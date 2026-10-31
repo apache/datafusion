@@ -23,8 +23,9 @@ impl LimitPushPastWindows {
     }
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Default)]
 enum Phase {
+    #[default]
     FindOrGrow,
     Apply,
 }
@@ -33,16 +34,23 @@ enum Phase {
 struct TraverseState {
     pub limit: Option<usize>,
     pub lookahead: usize,
+    pub phase: Phase,
 }
 
 impl TraverseState {
+    /// Forget the chain we were walking: no limit in hand, nothing to grow by,
+    /// and back to looking for the next limit.
+    pub fn reset(&mut self) {
+        *self = Self::default();
+    }
+
+    /// Start a chain from a limit we just found, abandoning whatever chain we
+    /// were walking: that one never found a sort to apply to, and this limit is
+    /// the one that governs everything below here.
     pub fn reset_limit(&mut self, limit: Option<usize>) {
         self.limit = limit;
         self.lookahead = 0;
-    }
-
-    pub fn max_lookahead(&mut self, new_val: usize) {
-        self.lookahead = self.lookahead.max(new_val);
+        self.phase = Phase::FindOrGrow;
     }
 }
 
@@ -56,7 +64,6 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             return Ok(original);
         }
         let mut ctx = TraverseState::default();
-        let mut phase = Phase::FindOrGrow;
         let result = original.transform_down(|node| {
             // helper closure to DRY out most the early return cases
             let reset = |node,
@@ -64,8 +71,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
              -> datafusion_common::Result<
                 Transformed<Arc<dyn ExecutionPlan>>,
             > {
-                ctx.limit = None;
-                ctx.lookahead = 0;
+                ctx.reset();
                 Ok(Transformed::no(node))
             };
 
@@ -74,14 +80,20 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
                 return reset(node, &mut ctx);
             }
 
-            // grab the latest limit we see
-            if phase == Phase::FindOrGrow && get_limit(&node, &mut ctx) {
+            // Grab the latest limit we see. The phase only has to hold us back at
+            // a `SortPreservingMergeExec`, which is both a limit source and an
+            // apply target; a plain limit node is never an apply target, so
+            // reading it is always safe -- and it is more current than the chain
+            // we were on, which has not found a sort to apply to.
+            if (ctx.phase == Phase::FindOrGrow || !node.is::<SortPreservingMergeExec>())
+                && get_limit(&node, &mut ctx)
+            {
                 return Ok(Transformed::no(node));
             }
 
             // grow the limit if we hit a window function
             if let LimitBehavior::Window(lookahead) = node.limit_behavior() {
-                phase = Phase::Apply;
+                ctx.phase = Phase::Apply;
                 if !grow_limit(lookahead, &mut ctx) {
                     return reset(node, &mut ctx);
                 }
@@ -89,7 +101,7 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // Apply the limit if we hit a sortpreservingmerge node
-            if phase == Phase::Apply
+            if ctx.phase == Phase::Apply
                 && let Some(out) = apply_limit(&node, &mut ctx)
             {
                 return Ok(out);
@@ -123,14 +135,23 @@ fn grow_limit(lookahead: Option<WindowLookahead>, ctx: &mut TraverseState) -> bo
     let Some(lookahead) = lookahead else {
         return false;
     };
-    if let Some(min_rows) = lookahead.min_rows {
-        ctx.limit = Some(ctx.limit.unwrap_or(0).max(min_rows));
+    // Only raise a limit we actually have. With nothing in hand there is no
+    // limit to raise, and inventing one truncates a sort that has no `LIMIT`
+    // above it at all.
+    if let (Some(min_rows), Some(cur)) = (lookahead.min_rows, ctx.limit) {
+        ctx.limit = Some(cur.max(min_rows));
     }
-    ctx.max_lookahead(lookahead.frame_end);
+    // A window reads ahead of every row the windows above it need, so stacked
+    // windows add their lookaheads. Expressions within one window share theirs,
+    // which `WindowLookahead` has already taken the maximum over.
+    //
     // Frame bounds come straight from the query and can be as large as
     // `u64::MAX`, so saturate instead of overflowing. A saturated lookahead
     // makes the `checked_add` in `apply_limit` fail, which skips the pushdown.
-    ctx.max_lookahead(ctx.lookahead.saturating_add(lookahead.relative));
+    ctx.lookahead = ctx
+        .lookahead
+        .saturating_add(lookahead.frame_end)
+        .saturating_add(lookahead.relative);
     true
 }
 
@@ -141,23 +162,27 @@ fn apply_limit(
     if !node.is::<SortExec>() && !node.is::<SortPreservingMergeExec>() {
         return None;
     }
-    let latest = ctx.limit.take();
-    let Some(fetch) = latest else {
-        ctx.limit = None;
-        ctx.lookahead = 0;
+    // Taking the state both reads the chain we were walking and forgets it.
+    let TraverseState {
+        limit, lookahead, ..
+    } = std::mem::take(ctx);
+    let Some(fetch) = limit else {
         return Some(Transformed::no(Arc::clone(node)));
     };
     // A fetch that overflows can't drop any rows, so skip the pushdown rather
     // than turning the sort into a TopK that holds every row and can't spill.
-    let Some(fetch) = fetch.checked_add(ctx.lookahead) else {
-        ctx.lookahead = 0;
+    let Some(fetch) = fetch.checked_add(lookahead) else {
         return Some(Transformed::no(Arc::clone(node)));
     };
     let fetch = match node.fetch() {
         None => fetch,
         Some(existing) => existing.min(fetch),
     };
-    Some(Transformed::complete(node.with_fetch(Some(fetch)).unwrap()))
+    // Carry on past this sort rather than stopping. `ctx` is back to its default
+    // above, which is exactly what it held at the start of the traversal, so
+    // walking the subtree below is equivalent to running the rule on it afresh
+    // -- and that subtree may hold another independent limit over another window.
+    Some(Transformed::yes(node.with_fetch(Some(fetch)).unwrap()))
 }
 
 fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
@@ -177,11 +202,16 @@ fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, FieldRef, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_expr::WindowFrame;
-    use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
-    use datafusion_functions_window::row_number::row_number_udwf;
+    use datafusion_expr::function::{PartitionEvaluatorArgs, WindowUDFFieldArgs};
+    use datafusion_expr::{
+        LimitEffect, PartitionEvaluator, Signature, WindowFrameBound, WindowFrameUnits,
+        WindowUDF, WindowUDFImpl,
+    };
+    use datafusion_functions_window::row_number::{RowNumber, row_number_udwf};
+    use datafusion_physical_expr::PhysicalExpr;
     use datafusion_physical_expr::expressions::col;
     use datafusion_physical_expr::window::StandardWindowExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -202,13 +232,16 @@ mod tests {
         Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]))
     }
 
-    /// Build: LocalLimitExec or GlobalLimitExec → BoundedWindowAggExec(row_number) → SortExec
-    fn build_window_plan(
-        use_local_limit: bool,
+    /// Wrap `input` in `SortExec -> BoundedWindowAggExec(udwf)`, both ordered by `a`.
+    /// The frame ends at the current row, so the window adds no lookahead of its own
+    /// and the fetch a test asserts on comes only from what the rule carried down.
+    fn sort_then_window(
+        udwf: &Arc<WindowUDF>,
+        name: &str,
+        input: Arc<dyn ExecutionPlan>,
+        input_order_mode: InputOrderMode,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        let s = schema();
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(PlaceholderRowExec::new(Arc::clone(&s)));
+        let s = input.schema();
 
         let ordering =
             LexOrdering::new(vec![PhysicalSortExpr::new_default(col("a", &s)?).asc()])
@@ -219,13 +252,7 @@ mod tests {
         );
 
         let window_expr = Arc::new(StandardWindowExpr::new(
-            create_udwf_window_expr(
-                &row_number_udwf(),
-                &[],
-                &s,
-                "row_number".to_string(),
-                false,
-            )?,
+            create_udwf_window_expr(udwf, &[], &s, name.to_string(), false)?,
             &[],
             ordering.as_ref(),
             Arc::new(WindowFrame::new_bounds(
@@ -235,20 +262,31 @@ mod tests {
             )),
         ));
 
-        let window: Arc<dyn ExecutionPlan> = Arc::new(BoundedWindowAggExec::try_new(
+        Ok(Arc::new(BoundedWindowAggExec::try_new(
             vec![window_expr],
             sort,
-            InputOrderMode::Sorted,
+            input_order_mode,
             true,
-        )?);
+        )?))
+    }
 
-        let limit: Arc<dyn ExecutionPlan> = if use_local_limit {
+    /// Build: LocalLimitExec or GlobalLimitExec → BoundedWindowAggExec(row_number) → SortExec
+    fn build_window_plan(
+        use_local_limit: bool,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
+        let window = sort_then_window(
+            &row_number_udwf(),
+            "row_number",
+            input,
+            InputOrderMode::Sorted,
+        )?;
+
+        Ok(if use_local_limit {
             Arc::new(LocalLimitExec::new(window, 100))
         } else {
             Arc::new(GlobalLimitExec::new(window, 0, Some(100)))
-        };
-
-        Ok(limit)
+        })
     }
 
     fn optimize(plan: Arc<dyn ExecutionPlan>) -> Arc<dyn ExecutionPlan> {
@@ -281,6 +319,145 @@ mod tests {
           BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
             SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true]
               PlaceholderRowExec
+        "#);
+    }
+
+    /// A window whose input is not grouped by partition key reads ahead by an
+    /// amount no frame bound describes, so the rule has to leave the sort below it
+    /// alone. This is the plan from [`global_limit_pushes_past_window`] with only
+    /// the input order mode changed.
+    #[test]
+    fn interleaved_partitions_block_the_pushdown() {
+        let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
+        let window = sort_then_window(
+            &row_number_udwf(),
+            "row_number",
+            input,
+            InputOrderMode::Linear,
+        )
+        .unwrap();
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(window, 0, Some(100)));
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        GlobalLimitExec: skip=0, fetch=100
+          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Linear]
+            SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+              PlaceholderRowExec
+        "#);
+    }
+
+    /// A `row_number` wrapper that claims it always needs at least 200 input rows.
+    /// No in-tree window function returns [`LimitEffect::Absolute`], so wrapping one
+    /// is the only way to reach that arm of `grow_limit`.
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct AtLeast200(RowNumber);
+
+    impl WindowUDFImpl for AtLeast200 {
+        fn name(&self) -> &str {
+            "at_least_200"
+        }
+
+        fn signature(&self) -> &Signature {
+            self.0.signature()
+        }
+
+        fn partition_evaluator(
+            &self,
+            args: PartitionEvaluatorArgs,
+        ) -> datafusion_common::Result<Box<dyn PartitionEvaluator>> {
+            self.0.partition_evaluator(args)
+        }
+
+        fn field(&self, args: WindowUDFFieldArgs) -> datafusion_common::Result<FieldRef> {
+            self.0.field(args)
+        }
+
+        fn limit_effect(&self, _args: &[Arc<dyn PhysicalExpr>]) -> LimitEffect {
+            LimitEffect::Absolute(200)
+        }
+    }
+
+    /// Build `[GlobalLimitExec(100) →] BoundedWindowAggExec(at_least_200) → SortExec
+    /// → PlaceholderRowExec`. Without the limit there is no fetch anywhere in the plan.
+    fn build_absolute_plan(
+        with_limit: bool,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
+        let udwf = Arc::new(WindowUDF::from(AtLeast200(RowNumber::new())));
+        let window =
+            sort_then_window(&udwf, "at_least_200", input, InputOrderMode::Sorted)?;
+
+        Ok(if with_limit {
+            Arc::new(GlobalLimitExec::new(window, 0, Some(100)))
+        } else {
+            window
+        })
+    }
+
+    /// Build `GlobalLimitExec(100) → BoundedWindowAggExec(row_number) → SortExec
+    /// → BoundedWindowAggExec(at_least_200) → SortExec → PlaceholderRowExec`.
+    ///
+    /// The outer sort consumes the limit, so the inner window is reached with
+    /// nothing in hand and the inner sort has no limit above it at all. Only this
+    /// PR makes the shape reachable: before it, applying a fetch ended the walk,
+    /// so nothing below the outer sort was ever visited.
+    fn build_nested_absolute_plan() -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
+        let udwf = Arc::new(WindowUDF::from(AtLeast200(RowNumber::new())));
+        let inner =
+            sort_then_window(&udwf, "at_least_200", input, InputOrderMode::Sorted)?;
+        let outer = sort_then_window(
+            &row_number_udwf(),
+            "row_number",
+            inner,
+            InputOrderMode::Sorted,
+        )?;
+
+        Ok(Arc::new(GlobalLimitExec::new(outer, 0, Some(100))))
+    }
+
+    /// With no limit in the plan there is nothing to raise, so the sort must stay a
+    /// full sort. Turning it into a TopK here would drop rows the query asked for.
+    #[test]
+    fn absolute_limit_effect_does_not_invent_a_limit() {
+        let plan = build_absolute_plan(false).unwrap();
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        BoundedWindowAggExec: wdw=[at_least_200: Field { "at_least_200": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+          SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+            PlaceholderRowExec
+        "#);
+    }
+
+    /// A limit that is in the plan is still raised to the window's floor: 100 rows
+    /// are asked for, the window needs 200, so the sort fetches 200.
+    #[test]
+    fn absolute_limit_effect_raises_an_existing_limit() {
+        let plan = build_absolute_plan(true).unwrap();
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        GlobalLimitExec: skip=0, fetch=100
+          BoundedWindowAggExec: wdw=[at_least_200: Field { "at_least_200": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            SortExec: TopK(fetch=200), expr=[a@0 ASC], preserve_partitioning=[true]
+              PlaceholderRowExec
+        "#);
+    }
+
+    /// The nested shape from review: the limit is spent on the outer sort, so the
+    /// inner window's `Absolute(200)` has nothing to raise. It must not become a
+    /// fetch on the inner sort, which no `LIMIT` sits above.
+    #[test]
+    fn absolute_limit_effect_does_not_invent_a_limit_below_an_applied_sort() {
+        let plan = build_nested_absolute_plan().unwrap();
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        GlobalLimitExec: skip=0, fetch=100
+          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+            SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true], sort_prefix=[a@0 ASC]
+              BoundedWindowAggExec: wdw=[at_least_200: Field { "at_least_200": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+                SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+                  PlaceholderRowExec
         "#);
     }
 }
