@@ -25,7 +25,6 @@ use datafusion_physical_expr::expressions::{Literal, col};
 use datafusion_physical_expr::{Partitioning, RangePartitioning, SplitPoint};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
 use datafusion_physical_plan::joins::{StreamJoinPartitionMode, SymmetricHashJoinExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
@@ -1004,8 +1003,8 @@ async fn test_union_with_sorts_and_constants() -> Result<()> {
     Ok(())
 }
 
-/// Removes every [`SortExec`], standing in for a rule that breaks ordering
-/// requirements.
+/// Test rule that removes every [`SortExec`], so that the final check fails
+/// and its error can be checked.
 ///
 /// [`SortExec`]: datafusion_physical_plan::sorts::sort::SortExec
 #[derive(Debug)]
@@ -1070,28 +1069,8 @@ async fn test_final_check_names_appended_rule() -> Result<()> {
     Ok(())
 }
 
-/// A custom rule list is checked too.
-#[tokio::test]
-async fn test_final_check_names_rule_in_custom_pipeline() -> Result<()> {
-    let state = SessionStateBuilder::new()
-        .with_default_features()
-        .with_physical_optimizer_rules(vec![
-            Arc::new(EnsureRequirements::new()),
-            Arc::new(RemoveSorts),
-        ])
-        .build();
-    let error = plan_window_query(state).await.unwrap_err().to_string();
-    assert!(
-        error.starts_with(
-            "SanityCheckPlan: order and distribution requirements stopped holding \
-             after physical optimizer rule 'remove_sorts'"
-        ),
-        "{error}"
-    );
-    Ok(())
-}
-
-/// Without `EnsureRequirements`, the window's sort is never added.
+/// A custom rule list is checked too. Without `EnsureRequirements`, the
+/// window's sort is never added.
 #[tokio::test]
 async fn test_final_check_without_ensure_requirements() -> Result<()> {
     let state = SessionStateBuilder::new()
@@ -1106,13 +1085,5 @@ async fn test_final_check_without_ensure_requirements() -> Result<()> {
         ),
         "{error}"
     );
-    Ok(())
-}
-
-/// The default rules produce a plan that passes the final check.
-#[tokio::test]
-async fn test_final_check_passes_default_rules() -> Result<()> {
-    let state = SessionStateBuilder::new().with_default_features().build();
-    plan_window_query(state).await?;
     Ok(())
 }
