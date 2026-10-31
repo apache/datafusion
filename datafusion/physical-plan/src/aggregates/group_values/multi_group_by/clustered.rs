@@ -188,23 +188,29 @@ mod tests {
 
     use arrow::array::UInt32Array;
     use arrow::array::{
-        Array, AsArray, BooleanArray, Decimal32Array, Decimal64Array, Decimal128Array,
-        Decimal256Array, FixedSizeBinaryArray, Int32Array, Int64Array,
-        IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+        Array, AsArray, BooleanArray, FixedSizeBinaryArray, Int32Array, Int64Array,
         StringArray,
     };
     use arrow::buffer::{Buffer, NullBuffer};
-    use arrow::compute::{cast, take};
-    use arrow::datatypes::{
-        Field, IntervalDayTime, IntervalMonthDayNano, IntervalUnit, i256,
-    };
+    use arrow::datatypes::Field;
     use datafusion_expr::GroupSelection;
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::array::{
+        Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
+        IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    };
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::compute::{cast, take};
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, IntervalUnit, i256};
 
     use super::*;
 
     // The values repeat in seven-row runs, with four keys per value of the
     // first column. Construct logical types directly where casting would
     // rescale decimals or cannot represent all interval components.
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn clustered_key_array(
         key_type: &DataType,
         rows: usize,
@@ -338,15 +344,21 @@ mod tests {
         })
     }
 
-    // Compare with the existing hash implementation, changing actual input
-    // boundaries and removing completed groups between batches. This checks the
-    // semantic contract rather than duplicating the adjacent-run algorithm.
+    // Compare with the existing hash implementation across input boundaries and
+    // emits, without duplicating the adjacent-run algorithm. The reference hashes
+    // while the clustered implementation does not, so forced collisions make the
+    // reference quadratic without testing collision handling in this implementation.
+    #[cfg(not(feature = "force_hash_collisions"))]
     #[rstest::rstest]
     #[case::sorted(false)]
     #[case::unsorted(true)]
     fn clustered_keys_match_hash_grouping_across_batches_and_emits(
         #[case] unsorted: bool,
+        // Keep these values in sync with KEY_TYPE_SHARD_COUNT below.
+        #[values(0, 1, 2, 3)] shard: usize,
     ) -> Result<()> {
+        const KEY_TYPE_SHARD_COUNT: usize = 4;
+
         let mut key_types = vec![
             DataType::Boolean,
             DataType::Int8,
@@ -394,7 +406,10 @@ mod tests {
                 key_types.push(DataType::Timestamp(unit, timezone.map(Into::into)));
             }
         }
-        for key_type in key_types {
+        for (key_type_index, key_type) in key_types.into_iter().enumerate() {
+            if key_type_index % KEY_TYPE_SHARD_COUNT != shard {
+                continue;
+            }
             for nullable in [false, true] {
                 for batch_size in [1, 2, 7, 8, 63, 1024] {
                     let rows = 129.max(batch_size + 1);
