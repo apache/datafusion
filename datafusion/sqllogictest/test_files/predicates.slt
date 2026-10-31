@@ -727,6 +727,59 @@ DROP TABLE data_index_bloom_encoding_stats;
 
 
 ########
+# Bloom filter pruning must treat 0.0 and -0.0 as equal
+# Refer to https://github.com/apache/datafusion/issues/26491
+########
+
+statement ok
+set datafusion.execution.parquet.bloom_filter_on_write = true;
+
+statement ok
+set datafusion.execution.parquet.max_row_group_size = 2;
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+# row groups: (-0.0, -0.0), (0.0, 1.0), (-0.0, 2.0)
+query I
+COPY (SELECT * FROM (VALUES (1, -0.0), (2, -0.0), (3, 0.0), (4, 1.0), (5, -0.0), (6, 2.0)) AS t(id, c) ORDER BY id)
+TO 'test_files/scratch/predicates/signed_zero_bloom.parquet' STORED AS PARQUET;
+----
+6
+
+statement ok
+set datafusion.execution.parquet.bloom_filter_on_write = false;
+
+statement ok
+set datafusion.execution.parquet.max_row_group_size = 1048576;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+statement ok
+CREATE EXTERNAL TABLE signed_zero_bloom STORED AS PARQUET LOCATION 'test_files/scratch/predicates/signed_zero_bloom.parquet';
+
+query I
+SELECT id FROM signed_zero_bloom WHERE c = 0.0 ORDER BY id;
+----
+1
+2
+3
+5
+
+query I
+SELECT id FROM signed_zero_bloom WHERE c = -0.0 ORDER BY id;
+----
+1
+2
+3
+5
+
+statement ok
+DROP TABLE signed_zero_bloom;
+
+
+########
 # String coercion
 ########
 

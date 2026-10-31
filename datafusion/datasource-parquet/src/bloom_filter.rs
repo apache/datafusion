@@ -91,8 +91,14 @@ impl BloomFilterStatistics {
             | ScalarValue::LargeBinary(Some(v)) => sbbf.check(v),
             ScalarValue::FixedSizeBinary(_size, Some(v)) => sbbf.check(v),
             ScalarValue::Boolean(Some(v)) => sbbf.check(v),
-            ScalarValue::Float64(Some(v)) => sbbf.check(v),
-            ScalarValue::Float32(Some(v)) => sbbf.check(v),
+            // `0.0 == -0.0` in SQL, but the filter hashes the plain-encoded bits,
+            // so a zero literal must probe both signs.
+            ScalarValue::Float64(Some(v)) => {
+                sbbf.check(v) || (*v == 0.0 && sbbf.check(&-*v))
+            }
+            ScalarValue::Float32(Some(v)) => {
+                sbbf.check(v) || (*v == 0.0 && sbbf.check(&-*v))
+            }
             ScalarValue::Int64(Some(v)) => sbbf.check(v),
             ScalarValue::Int32(Some(v)) => sbbf.check(v),
             ScalarValue::UInt64(Some(v)) => sbbf.check(v),
@@ -234,7 +240,7 @@ mod tests {
     use crate::test_util::ExpectedPruning;
     use crate::{ParquetAccessPlan, ParquetFileMetrics, RowGroupAccessPlanFilter};
 
-    use arrow::array::Decimal128Array;
+    use arrow::array::{Decimal128Array, Float32Array, Float64Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use bytes::{BufMut, BytesMut};
     use datafusion_common::Result;
@@ -494,6 +500,92 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_signed_zero() {
+        // Row groups of 2 rows: (-0.0, -0.0), (0.0, 1.0), (-0.0, 2.0)
+        let neg_zero = [-0.0f64, -0.0, 0.0, 1.0, -0.0, 2.0];
+        let data = parquet_float_with_bloom_filter(Arc::new(Float64Array::from(
+            neg_zero.to_vec(),
+        )) as ArrayRef);
+        let schema = Schema::new(vec![Field::new("c", DataType::Float64, true)]);
+        for (lit_value, expected) in [
+            (0.0f64, vec![0, 1, 2]),
+            (-0.0f64, vec![0, 1, 2]),
+            (1.0f64, vec![1]),
+            (3.0f64, vec![]),
+        ] {
+            let expr = logical2physical(&col("c").eq(lit(lit_value)), &schema);
+            let in_list = logical2physical(
+                &col("c").in_list(vec![lit(lit_value), lit(3.0f64)], false),
+                &schema,
+            );
+            let or_expr = logical2physical(
+                &col("c").eq(lit(lit_value)).or(col("c").eq(lit(3.0f64))),
+                &schema,
+            );
+            for expr in [expr, in_list, or_expr] {
+                let predicate = build_test_pruning_predicate(expr, schema.clone());
+                let pruned = test_row_group_bloom_filter_pruning_predicate(
+                    "f64.parquet",
+                    data.clone(),
+                    &predicate,
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    pruned.access_plan().row_group_indexes(),
+                    expected,
+                    "literal {lit_value:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_signed_zero_only_one_sign() {
+        // Every zero in the file is -0.0 (and the reverse for +0.0)
+        for (stored, probed) in [(-0.0f64, 0.0f64), (0.0, -0.0)] {
+            let data = parquet_float_with_bloom_filter(Arc::new(Float64Array::from(vec![
+                stored, stored, 1.0, 2.0,
+            ])) as ArrayRef);
+            let schema = Schema::new(vec![Field::new("c", DataType::Float64, true)]);
+            let expr = logical2physical(&col("c").eq(lit(probed)), &schema);
+            let predicate = build_test_pruning_predicate(expr, schema);
+            let pruned = test_row_group_bloom_filter_pruning_predicate(
+                "f64_zero.parquet",
+                data,
+                &predicate,
+            )
+            .await
+            .unwrap();
+            assert_eq!(pruned.access_plan().row_group_indexes(), vec![0]);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_row_group_bloom_filter_pruning_signed_zero_f32() {
+        let data = parquet_float_with_bloom_filter(Arc::new(Float32Array::from(vec![
+            -0.0f32, -0.0, 0.0, 1.0, -0.0, 2.0,
+        ])) as ArrayRef);
+        let schema = Schema::new(vec![Field::new("c", DataType::Float32, true)]);
+        for lit_value in [0.0f32, -0.0f32] {
+            let expr = logical2physical(&col("c").eq(lit(lit_value)), &schema);
+            let predicate = build_test_pruning_predicate(expr, schema.clone());
+            let pruned = test_row_group_bloom_filter_pruning_predicate(
+                "f32.parquet",
+                data.clone(),
+                &predicate,
+            )
+            .await
+            .unwrap();
+            assert_eq!(
+                pruned.access_plan().row_group_indexes(),
+                vec![0, 1, 2],
+                "literal {lit_value:?}"
+            );
+        }
+    }
+
     struct BloomFilterTest {
         file_name: String,
         schema: Schema,
@@ -583,6 +675,29 @@ mod tests {
 
             post_pruning_row_groups.assert(&pruned_row_groups);
         }
+    }
+
+    /// Writes a single float column `c` with 2-row groups and bloom filters
+    fn parquet_float_with_bloom_filter(array: ArrayRef) -> bytes::Bytes {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c",
+            array.data_type().clone(),
+            true,
+        )]));
+        let batch =
+            arrow::array::RecordBatch::try_new(schema.clone(), vec![array]).unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(2))
+            .set_bloom_filter_enabled(true)
+            .set_statistics_enabled(EnabledStatistics::None)
+            .build();
+        let mut out = BytesMut::new().writer();
+        {
+            let mut writer = ArrowWriter::try_new(&mut out, schema, Some(props)).unwrap();
+            writer.write(&batch).unwrap();
+            writer.finish().unwrap();
+        }
+        out.into_inner().freeze()
     }
 
     fn parquet_decimal128_with_bloom_filter(
