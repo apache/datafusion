@@ -346,6 +346,20 @@ from table_with_metadata;
 ----
 3 the id field
 
+# Regression test: max should preserve metadata
+query IT
+select max(id), arrow_metadata(max(id), 'metadata_key')
+from table_with_metadata;
+----
+3 the id field
+
+# Regression test: min should preserve metadata
+query IT
+select min(id), arrow_metadata(min(id), 'metadata_key')
+from table_with_metadata;
+----
+1 the id field
+
 # Regression test: DISTINCT ON should preserve metadata (uses first_value internally)
 query ITTT
 select distinct on (id) id, arrow_metadata(id, 'metadata_key'), name, arrow_metadata(name, 'metadata_key')
@@ -506,6 +520,24 @@ select
 from table_with_metadata limit 1;
 ----
 NULL the id field
+
+# Test MAX window function preserves metadata
+query IT
+select
+  max(id) over (order by id asc nulls last) as mx,
+  arrow_metadata(max(id) over (order by id asc nulls last), 'metadata_key') as meta
+from table_with_metadata limit 1;
+----
+1 the id field
+
+# Test MIN window function preserves metadata
+query IT
+select
+  min(id) over (order by id asc nulls last) as mn,
+  arrow_metadata(min(id) over (order by id asc nulls last), 'metadata_key') as meta
+from table_with_metadata limit 1;
+----
+1 the id field
 
 # Test NTH_VALUE window function preserves metadata
 query IT
