@@ -167,7 +167,7 @@ fn step(plan: &Arc<dyn ExecutionPlan>) -> Step {
     match plan.limit_behavior() {
         LimitBehavior::Limit { skip, fetch } => Step::Limit(RowBound { skip, fetch }),
         LimitBehavior::CopyToChildren | LimitBehavior::MoveToInput => Step::Pass,
-        LimitBehavior::Merge { .. } => Step::Merge,
+        LimitBehavior::Merge => Step::Merge,
         // LimitPushPastWindows handles windows.
         LimitBehavior::Stops | LimitBehavior::Window(_) => Step::Stop,
     }

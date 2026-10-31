@@ -97,12 +97,11 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
 
             // nodes along the way
             match node.limit_behavior() {
-                LimitBehavior::CopyToChildren
-                | LimitBehavior::MoveToInput
-                | LimitBehavior::Merge { fetch: None } => {}
+                LimitBehavior::CopyToChildren | LimitBehavior::MoveToInput => {}
+                LimitBehavior::Merge if node.fetch().is_none() => {}
                 LimitBehavior::Stops
                 | LimitBehavior::Limit { .. }
-                | LimitBehavior::Merge { fetch: Some(_) }
+                | LimitBehavior::Merge
                 | LimitBehavior::Window(_) => return reset(node, &mut ctx),
             }
 

@@ -290,7 +290,7 @@ impl ExecutionPlan for CoalescePartitionsExec {
     }
 
     fn limit_behavior(&self) -> LimitBehavior {
-        LimitBehavior::Merge { fetch: self.fetch }
+        LimitBehavior::Merge
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {

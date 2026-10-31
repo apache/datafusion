@@ -133,10 +133,11 @@ fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
 
 /// Returns whether a fetch on `plan` can move to its input.
 fn can_push_fetch_through(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    matches!(
-        plan.limit_behavior(),
-        LimitBehavior::MoveToInput | LimitBehavior::Merge { fetch: None }
-    )
+    match plan.limit_behavior() {
+        LimitBehavior::MoveToInput => true,
+        LimitBehavior::Merge => plan.fetch().is_none(),
+        _ => false,
+    }
 }
 
 /// Returns a plan when the fast path for an already-satisfied ordering can also

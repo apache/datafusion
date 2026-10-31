@@ -274,7 +274,10 @@ impl ExecutionPlan for BufferExec {
         // also go below the input.
         match self.input.limit_behavior() {
             LimitBehavior::Stops | LimitBehavior::Window(_) => LimitBehavior::Stops,
-            _ => LimitBehavior::MoveToInput,
+            LimitBehavior::Limit { .. }
+            | LimitBehavior::CopyToChildren
+            | LimitBehavior::MoveToInput
+            | LimitBehavior::Merge => LimitBehavior::MoveToInput,
         }
     }
 

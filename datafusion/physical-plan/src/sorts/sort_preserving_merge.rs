@@ -419,7 +419,7 @@ impl ExecutionPlan for SortPreservingMergeExec {
     }
 
     fn limit_behavior(&self) -> LimitBehavior {
-        LimitBehavior::Merge { fetch: self.fetch }
+        LimitBehavior::Merge
     }
 
     /// Tries to swap the projection with its input [`SortPreservingMergeExec`].

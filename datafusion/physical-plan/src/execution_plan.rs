@@ -2111,11 +2111,11 @@ pub enum LimitBehavior {
     MoveToInput,
     /// This node merges its input partitions, so it sees every row and can
     /// enforce a limit with its own fetch (`CoalescePartitionsExec`,
-    /// `SortPreservingMergeExec`). Without a `fetch` of its own it outputs
-    /// exactly the rows of its input, like [`Self::MoveToInput`]. With one,
-    /// it already selects rows, so a limit above it may not move below it.
-    /// `fetch` must equal the node's [`ExecutionPlan::fetch`].
-    Merge { fetch: Option<usize> },
+    /// `SortPreservingMergeExec`). Without a fetch of its own
+    /// ([`ExecutionPlan::fetch`]) it outputs exactly the rows of its input,
+    /// like [`Self::MoveToInput`]. With one, it already selects rows, so a
+    /// limit above it may not move below it.
+    Merge,
     /// A window function node, with how far it reads ahead of each output
     /// row; `None` if that is not known before execution. Only
     /// `LimitPushPastWindows` copies a limit below a window.
