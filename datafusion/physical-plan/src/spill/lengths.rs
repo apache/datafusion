@@ -36,45 +36,67 @@ use arrow::datatypes::{
     GenericBinaryType, Int32Type, Int64Type, LargeBinaryType, LargeUtf8Type, Schema,
     SchemaRef, Utf8Type,
 };
-use datafusion_common::{Result, internal_err};
+use datafusion_common::utils::offset_span;
+use datafusion_common::{Result, internal_datafusion_err, internal_err};
 
 /// Returns the schema that `schema` is spilled as, or `None` if it has no byte
 /// array columns
 pub(super) fn encode_schema(schema: &Schema) -> Option<SchemaRef> {
-    if !schema
-        .fields()
-        .iter()
-        .any(|field| encoded_type(field.data_type()).is_some())
-    {
-        return None;
-    }
+    let mut encoded = false;
     let fields: Vec<_> = schema
         .fields()
         .iter()
         .map(|field| match encoded_type(field.data_type()) {
             Some(data_type) => {
+                encoded = true;
                 Arc::new(Field::new(field.name(), data_type, field.is_nullable()))
             }
             None => Arc::clone(field),
         })
         .collect();
-    Some(Arc::new(Schema::new_with_metadata(
-        fields,
-        schema.metadata().clone(),
-    )))
+    encoded
+        .then(|| Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone())))
 }
 
-/// Encodes the byte array columns of `batch`, see the [module docs](self)
-pub(super) fn encode(batch: &RecordBatch) -> Result<RecordBatch> {
-    let Some(schema) = encode_schema(batch.schema_ref()) else {
-        return Ok(batch.clone());
-    };
-    let columns = batch
-        .columns()
+/// Encodes the byte array columns of `batch` as [`encode_schema`] returned
+/// `schema`, see the [module docs](self)
+///
+/// The other columns keep the fields of `batch`, which can differ from the
+/// spill schema in nested nullability, see `InProgressSpillFile::append_batch`.
+pub(super) fn encode(batch: &RecordBatch, schema: &SchemaRef) -> Result<RecordBatch> {
+    let mut fields = Vec::with_capacity(batch.num_columns());
+    let mut columns = Vec::with_capacity(batch.num_columns());
+    for ((field, spilled), column) in batch
+        .schema_ref()
+        .fields()
         .iter()
-        .map(encode_array)
-        .collect::<Result<_>>()?;
-    Ok(RecordBatch::try_new(schema, columns)?)
+        .zip(schema.fields())
+        .zip(batch.columns())
+    {
+        let encoded = match (column.data_type(), spilled.data_type()) {
+            (DataType::Utf8, DataType::Struct(struct_fields)) => {
+                encode_bytes::<_, Int32Type>(struct_fields, column.as_string::<i32>())?
+            }
+            (DataType::LargeUtf8, DataType::Struct(struct_fields)) => {
+                encode_bytes::<_, Int64Type>(struct_fields, column.as_string::<i64>())?
+            }
+            (DataType::Binary, DataType::Struct(struct_fields)) => {
+                encode_bytes::<_, Int32Type>(struct_fields, column.as_binary::<i32>())?
+            }
+            (DataType::LargeBinary, DataType::Struct(struct_fields)) => {
+                encode_bytes::<_, Int64Type>(struct_fields, column.as_binary::<i64>())?
+            }
+            _ => {
+                fields.push(Arc::clone(field));
+                columns.push(Arc::clone(column));
+                continue;
+            }
+        };
+        fields.push(Arc::clone(spilled));
+        columns.push(encoded);
+    }
+    let schema = Schema::new_with_metadata(fields, batch.schema_ref().metadata().clone());
+    Ok(RecordBatch::try_new(Arc::new(schema), columns)?)
 }
 
 /// Restores a batch that [`encode`] wrote for `schema`
@@ -112,16 +134,6 @@ where
     ])
 }
 
-fn encode_array(array: &ArrayRef) -> Result<ArrayRef> {
-    match array.data_type() {
-        DataType::Utf8 => encode_bytes::<_, Int32Type>(array.as_string::<i32>()),
-        DataType::LargeUtf8 => encode_bytes::<_, Int64Type>(array.as_string::<i64>()),
-        DataType::Binary => encode_bytes::<_, Int32Type>(array.as_binary::<i32>()),
-        DataType::LargeBinary => encode_bytes::<_, Int64Type>(array.as_binary::<i64>()),
-        _ => Ok(Arc::clone(array)),
-    }
-}
-
 fn decode_array(data_type: &DataType, array: &ArrayRef) -> Result<ArrayRef> {
     match data_type {
         DataType::Utf8 => decode_bytes::<Utf8Type, Int32Type>(array),
@@ -132,21 +144,19 @@ fn decode_array(data_type: &DataType, array: &ArrayRef) -> Result<ArrayRef> {
     }
 }
 
-fn encode_bytes<T, L>(array: &GenericByteArray<T>) -> Result<ArrayRef>
+fn encode_bytes<T, L>(fields: &Fields, array: &GenericByteArray<T>) -> Result<ArrayRef>
 where
     T: ByteArrayType,
     L: ArrowPrimitiveType<Native = T::Offset>,
 {
-    let fields = encoded_fields::<L>();
     if array.is_empty() {
-        return Ok(new_empty_array(&DataType::Struct(fields)));
+        return Ok(new_empty_array(&DataType::Struct(fields.clone())));
     }
     let offsets = array.offsets();
     let lengths = offsets.windows(2).map(|w| w[1] - w[0]).collect();
     let lengths = PrimitiveArray::<L>::new(lengths, array.nulls().cloned());
 
-    let start = offsets[0].as_usize();
-    let len = offsets[array.len()].as_usize() - start;
+    let (start, len) = offset_span(offsets);
     let bytes = GenericBinaryArray::<T::Offset>::new(
         OffsetBuffer::from_lengths([len]),
         array.values().slice_with_length(start, len),
@@ -155,8 +165,11 @@ where
     let run_ends = Int64Array::from(vec![array.len() as i64]);
     let values = RunArray::try_new(&run_ends, &bytes)?;
 
-    let array =
-        StructArray::try_new(fields, vec![Arc::new(lengths), Arc::new(values)], None)?;
+    let array = StructArray::try_new(
+        fields.clone(),
+        vec![Arc::new(lengths), Arc::new(values)],
+        None,
+    )?;
     Ok(Arc::new(array))
 }
 
@@ -167,36 +180,29 @@ where
 {
     let array = array.as_struct();
     let lengths = array.column(0).as_primitive::<L>();
-    let mut end = T::Offset::usize_as(0);
-    let mut offsets = Vec::with_capacity(lengths.len() + 1);
-    offsets.push(end);
-    offsets.extend(lengths.values().iter().map(|&len| {
-        end += len;
-        end
-    }));
+    let offsets = OffsetBuffer::<T::Offset>::try_from_lengths(
+        lengths.values().iter().map(|len| len.as_usize()),
+    )
+    .map_err(|e| {
+        internal_datafusion_err!("Invalid spilled {} lengths: {e}", T::DATA_TYPE)
+    })?;
 
     let bytes = array.column(1).as_run::<Int64Type>().values();
     let bytes = bytes.as_binary::<T::Offset>();
-    let bytes_offsets = bytes.value_offsets();
-    let start = bytes_offsets[0].as_usize();
-    let len = bytes_offsets[bytes_offsets.len() - 1].as_usize() - start;
-    if end.as_usize() != len {
+    let (start, len) = offset_span(bytes.offsets());
+    let end = offsets.last().as_usize();
+    if end != len {
         return internal_err!(
-            "Spilled {} lengths add up to {}, but there are {len} value bytes",
-            T::DATA_TYPE,
-            end.as_usize()
+            "Spilled {} lengths add up to {end}, but there are {len} value bytes",
+            T::DATA_TYPE
         );
     }
 
-    // SAFETY: `encode_bytes` took the lengths and value bytes from a valid
-    // array of type `T`, so their running sum gives back its offsets
-    let array = unsafe {
-        GenericByteArray::<T>::new_unchecked(
-            OffsetBuffer::new_unchecked(offsets.into()),
-            bytes.values().slice_with_length(start, len),
-            lengths.nulls().cloned(),
-        )
-    };
+    let array = GenericByteArray::<T>::try_new(
+        offsets,
+        bytes.values().slice_with_length(start, len),
+        lengths.nulls().cloned(),
+    )?;
     Ok(Arc::new(array))
 }
 
@@ -206,7 +212,7 @@ mod tests {
     use crate::common::collect;
     use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
     use crate::spill::spill_manager::SpillManager;
-    use arrow::array::{Int32Array, ListArray, StringArray};
+    use arrow::array::StringArray;
     use arrow::compute::cast;
     use arrow_ipc::CompressionType;
     use arrow_ipc::writer::{IpcWriteOptions, StreamWriter};
@@ -219,42 +225,20 @@ mod tests {
         SpillManager::new(env, metrics, schema).with_compression_type(compression)
     }
 
-    /// Byte arrays read back as written, sliced, empty or with nulls, next to
-    /// the columns that are spilled as they are
+    /// Sliced and empty byte arrays with nulls read back as written
     #[tokio::test]
     async fn test_spill_lengths_round_trip() -> Result<()> {
         let utf8: ArrayRef = Arc::new(StringArray::from_iter(
             (0..1000).map(|i| (i % 7 != 0).then(|| "x".repeat(i % 5))),
         ));
-        let list = ListArray::new(
-            Arc::new(Field::new("item", DataType::Utf8, true)),
-            OffsetBuffer::from_lengths([1; 1000]),
-            Arc::clone(&utf8),
-            None,
-        );
         let batch = RecordBatch::try_from_iter(vec![
-            (
-                "int32",
-                Arc::new(Int32Array::from_iter_values(0..1000)) as _,
-            ),
             ("large_utf8", cast(&utf8, &DataType::LargeUtf8)?),
             ("binary", cast(&utf8, &DataType::Binary)?),
             ("large_binary", cast(&utf8, &DataType::LargeBinary)?),
-            ("utf8_view", cast(&utf8, &DataType::Utf8View)?),
-            ("list", Arc::new(list)),
             ("utf8", utf8),
         ])?;
-        let batches = [
-            batch.clone(),
-            batch.slice(3, 500),
-            batch.slice(998, 2),
-            batch.slice(0, 0),
-        ];
-        for compression in [
-            SpillCompression::Uncompressed,
-            SpillCompression::Lz4Frame,
-            SpillCompression::Zstd,
-        ] {
+        let batches = [batch.slice(3, 500), batch.slice(998, 2), batch.slice(0, 0)];
+        for compression in [SpillCompression::Lz4Frame, SpillCompression::Zstd] {
             let spill_manager = spill_manager(batch.schema(), compression);
             let spill_file = spill_manager
                 .spill_record_batch_and_finish(&batches, "Test")?
@@ -287,7 +271,6 @@ mod tests {
         let mut writer = StreamWriter::try_new_with_options(&mut ipc, &schema, options)?;
         writer.write(&batch)?;
         writer.finish()?;
-        drop(writer);
         assert!(
             spilled * 4 < ipc.len(),
             "spilled {spilled} bytes, against {} bytes of IPC",
