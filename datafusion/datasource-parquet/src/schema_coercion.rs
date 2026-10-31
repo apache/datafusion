@@ -212,7 +212,7 @@ fn coerce_data_type(
         // Preserve the file's offset width when promoting it to a dictionary.
         // The projection can cast the much smaller dictionary values afterwards.
         (Dictionary(_, _), _) if enable_rle => {
-            dictionary_reader_type(file_type, table_type)
+            dictionary_reader_type(file_type, table_type, binary_to_string)
         }
         _ => None,
     }
@@ -329,11 +329,28 @@ fn common_dictionary_key_type(a: &DataType, b: &DataType) -> Option<DataType> {
 fn dictionary_reader_type(
     file_field_type: &DataType,
     table_dictionary_type: &DataType,
+    binary_to_string: bool,
 ) -> Option<DataType> {
     let DataType::Dictionary(table_key, table_value) = table_dictionary_type else {
         return None;
     };
-    let value_type = common_dictionary_value_type(file_field_type, table_value)?;
+    let file_value = match file_field_type {
+        DataType::Dictionary(_, value) => value.as_ref(),
+        value => value,
+    };
+    let value_type =
+        common_dictionary_value_type(file_field_type, table_value).or_else(|| {
+            (binary_to_string
+                && matches!(
+                    file_value,
+                    DataType::Binary | DataType::LargeBinary | DataType::BinaryView
+                )
+                && matches!(
+                    table_value.as_ref(),
+                    DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+                ))
+            .then(|| file_value.clone())
+        })?;
     let file_key = match file_field_type {
         DataType::Dictionary(file_key, _) => file_key.as_ref(),
         // A plain column can have any number of distinct values, so narrow keys are unsafe.
@@ -1959,10 +1976,16 @@ mod tests {
                 dict(DataType::LargeBinary),
             ),
             (
-                "binary_not_utf8",
+                "binary_to_utf8_dict_preserves_file_type",
                 dict(DataType::Utf8),
                 DataType::Binary,
-                DataType::Binary,
+                dict(DataType::Binary),
+            ),
+            (
+                "large_binary_to_utf8_dict_preserves_file_type",
+                dict(DataType::Utf8),
+                DataType::LargeBinary,
+                dict(DataType::LargeBinary),
             ),
             (
                 "utf8_not_binary",
