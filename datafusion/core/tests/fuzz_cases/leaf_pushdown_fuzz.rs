@@ -683,13 +683,17 @@ fn env_usize(name: &str, default: usize) -> usize {
 }
 
 fn seed() -> u64 {
-    env_usize("LEAF_PUSHDOWN_FUZZ_SEED", 0) as u64
+    seed_offset(0)
 }
 
-async fn run_memory(cases: usize) {
+fn seed_offset(default: u64) -> u64 {
+    env_usize("LEAF_PUSHDOWN_FUZZ_SEED", default as usize) as u64
+}
+
+async fn run_memory(cases: usize, seed0: u64) {
     let on = memory_ctx(true);
     let off = memory_ctx(false);
-    run(&on, &off, "pushdown on", "pushdown off", cases, seed()).await;
+    run(&on, &off, "pushdown on", "pushdown off", cases, seed0).await;
 }
 
 // ---------------------------------------------------------------------------
@@ -735,7 +739,7 @@ async fn parquet_ctx(dir: &TempDir, parquet_pushdown: bool) -> SessionContext {
     ctx
 }
 
-async fn run_parquet(cases: usize) {
+async fn run_parquet(cases: usize, seed0: u64) {
     let dir = TempDir::new().unwrap();
     let on = parquet_ctx(&dir, true).await;
     let off = parquet_ctx(&dir, false).await;
@@ -745,7 +749,7 @@ async fn run_parquet(cases: usize) {
         "parquet pushdown on",
         "parquet pushdown off",
         cases,
-        seed(),
+        seed0,
     )
     .await;
 }
@@ -756,18 +760,63 @@ async fn run_parquet(cases: usize) {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn leaf_pushdown_fuzz() {
-    run_memory(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", DEFAULT_CASES)).await;
+    run_memory(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", DEFAULT_CASES), seed()).await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn leaf_pushdown_parquet_fuzz() {
-    run_parquet(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", DEFAULT_CASES / 2)).await;
+    run_parquet(
+        env_usize("LEAF_PUSHDOWN_FUZZ_CASES", DEFAULT_CASES / 2),
+        seed(),
+    )
+    .await;
+}
+
+const EXTENDED_PARTITION: usize = EXTENDED_CASES / 4;
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leaf_pushdown_fuzz_extended_memory_1() {
+    run_memory(
+        env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_PARTITION),
+        seed_offset(0),
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn leaf_pushdown_fuzz_extended() {
-    run_memory(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_CASES)).await;
-    run_parquet(env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_CASES / 5)).await;
+async fn leaf_pushdown_fuzz_extended_memory_2() {
+    run_memory(
+        env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_PARTITION),
+        seed_offset(EXTENDED_PARTITION as u64),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leaf_pushdown_fuzz_extended_memory_3() {
+    run_memory(
+        env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_PARTITION),
+        seed_offset(2 * EXTENDED_PARTITION as u64),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leaf_pushdown_fuzz_extended_memory_4() {
+    run_memory(
+        env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_PARTITION),
+        seed_offset(3 * EXTENDED_PARTITION as u64),
+    )
+    .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn leaf_pushdown_fuzz_extended_parquet() {
+    run_parquet(
+        env_usize("LEAF_PUSHDOWN_FUZZ_CASES", EXTENDED_CASES / 5),
+        seed(),
+    )
+    .await;
 }
 
 /// Two Parquet files of one table, one of which stores a column with a type
