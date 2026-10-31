@@ -1058,6 +1058,25 @@ message PhysicalExtensionNode {
   optional string plan_name = 3;
 }
 
+// Payload of a DataSourceExec encoded as a PhysicalExtensionNode. The outer
+// plan name identifies DataSourceExec; source names use a separate registry kind.
+message PhysicalExtensionDataSourceNode {
+  bytes node = 1;
+  // Namespaced source type name. The decoding session must register a source
+  // decoder for this name; source payloads are never passed to a plan codec.
+  optional string source_name = 2;
+}
+
+// Payload of a DataSinkExec encoded as a PhysicalExtensionNode. The outer
+// plan carries the input; sink names use a separate registry kind.
+message PhysicalExtensionDataSinkNode {
+  bytes node = 1;
+  // Namespaced sink type name. Once the DataSinkExec wrapper decoder is
+  // registered, sink lookup and decoding errors do not fall back to a plan codec.
+  optional string sink_name = 2;
+  PhysicalSortExprNodeCollection sort_order = 3;
+}
+
 // physical expressions
 message PhysicalExprNode {
   // Was date_time_interval_expr

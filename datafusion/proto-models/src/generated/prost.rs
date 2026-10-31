@@ -1634,6 +1634,30 @@ pub struct PhysicalExtensionNode {
     #[prost(string, optional, tag = "3")]
     pub plan_name: ::core::option::Option<::prost::alloc::string::String>,
 }
+/// Payload of a DataSourceExec encoded as a PhysicalExtensionNode. The outer
+/// plan name identifies DataSourceExec; source names use a separate registry kind.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct PhysicalExtensionDataSourceNode {
+    #[prost(bytes = "vec", tag = "1")]
+    pub node: ::prost::alloc::vec::Vec<u8>,
+    /// Namespaced source type name. The decoding session must register a source
+    /// decoder for this name; source payloads are never passed to a plan codec.
+    #[prost(string, optional, tag = "2")]
+    pub source_name: ::core::option::Option<::prost::alloc::string::String>,
+}
+/// Payload of a DataSinkExec encoded as a PhysicalExtensionNode. The outer
+/// plan carries the input; sink names use a separate registry kind.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalExtensionDataSinkNode {
+    #[prost(bytes = "vec", tag = "1")]
+    pub node: ::prost::alloc::vec::Vec<u8>,
+    /// Namespaced sink type name. Once the DataSinkExec wrapper decoder is
+    /// registered, sink lookup and decoding errors do not fall back to a plan codec.
+    #[prost(string, optional, tag = "2")]
+    pub sink_name: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(message, optional, tag = "3")]
+    pub sort_order: ::core::option::Option<PhysicalSortExprNodeCollection>,
+}
 /// physical expressions
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalExprNode {
