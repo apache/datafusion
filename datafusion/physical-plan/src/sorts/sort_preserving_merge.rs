@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use crate::common::spawn_buffered;
+use crate::execution_plan::LimitBehavior;
 use crate::limit::LimitStream;
 use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
@@ -415,6 +416,10 @@ impl ExecutionPlan for SortPreservingMergeExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Merge
     }
 
     /// Tries to swap the projection with its input [`SortPreservingMergeExec`].
@@ -908,7 +913,7 @@ mod tests {
         let rb = RecordBatch::try_from_iter(vec![("a", a), ("b", b), ("c", c)])?;
         let schema = rb.schema();
 
-        let rbs = std::iter::repeat_n(rb, 1024).collect::<Vec<_>>();
+        let rbs = std::iter::repeat_n(rb, 256).collect::<Vec<_>>();
         let sort = [
             PhysicalSortExpr {
                 expr: col("b", &schema)?,

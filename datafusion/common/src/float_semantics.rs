@@ -8,19 +8,20 @@
 //! i.e. IEEE 754 totalOrder. DataFusion deviates from that in one
 //! respect: `+0.0` and `-0.0` are equal, hash the same and fall into the same
 //! group. See [`normalize_float`], [`normalize_floats`] and
-//! [`normalize_float_scalar`]. Ordering still follows totalOrder, so
+//! [`ScalarValue::normalize`]. Ordering still follows totalOrder, so
 //! [`compare_floats`] sorts `-0.0` before `+0.0`.
 //!
 //! Every comparison, hash or grouping boundary should be built from these
 //! helpers rather than inspecting float bits itself:
 //!
 //! - Equality and grouping: normalize first ([`normalize_float`],
-//!   [`normalize_floats`], [`normalize_float_scalar`]), then compare bits or
+//!   [`normalize_floats`], [`ScalarValue::normalize`]), then compare bits or
 //!   call Arrow's `eq`, `RowConverter` or `make_comparator`. Hash
 //!   [`hash_input`].
 //! - Ordering: use [`compare_floats`], [`float_lt`] or [`float_gt`]. Sorting
 //!   does not normalize yet, so `-0.0` still sorts before `+0.0`.
 //!
+//! [`ScalarValue::normalize`]: crate::ScalarValue::normalize
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -30,8 +31,6 @@ use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Float16Type, Float32Type, Float64Type,
 };
 use half::f16;
-
-use crate::ScalarValue;
 
 /// The floating point types the functions in this module are defined for:
 /// [`f16`](struct@f16), [`f32`] and [`f64`].
@@ -166,17 +165,6 @@ where
     Arc::new(arr.unary::<_, T>(normalize_float))
 }
 
-/// Applies [`normalize_float`] to a `Float16`, `Float32` or `Float64` scalar.
-/// Other scalars are returned as is.
-pub fn normalize_float_scalar(scalar: ScalarValue) -> ScalarValue {
-    match scalar {
-        ScalarValue::Float16(Some(v)) => ScalarValue::Float16(Some(normalize_float(v))),
-        ScalarValue::Float32(Some(v)) => ScalarValue::Float32(Some(normalize_float(v))),
-        ScalarValue::Float64(Some(v)) => ScalarValue::Float64(Some(normalize_float(v))),
-        other => other,
-    }
-}
-
 /// Whether `data_type` is a float or contains a float at any depth of its
 /// nested children.
 pub fn has_float_leaf(data_type: &DataType) -> bool {
@@ -306,29 +294,5 @@ mod tests {
             ListArray::from_iter_primitive::<Int32Type, _, _>(vec![Some(vec![Some(1)])]);
         let array: ArrayRef = Arc::new(list);
         assert!(Arc::ptr_eq(&normalize_floats(&array), &array));
-    }
-
-    #[test]
-    fn normalize_float_scalar_folds_negative_zero() {
-        assert_eq!(
-            normalize_float_scalar(ScalarValue::Float64(Some(-0.0))),
-            ScalarValue::Float64(Some(0.0))
-        );
-        assert_eq!(
-            normalize_float_scalar(ScalarValue::Float32(Some(-0.0))),
-            ScalarValue::Float32(Some(0.0))
-        );
-        assert_eq!(
-            normalize_float_scalar(ScalarValue::Float16(Some(f16::NEG_ZERO))),
-            ScalarValue::Float16(Some(f16::ZERO))
-        );
-        assert_eq!(
-            normalize_float_scalar(ScalarValue::Float64(None)),
-            ScalarValue::Float64(None)
-        );
-        assert_eq!(
-            normalize_float_scalar(ScalarValue::Int32(Some(0))),
-            ScalarValue::Int32(Some(0))
-        );
     }
 }

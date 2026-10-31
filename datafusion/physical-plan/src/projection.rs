@@ -13,6 +13,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, SortOrderPushdownResult, Statistics,
 };
+use crate::execution_plan::LimitBehavior;
 use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -41,7 +42,9 @@ use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
-use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
+use datafusion_physical_expr_common::physical_expr::{
+    PhysicalExprRef, fmt_sql, is_volatile,
+};
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, PhysicalSortExpr,
 };
@@ -491,6 +494,10 @@ impl ExecutionPlan for ProjectionExec {
         true
     }
 
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::MoveToInput
+    }
+
     fn cardinality_effect(&self) -> CardinalityEffect {
         CardinalityEffect::Equal
     }
@@ -519,10 +526,17 @@ impl ExecutionPlan for ProjectionExec {
         for filter in parent_filters {
             // Check that every column is a valid output column of this
             // projection, then replace each one with the expression at that
-            // output position.
+            // output position. A filter that becomes volatile after the
+            // rewrite must stay above the projection: inlining a volatile
+            // expression evaluates it independently, so the filter would test
+            // a different value than the one the projection outputs.
             if let Some(reassigned) = remapper.try_remap(&filter)? {
                 let rewritten = self.projection_expr().unproject_expr(&reassigned)?;
-                child_parent_filters.push(PushedDownPredicate::supported(rewritten));
+                if is_volatile(&rewritten) {
+                    child_parent_filters.push(PushedDownPredicate::unsupported(filter));
+                } else {
+                    child_parent_filters.push(PushedDownPredicate::supported(rewritten));
+                }
             } else {
                 child_parent_filters.push(PushedDownPredicate::unsupported(filter));
             }
@@ -1569,6 +1583,7 @@ mod tests {
 
     use datafusion_expr::{Operator, ScalarUDF};
     use datafusion_functions::core::arrow_metadata::ArrowMetadataFunc;
+    use datafusion_functions::math::random::RandomFunc;
     use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::expressions::{
         BinaryExpr, CastExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col,
@@ -2227,6 +2242,82 @@ mod tests {
         );
         // Verify the predicate was actually pushed down
         assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_pushdown_volatile_projection_expr() -> Result<()> {
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&input_schema),
+            input_schema.clone(),
+        ));
+
+        // project "a", random() as "r"
+        let random_expr = Arc::new(ScalarFunctionExpr::new(
+            "random",
+            Arc::new(ScalarUDF::new_from_impl(RandomFunc::new())),
+            vec![],
+            Arc::new(Field::new("r", DataType::Float64, false)),
+            Arc::new(ConfigOptions::default()),
+        )) as Arc<dyn PhysicalExpr>;
+        let projection = ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    alias: "a".to_string(),
+                },
+                ProjectionExpr {
+                    expr: random_expr,
+                    alias: "r".to_string(),
+                },
+            ],
+            input,
+        )?;
+
+        // filter "a > 5" is deterministic and is pushed down, rewritten to
+        // reference the input column
+        let deterministic_filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        // filter "r > 0.5" must stay above the projection: unprojecting it
+        // would inline an independent evaluation of random(), so the filter
+        // would test a different value than the one the projection outputs
+        let volatile_filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("r", 1)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Float64(Some(0.5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let description = projection.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![deterministic_filter, Arc::clone(&volatile_filter)],
+            &ConfigOptions::default(),
+        )?;
+
+        let expected_pushed = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let pushed_filters = &description.parent_filters()[0];
+        assert_eq!(pushed_filters.len(), 2);
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
+        assert_eq!(
+            format!("{}", pushed_filters[0].predicate),
+            format!("{}", expected_pushed)
+        );
+        assert!(matches!(pushed_filters[1].discriminant, PushedDown::No));
+        // the unsupported filter is kept unchanged
+        assert_eq!(
+            format!("{}", pushed_filters[1].predicate),
+            format!("{}", volatile_filter)
+        );
 
         Ok(())
     }

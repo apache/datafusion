@@ -462,9 +462,11 @@ jobs:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci"
       - name: Run tests (excluding doctests and datafusion-cli)
+        run: cargo xtask ci step test workspace
+      - name: Run SQLLogicTests with coverage
         env:
           RUST_BACKTRACE: 1
-        run: cargo xtask ci step test workspace
+        run: cargo xtask ci step test slt-coverage
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code
@@ -477,10 +479,20 @@ jobs:
                 echo "$STATUS"
                 exit 1
               fi
-      - name: Upload coverage to codecov.io
+      - name: Upload all-test coverage to codecov.io
         uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
         with:
           files: target/codecov.json
+          flags: all-tests
+          disable_search: true
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+      - name: Upload SQLLogicTest coverage to codecov.io
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5  # v7.1.1
+        with:
+          files: target/codecov-slt.json
+          flags: sqllogictests
+          disable_search: true
           fail_ci_if_error: false
           token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -519,13 +531,6 @@ jobs:
           ci/scripts/retry timeout 120 docker pull "$RUSTFS_IMAGE" \
             || echo "::warning::Could not pre-pull $RUSTFS_IMAGE, the tests will pull it themselves"
       - name: Run tests (excluding doctests)
-        env:
-          RUST_BACKTRACE: 1
-          AWS_ENDPOINT: http://127.0.0.1:9000
-          AWS_ACCESS_KEY_ID: TEST-DataFusionLogin
-          AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
-          TEST_STORAGE_INTEGRATION: 1
-          AWS_ALLOW_HTTP: true
         run: cargo xtask ci step test cli
       - name: Verify Working Directory Clean
         run: git diff --exit-code

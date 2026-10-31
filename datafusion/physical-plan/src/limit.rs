@@ -13,6 +13,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, Statistics,
 };
+use crate::execution_plan::LimitBehavior;
 use crate::execution_plan::{Boundedness, CardinalityEffect};
 use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
 use crate::{
@@ -272,6 +273,13 @@ impl ExecutionPlan for GlobalLimitExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Limit {
+            skip: self.skip,
+            fetch: self.fetch,
+        }
     }
 
     #[cfg(feature = "proto")]
@@ -550,6 +558,13 @@ impl ExecutionPlan for LocalLimitExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Limit {
+            skip: 0,
+            fetch: Some(self.fetch),
+        }
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
