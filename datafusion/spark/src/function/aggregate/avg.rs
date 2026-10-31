@@ -16,8 +16,8 @@ use datafusion_common::{Result, ScalarValue, not_impl_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::{AggregateOrderSensitivity, format_state_name};
 use datafusion_expr::{
-    Accumulator, AggregateUDFImpl, Coercion, EmitTo, GroupsAccumulator, ReversedUDAF,
-    Signature, TypeSignatureClass, Volatility,
+    Accumulator, AggregateUDFImpl, Coercion, DistinctHandling, EmitTo, GroupsAccumulator,
+    ReversedUDAF, Signature, TypeSignatureClass, Volatility,
 };
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::nulls::{
     filtered_null_mask, set_nulls,
@@ -138,6 +138,10 @@ impl AggregateUDFImpl for SparkAvg {
 
     fn signature(&self) -> &Signature {
         &self.signature
+    }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        DistinctHandling::Unsupported
     }
 }
 
@@ -367,6 +371,14 @@ where
 mod tests {
     use super::*;
     use arrow::array::Float64Array;
+
+    #[test]
+    fn avg_reports_distinct_as_unsupported() {
+        assert_eq!(
+            SparkAvg::new().distinct_handling(),
+            DistinctHandling::Unsupported
+        );
+    }
 
     fn make_acc() -> AvgGroupsAccumulator<Float64Type, impl Fn(f64, i64) -> Result<f64>> {
         AvgGroupsAccumulator::<Float64Type, _>::new(&DataType::Float64, |sum, count| {
