@@ -34,7 +34,7 @@ use itertools::Itertools;
 /// `c` the head of the second ordering.
 ///
 /// Pins live in the walk; the equivalence properties it reads do not change.
-pub(super) struct Walk<'a> {
+pub(super) struct SortKeyWalk<'a> {
     props: &'a EquivalenceProperties,
     /// Pinned expressions. Pinning a member of an equivalence class pins all
     /// of its members.
@@ -48,7 +48,7 @@ pub(super) struct Walk<'a> {
     head_idxs: Vec<usize>,
 }
 
-impl<'a> Walk<'a> {
+impl<'a> SortKeyWalk<'a> {
     pub(super) fn new(props: &'a EquivalenceProperties) -> Self {
         Self {
             props,
@@ -221,7 +221,11 @@ impl<'a> Walk<'a> {
             // strict:
             node.data.strictly_order_preserving = true;
         }
-        // Now, check what we know about orderings:
+        // Now, check what we know about orderings. A whole-partition window
+        // such as `SUM(x) OVER (PARTITION BY k)` adds `[k, w]` in all four
+        // directions of `w` (see `OrderingEquivalenceClass::is_expr_partial_const`).
+        // Once `k` is pinned, `w` heads orderings in opposite directions, so it
+        // has one value among the rows that tie on `k`:
         let normal_expr = self.props.eq_group.normalize_expr(Arc::clone(&node.expr));
         if self.is_fixed(&normal_expr) || is_partial_const(self.heads(), &normal_expr) {
             node.data.sort_properties = SortProperties::Singleton;
@@ -231,10 +235,10 @@ impl<'a> Walk<'a> {
         Ok(Transformed::yes(node))
     }
 
-    /// Whether `expr` is fixed (see [`Walk`]). Callers pass `expr` in normal
-    /// form. Pins are stored as given, so a pinned expression that is not in
-    /// normal form is found only through its equivalence class, whose members
-    /// are all pinned.
+    /// Whether `expr` is fixed (see [`SortKeyWalk`]). Callers pass `expr` in
+    /// normal form. Pins are stored as given, so a pinned expression that is
+    /// not in normal form is found only through its equivalence class, whose
+    /// members are all pinned.
     fn is_fixed(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         if expr.is::<Literal>() || self.pinned.contains(expr) {
             return true;

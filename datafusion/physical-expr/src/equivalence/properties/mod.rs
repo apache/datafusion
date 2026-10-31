@@ -5,7 +5,7 @@
 mod dependency; // Submodule containing DependencyMap and Dependencies
 mod joins; // Submodule containing join_equivalence_properties
 mod union; // Submodule containing calculate_union
-mod walk; // Submodule containing Walk
+mod walk; // Submodule containing SortKeyWalk
 
 pub use joins::*;
 pub use union::*;
@@ -18,7 +18,7 @@ use self::dependency::{
     Dependencies, DependencyMap, construct_prefix_orderings,
     generate_dependency_orderings, referred_dependencies,
 };
-use self::walk::Walk;
+use self::walk::SortKeyWalk;
 use crate::equivalence::{
     AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
 };
@@ -650,7 +650,7 @@ impl EquivalenceProperties {
             return Ok(true);
         }
         let keys = normal_reqs.iter().map(|req| (&req.expr, req.options));
-        Ok(Walk::new(self).sorted_prefix_len(keys)? == normal_reqs.len())
+        Ok(SortKeyWalk::new(self).sorted_prefix_len(keys)? == normal_reqs.len())
     }
 
     /// Returns the number of consecutive sort expressions (starting from the
@@ -666,7 +666,7 @@ impl EquivalenceProperties {
         let keys = normal_ordering
             .iter()
             .map(|sort_expr| (&sort_expr.expr, Some(sort_expr.options)));
-        Walk::new(self).sorted_prefix_len(keys)
+        SortKeyWalk::new(self).sorted_prefix_len(keys)
     }
 
     /// Determines the longest normal prefix of `ordering` satisfied by the
@@ -1205,12 +1205,12 @@ impl EquivalenceProperties {
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
     ) -> Result<(Vec<PhysicalSortExpr>, Vec<usize>)> {
-        let mut walk = Walk::new(self);
+        let mut walk = SortKeyWalk::new(self);
         let mut result = vec![];
         // The algorithm is as follows:
         // - Iterate over all the expressions and insert ordered expressions
         //   into the result.
-        // - Pin inserted expressions (see [`Walk`]).
+        // - Pin inserted expressions (see [`SortKeyWalk`]).
         // - Continue the above procedure until no expression is inserted; i.e.
         //   the algorithm reaches a fixed point.
         // This algorithm should reach a fixed point in at most `exprs.len()`
@@ -1300,7 +1300,7 @@ impl EquivalenceProperties {
     /// Returns an [`ExprProperties`] object containing the ordering and range
     /// information for the given expression.
     pub fn get_expr_properties(&self, expr: Arc<dyn PhysicalExpr>) -> ExprProperties {
-        Walk::new(self).expr_properties(expr)
+        SortKeyWalk::new(self).expr_properties(expr)
     }
 
     /// Returns whether `transformed_expr` reports the same ordering direction

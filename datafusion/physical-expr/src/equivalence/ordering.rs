@@ -219,10 +219,7 @@ impl OrderingEquivalenceClass {
     /// This is how a value that is constant only within groups of rows is
     /// recorded, since a `ConstExpr` is constant across all rows. For example,
     /// `SUM(x) OVER (PARTITION BY k)` has one value per `k`, so the window adds
-    /// `[k, w]` once for each of the four directions of `w`. Sort requirement
-    /// checks look at the orderings past the keys they have satisfied, so once
-    /// `k` is satisfied they see `w` in opposite directions, and `w` counts as
-    /// constant.
+    /// `[k, w]` once for each of the four directions of `w`.
     ///
     /// ### Future Improvements
     ///
