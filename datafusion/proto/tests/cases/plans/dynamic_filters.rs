@@ -21,7 +21,7 @@ use datafusion::logical_expr::{JoinType, Operator};
 use datafusion::physical_expr::LexOrdering;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
 use datafusion::physical_optimizer::PhysicalOptimizerRule;
-use datafusion::physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion::physical_optimizer::filter_pushdown::DynamicFilterPushdown;
 use datafusion::physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -409,7 +409,7 @@ fn test_hash_join_with_dynamic_filter_roundtrip() -> Result<()> {
     )?) as Arc<dyn ExecutionPlan>;
 
     // Run the optimizer rule for filter pushdown.
-    let optimizer = FilterPushdown::new_post_optimization();
+    let optimizer = DynamicFilterPushdown::new();
     let plan = optimizer.optimize(hash_join, &config)?;
 
     let ctx = SessionContext::new();
@@ -549,7 +549,7 @@ fn test_aggregate_with_dynamic_filter_roundtrip() -> Result<()> {
     )?) as Arc<dyn ExecutionPlan>;
 
     // Run the optimizer rule for filter pushdown.
-    let optimizer = FilterPushdown::new_post_optimization();
+    let optimizer = DynamicFilterPushdown::new();
     let plan = optimizer.optimize(agg, &config)?;
 
     // Roundtrip with deduplication.
@@ -619,7 +619,7 @@ fn test_aggregate_without_dynamic_filter_roundtrip() -> Result<()> {
 
     let mut config = ConfigOptions::default();
     config.optimizer.enable_aggregate_dynamic_filter_pushdown = true;
-    let optimizer = FilterPushdown::new_post_optimization();
+    let optimizer = DynamicFilterPushdown::new();
     let plan = optimizer.optimize(aggregate, &config)?;
     assert!(
         plan.downcast_ref::<AggregateExec>()
@@ -671,7 +671,7 @@ fn test_sort_topk_with_dynamic_filter_roundtrip() -> Result<()> {
     ) as Arc<dyn ExecutionPlan>;
 
     // Verify the optimizer kept the dynamic filter on the SortExec.
-    let optimizer = FilterPushdown::new_post_optimization();
+    let optimizer = DynamicFilterPushdown::new();
     let plan = optimizer.optimize(sort, &config)?;
 
     // Roundtrip with deduplication.

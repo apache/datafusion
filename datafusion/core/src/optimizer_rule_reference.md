@@ -76,18 +76,18 @@ requirements do not hold, the error names the rule that broke them.
 
 | order | rule                           | phase                   | summary                                                                                                  |
 | ----- | ------------------------------ | ----------------------- | -------------------------------------------------------------------------------------------------------- |
-| 1     | `OutputRequirements`           | add phase               | Adds helper nodes so output requirements survive later physical rewrites.                                |
+| 1     | `AddOutputRequirements`        | -                       | Adds helper nodes so output requirements survive later physical rewrites.                                |
 | 2     | `aggregate_statistics`         | -                       | Uses exact source statistics to answer some aggregates without scanning data.                            |
 | 3     | `EliminateConstantJoin`        | -                       | Replaces inner joins against a single row of literals with a filter that keeps the other input's order.  |
 | 4     | `join_selection`               | -                       | Chooses join implementation, build side, and partition mode from statistics and stream properties.       |
 | 5     | `LimitedDistinctAggregation`   | -                       | Pushes limit hints into grouped distinct-style aggregations when only a small result is needed.          |
-| 6     | `FilterPushdown`               | pre-optimization phase  | Pushes supported physical filters down toward data sources before distribution and sorting are enforced. |
+| 6     | `FilterPushdown`               | -                       | Pushes supported physical filters down toward data sources before distribution and sorting are enforced. |
 | 7     | `WindowTopN`                   | -                       | Replaces eligible row-number window and filter patterns with per-partition TopK execution.               |
 | 8     | `EnsureRequirements`           | -                       | Enforces both distribution and sorting requirements in a single idempotent rule.                         |
 | 9     | `CombinePartialFinalAggregate` | -                       | Collapses adjacent partial and final aggregates when the distributed shape makes them redundant.         |
 | 10    | `OptimizeAggregateOrder`       | -                       | Updates aggregate expressions to use the best ordering once sort requirements are known.                 |
 | 11    | `ProjectionPushdown`           | early pass              | Pushes projections toward inputs before later physical rewrites add more limit and TopK structure.       |
-| 12    | `OutputRequirements`           | remove phase            | Removes the temporary output-requirement helper nodes after requirement-sensitive planning is done.      |
+| 12    | `RemoveOutputRequirements`     | -                       | Removes the temporary output-requirement helper nodes after requirement-sensitive planning is done.      |
 | 13    | `LimitAggregation`             | -                       | Passes a limit hint into eligible aggregations so they can keep fewer accumulator buckets.               |
 | 14    | `LimitPushPastWindows`         | -                       | Pushes fetch limits through bounded window operators when doing so keeps the result correct.             |
 | 15    | `HashJoinBuffering`            | -                       | Adds buffering on the probe side of hash joins so probing can start before build completion.             |
@@ -96,4 +96,4 @@ requirements do not hold, the error names the rule that broke them.
 | 18    | `ProjectionPushdown`           | late pass               | Runs projection pushdown again after limit and TopK rewrites expose new pruning opportunities.           |
 | 19    | `PushdownSort`                 | -                       | Pushes sort requirements into data sources that can already return sorted output.                        |
 | 20    | `EnsureCooperative`            | -                       | Wraps non-cooperative plan parts so long-running tasks yield fairly.                                     |
-| 21    | `FilterPushdown(Post)`         | post-optimization phase | Pushes dynamic filters at the end of optimization, after plan references stop moving.                    |
+| 21    | `DynamicFilterPushdown`        | -                       | Pushes dynamic filters at the end of optimization, after plan references stop moving.                    |

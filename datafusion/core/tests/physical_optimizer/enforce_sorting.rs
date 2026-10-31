@@ -50,7 +50,7 @@ use datafusion_physical_optimizer::enforce_sorting::sort_pushdown::{SortPushDown
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
 use datafusion_physical_optimizer::projection_pushdown::ProjectionPushdown;
-use datafusion_physical_optimizer::output_requirements::{OutputRequirementExec, OutputRequirements};
+use datafusion_physical_optimizer::output_requirements::{OutputRequirementExec, RemoveOutputRequirements};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion::prelude::*;
 use arrow::array::{record_batch, Array, ArrayRef, Int32Array, RecordBatch};
@@ -3740,7 +3740,7 @@ async fn test_keep_sort_above_repartitioned_partial_aggregate() -> Result<()> {
     config.execution.target_partitions = 2;
     config.optimizer.prefer_existing_sort = true;
     let optimized = EnsureRequirements::new().optimize(plan, &config)?;
-    let optimized = OutputRequirements::new_remove_mode().optimize(optimized, &config)?;
+    let optimized = RemoveOutputRequirements::new().optimize(optimized, &config)?;
     assert_snapshot!(displayable(optimized.as_ref()).indent(true), @r"
     SortExec: expr=[k@0 ASC, sum_v[sum]@1 ASC], preserve_partitioning=[true]
       RepartitionExec: partitioning=Hash([k@0], 2), input_partitions=2

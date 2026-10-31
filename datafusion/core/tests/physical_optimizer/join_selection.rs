@@ -31,7 +31,7 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion_physical_optimizer::filter_pushdown::DynamicFilterPushdown;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::collect;
 use datafusion_physical_plan::displayable;
@@ -2078,7 +2078,7 @@ async fn test_join_selection_skips_unbounded_hash_join_with_dynamic_filter() -> 
     Ok(())
 }
 
-/// End-to-end regression for #26106: let `FilterPushdown::new_post_optimization()`
+/// End-to-end regression for #26106: let `DynamicFilterPushdown::new()`
 /// wire up a real dynamic filter, then ensure `JoinSelection` leaves the join
 /// untouched and the plan still executes with correct results.
 ///
@@ -2174,7 +2174,7 @@ async fn test_join_selection_skips_real_dynamic_filter_pushdown() -> Result<()> 
     config.execution.parquet.pushdown_filters = true;
 
     // Real optimizer wiring (not manual `with_dynamic_filter_expr`)
-    let with_filter = FilterPushdown::new_post_optimization().optimize(join, &config)?;
+    let with_filter = DynamicFilterPushdown::new().optimize(join, &config)?;
     let join_with_filter = with_filter
         .downcast_ref::<HashJoinExec>()
         .expect("plan should still be a HashJoinExec after pushdown");

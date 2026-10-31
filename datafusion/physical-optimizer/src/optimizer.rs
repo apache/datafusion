@@ -14,11 +14,11 @@ use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
 use crate::eliminate_constant_join::EliminateConstantJoin;
 use crate::ensure_coop::EnsureCooperative;
 use crate::ensure_requirements::EnsureRequirements;
-use crate::filter_pushdown::FilterPushdown;
+use crate::filter_pushdown::{DynamicFilterPushdown, FilterPushdown};
 use crate::join_selection::JoinSelection;
 use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
-use crate::output_requirements::OutputRequirements;
+use crate::output_requirements::{AddOutputRequirements, RemoveOutputRequirements};
 use crate::projection_pushdown::ProjectionPushdown;
 use crate::topk_aggregation::TopKAggregation;
 use crate::topk_repartition::TopKRepartition;
@@ -102,7 +102,8 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 ///
 /// - [`EnsureRequirements`] inserts the repartitioning and sorting needed to
 ///   satisfy the distribution and ordering requirements.
-/// - [`OutputRequirements`] records output requirements.
+/// - [`AddOutputRequirements`] records output requirements, and
+///   [`RemoveOutputRequirements`] drops the record again.
 ///
 /// Custom pipelines must keep these rules in a compatible relative order. We
 /// are working to remove these exceptions, so that all rules can be reordered
@@ -187,7 +188,7 @@ impl PhysicalOptimizer {
         let rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> = vec![
             // If there is a output requirement of the query, make sure that
             // this information is not lost across different rules during optimization.
-            Arc::new(OutputRequirements::new_add_mode()),
+            Arc::new(AddOutputRequirements::new()),
             Arc::new(AggregateStatistics::new()),
             // Runs after AggregateStatistics, which can fold a scalar subquery into a
             // row of literals, and before EnsureRequirements, so that the filter
@@ -244,7 +245,7 @@ impl PhysicalOptimizer {
             Arc::new(ProjectionPushdown::new()),
             // Remove the ancillary output requirement operator since we are done with the planning
             // phase.
-            Arc::new(OutputRequirements::new_remove_mode()),
+            Arc::new(RemoveOutputRequirements::new()),
             // The aggregation limiter will try to find situations where the accumulator count
             // is not tied to the cardinality, i.e. when the output of the aggregation is passed
             // into an `order by max(x) limit y`. In this case it will copy the limit value down
@@ -280,7 +281,7 @@ impl PhysicalOptimizer {
             // This FilterPushdown handles dynamic filters that may have references to the source ExecutionPlan.
             // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
             // See `FilterPushdownPhase` for more details.
-            Arc::new(FilterPushdown::new_post_optimization()),
+            Arc::new(DynamicFilterPushdown::new()),
             // There is no `SanityCheckPlan` rule at the end of this list. The
             // physical planner runs the same check on the final plan, after
             // every rule including the ones appended by the user. See

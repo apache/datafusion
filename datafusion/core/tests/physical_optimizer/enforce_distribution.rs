@@ -54,7 +54,9 @@ use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::enforce_distribution::*;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
-use datafusion_physical_optimizer::output_requirements::OutputRequirements;
+use datafusion_physical_optimizer::output_requirements::{
+    AddOutputRequirements, RemoveOutputRequirements,
+};
 use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
@@ -764,7 +766,7 @@ impl TestConfig {
         optimizers_to_run: &[Run],
     ) -> Result<Arc<dyn ExecutionPlan>> {
         // Add the ancillary output requirements operator at the start:
-        let optimizer = OutputRequirements::new_add_mode();
+        let optimizer = AddOutputRequirements::new();
         let mut optimized = optimizer.optimize(plan.clone(), &self.config)?;
 
         // This file has 2 rules that use tree node, apply these rules to original plan consecutively
@@ -821,7 +823,7 @@ impl TestConfig {
         }
 
         // Remove the ancillary output requirements operator when done:
-        let optimizer = OutputRequirements::new_remove_mode();
+        let optimizer = RemoveOutputRequirements::new();
         let optimized = optimizer.optimize(optimized, &self.config)?;
 
         Ok(optimized)

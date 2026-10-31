@@ -367,38 +367,54 @@ use itertools::{Itertools, izip};
 /// [`FilterExec`]: datafusion_physical_plan::filter::FilterExec
 /// [`ProjectionExec`]: datafusion_physical_plan::projection::ProjectionExec
 /// [`AggregateExec`]: datafusion_physical_plan::aggregates::AggregateExec
-#[derive(Debug)]
-pub struct FilterPushdown {
-    phase: FilterPushdownPhase,
-    name: String,
-}
+#[derive(Debug, Default)]
+pub struct FilterPushdown {}
 
 impl FilterPushdown {
-    fn new_with_phase(phase: FilterPushdownPhase) -> Self {
-        let name = match phase {
-            FilterPushdownPhase::Pre => "FilterPushdown",
-            FilterPushdownPhase::Post => "FilterPushdown(Post)",
-        }
-        .to_string();
-        Self { phase, name }
-    }
-
-    /// Create a new [`FilterPushdown`] optimizer rule that runs in the pre-optimization phase.
-    /// See [`FilterPushdownPhase`] for more details.
+    /// Create a new [`FilterPushdown`] rule, which pushes static filters
+    /// ([`FilterPushdownPhase::Pre`]).
     pub fn new() -> Self {
-        Self::new_with_phase(FilterPushdownPhase::Pre)
-    }
-
-    /// Create a new [`FilterPushdown`] optimizer rule that runs in the post-optimization phase.
-    /// See [`FilterPushdownPhase`] for more details.
-    pub fn new_post_optimization() -> Self {
-        Self::new_with_phase(FilterPushdownPhase::Post)
+        Self {}
     }
 }
 
-impl Default for FilterPushdown {
-    fn default() -> Self {
-        Self::new()
+/// Pushes dynamic filters, such as those a TopK `SortExec` or a `HashJoinExec`
+/// creates, into the operators that can use them
+/// ([`FilterPushdownPhase::Post`]). It runs after the other optimizer rules, so
+/// that later rewrites do not break the links between a filter's producer and
+/// its consumers. See [`FilterPushdown`] for how pushdown works.
+#[derive(Debug, Default)]
+pub struct DynamicFilterPushdown {}
+
+impl DynamicFilterPushdown {
+    /// Create a new [`DynamicFilterPushdown`] rule.
+    pub fn new() -> Self {
+        Self {}
+    }
+}
+
+impl PhysicalOptimizerRule for DynamicFilterPushdown {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(push_down_filters(
+            &Arc::clone(&plan),
+            vec![],
+            config,
+            FilterPushdownPhase::Post,
+        )?
+        .updated_node
+        .unwrap_or(plan))
+    }
+
+    fn name(&self) -> &str {
+        "DynamicFilterPushdown"
+    }
+
+    fn schema_check(&self) -> bool {
+        true // Filter pushdown does not change the schema of the plan
     }
 }
 
@@ -408,15 +424,18 @@ impl PhysicalOptimizerRule for FilterPushdown {
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        Ok(
-            push_down_filters(&Arc::clone(&plan), vec![], config, self.phase)?
-                .updated_node
-                .unwrap_or(plan),
-        )
+        Ok(push_down_filters(
+            &Arc::clone(&plan),
+            vec![],
+            config,
+            FilterPushdownPhase::Pre,
+        )?
+        .updated_node
+        .unwrap_or(plan))
     }
 
     fn name(&self) -> &str {
-        &self.name
+        "FilterPushdown"
     }
 
     fn schema_check(&self) -> bool {
