@@ -17,4 +17,8 @@
   under the License.
 -->
 
-See the [Contributor Guide](https://datafusion.apache.org/contributor-guide/index.html)
+See the [Contributor Guide](https://datafusion.apache.org/contributor-guide/index.html).
+
+AI-assisted contributions require meaningful, task-specific human supervision.
+Fully autonomous agent contributions are not accepted. See the
+[AI Policy](https://datafusion.apache.org/contributor-guide/ai-policy.html).
