@@ -62,11 +62,13 @@ use datafusion_optimizer::{
 };
 use datafusion_physical_expr::create_physical_expr;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
+use datafusion_physical_optimizer::analyzer::PhysicalAnalyzer;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion_session::{
-    CatalogProvider, PhysicalOptimizerContext, PhysicalOptimizerRule, Session,
+    CatalogProvider, PhysicalAnalyzerRule, PhysicalOptimizerContext,
+    PhysicalOptimizerRule, Session,
 };
 #[cfg(feature = "sql")]
 use datafusion_sql::{
@@ -157,6 +159,9 @@ struct SessionStateInner {
     type_planner: Option<Arc<dyn TypePlanner>>,
     /// Responsible for optimizing a logical plan
     optimizer: Optimizer,
+    /// Rules that run before requirements are enforced, ending with
+    /// `EnsureRequirements`
+    physical_analyzers: PhysicalAnalyzer,
     /// Responsible for optimizing a physical execution plan
     physical_optimizers: PhysicalOptimizer,
     /// Responsible for planning `LogicalPlan`s, and `ExecutionPlan`
@@ -261,6 +266,7 @@ impl Debug for SessionState {
         ret.field("query_planners", &self.inner.query_planner)
             .field("analyzer", &self.inner.analyzer)
             .field("optimizer", &self.inner.optimizer)
+            .field("physical_analyzers", &self.inner.physical_analyzers)
             .field("physical_optimizers", &self.inner.physical_optimizers)
             .field("table_functions", &self.inner.table_functions)
             .field("scalar_functions", &self.inner.scalar_functions)
@@ -299,6 +305,10 @@ impl Session for SessionState {
 
     fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
         SessionState::physical_optimizers(self)
+    }
+
+    fn physical_analyzers(&self) -> &[Arc<dyn PhysicalAnalyzerRule + Send + Sync>] {
+        SessionState::physical_analyzers(self)
     }
 
     fn statistics_registry(&self) -> Option<&StatisticsRegistry> {
@@ -961,6 +971,11 @@ impl SessionState {
         &self.inner.physical_optimizers.rules
     }
 
+    /// Return the physical analyzers
+    pub fn physical_analyzers(&self) -> &[Arc<dyn PhysicalAnalyzerRule + Send + Sync>] {
+        &self.inner.physical_analyzers.rules
+    }
+
     /// return the configuration options
     pub fn config_options(&self) -> &Arc<ConfigOptions> {
         self.inner.config.options()
@@ -1159,6 +1174,7 @@ pub struct SessionStateBuilder {
     #[cfg(feature = "sql")]
     type_planner: Option<Arc<dyn TypePlanner>>,
     optimizer: Option<Optimizer>,
+    physical_analyzers: Option<PhysicalAnalyzer>,
     physical_optimizers: Option<PhysicalOptimizer>,
     query_planner: Option<Arc<dyn QueryPlanner + Send + Sync>>,
     catalog_list: Option<Arc<dyn CatalogProviderList>>,
@@ -1203,6 +1219,7 @@ impl SessionStateBuilder {
             #[cfg(feature = "sql")]
             type_planner: None,
             optimizer: None,
+            physical_analyzers: None,
             physical_optimizers: None,
             query_planner: None,
             catalog_list: None,
@@ -1265,6 +1282,7 @@ impl SessionStateBuilder {
             #[cfg(feature = "sql")]
             type_planner: existing.type_planner,
             optimizer: Some(existing.optimizer),
+            physical_analyzers: Some(existing.physical_analyzers),
             physical_optimizers: Some(existing.physical_optimizers),
             query_planner: Some(existing.query_planner),
             catalog_list: Some(existing.catalog_list),
@@ -1454,6 +1472,15 @@ impl SessionStateBuilder {
         let mut rules = self.physical_optimizer_rules.unwrap_or_default();
         rules.push(physical_optimizer_rule);
         self.physical_optimizer_rules = Some(rules);
+        self
+    }
+
+    /// Set the [`PhysicalAnalyzerRule`]s run before physical optimization.
+    pub fn with_physical_analyzer_rules(
+        mut self,
+        physical_analyzers: Vec<Arc<dyn PhysicalAnalyzerRule + Send + Sync>>,
+    ) -> Self {
+        self.physical_analyzers = Some(PhysicalAnalyzer::with_rules(physical_analyzers));
         self
     }
 
@@ -1704,6 +1731,7 @@ impl SessionStateBuilder {
             #[cfg(feature = "sql")]
             type_planner,
             optimizer,
+            physical_analyzers,
             physical_optimizers,
             query_planner,
             catalog_list,
@@ -1741,6 +1769,7 @@ impl SessionStateBuilder {
             #[cfg(feature = "sql")]
             type_planner,
             optimizer: optimizer.unwrap_or_default(),
+            physical_analyzers: physical_analyzers.unwrap_or_default(),
             physical_optimizers: physical_optimizers.unwrap_or_default(),
             query_planner: query_planner
                 .unwrap_or_else(|| Arc::new(DefaultQueryPlanner {})),
@@ -1944,6 +1973,11 @@ impl SessionStateBuilder {
         &mut self.physical_optimizers
     }
 
+    /// Returns the current physical_analyzers value
+    pub fn physical_analyzers(&mut self) -> &mut Option<PhysicalAnalyzer> {
+        &mut self.physical_analyzers
+    }
+
     /// Returns the current query_planner value
     pub fn query_planner(&mut self) -> &mut Option<Arc<dyn QueryPlanner + Send + Sync>> {
         &mut self.query_planner
@@ -2083,6 +2117,7 @@ impl Debug for SessionStateBuilder {
             .field("analyzer", &self.analyzer)
             .field("optimizer_rules", &self.optimizer_rules)
             .field("optimizer", &self.optimizer)
+            .field("physical_analyzers", &self.physical_analyzers)
             .field("physical_optimizer_rules", &self.physical_optimizer_rules)
             .field("physical_optimizers", &self.physical_optimizers)
             .field("table_functions", &self.table_functions)

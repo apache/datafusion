@@ -21,7 +21,7 @@ use datafusion_execution::config::SessionConfig;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{self, cast, col};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::PhysicalAnalyzerRule;
 use datafusion_physical_optimizer::limited_distinct_aggregation::LimitedDistinctAggregation;
 use datafusion_physical_plan::{
     ExecutionPlan,
@@ -385,7 +385,7 @@ async fn test_single_local_is_unchanged() -> Result<()> {
         4, // fetch
     );
     let plan = LimitedDistinctAggregation::new()
-        .optimize(Arc::new(limit_exec), &ConfigOptions::new())?;
+        .analyze(Arc::new(limit_exec), &ConfigOptions::new())?;
     let actual = displayable(plan.as_ref()).indent(true).to_string();
     assert_snapshot!(
         actual,
@@ -433,7 +433,7 @@ async fn test_single_global_is_unchanged() -> Result<()> {
         Some(3), // fetch
     );
     let plan = LimitedDistinctAggregation::new()
-        .optimize(Arc::new(limit_exec), &ConfigOptions::new())?;
+        .analyze(Arc::new(limit_exec), &ConfigOptions::new())?;
     let actual = displayable(plan.as_ref()).indent(true).to_string();
     assert_snapshot!(
         actual,
@@ -474,7 +474,7 @@ async fn test_distinct_cols_different_than_group_by_cols() -> Result<()> {
     // Only the outer pair receives the hint: four distinct (a, b) pairs might
     // contain fewer than four distinct a values.
     let plan = LimitedDistinctAggregation::new()
-        .optimize(Arc::new(limit_exec), &ConfigOptions::new())?;
+        .analyze(Arc::new(limit_exec), &ConfigOptions::new())?;
     let actual = displayable(plan.as_ref()).indent(true).to_string();
     assert_snapshot!(
         actual,

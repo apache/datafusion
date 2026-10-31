@@ -12,6 +12,7 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
@@ -36,50 +37,36 @@ use datafusion_physical_plan::{
     SendableRecordBatchStream, StatisticsArgs,
 };
 
-/// This rule either adds or removes [`OutputRequirements`]s to/from the physical
-/// plan according to its `mode` attribute, which is set by the constructors
-/// `new_add_mode` and `new_remove_mode`. With this rule, we can keep track of
-/// the global requirements (ordering and distribution) across rules.
+/// Records the query's output requirement (its ordering and single output
+/// partition) as an [`OutputRequirementExec`] above the operator that
+/// establishes it, so that `EnsureRequirements` keeps it.
 ///
-/// The primary use case of this node and rule is to specify and preserve the desired output
-/// ordering and distribution the entire plan. When sending to a single client, a single partition may
-/// be desirable, but when sending to a multi-partitioned writer, keeping multiple partitions may be
-/// better.
-#[derive(Debug)]
-pub struct OutputRequirements {
-    mode: RuleMode,
-}
+/// It is idempotent: on a plan that already contains an
+/// `OutputRequirementExec` (at the root or below it), it returns the plan
+/// unchanged. [`RemoveOutputRequirements`] removes the marker again.
+#[derive(Debug, Default)]
+pub struct AddOutputRequirements {}
 
-impl OutputRequirements {
-    /// Create a new rule which works in `Add` mode; i.e. it simply adds a
-    /// top-level [`OutputRequirementExec`] into the physical plan to keep track
-    /// of global ordering and distribution requirements if there are any.
-    /// Note that this rule should run at the beginning. It is idempotent: when
-    /// invoked on a plan that already contains an `OutputRequirementExec` (at
-    /// the root or below it), it returns the plan unchanged.
-    pub fn new_add_mode() -> Self {
-        Self {
-            mode: RuleMode::Add,
-        }
-    }
-
-    /// Create a new rule which works in `Remove` mode; i.e. it simply removes
-    /// the top-level [`OutputRequirementExec`] from the physical plan if there is
-    /// any. We do this because a `OutputRequirementExec` is an ancillary,
-    /// non-executable operator whose sole purpose is to track global
-    /// requirements during optimization. Therefore, a
-    /// `OutputRequirementExec` should not appear in the final plan.
-    pub fn new_remove_mode() -> Self {
-        Self {
-            mode: RuleMode::Remove,
-        }
+impl AddOutputRequirements {
+    /// Create a new [`AddOutputRequirements`] rule.
+    pub fn new() -> Self {
+        Self {}
     }
 }
 
-#[derive(Debug, Ord, PartialOrd, PartialEq, Eq, Hash)]
-enum RuleMode {
-    Add,
-    Remove,
+/// Removes the [`OutputRequirementExec`]s that [`AddOutputRequirements`]
+/// added, once the rules that need the output requirement have run. The
+/// marker is not executable, so it must not reach the final plan: the planner
+/// also runs this rule after the optimizer rules, for custom optimizer lists
+/// that leave it out.
+#[derive(Debug, Default)]
+pub struct RemoveOutputRequirements {}
+
+impl RemoveOutputRequirements {
+    /// Create a new [`RemoveOutputRequirements`] rule.
+    pub fn new() -> Self {
+        Self {}
+    }
 }
 
 /// An ancillary, non-executable operator whose sole purpose is to track global
@@ -87,7 +74,7 @@ enum RuleMode {
 /// - the ordering requirement in its `order_requirement` attribute.
 /// - the distribution requirement in its `dist_requirement` attribute.
 ///
-/// See [`OutputRequirements`] for more details
+/// See [`AddOutputRequirements`] for more details
 #[derive(Debug)]
 pub struct OutputRequirementExec {
     input: Arc<dyn ExecutionPlan>,
@@ -338,28 +325,42 @@ impl ExecutionPlan for OutputRequirementExec {
     }
 }
 
-impl PhysicalOptimizerRule for OutputRequirements {
+impl PhysicalAnalyzerRule for AddOutputRequirements {
+    fn analyze(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        _config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        require_top_ordering(plan)
+    }
+
+    fn name(&self) -> &str {
+        "AddOutputRequirements"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+}
+
+impl PhysicalOptimizerRule for RemoveOutputRequirements {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         _config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        match self.mode {
-            RuleMode::Add => require_top_ordering(plan),
-            RuleMode::Remove => plan
-                .transform_up(|plan| {
-                    if let Some(sort_req) = plan.downcast_ref::<OutputRequirementExec>() {
-                        Ok(Transformed::yes(sort_req.input()))
-                    } else {
-                        Ok(Transformed::no(plan))
-                    }
-                })
-                .data(),
-        }
+        plan.transform_up(|plan| {
+            if let Some(marker) = plan.downcast_ref::<OutputRequirementExec>() {
+                Ok(Transformed::yes(marker.input()))
+            } else {
+                Ok(Transformed::no(plan))
+            }
+        })
+        .data()
     }
 
     fn name(&self) -> &str {
-        "OutputRequirements"
+        "RemoveOutputRequirements"
     }
 
     fn schema_check(&self) -> bool {

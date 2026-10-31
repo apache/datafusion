@@ -2,16 +2,15 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! [`EnsureRequirements`] optimizer rule that enforces distribution and
+//! [`EnsureRequirements`] analyzer rule that enforces distribution and
 //! sorting requirements together so that the two never invalidate each other.
 //!
-//! # Placement in the Optimizer Pipeline
+//! # Placement in the Physical Analyzer
 //!
-//! Unlike most optimizer rules, this rule modifies an unexecutable physical
-//! plan that does not satisfy distribution and ordering requirements into an
-//! *executable* one. A pipeline that omits this rule may produce a plan that
-//! is not runnable or that returns incorrect results. See the [Physical
-//! Optimizer](crate::optimizer) for details.
+//! This rule turns a physical plan that does not satisfy its distribution and
+//! ordering requirements into an *executable* one. It is the last rule of the
+//! [physical analyzer](crate::analyzer); a pipeline that omits it may produce a
+//! plan that is not runnable or that returns incorrect results.
 //!
 //! # Motivation
 //!
@@ -23,7 +22,7 @@
 //!
 //! # Architecture
 //!
-//! `optimize` runs several tree traversals. The defining property of this
+//! `analyze` runs several tree traversals. The defining property of this
 //! rule is **Phase 2**: a single combined bottom-up pass that resolves
 //! distribution *and* sorting for each node together. The surrounding phases
 //! are independent traversals (top-down join-key reorder, then several
@@ -31,7 +30,7 @@
 //! further in a follow-up.
 //!
 //! ```text
-//! EnsureRequirements::optimize(plan)
+//! EnsureRequirements::analyze(plan)
 //! │
 //! ├─ Phase 0: top-down Interleave → Union      (replace_interleave_with_union)
 //! │
@@ -140,7 +139,7 @@ pub mod enforce_sorting;
 
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
 use crate::optimizer::{
     ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
 };
@@ -162,22 +161,22 @@ use datafusion_physical_plan::ExecutionPlan;
 pub struct EnsureRequirements {}
 
 impl EnsureRequirements {
-    /// Create a new `EnsureRequirements` optimizer rule.
+    /// Create a new `EnsureRequirements` analyzer rule.
     pub fn new() -> Self {
         Self {}
     }
 }
 
-impl PhysicalOptimizerRule for EnsureRequirements {
-    fn optimize(
+impl PhysicalAnalyzerRule for EnsureRequirements {
+    fn analyze(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+        self.analyze_with_context(plan, &ConfigOnlyContext::new(config))
     }
 
-    fn optimize_with_context(
+    fn analyze_with_context(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         context: &dyn PhysicalOptimizerContext,

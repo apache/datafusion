@@ -20,7 +20,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::{JoinSide, JoinType, Result};
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, lit};
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::PhysicalAnalyzerRule;
 use datafusion_physical_optimizer::eliminate_constant_join::EliminateConstantJoin;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
@@ -71,8 +71,8 @@ async fn keeps_join_with_multi_row_constant() -> Result<()> {
         None,
     )?);
 
-    let optimized = EliminateConstantJoin::new()
-        .optimize(Arc::clone(&join), &ConfigOptions::new())?;
+    let optimized =
+        EliminateConstantJoin::new().analyze(Arc::clone(&join), &ConfigOptions::new())?;
     assert_eq!(rows(optimized).await?, rows(join).await?);
     Ok(())
 }
@@ -108,8 +108,8 @@ async fn keeps_join_with_lambda_filter() -> Result<()> {
         .create_physical_plan()
         .await?;
 
-    let optimized = EliminateConstantJoin::new()
-        .optimize(Arc::clone(&join), &ConfigOptions::new())?;
+    let optimized =
+        EliminateConstantJoin::new().analyze(Arc::clone(&join), &ConfigOptions::new())?;
     assert_eq!(rows(optimized).await?, rows(join).await?);
     Ok(())
 }

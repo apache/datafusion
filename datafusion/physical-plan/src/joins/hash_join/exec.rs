@@ -1349,7 +1349,7 @@ impl HashJoinExec {
         assert_or_internal_err!(
             self.dynamic_filter.is_none(),
             "Cannot swap HashJoinExec inputs after dynamic filters have been constructed. \
-             Optimizer rules that reorder join inputs must run before optimizer rules `FilterPushdown::new_post_optimization()`"
+             Optimizer rules that reorder join inputs must run before optimizer rules `DynamicFilterPushdown::new()`"
         );
 
         let left = self.left();

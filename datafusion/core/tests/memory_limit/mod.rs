@@ -42,7 +42,7 @@ use datafusion_execution::memory_pool::{
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::PhysicalAnalyzerRule;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::collect as collect_batches;
 use datafusion_physical_plan::common::collect;
@@ -1403,7 +1403,12 @@ impl TestCase {
             .with_runtime_env(runtime)
             .with_default_features();
         let builder = match scenario.rules() {
-            Some(rules) => builder.with_physical_optimizer_rules(rules),
+            // A scenario that pins a custom rule set does so to keep
+            // memory-hungry operators, such as the repartitions and sorts that
+            // enforcement adds, out of the plan.
+            Some(rules) => builder
+                .with_physical_analyzer_rules(rules)
+                .with_physical_optimizer_rules(vec![]),
             None => builder,
         };
 
@@ -1583,8 +1588,8 @@ impl Scenario {
         }
     }
 
-    /// return specific physical optimizer rules to use
-    fn rules(&self) -> Option<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>> {
+    /// return specific physical analyzer rules to use, with no optimizer rules
+    fn rules(&self) -> Option<Vec<Arc<dyn PhysicalAnalyzerRule + Send + Sync>>> {
         match self {
             Self::AccessLog => {
                 // Disabling physical optimizer rules to avoid sorts /

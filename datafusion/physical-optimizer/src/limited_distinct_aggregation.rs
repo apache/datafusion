@@ -17,7 +17,7 @@ use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 
-use crate::PhysicalOptimizerRule;
+use crate::analyzer::PhysicalAnalyzerRule;
 
 /// Pushes a soft limit into unordered DISTINCT aggregations. For
 /// `SELECT DISTINCT a FROM t LIMIT 10`, any ten distinct values are sufficient:
@@ -147,8 +147,8 @@ impl Default for LimitedDistinctAggregation {
     }
 }
 
-impl PhysicalOptimizerRule for LimitedDistinctAggregation {
-    fn optimize(
+impl PhysicalAnalyzerRule for LimitedDistinctAggregation {
+    fn analyze(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,

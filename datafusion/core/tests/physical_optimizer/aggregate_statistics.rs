@@ -30,7 +30,7 @@ use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
 use datafusion_physical_expr::expressions::{self, cast};
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::PhysicalAnalyzerRule;
 use datafusion_physical_optimizer::aggregate_statistics::AggregateStatistics;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
@@ -73,7 +73,7 @@ async fn assert_count_optim_success(
     let plan: Arc<dyn ExecutionPlan> = Arc::new(plan);
 
     let config = ConfigOptions::new();
-    let optimized = AggregateStatistics::new().optimize(Arc::clone(&plan), &config)?;
+    let optimized = AggregateStatistics::new().analyze(Arc::clone(&plan), &config)?;
 
     // A ProjectionExec is a sign that the count optimization was applied
     assert!(optimized.is::<ProjectionExec>());
@@ -270,7 +270,7 @@ async fn test_count_inexact_stat() -> Result<()> {
     )?;
 
     let conf = ConfigOptions::new();
-    let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+    let optimized = AggregateStatistics::new().analyze(Arc::new(final_agg), &conf)?;
 
     // check that the original ExecutionPlan was not replaced
     assert!(optimized.is::<AggregateExec>());
@@ -314,7 +314,7 @@ async fn test_count_with_nulls_inexact_stat() -> Result<()> {
     )?;
 
     let conf = ConfigOptions::new();
-    let optimized = AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+    let optimized = AggregateStatistics::new().analyze(Arc::new(final_agg), &conf)?;
 
     // check that the original ExecutionPlan was not replaced
     assert!(optimized.is::<AggregateExec>());
@@ -514,8 +514,7 @@ async fn test_count_distinct_optimization() -> Result<()> {
         )?;
 
         let conf = ConfigOptions::new();
-        let optimized =
-            AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+        let optimized = AggregateStatistics::new().analyze(Arc::new(final_agg), &conf)?;
 
         if case.expect_optimized {
             assert!(
@@ -812,8 +811,7 @@ async fn test_sum_from_statistics() -> Result<()> {
         )?;
 
         let conf = ConfigOptions::new();
-        let optimized =
-            AggregateStatistics::new().optimize(Arc::new(final_agg), &conf)?;
+        let optimized = AggregateStatistics::new().analyze(Arc::new(final_agg), &conf)?;
 
         if let Some(expected_value) = case.expected_value {
             assert!(

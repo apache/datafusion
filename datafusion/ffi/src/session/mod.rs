@@ -49,7 +49,8 @@ use datafusion_proto::logical_plan::to_proto::serialize_expr;
 use datafusion_proto::physical_plan::DefaultPhysicalExtensionCodec;
 use datafusion_proto::protobuf::LogicalExprNode;
 use datafusion_session::{
-    CatalogProviderList, PhysicalOptimizerRule, QueryPlanner, Session,
+    CatalogProviderList, PhysicalAnalyzerRule, PhysicalOptimizerRule, QueryPlanner,
+    Session,
 };
 use prost::Message;
 
@@ -62,6 +63,7 @@ use crate::arrow_wrappers::WrappedSchema;
 use crate::catalog_provider_list::FFI_CatalogProviderList;
 use crate::execution::FFI_TaskContext;
 use crate::execution_plan::FFI_ExecutionPlan;
+use crate::physical_analyzer::FFI_PhysicalAnalyzerRule;
 use crate::physical_expr::FFI_PhysicalExpr;
 use crate::physical_optimizer::FFI_PhysicalOptimizerRule;
 use crate::proto::logical_extension_codec::FFI_LogicalExtensionCodec;
@@ -153,6 +155,9 @@ pub(crate) struct FFI_SessionRef {
     /// Utility to identify when FFI objects are accessed locally through
     /// the foreign interface.
     pub library_marker_id: extern "C" fn() -> usize,
+
+    /// The session's physical analyzer rules.
+    physical_analyzers: unsafe extern "C" fn(&Self) -> SVec<FFI_PhysicalAnalyzerRule>,
 }
 
 unsafe impl Send for FFI_SessionRef {}
@@ -358,6 +363,18 @@ unsafe extern "C" fn physical_optimizers_fn_wrapper(
         .collect()
 }
 
+unsafe extern "C" fn physical_analyzers_fn_wrapper(
+    session: &FFI_SessionRef,
+) -> SVec<FFI_PhysicalAnalyzerRule> {
+    let runtime = unsafe { session.runtime().cloned() };
+    session
+        .inner()
+        .physical_analyzers()
+        .iter()
+        .map(|rule| FFI_PhysicalAnalyzerRule::new(Arc::clone(rule), runtime.clone()))
+        .collect()
+}
+
 unsafe extern "C" fn release_fn_wrapper(provider: &mut FFI_SessionRef) {
     unsafe {
         let private_data =
@@ -399,6 +416,7 @@ unsafe extern "C" fn clone_fn_wrapper(provider: &FFI_SessionRef) -> FFI_SessionR
             version: super::version,
             private_data,
             library_marker_id: crate::get_library_marker_id,
+            physical_analyzers: physical_analyzers_fn_wrapper,
         }
     }
 }
@@ -491,6 +509,7 @@ impl FFI_SessionRef {
             version: super::version,
             private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
+            physical_analyzers: physical_analyzers_fn_wrapper,
         }
     }
 }
@@ -523,6 +542,7 @@ pub struct ForeignSession {
     props: ExecutionProps,
     query_planner: OnceLock<Arc<dyn QueryPlanner + Send + Sync>>,
     physical_optimizers: OnceLock<Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>>,
+    physical_analyzers: OnceLock<Vec<Arc<dyn PhysicalAnalyzerRule + Send + Sync>>>,
 }
 
 unsafe impl Send for ForeignSession {}
@@ -597,6 +617,7 @@ impl TryFrom<&FFI_SessionRef> for ForeignSession {
                 props: Default::default(),
                 query_planner: OnceLock::new(),
                 physical_optimizers: OnceLock::new(),
+                physical_analyzers: OnceLock::new(),
             })
         }
     }
@@ -756,6 +777,15 @@ impl Session for ForeignSession {
     fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
         self.physical_optimizers.get_or_init(|| unsafe {
             (self.session.physical_optimizers)(&self.session)
+                .into_iter()
+                .map(|rule| (&rule).into())
+                .collect()
+        })
+    }
+
+    fn physical_analyzers(&self) -> &[Arc<dyn PhysicalAnalyzerRule + Send + Sync>] {
+        self.physical_analyzers.get_or_init(|| unsafe {
+            (self.session.physical_analyzers)(&self.session)
                 .into_iter()
                 .map(|rule| (&rule).into())
                 .collect()
@@ -959,6 +989,17 @@ mod tests {
             foreign_session.physical_optimizers().len(),
             state.physical_optimizers().len()
         );
+        let analyzer_names = |rules: &[Arc<dyn PhysicalAnalyzerRule + Send + Sync>]| {
+            rules
+                .iter()
+                .map(|r| r.name().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert!(!state.physical_analyzers().is_empty());
+        assert_eq!(
+            analyzer_names(foreign_session.physical_analyzers()),
+            analyzer_names(state.physical_analyzers())
+        );
         assert!(foreign_session.statistics_registry().is_none());
         let planned = foreign_session
             .query_planner()
@@ -989,6 +1030,41 @@ mod tests {
             assert!(local_udwfs.contains(udwf));
         }
 
+        Ok(())
+    }
+
+    /// Planning through a `ForeignSession` runs the owning session's physical
+    /// analyzer rules, so each join's `PartitionMode::Auto` is resolved.
+    #[tokio::test]
+    async fn test_foreign_session_runs_physical_analyzers() -> Result<()> {
+        let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
+        ctx.sql("CREATE TABLE t (a INT) AS VALUES (1), (2)")
+            .await?
+            .collect()
+            .await?;
+        let logical_plan = ctx
+            .sql("SELECT t1.a FROM t t1 JOIN t t2 ON t1.a = t2.a")
+            .await?
+            .into_optimized_plan()?;
+
+        let state = ctx.state();
+        let logical_codec = FFI_LogicalExtensionCodec::new(
+            Arc::new(DefaultLogicalExtensionCodec {}),
+            None,
+            task_ctx_provider,
+        );
+        let local_session = FFI_SessionRef::new(&state, None, logical_codec);
+        let foreign_session = ForeignSession::try_from(&local_session)?;
+
+        let plan = foreign_session
+            .query_planner()
+            .create_physical_plan(&logical_plan, &foreign_session)
+            .await?;
+        let plan = datafusion_physical_plan::displayable(plan.as_ref())
+            .indent(true)
+            .to_string();
+        assert!(plan.contains("HashJoinExec"), "{plan}");
+        assert!(!plan.contains("mode=Auto"), "{plan}");
         Ok(())
     }
 

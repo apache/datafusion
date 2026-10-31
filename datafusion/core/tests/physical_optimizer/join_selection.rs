@@ -31,7 +31,7 @@ use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 use datafusion_physical_optimizer::PhysicalOptimizerContext;
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
-use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
+use datafusion_physical_optimizer::filter_pushdown::DynamicFilterPushdown;
 use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_plan::collect;
 use datafusion_physical_plan::displayable;
@@ -60,6 +60,7 @@ use object_store::memory::InMemory;
 use rstest::rstest;
 
 use super::pushdown_utils::TestScanBuilder;
+use datafusion_physical_optimizer::PhysicalAnalyzerRule;
 
 /// Return statistics for empty table
 fn empty_statistics() -> Statistics {
@@ -247,7 +248,7 @@ async fn test_join_with_swap() {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .analyze(join, &ConfigOptions::new())
         .unwrap();
 
     let swapping_projection = optimized_join
@@ -320,7 +321,7 @@ async fn test_join_with_swap_to_sort_preserving_merge_fetch_side() {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .analyze(join, &ConfigOptions::new())
         .unwrap();
     let optimized_join = optimized_join
         .downcast_ref::<ProjectionExec>()
@@ -384,7 +385,7 @@ async fn test_left_join_no_swap() {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .analyze(join, &ConfigOptions::new())
         .unwrap();
 
     let swapped_join = optimized_join
@@ -432,7 +433,7 @@ async fn test_join_with_swap_semi() {
         let original_schema = join.schema();
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .analyze(Arc::new(join), &ConfigOptions::new())
             .unwrap();
 
         let swapped_join = optimized_join.downcast_ref::<HashJoinExec>().expect(
@@ -500,7 +501,7 @@ async fn test_null_aware_left_anti_swaps_to_right_anti(
     let original_schema = join.schema();
 
     let optimized_join =
-        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+        JoinSelection::new().analyze(Arc::new(join), &ConfigOptions::new())?;
     let swapped_join = optimized_join
         .downcast_ref::<HashJoinExec>()
         .expect("anti join swap should not require a projection");
@@ -550,7 +551,7 @@ async fn test_null_aware_auto_large_inputs_swaps_to_collect_left() -> Result<()>
     )?;
 
     let optimized_join =
-        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+        JoinSelection::new().analyze(Arc::new(join), &ConfigOptions::new())?;
     let swapped_join = optimized_join
         .downcast_ref::<HashJoinExec>()
         .expect("anti join swap should not require a projection");
@@ -583,7 +584,7 @@ async fn test_null_aware_left_anti_does_not_swap_when_left_is_smaller() -> Resul
     )?;
 
     let optimized_join =
-        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+        JoinSelection::new().analyze(Arc::new(join), &ConfigOptions::new())?;
     let unswapped_join = optimized_join
         .downcast_ref::<HashJoinExec>()
         .expect("join type should remain unchanged");
@@ -617,7 +618,7 @@ async fn test_null_aware_left_anti_respects_disabled_join_reordering() -> Result
     let mut config = ConfigOptions::new();
     config.optimizer.join_reordering = false;
 
-    let optimized_join = JoinSelection::new().optimize(Arc::new(join), &config)?;
+    let optimized_join = JoinSelection::new().analyze(Arc::new(join), &config)?;
     let unswapped_join = optimized_join
         .downcast_ref::<HashJoinExec>()
         .expect("join type should remain unchanged");
@@ -685,7 +686,7 @@ async fn test_join_swap_uses_context_statistics_registry() -> Result<()> {
     };
 
     let optimized_join =
-        JoinSelection::new().optimize_with_context(Arc::new(join), &context)?;
+        JoinSelection::new().analyze_with_context(Arc::new(join), &context)?;
     let swapped_join = optimized_join
         .downcast_ref::<HashJoinExec>()
         .expect("optimize_with_context should return a HashJoinExec");
@@ -722,7 +723,7 @@ async fn test_join_with_swap_mark() {
         let original_schema = join.schema();
 
         let optimized_join = JoinSelection::new()
-            .optimize(Arc::new(join), &ConfigOptions::new())
+            .analyze(Arc::new(join), &ConfigOptions::new())
             .unwrap();
 
         let swapped_join = optimized_join.downcast_ref::<HashJoinExec>().expect(
@@ -754,7 +755,7 @@ macro_rules! assert_optimized {
 
         let plan = Arc::new($PLAN);
         let optimized = JoinSelection::new()
-            .optimize(plan.clone(), &ConfigOptions::new())
+            .analyze(plan.clone(), &ConfigOptions::new())
             .unwrap();
 
         let plan_string = displayable(optimized.as_ref()).indent(true).to_string();
@@ -849,7 +850,7 @@ async fn test_join_no_swap() {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .analyze(join, &ConfigOptions::new())
         .unwrap();
 
     let swapped_join = optimized_join
@@ -895,7 +896,7 @@ async fn test_nl_join_with_swap(join_type: JoinType) {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .analyze(join, &ConfigOptions::new())
         .unwrap();
 
     let swapping_projection = optimized_join
@@ -969,7 +970,7 @@ async fn test_nl_join_with_swap_no_proj(join_type: JoinType) {
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(
+        .analyze(
             Arc::<NestedLoopJoinExec>::clone(&join),
             &ConfigOptions::new(),
         )
@@ -1230,7 +1231,7 @@ fn check_join_partition_mode(
     );
 
     let optimized_join = JoinSelection::new()
-        .optimize(join, &ConfigOptions::new())
+        .analyze(join, &ConfigOptions::new())
         .unwrap();
 
     if !is_swapped {
@@ -1902,7 +1903,7 @@ fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
     )?) as _;
 
     let optimized_join_plan =
-        JoinSelection::new().optimize(Arc::clone(&join), &ConfigOptions::new())?;
+        JoinSelection::new().analyze(Arc::clone(&join), &ConfigOptions::new())?;
 
     // If swap did happen
     let projection_added = optimized_join_plan.is::<ProjectionExec>();
@@ -1996,7 +1997,7 @@ async fn test_join_selection_skips_hash_join_with_dynamic_filter(
     let original_schema = join.schema();
 
     // JoinSelection must not fail and must leave the join unchanged
-    let optimized = JoinSelection::new().optimize(join, &ConfigOptions::new())?;
+    let optimized = JoinSelection::new().analyze(join, &ConfigOptions::new())?;
     let optimized_join = optimized
         .downcast_ref::<HashJoinExec>()
         .expect("join should remain HashJoinExec without wrapping projection");
@@ -2063,7 +2064,7 @@ async fn test_join_selection_skips_unbounded_hash_join_with_dynamic_filter() -> 
 
     // hash_join_swap_subrule would normally swap unbounded left with bounded right,
     // but must skip this join because it has a dynamic filter.
-    let optimized = JoinSelection::new().optimize(join, &ConfigOptions::new())?;
+    let optimized = JoinSelection::new().analyze(join, &ConfigOptions::new())?;
     let optimized_join = optimized
         .downcast_ref::<HashJoinExec>()
         .expect("join should remain HashJoinExec without wrapping projection");
@@ -2078,7 +2079,7 @@ async fn test_join_selection_skips_unbounded_hash_join_with_dynamic_filter() -> 
     Ok(())
 }
 
-/// End-to-end regression for #26106: let `FilterPushdown::new_post_optimization()`
+/// End-to-end regression for #26106: let `DynamicFilterPushdown::new()`
 /// wire up a real dynamic filter, then ensure `JoinSelection` leaves the join
 /// untouched and the plan still executes with correct results.
 ///
@@ -2174,7 +2175,7 @@ async fn test_join_selection_skips_real_dynamic_filter_pushdown() -> Result<()> 
     config.execution.parquet.pushdown_filters = true;
 
     // Real optimizer wiring (not manual `with_dynamic_filter_expr`)
-    let with_filter = FilterPushdown::new_post_optimization().optimize(join, &config)?;
+    let with_filter = DynamicFilterPushdown::new().optimize(join, &config)?;
     let join_with_filter = with_filter
         .downcast_ref::<HashJoinExec>()
         .expect("plan should still be a HashJoinExec after pushdown");
@@ -2232,7 +2233,7 @@ async fn test_join_selection_skips_real_dynamic_filter_pushdown() -> Result<()> 
 
     // JoinSelection must not fail in `swap_inputs` and must leave the join as-is
     let after_selection =
-        JoinSelection::new().optimize_with_context(with_filter, &context)?;
+        JoinSelection::new().analyze_with_context(with_filter, &context)?;
     let final_join = after_selection
         .downcast_ref::<HashJoinExec>()
         .expect("JoinSelection must leave dynamic-filter join as HashJoinExec");

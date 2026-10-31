@@ -12,7 +12,6 @@ use insta::assert_snapshot;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::ensure_requirements::enforce_sorting::{
     PlanWithCorrespondingCoalescePartitions, parallelize_sorts,
@@ -46,6 +45,7 @@ use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
 use datafusion_common::{JoinType, NullEquality};
 use datafusion_physical_expr::Distribution;
 use datafusion_physical_expr_common::sort_expr::OrderingRequirements;
+use datafusion_physical_optimizer::PhysicalAnalyzerRule;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::joins::{HashJoinExec, PartitionMode, SortMergeJoinExec};
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -168,7 +168,7 @@ fn optimize_and_sanity_check(
     plan: Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
     let config = test_config();
-    let optimized = EnsureRequirements::new().optimize(plan, &config)?;
+    let optimized = EnsureRequirements::new().analyze(plan, &config)?;
     // SanityCheckPlan must pass
     check_plan_tree_sanity(&optimized, &config.optimizer)?;
     Ok(optimized)
@@ -178,10 +178,10 @@ fn optimize_and_sanity_check(
 fn assert_idempotent(plan: Arc<dyn ExecutionPlan>) {
     let config = test_config();
     let p1 = EnsureRequirements::new()
-        .optimize(plan, &config)
+        .analyze(plan, &config)
         .expect("first optimize failed");
     let p2 = EnsureRequirements::new()
-        .optimize(Arc::clone(&p1), &config)
+        .analyze(Arc::clone(&p1), &config)
         .expect("second optimize failed");
 
     let s1 = plan_string(&p1);
@@ -234,7 +234,7 @@ macro_rules! assert_ensure_requirements_plan {
     ($plan:expr, @ $snapshot:literal $(,)?) => {{
         let config = test_config();
         let p1 = EnsureRequirements::new()
-            .optimize($plan, &config)
+            .analyze($plan, &config)
             .expect("EnsureRequirements::optimize failed (pass 1)");
         check_plan_tree_sanity(&p1, &config.optimizer)
             .expect("SanityCheckPlan failed (pass 1)");
@@ -243,7 +243,7 @@ macro_rules! assert_ensure_requirements_plan {
 
         // Idempotency: a second pass must produce the same plan.
         let p2 = EnsureRequirements::new()
-            .optimize(p1, &config)
+            .analyze(p1, &config)
             .expect("EnsureRequirements::optimize failed (pass 2)");
         let p2_str = plan_string(&p2);
         assert_eq!(
@@ -721,7 +721,7 @@ fn test_issue_21973_idempotent_spm_sort_multi_partition() {
     // none are added).
     let config = test_config();
     let optimized = EnsureRequirements::new()
-        .optimize(Arc::clone(&limit), &config)
+        .analyze(Arc::clone(&limit), &config)
         .expect("optimize failed");
     let plan_str = plan_string(&optimized);
     let spm_count = plan_str.matches("SortPreservingMergeExec").count();
@@ -755,17 +755,17 @@ fn test_issue_21973_parallel_sort_survives_multiple_passes() {
     let config = test_config();
 
     let p1 = EnsureRequirements::new()
-        .optimize(Arc::clone(&limit), &config)
+        .analyze(Arc::clone(&limit), &config)
         .expect("pass 1");
     let s1 = plan_string(&p1);
 
     let p2 = EnsureRequirements::new()
-        .optimize(Arc::clone(&p1), &config)
+        .analyze(Arc::clone(&p1), &config)
         .expect("pass 2");
     let s2 = plan_string(&p2);
 
     let p3 = EnsureRequirements::new()
-        .optimize(Arc::clone(&p2), &config)
+        .analyze(Arc::clone(&p2), &config)
         .expect("pass 3");
     let s3 = plan_string(&p3);
 
@@ -978,19 +978,19 @@ fn test_issue_14150_fetch_survives_multiple_passes() {
 
     // Pass 1
     let p1 = EnsureRequirements::new()
-        .optimize(Arc::clone(&limit), &config)
+        .analyze(Arc::clone(&limit), &config)
         .unwrap();
     let s1 = plan_string(&p1);
 
     // Pass 2
     let p2 = EnsureRequirements::new()
-        .optimize(Arc::clone(&p1), &config)
+        .analyze(Arc::clone(&p1), &config)
         .unwrap();
     let s2 = plan_string(&p2);
 
     // Pass 3
     let p3 = EnsureRequirements::new()
-        .optimize(Arc::clone(&p2), &config)
+        .analyze(Arc::clone(&p2), &config)
         .unwrap();
     let s3 = plan_string(&p3);
 
@@ -1046,12 +1046,12 @@ fn test_issue_14150_fetch_survives_with_input_spm() {
     let config = test_config();
 
     let p1 = EnsureRequirements::new()
-        .optimize(Arc::clone(&limit), &config)
+        .analyze(Arc::clone(&limit), &config)
         .unwrap();
     let s1 = plan_string(&p1);
 
     let p2 = EnsureRequirements::new()
-        .optimize(Arc::clone(&p1), &config)
+        .analyze(Arc::clone(&p1), &config)
         .unwrap();
     let s2 = plan_string(&p2);
 
@@ -1198,10 +1198,10 @@ fn test_idempotent_parallelize_sorts() {
     // First pass should parallelize the sort (Sort+SPM replaces Coalesce+Sort)
     let config = test_config();
     let p1 = EnsureRequirements::new()
-        .optimize(Arc::clone(&limit), &config)
+        .analyze(Arc::clone(&limit), &config)
         .expect("first optimize failed");
     let p2 = EnsureRequirements::new()
-        .optimize(Arc::clone(&p1), &config)
+        .analyze(Arc::clone(&p1), &config)
         .expect("second optimize failed");
 
     let s1 = plan_string(&p1);
@@ -1372,10 +1372,10 @@ fn test_enforce_distribution_idempotent_hash_join() {
 
     let config = test_config();
     let p1 = EnsureRequirements::new()
-        .optimize(Arc::clone(&join), &config)
+        .analyze(Arc::clone(&join), &config)
         .expect("first EnsureRequirements pass failed");
     let p2 = EnsureRequirements::new()
-        .optimize(Arc::clone(&p1), &config)
+        .analyze(Arc::clone(&p1), &config)
         .expect("second EnsureRequirements pass failed");
 
     let s1 = plan_string(&p1);

@@ -9,7 +9,7 @@ use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion::config::ConfigOptions;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_execution::object_store::ObjectStoreUrl;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::PhysicalAnalyzerRule;
 use datafusion_physical_optimizer::filter_pushdown::FilterPushdown;
 use datafusion_physical_plan::ExecutionPlan;
 use object_store::memory::InMemory;
@@ -97,7 +97,7 @@ fn bench_push_down_filter(c: &mut Criterion) {
     c.bench_function("push_down_filter", |b| {
         b.iter(|| {
             optimizer
-                .optimize(Arc::clone(&plan.plan), &plan.config)
+                .analyze(Arc::clone(&plan.plan), &plan.config)
                 .unwrap();
         });
     });

@@ -22,7 +22,9 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
-use crate::{PhysicalOptimizerRule, QueryPlanner, UnsupportedQueryPlanner};
+use crate::{
+    PhysicalAnalyzerRule, PhysicalOptimizerRule, QueryPlanner, UnsupportedQueryPlanner,
+};
 
 /// Interface for accessing [`SessionState`] from the catalog and data source.
 ///
@@ -108,17 +110,26 @@ pub trait Session: Send + Sync {
 
     /// Return the physical optimizer rules for this session.
     ///
+    /// The default implementation returns **no rules**, so the plan is not
+    /// optimized. The default exists only so this crate need not depend on the
+    /// optimizer; any real session should override this method (for example
+    /// by returning `SessionState::physical_optimizers`).
+    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+        &[]
+    }
+
+    /// Return the physical analyzer rules for this session. They run before
+    /// the physical optimizer rules, and the default list ends with
+    /// `EnsureRequirements`, which meets every distribution and ordering
+    /// requirement.
+    ///
     /// # Warning
     ///
-    /// The default implementation returns **no rules**. This is almost never
-    /// what you want: DataFusion relies on physical optimizer rules for
-    /// correctness-critical rewrites (such as inserting the repartitioning and
-    /// coalescing needed for parallel and multi-partition execution), so a
-    /// session with no rules will produce plans that are inefficient or that
-    /// fail to execute. The default exists only so this crate need not depend
-    /// on the optimizer; any real session should override this method (for
-    /// example by returning `SessionState::physical_optimizers`).
-    fn physical_optimizers(&self) -> &[Arc<dyn PhysicalOptimizerRule + Send + Sync>] {
+    /// The default implementation returns **no rules**, so nothing adds the
+    /// repartitions and sorts the plan needs, and planning or execution can
+    /// fail. A session that overrides `physical_optimizers` should override
+    /// this too, for example by returning `SessionState::physical_analyzers`.
+    fn physical_analyzers(&self) -> &[Arc<dyn PhysicalAnalyzerRule + Send + Sync>] {
         &[]
     }
 
