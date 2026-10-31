@@ -7801,6 +7801,30 @@ FROM range_nan_peers ORDER BY id;
 4 5 3
 5 1 3
 
+# BoundedWindowAggExec emits at most `batch_size` rows per batch, 2 here. Peer
+# group k = 1 becomes final when the first k = 2 row arrives, and k = 2 at the
+# end of the input. Each 5-row result is emitted as 2, 2 and 1 rows.
+# https://github.com/apache/datafusion/issues/26959
+statement ok
+CREATE TABLE bwag_peers(k INT, v INT) AS VALUES
+  (1, 1), (1, 2), (1, 3), (1, 4), (1, 5), (2, 6), (2, 7), (2, 8), (2, 9), (2, 10);
+
+statement ok
+set datafusion.explain.analyze_categories = 'rows';
+
+query TT
+EXPLAIN ANALYZE SELECT k, v, sum(v) OVER (ORDER BY k) FROM bwag_peers;
+----
+Plan with Metrics
+01)BoundedWindowAggExec: <slt:ignore>, mode=[Sorted], metrics=[output_rows=10, output_batches=6, batches_split=6]
+<slt:ignore>
+
+statement ok
+reset datafusion.explain.analyze_categories;
+
+statement ok
+DROP TABLE bwag_peers;
+
 statement ok
 reset datafusion.execution.batch_size;
 
