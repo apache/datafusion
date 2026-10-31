@@ -337,6 +337,25 @@ impl AggregateUDFImpl for Avg {
         }
     }
 
+    fn create_sliding_accumulator(
+        &self,
+        args: AccumulatorArgs,
+    ) -> Result<Box<dyn Accumulator>> {
+        // Same non-finite counts as sliding `SUM`. Decimal and duration keep
+        // the grouped accumulator, which already retracts exact values.
+        // https://github.com/apache/datafusion/issues/26222
+        if !args.is_distinct
+            && matches!(
+                (args.expr_fields[0].data_type(), args.return_type()),
+                (DataType::Float64, DataType::Float64)
+            )
+        {
+            Ok(Box::new(SlidingFloat64AvgAccumulator::default()))
+        } else {
+            self.accumulator(args)
+        }
+    }
+
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
         if args.is_distinct {
             // Decimal accumulator actually uses a different precision during accumulation,
@@ -668,6 +687,43 @@ impl Accumulator for AvgAccumulator {
             self.sum = Some(self.sum.unwrap() - x);
         }
         Ok(())
+    }
+
+    fn supports_retract_batch(&self) -> bool {
+        true
+    }
+}
+
+/// Sliding `Float64` average. Divides only when every value still in the
+/// frame is finite; a frame that holds an infinity averages to that infinity.
+#[derive(Debug, Default)]
+struct SlidingFloat64AvgAccumulator {
+    stats: crate::sum::NonFiniteFloat64State,
+}
+
+impl Accumulator for SlidingFloat64AvgAccumulator {
+    fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.stats.update_batch(values)
+    }
+
+    fn evaluate(&mut self) -> Result<ScalarValue> {
+        Ok(ScalarValue::Float64(self.stats.avg_value()))
+    }
+
+    fn size(&self) -> usize {
+        size_of_val(self)
+    }
+
+    fn state(&mut self) -> Result<Vec<ScalarValue>> {
+        Ok(self.stats.state())
+    }
+
+    fn merge_batch(&mut self, states: &[ArrayRef]) -> Result<()> {
+        self.stats.merge_batch(states)
+    }
+
+    fn retract_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.stats.retract_batch(values)
     }
 
     fn supports_retract_batch(&self) -> bool {
@@ -1325,6 +1381,20 @@ mod tests {
         with_avg_args(input_type, return_type, |args| Avg::new().accumulator(args))
     }
 
+    fn sliding_avg_accumulator() -> Result<Box<dyn Accumulator>> {
+        with_avg_args(&DataType::Float64, &DataType::Float64, |args| {
+            Avg::new().create_sliding_accumulator(args)
+        })
+    }
+
+    fn f64_array(values: &[Option<f64>]) -> ArrayRef {
+        Arc::new(Float64Array::from(values.to_vec()))
+    }
+
+    fn state_arrays(state: &[ScalarValue]) -> Result<Vec<ArrayRef>> {
+        state.iter().map(ScalarValue::to_array).collect()
+    }
+
     fn avg_distinct_accumulator(
         input_type: &DataType,
         return_type: &DataType,
@@ -1745,6 +1815,103 @@ mod tests {
                 .as_primitive::<Float64Type>(),
             &expected
         );
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_float64_avg_retracts_non_finite_values() -> Result<()> {
+        let mut acc = sliding_avg_accumulator()?;
+        acc.update_batch(&[f64_array(&[Some(f64::INFINITY), Some(2.0)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::INFINITY)));
+
+        let mut acc = sliding_avg_accumulator()?;
+        acc.update_batch(&[f64_array(&[
+            Some(2.0),
+            Some(f64::INFINITY),
+            Some(f64::INFINITY),
+        ])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::INFINITY)));
+        acc.retract_batch(&[f64_array(&[Some(f64::INFINITY)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::INFINITY)));
+        acc.retract_batch(&[f64_array(&[Some(f64::INFINITY)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(2.0)));
+
+        let mut acc = sliding_avg_accumulator()?;
+        acc.update_batch(&[f64_array(&[Some(f64::INFINITY), Some(f64::NEG_INFINITY)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::NAN)));
+        acc.retract_batch(&[f64_array(&[Some(f64::INFINITY)])])?;
+        assert_eq!(
+            acc.evaluate()?,
+            ScalarValue::Float64(Some(f64::NEG_INFINITY))
+        );
+
+        let mut acc = sliding_avg_accumulator()?;
+        acc.update_batch(&[f64_array(&[
+            Some(1.0),
+            Some(f64::NAN),
+            Some(f64::NAN),
+            Some(f64::NAN),
+        ])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::NAN)));
+        acc.retract_batch(&[f64_array(&[Some(f64::NAN)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::NAN)));
+        acc.retract_batch(&[f64_array(&[Some(f64::NAN), Some(f64::NAN)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(1.0)));
+
+        let mut acc = sliding_avg_accumulator()?;
+        acc.update_batch(&[f64_array(&[Some(2.0), None, Some(4.0)])])?;
+        let before = acc.state()?;
+        acc.retract_batch(&[f64_array(&[None])])?;
+        assert_eq!(acc.state()?, before);
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(3.0)));
+
+        let mut acc = sliding_avg_accumulator()?;
+        acc.update_batch(&[f64_array(&[Some(2.0), None])])?;
+        acc.retract_batch(&[f64_array(&[Some(2.0)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(None));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_float64_avg_of_finite_pairs() -> Result<()> {
+        let mut acc = sliding_avg_accumulator()?;
+        acc.update_batch(&[f64_array(&[Some(2.0), Some(3.0)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(2.5)));
+        let state = acc.state()?;
+        let mut merged = sliding_avg_accumulator()?;
+        merged.merge_batch(&state_arrays(&state)?)?;
+        assert_eq!(merged.evaluate()?, ScalarValue::Float64(Some(2.5)));
+        assert_eq!(merged.state()?, state);
+
+        let mut acc = sliding_avg_accumulator()?;
+        acc.update_batch(&[f64_array(&[Some(4.0), Some(5.0)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(4.5)));
+        Ok(())
+    }
+
+    #[test]
+    fn sliding_float64_avg_all_finite_matches_arrow_sum() -> Result<()> {
+        let input = Float64Array::from(vec![0.1, 0.2, 0.3]);
+        let expected = sum(&input).unwrap() / input.len() as f64;
+        let mut acc = sliding_avg_accumulator()?;
+        acc.update_batch(&[Arc::new(input)])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(expected)));
+        Ok(())
+    }
+
+    #[test]
+    fn grouped_float64_avg_still_adds_non_finite_values() -> Result<()> {
+        let mut acc = avg_accumulator(&DataType::Float64, &DataType::Float64)?;
+        acc.update_batch(&[f64_array(&[
+            Some(1.0),
+            Some(f64::INFINITY),
+            Some(f64::NEG_INFINITY),
+        ])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::NAN)));
+
+        let mut acc = avg_accumulator(&DataType::Float64, &DataType::Float64)?;
+        acc.update_batch(&[f64_array(&[Some(1.0), Some(f64::INFINITY), Some(2.0)])])?;
+        assert_eq!(acc.evaluate()?, ScalarValue::Float64(Some(f64::INFINITY)));
         Ok(())
     }
 }
