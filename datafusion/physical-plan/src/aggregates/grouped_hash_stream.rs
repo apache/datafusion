@@ -36,7 +36,7 @@ use crate::aggregates::{
     group_id_array, max_duplicate_ordinal,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
-use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
+use crate::sorts::streaming_merge::{SpillFileWithMemory, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::stream::EmptyRecordBatchStream;
 use crate::{PhysicalExpr, aggregates, metrics};
@@ -110,7 +110,7 @@ struct SpillState {
     // ========================================================================
     /// If data has previously been spilled, the locations of the
     /// spill files (in Arrow IPC format)
-    spills: Vec<SortedSpillFile>,
+    spills: Vec<SpillFileWithMemory>,
 
     /// true when streaming merge is in progress
     is_stream_merging: bool,
@@ -1258,19 +1258,17 @@ impl GroupedHashAggregateStream {
         let spillfile = self
             .spill_state
             .spill_manager
-            .spill_record_batch_iter_and_return_max_batch_memory(
-                sorted_iter,
-                "HashAggSpill",
-            )?;
+            .spill_record_batch_iter_with_memory(sorted_iter, "HashAggSpill")?;
 
         // Shrink the memory we allocated for sorting as the sorting is fully done at this point.
         self.reservation.shrink(sort_memory);
 
         match spillfile {
-            Some((spillfile, max_record_batch_memory)) => {
-                self.spill_state.spills.push(SortedSpillFile {
+            Some((spillfile, memory)) => {
+                self.spill_state.spills.push(SpillFileWithMemory {
                     file: spillfile,
-                    max_record_batch_memory,
+                    max_record_batch_memory: memory.input,
+                    progress: memory.progress,
                 })
             }
             None => {
@@ -1343,7 +1341,7 @@ impl GroupedHashAggregateStream {
             self.input = StreamingMergeBuilder::new()
                 .with_schema(Arc::clone(&self.spill_state.spill_schema))
                 .with_spill_manager(self.spill_state.spill_manager.clone())
-                .with_sorted_spill_files(std::mem::take(&mut self.spill_state.spills))
+                .with_spill_inputs(std::mem::take(&mut self.spill_state.spills))
                 .with_expressions(&self.spill_state.spill_expr)
                 .with_metrics(self.baseline_metrics.clone())
                 .with_batch_size(self.batch_size)

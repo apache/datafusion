@@ -140,20 +140,13 @@ async fn intermediate_sizing_does_not_add_rewrites_under_contention(
                 .with_intermediate_merge_sizing(size_intermediate_merges.then_some(ROWS));
         let mut stream = builder.create_spillable_merge_stream();
         let first = stream.try_next().await?.expect("nonempty merge");
-        if matches!(pressure_point, PressurePoint::IntermediateEof)
-            && size_intermediate_merges
-            && runs == 8
-        {
-            // Sizing these eight runs retains the admitted buffers across the
-            // intermediate EOF. The contender cannot take them before the final
-            // merge is admitted, so this boundary must not have fired yet.
-            assert_eq!(competing_pool.contender.size(), 0);
-        } else {
-            assert_eq!(
-                competing_pool.contender.size(),
-                competing_pool.contender_target
-            );
-        }
+        // Output construction has its own reservation. Its release at intermediate
+        // EOF can activate the contender even while the builder retains the input
+        // grant. Require correctness under the full scheduled contention in both cases.
+        assert_eq!(
+            competing_pool.contender.size(),
+            competing_pool.contender_target
+        );
         let mut batches = vec![first];
         batches.extend(stream.try_collect::<Vec<_>>().await?);
         let merged = concat_batches(&schema, &batches)?;
@@ -221,7 +214,11 @@ async fn sized_merge_retains_reservation_until_builder_drop() -> Result<()> {
     assert_eq!(builder.sorted_spill_files.len(), 2);
     let retained = 4 * 7 * batch_memory;
     assert_eq!(builder.reservation.size(), retained);
-    assert_eq!(pool.reserved(), retained + competing_pool.contender.size());
+    // The stream separately owns one batch of admitted output-construction workspace.
+    assert_eq!(
+        pool.reserved(),
+        retained + batch_memory + competing_pool.contender.size()
+    );
 
     // The intermediate stream may finish or be cancelled before the builder
     // starts final admission. Its drop must leave the grant with the builder.

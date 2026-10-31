@@ -30,7 +30,7 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::IncrementalSortIterator;
-use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
+use crate::sorts::streaming_merge::{SpillFileWithMemory, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
@@ -279,13 +279,16 @@ struct ExternalSorter {
     ///
     /// this is a tuple of:
     /// 1. `InProgressSpillFile` - the file that is being written to
-    /// 2. `max_record_batch_memory` - the maximum memory usage of a single batch in this spill file.
-    in_progress_spill_file: Option<(InProgressSpillFile, usize)>,
+    /// 2. Maximum physical read and construction-progress statistics for the file.
+    in_progress_spill_file: Option<(
+        InProgressSpillFile,
+        crate::spill::in_progress_spill_file::SpillFileMemory,
+    )>,
     /// If data has previously been spilled, the locations of the spill files (in
     /// Arrow IPC format)
     /// Within the same spill file, the data might be chunked into multiple batches,
     /// and ordered by sort keys.
-    finished_spill_files: Vec<SortedSpillFile>,
+    finished_spill_files: Vec<SpillFileWithMemory>,
 
     // ========================================================================
     // EXECUTION RESOURCES:
@@ -422,7 +425,7 @@ impl ExternalSorter {
             // without releasing them back to the pool, so other partitions
             // cannot race to consume the freed memory.
             StreamingMergeBuilder::new()
-                .with_sorted_spill_files(std::mem::take(&mut self.finished_spill_files))
+                .with_spill_inputs(std::mem::take(&mut self.finished_spill_files))
                 .with_spill_manager(self.spill_manager.clone())
                 .with_schema(Arc::clone(&self.schema))
                 .with_expressions(&self.expr.clone())
@@ -479,8 +482,10 @@ impl ExternalSorter {
 
         // Lazily initialize the in-progress spill file
         if self.in_progress_spill_file.is_none() {
-            self.in_progress_spill_file =
-                Some((self.spill_manager.create_in_progress_file("Sorting")?, 0));
+            self.in_progress_spill_file = Some((
+                self.spill_manager.create_in_progress_file("Sorting")?,
+                Default::default(),
+            ));
         }
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
@@ -490,15 +495,17 @@ impl ExternalSorter {
         // asynchronous writes. It is released on success or error via RAII.
         let _spill_reservation = self.reservation.take();
 
-        let (in_progress_file, max_record_batch_size) =
+        let (in_progress_file, memory) =
             self.in_progress_spill_file.as_mut().ok_or_else(|| {
                 internal_datafusion_err!("In-progress spill file should be initialized")
             })?;
 
         for batch in batches_to_spill {
-            let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
+            let batch_memory = in_progress_file
+                .append_batch_async_with_memory_size(&batch)
+                .await?;
 
-            *max_record_batch_size = (*max_record_batch_size).max(gc_sliced_size);
+            memory.include(&batch_memory);
         }
 
         assert_or_internal_err!(
@@ -511,16 +518,17 @@ impl ExternalSorter {
 
     /// Finishes the in-progress spill file and moves it to the finished spill files.
     async fn spill_finish(&mut self) -> Result<()> {
-        let (mut in_progress_file, max_record_batch_memory) =
+        let (mut in_progress_file, memory) =
             self.in_progress_spill_file.take().ok_or_else(|| {
                 internal_datafusion_err!("Should be called after `spill_append`")
             })?;
         let spill_file = in_progress_file.finish_async().await?;
 
         if let Some(spill_file) = spill_file {
-            self.finished_spill_files.push(SortedSpillFile {
+            self.finished_spill_files.push(SpillFileWithMemory {
                 file: spill_file,
-                max_record_batch_memory,
+                max_record_batch_memory: memory.input,
+                progress: memory.progress,
             });
         }
 
@@ -3069,11 +3077,10 @@ mod tests {
         assert!((9000..=10000).contains(&spilled_rows));
         assert!((38000..=44000).contains(&spilled_bytes));
 
-        let columns = result[0].columns();
-
-        let i = as_primitive_array::<Int32Type>(&columns[0])?;
+        let sorted = concat_batches(&schema, &result)?;
+        let i = as_primitive_array::<Int32Type>(sorted.column(0))?;
         assert_eq!(i.value(0), 0);
-        assert_eq!(i.value(i.len() - 1), 81);
+        assert_eq!(i.value(i.len() - 1), 99);
         assert_eq!(
             task_ctx.runtime_env().memory_pool.reserved(),
             0,
