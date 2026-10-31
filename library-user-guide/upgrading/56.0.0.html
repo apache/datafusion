@@ -1691,6 +1691,23 @@ Code that reads <code class="docutils literal notranslate"><span class="pre">Fil
 reordered should call <code class="docutils literal notranslate"><span class="pre">FileScanConfig::preserves_file_order()</span></code> instead, which
 also accounts for the output ordering.</p>
 </section>
+<section id="sanitycheckplan-is-deprecated-and-no-longer-in-the-default-physical-optimizer-rules">
+<h3><code class="docutils literal notranslate"><span class="pre">SanityCheckPlan</span></code> is deprecated and no longer in the default physical optimizer rules<a class="headerlink" href="#sanitycheckplan-is-deprecated-and-no-longer-in-the-default-physical-optimizer-rules" title="Link to this heading">#</a></h3>
+<p>The physical planner now runs the <code class="docutils literal notranslate"><span class="pre">SanityCheckPlan</span></code> check itself on the final
+plan, after every physical optimizer rule. This includes rules added with
+<code class="docutils literal notranslate"><span class="pre">SessionStateBuilder::with_physical_optimizer_rule</span></code> and custom rule lists. When
+the ordering or distribution requirements do not hold, the error names the rule
+that broke them. <code class="docutils literal notranslate"><span class="pre">EXPLAIN</span> <span class="pre">VERBOSE</span></code> no longer prints a
+<code class="docutils literal notranslate"><span class="pre">physical_plan</span> <span class="pre">after</span> <span class="pre">SanityCheckPlan</span></code> line.</p>
+<p>To upgrade, remove <code class="docutils literal notranslate"><span class="pre">SanityCheckPlan</span></code> from custom rule lists, and drop code that
+looks it up in <code class="docutils literal notranslate"><span class="pre">PhysicalOptimizer::new()</span></code>. Code that runs optimizer rules
+without the physical planner can call
+<code class="docutils literal notranslate"><span class="pre">datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity</span></code> on the
+final plan instead.</p>
+<p>A custom rule list that left out <code class="docutils literal notranslate"><span class="pre">SanityCheckPlan</span></code> is now checked too. A plan
+whose requirements do not hold, such as a <code class="docutils literal notranslate"><span class="pre">SortMergeJoinExec</span></code> over unsorted
+input, now fails to plan instead of possibly returning wrong results.</p>
+</section>
 </section>
 </section>
 
@@ -1802,6 +1819,7 @@ also accounts for the output ordering.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logicalplan-describetable-is-replaced-by-logicalplan-show"><code class="docutils literal notranslate"><span class="pre">LogicalPlan::DescribeTable</span></code> is replaced by <code class="docutils literal notranslate"><span class="pre">LogicalPlan::Show</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#extension-physicalexprs-can-decode-by-name-instead-of-through-a-codec">Extension <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code>s can decode by name instead of through a codec</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#order-preservation-hooks-for-limit-pushdown-are-deprecated">Order-preservation hooks for limit pushdown are deprecated</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sanitycheckplan-is-deprecated-and-no-longer-in-the-default-physical-optimizer-rules"><code class="docutils literal notranslate"><span class="pre">SanityCheckPlan</span></code> is deprecated and no longer in the default physical optimizer rules</a></li>
 </ul>
 </li>
 </ul>
