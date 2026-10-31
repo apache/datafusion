@@ -65,6 +65,9 @@ SELECT COUNT(*) FROM hits;
 10
 
 ## Q1
+statement ok
+set datafusion.execution.collect_statistics = false;
+
 query TT
 EXPLAIN SELECT COUNT(*) FROM hits WHERE "AdvEngineID" <> 0;
 ----
@@ -88,6 +91,9 @@ query I
 SELECT COUNT(*) FROM hits WHERE "AdvEngineID" <> 0;
 ----
 0
+
+statement ok
+reset datafusion.execution.collect_statistics;
 
 query TT
 EXPLAIN SELECT SUM("AdvEngineID"), COUNT(*), AVG("ResolutionWidth") FROM hits;
@@ -193,6 +199,9 @@ SELECT MIN("EventDate"), MAX("EventDate") FROM hits;
 2013-07-15 2013-07-15
 
 ## Q7
+statement ok
+set datafusion.execution.collect_statistics = false;
+
 query TT
 EXPLAIN SELECT "AdvEngineID", COUNT(*) FROM hits WHERE "AdvEngineID" <> 0 GROUP BY "AdvEngineID" ORDER BY COUNT(*) DESC;
 ----
@@ -217,6 +226,9 @@ physical_plan
 query II
 SELECT "AdvEngineID", COUNT(*) FROM hits WHERE "AdvEngineID" <> 0 GROUP BY "AdvEngineID" ORDER BY COUNT(*) DESC;
 ----
+
+statement ok
+reset datafusion.execution.collect_statistics;
 
 ## Q8
 query TT
@@ -970,6 +982,9 @@ SELECT "ClientIP", "ClientIP" - 1, "ClientIP" - 2, "ClientIP" - 3, COUNT(*) AS c
 1615432634 1615432633 1615432632 1615432631 1
 
 ## Q36
+statement ok
+set datafusion.execution.collect_statistics = false;
+
 query TT
 EXPLAIN SELECT "URL", COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate" >= '2013-07-01' AND "EventDate" <= '2013-07-31' AND "DontCountHits" = 0 AND "IsRefresh" = 0 AND "URL" <> '' GROUP BY "URL" ORDER BY PageViews DESC LIMIT 10;
 ----
@@ -1168,6 +1183,9 @@ physical_plan
 query PI
 SELECT DATE_TRUNC('minute', to_timestamp_seconds("EventTime")) AS M, COUNT(*) AS PageViews FROM hits WHERE "CounterID" = 62 AND "EventDate" >= '2013-07-14' AND "EventDate" <= '2013-07-15' AND "IsRefresh" = 0 AND "DontCountHits" = 0 GROUP BY DATE_TRUNC('minute', to_timestamp_seconds("EventTime")) ORDER BY DATE_TRUNC('minute', M) LIMIT 10 OFFSET 1000;
 ----
+
+statement ok
+reset datafusion.execution.collect_statistics;
 
 # Clickbench "Extended" queries that test count distinct
 
