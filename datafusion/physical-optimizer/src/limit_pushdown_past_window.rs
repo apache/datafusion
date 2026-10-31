@@ -239,6 +239,7 @@ mod tests {
         udwf: &Arc<WindowUDF>,
         name: &str,
         input: Arc<dyn ExecutionPlan>,
+        input_order_mode: InputOrderMode,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let s = input.schema();
 
@@ -264,7 +265,7 @@ mod tests {
         Ok(Arc::new(BoundedWindowAggExec::try_new(
             vec![window_expr],
             sort,
-            InputOrderMode::Sorted,
+            input_order_mode,
             true,
         )?))
     }
@@ -274,7 +275,12 @@ mod tests {
         use_local_limit: bool,
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
-        let window = sort_then_window(&row_number_udwf(), "row_number", input)?;
+        let window = sort_then_window(
+            &row_number_udwf(),
+            "row_number",
+            input,
+            InputOrderMode::Sorted,
+        )?;
 
         Ok(if use_local_limit {
             Arc::new(LocalLimitExec::new(window, 100))
@@ -312,6 +318,31 @@ mod tests {
         LocalLimitExec: fetch=100
           BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
             SortExec: TopK(fetch=100), expr=[a@0 ASC], preserve_partitioning=[true]
+              PlaceholderRowExec
+        "#);
+    }
+
+    /// A window whose input is not grouped by partition key reads ahead by an
+    /// amount no frame bound describes, so the rule has to leave the sort below it
+    /// alone. This is the plan from [`global_limit_pushes_past_window`] with only
+    /// the input order mode changed.
+    #[test]
+    fn interleaved_partitions_block_the_pushdown() {
+        let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
+        let window = sort_then_window(
+            &row_number_udwf(),
+            "row_number",
+            input,
+            InputOrderMode::Linear,
+        )
+        .unwrap();
+        let plan: Arc<dyn ExecutionPlan> =
+            Arc::new(GlobalLimitExec::new(window, 0, Some(100)));
+        let optimized = optimize(plan);
+        assert_snapshot!(plan_str(optimized.as_ref()), @r#"
+        GlobalLimitExec: skip=0, fetch=100
+          BoundedWindowAggExec: wdw=[row_number: Field { "row_number": UInt64 }, frame: ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Linear]
+            SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
               PlaceholderRowExec
         "#);
     }
@@ -354,7 +385,8 @@ mod tests {
     ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
         let udwf = Arc::new(WindowUDF::from(AtLeast200(RowNumber::new())));
-        let window = sort_then_window(&udwf, "at_least_200", input)?;
+        let window =
+            sort_then_window(&udwf, "at_least_200", input, InputOrderMode::Sorted)?;
 
         Ok(if with_limit {
             Arc::new(GlobalLimitExec::new(window, 0, Some(100)))
@@ -373,8 +405,14 @@ mod tests {
     fn build_nested_absolute_plan() -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
         let input: Arc<dyn ExecutionPlan> = Arc::new(PlaceholderRowExec::new(schema()));
         let udwf = Arc::new(WindowUDF::from(AtLeast200(RowNumber::new())));
-        let inner = sort_then_window(&udwf, "at_least_200", input)?;
-        let outer = sort_then_window(&row_number_udwf(), "row_number", inner)?;
+        let inner =
+            sort_then_window(&udwf, "at_least_200", input, InputOrderMode::Sorted)?;
+        let outer = sort_then_window(
+            &row_number_udwf(),
+            "row_number",
+            inner,
+            InputOrderMode::Sorted,
+        )?;
 
         Ok(Arc::new(GlobalLimitExec::new(outer, 0, Some(100))))
     }
