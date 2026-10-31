@@ -1253,27 +1253,89 @@ statistics registry:</p>
 default) are not affected. As for operators, <code class="docutils literal notranslate"><span class="pre">Exact</span></code> statistics from a provider
 must be guaranteed values: <code class="docutils literal notranslate"><span class="pre">AggregateStatistics</span></code> answers <code class="docutils literal notranslate"><span class="pre">COUNT(*)</span></code>, <code class="docutils literal notranslate"><span class="pre">MIN</span></code> and
 <code class="docutils literal notranslate"><span class="pre">MAX</span></code> from them, and <code class="docutils literal notranslate"><span class="pre">LimitPushdown</span></code> removes a limit over an <code class="docutils literal notranslate"><span class="pre">Exact(0)</span></code> input.</p>
-<p>For the same reason,
-<code class="docutils literal notranslate"><span class="pre">datafusion_physical_optimizer::limit_pushdown::pushdown_limit_helper</span></code> is
-deprecated in favour of <code class="docutils literal notranslate"><span class="pre">pushdown_limit_helper_with_stats</span></code>, which takes the
-<code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> from the caller. The deprecated form creates a new context
-on every call, without statistics providers. When providers are registered,
-switching to <code class="docutils literal notranslate"><span class="pre">pushdown_limit_helper_with_stats</span></code> with a context built from the
-statistics registry can change the result, because the providers are then
-consulted.</p>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion_physical_optimizer::limit_pushdown::pushdown_limit_helper</span></code> and
+<code class="docutils literal notranslate"><span class="pre">GlobalRequirements</span></code> are deprecated. <code class="docutils literal notranslate"><span class="pre">LimitPushdown</span></code> no longer works one node at
+a time; run the <code class="docutils literal notranslate"><span class="pre">LimitPushdown</span></code> rule instead. <code class="docutils literal notranslate"><span class="pre">pushdown_limit_helper</span></code> creates a
+new <code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> on every call, without statistics providers, so its
+result can differ from the rule’s when providers are registered.</p>
 </section>
-<section id="mergeintoop-requires-the-sql-visible-target-qualifier">
-<h3><code class="docutils literal notranslate"><span class="pre">MergeIntoOp</span></code> requires the SQL-visible target qualifier<a class="headerlink" href="#mergeintoop-requires-the-sql-visible-target-qualifier" title="Link to this heading">#</a></h3>
-<p><code class="docutils literal notranslate"><span class="pre">MergeIntoOp</span></code> now stores the SQL-visible target qualifier separately from the
-target provider identity. This prevents an aliased target from being confused
-with a source relation that uses the target table’s name.</p>
-<p>The struct is now non-exhaustive. Replace 55.0 struct literals with
-<code class="docutils literal notranslate"><span class="pre">MergeIntoOp::new</span></code>:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// DataFusion 55.0</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">op</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MergeIntoOp</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">on</span><span class="p">,</span><span class="w"> </span><span class="n">clauses</span><span class="w"> </span><span class="p">};</span>
+<section id="executionplan-supports-limit-pushdown-is-deprecated-in-favour-of-limit-behavior">
+<h3><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::supports_limit_pushdown</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">limit_behavior</span></code><a class="headerlink" href="#executionplan-supports-limit-pushdown-is-deprecated-in-favour-of-limit-behavior" title="Link to this heading">#</a></h3>
+<p>Operators now declare what a <code class="docutils literal notranslate"><span class="pre">LIMIT</span></code> on their output means for their input with
+<code class="docutils literal notranslate"><span class="pre">ExecutionPlan::limit_behavior</span></code>, which returns a <code class="docutils literal notranslate"><span class="pre">LimitBehavior</span></code>:</p>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">Stops</span></code> (the default): a limit above the node stays above it.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Limit</span> <span class="pre">{</span> <span class="pre">skip,</span> <span class="pre">fetch</span> <span class="pre">}</span></code>: the node is a limit.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">CopyToChildren</span></code>: a limit may be copied to each child as an early-stop hint,
+but must also stay above the node, which can output more rows than one child
+(<code class="docutils literal notranslate"><span class="pre">UnionExec</span></code>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">MoveToInput</span></code>: the node outputs exactly the rows of its input, so a limit may
+move below it (<code class="docutils literal notranslate"><span class="pre">ProjectionExec</span></code>).</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Merge</span></code>: the node merges its input partitions, so it can enforce a limit with
+its own fetch (<code class="docutils literal notranslate"><span class="pre">CoalescePartitionsExec</span></code>, <code class="docutils literal notranslate"><span class="pre">SortPreservingMergeExec</span></code>). Without a
+fetch of its own (<code class="docutils literal notranslate"><span class="pre">ExecutionPlan::fetch</span></code>) it behaves like <code class="docutils literal notranslate"><span class="pre">MoveToInput</span></code>.</p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">Window(lookahead)</span></code>: a window function node.</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">LimitPushdown</span></code>, <code class="docutils literal notranslate"><span class="pre">LimitPushPastWindows</span></code> and the sort pushdown in
+<code class="docutils literal notranslate"><span class="pre">EnsureRequirements</span></code> read only <code class="docutils literal notranslate"><span class="pre">limit_behavior</span></code>. Its default is derived from
+<code class="docutils literal notranslate"><span class="pre">supports_limit_pushdown</span></code> and <code class="docutils literal notranslate"><span class="pre">cardinality_effect</span></code>, so an operator that
+implements <code class="docutils literal notranslate"><span class="pre">supports_limit_pushdown</span></code> keeps working: <code class="docutils literal notranslate"><span class="pre">false</span></code> maps to <code class="docutils literal notranslate"><span class="pre">Stops</span></code>;
+<code class="docutils literal notranslate"><span class="pre">true</span></code> maps to <code class="docutils literal notranslate"><span class="pre">MoveToInput</span></code> when <code class="docutils literal notranslate"><span class="pre">cardinality_effect</span></code> is <code class="docutils literal notranslate"><span class="pre">Equal</span></code> and to
+<code class="docutils literal notranslate"><span class="pre">CopyToChildren</span></code> otherwise. Implement <code class="docutils literal notranslate"><span class="pre">limit_behavior</span></code> instead:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="k">fn</span><span class="w"> </span><span class="nf">limit_behavior</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nc">LimitBehavior</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">LimitBehavior</span><span class="p">::</span><span class="n">MoveToInput</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>DataFusion’s own operators keep returning the same <code class="docutils literal notranslate"><span class="pre">supports_limit_pushdown</span></code>
+values until it is removed, so a wrapper that forwards it to its input keeps
+working, but new code should call <code class="docutils literal notranslate"><span class="pre">limit_behavior</span></code>.</p>
+<p>Two differences for operators that still implement <code class="docutils literal notranslate"><span class="pre">supports_limit_pushdown</span></code>:</p>
+<ul>
+<li><p><code class="docutils literal notranslate"><span class="pre">LimitPushPastWindows</span></code> now pushes a window’s limit below a single-input
+operator that returns <code class="docutils literal notranslate"><span class="pre">true</span></code> and whose <code class="docutils literal notranslate"><span class="pre">cardinality_effect</span></code> is <code class="docutils literal notranslate"><span class="pre">Unknown</span></code> or
+<code class="docutils literal notranslate"><span class="pre">LowerEqual</span></code>. Before, it stopped there. <code class="docutils literal notranslate"><span class="pre">Unknown</span></code> is the default, so this
+includes a wrapper that forwards <code class="docutils literal notranslate"><span class="pre">supports_limit_pushdown</span></code> to its input and
+does not override <code class="docutils literal notranslate"><span class="pre">cardinality_effect</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span>
+</pre></div>
+</div>
+</li>
+</ul>
+<p>impl ExecutionPlan for MyWrapper {
+fn supports_limit_pushdown(&amp;self) -&gt; bool {
+self.input.supports_limit_pushdown()
+}
+// no <code class="docutils literal notranslate"><span class="pre">cardinality_effect</span></code>: the default is <code class="docutils literal notranslate"><span class="pre">Unknown</span></code>
+}</p>
+<div class="highlight-default notranslate"><div class="highlight"><pre><span></span>
+  `LimitPushdown` already moved plain limits below such an operator.
+  `LimitPushPastWindows` only copies the limit below and keeps it above, which
+  asks less of the operator, so this is safe wherever the existing
+  `LimitPushdown` behavior is.
 
-<span class="c1">// DataFusion 56.0</span>
-<span class="kd">let</span><span class="w"> </span><span class="n">op</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">MergeIntoOp</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">target_qualifier</span><span class="p">,</span><span class="w"> </span><span class="n">on</span><span class="p">,</span><span class="w"> </span><span class="n">clauses</span><span class="p">);</span>
+- `LimitPushdown` no longer moves a limit below an operator whose children
+  have more partitions in total than it outputs, such as one that combines
+  several inputs into one partition. Moved below, the limit would apply to each
+  input partition and keep too many rows. The limit now stays above the
+  operator, as it does above `CoalescePartitionsExec`, and is copied below as
+  an early-stop fetch.
+
+### `MergeIntoOp` requires the SQL-visible target qualifier
+
+`MergeIntoOp` now stores the SQL-visible target qualifier separately from the
+target provider identity. This prevents an aliased target from being confused
+with a source relation that uses the target table&#39;s name.
+
+The struct is now non-exhaustive. Replace 55.0 struct literals with
+`MergeIntoOp::new`:
+
+```rust
+// DataFusion 55.0
+let op = MergeIntoOp { on, clauses };
+
+// DataFusion 56.0
+let op = MergeIntoOp::new(target_qualifier, on, clauses);
 </pre></div>
 </div>
 <p><code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code> must be the relation name referenced by the MERGE expressions:
@@ -1798,7 +1860,7 @@ input, now fails to plan instead of possibly returning wrong results.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#default-datafusion-sql-parser-recursion-limit-raised-from-50-to-51">Default <code class="docutils literal notranslate"><span class="pre">datafusion.sql_parser.recursion_limit</span></code> raised from 50 to 51</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#ensure-distribution-is-deprecated-in-favour-of-ensure-distribution-with-stats"><code class="docutils literal notranslate"><span class="pre">ensure_distribution</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">ensure_distribution_with_stats</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#physical-optimizer-rules-share-one-statisticscontext-per-query">Physical optimizer rules share one <code class="docutils literal notranslate"><span class="pre">StatisticsContext</span></code> per query</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoop-requires-the-sql-visible-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOp</span></code> requires the SQL-visible target qualifier</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-supports-limit-pushdown-is-deprecated-in-favour-of-limit-behavior"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::supports_limit_pushdown</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">limit_behavior</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoopnode-protobuf-literals-require-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-aware-joins-record-their-not-in-value-key-count">Null-aware joins record their <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> value key count</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functionaldependence-has-a-new-null-equality-field"><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field</a></li>
