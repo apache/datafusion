@@ -20,6 +20,8 @@ use super::{
 };
 use crate::coalesce::LimitedBatchCoalescer;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
+use crate::hash_utils::CachingArrayHasher;
+#[cfg(test)]
 use crate::hash_utils::create_hashes;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
@@ -35,7 +37,7 @@ use crate::{
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
 use arrow::compute::take_arrays;
-use arrow::datatypes::{DataType, Schema, SchemaRef, UInt32Type};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, UInt32Type};
 use arrow_schema::SortOptions;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
@@ -644,6 +646,7 @@ enum BatchPartitionerState {
         partition_reducer: StrengthReducedU64,
         hash_buffer: Vec<u64>,
         indices: Vec<Vec<u32>>,
+        hasher: Option<CachingArrayHasher>,
     },
     RoundRobin {
         num_partitions: usize,
@@ -1023,6 +1026,7 @@ impl BatchPartitioner {
                 partition_reducer: StrengthReducedU64::new(num_partitions as u64),
                 hash_buffer: vec![],
                 indices: vec![vec![]; num_partitions],
+                hasher: None,
             },
             timer,
         })
@@ -1237,6 +1241,7 @@ impl BatchPartitioner {
                     partition_reducer,
                     hash_buffer,
                     indices,
+                    hasher,
                 } => {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
@@ -1247,11 +1252,24 @@ impl BatchPartitioner {
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
 
-                    create_hashes(
-                        &arrays,
-                        REPARTITION_RANDOM_STATE.random_state(),
-                        hash_buffer,
-                    )?;
+                    let hasher = hasher.get_or_insert_with(|| {
+                        let fields = arrays
+                            .iter()
+                            .enumerate()
+                            .map(|(index, array)| {
+                                Field::new(
+                                    format!("hash_{index}"),
+                                    array.data_type().clone(),
+                                    true,
+                                )
+                            })
+                            .collect::<Vec<_>>();
+                        CachingArrayHasher::new(
+                            &Schema::new(fields),
+                            REPARTITION_RANDOM_STATE.random_state().clone(),
+                        )
+                    });
+                    hasher.create_hashes(&arrays, hash_buffer)?;
 
                     for v in indices.iter_mut() {
                         v.clear();
@@ -2647,10 +2665,10 @@ mod tests {
     };
 
     use arrow::array::{
-        Array, ArrayRef, Decimal128Array, Int64Array, StringArray,
-        TimestampNanosecondArray, UInt32Array,
+        Array, ArrayRef, Decimal128Array, DictionaryArray, Int32Array, Int64Array,
+        StringArray, TimestampNanosecondArray, UInt32Array,
     };
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::{as_string_array, as_uint32_array};
     use datafusion_common::config::SpillCompression;
@@ -2902,6 +2920,65 @@ mod tests {
         assert_eq!(8, output_partitions.len());
         assert_eq!(total_rows, 8 * 50 * 3);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hash_partition_reuses_dictionary_values_across_batches() -> Result<()> {
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", dictionary_type, true),
+            Field::new("id", DataType::UInt32, false),
+        ]));
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "bb", "ccc"]));
+        let make_batch = |keys: Vec<Option<i32>>, ids: Vec<u32>| -> Result<RecordBatch> {
+            let dictionary: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(keys),
+                Arc::clone(&values),
+            )?);
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![dictionary, Arc::new(UInt32Array::from(ids))],
+            )?)
+        };
+        let batches = vec![
+            make_batch(vec![Some(0), Some(1), Some(2), None], vec![0, 1, 2, 3])?,
+            make_batch(vec![Some(2), Some(0), None, Some(1)], vec![4, 5, 6, 7])?,
+        ];
+
+        let mut expected = vec![Vec::new(); 4];
+        for batch in &batches {
+            let mut hashes = vec![0; batch.num_rows()];
+            create_hashes(
+                [batch.column(0)],
+                REPARTITION_RANDOM_STATE.random_state(),
+                &mut hashes,
+            )?;
+            let ids = as_uint32_array(batch.column(1))?;
+            for (hash, id) in hashes.into_iter().zip(ids.values().iter().copied()) {
+                expected[(hash % 4) as usize].push(id);
+            }
+        }
+
+        let output = repartition(
+            &schema,
+            vec![batches],
+            Partitioning::Hash(vec![col("key", &schema)?], 4),
+        )
+        .await?;
+        let mut actual = vec![Vec::new(); 4];
+        for (partition, batches) in output.iter().enumerate() {
+            for batch in batches {
+                actual[partition]
+                    .extend(as_uint32_array(batch.column(1))?.values().iter().copied());
+            }
+        }
+        for values in expected.iter_mut().chain(actual.iter_mut()) {
+            values.sort_unstable();
+        }
+
+        assert_eq!(actual, expected);
         Ok(())
     }
 
