@@ -9,9 +9,10 @@
 use std::hint::black_box;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Float32Array, Float64Array};
+use arrow::array::{ArrayRef, Float16Array, Float32Array, Float64Array};
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::float_semantics::normalize_floats;
+use half::f16;
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -27,11 +28,18 @@ fn bench_float_normalization(c: &mut Criterion) {
     let mut group = c.benchmark_group("float_normalization");
     let mut rng = StdRng::seed_from_u64(42);
     let clean = values(&mut rng);
+    // A single `-0.0` in the first row: the check can stop right away.
+    let mut first = clean.clone();
+    first[0] = -0.0;
     // A single `-0.0` in the last row: the check scans everything, then copies.
-    let mut dirty = clean.clone();
-    dirty[BATCH_SIZE - 1] = -0.0;
+    let mut last = clean.clone();
+    last[BATCH_SIZE - 1] = -0.0;
 
-    for (name, values) in [("clean", &clean), ("neg_zero_last", &dirty)] {
+    for (name, values) in [
+        ("clean", &clean),
+        ("neg_zero_first", &first),
+        ("neg_zero_last", &last),
+    ] {
         let f64_array: ArrayRef = Arc::new(Float64Array::from(values.clone()));
         group.bench_with_input(BenchmarkId::new("f64", name), &f64_array, |b, a| {
             b.iter(|| black_box(normalize_floats(black_box(a))))
@@ -40,6 +48,12 @@ fn bench_float_normalization(c: &mut Criterion) {
         let f32_values: Vec<f32> = values.iter().map(|&v| v as f32).collect();
         let f32_array: ArrayRef = Arc::new(Float32Array::from(f32_values));
         group.bench_with_input(BenchmarkId::new("f32", name), &f32_array, |b, a| {
+            b.iter(|| black_box(normalize_floats(black_box(a))))
+        });
+
+        let f16_values: Vec<f16> = values.iter().map(|&v| f16::from_f64(v)).collect();
+        let f16_array: ArrayRef = Arc::new(Float16Array::from(f16_values));
+        group.bench_with_input(BenchmarkId::new("f16", name), &f16_array, |b, a| {
             b.iter(|| black_box(normalize_floats(black_box(a))))
         });
     }
