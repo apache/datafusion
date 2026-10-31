@@ -505,6 +505,28 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         probe_size: "240K_multi_key_count",
         isolate_partitioned_join: true,
     },
+    // Q26: one hot key among unique keys.
+    // Build ~6M rows, where line 1 of each order (1.5M rows) shares one key
+    // and every other line has a key of its own, so the keys have fewer than
+    // two rows each on average. Probe 100K rows, 100 of them with the hot key:
+    // the partition that holds it matches each with its 1.5M rows.
+    HashJoinQuery {
+        sql: r###"SELECT count(*)
+        FROM (
+          SELECT CASE WHEN l_linenumber = 1 THEN 0 ELSE l_orderkey * 8 + l_linenumber END as k
+          FROM lineitem
+          WHERE l_orderkey % 10 = 0
+        ) l
+        JOIN (
+          SELECT CASE WHEN s_suppkey <= 100 THEN 0 ELSE s_suppkey * 80 + 2 END as k
+          FROM supplier
+        ) s ON l.k = s.k"###,
+        density: 0.01,
+        prob_hit: 0.2,
+        build_size: "6M_(1.5M_one_key)",
+        probe_size: "100K_count",
+        isolate_partitioned_join: true,
+    },
 ];
 
 impl RunOpt {
