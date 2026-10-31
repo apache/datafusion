@@ -63,6 +63,7 @@ Rule order matters. The default pipeline may change between releases.
 | 24    | `extract_leaf_expressions`                | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
 | 25    | `push_down_leaf_projections`              | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
 | 26    | `optimize_projections`                    | Prunes unused columns and removes unnecessary logical projections.                                                          |
+| 27    | `replace_filter_top1`                     | Rewrites `Filter(row_number() = 1)` over a partitioned window into a `first_value` aggregate.                               |
 
 ### Physical Optimizer Rules
 
