@@ -290,9 +290,9 @@ impl MinMaxStructState {
 
     /// Emits the specified min_max values
     ///
-    /// Returns (data_capacity, min_maxes), updating the current value of total_data_bytes
+    /// Returns (data_bytes, min_maxes), updating the current value of total_data_bytes
     ///
-    /// - `data_capacity`: the total length of all strings and their contents,
+    /// - `data_bytes`: the total memory size of all emitted struct arrays in bytes,
     /// - `min_maxes`: the actual min/max values for each group
     fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<StructArray>>) {
         match emit_to {
@@ -304,12 +304,14 @@ impl MinMaxStructState {
             }
             EmitTo::First(n) => {
                 let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
-                let first_data_capacity: usize = first_min_maxes
+                let first_data_bytes: usize = first_min_maxes
                     .iter()
-                    .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
+                    .map(|opt| {
+                        opt.as_ref().map(|s| s.get_array_memory_size()).unwrap_or(0)
+                    })
                     .sum();
-                self.total_data_bytes -= first_data_capacity;
-                (first_data_capacity, first_min_maxes)
+                self.total_data_bytes -= first_data_bytes;
+                (first_data_bytes, first_min_maxes)
             }
         }
     }
@@ -624,5 +626,54 @@ mod tests {
         let str_array = max_result.column(1).as_string::<i32>();
         assert_eq!(int_array.value(0), 4);
         assert_eq!(str_array.value(0), "d");
+    }
+
+    #[test]
+    fn test_min_max_struct_state_emit_to_first_memory_accounting() {
+        let array = create_test_struct_array(
+            vec![Some(1), Some(2), Some(3)],
+            vec![Some("a"), Some("b"), Some("c")],
+        );
+
+        let mut state = MinMaxStructState::new(array.data_type().clone());
+        state.min_max.resize(3, None);
+
+        let struct0 = array.slice(0, 1);
+        let struct1 = array.slice(1, 1);
+        let struct2 = array.slice(2, 1);
+
+        state.set_value(0, &struct0);
+        state.set_value(1, &struct1);
+        state.set_value(2, &struct2);
+
+        let size_before = state.size();
+        assert!(size_before > 0);
+        let total_bytes_before = state.total_data_bytes;
+        assert!(total_bytes_before > 0);
+
+        // Emit first 2 groups
+        let (emitted_bytes_first_2, emitted_first_2) = state.emit_to(EmitTo::First(2));
+        assert_eq!(emitted_first_2.len(), 2);
+        // Emitted bytes must reflect actual array memory size, not row count (1 + 1 = 2)
+        assert!(
+            emitted_bytes_first_2 > 2,
+            "emitted_bytes_first_2 ({emitted_bytes_first_2}) should be array memory size, not row count"
+        );
+        assert_eq!(state.min_max.len(), 1);
+        assert_eq!(
+            state.total_data_bytes,
+            total_bytes_before - emitted_bytes_first_2
+        );
+
+        // Emit remaining 1 group
+        let (emitted_bytes_last, emitted_last) = state.emit_to(EmitTo::First(1));
+        assert_eq!(emitted_last.len(), 1);
+        assert_eq!(
+            emitted_bytes_last,
+            total_bytes_before - emitted_bytes_first_2
+        );
+        assert_eq!(state.min_max.len(), 0);
+        assert_eq!(state.total_data_bytes, 0);
+        assert_eq!(state.size(), 0);
     }
 }
