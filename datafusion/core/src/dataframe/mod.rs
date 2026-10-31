@@ -2855,6 +2855,9 @@ impl DataFrame {
 
     /// Create a DataFrame from named Arrow arrays.
     ///
+    /// Each field's nullability is derived from its array: a column is
+    /// non-nullable when the array contains no nulls (see [`Array::is_nullable`]).
+    ///
     /// # Example
     ///
     /// ```
@@ -2888,7 +2891,10 @@ impl DataFrame {
         let (fields, arrays): (Vec<_>, Vec<_>) = columns
             .into_iter()
             .map(|(name, array)| {
-                (Field::new(name, array.data_type().clone(), true), array)
+                (
+                    Field::new(name, array.data_type().clone(), array.is_nullable()),
+                    array,
+                )
             })
             .unzip();
         let schema = Arc::new(Schema::new(fields));
