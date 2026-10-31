@@ -286,13 +286,18 @@ mod tests {
     use std::sync::Arc;
 
     use crate::expressions::{BinaryExpr, CastExpr, col, lit};
+    use crate::scalar_subquery::ScalarSubqueryExpr;
     use crate::{AcrossPartitions, ConstExpr, EquivalenceProperties};
-    use crate::{PhysicalExpr, PhysicalSortExpr};
+    use crate::{PhysicalExpr, PhysicalSortExpr, ScalarFunctionExpr};
 
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Result, ScalarValue};
-    use datafusion_expr::Operator;
+    use datafusion_expr::physical_planning_context::{
+        ScalarSubqueryResults, SubqueryIndex,
+    };
+    use datafusion_expr::{ColumnarValue, Operator, Volatility, create_udf};
 
     /// Pinning a key can move the head of an ordering to an expression that
     /// is equal to a function of the expressions after it, which implies a
@@ -498,6 +503,58 @@ mod tests {
         let (_, indices) =
             properties.find_longest_permutation(&[lit(5i32), k, b_mod_5])?;
         assert_eq!(indices, vec![0, 1, 2]);
+        Ok(())
+    }
+
+    /// A volatile function can return a new value for every row, so it is not
+    /// fixed even when its argument is pinned. An uncorrelated scalar subquery
+    /// has one value everywhere, so it is fixed, and so is `a + subquery` once
+    /// `a` is pinned. (A requirement drops a key that is just the subquery
+    /// before the walk sees it.)
+    #[test]
+    fn volatile_function_and_scalar_subquery_keys() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let a = col("a", &schema)?;
+        let subquery = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int32,
+            true,
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
+        )) as Arc<dyn PhysicalExpr>;
+        let call = |volatility| -> Result<Arc<dyn PhysicalExpr>> {
+            let udf = Arc::new(create_udf(
+                "f",
+                vec![DataType::Int32],
+                DataType::Int32,
+                volatility,
+                Arc::new(|args: &[ColumnarValue]| Ok(args[0].clone())),
+            ));
+            Ok(Arc::new(ScalarFunctionExpr::try_new(
+                udf,
+                vec![Arc::clone(&a)],
+                &schema,
+                Arc::new(ConfigOptions::new()),
+            )?))
+        };
+
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.add_ordering([PhysicalSortExpr::new_default(Arc::clone(&a))]);
+        let satisfied = |exprs: [&Arc<dyn PhysicalExpr>; 2]| {
+            properties.ordering_satisfy(
+                exprs.map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
+            )
+        };
+
+        assert!(!satisfied([&a, &call(Volatility::Volatile)?])?);
+        assert!(satisfied([&a, &call(Volatility::Stable)?])?);
+        let a_plus_subquery = Arc::new(BinaryExpr::new(
+            Arc::clone(&a),
+            Operator::Plus,
+            Arc::clone(&subquery),
+        )) as Arc<dyn PhysicalExpr>;
+        assert!(satisfied([&a, &a_plus_subquery])?);
+        let (_, found) = properties.find_longest_permutation(&[subquery])?;
+        assert_eq!(found, [0]);
         Ok(())
     }
 }
