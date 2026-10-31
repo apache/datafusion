@@ -20,18 +20,20 @@
 # A pull request from a fork to `main` runs `rust.yml` on the fork. This
 # workflow mirrors that run as one `Rust (fork)` check on the pull request, so
 # reviewers see the result without opening the fork. It never checks out or
-# runs code from the pull request: on `pull_request_target` it reads the fork's
-# public run list and creates the check, and on a schedule it updates the
-# active or missing runs of recently updated pull requests plus a rotating
-# slice of all open pull requests. The check is informational. The merge
+# runs code from the pull request: on `workflow_run` of
+# `pull_request_signal.yml` it reads the fork's public run list and creates the
+# check (`pull_request_target` is disabled by ASF infra policy), and on a
+# schedule it updates the active or missing runs of recently updated pull
+# requests plus a rotating slice of all open pull requests. The check is informational. The merge
 # queue runs the full workflow on the merged result and stays the gate.
 #
 # See docs/source/contributor-guide/index.md, "Pull Requests from Forks".
 name: Fork CI status
 
 on:
-  pull_request_target:
-    types: [opened, reopened, synchronize]
+  workflow_run:
+    workflows: ["Pull request signal"]
+    types: [requested]
   schedule:
     - cron: "*/15 * * * *"
   workflow_dispatch:
@@ -47,12 +49,13 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || 'update' }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request_target' }}
+  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_repository.full_name && format('{0}-{1}', github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch) || 'update' }}
+  cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
 
 jobs:
   bridge:
     name: Mirror the fork run
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
@@ -211,8 +214,24 @@ jobs:
               core.info(`Created ${CHECK} for ${sha}: ${payload.conclusion || payload.status}`);
             }
 
+            // `workflow_run.pull_requests` is empty for pull requests from
+            // forks, so find the pull request by its head branch and commit.
+            async function pullRequestOf(run) {
+              const { data } = await github.rest.pulls.list({
+                ...upstream,
+                state: 'open',
+                head: `${run.head_repository.owner.login}:${run.head_branch}`,
+              });
+              return data.find((pr) => pr.head.sha === run.head_sha);
+            }
+
             async function notify() {
-              const pr = context.payload.pull_request;
+              // An outdated commit matches nothing, since a newer run mirrors the new head.
+              const pr = await pullRequestOf(context.payload.workflow_run);
+              if (!pr) {
+                core.info('No open pull request for this commit; nothing to mirror.');
+                return;
+              }
               // Only fork PRs to main skip jobs upstream; release branches have
               // no merge queue and keep the full run.
               if (!isForkPrToMain(pr)) {
@@ -312,7 +331,7 @@ jobs:
               }
             }
 
-            if (context.eventName === 'pull_request_target') {
+            if (context.eventName === 'workflow_run') {
               await notify();
             } else {
               await update();
