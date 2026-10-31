@@ -9,7 +9,7 @@ use super::{
     IMDB_QUERY_END_ID, IMDB_QUERY_START_ID, IMDB_TABLES, get_imdb_table_schema,
     get_query_sql,
 };
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
+use crate::util::{BenchmarkRun, CommonOpt, QueryOpt, QueryResult, print_memory_stats};
 
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::{self, pretty_format_batches};
@@ -30,9 +30,6 @@ use datafusion_common::{DEFAULT_CSV_EXTENSION, DEFAULT_PARQUET_EXTENSION};
 
 use clap::Args;
 use log::info;
-
-// hack to avoid `default_value is meaningless for bool` errors
-type BoolDefaultTrue = bool;
 
 /// Run the imdb benchmark (a.k.a. JOB).
 ///
@@ -71,18 +68,9 @@ pub struct RunOpt {
     #[arg(short = 'o', long = "output")]
     output_path: Option<PathBuf>,
 
-    /// Whether to disable collection of statistics (and cost based optimizations) or not.
-    #[arg(short = 'S', long = "disable-statistics")]
-    disable_statistics: bool,
-
-    /// If true then hash join used, if false then sort merge join
-    /// True by default.
-    #[arg(short = 'j', long = "prefer_hash_join", default_value = "true")]
-    prefer_hash_join: BoolDefaultTrue,
-
-    /// How many bytes to buffer on the probe side of hash joins.
-    #[arg(long, default_value = "0")]
-    hash_join_buffering_capacity: usize,
+    /// Session configuration overrides
+    #[command(flatten)]
+    query_options: QueryOpt,
 }
 
 fn map_query_id_to_str(query_id: usize) -> &'static str {
@@ -298,13 +286,7 @@ impl RunOpt {
         query_id: usize,
         benchmark_run: &mut BenchmarkRun,
     ) -> Result<Vec<QueryResult>> {
-        let mut config = self
-            .common
-            .config()?
-            .with_collect_statistics(!self.disable_statistics);
-        config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
-        config.options_mut().execution.hash_join_buffering_capacity =
-            self.hash_join_buffering_capacity;
+        let config = self.query_options.config(&self.common)?;
         let rt = self.common.build_runtime()?;
         let ctx = SessionContext::new_with_config_rt(config, rt);
         benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
@@ -525,9 +507,7 @@ mod tests {
             file_format: "parquet".to_string(),
             mem_table: false,
             output_path: None,
-            disable_statistics: false,
-            prefer_hash_join: true,
-            hash_join_buffering_capacity: 0,
+            query_options: QueryOpt::default(),
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(map_query_id_to_str(query))?;
@@ -563,9 +543,7 @@ mod tests {
             file_format: "parquet".to_string(),
             mem_table: false,
             output_path: None,
-            disable_statistics: false,
-            prefer_hash_join: true,
-            hash_join_buffering_capacity: 0,
+            query_options: QueryOpt::default(),
         };
         opt.register_tables(&ctx).await?;
         let queries = get_query_sql(map_query_id_to_str(query))?;

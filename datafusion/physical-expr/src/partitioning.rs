@@ -1383,6 +1383,117 @@ mod tests {
         ))
     }
 
+    /// Builds `date_bin(stride, timestamp)` with a nanosecond-only literal stride
+    /// and the default epoch origin. This constructs the expression without evaluating it.
+    fn date_bin_of(
+        timestamp: Arc<dyn PhysicalExpr>,
+        stride_nanos: i64,
+    ) -> Arc<dyn PhysicalExpr> {
+        Arc::new(ScalarFunctionExpr::new(
+            "date_bin",
+            datafusion_functions::datetime::date_bin(),
+            vec![
+                Arc::new(Literal::new(ScalarValue::new_interval_mdn(
+                    0,
+                    0,
+                    stride_nanos,
+                ))),
+                timestamp,
+            ],
+            Field::new(
+                "date_bin",
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+                true,
+            )
+            .into(),
+            Arc::new(ConfigOptions::default()),
+        ))
+    }
+
+    #[test]
+    fn date_bin_requires_disjoint_bins_at_every_split() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let hour = 3_600_000_000_000;
+        let function = date_bin_of(fixture.col(0), hour);
+        // Ascending compares split - 1 ns with split. Descending compares split
+        // with split + 1 ns, so aligned descending splits end a bin rather than start it.
+        let cases = [
+            ("ascending aligned", false, vec![-hour, 0, hour], true),
+            ("ascending crossing", false, vec![-hour, 1, hour], false),
+            (
+                "descending aligned",
+                true,
+                vec![hour - 1, -1, -hour - 1],
+                true,
+            ),
+            ("descending crossing", true, vec![hour, 0, -hour], false),
+        ];
+        for (description, descending, splits, expected) in cases {
+            for nulls_first in [false, true] {
+                let range = fixture.range_partitioning_with_ordering(
+                    [fixture
+                        .range_sort_expr(0, SortOptions::new(descending, nulls_first))]
+                    .into(),
+                    splits
+                        .iter()
+                        .map(|value| timestamp_split(Some(*value), None))
+                        .collect(),
+                );
+                assert_eq!(
+                    range.keeps_keys_local(
+                        &[Arc::clone(&function)],
+                        &fixture.eq_properties,
+                        false,
+                    ),
+                    expected,
+                    "{description}, nulls_first={nulls_first}",
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn date_bin_rejects_adjacent_timestamp_binning_errors() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let hour = 3_600_000_000_000;
+        // The hour containing i64::MIN starts outside the timestamp range.
+        let nanos_to_next_hour = hour - i64::MIN.rem_euclid(hour);
+        let first_representable_hour = i64::MIN + nanos_to_next_hour;
+        let at_split =
+            ScalarValue::TimestampNanosecond(Some(first_representable_hour), None);
+        let before_split =
+            ScalarValue::TimestampNanosecond(Some(first_representable_hour - 1), None);
+        let timestamp = fixture.col(0);
+        let function = date_bin_of(Arc::clone(&timestamp), hour);
+
+        let bin_at_split = evaluate_with_range_value(&function, &timestamp, &at_split);
+        assert_eq!(bin_at_split, Some(at_split));
+
+        let bin_before_split =
+            evaluate_with_range_value(&function, &timestamp, &before_split);
+        assert!(
+            bin_before_split.is_none(),
+            "binning 1 ns before the split must fail"
+        );
+
+        let range = fixture.range_partitioning(
+            [0],
+            vec![timestamp_split(Some(first_representable_hour), None)],
+        );
+        assert!(
+            !range.keeps_keys_local(&[function], &fixture.eq_properties, false),
+            "a boundary evaluation error must reject the optimization",
+        );
+        Ok(())
+    }
+
     fn timestamp_split(value: Option<i64>, timezone: Option<&str>) -> SplitPoint {
         SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
             value,
