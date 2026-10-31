@@ -53,7 +53,8 @@ pub use equivalence::{
 };
 pub use expressions::{DynamicFilterTracker, DynamicFilterTracking};
 pub use partitioning::{
-    Distribution, Partitioning, PartitioningSatisfaction, RangePartitioning,
+    Distribution, GroupedPartitioning, Partitioning, PartitioningSatisfaction,
+    RangePartitioning,
 };
 pub use physical_expr::{
     add_offset_to_expr, add_offset_to_physical_sort_exprs, create_lex_ordering,

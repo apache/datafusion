@@ -984,3 +984,33 @@ async fn main() -> Result<()> {
 - [`SendableRecordBatchStream` API docs](https://docs.rs/datafusion/latest/datafusion/execution/type.SendableRecordBatchStream.html)
 - [DataFusion examples directory](https://github.com/apache/datafusion/tree/main/datafusion-examples/examples) --
   contains working examples including custom table providers
+
+## Declaring source-defined key groups
+
+A scan may expose `Partitioning::Grouped(GroupedPartitioning)` when the source
+already groups rows by a documented partition function. Use this for external
+bucket schemes; `Partitioning::Hash` describes DataFusion's native hash layout.
+The declaration is a source guarantee, not a request to hash the rows.
+
+`GroupedPartitioning::try_new(keys, scheme, group_ids)` records the original key
+expressions, a canonical semantic descriptor, and group labels in output
+partition order. The descriptor must identify the same deterministic function
+across providers: include its namespace/version, key types, encoding, seed,
+null behavior, and bucket reduction. Exclude table, snapshot, and executor
+identity. Each label identifies one complete group and occurs once; multiple
+files for that group must be read by the same output partition. Empty groups may
+be retained to align scans with different populated groups.
+
+Matching keys and partition counts alone do not establish a partition-wise
+join. Co-partitioned inputs must also have the same semantic descriptor and the
+same ordered group labels. Incompatible inputs are repartitioned normally.
+Projection that removes a required key discards the guarantee. Sources must
+preserve or recompute group membership when pruning or regrouping files.
+
+`RepartitionExec` cannot target this representation: DataFusion does not have a
+row router for an arbitrary source function. Multi-partition hash joins over
+source groups conservatively disable partition-dependent dynamic-filter
+routing. The protobuf format preserves the declaration; the existing FFI ABI
+conservatively exposes it as unknown partitioning until that ABI gains an
+explicit source-group representation. All-empty input should use an ordinary
+valid empty plan, rather than a zero-group declaration.

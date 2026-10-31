@@ -1694,6 +1694,12 @@ message PhysicalHashRepartition {
   uint64 partition_count = 2;
 }
 
+message PhysicalGroupedPartitioning {
+  repeated PhysicalExprNode keys = 1;
+  string scheme = 2;
+  repeated bytes group_ids = 3;
+}
+
 message PhysicalRangePartitioning {
   repeated PhysicalSortExprNode sort_expr = 1;
   // Effective split points. Kept for compatibility with older readers.
@@ -1725,6 +1731,7 @@ message Partitioning {
     PhysicalHashRepartition hash = 2;
     uint64 unknown = 3;
     PhysicalRangePartitioning range = 4;
+    PhysicalGroupedPartitioning grouped = 5;
   }
 }
 
