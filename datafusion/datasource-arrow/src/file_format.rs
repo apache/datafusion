@@ -45,6 +45,7 @@ use datafusion_datasource::file_format::{FileFormat, FileFormatFactory};
 use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
 use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
+use datafusion_physical_plan::spill::gc_view_arrays;
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 use futures::StreamExt;
@@ -333,6 +334,10 @@ impl FileSink for ArrowFileSink {
                 let mut row_count = 0;
                 while let Some(batch) = rx.recv().await {
                     row_count += batch.num_rows();
+                    // The IPC writer writes every data buffer of a view array in
+                    // full, and batches can reference much more view data than
+                    // they hold, for example after a sort or a merge
+                    let batch = gc_view_arrays(&batch)?;
                     arrow_writer.write(&batch)?;
                     let mut buff_to_flush = shared_buffer.buffer.try_lock().unwrap();
                     if buff_to_flush.len() > BUFFER_FLUSH_BYTES {

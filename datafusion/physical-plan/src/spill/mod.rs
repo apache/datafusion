@@ -736,7 +736,10 @@ fn get_max_alignment_for_schema(schema: &Schema) -> usize {
 #[cfg(test)]
 const VIEW_SIZE_BYTES: usize = 16;
 
-/// Performs garbage collection on StringView and BinaryView arrays before spilling to reduce memory usage.
+/// Compacts `StringView` and `BinaryView` arrays before Arrow IPC serialization.
+///
+/// The Arrow IPC writer writes every data buffer of a view array in full, so both
+/// spill files and files written by `ArrowFileSink` compact their batches first.
 ///
 /// # Why GC is needed
 ///
@@ -771,7 +774,14 @@ const VIEW_SIZE_BYTES: usize = 16;
 /// - Nested container types are traversed recursively so view arrays inside
 ///   `List`, `Map`, `Union`, `Dictionary`, and other child-bearing arrays are compacted too
 /// - The Arrow `gc()` method itself is optimized and only copies referenced data
-pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
+///
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
     let mut mutated = false;
     let mut new_columns: Vec<Arc<dyn Array>> = Vec::with_capacity(batch.num_columns());
 
