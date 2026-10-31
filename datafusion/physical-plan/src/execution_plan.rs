@@ -768,7 +768,7 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// a wrapper that forwards this to its input keeps working.
     #[deprecated(
         since = "56.0.0",
-        note = "implement `limit_behavior` instead; DataFusion no longer calls this"
+        note = "implement `limit_behavior` instead; the default `limit_behavior` reads this"
     )]
     fn supports_limit_pushdown(&self) -> bool {
         false
