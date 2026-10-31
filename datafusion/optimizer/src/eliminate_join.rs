@@ -842,7 +842,13 @@ mod tests {
                 let LogicalPlan::Aggregate(aggregate) = result.data else {
                     panic!("expected aggregate");
                 };
-                assert_eq!(aggregate.aggr_expr, aggr_expr);
+                // the outputs are named by implicit aliases
+                let outputs: Vec<Expr> = aggregate
+                    .aggr_expr
+                    .iter()
+                    .map(|e| e.strip_implicit_alias().clone())
+                    .collect();
+                assert_eq!(outputs, aggr_expr);
                 let LogicalPlan::Join(join) = aggregate.input.as_ref() else {
                     panic!("expected join");
                 };
@@ -878,7 +884,11 @@ mod tests {
             )?)
             .aggregate(Vec::<Expr>::new(), vec![min(col(column))])?
             .build()?;
-            assert_eq!(optimized, expected);
+            // the two plans scan the table with different column ids
+            assert_eq!(
+                optimized.with_canonical_column_ids()?,
+                expected.with_canonical_column_ids()?
+            );
         }
         Ok(())
     }

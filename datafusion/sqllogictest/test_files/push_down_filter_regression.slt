@@ -683,8 +683,8 @@ query TT
 EXPLAIN SELECT k, c FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY 1) WHERE k;
 ----
 logical_plan
-01)Projection: random() < Float64(0.5) AS k, count(Int64(1)) AS c
-02)--Filter: random() < Float64(0.5)
+01)Projection: "random() < Float64(0.5)" AS k, "count(Int64(1))" AS c
+02)--Filter: "random() < Float64(0.5)"
 03)----Aggregate: groupBy=[[random() < Float64(0.5)]], aggr=[[count(Int64(1))]]
 04)------TableScan: generate_series() projection=[]
 physical_plan
@@ -749,7 +749,7 @@ EXPLAIN SELECT k, v, s FROM (
 WHERE NULLIF(k, '') = 'a';
 ----
 logical_plan
-01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+01)Projection: window_expr_key.k, window_expr_key.v, "sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s
 02)--WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 03)----Filter: nullif(window_expr_key.k, Utf8View("")) = Utf8View("a")
 04)------TableScan: window_expr_key projection=[k, v]
@@ -775,7 +775,7 @@ EXPLAIN SELECT k, v, s FROM (
 WHERE NULLIF(k, '') IS NOT NULL;
 ----
 logical_plan
-01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+01)Projection: window_expr_key.k, window_expr_key.v, "sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s
 02)--WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 03)----Filter: nullif(window_expr_key.k, Utf8View("")) IS NOT NULL
 04)------TableScan: window_expr_key projection=[k, v]
@@ -803,7 +803,7 @@ EXPLAIN SELECT k, v, s FROM (
 WHERE v > 1;
 ----
 logical_plan
-01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+01)Projection: window_expr_key.k, window_expr_key.v, "sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s
 02)--Filter: window_expr_key.v > Int32(1)
 03)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 04)------TableScan: window_expr_key projection=[k, v]
@@ -831,7 +831,7 @@ EXPLAIN SELECT k, v, s FROM (
 WHERE k = 'a';
 ----
 logical_plan
-01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+01)Projection: window_expr_key.k, window_expr_key.v, "sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s
 02)--Filter: window_expr_key.k = Utf8View("a")
 03)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 04)------TableScan: window_expr_key projection=[k, v]
@@ -846,7 +846,7 @@ WHERE NULLIF(k, '') IN (SELECT k FROM window_expr_key WHERE v > 5);
 ----
 logical_plan
 01)LeftSemi Join: nullif(window_expr_key.k, Utf8View("")) = __correlated_sq_1.k
-02)--Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+02)--Projection: window_expr_key.k, window_expr_key.v, "sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s
 03)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 04)------TableScan: window_expr_key projection=[k, v]
 05)--SubqueryAlias: __correlated_sq_1
@@ -873,7 +873,7 @@ EXPLAIN SELECT k, v, s FROM (
 WHERE NULLIF(k, '') = (SELECT max(k) FROM window_expr_key);
 ----
 logical_plan
-01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+01)Projection: window_expr_key.k, window_expr_key.v, "sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s
 02)--Filter: nullif(window_expr_key.k, Utf8View("")) = (<subquery>)
 03)----Subquery:
 04)------Aggregate: groupBy=[[]], aggr=[[max(window_expr_key.k)]]
@@ -890,7 +890,7 @@ EXPLAIN SELECT k, v, s FROM (
 WHERE random() < 2;
 ----
 logical_plan
-01)Projection: window_expr_key.k, window_expr_key.v, sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+01)Projection: window_expr_key.k, window_expr_key.v, "sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s
 02)--Filter: random() < Float64(2)
 03)----WindowAggr: windowExpr=[[sum(CAST(window_expr_key.v AS Int64)) PARTITION BY [nullif(window_expr_key.k, Utf8View(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(window_expr_key.v) PARTITION BY [nullif(window_expr_key.k,Utf8(""))] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 04)------TableScan: window_expr_key projection=[k, v]
@@ -910,7 +910,7 @@ EXPLAIN SELECT a, b, s FROM (
 WHERE a + b > 2;
 ----
 logical_plan
-01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+01)Projection: window_ab.a, window_ab.b, "sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s
 02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 03)----Filter: window_ab.a + window_ab.b > Int32(2)
 04)------TableScan: window_ab projection=[a, b, c]
@@ -923,11 +923,11 @@ EXPLAIN SELECT a, b, s FROM (
 WHERE a + b > 5 OR a + b < 3;
 ----
 logical_plan
-01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+01)Projection: window_ab.a, window_ab.b, "sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s
 02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 03)----Projection: window_ab.a, window_ab.b, window_ab.c
-04)------Filter: __common_expr_3 > Int32(5) OR __common_expr_3 < Int32(3)
-05)--------Projection: window_ab.a + window_ab.b AS __common_expr_3, window_ab.a, window_ab.b, window_ab.c
+04)------Filter: "window_ab.a + window_ab.b" > Int32(5) OR "window_ab.a + window_ab.b" < Int32(3)
+05)--------Projection: window_ab.a + window_ab.b, window_ab.a, window_ab.b, window_ab.c
 06)----------TableScan: window_ab projection=[a, b, c]
 
 # Pushed: a predicate over a column key and an expression key of the same window.
@@ -938,7 +938,7 @@ EXPLAIN SELECT a, b, s FROM (
 WHERE a > 1 OR a + b > 4;
 ----
 logical_plan
-01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a, window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+01)Projection: window_ab.a, window_ab.b, "sum(window_ab.c) PARTITION BY [window_ab.a, window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s
 02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a, window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 03)----Filter: window_ab.a > Int32(1) OR window_ab.a + window_ab.b > Int32(4)
 04)------TableScan: window_ab projection=[a, b, c]
@@ -951,9 +951,9 @@ EXPLAIN SELECT a, b, s FROM (
 WHERE b + a > 2;
 ----
 logical_plan
-01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s
+01)Projection: window_ab.a, window_ab.b, "sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s
 02)--Filter: window_ab.b + window_ab.a > Int32(2)
-03)----Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+03)----Projection: window_ab.a, window_ab.b, "sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 04)------WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 05)--------TableScan: window_ab projection=[a, b, c]
 
@@ -968,10 +968,10 @@ EXPLAIN SELECT a, b, s, r FROM (
 WHERE a + b > 2;
 ----
 logical_plan
-01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s, rank() PARTITION BY [window_ab.a + window_ab.b] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r
-02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [__common_expr_1 AS window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-03)----WindowAggr: windowExpr=[[rank() PARTITION BY [__common_expr_1 AS window_ab.a + window_ab.b] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-04)------Projection: window_ab.a + window_ab.b AS __common_expr_1, window_ab.a, window_ab.b, window_ab.c
+01)Projection: window_ab.a, window_ab.b, "sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s, "rank() PARTITION BY [window_ab.a + window_ab.b] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS r
+02)--WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY ["window_ab.a + window_ab.b"] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+03)----WindowAggr: windowExpr=[[rank() PARTITION BY ["window_ab.a + window_ab.b"] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------Projection: window_ab.a + window_ab.b, window_ab.a, window_ab.b, window_ab.c
 05)--------Filter: window_ab.a + window_ab.b > Int32(2)
 06)----------TableScan: window_ab projection=[a, b, c]
 
@@ -986,9 +986,9 @@ EXPLAIN SELECT a, b, s, r FROM (
 WHERE a + b > 2;
 ----
 logical_plan
-01)Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS s, rank() PARTITION BY [window_ab.a] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r
+01)Projection: window_ab.a, window_ab.b, "sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS s, "rank() PARTITION BY [window_ab.a] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS r
 02)--Filter: window_ab.a + window_ab.b > Int32(2)
-03)----Projection: window_ab.a, window_ab.b, sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, rank() PARTITION BY [window_ab.a] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+03)----Projection: window_ab.a, window_ab.b, "sum(window_ab.c) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", "rank() PARTITION BY [window_ab.a] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
 04)------WindowAggr: windowExpr=[[rank() PARTITION BY [window_ab.a] ORDER BY [window_ab.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 05)--------WindowAggr: windowExpr=[[sum(CAST(window_ab.c AS Int64)) PARTITION BY [window_ab.a + window_ab.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 06)----------TableScan: window_ab projection=[a, b, c]

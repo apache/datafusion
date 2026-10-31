@@ -17,19 +17,44 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::has_float_leaf;
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err,
-    plan_err,
+    Column, ColumnId, DFSchema, DFSchemaRef, HashMap, Result, ScalarValue,
+    assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
-use datafusion_expr::expr_rewriter::strip_outer_reference;
+use datafusion_expr::expr_rewriter::{normalize_cols, strip_outer_reference};
+use datafusion_expr::logical_plan::column_ids::remap_column_ids;
 use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::simplify::SimplifyContext;
-use datafusion_expr::utils::{collect_subquery_cols, conjunction, split_conjunction};
+use datafusion_expr::utils::{
+    collect_subquery_cols, conjunction, grouping_set_to_exprlist, split_conjunction,
+};
 use datafusion_expr::{
     Aggregate, BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, FetchType,
     LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCtePlan, Operator,
-    SkipType, Window, expr, lit,
+    Projection, SkipType, Window, expr, lit,
 };
+
+/// Identifies a subplan of the subquery that [`PullUpCorrelatedExpr`] rewrites.
+///
+/// Equal subplans at different places, such as two scans of the same table,
+/// are equal [`LogicalPlan`]s but read different columns. The key also holds
+/// the [`ColumnId`]s of the subplan's output columns, so that such subplans
+/// do not share an entry.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PlanKey {
+    plan: LogicalPlan,
+    column_ids: Vec<Option<ColumnId>>,
+}
+
+impl PlanKey {
+    /// Create the key of `plan`
+    pub fn new(plan: &LogicalPlan) -> Self {
+        Self {
+            column_ids: plan.schema().field_ids().to_vec(),
+            plan: plan.clone(),
+        }
+    }
+}
 
 /// This struct rewrite the sub query plan by pull up the correlated
 /// expressions(contains outer reference columns) from the inner subquery's
@@ -40,7 +65,7 @@ use datafusion_expr::{
 pub struct PullUpCorrelatedExpr {
     pub join_filters: Vec<Expr>,
     /// mapping from the plan to its holding correlated columns
-    pub correlated_subquery_cols_map: HashMap<LogicalPlan, BTreeSet<Column>>,
+    pub correlated_subquery_cols_map: HashMap<PlanKey, BTreeSet<Column>>,
     pub in_predicate_opt: Option<Expr>,
     /// Is this an Exists(Not Exists) SubQuery. Defaults to **FALSE**
     pub exists_sub_query: bool,
@@ -65,7 +90,7 @@ pub struct PullUpCorrelatedExpr {
     /// [the count bug]: https://github.com/apache/datafusion/issues/10553
     pub need_handle_count_bug: bool,
     /// mapping from the plan to its expressions' evaluation result on empty batch
-    pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
+    pub collected_count_expr_map: HashMap<PlanKey, ExprResultMap>,
     /// pull up having expr, which must be evaluated after the Join
     pub pull_up_having_expr: Option<Expr>,
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
@@ -183,6 +208,22 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             column_refs.extend(expr.column_refs().into_iter().cloned());
         }
         self.column_refs_above.push(column_refs);
+
+        // Below an aggregate with grouping sets, the `IN` predicate's subquery
+        // column is the aggregate's input column, not its output column
+        if let LogicalPlan::Aggregate(aggregate) = &plan {
+            let ids = grouping_set_ids(aggregate);
+            if !ids.is_empty() {
+                let input_ids: HashMap<ColumnId, ColumnId> = ids
+                    .iter()
+                    .map(|(input, output)| (*output, *input))
+                    .collect();
+                self.in_predicate_opt = self
+                    .in_predicate_opt
+                    .take()
+                    .map(|expr| remap_column_ids(expr, |id| input_ids.get(&id).copied()));
+            }
+        }
 
         // This match is exhaustive on purpose. A correlated filter moves above
         // a node only when the node is known to keep the result the same. Add
@@ -400,8 +441,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 }
 
                 let mut expr_result_map_for_count_bug = HashMap::new();
-                let pull_up_expr_opt = if let Some(expr_result_map) =
-                    self.collected_count_expr_map.get(&*plan_filter.input)
+                let pull_up_expr_opt = if let Some(expr_result_map) = self
+                    .collected_count_expr_map
+                    .get(&PlanKey::new(&plan_filter.input))
                 {
                     if let Some(expr) = conjunction(subquery_filters.clone()) {
                         filter_exprs_evaluation_result_on_empty_batch(
@@ -440,23 +482,26 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     let new_plan =
                         LogicalPlanBuilder::from((*plan_filter.input).clone()).build()?;
                     let mut carried_correlated_cols = correlated_subquery_cols;
-                    if let Some(existing) =
-                        self.correlated_subquery_cols_map.get(&*plan_filter.input)
+                    if let Some(existing) = self
+                        .correlated_subquery_cols_map
+                        .get(&PlanKey::new(&plan_filter.input))
                     {
                         carried_correlated_cols.extend(existing.iter().cloned());
                     }
                     self.correlated_subquery_cols_map
-                        .insert(new_plan.clone(), carried_correlated_cols);
+                        .insert(PlanKey::new(&new_plan), carried_correlated_cols);
                     if !expr_result_map_for_count_bug.is_empty() {
-                        self.collected_count_expr_map
-                            .insert(new_plan.clone(), expr_result_map_for_count_bug);
+                        self.collected_count_expr_map.insert(
+                            PlanKey::new(&new_plan),
+                            expr_result_map_for_count_bug,
+                        );
                     } else if let Some(input_map) = self
                         .collected_count_expr_map
-                        .get(&*plan_filter.input)
+                        .get(&PlanKey::new(&plan_filter.input))
                         .cloned()
                     {
                         self.collected_count_expr_map
-                            .insert(new_plan.clone(), input_map);
+                            .insert(PlanKey::new(&new_plan), input_map);
                     }
                     return Ok(Transformed::yes(new_plan));
                 }
@@ -472,7 +517,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                             LogicalPlanBuilder::from((*plan_filter.input).clone())
                                 .build()?;
                         self.correlated_subquery_cols_map
-                            .entry(new_plan.clone())
+                            .entry(PlanKey::new(&new_plan))
                             .or_default()
                             .extend(correlated_subquery_cols);
                         Ok(Transformed::yes(new_plan))
@@ -486,7 +531,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         }
                         let new_plan = plan.build()?;
                         self.correlated_subquery_cols_map
-                            .entry(new_plan.clone())
+                            .entry(PlanKey::new(&new_plan))
                             .or_default()
                             .extend(correlated_subquery_cols);
                         Ok(Transformed::yes(new_plan))
@@ -510,8 +555,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 )?;
 
                 let mut expr_result_map_for_count_bug = HashMap::new();
-                if let Some(expr_result_map) =
-                    self.collected_count_expr_map.get(&*projection.input)
+                if let Some(expr_result_map) = self
+                    .collected_count_expr_map
+                    .get(&PlanKey::new(&projection.input))
                 {
                     proj_exprs_evaluation_result_on_empty_batch(
                         &missing_exprs,
@@ -529,18 +575,37 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     }
                 }
 
-                let new_plan = LogicalPlanBuilder::from((*projection.input).clone())
-                    .project(missing_exprs)?
-                    .build()?;
+                // Build the projection directly: the builder rejects two
+                // outputs with the same flattened name, such as `CAST(i.y AS
+                // ...)` and `i.y`, although they are different fields.
+                let missing_exprs = normalize_cols(missing_exprs, &projection.input)?;
+                let new_plan = LogicalPlan::Projection(Projection::try_new(
+                    missing_exprs,
+                    Arc::clone(&projection.input),
+                )?);
                 if !expr_result_map_for_count_bug.is_empty() {
                     self.collected_count_expr_map
-                        .insert(new_plan.clone(), expr_result_map_for_count_bug);
+                        .insert(PlanKey::new(&new_plan), expr_result_map_for_count_bug);
                 }
                 Ok(Transformed::yes(new_plan))
             }
             LogicalPlan::Aggregate(aggregate)
                 if self.in_predicate_opt.is_some() || !self.join_filters.is_empty() =>
             {
+                // The filters pulled up above an aggregate with grouping sets
+                // read its output columns, not its input columns
+                let ids = grouping_set_ids(aggregate);
+                if !ids.is_empty() {
+                    let output_id = |id| ids.get(&id).copied();
+                    self.join_filters = std::mem::take(&mut self.join_filters)
+                        .into_iter()
+                        .map(|expr| remap_column_ids(expr, output_id))
+                        .collect();
+                    self.in_predicate_opt = self
+                        .in_predicate_opt
+                        .take()
+                        .map(|expr| remap_column_ids(expr, output_id));
+                }
                 // A pulled up scalar aggregate below gives no row for unmatched
                 // outer rows, so this aggregate would see an empty input. Stop
                 // the rewrite here, since rebuilding the nodes above can fail
@@ -647,7 +712,20 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     .build()?;
                 if !expr_result_map_for_count_bug.is_empty() {
                     self.collected_count_expr_map
-                        .insert(new_plan.clone(), expr_result_map_for_count_bug);
+                        .insert(PlanKey::new(&new_plan), expr_result_map_for_count_bug);
+                }
+                // Above an aggregate with grouping sets, the correlated
+                // columns are its output columns
+                if !ids.is_empty() {
+                    let output_cols = local_correlated_cols
+                        .iter()
+                        .map(|col| {
+                            let id = col.id.map(|id| *ids.get(&id).unwrap_or(&id));
+                            col.clone().with_id(id)
+                        })
+                        .collect();
+                    self.correlated_subquery_cols_map
+                        .insert(PlanKey::new(&new_plan), output_cols);
                 }
                 Ok(Transformed::yes(new_plan))
             }
@@ -675,11 +753,13 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 };
 
                 self.correlated_subquery_cols_map
-                    .insert(new_plan.clone(), new_correlated_cols);
-                if let Some(input_map) = self.collected_count_expr_map.get(&*alias.input)
+                    .insert(PlanKey::new(&new_plan), new_correlated_cols);
+                if let Some(input_map) = self
+                    .collected_count_expr_map
+                    .get(&PlanKey::new(&alias.input))
                 {
                     self.collected_count_expr_map
-                        .insert(new_plan.clone(), input_map.clone());
+                        .insert(PlanKey::new(&new_plan), input_map.clone());
                 }
 
                 if new_plan != plan {
@@ -689,11 +769,13 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 }
             }
             LogicalPlan::Limit(limit) => {
-                if let Some(input_map) =
-                    self.collected_count_expr_map.get(&*limit.input).cloned()
+                if let Some(input_map) = self
+                    .collected_count_expr_map
+                    .get(&PlanKey::new(&limit.input))
+                    .cloned()
                 {
                     self.collected_count_expr_map
-                        .insert(plan.clone(), input_map);
+                        .insert(PlanKey::new(&plan), input_map);
                 }
                 Ok(Transformed::no(plan))
             }
@@ -755,11 +837,10 @@ impl PullUpCorrelatedExpr {
         &mut self,
         plan: LogicalPlan,
     ) -> Result<Transformed<LogicalPlan>> {
-        if plan
-            .inputs()
-            .iter()
-            .any(|input| self.collected_count_expr_map.contains_key(*input))
-        {
+        if plan.inputs().iter().any(|input| {
+            self.collected_count_expr_map
+                .contains_key(&PlanKey::new(input))
+        }) {
             self.can_pull_up = false;
         }
         Ok(Transformed::yes(plan.recompute_schema()?))
@@ -1032,11 +1113,17 @@ fn partitions_by_all(expr: &Expr, cols: &BTreeSet<Column>) -> bool {
 /// True if `candidate` collides with an existing entry's schema name,
 /// e.g. a bare column already wrapped in an equally-named `CAST`.
 /// Colliding means `LogicalPlanBuilder::project` would reject it as a duplicate.
+/// Does one of `exprs` define an output field with the same qualifier and
+/// name as `candidate`?
+///
+/// The qualifier and name are compared, not the flattened name: the output of
+/// `CAST(i.y AS ...)` is an unqualified field named `i.y`, a different field
+/// than `y` qualified by `i`.
 fn collides_with_existing(exprs: &[Expr], candidate: &Expr) -> bool {
-    let candidate_name = candidate.schema_name().to_string();
+    let candidate_name = candidate.qualified_name();
     exprs
         .iter()
-        .any(|expr| expr.schema_name().to_string() == candidate_name)
+        .any(|expr| expr.qualified_name() == candidate_name)
 }
 
 fn can_pullup_over_aggregation(expr: &Expr) -> bool {
@@ -1092,11 +1179,11 @@ fn split_column_equality(expr: &Expr) -> Option<(&Expr, &Expr)> {
 
 fn collect_local_correlated_cols(
     plan: &LogicalPlan,
-    all_cols_map: &HashMap<LogicalPlan, BTreeSet<Column>>,
+    all_cols_map: &HashMap<PlanKey, BTreeSet<Column>>,
     local_cols: &mut BTreeSet<Column>,
 ) {
     for child in plan.inputs() {
-        if let Some(cols) = all_cols_map.get(child) {
+        if let Some(cols) = all_cols_map.get(&PlanKey::new(child)) {
             local_cols.extend(cols.iter().cloned());
         }
         // SubqueryAlias is treated as the leaf node
@@ -1158,6 +1245,33 @@ pub(crate) fn build_join_filter<'a>(
                 .map(strip_outer_reference)
         })
         .transpose()
+}
+
+/// For an aggregate with grouping sets, the ids of the input columns it
+/// groups by, mapped to the ids of the output columns that group by them
+fn grouping_set_ids(aggregate: &Aggregate) -> HashMap<ColumnId, ColumnId> {
+    let mut ids = HashMap::new();
+    if !matches!(aggregate.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
+        return ids;
+    }
+    let Ok(grouping_exprs) = grouping_set_to_exprlist(&aggregate.group_expr) else {
+        return ids;
+    };
+    let input_schema = aggregate.input.schema();
+    for (i, expr) in grouping_exprs.iter().enumerate() {
+        if let Expr::Column(col) = expr
+            && let Some(input_id) = col.id.or_else(|| {
+                input_schema
+                    .maybe_index_of_column(col)
+                    .and_then(|idx| input_schema.field_id(idx))
+            })
+            && let Some(output_id) = aggregate.schema.field_id(i)
+            && input_id != output_id
+        {
+            ids.insert(input_id, output_id);
+        }
+    }
+    ids
 }
 
 fn remove_duplicated_filter(
@@ -1267,6 +1381,7 @@ fn proj_exprs_evaluation_result_on_empty_batch(
                     relation: _,
                     name,
                     spans: _,
+                    id: _,
                 }) => name.to_string(),
                 _ => expr.schema_name().to_string(),
             };

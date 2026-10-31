@@ -59,7 +59,7 @@ explain select * from (select * from t) t_(x, y);
 ----
 logical_plan
 01)SubqueryAlias: t_
-02)--Projection: t.A AS x, t.B.C AS y
+02)--Projection: t.A AS x, t."B.C" AS y
 03)----TableScan: t projection=[A, B.C]
 physical_plan
 01)ProjectionExec: expr=[A@0 as x, B.C@1 as y]
@@ -70,7 +70,7 @@ explain select * from (select * from t) t_(X, Y);
 ----
 logical_plan
 01)SubqueryAlias: t_
-02)--Projection: t.A AS x, t.B.C AS y
+02)--Projection: t.A AS x, t."B.C" AS y
 03)----TableScan: t projection=[A, B.C]
 physical_plan
 01)ProjectionExec: expr=[A@0 as x, B.C@1 as y]
@@ -81,7 +81,7 @@ explain select * from (select * from t) t_("X", "Y");
 ----
 logical_plan
 01)SubqueryAlias: t_
-02)--Projection: t.A AS X, t.B.C AS Y
+02)--Projection: t.A AS X, t."B.C" AS Y
 03)----TableScan: t projection=[A, B.C]
 physical_plan
 01)ProjectionExec: expr=[A@0 as X, B.C@1 as Y]

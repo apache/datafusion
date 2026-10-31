@@ -2852,10 +2852,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|(i, value_index)| {
                 let target_field = table_schema.field(i);
                 let expr = match value_index {
-                    Some(v) => {
-                        Expr::Column(Column::from(source.schema().qualified_field(v)))
-                            .cast_to(target_field.data_type(), source.schema())?
-                    }
+                    Some(v) => Expr::Column(source.schema().column(v))
+                        .cast_to(target_field.data_type(), source.schema())?,
                     // The value is not specified. Fill in the default value for the column.
                     None => table_source
                         .get_column_default(target_field.name())

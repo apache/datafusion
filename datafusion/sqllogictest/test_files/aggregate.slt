@@ -157,8 +157,12 @@ SELECT MIN(c) WITHIN GROUP (ORDER BY c) FROM (VALUES (1),(2)) as t(c);
 
 
 # https://github.com/apache/datafusion/issues/3353
-statement error DataFusion error: Schema error: Schema contains duplicate unqualified field name "approx_distinct\(aggregate_test_100\.c9\)"
+# The two aggregates have the same name, `approx_distinct(aggregate_test_100.c9)`
+# (a cast does not change the name), but define different columns
+query II
 SELECT approx_distinct(c9) count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
+----
+99 99
 
 # csv_query_approx_percentile_cont_with_weight
 statement error Function 'approx_percentile_cont_with_weight' failed to match any signature
@@ -1561,7 +1565,7 @@ query TT
 explain select median(distinct c) from t;
 ----
 logical_plan
-01)Projection: median(alias1) AS median(DISTINCT t.c)
+01)Projection: "median(alias1)" AS median(DISTINCT t.c)
 02)--Aggregate: groupBy=[[]], aggr=[[median(alias1)]]
 03)----Aggregate: groupBy=[[CAST(t.c AS Float64) AS alias1]], aggr=[[]]
 04)------TableScan: t projection=[c]
@@ -1709,12 +1713,7 @@ SELECT COUNT(2) FROM aggregate_test_100
 ----
 100
 
-# csv_query_approx_count
-# FIX: https://github.com/apache/datafusion/issues/3353
-# query II
-# SELECT approx_distinct(c9) AS count_c9, approx_distinct(cast(c9 as varchar)) count_c9_str FROM aggregate_test_100
-# ----
-# 100 99
+# csv_query_approx_count: see https://github.com/apache/datafusion/issues/3353 above
 
 # csv_query_approx_count_literal_null
 query I
@@ -7727,7 +7726,7 @@ EXPLAIN SELECT DISTINCT c3, min(c1) FROM aggregate_test_100 group by c3 limit 5;
 ----
 logical_plan
 01)Limit: skip=0, fetch=5
-02)--Aggregate: groupBy=[[aggregate_test_100.c3, min(aggregate_test_100.c1)]], aggr=[[]]
+02)--Aggregate: groupBy=[[aggregate_test_100.c3, "min(aggregate_test_100.c1)"]], aggr=[[]]
 03)----Aggregate: groupBy=[[aggregate_test_100.c3]], aggr=[[min(aggregate_test_100.c1)]]
 04)------TableScan: aggregate_test_100 projection=[c1, c3]
 physical_plan
@@ -7835,7 +7834,7 @@ query TT
 EXPLAIN SELECT max(c1), c2, c3 FROM aggregate_test_100 group by c2, c3 limit 5;
 ----
 logical_plan
-01)Projection: max(aggregate_test_100.c1), aggregate_test_100.c2, aggregate_test_100.c3
+01)Projection: "max(aggregate_test_100.c1)", aggregate_test_100.c2, aggregate_test_100.c3
 02)--Limit: skip=0, fetch=5
 03)----Aggregate: groupBy=[[aggregate_test_100.c2, aggregate_test_100.c3]], aggr=[[max(aggregate_test_100.c1)]]
 04)------TableScan: aggregate_test_100 projection=[c1, c2, c3]
@@ -9087,7 +9086,7 @@ query TT
 explain select state, sum(salary) as total_salary from employee_csv group by state;
 ----
 logical_plan
-01)Projection: employee_csv.state, sum(employee_csv.salary) AS total_salary
+01)Projection: employee_csv.state, "sum(employee_csv.salary)" AS total_salary
 02)--Aggregate: groupBy=[[employee_csv.state]], aggr=[[sum(employee_csv.salary)]]
 03)----TableScan: employee_csv projection=[state, salary]
 
@@ -9135,7 +9134,7 @@ EXPLAIN select * from having_test group by v1, v2 having max(v1) = 3
 ----
 logical_plan
 01)Projection: having_test.v1, having_test.v2
-02)--Filter: max(having_test.v1) = Int32(3)
+02)--Filter: "max(having_test.v1)" = Int32(3)
 03)----Aggregate: groupBy=[[having_test.v1, having_test.v2]], aggr=[[max(having_test.v1)]]
 04)------TableScan: having_test projection=[v1, v2]
 physical_plan
@@ -9287,7 +9286,7 @@ explain with A as (
 ) select last_value(a.foo order by a.foo), sum(distinct 1) from A a group by a.id;
 ----
 logical_plan
-01)Projection: last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))
+01)Projection: "last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST]", "sum(DISTINCT Int64(1))"
 02)--Aggregate: groupBy=[[a.id]], aggr=[[last_value(a.foo) ORDER BY [a.foo ASC NULLS LAST], sum(DISTINCT Int64(1))]]
 03)----SubqueryAlias: a
 04)------SubqueryAlias: a
@@ -9325,7 +9324,7 @@ EXPLAIN SELECT COUNT(c5) as count_c5 FROM aggregate_test_100 ORDER BY count_c5;
 ----
 logical_plan
 01)Sort: count_c5 ASC NULLS LAST
-02)--Projection: count(aggregate_test_100.c5) AS count_c5
+02)--Projection: "count(aggregate_test_100.c5)" AS count_c5
 03)----Aggregate: groupBy=[[]], aggr=[[count(aggregate_test_100.c5)]]
 04)------TableScan: aggregate_test_100 projection=[c5]
 physical_plan
@@ -9410,13 +9409,24 @@ select count(1), count(1) from t;
 query error
 explain select count(1), count(1) from t;
 
-# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\) AS \)" at position 0 and "count\(Int64\(1\) AS \)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
-query error
+# Two outputs with the same name are allowed when they define different
+# columns (see https://github.com/apache/datafusion/issues/6543)
+query II
 select count(), count() from t;
+----
+2 2
 
-# DataFusion error: Error during planning: Projections require unique expression names but the expression "count\(Int64\(1\) AS \)" at position 0 and "count\(Int64\(1\) AS \)" at position 1 have the same name\. Consider aliasing \("AS"\) one of them\.
-query error
+query TT
 explain select count(), count() from t;
+----
+logical_plan
+01)Projection: "count(Int64(1))" AS count(), "count(Int64(1))" AS count()
+02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+03)----TableScan: t projection=[]
+physical_plan
+01)ProjectionExec: expr=[count(Int64(1))@0 as count(), count(Int64(1))@0 as count()]
+02)--ProjectionExec: expr=[2 as count(Int64(1))]
+03)----PlaceholderRowExec
 
 query II
 select count(1), count(2) from t;
@@ -9442,7 +9452,7 @@ query TT
 explain select count(1), count() from t;
 ----
 logical_plan
-01)Projection: count(Int64(1)), count(Int64(1)) AS count()
+01)Projection: "count(Int64(1))", "count(Int64(1))" AS count()
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
@@ -9459,7 +9469,7 @@ query TT
 explain select count(1), count(*) from t;
 ----
 logical_plan
-01)Projection: count(Int64(1)), count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))", "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
@@ -9476,7 +9486,7 @@ query TT
 explain select count(), count(*) from t;
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(), count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(), "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: t projection=[]
 physical_plan
@@ -9488,7 +9498,7 @@ query TT
 explain select count(1) * count(2) from t;
 ----
 logical_plan
-01)Projection: count(Int64(1)) * count(Int64(2))
+01)Projection: "count(Int64(1))" * "count(Int64(2))"
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1)), count(Int64(2))]]
 03)----TableScan: t projection=[]
 physical_plan
@@ -10020,7 +10030,7 @@ ORDER BY g;
 ----
 logical_plan
 01)Sort: stream_test.g ASC NULLS LAST
-02)--Projection: stream_test.g, count(Int64(1)) AS count(*), sum(stream_test.x), avg(stream_test.x), avg(stream_test.x) AS mean(stream_test.x), min(stream_test.x), max(stream_test.y), bit_and(stream_test.i), bit_or(stream_test.i), bit_xor(stream_test.i), bool_and(stream_test.b), bool_or(stream_test.b), median(stream_test.x), Int32(0) AS grouping(stream_test.g), var(stream_test.x), var(stream_test.x) AS var_samp(stream_test.x), var_pop(stream_test.x), var(stream_test.x) AS var_sample(stream_test.x), var_pop(stream_test.x) AS var_population(stream_test.x), stddev(stream_test.x), stddev(stream_test.x) AS stddev_samp(stream_test.x), stddev_pop(stream_test.x)
+02)--Projection: stream_test.g, "count(Int64(1))" AS count(*), "sum(stream_test.x)", "avg(stream_test.x)", "avg(stream_test.x)" AS mean(stream_test.x), "min(stream_test.x)", "max(stream_test.y)", "bit_and(stream_test.i)", "bit_or(stream_test.i)", "bit_xor(stream_test.i)", "bool_and(stream_test.b)", "bool_or(stream_test.b)", "median(stream_test.x)", Int32(0) AS grouping(stream_test.g), "var(stream_test.x)", "var(stream_test.x)" AS var_samp(stream_test.x), "var_pop(stream_test.x)", "var(stream_test.x)" AS var_sample(stream_test.x), "var_pop(stream_test.x)" AS var_population(stream_test.x), "stddev(stream_test.x)", "stddev(stream_test.x)" AS stddev_samp(stream_test.x), "stddev_pop(stream_test.x)"
 03)----Aggregate: groupBy=[[stream_test.g]], aggr=[[count(Int64(1)), sum(stream_test.x), avg(stream_test.x), min(stream_test.x), max(stream_test.y), bit_and(stream_test.i), bit_or(stream_test.i), bit_xor(stream_test.i), bool_and(stream_test.b), bool_or(stream_test.b), median(stream_test.x), var(stream_test.x), var_pop(stream_test.x), stddev(stream_test.x), stddev_pop(stream_test.x)]]
 04)------Sort: stream_test.g ASC NULLS LAST, fetch=10000
 05)--------TableScan: stream_test projection=[g, x, y, i, b]
@@ -10159,7 +10169,7 @@ ORDER BY g;
 ----
 logical_plan
 01)Sort: stream_test.g ASC NULLS LAST
-02)--Projection: stream_test.g, corr(stream_test.x,stream_test.y), covar_samp(stream_test.x,stream_test.y) AS covar(stream_test.x,stream_test.y), covar_samp(stream_test.x,stream_test.y), covar_pop(stream_test.x,stream_test.y), regr_sxx(stream_test.x,stream_test.y), regr_sxy(stream_test.x,stream_test.y), regr_syy(stream_test.x,stream_test.y), regr_avgx(stream_test.x,stream_test.y), regr_avgy(stream_test.x,stream_test.y), regr_count(stream_test.x,stream_test.y), regr_slope(stream_test.x,stream_test.y), regr_intercept(stream_test.x,stream_test.y), regr_r2(stream_test.x,stream_test.y)
+02)--Projection: stream_test.g, "corr(stream_test.x,stream_test.y)", "covar_samp(stream_test.x,stream_test.y)" AS covar(stream_test.x,stream_test.y), "covar_samp(stream_test.x,stream_test.y)", "covar_pop(stream_test.x,stream_test.y)", "regr_sxx(stream_test.x,stream_test.y)", "regr_sxy(stream_test.x,stream_test.y)", "regr_syy(stream_test.x,stream_test.y)", "regr_avgx(stream_test.x,stream_test.y)", "regr_avgy(stream_test.x,stream_test.y)", "regr_count(stream_test.x,stream_test.y)", "regr_slope(stream_test.x,stream_test.y)", "regr_intercept(stream_test.x,stream_test.y)", "regr_r2(stream_test.x,stream_test.y)"
 03)----Aggregate: groupBy=[[stream_test.g]], aggr=[[corr(stream_test.x, stream_test.y), covar_samp(stream_test.x, stream_test.y), covar_pop(stream_test.x, stream_test.y), regr_sxx(stream_test.x, stream_test.y), regr_sxy(stream_test.x, stream_test.y), regr_syy(stream_test.x, stream_test.y), regr_avgx(stream_test.x, stream_test.y), regr_avgy(stream_test.x, stream_test.y), regr_count(stream_test.x, stream_test.y), regr_slope(stream_test.x, stream_test.y), regr_intercept(stream_test.x, stream_test.y), regr_r2(stream_test.x, stream_test.y)]]
 04)------Sort: stream_test.g ASC NULLS LAST, fetch=10000
 05)--------TableScan: stream_test projection=[g, x, y]
@@ -10212,7 +10222,7 @@ ORDER BY g;
 ----
 logical_plan
 01)Sort: stream_test.g ASC NULLS LAST
-02)--Projection: stream_test.g, approx_distinct(stream_test.i), approx_median(stream_test.x), percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST], percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST] AS quantile_cont(stream_test.x,Float64(0.5)), approx_percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST], approx_percentile_cont_with_weight(Float64(1),Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST], percentile_cont(stream_test.x,Float64(0.5)), approx_percentile_cont(stream_test.x,Float64(0.5)), approx_percentile_cont_with_weight(stream_test.x,Float64(1),Float64(0.5))
+02)--Projection: stream_test.g, "approx_distinct(stream_test.i)", "approx_median(stream_test.x)", "percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST]", "percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST]" AS quantile_cont(stream_test.x,Float64(0.5)), "approx_percentile_cont(Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST]", "approx_percentile_cont_with_weight(Float64(1),Float64(0.5)) WITHIN GROUP [stream_test.x ASC NULLS LAST]", "percentile_cont(stream_test.x,Float64(0.5))", "approx_percentile_cont(stream_test.x,Float64(0.5))", "approx_percentile_cont_with_weight(stream_test.x,Float64(1),Float64(0.5))"
 03)----Aggregate: groupBy=[[stream_test.g]], aggr=[[approx_distinct(stream_test.i), approx_median(stream_test.x), percentile_cont(stream_test.x, Float64(0.5)) ORDER BY [stream_test.x ASC NULLS LAST], approx_percentile_cont(stream_test.x, Float64(0.5)) ORDER BY [stream_test.x ASC NULLS LAST], approx_percentile_cont_with_weight(stream_test.x, Float64(1), Float64(0.5)) ORDER BY [stream_test.x ASC NULLS LAST], percentile_cont(stream_test.x, Float64(0.5)), approx_percentile_cont(stream_test.x, Float64(0.5)), approx_percentile_cont_with_weight(stream_test.x, Float64(1), Float64(0.5))]]
 04)------Sort: stream_test.g ASC NULLS LAST, fetch=10000
 05)--------TableScan: stream_test projection=[g, x, i]

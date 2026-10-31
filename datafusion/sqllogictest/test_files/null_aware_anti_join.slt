@@ -437,7 +437,7 @@ WHERE (a, 2) NOT IN (SELECT x, y FROM multi_col_inner);
 ----
 logical_plan
 01)Projection: multi_col_outer.k, multi_col_outer.a, multi_col_outer.b
-02)--LeftAnti Join: multi_col_outer.a = __correlated_sq_1.x, __correlated_sq_1_value_1 = __correlated_sq_1.multi_col_inner.y null_aware(value_keys=2)
+02)--LeftAnti Join: multi_col_outer.a = __correlated_sq_1.x, __correlated_sq_1_value_1 = __correlated_sq_1."multi_col_inner.y" null_aware(value_keys=2)
 03)----Projection: multi_col_outer.k, multi_col_outer.a, multi_col_outer.b, Int64(2) AS __correlated_sq_1_value_1
 04)------TableScan: multi_col_outer projection=[k, a, b]
 05)----SubqueryAlias: __correlated_sq_1
@@ -776,7 +776,7 @@ EXPLAIN SELECT z FROM naconst_corr_t3 WHERE 1 NOT IN (SELECT naconst_corr_t4.id 
 ----
 logical_plan
 01)Projection: naconst_corr_t3.z
-02)--LeftAnti Join: __correlated_sq_1_value = __correlated_sq_1.naconst_corr_t4.id, naconst_corr_t3.z = __correlated_sq_1.z null_aware
+02)--LeftAnti Join: __correlated_sq_1_value = __correlated_sq_1."naconst_corr_t4.id", naconst_corr_t3.z = __correlated_sq_1.z null_aware
 03)----Projection: naconst_corr_t3.z, Int64(1) AS __correlated_sq_1_value
 04)------TableScan: naconst_corr_t3 projection=[z]
 05)----SubqueryAlias: __correlated_sq_1
@@ -1126,7 +1126,7 @@ query TT
 EXPLAIN SELECT x FROM nanull_o WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
 ----
 logical_plan
-01)LeftAnti Join: CASE WHEN nanull_o.x > Int32(100) THEN Int64(1) END = __correlated_sq_1.nanull_i.id null_aware
+01)LeftAnti Join: CASE WHEN nanull_o.x > Int32(100) THEN Int64(1) END = __correlated_sq_1."nanull_i.id" null_aware
 02)--TableScan: nanull_o projection=[x]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: CAST(nanull_i.id AS Int64)
@@ -1142,7 +1142,7 @@ query TT
 EXPLAIN SELECT x FROM nanull_o WHERE x + 1 NOT IN (SELECT id FROM nanull_i);
 ----
 logical_plan
-01)LeftAnti Join: CAST(nanull_o.x AS Int64) + Int64(1) = __correlated_sq_1.nanull_i.id
+01)LeftAnti Join: CAST(nanull_o.x AS Int64) + Int64(1) = __correlated_sq_1."nanull_i.id"
 02)--TableScan: nanull_o projection=[x]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: CAST(nanull_i.id AS Int64)

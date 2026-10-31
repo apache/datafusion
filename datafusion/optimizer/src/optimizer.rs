@@ -589,6 +589,22 @@ fn plan_has_subqueries(plan: &LogicalPlan) -> bool {
     found
 }
 
+/// Logs each column reference of `plan` whose [`ColumnId`] is missing, stale,
+/// or refers to another column than its name, under the log target
+/// `datafusion::column_id`. `stage` names the rule that produced the plan.
+///
+/// [`ColumnId`]: datafusion_common::ColumnId
+pub(crate) fn log_column_id_issues(plan: &LogicalPlan, stage: &str) {
+    if !log::log_enabled!(target: "datafusion::column_id", log::Level::Debug) {
+        return;
+    }
+    let issues = plan.column_id_issues();
+    for issue in &issues {
+        log::debug!(target: "datafusion::column_id", "after {stage}: {issue}");
+    }
+    log::trace!(target: "datafusion::column_id", "after {stage}:\n{}", plan.display_column_ids());
+}
+
 impl Optimizer {
     /// Optimizes the logical plan by applying optimizer rules, and
     /// invoking observer function after each call
@@ -608,6 +624,7 @@ impl Optimizer {
         let start_time = Instant::now();
         let options = config.options();
         let mut new_plan = plan;
+        log_column_id_issues(&new_plan, "optimizer input");
 
         let mut previous_plans = HashSet::with_capacity(16);
         previous_plans.insert(LogicalPlanSignature::new(&new_plan));
@@ -700,6 +717,9 @@ impl Optimizer {
                         _,
                     ) => {
                         new_plan = data;
+                        if transformed {
+                            log_column_id_issues(&new_plan, rule.name());
+                        }
                         observer(&new_plan, rule.as_ref());
                         if transformed {
                             has_subqueries = plan_has_subqueries(&new_plan);
@@ -788,7 +808,7 @@ mod tests {
 
     use datafusion_common::tree_node::Transformed;
     use datafusion_common::{
-        Column, DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
+        DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
     };
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{
@@ -1037,7 +1057,7 @@ mod tests {
                 return Ok(Transformed::no(plan));
             };
 
-            let expr = Expr::from(Column::from(projection.schema.qualified_field(0)));
+            let expr = Expr::Column(projection.schema.column(0));
 
             Ok(Transformed::yes(LogicalPlan::Projection(
                 Projection::try_new(vec![expr], Arc::clone(&projection.input))?,

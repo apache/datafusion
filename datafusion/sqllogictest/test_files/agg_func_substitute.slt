@@ -26,7 +26,7 @@ EXPLAIN SELECT a, ARRAY_AGG(c ORDER BY c)[1] as result
                         GROUP BY a;
 ----
 logical_plan
-01)Projection: multiple_ordered_table.a, nth_value(multiple_ordered_table.c,Int64(1)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST] AS result
+01)Projection: multiple_ordered_table.a, "nth_value(multiple_ordered_table.c,Int64(1)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST]" AS result
 02)--Aggregate: groupBy=[[multiple_ordered_table.a]], aggr=[[nth_value(multiple_ordered_table.c, Int64(1)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST]]]
 03)----TableScan: multiple_ordered_table projection=[a, c]
 physical_plan
@@ -44,7 +44,7 @@ EXPLAIN SELECT a, NTH_VALUE(c, 1 ORDER BY c) as result
                         GROUP BY a;
 ----
 logical_plan
-01)Projection: multiple_ordered_table.a, nth_value(multiple_ordered_table.c,Int64(1)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST] AS result
+01)Projection: multiple_ordered_table.a, "nth_value(multiple_ordered_table.c,Int64(1)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST]" AS result
 02)--Aggregate: groupBy=[[multiple_ordered_table.a]], aggr=[[nth_value(multiple_ordered_table.c, Int64(1)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST]]]
 03)----TableScan: multiple_ordered_table projection=[a, c]
 physical_plan
@@ -61,7 +61,7 @@ EXPLAIN SELECT a, ARRAY_AGG(c ORDER BY c)[1 + 100] as result
                         GROUP BY a;
 ----
 logical_plan
-01)Projection: multiple_ordered_table.a, nth_value(multiple_ordered_table.c,Int64(1) + Int64(100)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST] AS result
+01)Projection: multiple_ordered_table.a, "nth_value(multiple_ordered_table.c,Int64(1) + Int64(100)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST]" AS result
 02)--Aggregate: groupBy=[[multiple_ordered_table.a]], aggr=[[nth_value(multiple_ordered_table.c, Int64(101)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST] AS nth_value(multiple_ordered_table.c,Int64(1) + Int64(100)) ORDER BY [multiple_ordered_table.c ASC NULLS LAST]]]
 03)----TableScan: multiple_ordered_table projection=[a, c]
 physical_plan

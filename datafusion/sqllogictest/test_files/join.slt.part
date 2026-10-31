@@ -1412,10 +1412,10 @@ FROM t0,
 LATERAL (SELECT sum(v1) FROM t1 WHERE t0.v0 = t1.v0);
 ----
 logical_plan
-01)Projection: t0.v0, t0.v1, sum(t1.v1)
+01)Projection: t0.v0, t0.v1, "sum(t1.v1)"
 02)--Left Join: t0.v0 = t1.v0
 03)----TableScan: t0 projection=[v0, v1]
-04)----Projection: sum(t1.v1), t1.v0
+04)----Projection: "sum(t1.v1)", t1.v0
 05)------Aggregate: groupBy=[[t1.v0]], aggr=[[sum(t1.v1)]]
 06)--------TableScan: t1 projection=[v0, v1]
 physical_plan

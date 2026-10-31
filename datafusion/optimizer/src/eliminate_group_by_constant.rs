@@ -93,8 +93,7 @@ impl OptimizerRule for EliminateGroupByConstant {
                     let expr = if redundant {
                         expr
                     } else {
-                        let column =
-                            Expr::from(simplified_schema.qualified_field(next_output));
+                        let column = Expr::Column(simplified_schema.column(next_output));
                         next_output += 1;
                         column
                     };
@@ -108,8 +107,7 @@ impl OptimizerRule for EliminateGroupByConstant {
                     projection_expr.push(expr);
                 }
                 for i in next_output..simplified_schema.fields().len() {
-                    projection_expr
-                        .push(Expr::from(simplified_schema.qualified_field(i)));
+                    projection_expr.push(Expr::Column(simplified_schema.column(i)));
                 }
 
                 let projection = LogicalPlan::Projection(Projection::try_new(
@@ -246,11 +244,11 @@ mod tests {
             .aggregate(vec![col("a"), lit(1u32)], vec![count(col("c"))])?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
-        Projection: test.a, UInt32(1), count(test.c)
+        assert_optimized_plan_equal!(plan, @r#"
+        Projection: test.a, UInt32(1), "count(test.c)"
           Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]
             TableScan: test
-        ")
+        "#)
     }
 
     /// A required GROUP BY expression refers to an input column without the
@@ -272,12 +270,12 @@ mod tests {
             vec![count(col("m.c"))],
         )?);
 
-        assert_optimized_plan_equal!(plan, @r"
-        Projection: k, m.a, m.a + UInt32(1), count(m.c)
+        assert_optimized_plan_equal!(plan, @r#"
+        Projection: k, m.a, m.a + UInt32(1), "count(m.c)"
           Aggregate: groupBy=[[b AS k, m.a]], aggr=[[count(m.c)]]
             SubqueryAlias: m
               TableScan: test
-        ")
+        "#)
     }
 
     #[test]
@@ -329,11 +327,11 @@ mod tests {
             )?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
-        Projection: UInt32(123) AS const, test.a, count(test.c)
+        assert_optimized_plan_equal!(plan, @r#"
+        Projection: UInt32(123) AS const, test.a, "count(test.c)"
           Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]
             TableScan: test
-        ")
+        "#)
     }
 
     #[test]
@@ -348,11 +346,11 @@ mod tests {
             .aggregate(vec![udf_expr, col("a")], vec![count(col("c"))])?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
-        Projection: scalar_fn_mock(UInt32(123)), test.a, count(test.c)
+        assert_optimized_plan_equal!(plan, @r#"
+        Projection: scalar_fn_mock(UInt32(123)), test.a, "count(test.c)"
           Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]
             TableScan: test
-        ")
+        "#)
     }
 
     #[test]
@@ -371,11 +369,11 @@ mod tests {
             )?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
-        Projection: test.a, test.a - UInt32(1), test.a - UInt32(2), test.a - UInt32(3), count(test.c)
+        assert_optimized_plan_equal!(plan, @r#"
+        Projection: test.a, test.a - UInt32(1), test.a - UInt32(2), test.a - UInt32(3), "count(test.c)"
           Aggregate: groupBy=[[test.a]], aggr=[[count(test.c)]]
             TableScan: test
-        ")
+        "#)
     }
 
     #[test]

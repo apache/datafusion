@@ -21,8 +21,8 @@ use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
 use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, HashMap, Result, not_impl_err,
-    plan_err,
+    Column, ColumnId, DFSchema, DFSchemaRef, DataFusionError, HashMap, Result,
+    not_impl_err, plan_err,
 };
 use datafusion_common::{NullHandling, RecursionUnnestOption, UnnestOptions};
 use datafusion_expr::ExprSchemable;
@@ -32,6 +32,7 @@ use datafusion_expr::expr::{PlannedReplaceSelectItem, WildcardOptions};
 use datafusion_expr::expr_rewriter::{
     normalize_col, normalize_col_with_schemas_and_ambiguity_check, normalize_sorts,
 };
+use datafusion_expr::logical_plan::column_ids::{self, with_output_ids};
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
     expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
@@ -134,7 +135,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Having and group by clause may reference aliases defined in select projection
         let projected_plan =
             self.project(base_plan.clone(), select_exprs, set_expr_left_schema)?;
-        let select_exprs = projected_plan.expressions();
+        // The select expressions, without the implicit aliases that the
+        // projection added to name its outputs
+        let select_exprs: Vec<Expr> = projected_plan
+            .expressions()
+            .into_iter()
+            .map(Expr::into_unaliased_implicit)
+            .collect();
 
         let order_by =
             to_order_by_exprs_with_select(query_order_by, Some(&select_exprs))?;
@@ -356,6 +363,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 &on_exprs_pre_aggr,
                 &group_by_exprs,
                 &aggr_exprs,
+                projected_plan.schema().field_ids(),
             )?
         } else {
             match having_expr_opt {
@@ -407,11 +415,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .map(|expr| rebase_expr(expr, &window_func_exprs, &plan))
                 .collect::<Result<Vec<Expr>>>()?;
 
+            // References to a select output that is now a window output column
+            // refer to that column
+            let output_ids = select_output_id_remap(
+                &select_exprs_post_aggr,
+                projected_plan.schema().field_ids(),
+                &plan,
+            );
             order_by_rex = order_by_rex
                 .into_iter()
                 .map(|sort_expr| {
+                    let expr = remap_column_ids(sort_expr.expr.clone(), &output_ids);
                     Ok(sort_expr.with_expr(rebase_expr(
-                        &sort_expr.expr,
+                        &expr,
                         &window_func_exprs,
                         &plan,
                     )?))
@@ -470,6 +486,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // tie-breakers that aren't in the user SELECT stay in scope.
         // DistinctOn provides the projection in that case (its select_expr
         // list is wrapped in FIRST_VALUE during lowering).
+        // The final projection defines the select outputs that the references
+        // were bound to (through `projected_plan`): a computed output keeps
+        // its id. An output that is a column of the plan below keeps that
+        // column's id, and the references were remapped to it above.
+        if select_exprs_post_aggr.len() == projected_plan.schema().fields().len() {
+            select_exprs_post_aggr =
+                with_output_ids(select_exprs_post_aggr, projected_plan.schema());
+        }
+
         let plan = match select.distinct {
             None | Some(Distinct::All) => {
                 self.try_process_unnest(plan, select_exprs_post_aggr)?
@@ -1221,6 +1246,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         on_exprs: &[Expr],
         group_by_exprs: &[Expr],
         aggr_exprs: &[Expr],
+        select_output_ids: &[Option<ColumnId>],
     ) -> Result<AggregatePlanResult> {
         // create the aggregate plan
         let options =
@@ -1257,7 +1283,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         aggr_projection_exprs.extend_from_slice(exprs)
                     }
                 }
-                _ => aggr_projection_exprs.push(expr.clone()),
+                // the group expression, without the implicit alias that names
+                // the aggregate's output
+                _ => aggr_projection_exprs.push(expr.strip_implicit_alias().clone()),
             }
         }
         aggr_projection_exprs.extend_from_slice(aggr_exprs);
@@ -1272,14 +1300,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // an output column from the aggregate schema
         let column_exprs_post_aggr = aggr_projection_exprs
             .iter()
-            .map(|expr| expr_as_column_expr(expr, input))
+            .map(|expr| expr_as_column_expr(expr, &plan))
             .collect::<Result<Vec<Expr>>>()?;
 
         // next we re-write the projection
         let select_exprs_post_aggr = select_exprs
             .iter()
-            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
+            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, &plan))
             .collect::<Result<Vec<Expr>>>()?;
+
+        // References to a select output that is now an aggregate output column
+        // refer to that column
+        let output_ids =
+            select_output_id_remap(&select_exprs_post_aggr, select_output_ids, &plan);
+        let order_by_exprs: Vec<SortExpr> = order_by_exprs
+            .iter()
+            .map(|sort_expr| {
+                sort_expr
+                    .clone()
+                    .with_expr(remap_column_ids(sort_expr.expr.clone(), &output_ids))
+            })
+            .collect();
 
         // finally, we have some validation that the re-written projection can be resolved
         // from the aggregate output columns
@@ -1295,7 +1336,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // aggregation.
         let having_expr_post_aggr = if let Some(having_expr) = having_expr_opt {
             let having_expr_post_aggr =
-                rebase_expr(having_expr, &aggr_projection_exprs, input)?;
+                rebase_expr(having_expr, &aggr_projection_exprs, &plan)?;
 
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
@@ -1314,7 +1355,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // aggregation.
         let qualify_expr_post_aggr = if let Some(qualify_expr) = qualify_expr_opt {
             let qualify_expr_post_aggr =
-                rebase_expr(qualify_expr, &aggr_projection_exprs, input)?;
+                rebase_expr(qualify_expr, &aggr_projection_exprs, &plan)?;
 
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
@@ -1337,7 +1378,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .iter()
             .map(|sort_expr| {
                 let rewritten_expr =
-                    rebase_expr(&sort_expr.expr, &aggr_projection_exprs, input)?;
+                    rebase_expr(&sort_expr.expr, &aggr_projection_exprs, &plan)?;
 
                 // Check if this ORDER BY expression matches any aliased SELECT expression
                 // If so, use the SELECT's alias instead of the raw expression
@@ -1351,9 +1392,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 other => other,
                             };
                             if alias.expr.as_ref() == rewritten_unaliased {
-                                return Some(Expr::Column(Column::new_unqualified(
-                                    alias.name.clone(),
-                                )));
+                                return Some(Expr::Column(
+                                    Column::new_unqualified(alias.name.clone())
+                                        .with_id(Some(alias.id)),
+                                ));
                             }
                         }
                         None
@@ -1369,7 +1411,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .cloned()
             .chain(select_exprs_post_aggr.iter().filter_map(|e| {
                 if let Expr::Alias(alias) = e {
-                    Some(Expr::Column(Column::new_unqualified(alias.name.clone())))
+                    Some(Expr::Column(
+                        Column::new_unqualified(alias.name.clone())
+                            .with_id(Some(alias.id)),
+                    ))
                 } else {
                     None
                 }
@@ -1391,7 +1436,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // grouping column or a raw aggregate expression in ON is resolved.
         let on_exprs_post_aggr = on_exprs
             .iter()
-            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
+            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, &plan))
             .collect::<Result<Vec<Expr>>>()?;
         check_columns_satisfy_exprs(
             &all_valid_exprs,
@@ -1623,4 +1668,45 @@ fn collect_unnest_null_handling(expr_groups: &[Vec<Expr>]) -> Result<NullHandlin
     } else {
         NullHandling::Drop
     })
+}
+
+/// Maps the ids that references to the select outputs were bound to (the ids
+/// of the outputs of the projection that resolved the names, `bound_ids`) to
+/// the ids of the columns of `plan` that some outputs became, once rebased
+/// onto an aggregate or window.
+fn select_output_id_remap(
+    select_exprs: &[Expr],
+    bound_ids: &[Option<ColumnId>],
+    plan: &LogicalPlan,
+) -> HashMap<ColumnId, ColumnId> {
+    let mut remap = HashMap::new();
+    if select_exprs.len() != bound_ids.len() {
+        return remap;
+    }
+    let schema = plan.schema();
+    for (expr, bound_id) in select_exprs.iter().zip(bound_ids) {
+        let column_id = match expr {
+            Expr::Column(col) => col.id.or_else(|| {
+                schema
+                    .maybe_index_of_column(col)
+                    .and_then(|idx| schema.field_id(idx))
+            }),
+            _ => None,
+        };
+        if let (Some(bound_id), Some(column_id)) = (bound_id, column_id)
+            && *bound_id != column_id
+        {
+            remap.insert(*bound_id, column_id);
+        }
+    }
+    remap
+}
+
+/// Moves the column references of `expr` whose id is in `remap` to the
+/// mapped id
+fn remap_column_ids(expr: Expr, remap: &HashMap<ColumnId, ColumnId>) -> Expr {
+    if remap.is_empty() {
+        return expr;
+    }
+    column_ids::remap_column_ids(expr, |id| remap.get(&id).copied())
 }

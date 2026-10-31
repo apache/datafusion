@@ -41,7 +41,7 @@ query TT
 EXPLAIN SELECT count(*) from json_test
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----TableScan: json_test projection=[]
 physical_plan

@@ -257,11 +257,11 @@ mod tests {
 
         assert_snapshot!(
             plan,
-            @r"
-        Projection: c0, c1, sum(c0) AS summation
+            @r#"
+        Projection: c0, c1, "sum(c0)" AS summation
           Aggregate: groupBy=[[GROUPING SETS ((c0), (c1), (c0, c1))]], aggr=[[sum(c0)]]
             Values: (Int64(1), Int64(10)), (Int64(1), Int64(20)), (Int64(2), Int64(10))
-        "
+        "#
         );
 
         let results = DataFrame::new(ctx.state(), plan).collect().await?;

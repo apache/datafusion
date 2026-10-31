@@ -324,7 +324,8 @@ pub(crate) fn unproject_sort_expr(
                     if let LogicalPlan::Projection(Projection { expr, schema, .. }) =
                         input
                         && let Ok(idx) = schema.index_of_column(&col)
-                        && let Some(Expr::ScalarFunction(scalar_fn)) = expr.get(idx)
+                        && let Some(Expr::ScalarFunction(scalar_fn)) =
+                            expr.get(idx).map(Expr::strip_implicit_alias)
                     {
                         return Ok(Transformed::yes(Expr::ScalarFunction(
                             scalar_fn.clone(),
@@ -606,7 +607,7 @@ pub(crate) fn filter_depends_on_input_alias(filter: &Filter) -> bool {
                 .expr
                 .iter()
                 .filter_map(|e| match e {
-                    Expr::Alias(a) => Some((&a.relation, &a.name)),
+                    Expr::Alias(a) if !a.is_implicit() => Some((&a.relation, &a.name)),
                     _ => None,
                 })
                 .collect::<HashSet<_>>();

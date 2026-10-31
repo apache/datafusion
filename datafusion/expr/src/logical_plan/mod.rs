@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 pub mod builder;
+pub mod column_ids;
 mod ddl;
 pub mod display;
 pub mod dml;

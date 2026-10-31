@@ -7,10 +7,10 @@
 
 use crate::utils::is_repeatable;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Result;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
+use datafusion_common::{ColumnId, Result};
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::utils::disjunction;
@@ -18,6 +18,7 @@ use datafusion_expr::{
     Distinct, Expr, Filter, LogicalPlan, Projection, SubqueryAlias, TableSource, Union,
 };
 use log::debug;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Default, Debug)]
@@ -95,7 +96,11 @@ fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> 
     let mut transformed = false;
 
     for input in inputs {
-        let Some(branch) = extract_branch(Arc::unwrap_or_clone(input))? else {
+        // Two branches that scan the same table give the scanned columns
+        // different ids. With canonical ids, equivalent branches have equal
+        // sources and wrappers, and their predicates read the same columns.
+        let input = Arc::unwrap_or_clone(input).with_canonical_column_ids()?;
+        let Some(branch) = extract_branch(input)? else {
             return Ok(None);
         };
 
@@ -128,6 +133,8 @@ fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> 
         let branch = wrap_branch(branch, &key.wrappers)?;
         let branch = coerce_plan_expr_for_schema(branch, &schema)?;
         let branch = align_plan_to_schema(branch, Arc::clone(&schema))?;
+        // Canonical ids are the same in every branch: give each its own
+        let branch = branch.with_fresh_column_ids()?;
         builder = Some(match builder {
             None => LogicalPlanBuilder::from(branch),
             Some(builder) => builder.union(branch)?,
@@ -137,6 +144,20 @@ fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> 
     let union = builder
         .expect("at least one branch after rewrite")
         .build()?;
+    // The rewritten plan defines the columns the union did, so that the
+    // references to them keep resolving
+    let output_ids: HashMap<ColumnId, ColumnId> = union
+        .schema()
+        .field_ids()
+        .iter()
+        .zip(schema.field_ids())
+        .filter_map(|(new, old)| Some(((*new)?, (*old)?)))
+        .collect();
+    let union = if output_ids.len() == schema.fields().len() {
+        union.rename_column_ids(&output_ids)?
+    } else {
+        union
+    };
     Ok(Some(LogicalPlan::Distinct(Distinct::All(Arc::new(union)))))
 }
 
@@ -703,7 +724,12 @@ mod tests {
             .unwrap()
             .build()
             .unwrap();
-        assert_eq!(left_source, right_source);
+        // equivalent, although the two scans give their columns different ids
+        assert!(
+            left_source
+                .is_equivalent_up_to_column_ids(&right_source)
+                .unwrap()
+        );
 
         let left = LogicalPlanBuilder::from(left_source)
             .filter(col("x.a").eq(lit(1)))

@@ -1690,12 +1690,25 @@ impl DefaultPhysicalPlanner {
                             .chain(right_df_schema.metadata().clone())
                             .collect();
 
+                        // Keep the column ids, so the filter's columns resolve to
+                        // the same fields as in the join's inputs
+                        let filter_ids = left_field_indices
+                            .iter()
+                            .map(|i| left_df_schema.field_id(*i))
+                            .chain(
+                                right_field_indices
+                                    .iter()
+                                    .map(|i| right_df_schema.field_id(*i)),
+                            )
+                            .collect();
+
                         // Construct intermediate schemas used for filtering data and
                         // convert logical expression to physical according to filter schema
                         let filter_df_schema = DFSchema::new_with_metadata(
                             filter_df_fields,
                             metadata.clone(),
-                        )?;
+                        )?
+                        .with_field_ids(filter_ids)?;
                         let filter_schema =
                             Schema::new_with_metadata(filter_fields, metadata);
 
@@ -2179,8 +2192,9 @@ impl DefaultPhysicalPlanner {
         let agg_filter = aggr_expr
             .iter()
             .map(|e| {
+                // an implicit alias only gives the output its own name
                 LoweredAggregateBuilder::new(
-                    e,
+                    e.strip_implicit_alias(),
                     logical_input_schema,
                     &physical_input_schema,
                     execution_props,
@@ -3082,6 +3096,8 @@ pub fn create_window_expr(
     execution_props: &ExecutionProps,
     planning_ctx: &PhysicalPlanningContext,
 ) -> Result<Arc<dyn WindowExpr>> {
+    // an implicit alias only gives the output its own name
+    let e = e.strip_implicit_alias();
     // unpack aliased logical expressions, e.g. "sum(col) over () as total"
     let (name, e) = match e {
         Expr::Alias(alias) => (

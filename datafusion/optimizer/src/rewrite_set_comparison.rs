@@ -9,8 +9,9 @@
 use crate::utils::merge_into_schema;
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchema, ExprSchema, Result, ScalarValue, plan_err};
+use datafusion_common::{DFSchema, ExprSchema, Result, ScalarValue, plan_err};
 use datafusion_expr::expr::{self, Exists, SetComparison, SetQuantifier};
+use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::{Expr, LogicalPlan, lit};
@@ -36,8 +37,15 @@ impl RewriteSetComparison {
         if let Some(merge_schema) = merge_into_schema(&plan)? {
             schema = merge_schema;
         }
+        // The rewrite replaces the expression, so keep its output name (and the
+        // id of the column it defines) for the nodes that refer to it
+        let name_preserver = NamePreserver::new(&plan);
         plan.map_expressions(|expr| {
+            let saved_name = name_preserver.save(&expr);
             expr.transform_up(|expr| rewrite_set_comparison(expr, &schema))
+                .map(|transformed| {
+                    transformed.update_data(|expr| saved_name.restore(expr))
+                })
         })
     }
 }
@@ -86,7 +94,7 @@ fn build_set_comparison_subquery(
         return plan_err!("single expression required.");
     }
     // avoid `head_output_expr` for aggr/window plan, it will gives group-by expr if exists
-    let right_expr = Expr::Column(Column::from(subquery_schema.qualified_field(0)));
+    let right_expr = Expr::Column(subquery_schema.column(0));
 
     let comparison = Expr::BinaryExpr(expr::BinaryExpr::new(
         Box::new(left_expr),

@@ -305,8 +305,8 @@ Plan with Metrics
 03)----NestedLoopJoinExec: join_type=RightSemi, filter=threshold@0 > k@1, projection=[], metrics=[output_rows=128, <slt:ignore> spill_count=2, <slt:ignore> input_batches=8, input_rows=516, <slt:ignore>]
 04)------ProjectionExec: expr=[CASE WHEN value@0 = 4097 THEN 130 WHEN value@0 % 65 = 0 THEN 65 WHEN value@0 % 65 = 1 THEN 97 ELSE 114 END as threshold], metrics=[<slt:ignore>]
 05)--------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=5000, batch_size=65], metrics=[<slt:ignore>]
-06)------ProjectionExec: expr=[CASE WHEN __common_expr_1@0 = 128 THEN NULL ELSE __common_expr_1@0 END as k], metrics=[<slt:ignore>]
-07)--------ProjectionExec: expr=[value@0 * 2 % 129 as __common_expr_1], metrics=[<slt:ignore>]
+06)------ProjectionExec: expr=[CASE WHEN range().value * Int64(2) % Int64(129)@0 = 128 THEN NULL ELSE range().value * Int64(2) % Int64(129)@0 END as k], metrics=[<slt:ignore>]
+07)--------ProjectionExec: expr=[value@0 * 2 % 129 as range().value * Int64(2) % Int64(129)], metrics=[<slt:ignore>]
 08)----------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=129, batch_size=65], metrics=[<slt:ignore>]
 
 query TT
@@ -320,8 +320,8 @@ Plan with Metrics
 03)----NestedLoopJoinExec: join_type=RightAnti, filter=threshold@0 > k@1, projection=[], metrics=[output_rows=1, <slt:ignore> spill_count=2, <slt:ignore> input_batches=8, input_rows=516, <slt:ignore>]
 04)------ProjectionExec: expr=[CASE WHEN value@0 = 4097 THEN 130 WHEN value@0 % 65 = 0 THEN 65 WHEN value@0 % 65 = 1 THEN 97 ELSE 114 END as threshold], metrics=[<slt:ignore>]
 05)--------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=5000, batch_size=65], metrics=[<slt:ignore>]
-06)------ProjectionExec: expr=[CASE WHEN __common_expr_1@0 = 128 THEN NULL ELSE __common_expr_1@0 END as k], metrics=[<slt:ignore>]
-07)--------ProjectionExec: expr=[value@0 * 2 % 129 as __common_expr_1], metrics=[<slt:ignore>]
+06)------ProjectionExec: expr=[CASE WHEN range().value * Int64(2) % Int64(129)@0 = 128 THEN NULL ELSE range().value * Int64(2) % Int64(129)@0 END as k], metrics=[<slt:ignore>]
+07)--------ProjectionExec: expr=[value@0 * 2 % 129 as range().value * Int64(2) % Int64(129)], metrics=[<slt:ignore>]
 08)----------LazyMemoryExec: partitions=1, batch_generators=[range: start=0, end=129, batch_size=65], metrics=[<slt:ignore>]
 
 # Every row in both right batches matches the first left row. Later left chunks

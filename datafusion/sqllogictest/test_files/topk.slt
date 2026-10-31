@@ -368,9 +368,9 @@ explain select number + 1 as number_plus, number, number + 1 as other_number_plu
 ----
 physical_plan
 01)SortPreservingMergeExec: [number_plus@0 DESC, number@1 DESC, other_number_plus@2 DESC, age@3 ASC NULLS LAST], fetch=3
-02)--ProjectionExec: expr=[__common_expr_1@0 as number_plus, number@1 as number, __common_expr_1@0 as other_number_plus, age@2 as age]
-03)----SortExec: TopK(fetch=3), expr=[__common_expr_1@0 DESC, number@1 DESC, age@2 ASC NULLS LAST], preserve_partitioning=[true]
-04)------ProjectionExec: expr=[CAST(number@0 AS Int64) + 1 as __common_expr_1, number@0 as number, age@1 as age]
+02)--ProjectionExec: expr=[partial_sorted.number + Int64(1)@0 as number_plus, number@1 as number, partial_sorted.number + Int64(1)@0 as other_number_plus, age@2 as age]
+03)----SortExec: TopK(fetch=3), expr=[partial_sorted.number + Int64(1)@0 DESC, number@1 DESC, age@2 ASC NULLS LAST], preserve_partitioning=[true]
+04)------ProjectionExec: expr=[CAST(number@0 AS Int64) + 1 as partial_sorted.number + Int64(1), number@0 as number, age@1 as age]
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
 06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/topk/partial_sorted/1.parquet]]}, projection=[number, age], output_ordering=[number@0 DESC], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 

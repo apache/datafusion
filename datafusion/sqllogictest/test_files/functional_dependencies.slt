@@ -215,7 +215,7 @@ EXPLAIN SELECT x, cnt FROM (SELECT x, count(*) AS cnt FROM t_uniq GROUP BY x) OR
 ----
 logical_plan
 01)Sort: t_uniq.x ASC NULLS LAST
-02)--Projection: t_uniq.x, count(Int64(1)) AS cnt
+02)--Projection: t_uniq.x, "count(Int64(1))" AS cnt
 03)----Aggregate: groupBy=[[t_uniq.x]], aggr=[[count(Int64(1))]]
 04)------TableScan: t_uniq projection=[x]
 
@@ -254,7 +254,7 @@ EXPLAIN SELECT x, y, cnt FROM (SELECT x, y, count(*) AS cnt FROM t_uniq GROUP BY
 ----
 logical_plan
 01)Sort: t_uniq.x ASC NULLS LAST, t_uniq.y ASC NULLS LAST
-02)--Projection: t_uniq.x, t_uniq.y, count(Int64(1)) AS cnt
+02)--Projection: t_uniq.x, t_uniq.y, "count(Int64(1))" AS cnt
 03)----Aggregate: groupBy=[[t_uniq.x, t_uniq.y]], aggr=[[count(Int64(1))]]
 04)------TableScan: t_uniq projection=[x, y]
 
@@ -409,14 +409,14 @@ EXPLAIN SELECT g.x, count(*) AS c
   GROUP BY g.x, g.cnt;
 ----
 logical_plan
-01)Projection: g.x, count(Int64(1)) AS count(*) AS c
+01)Projection: g.x, "count(Int64(1))" AS count(*) AS c
 02)--Aggregate: groupBy=[[g.x, g.cnt]], aggr=[[count(Int64(1))]]
 03)----Projection: g.x, g.cnt
 04)------Left Join: CAST(a.z AS Int64) = g.cnt
 05)--------SubqueryAlias: a
 06)----------TableScan: t_probe projection=[z]
 07)--------SubqueryAlias: g
-08)----------Projection: t_null.x, count(Int64(1)) AS count(*) AS cnt
+08)----------Projection: t_null.x, "count(Int64(1))" AS count(*) AS cnt
 09)------------Aggregate: groupBy=[[t_null.x]], aggr=[[count(Int64(1))]]
 10)--------------TableScan: t_null projection=[x]
 
@@ -654,7 +654,7 @@ query TT
 EXPLAIN SELECT sum(y) OVER (ORDER BY x) FROM t_pk;
 ----
 logical_plan
-01)Projection: sum(t_pk.y) ORDER BY [t_pk.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+01)Projection: "sum(t_pk.y) ORDER BY [t_pk.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
 02)--WindowAggr: windowExpr=[[sum(CAST(t_pk.y AS Int64)) ORDER BY [t_pk.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 03)----TableScan: t_pk projection=[x, y]
 
@@ -673,7 +673,7 @@ query TT
 EXPLAIN SELECT sum(y) OVER (ORDER BY x NULLS FIRST) FROM t_uniq;
 ----
 logical_plan
-01)Projection: sum(t_uniq.y) ORDER BY [t_uniq.x ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+01)Projection: "sum(t_uniq.y) ORDER BY [t_uniq.x ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
 02)--WindowAggr: windowExpr=[[sum(CAST(t_uniq.y AS Int64)) ORDER BY [t_uniq.x ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 03)----TableScan: t_uniq projection=[x, y]
 
@@ -689,7 +689,7 @@ query TT
 EXPLAIN SELECT sum(y) OVER (ORDER BY x) FROM t_uniq_not_null;
 ----
 logical_plan
-01)Projection: sum(t_uniq_not_null.y) ORDER BY [t_uniq_not_null.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+01)Projection: "sum(t_uniq_not_null.y) ORDER BY [t_uniq_not_null.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
 02)--WindowAggr: windowExpr=[[sum(CAST(t_uniq_not_null.y AS Int64)) ORDER BY [t_uniq_not_null.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 03)----TableScan: t_uniq_not_null projection=[x, y]
 
@@ -700,9 +700,9 @@ EXPLAIN SELECT sum(cnt) OVER (ORDER BY x)
 FROM (SELECT x, count(*) AS cnt FROM t_uniq GROUP BY x);
 ----
 logical_plan
-01)Projection: sum(cnt) ORDER BY [t_uniq.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+01)Projection: "sum(cnt) ORDER BY [t_uniq.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
 02)--WindowAggr: windowExpr=[[sum(cnt) ORDER BY [t_uniq.x ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-03)----Projection: t_uniq.x, count(Int64(1)) AS count(*) AS cnt
+03)----Projection: t_uniq.x, "count(Int64(1))" AS count(*) AS cnt
 04)------Aggregate: groupBy=[[t_uniq.x]], aggr=[[count(Int64(1))]]
 05)--------TableScan: t_uniq projection=[x]
 

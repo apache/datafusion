@@ -91,7 +91,7 @@ pub async fn from_project_rel(
         let mut final_exprs: Vec<Expr> =
             Vec::with_capacity(original_schema.fields().len() + explicit_exprs.len());
         for index in 0..original_schema.fields().len() {
-            let e = Expr::Column(Column::from(original_schema.qualified_field(index)));
+            let e = Expr::Column(original_schema.column(index));
             final_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
         final_exprs.append(&mut explicit_exprs);

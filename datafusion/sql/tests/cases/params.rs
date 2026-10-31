@@ -509,12 +509,12 @@ fn test_infer_types_subquery() {
 
     assert_snapshot!(
         test.run(),
-        @r"
+        @r#"
     ** Initial Plan:
     Projection: person.id, person.age
       Filter: person.age = (<subquery>)
         Subquery:
-          Projection: max(person.age)
+          Projection: "max(person.age)"
             Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
               Filter: person.id = $1
                 TableScan: person
@@ -523,12 +523,12 @@ fn test_infer_types_subquery() {
     Projection: person.id, person.age
       Filter: person.age = (<subquery>)
         Subquery:
-          Projection: max(person.age)
+          Projection: "max(person.age)"
             Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
               Filter: person.id = UInt32(10)
                 TableScan: person
         TableScan: person
-    "
+    "#
     );
 }
 
@@ -548,7 +548,7 @@ fn test_prepare_statement_infer_types_subquery() {
       Projection: person.id, person.age
         Filter: person.age = (<subquery>)
           Subquery:
-            Projection: max(person.age)
+            Projection: "max(person.age)"
               Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
                 Filter: person.id = $1
                   TableScan: person
@@ -557,7 +557,7 @@ fn test_prepare_statement_infer_types_subquery() {
     Projection: person.id, person.age
       Filter: person.age = (<subquery>)
         Subquery:
-          Projection: max(person.age)
+          Projection: "max(person.age)"
             Aggregate: groupBy=[[]], aggr=[[max(person.age)]]
               Filter: person.id = UInt32(10)
                 TableScan: person
@@ -579,18 +579,18 @@ fn test_update_infer() {
 
     assert_snapshot!(
         test.run(),
-        @r"
+        @r#"
     ** Initial Plan:
     Dml: op=[Update] table=[person]
-      Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+      Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person."😀" AS 😀
         Filter: person.id = $2
           TableScan: person
     ** Final Plan:
     Dml: op=[Update] table=[person]
-      Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+      Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person."😀" AS 😀
         Filter: person.id = UInt32(1)
           TableScan: person
-    "
+    "#
     );
 }
 
@@ -611,12 +611,12 @@ fn test_prepare_statement_update_infer() {
     ** Initial Plan:
     Prepare: "my_plan" [Int32, UInt32]
       Dml: op=[Update] table=[person]
-        Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+        Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, $1 AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person."😀" AS 😀
           Filter: person.id = $2
             TableScan: person
     ** Final Plan:
     Dml: op=[Update] table=[person]
-      Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person.😀 AS 😀
+      Projection: person.id AS id, person.first_name AS first_name, person.last_name AS last_name, Int32(42) AS age, person.state AS state, person.salary AS salary, person.birth_date AS birth_date, person."😀" AS 😀
         Filter: person.id = UInt32(1)
           TableScan: person
     "#
@@ -941,8 +941,8 @@ fn test_prepare_statement_to_plan_having() {
         plan,
         @r#"
     Prepare: "my_plan" [Int32, Float64, Float64, Float64]
-      Projection: person.id, sum(person.age)
-        Filter: sum(person.age) < $1 AND sum(person.age) > Int64(10) OR sum(person.age) IN ([$3, $4])
+      Projection: person.id, "sum(person.age)"
+        Filter: "sum(person.age)" < $1 AND "sum(person.age)" > Int64(10) OR "sum(person.age)" IN ([$3, $4])
           Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
             Filter: person.salary > $2
               TableScan: person
@@ -962,13 +962,13 @@ fn test_prepare_statement_to_plan_having() {
     let plan_with_params = plan.with_param_values(param_values).unwrap();
     assert_snapshot!(
         plan_with_params,
-        @r"
-    Projection: person.id, sum(person.age)
-      Filter: sum(person.age) < Int32(10) AND sum(person.age) > Int64(10) OR sum(person.age) IN ([Float64(200), Float64(300)])
+        @r#"
+    Projection: person.id, "sum(person.age)"
+      Filter: "sum(person.age)" < Int32(10) AND "sum(person.age)" > Int64(10) OR "sum(person.age)" IN ([Float64(200), Float64(300)])
         Aggregate: groupBy=[[person.id]], aggr=[[sum(person.age)]]
           Filter: person.salary > Float64(100)
             TableScan: person
-    "
+    "#
     );
 }
 

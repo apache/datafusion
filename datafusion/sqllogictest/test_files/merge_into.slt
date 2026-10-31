@@ -113,7 +113,7 @@ when matched then update set val = s.val;
 logical_plan
 01)Dml: op=[MergeInto] table=[target] on=[target.id = s.id] clauses=[WHEN MATCHED THEN UPDATE SET val = s.val]
 02)--SubqueryAlias: s
-03)----Projection: source.id, max(source.val) AS val
+03)----Projection: source.id, "max(source.val)" AS val
 04)------Aggregate: groupBy=[[source.id]], aggr=[[max(source.val)]]
 05)--------TableScan: source projection=[id, val]
 physical_plan_error
