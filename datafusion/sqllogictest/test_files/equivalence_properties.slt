@@ -203,6 +203,9 @@ SELECT r, x FROM (
 statement ok
 DROP TABLE lossy_topk;
 
+statement ok
+set datafusion.execution.target_partitions = 4;
+
 ###
 ### Functions whose ordering cannot be derived from their input
 ###
