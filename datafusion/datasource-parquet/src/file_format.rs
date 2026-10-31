@@ -422,6 +422,10 @@ impl FileFormat for ParquetFormat {
             .coerce_int96_tz
             .as_ref()
             .map(|tz| Arc::<str>::from(tz.as_str()));
+        let rle_to_dictionary_max_distinct_values =
+            self.options.global.rle_to_dictionary_max_distinct_values;
+        let enable_rle_to_dictionary = self.options.global.enable_rle_to_dictionary
+            || rle_to_dictionary_max_distinct_values.is_some();
 
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
@@ -440,8 +444,9 @@ impl FileFormat for ParquetFormat {
                     .with_file_metadata_cache(Some(Arc::clone(&file_metadata_cache)))
                     .with_coerce_int96(coerce_int96)
                     .with_coerce_int96_tz(coerce_int96_tz.clone())
-                    .with_enable_rle_to_dictionary(
-                        self.options.global.enable_rle_to_dictionary,
+                    .with_enable_rle_to_dictionary(enable_rle_to_dictionary)
+                    .with_rle_to_dictionary_max_distinct_values(
+                        rle_to_dictionary_max_distinct_values,
                     );
                 let result = meta.fetch_schema_with_location().await?;
                 Ok::<_, DataFusionError>(result)
@@ -481,7 +486,17 @@ impl FileFormat for ParquetFormat {
         // Normalize dict-promoted schemas before merging so mixed dict/plain files merge cleanly.
         let mut schemas: Vec<Schema> =
             schemas.into_iter().map(|(_, schema)| schema).collect();
-        if self.options.global.enable_rle_to_dictionary {
+        if enable_rle_to_dictionary {
+            if rle_to_dictionary_max_distinct_values.is_some() {
+                let dictionary_columns =
+                    crate::schema_coercion::columns_dictionary_in_all_present_schemas(
+                        &schemas,
+                    );
+                schemas = crate::schema_coercion::demote_dictionary_columns(
+                    schemas,
+                    &dictionary_columns,
+                );
+            }
             schemas = crate::schema_coercion::uniform_dict_schemas(schemas);
         }
 
@@ -761,6 +776,12 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
                 parquet_options::CompressionOpt::Compression(compression.to_string())
             }),
             enable_rle_to_dictionary: global_options.global.enable_rle_to_dictionary,
+            rle_to_dictionary_max_distinct_values_opt: global_options
+                .global
+                .rle_to_dictionary_max_distinct_values
+                .map(|max_distinct_values| {
+                    parquet_options::RleToDictionaryMaxDistinctValuesOpt::RleToDictionaryMaxDistinctValues(max_distinct_values as u64)
+                }),
             dictionary_enabled_opt: global_options.global.dictionary_enabled.map(|enabled| {
                 parquet_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
             }),

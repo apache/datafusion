@@ -632,6 +632,10 @@ message ParquetOptions {
   string row_group_range_assignment = 39;
   bool enable_rle_to_dictionary = 40;
 
+  oneof rle_to_dictionary_max_distinct_values_opt {
+    uint64 rle_to_dictionary_max_distinct_values = 42;
+  }
+
   string created_by = 16;
 
   oneof coerce_int96_opt {
