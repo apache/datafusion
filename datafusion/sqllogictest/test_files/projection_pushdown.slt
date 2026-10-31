@@ -1992,6 +1992,18 @@ FROM extracted_alias_names WHERE id > 0;
 ----
 10
 
+query I
+SELECT 10 / id AS __datafusion_extracted_0
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
+query I
+SELECT 10 / id AS __datafusion_extracted_01
+FROM extracted_alias_names WHERE id > 0;
+----
+10
+
 statement ok
 DROP TABLE extracted_alias_names;
 
