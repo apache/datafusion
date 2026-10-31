@@ -329,6 +329,8 @@ impl StepContext {
                      The SQL benchmark harness needs separately generated datasets and\n\
                      is covered by the benchmark result verification job.",
                 );
+                // Keep the i64 key payload above 1 MiB in the smoke run.
+                cmd_builder.env("SORT_AXIS_ROWS", "200000");
                 cmd_builder.env(
                     "CLICKBENCH_DATA_PATH",
                     self.root
@@ -833,6 +835,7 @@ cargo test \
 
 cd /workspace && \
 CLICKBENCH_DATA_PATH=/workspace/datafusion/core/tests/data/clickbench_hits_10.parquet \
+SORT_AXIS_ROWS=200000 \
 cargo test \
 --profile ci-bench \
 --no-fail-fast \
