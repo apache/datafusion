@@ -815,6 +815,10 @@ set datafusion.execution.target_partitions = 4;
 # The TopK dynamic filter must keep `-0.0` rows when the threshold is `0.0`
 # (and vice versa): the heap orders `-0.0` before `0.0`, but comparisons treat
 # them as equal. https://github.com/apache/datafusion/issues/26618
+#
+# The expected rows assume -0.0 sorts before 0.0 (the current order).
+# They will change when -0.0 and 0.0 are treated as equal when sorting,
+# see https://github.com/apache/datafusion/issues/26138
 statement ok
 set datafusion.execution.target_partitions = 1;
 

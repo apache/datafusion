@@ -32,6 +32,8 @@ use arrow::datatypes::{
 };
 use half::f16;
 
+use crate::ScalarValue;
+
 /// The floating point types the functions in this module are defined for:
 /// [`f16`](struct@f16), [`f32`] and [`f64`].
 pub trait FloatSemantics: Copy {
@@ -102,6 +104,19 @@ pub fn float_lt<T: FloatSemantics>(left: T, right: T) -> bool {
 #[inline]
 pub fn float_gt<T: FloatSemantics>(left: T, right: T) -> bool {
     compare_floats(left, right).is_gt()
+}
+
+/// Whether `value` is a float `0.0` or `-0.0`, including one inside a
+/// dictionary. The two zeros are equal but [`compare_floats`] sorts them
+/// apart, so a sort boundary at a zero has to account for both.
+pub fn is_float_zero(value: &ScalarValue) -> bool {
+    match value {
+        ScalarValue::Float16(Some(v)) => v.to_f32() == 0.0,
+        ScalarValue::Float32(Some(v)) => *v == 0.0,
+        ScalarValue::Float64(Some(v)) => *v == 0.0,
+        ScalarValue::Dictionary(_, inner) => is_float_zero(inner),
+        _ => false,
+    }
 }
 
 /// The value that DataFusion hashes in place of a float. Values that DataFusion
@@ -238,6 +253,30 @@ mod tests {
         assert_eq!(compare_floats(f16::ONE, f16::ZERO), Ordering::Greater);
         assert!(float_lt(1.0_f64, 2.0) && !float_lt(2.0_f64, 1.0));
         assert!(float_gt(f64::NAN, f64::INFINITY) && !float_gt(1.0_f64, 1.0));
+    }
+
+    #[test]
+    fn is_float_zero_matches_both_zeros() {
+        for v in [
+            ScalarValue::Float64(Some(0.0)),
+            ScalarValue::Float64(Some(-0.0)),
+            ScalarValue::Float32(Some(-0.0)),
+            ScalarValue::Float16(Some(f16::NEG_ZERO)),
+            ScalarValue::Dictionary(
+                Box::new(DataType::Int32),
+                Box::new(ScalarValue::Float64(Some(-0.0))),
+            ),
+        ] {
+            assert!(is_float_zero(&v), "{v:?}");
+        }
+        for v in [
+            ScalarValue::Float64(None),
+            ScalarValue::Float64(Some(f64::MIN_POSITIVE)),
+            ScalarValue::Float32(Some(f32::NAN)),
+            ScalarValue::Int32(Some(0)),
+        ] {
+            assert!(!is_float_zero(&v), "{v:?}");
+        }
     }
 
     #[test]

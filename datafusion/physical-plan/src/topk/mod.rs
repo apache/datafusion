@@ -25,6 +25,7 @@ use crate::{SendableRecordBatchStream, stream::RecordBatchStreamAdapter};
 
 use arrow::array::{ArrayRef, RecordBatch, UInt32Array, UInt64Array};
 use arrow::datatypes::{FieldRef, Schema, SchemaRef};
+use datafusion_common::float_semantics::is_float_zero;
 use datafusion_common::utils::memory::RecordBatchMemoryTracker;
 use datafusion_common::{
     HashMap, Result, ScalarValue, internal_datafusion_err, internal_err,
@@ -347,17 +348,6 @@ pub(crate) fn build_sort_fields(
             ))
         })
         .collect::<Result<_>>()
-}
-
-/// Whether `value` is a floating-point `0.0` or `-0.0`.
-fn is_float_zero(value: &ScalarValue) -> bool {
-    match value {
-        ScalarValue::Float16(Some(v)) => v.to_f32() == 0.0,
-        ScalarValue::Float32(Some(v)) => *v == 0.0,
-        ScalarValue::Float64(Some(v)) => *v == 0.0,
-        ScalarValue::Dictionary(_, inner) => is_float_zero(inner),
-        _ => false,
-    }
 }
 
 impl TopK {
