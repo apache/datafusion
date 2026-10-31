@@ -202,6 +202,24 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         from_substrait_rel(self, rel).await
     }
 
+    /// Consumes independent inputs of a relation, returning plans in input order.
+    ///
+    /// Implementations must return exactly one plan per input, in the same order.
+    /// On error, implementations must drop any unfinished input futures.
+    ///
+    /// The default preserves sequential consumption. Implementations may override it
+    /// when they can isolate mutable traversal state between inputs.
+    async fn consume_rel_inputs(
+        &self,
+        rels: &[&Rel],
+    ) -> datafusion::common::Result<Vec<LogicalPlan>> {
+        let mut plans = Vec::with_capacity(rels.len());
+        for rel in rels {
+            plans.push(self.consume_rel(rel).await?);
+        }
+        Ok(plans)
+    }
+
     async fn consume_read(
         &self,
         rel: &ReadRel,
@@ -462,6 +480,7 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         substrait_err!("Missing handler for ExtensionSingleRel")
     }
 
+    /// Custom handlers can use [`Self::consume_rel_inputs`] to consume independent inputs.
     async fn consume_extension_multi(
         &self,
         rel: &ExtensionMultiRel,
@@ -666,11 +685,8 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
             .state
             .serializer_registry()
             .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
-        let mut inputs = Vec::with_capacity(rel.inputs.len());
-        for input in &rel.inputs {
-            let input_plan = self.consume_rel(input).await?;
-            inputs.push(input_plan);
-        }
+        let input_rels = rel.inputs.iter().collect::<Vec<_>>();
+        let inputs = self.consume_rel_inputs(&input_rels).await?;
         let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
         Ok(LogicalPlan::Extension(Extension { node: plan }))
     }

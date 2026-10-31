@@ -9,8 +9,8 @@ use datafusion::logical_expr::{
     Cast, Expr, LogicalPlan, LogicalPlanBuilder, requalify_sides_if_needed,
 };
 use std::sync::Arc;
+use substrait::proto::SetRel;
 use substrait::proto::set_rel::SetOp;
-use substrait::proto::{Rel, SetRel};
 
 pub async fn from_set_rel(
     consumer: &impl SubstraitConsumer,
@@ -19,38 +19,32 @@ pub async fn from_set_rel(
     if set.inputs.len() < 2 {
         substrait_err!("Set operation requires at least two inputs")
     } else {
+        if let SetOp::Unspecified | SetOp::MinusMultiset = set.op() {
+            return not_impl_err!("Unsupported set operator: {:?}", set.op());
+        }
+        let inputs = set.inputs.iter().collect::<Vec<_>>();
+        let mut rels = consumer.consume_rel_inputs(&inputs).await?.into_iter();
         match set.op() {
-            SetOp::UnionAll => union_rels(consumer, &set.inputs, true).await,
-            SetOp::UnionDistinct => union_rels(consumer, &set.inputs, false).await,
-            SetOp::IntersectionPrimary => intersect_rel(
-                consumer.consume_rel(&set.inputs[0]).await?,
-                union_rels(consumer, &set.inputs[1..], true).await?,
-                false,
-            ),
-            SetOp::IntersectionMultiset => {
-                intersect_rels(consumer, &set.inputs, false).await
+            SetOp::UnionAll => union_rels(rels, true),
+            SetOp::UnionDistinct => union_rels(rels, false),
+            SetOp::IntersectionPrimary => {
+                intersect_rel(rels.next().unwrap(), union_rels(rels, true)?, false)
             }
-            SetOp::IntersectionMultisetAll => {
-                intersect_rels(consumer, &set.inputs, true).await
-            }
-            SetOp::MinusPrimary => except_rels(consumer, &set.inputs, false).await,
-            SetOp::MinusPrimaryAll => except_rels(consumer, &set.inputs, true).await,
+            SetOp::IntersectionMultiset => intersect_rels(rels, false),
+            SetOp::IntersectionMultisetAll => intersect_rels(rels, true),
+            SetOp::MinusPrimary => except_rels(rels, false),
+            SetOp::MinusPrimaryAll => except_rels(rels, true),
             set_op => not_impl_err!("Unsupported set operator: {set_op:?}"),
         }
     }
 }
 
-async fn union_rels(
-    consumer: &impl SubstraitConsumer,
-    rels: &[Rel],
+fn union_rels(
+    mut rels: impl Iterator<Item = LogicalPlan>,
     is_all: bool,
 ) -> datafusion::common::Result<LogicalPlan> {
-    let mut union_builder = Ok(LogicalPlanBuilder::from(
-        consumer.consume_rel(&rels[0]).await?,
-    ));
-    for input in &rels[1..] {
-        let rel_plan = consumer.consume_rel(input).await?;
-
+    let mut union_builder = Ok(LogicalPlanBuilder::from(rels.next().unwrap()));
+    for rel_plan in rels {
         union_builder = if is_all {
             union_builder?.union(rel_plan)
         } else {
@@ -60,15 +54,14 @@ async fn union_rels(
     union_builder?.build()
 }
 
-async fn intersect_rels(
-    consumer: &impl SubstraitConsumer,
-    rels: &[Rel],
+fn intersect_rels(
+    mut rels: impl Iterator<Item = LogicalPlan>,
     is_all: bool,
 ) -> datafusion::common::Result<LogicalPlan> {
-    let mut rel = consumer.consume_rel(&rels[0]).await?;
+    let mut rel = rels.next().unwrap();
 
-    for input in &rels[1..] {
-        rel = intersect_rel(rel, consumer.consume_rel(input).await?, is_all)?;
+    for input in rels {
+        rel = intersect_rel(rel, input, is_all)?;
     }
 
     Ok(rel)
@@ -199,16 +192,14 @@ fn intersect_rel(
     LogicalPlanBuilder::from(joined).project(exprs)?.build()
 }
 
-async fn except_rels(
-    consumer: &impl SubstraitConsumer,
-    rels: &[Rel],
+fn except_rels(
+    mut rels: impl Iterator<Item = LogicalPlan>,
     is_all: bool,
 ) -> datafusion::common::Result<LogicalPlan> {
-    let mut rel = consumer.consume_rel(&rels[0]).await?;
+    let mut rel = rels.next().unwrap();
 
-    for input in &rels[1..] {
-        rel =
-            LogicalPlanBuilder::except(rel, consumer.consume_rel(input).await?, is_all)?;
+    for input in rels {
+        rel = LogicalPlanBuilder::except(rel, input, is_all)?;
     }
 
     Ok(rel)

@@ -20,12 +20,13 @@ pub async fn from_join_rel(
         return not_impl_err!("JoinRel with post_join_filter is not yet supported");
     }
 
-    let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
-        consumer.consume_rel(join.left.as_ref().unwrap()).await?,
-    );
-    let right = LogicalPlanBuilder::from(
-        consumer.consume_rel(join.right.as_ref().unwrap()).await?,
-    );
+    let [left, right] = consumer
+        .consume_rel_inputs(&[join.left.as_ref().unwrap(), join.right.as_ref().unwrap()])
+        .await?
+        .try_into()
+        .unwrap();
+    let left: LogicalPlanBuilder = LogicalPlanBuilder::from(left);
+    let right = LogicalPlanBuilder::from(right);
     let (left, right, _requalified) = requalify_sides_if_needed(left, right)?;
 
     let join_type = from_substrait_jointype(join.r#type)?;

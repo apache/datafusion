@@ -13,12 +13,16 @@ pub async fn from_cross_rel(
     consumer: &impl SubstraitConsumer,
     cross: &CrossRel,
 ) -> datafusion::common::Result<LogicalPlan> {
-    let left = LogicalPlanBuilder::from(
-        consumer.consume_rel(cross.left.as_ref().unwrap()).await?,
-    );
-    let right = LogicalPlanBuilder::from(
-        consumer.consume_rel(cross.right.as_ref().unwrap()).await?,
-    );
+    let [left, right] = consumer
+        .consume_rel_inputs(&[
+            cross.left.as_ref().unwrap(),
+            cross.right.as_ref().unwrap(),
+        ])
+        .await?
+        .try_into()
+        .unwrap();
+    let left = LogicalPlanBuilder::from(left);
+    let right = LogicalPlanBuilder::from(right);
     let (left, right, _requalified) = requalify_sides_if_needed(left, right)?;
     left.cross_join(right.build()?)?.build()
 }
