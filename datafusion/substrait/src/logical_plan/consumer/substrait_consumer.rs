@@ -18,11 +18,13 @@ use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::catalog::TableProvider;
 use datafusion::common::datatype::FieldExt;
 use datafusion::common::{
-    DFSchema, ScalarValue, TableReference, not_impl_err, substrait_err,
+    DFSchema, ScalarValue, TableReference, internal_err, not_impl_err, substrait_err,
 };
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::expr::LambdaVariable;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
+use futures::TryStreamExt;
+use futures::stream::FuturesUnordered;
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use substrait::proto::expression as substrait_expression;
@@ -200,6 +202,54 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     /// You can provide your own implementation if you wish to customize the conversion behaviour.
     async fn consume_rel(&self, rel: &Rel) -> datafusion::common::Result<LogicalPlan> {
         from_substrait_rel(self, rel).await
+    }
+
+    /// Creates a consumer for an independent branch, inheriting the current scope.
+    ///
+    /// Return `Some` only when mutable traversal state (including outer-query and
+    /// lambda scopes) is independent of both this consumer and all other forks.
+    /// Immutable configuration and concurrency-safe services may be shared.
+    /// Forking must not mutate this consumer's scope. A shallow clone of shared
+    /// scope stacks does not satisfy this contract.
+    ///
+    /// The default returns `None`, preserving sequential input consumption.
+    fn fork_for_branch(&self) -> Option<Self> {
+        None
+    }
+
+    /// Consumes independent inputs of a relation, returning plans in input order.
+    ///
+    /// Implementations must return exactly one plan per input, in the same order.
+    /// On error, implementations must drop any unfinished input futures.
+    ///
+    /// The default creates a [`Self::fork_for_branch`] for each input before
+    /// consuming any input. If every fork succeeds, inputs are consumed concurrently.
+    /// If any fork returns `None`, all inputs are consumed sequentially on `self`.
+    /// Overrides can provide a different scheduling policy.
+    async fn consume_rel_inputs(
+        &self,
+        rels: &[&Rel],
+    ) -> datafusion::common::Result<Vec<LogicalPlan>> {
+        let mut branches = Vec::with_capacity(rels.len());
+        for _ in rels {
+            let Some(branch) = self.fork_for_branch() else {
+                let mut plans = Vec::with_capacity(rels.len());
+                for rel in rels {
+                    plans.push(self.consume_rel(rel).await?);
+                }
+                return Ok(plans);
+            };
+            branches.push(branch);
+        }
+        let pending = FuturesUnordered::new();
+        for (index, (branch, rel)) in branches.into_iter().zip(rels).enumerate() {
+            pending.push(async move {
+                branch.consume_rel(rel).await.map(|plan| (index, plan))
+            });
+        }
+        let mut completed = pending.try_collect::<Vec<_>>().await?;
+        completed.sort_unstable_by_key(|(index, _)| *index);
+        Ok(completed.into_iter().map(|(_, plan)| plan).collect())
     }
 
     async fn consume_read(
@@ -462,6 +512,7 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         substrait_err!("Missing handler for ExtensionSingleRel")
     }
 
+    /// Custom handlers can use [`Self::consume_rel_inputs`] to consume independent inputs.
     async fn consume_extension_multi(
         &self,
         rel: &ExtensionMultiRel,
@@ -584,6 +635,15 @@ impl<'a> DefaultSubstraitConsumer<'a> {
 
 #[async_trait]
 impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
+    fn fork_for_branch(&self) -> Option<Self> {
+        Some(Self {
+            extensions: self.extensions,
+            state: self.state,
+            outer_schemas: RwLock::new(self.outer_schemas.read().unwrap().clone()),
+            lambda_consumer: self.lambda_consumer.fork_for_branch(),
+        })
+    }
+
     async fn resolve_table_ref(
         &self,
         table_ref: &TableReference,
@@ -666,10 +726,12 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
             .state
             .serializer_registry()
             .deserialize_logical_plan(&ext_detail.type_url, &ext_detail.value)?;
-        let mut inputs = Vec::with_capacity(rel.inputs.len());
-        for input in &rel.inputs {
-            let input_plan = self.consume_rel(input).await?;
-            inputs.push(input_plan);
+        let input_rels = rel.inputs.iter().collect::<Vec<_>>();
+        let inputs = self.consume_rel_inputs(&input_rels).await?;
+        if inputs.len() != input_rels.len() {
+            return internal_err!(
+                "ExtensionMultiRel consumer returned the wrong number of inputs"
+            );
         }
         let plan = plan.with_exprs_and_inputs(plan.expressions(), inputs)?;
         Ok(LogicalPlan::Extension(Extension { node: plan }))
@@ -704,6 +766,7 @@ pub struct DefaultSubstraitLambdaConsumer {
     inner: RwLock<DefaultSubstraitLambdaConsumerInner>,
 }
 
+#[derive(Clone)]
 struct DefaultSubstraitLambdaConsumerInner {
     /// Parameters of the lambdas currently in scope, ordered from innermost
     /// to outermost. Index 0 is the lambda being consumed; higher indices
@@ -726,6 +789,15 @@ impl DefaultSubstraitLambdaConsumer {
                 lambda_parameters: VecDeque::new(),
                 next_lambda_parameter: 0,
             }),
+        }
+    }
+
+    /// Copies the current lambda scopes into independent storage for a branch.
+    ///
+    /// Custom consumers can use this in [`SubstraitConsumer::fork_for_branch`].
+    pub fn fork_for_branch(&self) -> Self {
+        Self {
+            inner: RwLock::new(self.inner.read().unwrap().clone()),
         }
     }
 
@@ -815,6 +887,20 @@ mod tests {
     use super::*;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
     use datafusion::arrow::datatypes::{Field, Schema};
+    use datafusion::logical_expr::logical_plan::builder::table_scan;
+    use futures::poll;
+    use std::slice;
+    use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::sync::Semaphore;
+
+    struct ActiveInput<'a>(&'a AtomicUsize);
+
+    impl Drop for ActiveInput<'_> {
+        fn drop(&mut self) {
+            self.0.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
 
     fn make_schema(fields: &[(&str, DataType)]) -> Arc<DFSchema> {
         let arrow_fields: Vec<Field> = fields
@@ -883,5 +969,311 @@ mod tests {
         let result = consumer.get_outer_schema(1).unwrap();
         assert_eq!(result.fields()[0].name(), "a");
         assert!(consumer.get_outer_schema(2).is_none());
+    }
+
+    // A custom consumer exercises the trait default independently of the default
+    // consumer's scheduling policy.
+    #[derive(Clone)]
+    struct InputConsumer {
+        extensions: Arc<Extensions>,
+        state: Arc<SessionState>,
+        reads: Arc<Mutex<Vec<String>>>,
+        ready: Arc<Semaphore>,
+        gates: Arc<HashMap<String, Semaphore>>,
+        active: Arc<AtomicUsize>,
+        forkable: bool,
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for InputConsumer {
+        fn fork_for_branch(&self) -> Option<Self> {
+            self.forkable.then(|| self.clone())
+        }
+
+        fn get_extensions(&self) -> &Extensions {
+            &self.extensions
+        }
+
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            self.state.as_ref()
+        }
+
+        async fn resolve_table_ref(
+            &self,
+            _: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            unreachable!("test consumes reads directly")
+        }
+
+        async fn consume_rel(
+            &self,
+            rel: &Rel,
+        ) -> datafusion::common::Result<LogicalPlan> {
+            let Some(proto::rel::RelType::Read(read)) = &rel.rel_type else {
+                panic!("expected a read")
+            };
+            let Some(proto::read_rel::ReadType::NamedTable(table)) = &read.read_type
+            else {
+                panic!("expected a named table")
+            };
+            self.reads.lock().unwrap().push(table.names[0].clone());
+            self.active.fetch_add(1, Ordering::SeqCst);
+            let _active = ActiveInput(&self.active);
+            let gate = self.gates.get(&table.names[0]).unwrap_or(&self.ready);
+            gate.acquire().await.unwrap().forget();
+            if table.names[0] == "fail" {
+                return substrait_err!("input failed");
+            }
+            table_scan(
+                Some(table.names[0].as_str()),
+                &Schema::new(vec![Field::new("x", DataType::Int64, false)]),
+                None,
+            )?
+            .build()
+        }
+    }
+
+    fn input_consumer() -> InputConsumer {
+        InputConsumer {
+            extensions: Arc::new(Extensions::default()),
+            state: Arc::new(
+                datafusion::execution::SessionStateBuilder::new_with_default_features()
+                    .build(),
+            ),
+            reads: Arc::new(Mutex::default()),
+            ready: Arc::new(Semaphore::new(0)),
+            gates: Arc::new(HashMap::new()),
+            active: Arc::new(AtomicUsize::new(0)),
+            forkable: false,
+        }
+    }
+
+    fn input_read(name: &str) -> Rel {
+        Rel {
+            rel_type: Some(proto::rel::RelType::Read(Box::new(ReadRel {
+                read_type: Some(proto::read_rel::ReadType::NamedTable(
+                    proto::read_rel::NamedTable {
+                        names: vec![name.into()],
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            }))),
+        }
+    }
+
+    #[tokio::test]
+    async fn input_hook_default_is_sequential_and_stops_on_error() {
+        let consumer = input_consumer();
+        let rels = [input_read("a"), input_read("fail"), input_read("unreached")];
+        let inputs = rels.iter().collect::<Vec<_>>();
+        let mut pending = Box::pin(consumer.consume_rel_inputs(&inputs));
+        assert!(poll!(pending.as_mut()).is_pending());
+        assert_eq!(*consumer.reads.lock().unwrap(), ["a"]);
+        consumer.ready.add_permits(3);
+        assert!(
+            pending
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("input failed")
+        );
+        assert_eq!(*consumer.reads.lock().unwrap(), ["a", "fail"]);
+    }
+
+    #[tokio::test]
+    async fn forked_inputs_overlap_and_preserve_input_order() {
+        let mut consumer = input_consumer();
+        consumer.forkable = true;
+        consumer.gates = Arc::new(HashMap::from([
+            ("a".into(), Semaphore::new(0)),
+            ("b".into(), Semaphore::new(0)),
+        ]));
+        let rels = [input_read("a"), input_read("b")];
+        let inputs = rels.iter().collect::<Vec<_>>();
+        let mut pending = Box::pin(consumer.consume_rel_inputs(&inputs));
+        assert!(poll!(&mut pending).is_pending());
+        assert_eq!(*consumer.reads.lock().unwrap(), ["a", "b"]);
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 2);
+        consumer.gates["b"].add_permits(1);
+        assert!(poll!(&mut pending).is_pending());
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 1);
+        consumer.gates["a"].add_permits(1);
+        let plans = pending.await.unwrap();
+        assert_eq!(plans.len(), 2);
+        assert!(
+            plans[0]
+                .display_indent()
+                .to_string()
+                .contains("TableScan: a")
+        );
+        assert!(
+            plans[1]
+                .display_indent()
+                .to_string()
+                .contains("TableScan: b")
+        );
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn forked_inputs_cancel_pending_siblings_on_error() {
+        let mut consumer = input_consumer();
+        consumer.forkable = true;
+        consumer.gates = Arc::new(HashMap::from([("fail".into(), Semaphore::new(0))]));
+        // Exercise more inputs than the small-future optimization in try_join_all.
+        let mut rels = (0..40)
+            .map(|i| input_read(&format!("a{i}")))
+            .collect::<Vec<_>>();
+        rels.push(input_read("fail"));
+        let inputs = rels.iter().collect::<Vec<_>>();
+        let mut pending = Box::pin(consumer.consume_rel_inputs(&inputs));
+        assert!(poll!(&mut pending).is_pending());
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 41);
+        consumer.gates["fail"].add_permits(1);
+        let error = pending.await.unwrap_err();
+        assert!(error.to_string().contains("input failed"));
+        assert_eq!(consumer.active.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn default_fork_inherits_and_isolates_scopes() {
+        let consumer = test_consumer();
+        consumer.push_outer_schema(make_schema(&[("outer", DataType::Int64)]));
+        let ty = Type {
+            kind: Some(r#type::Kind::I64(r#type::I64::default())),
+        };
+        consumer
+            .push_lambda_parameters(slice::from_ref(&ty), &DFSchema::empty())
+            .unwrap();
+        let branch = consumer.fork_for_branch().unwrap();
+        let sibling = consumer.fork_for_branch().unwrap();
+        assert_eq!(branch.get_outer_schema(1), consumer.get_outer_schema(1));
+        assert_eq!(
+            branch.lambda_variable(0, 0).unwrap(),
+            consumer.lambda_variable(0, 0).unwrap()
+        );
+        let names = branch
+            .push_lambda_parameters(&[ty], &DFSchema::empty())
+            .unwrap();
+        assert_eq!(names, ["p1"]);
+        assert_eq!(
+            branch.lambda_variable(1, 0).unwrap(),
+            consumer.lambda_variable(0, 0).unwrap()
+        );
+        branch.pop_outer_schema();
+        branch.pop_lambda_parameters();
+        branch.pop_lambda_parameters();
+        assert!(branch.get_outer_schema(1).is_none());
+        assert!(branch.lambda_variable(0, 0).is_err());
+        assert_eq!(sibling.get_outer_schema(1), consumer.get_outer_schema(1));
+        assert_eq!(
+            sibling.lambda_variable(0, 0).unwrap(),
+            consumer.lambda_variable(0, 0).unwrap()
+        );
+    }
+
+    struct HookConsumer {
+        inner: InputConsumer,
+        calls: Mutex<Vec<usize>>,
+        truncate: bool,
+    }
+
+    #[async_trait]
+    impl SubstraitConsumer for HookConsumer {
+        fn get_extensions(&self) -> &Extensions {
+            &self.inner.extensions
+        }
+        fn get_function_registry(&self) -> &impl FunctionRegistry {
+            self.inner.state.as_ref()
+        }
+        async fn resolve_table_ref(
+            &self,
+            _: &TableReference,
+        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
+            unreachable!("test consumes reads directly")
+        }
+        async fn consume_rel_inputs(
+            &self,
+            rels: &[&Rel],
+        ) -> datafusion::common::Result<Vec<LogicalPlan>> {
+            self.calls.lock().unwrap().push(rels.len());
+            let mut plans = self.inner.consume_rel_inputs(rels).await?;
+            if self.truncate {
+                plans.pop();
+            }
+            Ok(plans)
+        }
+    }
+
+    #[tokio::test]
+    async fn multi_input_relations_use_the_input_hook() {
+        use proto::rel::RelType;
+        use proto::set_rel::SetOp;
+
+        let mut relations = vec![
+            RelType::Join(Box::new(JoinRel {
+                left: Some(Box::new(input_read("a"))),
+                right: Some(Box::new(input_read("b"))),
+                r#type: proto::join_rel::JoinType::Inner as i32,
+                ..Default::default()
+            })),
+            RelType::Cross(Box::new(CrossRel {
+                left: Some(Box::new(input_read("a"))),
+                right: Some(Box::new(input_read("b"))),
+                ..Default::default()
+            })),
+        ];
+        for op in [
+            SetOp::UnionAll,
+            SetOp::UnionDistinct,
+            SetOp::IntersectionPrimary,
+            SetOp::IntersectionMultiset,
+            SetOp::IntersectionMultisetAll,
+            SetOp::MinusPrimary,
+            SetOp::MinusPrimaryAll,
+        ] {
+            relations.push(RelType::Set(SetRel {
+                inputs: vec![input_read("a"), input_read("b"), input_read("c")],
+                op: op as i32,
+                ..Default::default()
+            }));
+        }
+        for truncate in [false, true] {
+            for rel_type in &relations {
+                let consumer = HookConsumer {
+                    inner: input_consumer(),
+                    calls: Mutex::default(),
+                    truncate,
+                };
+                consumer.inner.ready.add_permits(3);
+                let rel = Rel {
+                    rel_type: Some(rel_type.clone()),
+                };
+                let result = consumer.consume_rel(&rel).await;
+                if truncate {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .to_string()
+                            .contains("wrong number of inputs")
+                    );
+                } else {
+                    let plan = result.unwrap().display_indent().to_string();
+                    assert!(
+                        plan.find("TableScan: a").unwrap()
+                            < plan.find("TableScan: b").unwrap()
+                    );
+                    if let RelType::Set(_) = rel_type {
+                        assert!(
+                            plan.find("TableScan: b").unwrap()
+                                < plan.find("TableScan: c").unwrap()
+                        );
+                    }
+                }
+                let expected_inputs = if let RelType::Set(_) = rel_type { 3 } else { 2 };
+                assert_eq!(*consumer.calls.lock().unwrap(), [expected_inputs]);
+            }
+        }
     }
 }
