@@ -508,6 +508,8 @@ Bitwise Shift Left
 - [@> (array contains)](#op_arr_contains)
 - [<@ (array is contained by)](#op_arr_contained_by)
 - [AT TIME ZONE](#op_at_time_zone)
+- [LIKE ANY (like any of a list of patterns)](#op_like_any)
+- [ILIKE ANY (case-insensitive like any of a list of patterns)](#op_ilike_any)
 
 (op_str_cat)=
 
@@ -616,6 +618,89 @@ convention, so `'+05:30'` is 5 hours 30 minutes _east_ of UTC. PostgreSQL
 applies the opposite (POSIX) convention to offsets spelled this way.
 
 [`timezone(tz, expression)`]: scalar_functions.md#timezone
+
+(op_like_any)=
+
+### `LIKE ANY`
+
+Like Any: `expression LIKE ANY (pattern1, ..., patternN)` is true when
+`expression` matches at least one pattern. It is the same as
+`expression LIKE pattern1 OR ... OR expression LIKE patternN`, following Spark.
+
+```sql
+> SELECT 'datafusion' LIKE ANY ('dat%', '%sql') AS like_any;
++----------+
+| like_any |
++----------+
+| true     |
++----------+
+```
+
+`NOT` before `LIKE` applies to each pattern, so `expression NOT LIKE ANY (...)`
+is true when `expression` fails to match at least one pattern. `NOT` before the
+expression negates the whole match:
+
+```sql
+> SELECT
+  'datafusion' NOT LIKE ANY ('dat%', '%sql') AS per_pattern,
+  NOT 'datafusion' LIKE ANY ('dat%', '%sql') AS whole_match;
++-------------+-------------+
+| per_pattern | whole_match |
++-------------+-------------+
+| true        | false       |
++-------------+-------------+
+```
+
+An `ESCAPE` character applies to every pattern:
+
+```sql
+> SELECT 'data_fusion' LIKE ANY ('data\_%', '%sql') ESCAPE '\' AS escaped;
++---------+
+| escaped |
++---------+
+| true    |
++---------+
+```
+
+A NULL pattern gives NULL only when no other pattern matches. A NULL
+expression gives NULL:
+
+```sql
+> SELECT
+  'datafusion' LIKE ANY ('dat%', NULL) AS one_match,
+  'datafusion' LIKE ANY ('%sql', NULL) AS no_match,
+  NULL LIKE ANY ('dat%', '%sql') AS null_subject;
++-----------+----------+--------------+
+| one_match | no_match | null_subject |
++-----------+----------+--------------+
+| true      | NULL     | NULL         |
++-----------+----------+--------------+
+```
+
+Snowflake differs here: its `LIKE ANY` returns NULL when any argument is NULL,
+so `'datafusion' LIKE ANY ('dat%', NULL)` is NULL in Snowflake.
+
+The patterns must be a parenthesized list. An array of patterns, such as
+`ARRAY['dat%', '%sql']` or `make_array('dat%', '%sql')`, and a subquery are not
+supported. A volatile expression, such as `CAST(random() AS VARCHAR)`, is not
+supported either, because each pattern would see a different value.
+`LIKE ALL` and `LIKE SOME` are not supported.
+
+(op_ilike_any)=
+
+### `ILIKE ANY`
+
+Case-Insensitive Like Any: the same as [`LIKE ANY`](#op_like_any), using
+`ILIKE` for each pattern.
+
+```sql
+> SELECT 'DataFusion' ILIKE ANY ('dat%', '%sql') AS ilike_any;
++-----------+
+| ilike_any |
++-----------+
+| true      |
++-----------+
+```
 
 ## Literals
 
