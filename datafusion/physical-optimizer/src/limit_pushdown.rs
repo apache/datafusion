@@ -349,26 +349,10 @@ pub fn pushdown_limit_helper(
     pushdown_plan: Arc<dyn ExecutionPlan>,
     global_state: GlobalRequirements,
 ) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
-    pushdown_limit_helper_with_stats(
-        pushdown_plan,
-        global_state,
-        &StatisticsContext::new(),
-    )
-}
-
-/// Like [`pushdown_limit_helper`], but computes statistics with `stats_ctx`.
-#[deprecated(
-    since = "56.0.0",
-    note = "LimitPushdown no longer works one node at a time; run the `LimitPushdown` rule"
-)]
-#[expect(deprecated)]
-pub fn pushdown_limit_helper_with_stats(
-    pushdown_plan: Arc<dyn ExecutionPlan>,
-    global_state: GlobalRequirements,
-    stats_ctx: &StatisticsContext,
-) -> Result<(Transformed<Arc<dyn ExecutionPlan>>, GlobalRequirements)> {
     let above = Above::from(global_state);
-    if let Some((input, above)) = fold_limit(&pushdown_plan, above, stats_ctx)? {
+    if let Some((input, above)) =
+        fold_limit(&pushdown_plan, above, &StatisticsContext::new())?
+    {
         return Ok((
             Transformed::new(input, true, TreeNodeRecursion::Stop),
             above.into(),
