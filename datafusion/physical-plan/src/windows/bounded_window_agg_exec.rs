@@ -14,9 +14,11 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::utils::create_schema;
-use crate::metrics::{BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet};
+use crate::metrics::{
+    BaselineMetrics, ExecutionPlanMetricsSet, MetricsSet, SplitMetrics,
+};
 use crate::statistics::{ChildStats, StatisticsArgs};
-use crate::stream::EmptyRecordBatchStream;
+use crate::stream::{BatchSplitStream, EmptyRecordBatchStream, ObservedStream};
 use crate::windows::{
     calc_requirements, get_ordered_partition_by_indices, get_partition_by_sort_exprs,
     window_equivalence_properties,
@@ -506,18 +508,31 @@ impl ExecutionPlan for BoundedWindowAggExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let batch_size = context.session_config().batch_size();
         let input = self.input.execute(partition, context)?;
         let search_mode = self.get_search_algo()?;
+        let baseline_metrics = BaselineMetrics::new(&self.metrics, partition);
         let stream = Box::pin(BoundedWindowAggStream::new(
             Arc::clone(&self.schema),
             self.window_expr.clone(),
             input,
-            BaselineMetrics::new(&self.metrics, partition),
+            baseline_metrics.clone(),
             search_mode,
             partition,
             self.state_observer.clone(),
         )?);
-        Ok(stream)
+        // Rows that become final together are emitted as one batch, so split
+        // them to respect `batch_size`.
+        let stream = Box::pin(BatchSplitStream::new(
+            stream,
+            batch_size,
+            SplitMetrics::new(&self.metrics, partition),
+        ));
+        Ok(Box::pin(ObservedStream::new(
+            stream,
+            baseline_metrics,
+            None,
+        )))
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -1278,8 +1293,7 @@ impl Stream for BoundedWindowAggStream {
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
     ) -> Poll<Option<Self::Item>> {
-        let poll = self.poll_next_inner(cx);
-        self.baseline_metrics.record_poll(poll)
+        self.poll_next_inner(cx)
     }
 }
 
@@ -2313,7 +2327,9 @@ mod tests {
         )
         .map(|e| Arc::new(e) as Arc<dyn ExecutionPlan>)?;
 
-        let batches = collect(physical_plan.execute(0, task_context())?).await?;
+        // The default batch size keeps each emission in a single batch.
+        let task_ctx = Arc::new(TaskContext::default());
+        let batches = collect(physical_plan.execute(0, task_ctx)?).await?;
 
         // The skip must not delay results that are ready to be finalized;
         // they stream out as soon as every window expression has produced
