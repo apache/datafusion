@@ -897,3 +897,44 @@ physical_plan
 
 statement ok
 DROP TABLE huge_frame_t;
+
+# Regression for #26617: count all rows before applying LIMIT.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+query II
+SELECT count(*) OVER () AS n,
+       row_number() OVER (PARTITION BY length('x') ORDER BY a) AS r
+FROM (SELECT 1 AS a UNION ALL SELECT 2 UNION ALL SELECT 3)
+ORDER BY r LIMIT 1;
+----
+3 1
+
+query II
+SELECT count(*) OVER () AS n,
+       row_number() OVER (PARTITION BY length('x') ORDER BY a) AS r
+FROM (SELECT 1 AS a UNION ALL SELECT 2 UNION ALL SELECT 3)
+ORDER BY r LIMIT 1 OFFSET 1;
+----
+3 2
+
+# When replacing the outer TopK is safe, LimitPushdown must absorb the
+# redundant GlobalLimitExec into SortPreservingMergeExec.
+query TT
+EXPLAIN
+SELECT depname, row_number() OVER (PARTITION BY depname ORDER BY empno) AS r
+FROM employees
+ORDER BY depname LIMIT 1;
+----
+logical_plan
+01)Sort: employees.depname ASC NULLS LAST, fetch=1
+02)--Projection: employees.depname, row_number() PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS r
+03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------TableScan: employees projection=[depname, empno]
+physical_plan
+01)SortPreservingMergeExec: [depname@0 ASC NULLS LAST], fetch=1
+02)--ProjectionExec: expr=[depname@0 as depname, row_number() PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as r]
+03)----BoundedWindowAggExec: wdw=[row_number() PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
+05)--------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=1
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno], file_type=csv, has_header=true

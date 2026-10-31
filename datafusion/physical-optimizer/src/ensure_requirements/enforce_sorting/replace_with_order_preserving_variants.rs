@@ -18,6 +18,7 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_physical_plan::ExecutionPlanProperties;
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::execution_plan::EmissionType;
+use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
 use datafusion_physical_plan::tree_node::PlanContext;
@@ -97,6 +98,7 @@ pub fn plan_with_order_preserving_variants(
         sort_input.data = false;
         return Ok(sort_input);
     }
+    let child_fetch = fetch.filter(|_| sort_input.plan.supports_limit_pushdown());
     sort_input.children = sort_input
         .children
         .into_iter()
@@ -107,7 +109,7 @@ pub fn plan_with_order_preserving_variants(
                     node,
                     is_spr_better,
                     is_spm_better,
-                    fetch,
+                    child_fetch,
                 )
             } else {
                 Ok(node)
@@ -271,6 +273,17 @@ pub fn replace_with_order_preserving_variants(
     }
     for child in alternate_plan.children.iter_mut() {
         child.data = false;
+    }
+    if let Some(fetch) = requirements.plan.fetch() {
+        let plan = if requirements.plan.output_partitioning().partition_count() == 1 {
+            let limit =
+                GlobalLimitExec::new(Arc::clone(&alternate_plan.plan), 0, Some(fetch));
+            Arc::new(limit) as _
+        } else {
+            let limit = LocalLimitExec::new(Arc::clone(&alternate_plan.plan), fetch);
+            Arc::new(limit) as _
+        };
+        alternate_plan = PlanContext::new(plan, false, vec![alternate_plan]);
     }
     Ok(Transformed::yes(alternate_plan))
 }
