@@ -85,6 +85,21 @@ fn bench_ordering_satisfaction(c: &mut Criterion) {
 
     for n_classes in [2, 8, 32] {
         let props = properties(n_classes);
+        // Check each answer once, untimed, so that a wrong answer cannot pass
+        // for a faster one.
+        assert!(props.ordering_satisfy(one_key.clone()).unwrap());
+        assert!(!props.ordering_satisfy(one_key_unsatisfied.clone()).unwrap());
+        assert!(props.ordering_satisfy(four_keys.clone()).unwrap());
+        assert!(props.ordering_satisfy_requirement(one_req.clone()).unwrap());
+        assert!(
+            props
+                .ordering_satisfy_requirement(four_reqs.clone())
+                .unwrap()
+        );
+        let (_, all_satisfied) = props
+            .extract_common_sort_prefix(four_key_ordering.clone())
+            .unwrap();
+        assert!(all_satisfied);
 
         // A single sort key: the most common shape by far.
         group.bench_function(
@@ -172,6 +187,11 @@ fn bench_shapes(c: &mut Criterion) {
         let props = properties(n_classes);
         let one = vec![col(0)];
         let five = vec![col(3), col(2), col(1), col(0), col(7)];
+        assert_eq!(props.find_longest_permutation(&one).unwrap().1, [0]);
+        assert_eq!(
+            props.find_longest_permutation(&five).unwrap().1,
+            [3, 2, 1, 0]
+        );
         group.bench_function(
             BenchmarkId::new("find_longest_permutation/1_expr", n_classes),
             |b| b.iter(|| props.find_longest_permutation(&one).unwrap()),
@@ -202,6 +222,7 @@ fn bench_shapes(c: &mut Criterion) {
             PhysicalSortExpr::new(col(0), asc_nulls_last),
             PhysicalSortExpr::new(col(1), asc_nulls_last),
         ];
+        assert!(props.ordering_satisfy(keys.clone()).unwrap());
         group.bench_function(BenchmarkId::new("window", w), |b| {
             b.iter_batched(
                 || keys.clone(),
@@ -212,6 +233,8 @@ fn bench_shapes(c: &mut Criterion) {
     }
 
     // Deep key: `[c0, e, c1]` with `e = c1 + 1 + ... + 1` nested `depth` deep.
+    // `+` may overflow, so `e` is unordered: the check computes the properties
+    // of `e` and stops there.
     for depth in [4, 8, 16, 32] {
         let props = properties(8);
         let mut e = col(1);
@@ -223,6 +246,7 @@ fn bench_shapes(c: &mut Criterion) {
             PhysicalSortExpr::new(e, SortOptions::default()),
             asc(1),
         ];
+        assert!(!props.ordering_satisfy(keys.clone()).unwrap());
         group.bench_function(BenchmarkId::new("deep_key", depth), |b| {
             b.iter_batched(
                 || keys.clone(),
