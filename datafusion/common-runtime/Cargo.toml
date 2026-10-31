@@ -43,6 +43,7 @@ name = "datafusion_common_runtime"
 [dependencies]
 futures = { workspace = true }
 log = { workspace = true }
+pin-project-lite = { workspace = true }
 tokio = { workspace = true }
 
 [dev-dependencies]

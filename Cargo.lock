@@ -1941,6 +1941,7 @@ version = "55.1.0"
 dependencies = [
  "futures",
  "log",
+ "pin-project-lite",
  "tokio",
 ]
 
