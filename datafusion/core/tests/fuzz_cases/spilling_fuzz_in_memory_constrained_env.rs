@@ -260,12 +260,12 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch() -> Result<()
 
     let number_of_record_batches = 100;
 
-    // Each spilled run's largest batch is so big that two merge streams cannot be
-    // reserved at once even at the smallest read-buffer size (`2 * (2 * batch) >
-    // pool`), yet a single stream still fits (`2 * batch < pool`). Reducing the
-    // buffer size therefore cannot help, the multi-level merge has to re-spill a
-    // run with a smaller batch size to make progress instead of failing with
-    // `ResourcesExhausted`.
+    // Each input batch is so big that two merge streams over spill files of such
+    // batches cannot be reserved at once (`2 * (2 * batch) > pool`), yet a single
+    // stream fits (`2 * batch < pool`). The sort must not fail with
+    // `ResourcesExhausted`: it bounds the batches it spills by bytes, so the merge
+    // can seat two streams. (The merge's fallback of re-spilling a run at half the
+    // batch size is covered by the unit tests in `multi_level_merge.rs`.)
     let metrics = run_sort_test_with_limited_memory(RunTestWithLimitedMemoryArgs {
         pool_size,
         task_ctx: Arc::new(task_ctx),
@@ -277,12 +277,9 @@ async fn test_sort_with_limited_memory_and_oversized_record_batch() -> Result<()
     })
     .await?;
 
-    let output_batches = get_output_batches_from_metrics(&metrics);
-
-    // minimum 2 batches more
     assert!(
-        output_batches >= number_of_record_batches + 2,
-        "output_batches {output_batches} should be greater than number_of_record_batches ({number_of_record_batches}) + 2"
+        metrics.spill_count().unwrap_or(0) > 0,
+        "the sort must spill"
     );
 
     Ok(())
