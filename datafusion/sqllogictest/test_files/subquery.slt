@@ -4094,6 +4094,45 @@ DROP TABLE nested_agg_outer;
 statement ok
 DROP TABLE nested_agg_inner;
 
+# A set comparison in a projection without an alias must not change the projection's
+# output field name. `RewriteSetComparison` replaces `x > ALL (…)` with a `CASE` whose
+# display name differs from the field name, and rebuilding the projection from the
+# expression names failed the optimizer's "schema is invariant" check with an internal
+# error instead of returning the answer.
+query B
+select 2 > all (select v from (values (1), (0)) t(v));
+----
+true
+
+query BI
+select 2 > all (select v from (values (1), (0)) t(v)), 9 as k;
+----
+true 9
+
+# A control rather than a regression test: an aliased set comparison already keeps its
+# name on `main`, so this one does not change with the fix. It pins the alias arm of the
+# name comparison against a rule that starts renaming aliased projections.
+query B
+select 2 > all (select v from (values (1), (0)) t(v)) as aliased;
+----
+true
+
+# A qualified column next to the set comparison is the other side of the same check:
+# `Expr::schema_name` keeps the qualifier (`t_qual.k`) while the field is named after the
+# bare column, so losing the qualifier breaks the schema just as adding a stale name does.
+# Fails on `main` with the same internal error.
+statement ok
+create table t_qual(k int) as values (1), (2);
+
+query IB
+select t_qual.k, t_qual.k > all (select v from (values (1), (0)) s(v)) from t_qual order by t_qual.k;
+----
+1 false
+2 true
+
+statement ok
+drop table t_qual;
+
 # Regression tests for #25258 - Unaliased set comparison subqueries return wrong results
 
 statement ok
