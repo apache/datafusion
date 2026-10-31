@@ -3,7 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::Array;
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field, FieldRef};
 
 use crate::binaries::{
     ConcatBinaryBuilder, ConcatBinaryViewBuilder, ConcatLargeBinaryBuilder,
@@ -19,7 +19,7 @@ use datafusion_common::{Result, ScalarValue, exec_err, internal_err, plan_err};
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{ColumnarValue, Documentation, Expr, Volatility, lit};
-use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
+use datafusion_expr::{ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_macros::user_doc;
 
 #[user_doc(
@@ -94,6 +94,22 @@ impl ScalarUDFImpl for ConcatWsFunc {
     /// Match the return type to the input types. Delegates to `concat` implementation.
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         Ok(deduce_return_type(arg_types))
+    }
+
+    fn return_field_from_args(&self, args: ReturnFieldArgs<'_>) -> Result<FieldRef> {
+        // Null values are skipped, so only a null separator produces null.
+        let separator = &args.arg_fields[0];
+        let arg_types = args
+            .arg_fields
+            .iter()
+            .map(|field| field.data_type().clone())
+            .collect::<Vec<_>>();
+        Ok(Field::new(
+            self.name(),
+            self.return_type(&arg_types)?,
+            separator.is_nullable(),
+        )
+        .into())
     }
 
     /// Concatenates all but the first argument, with separators. The first
