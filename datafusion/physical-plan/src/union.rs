@@ -116,7 +116,9 @@ fn coerce_schema(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+    Ok(Arc::new(ProjectionExec::try_new_with_schema_metadata(
+        exprs, input, schema,
+    )?))
 }
 
 /// `UnionExec`: `UNION ALL` execution plan.
@@ -1783,9 +1785,9 @@ mod tests {
             );
             for batch in batches {
                 assert_eq!(
-                    batch.schema().fields(),
-                    expected_schema.fields(),
-                    "{nullability:?}"
+                    batch.schema(),
+                    expected_schema,
+                    "output batch schema for {nullability:?}"
                 );
             }
         }
