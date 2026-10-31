@@ -972,6 +972,18 @@ config_namespace! {
         /// See <https://github.com/apache/datafusion/issues/22710> for details.
         pub enable_migration_aggregate: bool, default = true
 
+        /// Whether inner, left outer, right outer, and full outer hash joins use
+        /// the refactored implementation. When set to `false`, these joins use
+        /// the existing implementation. Other join types always use the existing
+        /// implementation.
+        ///
+        /// The fallback exists only as a workaround for bugs in the new
+        /// implementation and will be removed, together with this option, once
+        /// the migration is complete.
+        ///
+        /// See <https://github.com/apache/datafusion/issues/26361> for details.
+        pub enable_migration_hash_join: bool, default = true
+
         /// Sets the compression codec used when spilling data to disk.
         ///
         /// Since datafusion writes spill files using the Arrow IPC Stream format,

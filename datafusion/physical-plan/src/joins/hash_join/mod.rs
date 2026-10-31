@@ -14,9 +14,12 @@ pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 pub use partitioned_hash_eval::HashTableLookupExpr;
 pub use partitioned_hash_eval::{HashExpr, SeededRandomState};
 
+mod build;
 mod exec;
+mod hash_join_table;
 mod inlist_builder;
 mod not_in;
 mod partitioned_hash_eval;
+mod regular_join;
 mod shared_bounds;
 mod stream;
