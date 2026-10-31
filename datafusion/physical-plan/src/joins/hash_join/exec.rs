@@ -3339,7 +3339,6 @@ fn build_in_memory(
         .map(|not_in| {
             NotInBuild::try_new(
                 not_in,
-                on_left,
                 &batch,
                 &left_values,
                 &normalized_values,

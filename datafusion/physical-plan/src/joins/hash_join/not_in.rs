@@ -50,7 +50,6 @@ use datafusion_common::{
 };
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_expr::{ColumnarValue, Operator};
-use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::datum::apply_cmp;
 
 use crate::joins::PartitionMode;
@@ -61,7 +60,7 @@ use crate::joins::join_hash_map::{JoinHashMapType, ProbeOffset};
 use crate::joins::probe_completion::ProbeSideSummary;
 use crate::joins::utils::{
     BuildProbeJoinMetrics, JoinFilter, apply_join_filter_to_indices,
-    equal_rows_arr_with_normalized_left, matchable_join_keys,
+    equal_rows_arr_with_normalized_left, matchable_join_keys, update_hash_from_values,
 };
 
 /// Which `NOT IN` a null-aware join computes, derived from
@@ -216,10 +215,8 @@ impl NotInBuild {
     /// Builds the `NOT IN` state of a collected build side and charges it to
     /// `reservation`. `keys` are the build keys as evaluated, `normalized`
     /// with `-0.0` rewritten (see `JoinLeftData::values`).
-    #[expect(clippy::too_many_arguments)]
     pub(super) fn try_new(
         not_in: NotIn,
-        on_left: &[PhysicalExprRef],
         batch: &RecordBatch,
         keys: &[ArrayRef],
         normalized: &[ArrayRef],
@@ -230,7 +227,6 @@ impl NotInBuild {
         let num_rows = batch.num_rows();
         let correlated_row_state = |value_keys, reservation: &mut MemoryReservation| {
             correlated_row_state(
-                on_left,
                 keys,
                 normalized,
                 value_keys,
@@ -603,7 +599,6 @@ fn retain_probe_rows(
 
 /// The scope map and NULL-valued build rows of a correlated `NOT IN`.
 fn correlated_row_state(
-    on_left: &[PhysicalExprRef],
     keys: &[ArrayRef],
     normalized: &[ArrayRef],
     value_keys: usize,
@@ -611,10 +606,10 @@ fn correlated_row_state(
     reservation: &mut MemoryReservation,
     metrics: &BuildProbeJoinMetrics,
 ) -> Result<(Option<BuildScopeMap>, Option<NullValueBuildRows>)> {
-    // `on_left[..V]` are the value keys and `on_left[V..]` the (possibly
-    // empty) correlation scope keys.
-    let scope_keys = &on_left[value_keys..];
-    let scope_map = (!scope_keys.is_empty()).then(|| BuildScopeMap {
+    // `keys[..V]` are the value keys and `keys[V..]` the (possibly empty)
+    // correlation scope keys.
+    let has_scope_keys = keys.len() > value_keys;
+    let scope_map = has_scope_keys.then(|| BuildScopeMap {
         map: OnceLock::new(),
         reservation: Mutex::new(reservation.new_empty()),
         metrics: metrics.clone(),
@@ -631,7 +626,7 @@ fn correlated_row_state(
     reservation.try_grow(retained_size)?;
     metrics.build_mem_used.add(retained_size);
 
-    let scope = if scope_keys.is_empty() {
+    let scope = if !has_scope_keys {
         NullValueScope::Unscoped
     } else {
         let null_rows = build_indices.len();
@@ -710,15 +705,18 @@ impl BuildScopeMap {
             Err(e) => return Err(e),
         };
         let mut hashes_buffer = vec![0; num_rows];
-        create_hashes(scope_values, random_state, &mut hashes_buffer)?;
-        map.extend_zero(num_rows);
-        // A build row whose scope keys hold a NULL is in no scope.
-        let valid = matchable_join_keys(scope_values, NullEquality::NullEqualsNothing);
-        let hashes = hashes_buffer
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| valid.as_ref().is_none_or(|valid| valid.is_valid(*i)));
-        map.update_from_iter(Box::new(hashes.rev()), 0);
+        // A build row whose scope keys hold a NULL is in no scope, so it is
+        // left out of the map.
+        update_hash_from_values(
+            scope_values,
+            &mut *map,
+            0,
+            random_state,
+            &mut hashes_buffer,
+            0,
+            true,
+            NullEquality::NullEqualsNothing,
+        )?;
         Ok(self.map.get_or_init(|| Some(map)).as_deref())
     }
 }
@@ -1179,8 +1177,8 @@ fn sort_by_hash(hashes: &[u64], rows: &[u32]) -> Vec<(u64, u32)> {
 }
 
 /// The groups of equal hashes in `sorted`, sorted by hash.
-fn count_groups(sorted: &[(u64, u32)]) -> usize {
-    sorted.chunk_by(|a, b| a.0 == b.0).count()
+fn hash_groups(sorted: &[(u64, u32)]) -> Vec<&[(u64, u32)]> {
+    sorted.chunk_by(|a, b| a.0 == b.0).collect()
 }
 
 /// Whether `rows` probe rows in `groups` groups of equal hashes save work when
@@ -1391,7 +1389,8 @@ where
         ) {
             rest = sort_by_hash(&hashes[group_from..], &probe_rows[group_from..]);
         }
-        if rest.is_empty() || !saves_work(rest.len(), count_groups(&rest)) {
+        let mut groups = hash_groups(&rest);
+        if rest.is_empty() || !saves_work(rest.len(), groups.len()) {
             self.wasted_matches = 0;
             let Some((offset, _)) = self.lookup_each_row(
                 scope_map,
@@ -1408,9 +1407,19 @@ where
             let group_from = match offset {
                 AtRow { row } | MidChain { row, .. } => row,
             };
-            rest = sort_by_hash(&hashes[group_from..], &probe_rows[group_from..]);
+            if rest.is_empty() {
+                rest = sort_by_hash(&hashes[group_from..], &probe_rows[group_from..]);
+            } else {
+                // `probe_rows` is increasing, so the rows from `group_from` on
+                // are those not below its row, and keeping them keeps the
+                // order by hash.
+                match probe_rows.get(group_from) {
+                    Some(&first) => rest.retain(|(_, row)| *row >= first),
+                    None => rest.clear(),
+                }
+            }
+            groups = hash_groups(&rest);
         }
-        let groups: Vec<_> = rest.chunk_by(|a, b| a.0 == b.0).collect();
 
         #[cfg(test)]
         {
