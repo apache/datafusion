@@ -720,76 +720,7 @@
                         }
                       },
                       "groupings": [{
-                        "groupingExpressions": [{
-                          "selection": {
-                            "directReference": {
-                              "structField": {
-                              }
-                            },
-                            "rootReference": {
-                            }
-                          }
-                        }, {
-                          "selection": {
-                            "directReference": {
-                              "structField": {
-                                "field": 1
-                              }
-                            },
-                            "rootReference": {
-                            }
-                          }
-                        }, {
-                          "selection": {
-                            "directReference": {
-                              "structField": {
-                                "field": 2
-                              }
-                            },
-                            "rootReference": {
-                            }
-                          }
-                        }, {
-                          "selection": {
-                            "directReference": {
-                              "structField": {
-                                "field": 3
-                              }
-                            },
-                            "rootReference": {
-                            }
-                          }
-                        }, {
-                          "selection": {
-                            "directReference": {
-                              "structField": {
-                                "field": 4
-                              }
-                            },
-                            "rootReference": {
-                            }
-                          }
-                        }, {
-                          "selection": {
-                            "directReference": {
-                              "structField": {
-                                "field": 5
-                              }
-                            },
-                            "rootReference": {
-                            }
-                          }
-                        }, {
-                          "selection": {
-                            "directReference": {
-                              "structField": {
-                                "field": 6
-                              }
-                            },
-                            "rootReference": {
-                            }
-                          }
-                        }]
+                        "expressionReferences": [0, 1, 2, 3, 4, 5, 6]
                       }],
                       "measures": [{
                         "measure": {
@@ -816,6 +747,76 @@
                               }
                             }
                           }]
+                        }
+                      }],
+                      "groupingExpressions": [{
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }, {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 1
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }, {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 2
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }, {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 3
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }, {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 4
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }, {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 5
+                            }
+                          },
+                          "rootReference": {
+                          }
+                        }
+                      }, {
+                        "selection": {
+                          "directReference": {
+                            "structField": {
+                              "field": 6
+                            }
+                          },
+                          "rootReference": {
+                          }
                         }
                       }]
                     }
@@ -918,7 +919,11 @@
               }]
             }
           },
-          "count": "20"
+          "countExpr": {
+            "literal": {
+              "i64": "20"
+            }
+          }
         }
       },
       "names": ["C_CUSTKEY", "C_NAME", "REVENUE", "C_ACCTBAL", "N_NAME", "C_ADDRESS", "C_PHONE", "C_COMMENT"]

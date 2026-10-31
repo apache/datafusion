@@ -109,14 +109,12 @@ pub fn from_higher_order_function(
         output_field.is_nullable(),
     )?;
 
-    #[expect(deprecated)]
     Ok(Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
             arguments,
             output_type: Some(output_type),
             options: vec![],
-            args: vec![],
         })),
     })
 }
@@ -140,14 +138,12 @@ fn from_function(
     let output_type = to_substrait_type(producer, output_type, output_nullability)?;
 
     let function_anchor = producer.register_function(name.to_string());
-    #[expect(deprecated)]
     Ok(Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
             arguments,
             output_type: Some(output_type),
             options: vec![],
-            args: vec![],
         })),
     })
 }
@@ -275,13 +271,11 @@ pub fn from_like(
         vec![]
     };
 
-    #[expect(deprecated)]
     let substrait_like = Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
             arguments,
             output_type: Some(output_type.clone()),
-            args: vec![],
             options,
         })),
     };
@@ -289,7 +283,6 @@ pub fn from_like(
     if *negated {
         let function_anchor = producer.register_function("not".to_string());
 
-        #[expect(deprecated)]
         Ok(Expression {
             rex_type: Some(RexType::ScalarFunction(ScalarFunction {
                 function_reference: function_anchor,
@@ -298,7 +291,6 @@ pub fn from_like(
                 }],
                 // `not` yields the type its argument does.
                 output_type: Some(output_type),
-                args: vec![],
                 options: vec![],
             })),
         })
@@ -326,7 +318,6 @@ fn to_substrait_unary_scalar_fn(
             }],
             output_type: Some(output_type.clone()),
             options: vec![],
-            ..Default::default()
         })),
     })
 }
@@ -340,7 +331,6 @@ pub fn make_binary_op_scalar_func(
     output_type: &Type,
 ) -> Expression {
     let function_anchor = producer.register_function(operator_to_name(op).to_string());
-    #[expect(deprecated)]
     Expression {
         rex_type: Some(RexType::ScalarFunction(ScalarFunction {
             function_reference: function_anchor,
@@ -353,7 +343,6 @@ pub fn make_binary_op_scalar_func(
                 },
             ],
             output_type: Some(output_type.clone()),
-            args: vec![],
             options: vec![],
         })),
     }
