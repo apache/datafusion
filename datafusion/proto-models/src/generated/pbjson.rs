@@ -18970,6 +18970,12 @@ impl serde::Serialize for PhysicalCaseNode {
         if self.else_expr.is_some() {
             len += 1;
         }
+        if self.logical_result_type.is_some() {
+            len += 1;
+        }
+        if !self.logical_result_metadata.is_empty() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.PhysicalCaseNode", len)?;
         if let Some(v) = self.expr.as_ref() {
             struct_ser.serialize_field("expr", v)?;
@@ -18979,6 +18985,12 @@ impl serde::Serialize for PhysicalCaseNode {
         }
         if let Some(v) = self.else_expr.as_ref() {
             struct_ser.serialize_field("elseExpr", v)?;
+        }
+        if let Some(v) = self.logical_result_type.as_ref() {
+            struct_ser.serialize_field("logicalResultType", v)?;
+        }
+        if !self.logical_result_metadata.is_empty() {
+            struct_ser.serialize_field("logicalResultMetadata", &self.logical_result_metadata)?;
         }
         struct_ser.end()
     }
@@ -18995,6 +19007,10 @@ impl<'de> serde::Deserialize<'de> for PhysicalCaseNode {
             "whenThenExpr",
             "else_expr",
             "elseExpr",
+            "logical_result_type",
+            "logicalResultType",
+            "logical_result_metadata",
+            "logicalResultMetadata",
         ];
 
         #[allow(clippy::enum_variant_names)]
@@ -19002,6 +19018,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalCaseNode {
             Expr,
             WhenThenExpr,
             ElseExpr,
+            LogicalResultType,
+            LogicalResultMetadata,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -19026,6 +19044,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalCaseNode {
                             "expr" => Ok(GeneratedField::Expr),
                             "whenThenExpr" | "when_then_expr" => Ok(GeneratedField::WhenThenExpr),
                             "elseExpr" | "else_expr" => Ok(GeneratedField::ElseExpr),
+                            "logicalResultType" | "logical_result_type" => Ok(GeneratedField::LogicalResultType),
+                            "logicalResultMetadata" | "logical_result_metadata" => Ok(GeneratedField::LogicalResultMetadata),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -19048,6 +19068,8 @@ impl<'de> serde::Deserialize<'de> for PhysicalCaseNode {
                 let mut expr__ = None;
                 let mut when_then_expr__ = None;
                 let mut else_expr__ = None;
+                let mut logical_result_type__ = None;
+                let mut logical_result_metadata__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Expr => {
@@ -19068,12 +19090,28 @@ impl<'de> serde::Deserialize<'de> for PhysicalCaseNode {
                             }
                             else_expr__ = map_.next_value()?;
                         }
+                        GeneratedField::LogicalResultType => {
+                            if logical_result_type__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("logicalResultType"));
+                            }
+                            logical_result_type__ = map_.next_value()?;
+                        }
+                        GeneratedField::LogicalResultMetadata => {
+                            if logical_result_metadata__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("logicalResultMetadata"));
+                            }
+                            logical_result_metadata__ = Some(
+                                map_.next_value::<std::collections::HashMap<_, _>>()?
+                            );
+                        }
                     }
                 }
                 Ok(PhysicalCaseNode {
                     expr: expr__,
                     when_then_expr: when_then_expr__.unwrap_or_default(),
                     else_expr: else_expr__,
+                    logical_result_type: logical_result_type__,
+                    logical_result_metadata: logical_result_metadata__.unwrap_or_default(),
                 })
             }
         }

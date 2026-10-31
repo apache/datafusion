@@ -8,9 +8,9 @@
 use super::{roundtrip_test, roundtrip_test_and_return};
 use arrow::datatypes::Fields;
 use datafusion::arrow::compute::SortOptions;
-use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Schema};
+use datafusion::arrow::datatypes::{DataType, Field, IntervalUnit, Metadata, Schema};
 use datafusion::logical_expr::Operator;
-use datafusion::physical_expr::expressions::{LambdaVariable, Literal, lambda};
+use datafusion::physical_expr::expressions::{CaseExpr, LambdaVariable, Literal, lambda};
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::expressions::{
     BinaryExpr, Column, PhysicalSortExpr, SqlSimilarToPattern, binary, col, like, lit,
@@ -34,6 +34,130 @@ use prost::Message;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::vec;
+
+#[test]
+fn roundtrip_case_result_metadata() -> Result<()> {
+    let input_schema = Arc::new(Schema::new(vec![
+        Field::new("flag", DataType::Boolean, false),
+        Field::new("value", DataType::Int32, false)
+            .with_metadata(Metadata::new().with("source", "physical")),
+    ]));
+    for metadata in [Metadata::new(), Metadata::new().with("source", "logical")] {
+        let expression: Arc<dyn PhysicalExpr> = Arc::new(
+            CaseExpr::try_new(
+                None,
+                vec![(col("flag", &input_schema)?, col("value", &input_schema)?)],
+                Some(col("value", &input_schema)?),
+            )?
+            .with_logical_result_field(&Arc::new(
+                Field::new("logical_case", DataType::Int32, true)
+                    .with_metadata(metadata.clone()),
+            )),
+        );
+        let plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            vec![(expression, "value".to_string())],
+            Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+        )?);
+        let ctx = SessionContext::new();
+        let assert_fields = |decoded: &Arc<dyn ExecutionPlan>| -> Result<()> {
+            assert_eq!(decoded.schema().field(0).metadata(), &metadata);
+            let projection = decoded.downcast_ref::<ProjectionExec>().unwrap();
+            let expression = &projection.expr()[0].expr;
+            let first = expression.return_field(&input_schema)?;
+            let second = expression.return_field(&input_schema)?;
+            assert_eq!(first.metadata(), &metadata);
+            assert_eq!(first.data_type(), &DataType::Int32);
+            assert!(!first.is_nullable());
+            if !metadata.is_empty() {
+                assert!(Arc::ptr_eq(
+                    first.metadata().as_arc().unwrap(),
+                    second.metadata().as_arc().unwrap()
+                ));
+            }
+            Ok(())
+        };
+        let decoded = roundtrip_test_and_return(
+            Arc::clone(&plan),
+            &ctx,
+            &DefaultPhysicalExtensionCodec {},
+            &DefaultPhysicalProtoConverter {},
+        )?;
+        assert_fields(&decoded)?;
+        #[cfg(feature = "json")]
+        {
+            let decoded = super::roundtrip_test_json_and_return(plan, &ctx)?;
+            assert_fields(&decoded)?;
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn roundtrip_case_marked_typed_null_else() -> Result<()> {
+    use arrow::array::{BooleanArray, Int32Array};
+    use arrow::record_batch::RecordBatch;
+    use datafusion_common::metadata::FieldMetadata;
+
+    let input_schema = Arc::new(Schema::new(vec![
+        Field::new("flag", DataType::Boolean, true),
+        Field::new("value", DataType::Int32, false),
+    ]));
+    let metadata = Metadata::new().with("source", "typed_null_else");
+    let expression: Arc<dyn PhysicalExpr> = Arc::new(CaseExpr::try_new(
+        None,
+        vec![(col("flag", &input_schema)?, col("value", &input_schema)?)],
+        Some(Arc::new(Literal::new_with_metadata(
+            ScalarValue::Int32(None),
+            Some(FieldMetadata::from(metadata.clone())),
+        ))),
+    )?);
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![(expression, "value".to_string())],
+        Arc::new(EmptyExec::new(Arc::clone(&input_schema))),
+    )?);
+    let batch = RecordBatch::try_new(
+        Arc::clone(&input_schema),
+        vec![
+            Arc::new(BooleanArray::from(vec![Some(true), Some(false), None])),
+            Arc::new(Int32Array::from(vec![7, 8, 9])),
+        ],
+    )?;
+    let assert_expression = |decoded: &Arc<dyn ExecutionPlan>| -> Result<()> {
+        let projection = decoded.downcast_ref::<ProjectionExec>().unwrap();
+        let expression = &projection.expr()[0].expr;
+        let field = expression.return_field(&input_schema)?;
+        assert_eq!(field.metadata(), &metadata);
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(field.is_nullable());
+        assert!(
+            expression
+                .downcast_ref::<CaseExpr>()
+                .unwrap()
+                .else_expr()
+                .is_some()
+        );
+        let output = expression.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            output.as_ref(),
+            &Int32Array::from(vec![Some(7), None, None])
+        );
+        Ok(())
+    };
+    let ctx = SessionContext::new();
+    let decoded = roundtrip_test_and_return(
+        Arc::clone(&plan),
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    assert_expression(&decoded)?;
+    #[cfg(feature = "json")]
+    {
+        let decoded = super::roundtrip_test_json_and_return(plan, &ctx)?;
+        assert_expression(&decoded)?;
+    }
+    Ok(())
+}
 
 #[test]
 fn roundtrip_projection_metadata() -> Result<()> {

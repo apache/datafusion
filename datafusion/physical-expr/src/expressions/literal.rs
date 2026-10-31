@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
 
-use arrow::datatypes::{Field, FieldRef};
+use arrow::datatypes::{Field, FieldRef, Metadata};
 use arrow::{
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
@@ -68,6 +68,10 @@ impl Literal {
     /// Get the scalar value
     pub fn value(&self) -> &ScalarValue {
         &self.value
+    }
+
+    pub(crate) fn metadata(&self) -> &Metadata {
+        self.field.metadata()
     }
 }
 
