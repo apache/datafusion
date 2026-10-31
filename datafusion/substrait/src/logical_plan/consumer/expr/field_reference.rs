@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::{Column, DFSchema, not_impl_err, substrait_err};
 use datafusion::logical_expr::Expr;
 use std::sync::Arc;
@@ -15,14 +15,16 @@ pub async fn from_field_reference(
     consumer: &impl SubstraitConsumer,
     field_ref: &FieldReference,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Expr> {
-    from_substrait_field_reference(consumer, field_ref, input_schema)
+    from_substrait_field_reference(consumer, field_ref, input_schema, context)
 }
 
 pub(crate) fn from_substrait_field_reference(
     consumer: &impl SubstraitConsumer,
     field_ref: &FieldReference,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Expr> {
     match &field_ref.reference_type {
         Some(DirectReference(direct)) => match &direct.reference_type.as_ref() {
@@ -38,14 +40,14 @@ pub(crate) fn from_substrait_field_reference(
                         Column::from(input_schema.qualified_field(field_idx)),
                     )),
                     Some(RootType::OuterReference(outer_ref)) => {
-                        resolve_outer_reference(consumer, outer_ref, field_idx)
+                        resolve_outer_reference(consumer, outer_ref, field_idx, context)
                     }
                     Some(RootType::Expression(_)) => not_impl_err!(
                         "Expression root type in field reference is not supported"
                     ),
                     Some(RootType::LambdaParameterReference(
                         LambdaParameterReference { steps_out },
-                    )) => consumer.lambda_variable(*steps_out as usize, field_idx),
+                    )) => context.lambda_variable(*steps_out as usize, field_idx),
                 }
             }
             _ => not_impl_err!(
@@ -57,12 +59,13 @@ pub(crate) fn from_substrait_field_reference(
 }
 
 fn resolve_outer_reference(
-    consumer: &impl SubstraitConsumer,
+    _consumer: &impl SubstraitConsumer,
     outer_ref: &substrait::proto::expression::field_reference::OuterReference,
     field_idx: usize,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Expr> {
     let steps_out = outer_ref.steps_out as usize;
-    let Some(outer_schema) = consumer.get_outer_schema(steps_out) else {
+    let Some(outer_schema) = context.get_outer_schema(steps_out) else {
         return substrait_err!(
             "OuterReference with steps_out={steps_out} \
              but no outer schema is available"
@@ -75,6 +78,7 @@ fn resolve_outer_reference(
 
 #[cfg(test)]
 mod tests {
+    use crate::logical_plan::consumer::SubstraitConsumerContext;
     use datafusion::{
         common::{DFSchema, assert_contains},
         prelude::SessionContext,
@@ -91,9 +95,7 @@ mod tests {
 
     use crate::{
         extensions::Extensions,
-        logical_plan::consumer::{
-            DefaultSubstraitConsumer, SubstraitConsumer, from_field_reference,
-        },
+        logical_plan::consumer::{DefaultSubstraitConsumer, from_field_reference},
     };
 
     #[tokio::test]
@@ -104,10 +106,14 @@ mod tests {
         let session_state = SessionContext::new().state();
         let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
 
-        let err =
-            from_field_reference(&consumer, &lambda_field_ref, DFSchema::empty_ref())
-                .await
-                .unwrap_err();
+        let err = from_field_reference(
+            &consumer,
+            &lambda_field_ref,
+            DFSchema::empty_ref(),
+            &SubstraitConsumerContext::default(),
+        )
+        .await
+        .unwrap_err();
 
         assert_contains!(err.to_string(), "No lambda at 99 steps out, got only 0");
     }
@@ -119,8 +125,9 @@ mod tests {
         let extensions = Extensions::default();
         let session_state = SessionContext::new().state();
         let consumer = DefaultSubstraitConsumer::new(&extensions, &session_state);
-        let _names = consumer
-            .push_lambda_parameters(
+        let (context, _names) = SubstraitConsumerContext::default()
+            .with_lambda_parameters(
+                &consumer,
                 &[Type {
                     kind: Some(Kind::I64(I64::default())),
                 }],
@@ -128,10 +135,14 @@ mod tests {
             )
             .unwrap();
 
-        let err =
-            from_field_reference(&consumer, &lambda_field_ref, DFSchema::empty_ref())
-                .await
-                .unwrap_err();
+        let err = from_field_reference(
+            &consumer,
+            &lambda_field_ref,
+            DFSchema::empty_ref(),
+            &context,
+        )
+        .await
+        .unwrap_err();
 
         assert_contains!(
             err.to_string(),

@@ -2,10 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::from_substrait_literal;
 use crate::logical_plan::consumer::from_substrait_named_struct;
 use crate::logical_plan::consumer::utils::ensure_schema_compatibility;
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::common::{
     DFSchema, DFSchemaRef, TableReference, not_impl_err, plan_err,
     substrait_datafusion_err, substrait_err,
@@ -25,6 +25,7 @@ use url::Url;
 pub async fn from_read_rel(
     consumer: &impl SubstraitConsumer,
     read: &ReadRel,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
     async fn read_with_schema(
         consumer: &impl SubstraitConsumer,
@@ -32,11 +33,12 @@ pub async fn from_read_rel(
         schema: DFSchema,
         projection: Option<&MaskExpression>,
         filter: Option<&Expression>,
+        context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
         let schema = schema.replace_qualifier(table_ref.clone());
 
         let filters = if let Some(f) = filter {
-            let filter_expr = consumer.consume_expression(f, &schema).await?;
+            let filter_expr = consumer.consume_expression(f, &schema, context).await?;
             split_conjunction_owned(filter_expr)
         } else {
             vec![]
@@ -96,6 +98,7 @@ pub async fn from_read_rel(
                 substrait_schema,
                 read.projection.as_ref(),
                 read.filter.as_deref(),
+                context,
             )
             .await
         }
@@ -158,7 +161,11 @@ pub async fn from_read_rel(
                         }
                         _ => {
                             consumer
-                                .consume_expression(expression, &substrait_schema)
+                                .consume_expression(
+                                    expression,
+                                    &substrait_schema,
+                                    context,
+                                )
                                 .await?
                         }
                     };
@@ -218,6 +225,7 @@ pub async fn from_read_rel(
                 substrait_schema,
                 read.projection.as_ref(),
                 read.filter.as_deref(),
+                context,
             )
             .await
         }

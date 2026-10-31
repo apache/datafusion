@@ -2,6 +2,8 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::logical_plan::consumer::SubstraitConsumerContext;
+
 use crate::logical_plan::consumer::{
     SubstraitConsumer, from_substrait_func_args, substrait_fun_name,
 };
@@ -36,6 +38,7 @@ pub async fn from_substrait_agg_func(
     filter: Option<Box<Expr>>,
     order_by: Vec<SortExpr>,
     distinct: bool,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<Arc<Expr>> {
     validate_aggregation_phase(f.phase)?;
     let Some(fn_signature) = consumer
@@ -59,7 +62,8 @@ pub async fn from_substrait_agg_func(
         )
     })?;
 
-    let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
+    let args =
+        from_substrait_func_args(consumer, &f.arguments, input_schema, context).await?;
 
     // Datafusion does not support aggregate functions with no arguments, so
     // we inject a dummy argument that does not affect the query, but allows
