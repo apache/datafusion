@@ -22,7 +22,7 @@ use crate::joins::join_hash_map::ProbeOffset;
 use crate::joins::join_hash_map::ProbeOffset::AtRow;
 use crate::joins::probe_completion::{Completion, ProbeSideSummary};
 use crate::joins::utils::{
-    JoinKeyComparator, OnceFut, equal_rows_arr_with_normalized_left, matchable_join_keys,
+    JoinKeyComparator, OnceFut, equal_rows_arr_multi, matchable_join_keys,
 };
 use crate::stream::EmptyRecordBatchStream;
 use crate::{
@@ -30,8 +30,9 @@ use crate::{
     hash_utils::create_hashes,
     joins::utils::{
         BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinHashMapType,
-        StatefulStreamResult, adjust_indices_by_join_type, apply_join_filter_to_indices,
-        build_batch_empty_build_side, build_batch_from_indices,
+        StatefulStreamResult, adjust_indices_by_join_type,
+        apply_join_filter_to_indices_multi, build_batch_empty_build_side,
+        build_batch_from_indices, build_batch_from_indices_multi,
         need_produce_result_in_final,
     },
 };
@@ -183,9 +184,9 @@ pub(super) struct ProcessProbeBatchState {
     /// `probe_hit_rate` and `avg_fanout` count a probe row whose matches span
     /// several chunks only once.
     matched_probe_idx: Option<u32>,
-    /// Key comparator for this batch, built on first use and reused by every
-    /// chunk
-    key_comparator: Option<JoinKeyComparator>,
+    /// Key comparators for this batch, one per build batch, each built on
+    /// first use and reused by every chunk
+    key_comparators: Vec<Option<JoinKeyComparator>>,
 }
 
 impl ProcessProbeBatchState {
@@ -467,7 +468,7 @@ impl RecordBatchStream for HashJoinStream {
 #[expect(clippy::too_many_arguments)]
 pub(super) fn lookup_join_hashmap(
     build_hashmap: &dyn JoinHashMapType,
-    build_side_values: &[ArrayRef],
+    build_side_values: &[Vec<ArrayRef>],
     probe_side_values: &[ArrayRef],
     null_equality: NullEquality,
     hashes_buffer: &[u64],
@@ -476,7 +477,7 @@ pub(super) fn lookup_join_hashmap(
     offset: ProbeOffset,
     probe_indices_buffer: &mut Vec<u32>,
     build_indices_buffer: &mut Vec<u64>,
-    key_comparator: &mut Option<JoinKeyComparator>,
+    key_comparators: &mut Vec<Option<JoinKeyComparator>>,
 ) -> Result<(UInt64Array, UInt32Array, Option<ProbeOffset>)> {
     let next_offset = build_hashmap.get_matched_indices_with_limit_offset(
         hashes_buffer,
@@ -492,13 +493,13 @@ pub(super) fn lookup_join_hashmap(
     let probe_indices_unfiltered: UInt32Array =
         std::mem::take(probe_indices_buffer).into();
 
-    let (build_indices, probe_indices) = equal_rows_arr_with_normalized_left(
+    let (build_indices, probe_indices) = equal_rows_arr_multi(
         &build_indices_unfiltered,
         &probe_indices_unfiltered,
         build_side_values,
         probe_side_values,
         null_equality,
-        key_comparator,
+        key_comparators,
     )?;
 
     // Reclaim buffers
@@ -636,6 +637,7 @@ impl HashJoinStream {
         let keys_have_null = left_data
             .values()
             .iter()
+            .flatten()
             .any(|array| array.logical_null_count() > 0);
 
         let build_data = match self.mode {
@@ -803,7 +805,7 @@ impl HashJoinStream {
                         offset: AtRow { row: 0 },
                         joined_probe_idx: None,
                         matched_probe_idx: None,
-                        key_comparator: None,
+                        key_comparators: Vec::new(),
                     });
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
@@ -853,7 +855,7 @@ impl HashJoinStream {
         if is_empty {
             let result = self.not_in.after_empty_build(build_batch_empty_build_side(
                 &self.schema,
-                build_side.left_data.batch(),
+                build_side.left_data.schema(),
                 &state.batch,
                 &self.column_indices,
                 self.join_type,
@@ -884,7 +886,7 @@ impl HashJoinStream {
                 state.offset,
                 &mut self.probe_indices_buffer,
                 &mut self.build_indices_buffer,
-                &mut state.key_comparator,
+                &mut state.key_comparators,
             )?,
             Map::ArrayMap(array_map) => {
                 let next_offset = array_map.get_matched_indices_with_limit_offset(
@@ -918,14 +920,13 @@ impl HashJoinStream {
 
         // apply join filter if exists
         let (left_indices, right_indices) = if let Some(filter) = &self.filter {
-            apply_join_filter_to_indices(
-                build_side.left_data.batch(),
+            apply_join_filter_to_indices_multi(
+                build_side.left_data.batches(),
                 &state.batch,
                 left_indices,
                 right_indices,
                 filter,
                 JoinSide::Left,
-                None,
                 self.join_type,
             )?
         } else {
@@ -989,24 +990,36 @@ impl HashJoinStream {
         }
 
         // Build output batch and push to coalescer
-        let (build_batch, probe_batch, join_side) =
-            if self.join_type == JoinType::RightMark {
-                (&state.batch, build_side.left_data.batch(), JoinSide::Right)
-            } else {
-                (build_side.left_data.batch(), &state.batch, JoinSide::Left)
-            };
-
-        let batch = build_batch_from_indices(
-            &self.schema,
-            build_batch,
-            probe_batch,
-            &left_indices,
-            &right_indices,
-            &self.column_indices,
-            join_side,
-            self.join_type,
-            None,
-        )?;
+        let batch = if self.join_type == JoinType::RightMark {
+            // RightMark output is the probe (right) columns plus a mark column; the
+            // build-side (left) data is never read here (see `build_join_schema`),
+            // so a single-batch call with an empty left placeholder is sufficient.
+            let empty_left =
+                RecordBatch::new_empty(Arc::clone(build_side.left_data.schema()));
+            build_batch_from_indices(
+                &self.schema,
+                &state.batch,
+                &empty_left,
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                JoinSide::Right,
+                self.join_type,
+                None,
+            )?
+        } else {
+            build_batch_from_indices_multi(
+                &self.schema,
+                build_side.left_data.batches(),
+                &state.batch,
+                &left_indices,
+                &right_indices,
+                &self.column_indices,
+                JoinSide::Left,
+                self.join_type,
+                None,
+            )?
+        };
 
         // Reclaim the array map scratch buffers now that no index array
         // refers to them.
@@ -1137,9 +1150,9 @@ impl HashJoinStream {
         // Push this chunk of final indices to output buffer
         if !left_side.is_empty() {
             let empty_right_batch = RecordBatch::new_empty(self.right.schema());
-            let batch = build_batch_from_indices(
+            let batch = build_batch_from_indices_multi(
                 &self.schema,
-                build_side.left_data.batch(),
+                build_side.left_data.batches(),
                 &empty_right_batch,
                 &left_side,
                 &right_side,

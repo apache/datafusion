@@ -384,7 +384,7 @@ impl ExistencePWMJStream {
             let (num_rows, columns) = match self.join_type {
                 JoinType::LeftSemi => {
                     let sliced =
-                        buffered_batch.slice(min_marked, non_null_end - min_marked);
+                        buffered_batch.slice(min_marked, non_null_end - min_marked)?;
                     (sliced.num_rows(), sliced.columns().to_vec())
                 }
                 // `LeftMark` keeps every buffered row -- nothing to slice -- and appends
@@ -396,7 +396,10 @@ impl ExistencePWMJStream {
                     mark.append_n(non_null_end - min_marked, true);
                     mark.append_n(buffered_len - non_null_end, false);
 
-                    let mut columns = buffered_batch.columns().to_vec();
+                    // The buffered side is kept as the batches it arrived in, so
+                    // its whole row range is gathered into one batch here.
+                    let mut columns =
+                        buffered_batch.slice(0, buffered_len)?.columns().to_vec();
                     columns.push(
                         Arc::new(BooleanArray::new(mark.finish(), None)) as ArrayRef
                     );

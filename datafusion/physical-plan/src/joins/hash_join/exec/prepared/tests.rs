@@ -444,7 +444,12 @@ async fn prepared_build_shares_single_batch_but_owns_output() -> Result<()> {
             let single_batch = sources.len() == 1;
             let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
             let prepared = prepare(&base, sources, Arc::clone(&pool)).await?;
-            let addresses = buffer_addresses(prepared.build.batch.columns());
+            let addresses: Vec<usize> = prepared
+                .build
+                .batches
+                .iter()
+                .flat_map(|batch| buffer_addresses(batch.columns()))
+                .collect();
             if single_batch {
                 assert_eq!(addresses, buffer_addresses(build.columns()));
             }
@@ -754,25 +759,41 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
             let PushdownStrategy::InList(values) = &prepared.build.membership else {
                 panic!("expected IN-list membership");
             };
-            let columns = prepared.build.batch.columns();
-            if keys == 1 {
-                assert!(Arc::ptr_eq(values, &columns[0]));
-            } else {
-                let values = values.as_any().downcast_ref::<StructArray>().unwrap();
-                for (value, column) in values.columns().iter().zip(columns) {
-                    assert!(Arc::ptr_eq(value, column));
-                }
-            }
             let bytes = prepared.reserved_bytes();
             let mut counter = RecordBatchMemoryCounter::new();
-            let batch_bytes = counter.count_batch(&prepared.build.batch);
-            assert!(bytes > batch_bytes, "hash storage must also be reserved");
+            let batch_bytes = prepared
+                .build
+                .batches
+                .iter()
+                .map(|batch| counter.count_batch(batch))
+                .sum::<usize>();
             let membership_batch =
                 RecordBatch::try_from_iter([("membership", Arc::clone(values))])?;
-            assert_eq!(counter.count_batch(&membership_batch), 0);
+            let membership_bytes = counter.count_batch(&membership_batch);
             drop(membership_batch);
+            if let [batch] = prepared.build.batches.as_slice() {
+                // A single batch's keys are shared with the IN-list.
+                let columns = batch.columns();
+                if keys == 1 {
+                    assert!(Arc::ptr_eq(values, &columns[0]));
+                } else {
+                    let values = values.as_any().downcast_ref::<StructArray>().unwrap();
+                    for (value, column) in values.columns().iter().zip(columns) {
+                        assert!(Arc::ptr_eq(value, column));
+                    }
+                }
+                assert_eq!(membership_bytes, 0);
+            } else {
+                // Several batches' keys are concatenated for the IN-list, and
+                // that copy is charged to the build.
+                assert!(membership_bytes > 0);
+            }
+            assert!(
+                bytes > batch_bytes + membership_bytes,
+                "hash storage must also be reserved"
+            );
 
-            // Disabling IN-list membership shares the same key buffers; a
+            // Disabling IN-list membership drops its copy of the keys; a
             // pruning bitmap, when the sparse two-key range earns one, adds
             // its own bytes on top.
             let mut config = ConfigOptions::default();
@@ -788,8 +809,9 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
                 panic!("expected hash-map membership");
             };
             let bitmap_bytes = bitmap.as_ref().map_or(0, |bitmap| bitmap.size());
-            assert_eq!(map.reserved_bytes(), bytes + bitmap_bytes);
-            assert_eq!(pool.reserved(), 2 * bytes + bitmap_bytes);
+            let map_bytes = bytes - membership_bytes + bitmap_bytes;
+            assert_eq!(map.reserved_bytes(), map_bytes);
+            assert_eq!(pool.reserved(), bytes + map_bytes);
             drop(map);
             let lease = Arc::clone(&prepared);
             drop(prepared);

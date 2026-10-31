@@ -767,13 +767,15 @@ fn mark_null_candidates_for_probe_batch(
         return Ok(());
     }
 
+    // A null-aware build is concatenated into one batch, see `build_in_memory`.
+    let build_batch = left_data.contiguous_batch()?;
+    let build_values = left_data.contiguous_values()?;
     debug_assert_eq!(
-        left_data.values().len(),
+        build_values.len(),
         probe_values.len(),
         "build/probe key counts must match"
     );
-    let (build_value_keys, build_scope_values) =
-        left_data.values().split_at(num_value_keys);
+    let (build_value_keys, build_scope_values) = build_values.split_at(num_value_keys);
     let (probe_value_keys, probe_scope_values) = probe_values.split_at(num_value_keys);
 
     // Keeps the candidate pairs whose value tuples are not a definite mismatch
@@ -794,7 +796,7 @@ fn mark_null_candidates_for_probe_batch(
         }
         let (build_indices, probe_indices) = match filter {
             Some(filter) => apply_join_filter_to_indices(
-                left_data.batch(),
+                build_batch,
                 probe_batch,
                 build_indices,
                 probe_indices,
@@ -901,10 +903,7 @@ fn mark_null_candidates_for_probe_batch(
             }
             None => {
                 let mut pairs = UnmarkedPairs::new(marks, batch_size, &mark);
-                pairs.cross_product(
-                    0..left_data.batch().num_rows() as u64,
-                    null_probe_rows,
-                )?;
+                pairs.cross_product(0..build_batch.num_rows() as u64, null_probe_rows)?;
                 pairs.finish()?;
             }
         }

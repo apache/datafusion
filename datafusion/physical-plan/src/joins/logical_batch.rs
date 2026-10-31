@@ -106,6 +106,12 @@ impl LogicalBatch {
         self.offsets[self.offsets.len() - 1]
     }
 
+    /// The underlying batches, in row order. Each holds at least one row,
+    /// see [`Self::new`].
+    pub(crate) fn batches(&self) -> &[RecordBatch] {
+        &self.segments
+    }
+
     /// Returns the underlying batches, in row order.
     pub(crate) fn into_batches(self) -> Vec<RecordBatch> {
         self.segments

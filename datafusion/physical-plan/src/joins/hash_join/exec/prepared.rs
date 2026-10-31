@@ -34,7 +34,7 @@ impl fmt::Debug for PreparedHashJoinBuild {
     /// Describe immutable metadata without dumping table contents.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PreparedHashJoinBuild")
-            .field("schema", &self.build.batch.schema())
+            .field("schema", &self.build.schema)
             .field("keys", &self.keys)
             .field("rows", &self.num_rows())
             .field("reserved_bytes", &self.reserved_bytes())
@@ -50,7 +50,7 @@ impl PreparedHashJoinBuild {
 
     /// Return the complete build row count, including duplicate and null keys.
     pub fn num_rows(&self) -> usize {
-        self.build.batch.num_rows()
+        self.build.num_rows
     }
 
     /// Create independent mutable state for one consuming join.
@@ -68,7 +68,7 @@ impl PreparedHashJoinBuild {
     /// consuming input or modifying either plan. Cache identity is caller-owned.
     pub(super) fn validate(&self, join: &HashJoinExec) -> Result<()> {
         let keys = prepared_key_indices(join)?;
-        if join.left.schema() != self.build.batch.schema()
+        if join.left.schema() != self.build.schema
             || keys != self.keys
             || join.null_equality != self.null_equality
         {
