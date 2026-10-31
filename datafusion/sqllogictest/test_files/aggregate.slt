@@ -10745,3 +10745,92 @@ b 3.000000 1 1
 
 statement ok
 DROP TABLE s_decimal_distinct;
+
+# COUNT(DISTINCT) must account for reserved hash table capacity, including
+# slots reserved by a duplicate-heavy batch. Two distinct expressions keep
+# this on the accumulator path instead of SingleDistinctToGroupBy.
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+statement ok
+SET datafusion.execution.batch_size = 8192
+
+statement ok
+SET datafusion.runtime.memory_limit = '64K'
+
+query error Resources exhausted:.*AggregateStream
+SELECT count(DISTINCT v % 2), count(DISTINCT v % 3)
+FROM generate_series(0, 8191) AS t(v);
+
+# The nullable path inserts individual values and needs much less capacity.
+# It should still fit the same limit and return exact counts.
+query II
+SELECT count(DISTINCT CASE WHEN v % 17 = 0 THEN NULL ELSE v % 2 END),
+       count(DISTINCT CASE WHEN v % 17 = 0 THEN NULL ELSE v % 3 END)
+FROM generate_series(0, 8191) AS t(v);
+----
+2 3
+
+query II
+SELECT count(DISTINCT v % 2), count(DISTINCT v % 3)
+FROM generate_series(0, 8191) AS t(v) WHERE v < 0;
+----
+0 0
+
+# Raising the limit allows the original query to finish unchanged.
+statement ok
+SET datafusion.runtime.memory_limit = '512K'
+
+query II
+SELECT count(DISTINCT v % 2), count(DISTINCT v % 3)
+FROM generate_series(0, 8191) AS t(v);
+----
+2 3
+
+# Shared GenericDistinctBuffer users must charge retained capacity too.
+# Different DISTINCT arguments avoid SingleDistinctToGroupBy.
+statement ok
+SET datafusion.runtime.memory_limit = '64K'
+
+query error Resources exhausted:.*AggregateStream
+SELECT count(DISTINCT CAST(v % 2 AS DOUBLE)),
+       sum(DISTINCT CAST(v % 3 AS DOUBLE)),
+       avg(DISTINCT CAST(v % 2 + v % 3 AS DOUBLE)),
+       var_pop(DISTINCT CAST(v % 2 - v % 3 AS DOUBLE))
+FROM generate_series(0, 8191) AS t(v);
+
+# Nullable input has much smaller tables and still fits the same budget.
+query IRRR
+WITH input AS (
+  SELECT CASE WHEN v % 17 = 0 THEN NULL ELSE CAST(v % 2 AS DOUBLE) END AS a,
+         CASE WHEN v % 17 = 0 THEN NULL ELSE CAST(v % 3 AS DOUBLE) END AS b
+  FROM generate_series(0, 8191) AS t(v)
+)
+SELECT count(DISTINCT a), sum(DISTINCT b), avg(DISTINCT a + b), var_pop(DISTINCT a - b)
+FROM input;
+----
+2 3 1.5 1.25
+
+statement ok
+SET datafusion.runtime.memory_limit = '1M'
+
+query IRRR
+SELECT count(DISTINCT CAST(v % 2 AS DOUBLE)),
+       sum(DISTINCT CAST(v % 3 AS DOUBLE)),
+       avg(DISTINCT CAST(v % 2 + v % 3 AS DOUBLE)),
+       var_pop(DISTINCT CAST(v % 2 - v % 3 AS DOUBLE))
+FROM generate_series(0, 8191) AS t(v);
+----
+2 3 1.5 1.25
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+statement ok
+RESET datafusion.execution.batch_size
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema

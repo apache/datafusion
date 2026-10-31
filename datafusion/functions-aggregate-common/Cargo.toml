@@ -61,3 +61,7 @@ name = "accumulate"
 [[bench]]
 harness = false
 name = "groups_accumulator_adapter"
+
+[[bench]]
+harness = false
+name = "count_distinct"
