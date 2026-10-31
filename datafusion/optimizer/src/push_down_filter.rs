@@ -54,6 +54,7 @@ use datafusion_expr::{
     TableProviderFilterPushDown, and, or,
 };
 
+use crate::common_subexpr_eliminate::CSE_PREFIX;
 use crate::extract_leaf_expressions::is_pure_extraction_projection;
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
@@ -1567,14 +1568,42 @@ fn rewrite_projection(
                 || value.placement() == ExpressionPlacement::MoveTowardsLeafNodes
         });
 
-    let mut push_predicates = vec![];
-    let mut keep_predicates = vec![];
-    for expr in predicates {
-        if contains_column(&expr, &non_pushable_map) {
-            keep_predicates.push(expr);
-        } else {
-            push_predicates.push(expr);
-        }
+    let (mut push_predicates, mut keep_predicates): (Vec<_>, Vec<_>) = predicates
+        .into_iter()
+        .partition(|expr| !contains_column(expr, &non_pushable_map));
+
+    // A definition that `CommonSubexprEliminate` created records that it is
+    // worth computing one time. If the pushed predicates reference it more
+    // than one time, CSE would hoist it out of them again with a new alias,
+    // and the two rules would never converge. Keep those predicates above.
+    // A leaf expression may be copied, as everywhere else.
+    let mut cse_references: HashMap<&Column, usize> = HashMap::new();
+    for expr in &push_predicates {
+        expr.apply(|e| {
+            if let Expr::Column(c) = e
+                && let Some((column, definition)) = pushable_map.get_key_value(c)
+                && column.name.starts_with(CSE_PREFIX)
+                && !definition.placement().should_push_to_leaves()
+            {
+                *cse_references.entry(column).or_default() += 1;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    let repeated: HashSet<Column> = cse_references
+        .into_iter()
+        .filter(|(_, count)| *count > 1)
+        .map(|(column, _)| column.clone())
+        .collect();
+    if !repeated.is_empty() {
+        let (push, keep): (Vec<_>, Vec<_>) =
+            push_predicates.into_iter().partition(|expr| {
+                !expr
+                    .exists(|e| Ok(matches!(e, Expr::Column(c) if repeated.contains(c))))
+                    .unwrap()
+            });
+        push_predicates = push;
+        keep_predicates.extend(keep);
     }
 
     let projection = if let Some(expr) = conjunction(push_predicates) {
@@ -5014,6 +5043,37 @@ mod tests {
         Filter: test.a > Int64(10)
           Sort: test.a ASC NULLS FIRST, fetch=5
             TableScan: test
+        "
+        )
+    }
+
+    /// A definition that `CommonSubexprEliminate` created is not duplicated
+    /// into pushed predicates that reference it more than one time, or CSE
+    /// would hoist it again with a new alias. A user definition in the same
+    /// projection is still pushed.
+    #[test]
+    fn repeated_cse_reference_not_pushed_through_projection() -> Result<()> {
+        let cse = format!("{CSE_PREFIX}_1");
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![
+                (col("a") + lit(1)).alias(&cse),
+                (col("b") + lit(1)).alias("c1"),
+                col("c"),
+            ])?
+            .filter(
+                col(&cse)
+                    .gt(lit(1))
+                    .and(col(&cse).lt(lit(5)))
+                    .and(col("c1").gt(lit(1)).or(col("c1").lt(lit(0)))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: __common_expr_1 > Int32(1) AND __common_expr_1 < Int32(5)
+          Projection: test.a + Int32(1) AS __common_expr_1, test.b + Int32(1) AS c1, test.c
+            TableScan: test, full_filters=[test.b + Int32(1) > Int32(1) OR test.b + Int32(1) < Int32(0)]
         "
         )
     }
