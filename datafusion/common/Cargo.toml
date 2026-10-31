@@ -58,6 +58,10 @@ name = "with_hashes"
 
 [[bench]]
 harness = false
+name = "float_normalization"
+
+[[bench]]
+harness = false
 name = "scalar_to_array"
 
 [[bench]]

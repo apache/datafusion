@@ -119,10 +119,10 @@ pub fn hash_input<T: FloatSemantics>(v: T) -> T {
 /// Callers use this before handing float data to Arrow kernels that compare
 /// bit patterns, so that `+0.0 = -0.0` holds.
 ///
-/// The common case - nothing to normalize - is allocation-free: a single
-/// read-only scan of the values buffer (auto-vectorizable to an OR-reduction)
-/// decides whether to fall through to the rewriting path. Only arrays that
-/// contain values to normalize pay for a new buffer.
+/// The common case - nothing to normalize - is allocation-free: a read-only
+/// scan of the values buffer, in vectorized chunks that stop at the first
+/// chunk with a match, decides whether to fall through to the rewriting path.
+/// Only arrays that contain values to normalize pay for a new buffer.
 pub fn normalize_floats(array: &ArrayRef) -> ArrayRef {
     match array.data_type() {
         DataType::Float16 => normalize_primitive::<Float16Type>(array),
@@ -153,13 +153,25 @@ pub fn normalize_floats(array: &ArrayRef) -> ArrayRef {
     }
 }
 
+/// How many values [`normalize_floats`] checks at a time before it can stop.
+const NORMALIZATION_CHECK_CHUNK: usize = 1024;
+
 fn normalize_primitive<T>(array: &ArrayRef) -> ArrayRef
 where
     T: ArrowPrimitiveType,
     T::Native: FloatSemantics,
 {
     let arr = array.as_primitive::<T>();
-    if !arr.values().iter().any(|v| v.needs_normalization()) {
+    // Not `any()` over the values: its early exit checks one value at a time.
+    // A fold over a chunk vectorizes, and stopping after the first chunk with
+    // a match keeps an early exit.
+    let needs_normalization =
+        arr.values().chunks(NORMALIZATION_CHECK_CHUNK).any(|chunk| {
+            chunk
+                .iter()
+                .fold(false, |acc, v| acc | v.needs_normalization())
+        });
+    if !needs_normalization {
         return Arc::clone(array);
     }
     Arc::new(arr.unary::<_, T>(normalize_float))
@@ -189,7 +201,9 @@ pub fn has_float_leaf(data_type: &DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Float16Array, Float32Array, Float64Array, Int32Array, ListArray};
+    use arrow::array::{
+        Float16Array, Float32Array, Float64Array, Int32Array, ListArray, PrimitiveArray,
+    };
     use arrow::datatypes::Int32Type;
 
     #[test]
@@ -272,6 +286,35 @@ mod tests {
 
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         assert!(Arc::ptr_eq(&normalize_floats(&array), &array));
+    }
+
+    #[test]
+    fn normalize_floats_finds_negative_zero_in_any_chunk() {
+        assert_finds_negative_zero_in_any_chunk::<Float16Type>(
+            f16::from_f32(1.5),
+            f16::NEG_ZERO,
+        );
+        assert_finds_negative_zero_in_any_chunk::<Float32Type>(1.5, -0.0);
+        assert_finds_negative_zero_in_any_chunk::<Float64Type>(1.5, -0.0);
+    }
+
+    /// Puts a `-0.0` at the ends of chunks and in a partial last chunk.
+    fn assert_finds_negative_zero_in_any_chunk<T>(value: T::Native, neg_zero: T::Native)
+    where
+        T: ArrowPrimitiveType,
+        T::Native: FloatSemantics,
+    {
+        let chunk = NORMALIZATION_CHECK_CHUNK;
+        let len = 2 * chunk + chunk / 2;
+        for pos in [0, chunk - 1, chunk, 2 * chunk - 1, 2 * chunk, len - 1] {
+            let mut values = vec![value; len];
+            values[pos] = neg_zero;
+            let array: ArrayRef = Arc::new(PrimitiveArray::<T>::from_iter_values(values));
+            let normalized = normalize_floats(&array);
+            assert!(!Arc::ptr_eq(&normalized, &array), "pos {pos}");
+            let normalized = normalized.as_primitive::<T>();
+            assert!(!normalized.value(pos).needs_normalization(), "pos {pos}");
+        }
     }
 
     #[test]
