@@ -10,8 +10,9 @@ use arrow::array::{
     Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
     FixedSizeListBuilder, Float16Array, Float32Array, Float64Array, Int8Array,
     Int16Array, Int32Array, Int32Builder, Int64Array, LargeListArray, ListArray,
-    ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder, UInt8Array,
-    UInt16Array, UInt32Array, UInt32Builder, UInt64Array, UnionArray, record_batch,
+    ListBuilder, NullArray, RecordBatch, StringArray, StringBuilder, StructBuilder,
+    UInt8Array, UInt16Array, UInt32Array, UInt32Builder, UInt64Array, UnionArray,
+    record_batch,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
@@ -36,6 +37,7 @@ use object_store::local::LocalFileSystem;
 use rstest::rstest;
 use std::collections::HashMap;
 use std::fs;
+use std::ops::Rem;
 use std::path::Path;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -47,7 +49,7 @@ use datafusion::error::Result;
 use datafusion::execution::context::SessionContext;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::logical_expr::{ColumnarValue, Volatility};
-use datafusion::prelude::{CsvReadOptions, JoinType, ParquetReadOptions};
+use datafusion::prelude::{CsvReadOptions, JoinType, ParquetReadOptions, array_col};
 use datafusion::test_util::{
     parquet_test_data, populate_csv_partitions, register_aggregate_csv, test_table,
     test_table_with_cache_factory, test_table_with_name,
@@ -129,6 +131,36 @@ async fn assert_logical_expr_schema_eq_physical_expr_schema(df: DataFrame) -> Re
     let physical_expr_schema = batches[0].schema();
     assert_eq!(logical_expr_schema, physical_expr_schema);
     Ok(())
+}
+
+/// n rows with id = 0..n, split into batches of batch_size rows.
+fn id_batches(n: i32, batch_size: usize) -> Result<Vec<RecordBatch>> {
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    (0..n)
+        .step_by(batch_size)
+        .map(|start| {
+            let end = (start + batch_size as i32).min(n);
+            let ids: ArrayRef = Arc::new(Int32Array::from_iter_values(start..end));
+            Ok(RecordBatch::try_new(Arc::clone(&schema), vec![ids])?)
+        })
+        .collect()
+}
+
+/// All values of an Int32 column across batches, in output order.
+fn column_values(batches: &[RecordBatch], name: &str) -> Vec<i32> {
+    batches
+        .iter()
+        .flat_map(|b| {
+            b.column_by_name(name)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .iter()
+                .copied()
+        })
+        .collect()
 }
 
 #[tokio::test]
@@ -7680,6 +7712,460 @@ async fn test_dataframe_macro() -> Result<()> {
     assert_eq!(df_empty.schema().fields().len(), 0);
     assert_eq!(df_empty.count().await?, 0);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_with_column_array_col() -> Result<()> {
+    let df = dataframe!("id" => [1_i32, 2, 3])?;
+
+    let bools: ArrayRef = Arc::new(BooleanArray::from(vec![true, false, true]));
+    let i8s: ArrayRef = Arc::new(Int8Array::from(vec![-1, 0, 1]));
+    let i16s: ArrayRef = Arc::new(Int16Array::from(vec![-1, 0, 1]));
+    let i32s: ArrayRef = Arc::new(Int32Array::from(vec![-1, 0, 1]));
+    let i64s: ArrayRef = Arc::new(Int64Array::from(vec![-1, 0, 1]));
+    let u8s: ArrayRef = Arc::new(UInt8Array::from(vec![0, 1, 2]));
+    let u16s: ArrayRef = Arc::new(UInt16Array::from(vec![0, 1, 2]));
+    let u32s: ArrayRef = Arc::new(UInt32Array::from(vec![0, 1, 2]));
+    let u64s: ArrayRef = Arc::new(UInt64Array::from(vec![0, 1, 2]));
+    let f16s: ArrayRef = Arc::new(Float16Array::from(vec![
+        half::f16::from_f64(1.0),
+        half::f16::from_f64(2.0),
+        half::f16::from_f64(3.0),
+    ]));
+    let f32s: ArrayRef = Arc::new(Float32Array::from(vec![1.0, 2.0, 3.0]));
+    let f64s: ArrayRef = Arc::new(Float64Array::from(vec![1.0, 2.0, 3.0]));
+    let strings: ArrayRef =
+        Arc::new(StringArray::from(vec![Some("foo"), Some("bar"), None]));
+
+    let df = df
+        .with_column("bool", array_col(bools))?
+        .with_column("i8", array_col(i8s))?
+        .with_column("i16", array_col(i16s))?
+        .with_column("i32", array_col(i32s))?
+        .with_column("i64", array_col(i64s))?
+        .with_column("u8", array_col(u8s))?
+        .with_column("u16", array_col(u16s))?
+        .with_column("u32", array_col(u32s))?
+        .with_column("u64", array_col(u64s))?
+        .with_column("f16", array_col(f16s))?
+        .with_column("f32", array_col(f32s))?
+        .with_column("f64", array_col(f64s))?
+        .with_column("str", array_col(strings))?;
+
+    let expected_types = [
+        ("id", DataType::Int32),
+        ("bool", DataType::Boolean),
+        ("i8", DataType::Int8),
+        ("i16", DataType::Int16),
+        ("i32", DataType::Int32),
+        ("i64", DataType::Int64),
+        ("u8", DataType::UInt8),
+        ("u16", DataType::UInt16),
+        ("u32", DataType::UInt32),
+        ("u64", DataType::UInt64),
+        ("f16", DataType::Float16),
+        ("f32", DataType::Float32),
+        ("f64", DataType::Float64),
+        ("str", DataType::Utf8),
+    ];
+
+    assert_eq!(df.schema().fields().len(), expected_types.len());
+    assert_eq!(df.clone().count().await?, 3);
+
+    let schema = df.schema();
+    for (name, data_type) in &expected_types {
+        assert_eq!(schema.field_with_name(None, name)?.data_type(), data_type);
+    }
+
+    let rows = df.sort(vec![col("id").sort(true, true)])?;
+    assert_batches_eq!(
+        &[
+            "+----+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            "| id | bool  | i8 | i16 | i32 | i64 | u8 | u16 | u32 | u64 | f16 | f32 | f64 | str |",
+            "+----+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+            "| 1  | true  | -1 | -1  | -1  | -1  | 0  | 0   | 0   | 0   | 1   | 1.0 | 1.0 | foo |",
+            "| 2  | false | 0  | 0   | 0   | 0   | 1  | 1   | 1   | 1   | 2   | 2.0 | 2.0 | bar |",
+            "| 3  | true  | 1  | 1   | 1   | 1   | 2  | 2   | 2   | 2   | 3   | 3.0 | 3.0 |     |",
+            "+----+-------+----+-----+-----+-----+----+-----+-----+-----+-----+-----+-----+-----+",
+        ],
+        &rows.collect().await?
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_with_column_array_col_then_filter() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3], "data" => [42, 43, 44])?;
+    let new_col: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
+
+    let df = df
+        .with_column("new_col", array_col(new_col))?
+        .filter(col("id").gt(lit(1)))?;
+
+    assert_eq!(
+        df.schema().field_with_name(None, "new_col")?.data_type(),
+        &DataType::Utf8
+    );
+    assert_eq!(df.clone().count().await?, 2);
+    assert_batches_eq!(
+        &[
+            "+----+------+---------+",
+            "| id | data | new_col |",
+            "+----+------+---------+",
+            "| 2  | 43   | bar     |",
+            "| 3  | 44   | baz     |",
+            "+----+------+---------+",
+        ],
+        &df.collect().await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_column_array_col_replaces_existing_column() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3], "data" => [42, 43, 44])?;
+    let new_id: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+    let df = df.with_column("id", array_col(new_id))?;
+
+    // Same position, new type, other columns untouched.
+    assert_eq!(
+        df.schema().field_with_unqualified_name("id")?.data_type(),
+        &DataType::Utf8
+    );
+    assert_batches_eq!(
+        &[
+            "+----+------+",
+            "| id | data |",
+            "+----+------+",
+            "| a  | 42   |",
+            "| b  | 43   |",
+            "| c  | 44   |",
+            "+----+------+",
+        ],
+        &df.collect().await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_column_array_col_replaces_array_column() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let first: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+    let second: ArrayRef = Arc::new(Int32Array::from(vec![11, 21, 31]));
+    let df = df
+        .with_column("extra", array_col(first))?
+        .with_column("extra", array_col(second))?;
+
+    assert_eq!(df.schema().fields().len(), 2);
+    assert_batches_eq!(
+        &[
+            "+----+-------+",
+            "| id | extra |",
+            "+----+-------+",
+            "| 1  | 11    |",
+            "| 2  | 21    |",
+            "| 3  | 31    |",
+            "+----+-------+",
+        ],
+        &df.collect().await?
+    );
+    Ok(())
+}
+
+#[test]
+fn test_with_column_array_col_ambiguous_name() -> Result<()> {
+    let left = dataframe!("id" => [1, 2, 3])?.alias("l")?;
+    let right = dataframe!("id" => [1, 2, 3])?.alias("r")?;
+    let joined = left.join(right, JoinType::Inner, &["id"], &["id"], None)?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![7, 8, 9]));
+    let err = joined.with_column("id", array_col(a)).unwrap_err();
+    assert_contains!(err.to_string(), "ambiguous");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_with_column_array_col_length_mismatch() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let too_short: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+    let df = df.with_column("extra", array_col(too_short))?;
+    let err = df.collect().await.unwrap_err();
+    assert!(err.to_string().contains("rows"));
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_with_column_array_col_row_order_multi_partition() -> Result<()> {
+    const ROWS: i32 = 32_000;
+    // Pin parallelism so the test does not depend on the CI machine's core count.
+    let config = SessionConfig::new()
+        .with_target_partitions(8)
+        .with_batch_size(1_000);
+    let ctx = SessionContext::new_with_config(config);
+    let batches = id_batches(ROWS, 1_000)?;
+
+    // Scheduling is nondeterministic, so repeat: one scrambled run is enough to fail.
+    for _ in 0..10 {
+        let tag: ArrayRef = Arc::new(Int32Array::from_iter_values(0..ROWS));
+        let df = ctx
+            .read_batches(batches.clone())? // ONE MemTable partition...
+            .filter(col("id").gt_eq(lit(0)))? // ...that the optimizer splits into 8
+            .with_column("tag", array_col(tag))?;
+
+        let mismatched = df.filter(col("id").not_eq(col("tag")))?.count().await?;
+        assert_eq!(
+            mismatched, 0,
+            "rows were paired with the wrong array values"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn test_with_column_array_col_reads_partitions_in_order() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int32, false)]));
+    // 4 partitions x 2 batches x 3 rows, ids 0..24 laid out partition-major:
+    // partition 0 = [0,1,2],[3,4,5]; partition 1 = [6,7,8],[9,10,11]; ...
+    let partitions: Vec<Vec<RecordBatch>> = (0..4)
+        .map(|p| {
+            (0..2)
+                .map(|b| {
+                    let start = p * 6 + b * 3;
+                    let ids: ArrayRef =
+                        Arc::new(Int32Array::from_iter_values(start..start + 3));
+                    Ok(RecordBatch::try_new(Arc::clone(&schema), vec![ids])?)
+                })
+                .collect::<Result<_>>()
+        })
+        .collect::<Result<_>>()?;
+    let table = MemTable::try_new(Arc::clone(&schema), partitions)?;
+
+    let ctx = SessionContext::new();
+    let tag: ArrayRef = Arc::new(Int32Array::from_iter_values((0..24).map(|i| i * 100)));
+    let df = ctx
+        .read_table(Arc::new(table))?
+        .with_column("tag", array_col(tag))?;
+
+    let batches = df.collect().await?;
+    let ids = column_values(&batches, "id");
+    let tags = column_values(&batches, "tag");
+    // Partition 0 first, then 1, 2, 3 — same order as collect_partitioned() flattened.
+    assert_eq!(ids, (0..24).collect::<Vec<_>>());
+    assert_eq!(tags, ids.iter().map(|i| i * 100).collect::<Vec<_>>());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_column_array_col_across_batch_boundaries() -> Result<()> {
+    let ctx = SessionContext::new_with_config(SessionConfig::new().with_batch_size(7));
+    let df = ctx
+        .read_batches(id_batches(100, 13)?)? // 13-row input batches, 7-row output batches
+        .filter(col("id").rem(lit(3)).eq(lit(0)))?; // ragged batches: 0,3,6,...,99 -> 34 rows
+
+    let expected: Vec<i32> = (0..100).filter(|i| i % 3 == 0).collect();
+    let tag: ArrayRef = Arc::new(Int32Array::from(expected.clone()));
+    let batches = df.with_column("tag", array_col(tag))?.collect().await?;
+
+    assert_eq!(column_values(&batches, "id"), expected);
+    assert_eq!(column_values(&batches, "tag"), expected);
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn test_with_column_array_col_after_sort() -> Result<()> {
+    const ROWS: i32 = 10_000;
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(8));
+    // Reverse-aligned array: row with id = k (sorted desc) should get tag = ROWS - 1 - k.
+    let tag: ArrayRef = Arc::new(Int32Array::from_iter_values(0..ROWS));
+    let df = ctx
+        .read_batches(id_batches(ROWS, 500)?)?
+        .sort(vec![col("id").sort(false, false)])?
+        .with_column("tag", array_col(tag))?;
+
+    let mismatched = df
+        .filter((col("id") + col("tag")).not_eq(lit(ROWS - 1)))?
+        .count()
+        .await?;
+    assert_eq!(mismatched, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_column_array_col_physical_plan() -> Result<()> {
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(8));
+    let tag: ArrayRef = Arc::new(Int32Array::from_iter_values(0..1_000));
+    let df = ctx
+        .read_batches(id_batches(1_000, 100)?)?
+        .filter(col("id").gt_eq(lit(0)))?
+        .with_column("tag", array_col(tag))?;
+
+    let plan = df.create_physical_plan().await?;
+    let displayed = displayable(plan.as_ref()).indent(true).to_string();
+    // The subtree feeding the positional pairing is planned single-partition...
+    assert!(
+        displayed.contains("AddColumnExec: tag, input_partitions=1"),
+        "{displayed}"
+    );
+    assert!(displayed.contains("partitions=1"), "{displayed}");
+    // ...and the merge is not smuggled in at execute() time.
+    assert!(!displayed.contains("RepartitionExec"), "{displayed}");
+    assert!(!displayed.contains("CoalescePartitionsExec"), "{displayed}");
+    Ok(())
+}
+
+#[test]
+fn test_array_col_rejected_in_select() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let err = df.select(vec![array_col(a).alias("x")]).unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "can only be used as the expression passed to DataFrame::with_column"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_array_col_rejected_in_expression() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let err = df.with_column("x", array_col(a) + lit(1)).unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "can only be used as the expression passed to DataFrame::with_column"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_array_col_rejected_in_filter_at_execution() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    // `is_null` does not type-check its argument, so the builder accepts this;
+    // the planner rejects it before anything runs.
+    let err = df
+        .filter(array_col(a).is_null())?
+        .collect()
+        .await
+        .unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "can only be used as the expression passed to DataFrame::with_column"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_array_col_with_alias() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+    // The alias is unwrapped; the column takes the name given to with_column.
+    let df = df.with_column("extra", array_col(a).alias("ignored"))?;
+    assert!(df.schema().field_with_unqualified_name("extra").is_ok());
+    assert!(df.schema().field_with_unqualified_name("ignored").is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_column_array_col_consecutive_calls_collapse() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+    let b: ArrayRef = Arc::new(StringArray::from(vec!["x", "y", "z"]));
+    let c: ArrayRef = Arc::new(Int32Array::from(vec![7, 8, 9]));
+    let df = df
+        .with_column("a", array_col(a))?
+        .with_column("b", array_col(b))?
+        .with_column("id", array_col(c))?; // replaces an input column
+
+    // One operator for all three columns, not one per call.
+    let plan = df.clone().create_physical_plan().await?;
+    let displayed = displayable(plan.as_ref()).indent(true).to_string();
+    assert_eq!(displayed.matches("AddColumnExec").count(), 1, "{displayed}");
+    assert_contains!(
+        &displayed,
+        "AddColumnExec: id (replace), a, b, input_partitions=1"
+    );
+
+    assert_batches_eq!(
+        &[
+            "+----+----+---+",
+            "| id | a  | b |",
+            "+----+----+---+",
+            "| 7  | 10 | x |",
+            "| 8  | 20 | y |",
+            "| 9  | 30 | z |",
+            "+----+----+---+",
+        ],
+        &df.collect().await?
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_with_column_array_col_does_not_collapse_across_filter() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+    // `b` is aligned with the filtered rows, so it must stay above the filter.
+    let b: ArrayRef = Arc::new(Int32Array::from(vec![200, 300]));
+    let df = df
+        .with_column("a", array_col(a))?
+        .filter(col("id").gt(lit(1)))?
+        .with_column("b", array_col(b))?;
+
+    let plan = df.clone().create_physical_plan().await?;
+    let displayed = displayable(plan.as_ref()).indent(true).to_string();
+    assert_eq!(displayed.matches("AddColumnExec").count(), 2, "{displayed}");
+
+    assert_batches_eq!(
+        &[
+            "+----+----+-----+",
+            "| id | a  | b   |",
+            "+----+----+-----+",
+            "| 2  | 20 | 200 |",
+            "| 3  | 30 | 300 |",
+            "+----+----+-----+",
+        ],
+        &df.collect().await?
+    );
+    Ok(())
+}
+
+#[test]
+fn test_with_column_array_col_arrays_of_different_length() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![10, 20, 30]));
+    let b: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
+    // Caught when the column is added, not when the DataFrame is executed.
+    let err = df
+        .with_column("a", array_col(a))?
+        .with_column("b", array_col(b))
+        .unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Column 'b' has 2 rows but column 'a' has 3"
+    );
+    Ok(())
+}
+
+#[test]
+fn test_with_column_array_col_nullability() -> Result<()> {
+    let df = dataframe!("id" => [1, 2, 3])?;
+    let no_nulls: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let with_nulls: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+    let all_null: ArrayRef = Arc::new(NullArray::new(3));
+
+    let df = df
+        .with_column("a", array_col(no_nulls))?
+        .with_column("b", array_col(with_nulls))?
+        .with_column("c", array_col(all_null))?;
+
+    let schema = df.schema();
+    assert!(!schema.field_with_unqualified_name("a")?.is_nullable());
+    assert!(schema.field_with_unqualified_name("b")?.is_nullable());
+    assert!(schema.field_with_unqualified_name("c")?.is_nullable());
     Ok(())
 }
 
