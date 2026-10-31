@@ -42,7 +42,8 @@ use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
 use range_partitioning::{
-    register_range_partitioned_table, register_range_sorted_time_bin_table,
+    register_range_partitioned_table, register_range_sorted_day_bin_table,
+    register_range_sorted_time_bin_table,
 };
 
 use async_trait::async_trait;
@@ -218,6 +219,7 @@ impl TestContext {
             "range_sorted_time_bin_agg.slt" => {
                 info!("Registering range-sorted time-bin table");
                 register_range_sorted_time_bin_table(test_ctx.session_ctx());
+                register_range_sorted_day_bin_table(test_ctx.session_ctx());
             }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");

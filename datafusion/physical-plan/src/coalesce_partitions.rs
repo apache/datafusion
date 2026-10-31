@@ -15,6 +15,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, SendableRecordBatchStream,
     Statistics,
 };
+use crate::execution_plan::LimitBehavior;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::filter_pushdown::{FilterDescription, FilterPushdownPhase};
 use crate::projection::{ProjectionExec, make_with_child};
@@ -286,6 +287,10 @@ impl ExecutionPlan for CoalescePartitionsExec {
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::Merge
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
