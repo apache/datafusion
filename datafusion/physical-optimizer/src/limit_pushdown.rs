@@ -252,12 +252,9 @@ fn apply_bound(
         }
         (Step::Limit(_), _) => unreachable!("limit nodes are folded before apply_bound"),
         (Step::Pass, above) => (plan, above),
-        (Step::Merge, Above::Open(bound)) => match plan.with_fetch(bound.input_rows()) {
-            Some(_) => (place(plan, bound), Above::Enforced(bound.input_rows())),
-            // Not reachable in-tree: both merges absorb a fetch. Unlike the
-            // other branches, the bound below does not add `skip`.
-            None => (limit_node(plan, bound), Above::Enforced(bound.fetch)),
-        },
+        (Step::Merge, Above::Open(bound)) => {
+            (place(plan, bound), Above::Enforced(bound.input_rows()))
+        }
         (Step::Merge, Above::Enforced(fetch)) => (
             plan.with_fetch(fetch).unwrap_or(plan),
             Above::Enforced(fetch),

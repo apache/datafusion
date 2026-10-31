@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use std::fmt;
 use std::sync::Arc;
 
 use crate::physical_optimizer::test_utils::{
@@ -11,15 +12,17 @@ use crate::physical_optimizer::test_utils::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use datafusion::execution::TaskContext;
 use datafusion::execution::session_state::SessionStateBuilder;
 use datafusion::prelude::{SessionConfig, SessionContext};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::stats::Precision;
+use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_expr::{JoinType, Operator};
-use datafusion_physical_expr::Partitioning;
 use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
-use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
+use datafusion_physical_expr::{EquivalenceProperties, Partitioning};
+use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_optimizer::PhysicalOptimizerRule;
 use datafusion_physical_optimizer::limit_pushdown::LimitPushdown;
@@ -33,7 +36,10 @@ use datafusion_physical_plan::operator_statistics::{
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::statistics::StatisticsArgs;
-use datafusion_physical_plan::{ExecutionPlan, get_plan_string};
+use datafusion_physical_plan::{
+    DisplayAs, DisplayFormatType, ExecutionPlan, LimitBehavior, PlanProperties,
+    SendableRecordBatchStream, get_plan_string,
+};
 
 fn create_schema() -> SchemaRef {
     Arc::new(Schema::new(vec![
@@ -433,6 +439,107 @@ fn keeps_pushed_local_limit_exec_when_there_are_multiple_input_partitions() -> R
       FilterExec: c3@2 > 0, fetch=5
         RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
           StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
+    "
+    );
+
+    Ok(())
+}
+
+/// Outputs the rows of all its children's partitions in one partition, and
+/// declares `behavior` as its `limit_behavior`. It can't take a fetch.
+#[derive(Debug)]
+struct CombineExec {
+    inputs: Vec<Arc<dyn ExecutionPlan>>,
+    behavior: LimitBehavior,
+    properties: Arc<PlanProperties>,
+}
+
+impl CombineExec {
+    fn new(inputs: Vec<Arc<dyn ExecutionPlan>>, behavior: LimitBehavior) -> Self {
+        let properties = Arc::new(PlanProperties::new(
+            EquivalenceProperties::new(inputs[0].schema()),
+            Partitioning::UnknownPartitioning(1),
+            inputs[0].properties().emission_type,
+            inputs[0].properties().boundedness,
+        ));
+        Self {
+            inputs,
+            behavior,
+            properties,
+        }
+    }
+}
+
+impl DisplayAs for CombineExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "CombineExec: {:?}", self.behavior)
+    }
+}
+
+impl ExecutionPlan for CombineExec {
+    fn name(&self) -> &str {
+        "CombineExec"
+    }
+
+    fn properties(&self) -> &Arc<PlanProperties> {
+        &self.properties
+    }
+
+    fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+        self.inputs.iter().collect()
+    }
+
+    fn apply_expressions(
+        &self,
+        _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+    ) -> Result<TreeNodeRecursion> {
+        Ok(TreeNodeRecursion::Continue)
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(Arc::new(Self::new(children, self.behavior)))
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        self.behavior
+    }
+
+    fn execute(
+        &self,
+        _partition: usize,
+        _context: Arc<TaskContext>,
+    ) -> Result<SendableRecordBatchStream> {
+        unimplemented!("only planned in these tests")
+    }
+}
+
+#[test]
+fn merge_without_fetch_gets_offset_rows_below() -> Result<()> {
+    let schema = create_schema();
+    let streaming_table = stream_exec(&schema);
+    let repartition = repartition_exec(streaming_table)?;
+    let filter = filter_exec(schema, repartition)?;
+    let merge: Arc<dyn ExecutionPlan> =
+        Arc::new(CombineExec::new(vec![filter], LimitBehavior::Merge));
+    let global_limit = global_limit_exec(merge, 5, Some(3));
+
+    let after_optimize =
+        LimitPushdown::new().optimize(global_limit, &ConfigOptions::new())?;
+
+    // The merge can't take the limit, so it stays above it. Each partition
+    // below must still give the 5 skipped rows plus the 3 kept ones.
+    let optimized = format_plan(&after_optimize);
+    insta::assert_snapshot!(
+        optimized,
+        @r"
+    GlobalLimitExec: skip=5, fetch=3
+      CombineExec: Merge
+        FilterExec: c3@2 > 0, fetch=8
+          RepartitionExec: partitioning=RoundRobinBatch(8), input_partitions=1
+            StreamingTableExec: partition_sizes=1, projection=[c1, c2, c3], infinite_source=true
     "
     );
 
