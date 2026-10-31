@@ -1419,8 +1419,8 @@ config_namespace! {
         /// Defaults to 20.
         pub max_in_list_size: usize, default = 20
 
-        /// (reading) If true, top-level string and binary Parquet columns with
-        /// dictionary pages are inferred and scanned as
+        /// (reading) If true, top-level string and binary Parquet columns whose data
+        /// pages are all dictionary encoded in every file are inferred and scanned as
         /// `Dictionary<Int32, Utf8>` / `Dictionary<Int32, Binary>` instead of
         /// their plain value type.
         ///
