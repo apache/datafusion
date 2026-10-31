@@ -1770,6 +1770,30 @@ final plan instead.</p>
 whose requirements do not hold, such as a <code class="docutils literal notranslate"><span class="pre">SortMergeJoinExec</span></code> over unsorted
 input, now fails to plan instead of possibly returning wrong results.</p>
 </section>
+<section id="aggregateudfimpl-is-nullable-is-deprecated">
+<h3><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_nullable</span></code> is deprecated<a class="headerlink" href="#aggregateudfimpl-is-nullable-is-deprecated" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_nullable</span></code> is deprecated; set the nullability in the field
+returned by <code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::return_field</span></code> instead. The compiler does not
+warn about existing overrides. Keep them, consistent with <code class="docutils literal notranslate"><span class="pre">return_field</span></code>,
+until the method is removed, as callers of the deprecated method still use them.</p>
+<p><strong>Migration guide:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">is_nullable</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kc">false</span>
+<span class="p">}</span>
+
+<span class="c1">// After</span>
+<span class="k">fn</span><span class="w"> </span><span class="nf">return_field</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">,</span><span class="w"> </span><span class="n">_arg_fields</span><span class="p">:</span><span class="w"> </span><span class="kp">&amp;</span><span class="p">[</span><span class="n">FieldRef</span><span class="p">])</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="nb">Result</span><span class="o">&lt;</span><span class="n">FieldRef</span><span class="o">&gt;</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nb">Ok</span><span class="p">(</span><span class="n">Arc</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="n">Field</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="bp">self</span><span class="p">.</span><span class="n">name</span><span class="p">(),</span><span class="w"> </span><span class="n">DataType</span><span class="p">::</span><span class="n">Int64</span><span class="p">,</span><span class="w"> </span><span class="kc">false</span><span class="p">)))</span>
+<span class="p">}</span>
+
+<span class="k">fn</span><span class="w"> </span><span class="nf">is_nullable</span><span class="p">(</span><span class="o">&amp;</span><span class="bp">self</span><span class="p">)</span><span class="w"> </span><span class="p">-&gt;</span><span class="w"> </span><span class="kt">bool</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="kc">false</span>
+<span class="p">}</span>
+</pre></div>
+</div>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/18882">issue #18882</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -1882,6 +1906,7 @@ input, now fails to plan instead of possibly returning wrong results.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#extension-physicalexprs-can-decode-by-name-instead-of-through-a-codec">Extension <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code>s can decode by name instead of through a codec</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#order-preservation-hooks-for-limit-pushdown-are-deprecated">Order-preservation hooks for limit pushdown are deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sanitycheckplan-is-deprecated-and-no-longer-in-the-default-physical-optimizer-rules"><code class="docutils literal notranslate"><span class="pre">SanityCheckPlan</span></code> is deprecated and no longer in the default physical optimizer rules</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-is-nullable-is-deprecated"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_nullable</span></code> is deprecated</a></li>
 </ul>
 </li>
 </ul>

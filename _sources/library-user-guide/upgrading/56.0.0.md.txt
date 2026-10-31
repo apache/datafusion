@@ -1432,3 +1432,30 @@ final plan instead.
 A custom rule list that left out `SanityCheckPlan` is now checked too. A plan
 whose requirements do not hold, such as a `SortMergeJoinExec` over unsorted
 input, now fails to plan instead of possibly returning wrong results.
+
+### `AggregateUDFImpl::is_nullable` is deprecated
+
+`AggregateUDFImpl::is_nullable` is deprecated; set the nullability in the field
+returned by `AggregateUDFImpl::return_field` instead. The compiler does not
+warn about existing overrides. Keep them, consistent with `return_field`,
+until the method is removed, as callers of the deprecated method still use them.
+
+**Migration guide:**
+
+```rust,ignore
+// Before
+fn is_nullable(&self) -> bool {
+    false
+}
+
+// After
+fn return_field(&self, _arg_fields: &[FieldRef]) -> Result<FieldRef> {
+    Ok(Arc::new(Field::new(self.name(), DataType::Int64, false)))
+}
+
+fn is_nullable(&self) -> bool {
+    false
+}
+```
+
+See [issue #18882](https://github.com/apache/datafusion/issues/18882) for details.
