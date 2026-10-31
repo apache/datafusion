@@ -1,0 +1,23 @@
+subgroup window
+
+name Q36
+group h2o
+
+echo Loading ${H2O_BENCH_SIZE:-small} window ${H2O_FILE_TYPE:-csv} h2o data
+
+load sql_benchmarks/h2o/init/load_window_${H2O_BENCH_SIZE:-small}_${H2O_FILE_TYPE:-csv}.sql
+
+assert I
+SELECT COUNT(*) > 0 FROM x
+----
+true
+
+run
+-- Q36: DENSE_RANK, 1000 partition keys; 10-value ORDER BY tie axis.
+SELECT pkey, largest_v2 FROM (
+    SELECT id3 % 1000 AS pkey, v2 AS largest_v2,
+           DENSE_RANK() OVER (PARTITION BY id3 % 1000 ORDER BY CAST(v2 AS BIGINT) % 10 DESC) AS dr_v2
+    FROM x WHERE v2 IS NOT NULL
+) sub_query WHERE dr_v2 = 1;
+
+result sql_benchmarks/h2o/results/window/${H2O_BENCH_SIZE:-small}/q36.csv
