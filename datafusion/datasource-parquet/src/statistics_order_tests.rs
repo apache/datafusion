@@ -2,13 +2,13 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Regression tests for interpreting Parquet byte-array statistics orders.
+//! Regression tests for interpreting Parquet statistics orders.
 
 use std::io::Write;
 use std::sync::Arc;
 
 use arrow::array::{BooleanArray, record_batch};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use bytes::Bytes;
 use datafusion_common::pruning::{PrunableStatistics, PruningStatistics};
 use datafusion_common::stats::Precision;
@@ -19,9 +19,9 @@ use datafusion_physical_expr::planner::logical2physical;
 use datafusion_physical_plan::metrics::{Count, ExecutionPlanMetricsSet};
 use datafusion_pruning::{MAX_IN_LIST_SIZE, PruningPredicate, PruningPredicateBuilder};
 use parquet::arrow::ArrowWriter;
-use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
+use parquet::arrow::arrow_reader::{ArrowReaderOptions, ParquetRecordBatchReaderBuilder};
 use parquet::basic::{ColumnOrder, LogicalType, SortOrder, Type as PhysicalType};
-use parquet::data_type::{ByteArray, FixedLenByteArray};
+use parquet::data_type::{ByteArray, FixedLenByteArray, Int96, Int96Type};
 use parquet::file::metadata::page_index::{PageIndex, PageIndexBuilder};
 use parquet::file::metadata::{
     ColumnChunkMetaData, ColumnIndexBuilder, FileMetaData, OffsetIndexBuilder,
@@ -30,7 +30,8 @@ use parquet::file::metadata::{
 };
 use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use parquet::file::statistics::Statistics as ParquetStatistics;
-use parquet::file::writer::TrackedWrite;
+use parquet::file::writer::{SerializedFileWriter, TrackedWrite};
+use parquet::schema::parser::parse_message_type;
 use parquet::schema::types::{SchemaDescriptor, Type as ParquetType};
 
 use crate::RowGroupAccessPlanFilter;
@@ -51,6 +52,7 @@ struct TestFile {
     bytes: Bytes,
     schema: SchemaRef,
     metadata: Arc<ParquetMetaData>,
+    int96_coercion: Option<(TimeUnit, Option<Arc<str>>)>,
 }
 
 impl TestFile {
@@ -97,6 +99,7 @@ impl TestFile {
                 bytes: original,
                 schema,
                 metadata: Arc::new(metadata),
+                int96_coercion: None,
             };
         }
 
@@ -202,6 +205,7 @@ impl TestFile {
             bytes,
             schema,
             metadata: Arc::new(metadata),
+            int96_coercion: None,
         }
     }
 
@@ -215,8 +219,21 @@ impl TestFile {
     }
 
     fn statistics(&self) -> Statistics {
-        DFParquetMetadata::statistics_from_parquet_metadata(&self.metadata, &self.schema)
+        if let Some((unit, timezone)) = &self.int96_coercion {
+            DFParquetMetadata::statistics_from_parquet_metadata_with_coercion(
+                &self.metadata,
+                &self.schema,
+                Some(*unit),
+                timezone.clone(),
+            )
             .unwrap()
+        } else {
+            DFParquetMetadata::statistics_from_parquet_metadata(
+                &self.metadata,
+                &self.schema,
+            )
+            .unwrap()
+        }
     }
 
     fn file_matches(&self, predicate: &PruningPredicate) -> bool {
@@ -265,10 +282,12 @@ impl TestFile {
             .row_groups
             .into_iter()
             .flat_map(|rg| {
-                let mut builder =
-                    ParquetRecordBatchReaderBuilder::try_new(self.bytes.clone())
-                        .unwrap()
-                        .with_row_groups(vec![rg.selection.row_group_index()]);
+                let mut builder = ParquetRecordBatchReaderBuilder::try_new_with_options(
+                    self.bytes.clone(),
+                    ArrowReaderOptions::new().with_schema(Arc::clone(&self.schema)),
+                )
+                .unwrap()
+                .with_row_groups(vec![rg.selection.row_group_index()]);
                 if let Some(selection) = rg.selection.selection() {
                     builder = builder.with_row_selection(selection.clone());
                 }
@@ -731,8 +750,563 @@ fn signed_decimal_byte_array_statistics_remain_usable() {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Int96Order {
+    Timestamp,
+    Missing,
+    TypeDefined,
+    Unknown,
+}
+
+fn int96(seconds: i64) -> Int96 {
+    let day = 2_440_588 + seconds.div_euclid(86_400);
+    let nanos = seconds.rem_euclid(86_400) as u64 * 1_000_000_000;
+    let mut value = Int96::new();
+    value.set_data(nanos as u32, (nanos >> 32) as u32, day as u32);
+    value
+}
+
+impl TestFile {
+    fn int96(
+        order: Int96Order,
+        unit: TimeUnit,
+        timezone: Option<Arc<str>>,
+        row_groups: &[Vec<Option<Int96>>],
+    ) -> Self {
+        let parquet_schema =
+            Arc::new(parse_message_type("message schema { optional int96 s; }").unwrap());
+        let properties = Arc::new(
+            WriterProperties::builder()
+                .set_data_page_row_count_limit(2)
+                .set_write_batch_size(2)
+                .set_dictionary_enabled(false)
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+        let mut bytes = Vec::new();
+        let mut writer =
+            SerializedFileWriter::new(&mut bytes, parquet_schema, properties).unwrap();
+        for values in row_groups {
+            let mut row_group = writer.next_row_group().unwrap();
+            let mut column = row_group.next_column().unwrap().unwrap();
+            let levels = values
+                .iter()
+                .map(|v| i16::from(v.is_some()))
+                .collect::<Vec<_>>();
+            let values = values.iter().flatten().copied().collect::<Vec<_>>();
+            column
+                .typed::<Int96Type>()
+                .write_batch(&values, Some(&levels), None)
+                .unwrap();
+            column.close().unwrap();
+            row_group.close().unwrap();
+        }
+        writer.close().unwrap();
+
+        // Replace only the footer's column_orders field. The real data and
+        // page indexes stay identical, so every order variant reads the same rows.
+        let end = bytes.len() - 8;
+        let encoded_orders = [0x19, 0x1c, 0x3c, 0, 0, 0];
+        let start = end - encoded_orders.len();
+        assert_eq!(&bytes[start..end], &encoded_orders);
+        if order == Int96Order::Missing {
+            let metadata_start = footer_start(&bytes);
+            bytes.drain(start..end - 1);
+            let end = bytes.len() - 8;
+            let metadata_len = (end - metadata_start) as u32;
+            bytes[end..end + 4].copy_from_slice(&metadata_len.to_le_bytes());
+        } else if order == Int96Order::TypeDefined {
+            bytes[start + 2] = 0x1c;
+        } else if order == Int96Order::Unknown {
+            bytes[start + 2] = 0x4c;
+        }
+        let bytes = Bytes::from(bytes);
+        let metadata = read_metadata(&bytes);
+        let expected_order = match order {
+            Int96Order::Timestamp => ColumnOrder::INT96_TIMESTAMP_ORDER,
+            Int96Order::Missing => ColumnOrder::UNDEFINED,
+            Int96Order::TypeDefined => {
+                ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED)
+            }
+            Int96Order::Unknown => ColumnOrder::UNKNOWN,
+        };
+        assert_eq!(metadata.file_metadata().column_order(0), expected_order);
+        let schema = Schema::new(vec![Field::new(
+            "s",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        )]);
+        let schema = crate::Int96Coercer::new(
+            metadata.file_metadata().schema_descr(),
+            &schema,
+            &unit,
+        )
+        .with_timezone(timezone.clone())
+        .coerce()
+        .unwrap();
+        Self {
+            bytes,
+            schema: Arc::new(schema),
+            metadata: Arc::new(metadata),
+            int96_coercion: Some((unit, timezone)),
+        }
+    }
+
+    fn timestamp(&self, seconds: i64) -> ScalarValue {
+        let DataType::Timestamp(unit, timezone) = self.schema.field(0).data_type() else {
+            unreachable!()
+        };
+        match unit {
+            TimeUnit::Second => {
+                ScalarValue::TimestampSecond(Some(seconds), timezone.clone())
+            }
+            TimeUnit::Millisecond => {
+                ScalarValue::TimestampMillisecond(Some(seconds * 1_000), timezone.clone())
+            }
+            TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(
+                Some(seconds * 1_000_000),
+                timezone.clone(),
+            ),
+            TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(
+                Some(seconds * 1_000_000_000),
+                timezone.clone(),
+            ),
+        }
+    }
+}
+
 #[test]
-fn undefined_int96_order_is_never_trusted() {
+fn int96_timestamp_order_prunes_files_row_groups_and_pages() {
+    let row_groups = [
+        vec![
+            Some(int96(-86_400)),
+            Some(int96(-1)),
+            Some(int96(0)),
+            Some(int96(1)),
+        ],
+        vec![
+            Some(int96(86_400)),
+            Some(int96(86_401)),
+            Some(int96(172_800)),
+            Some(int96(172_801)),
+        ],
+        vec![None; 4],
+    ];
+    for unit in [
+        TimeUnit::Second,
+        TimeUnit::Millisecond,
+        TimeUnit::Microsecond,
+        TimeUnit::Nanosecond,
+    ] {
+        for timezone in [None, Some(Arc::from("UTC"))] {
+            for order in [
+                Int96Order::Timestamp,
+                Int96Order::Missing,
+                Int96Order::TypeDefined,
+                Int96Order::Unknown,
+            ] {
+                let file = TestFile::int96(order, unit, timezone.clone(), &row_groups);
+                let trusted = order == Int96Order::Timestamp;
+                let statistics = file.statistics();
+                assert_eq!(statistics.num_rows, Precision::Exact(12));
+                assert_eq!(
+                    statistics.column_statistics[0].null_count,
+                    Precision::Exact(4)
+                );
+                assert_eq!(
+                    statistics.column_statistics[0].min_value,
+                    if trusted {
+                        Precision::Exact(file.timestamp(-86_400))
+                    } else {
+                        Precision::Absent
+                    },
+                    "order={order:?}, unit={unit:?}, timezone={timezone:?}"
+                );
+                assert_eq!(
+                    statistics.column_statistics[0].max_value,
+                    if trusted {
+                        Precision::Exact(file.timestamp(172_801))
+                    } else {
+                        Precision::Absent
+                    }
+                );
+
+                let (_, absent) =
+                    file.predicate(&col("s").eq(lit(file.timestamp(259_200))));
+                assert_eq!(file.file_matches(&absent), !trusted);
+                let (physical, predicate) =
+                    file.predicate(&col("s").eq(lit(file.timestamp(0))));
+                let all = ParquetAccessPlan::new_all(file.metadata.num_row_groups());
+                assert_eq!(file.matching_rows(&physical, all.clone()), 1);
+                assert!(file.file_matches(&predicate));
+                let row_groups = file.row_group_plan(&predicate);
+                assert_eq!(
+                    row_groups.row_group_indexes(),
+                    if trusted { vec![0] } else { vec![0, 1] }
+                );
+                assert_eq!(file.matching_rows(&physical, row_groups.clone()), 1);
+
+                // Start page pruning from all row groups, independently of row-group pruning.
+                let page_metrics = metrics();
+                let pages =
+                    PagePruningAccessPlanFilter::new(&physical, Arc::clone(&file.schema))
+                        .prune_plan_with_page_index(
+                            all,
+                            &file.schema,
+                            file.metadata.file_metadata().schema_descr(),
+                            &file.metadata,
+                            &page_metrics,
+                        );
+                assert_eq!(
+                    page_metrics.page_index_rows_pruned.pruned(),
+                    if trusted { 10 } else { 4 }
+                );
+                assert_eq!(file.matching_rows(&physical, pages), 1);
+                assert_eq!(
+                    file.matching_rows(&physical, file.page_plan(&physical, row_groups)),
+                    1
+                );
+
+                let mut runtime_pruner = RowGroupPruner::new(
+                    physical,
+                    Arc::clone(&file.schema),
+                    Arc::clone(&file.metadata),
+                    Count::new(),
+                    Count::new(),
+                    MAX_IN_LIST_SIZE,
+                );
+                assert!(!runtime_pruner.should_prune(&[0]));
+                assert_eq!(runtime_pruner.should_prune(&[1]), trusted);
+                assert!(runtime_pruner.should_prune(&[2]));
+            }
+        }
+    }
+}
+
+#[test]
+fn int96_row_group_reordering_uses_explicit_timestamp_order() {
+    use arrow::compute::SortOptions;
+    use datafusion_physical_expr::expressions::Column as PhysicalColumn;
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
+
+    let order = LexOrdering::new(vec![PhysicalSortExpr {
+        expr: Arc::new(PhysicalColumn::new("s", 0)),
+        options: SortOptions::default(),
+    }])
+    .unwrap();
+    for footer_order in [
+        Int96Order::Timestamp,
+        Int96Order::Missing,
+        Int96Order::TypeDefined,
+        Int96Order::Unknown,
+    ] {
+        let file = TestFile::int96(
+            footer_order,
+            TimeUnit::Microsecond,
+            Some(Arc::from("UTC")),
+            &[
+                vec![Some(int96(50))],
+                vec![Some(int96(10))],
+                vec![Some(int96(100))],
+            ],
+        );
+        let plan = ParquetAccessPlan::new_all(file.metadata.num_row_groups())
+            .prepare(file.metadata.row_groups())
+            .unwrap()
+            .reorder_by_statistics(&order, &file.metadata, &file.schema)
+            .unwrap();
+        assert_eq!(
+            plan.row_group_indexes(),
+            if footer_order == Int96Order::Timestamp {
+                vec![1, 0, 2]
+            } else {
+                vec![0, 1, 2]
+            },
+            "footer_order={footer_order:?}",
+        );
+    }
+}
+
+#[test]
+fn int96_order_uses_physical_leaf_after_nested_columns() {
+    use parquet::data_type::Int32Type;
+
+    for repeated in [false, true] {
+        let nested = if repeated { "repeated" } else { "required" };
+        let parquet_schema = Arc::new(
+            parse_message_type(&format!(
+                "message schema {{
+                    {nested} group ids {{ required int32 first; required int32 second; }}
+                    optional int96 s;
+                }}"
+            ))
+            .unwrap(),
+        );
+        let properties = Arc::new(
+            WriterProperties::builder()
+                .set_data_page_row_count_limit(2)
+                .set_write_batch_size(2)
+                .set_dictionary_enabled(false)
+                .set_statistics_enabled(EnabledStatistics::Page)
+                .build(),
+        );
+        let mut original = Vec::new();
+        let mut writer =
+            SerializedFileWriter::new(&mut original, parquet_schema, properties).unwrap();
+        for timestamps in [
+            [Some(-2), None, Some(0), Some(1)],
+            [Some(10), None, Some(11), Some(12)],
+            [None; 4],
+        ] {
+            let mut row_group = writer.next_row_group().unwrap();
+            for _ in 0..2 {
+                let mut column = row_group.next_column().unwrap().unwrap();
+                // A repeated group is the legacy list-of-struct encoding.
+                // Give each row one element, so both layouts have four rows.
+                column
+                    .typed::<Int32Type>()
+                    .write_batch(
+                        &[0, 1, 2, 3],
+                        repeated.then_some(&[1, 1, 1, 1]),
+                        repeated.then_some(&[0, 0, 0, 0]),
+                    )
+                    .unwrap();
+                column.close().unwrap();
+            }
+            let mut column = row_group.next_column().unwrap().unwrap();
+            let levels: Vec<_> = timestamps
+                .iter()
+                .map(|value| i16::from(value.is_some()))
+                .collect();
+            let values: Vec<_> = timestamps.into_iter().flatten().map(int96).collect();
+            column
+                .typed::<Int96Type>()
+                .write_batch(&values, Some(&levels), None)
+                .unwrap();
+            column.close().unwrap();
+            row_group.close().unwrap();
+        }
+        writer.close().unwrap();
+
+        for trusted in [true, false] {
+            let mut bytes = original.clone();
+            let end = bytes.len() - 8;
+            let encoded_orders = [0x19, 0x3c, 0x1c, 0, 0, 0x1c, 0, 0, 0x3c, 0, 0, 0];
+            let start = end - encoded_orders.len();
+            assert_eq!(&bytes[start..end], &encoded_orders);
+            if !trusted {
+                // Only the third physical leaf's order becomes unknown.
+                bytes[start + 8] = 0x4c;
+            }
+            let bytes = Bytes::from(bytes);
+            let metadata = read_metadata(&bytes);
+            let schema = Arc::clone(
+                ParquetRecordBatchReaderBuilder::try_new(bytes.clone())
+                    .unwrap()
+                    .schema(),
+            );
+            assert_eq!(schema.fields().len(), 2);
+            assert_eq!(schema.index_of("s").unwrap(), 1);
+            assert_eq!(metadata.file_metadata().schema_descr().num_columns(), 3);
+            assert_eq!(
+                metadata.file_metadata().column_order(2),
+                if trusted {
+                    ColumnOrder::INT96_TIMESTAMP_ORDER
+                } else {
+                    ColumnOrder::UNKNOWN
+                }
+            );
+            let file = TestFile {
+                bytes,
+                schema,
+                metadata: Arc::new(metadata),
+                int96_coercion: None,
+            };
+            let timestamp = |seconds: i64| {
+                ScalarValue::TimestampNanosecond(Some(seconds * 1_000_000_000), None)
+            };
+            let statistics = file.statistics();
+            assert_eq!(statistics.num_rows, Precision::Exact(12));
+            assert_eq!(
+                statistics.column_statistics[1].null_count,
+                Precision::Exact(6)
+            );
+            for (bound, seconds) in [
+                (&statistics.column_statistics[1].min_value, -2),
+                (&statistics.column_statistics[1].max_value, 12),
+            ] {
+                assert_eq!(
+                    bound,
+                    &if trusted {
+                        Precision::Exact(timestamp(seconds))
+                    } else {
+                        Precision::Absent
+                    },
+                    "repeated={repeated}, trusted={trusted}"
+                );
+            }
+
+            let (_, absent) = file.predicate(&col("s").eq(lit(timestamp(20))));
+            assert_eq!(file.file_matches(&absent), !trusted);
+            let (physical, predicate) = file.predicate(&col("s").eq(lit(timestamp(0))));
+            let all = ParquetAccessPlan::new_all(file.metadata.num_row_groups());
+            assert_eq!(file.matching_rows(&physical, all.clone()), 1);
+            let row_groups = file.row_group_plan(&predicate);
+            assert_eq!(
+                row_groups.row_group_indexes(),
+                if trusted { vec![0] } else { vec![0, 1] }
+            );
+            assert_eq!(file.matching_rows(&physical, row_groups), 1);
+
+            let page_metrics = metrics();
+            let pages =
+                PagePruningAccessPlanFilter::new(&physical, Arc::clone(&file.schema))
+                    .prune_plan_with_page_index(
+                        all,
+                        &file.schema,
+                        file.metadata.file_metadata().schema_descr(),
+                        &file.metadata,
+                        &page_metrics,
+                    );
+            assert_eq!(
+                page_metrics.page_index_rows_pruned.pruned(),
+                if trusted { 10 } else { 4 }
+            );
+            assert_eq!(file.matching_rows(&physical, pages), 1);
+
+            let mut runtime_pruner = RowGroupPruner::new(
+                physical,
+                Arc::clone(&file.schema),
+                Arc::clone(&file.metadata),
+                Count::new(),
+                Count::new(),
+                MAX_IN_LIST_SIZE,
+            );
+            assert!(!runtime_pruner.should_prune(&[0]));
+            assert_eq!(runtime_pruner.should_prune(&[1]), trusted);
+            assert!(runtime_pruner.should_prune(&[2]));
+        }
+    }
+}
+
+#[test]
+fn int96_overflow_keeps_wrapped_rows_and_coerced_bounds() {
+    // The second timestamp wraps to a negative nanosecond value when read.
+    // Neither endpoint is a safe bound for the resulting nanosecond interval.
+    let row_groups = [vec![Some(int96(0)), Some(int96(10_000_000_000))]];
+    let file = TestFile::int96(
+        Int96Order::Timestamp,
+        TimeUnit::Nanosecond,
+        None,
+        &row_groups,
+    );
+    let statistics = file.statistics();
+    assert_eq!(statistics.column_statistics[0].min_value, Precision::Absent);
+    assert_eq!(statistics.column_statistics[0].max_value, Precision::Absent);
+    assert_eq!(
+        statistics.column_statistics[0].null_count,
+        Precision::Exact(0)
+    );
+    let (physical, predicate) = file.predicate(&col("s").lt(lit(file.timestamp(0))));
+    assert!(file.file_matches(&predicate));
+    let row_groups = file.row_group_plan(&predicate);
+    assert_eq!(row_groups.row_group_indexes(), vec![0]);
+    assert_eq!(
+        file.matching_rows(&physical, file.page_plan(&physical, row_groups)),
+        1
+    );
+
+    for unit in [
+        TimeUnit::Second,
+        TimeUnit::Millisecond,
+        TimeUnit::Microsecond,
+    ] {
+        let file = TestFile::int96(
+            Int96Order::Timestamp,
+            unit,
+            None,
+            &[vec![Some(int96(0)), Some(int96(10_000_000_000))]],
+        );
+        let statistics = file.statistics();
+        assert_eq!(
+            statistics.column_statistics[0].min_value,
+            Precision::Exact(file.timestamp(0))
+        );
+        assert_eq!(
+            statistics.column_statistics[0].max_value,
+            Precision::Exact(file.timestamp(10_000_000_000))
+        );
+        let uncoerced = DFParquetMetadata::statistics_from_parquet_metadata(
+            &file.metadata,
+            &file.schema,
+        )
+        .unwrap();
+        assert_eq!(uncoerced.column_statistics[0].min_value, Precision::Absent);
+        assert_eq!(uncoerced.column_statistics[0].max_value, Precision::Absent);
+        assert_eq!(
+            uncoerced.column_statistics[0].null_count,
+            Precision::Exact(0)
+        );
+        let (_, predicate) = file.predicate(&col("s").lt(lit(file.timestamp(0))));
+        assert!(!file.file_matches(&predicate));
+        assert!(
+            file.row_group_plan(&predicate)
+                .row_group_indexes()
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn int96_fetched_statistics_use_configured_resolution() {
+    use object_store::ObjectStoreExt;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+
+    let file = TestFile::int96(
+        Int96Order::Timestamp,
+        TimeUnit::Microsecond,
+        Some(Arc::from("UTC")),
+        &[vec![Some(int96(0)), Some(int96(10_000_000_000))]],
+    );
+    let store = InMemory::new();
+    let path = Path::from("int96.parquet");
+    store.put(&path, file.bytes.clone().into()).await.unwrap();
+    let object = store.head(&path).await.unwrap();
+    let metadata = DFParquetMetadata::new(&store, &object)
+        .with_coerce_int96(Some(TimeUnit::Microsecond))
+        .with_coerce_int96_tz(Some(Arc::from("UTC")));
+    let schema = Arc::new(metadata.fetch_schema().await.unwrap());
+    assert_eq!(schema, file.schema);
+    let statistics = metadata.fetch_statistics(&schema).await.unwrap();
+    assert_eq!(
+        statistics.column_statistics[0].min_value,
+        Precision::Exact(file.timestamp(0))
+    );
+    assert_eq!(
+        statistics.column_statistics[0].max_value,
+        Precision::Exact(file.timestamp(10_000_000_000))
+    );
+    assert_eq!(
+        statistics.column_statistics[0].null_count,
+        Precision::Exact(0)
+    );
+
+    // A table schema alone does not opt in to direct microsecond decoding.
+    let statistics = DFParquetMetadata::new(&store, &object)
+        .fetch_statistics(&schema)
+        .await
+        .unwrap();
+    assert_eq!(statistics.column_statistics[0].min_value, Precision::Absent);
+    assert_eq!(statistics.column_statistics[0].max_value, Precision::Absent);
+    assert_eq!(
+        statistics.column_statistics[0].null_count,
+        Precision::Exact(0)
+    );
+}
+
+#[test]
+fn int96_requires_explicit_timestamp_order() {
     let parquet_type = ParquetType::primitive_type_builder("s", PhysicalType::INT96)
         .build()
         .unwrap();
@@ -751,7 +1325,8 @@ fn undefined_int96_order_is_never_trusted() {
         Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNDEFINED)),
         Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)),
         Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::UNSIGNED)),
-        Some(ColumnOrder::INT96_TIMESTAMP_ORDER),
+        Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::INT96_TIMESTAMP)),
+        Some(ColumnOrder::IEEE_754_TOTAL_ORDER),
     ] {
         assert!(
             has_untrusted_min_max_order(
@@ -762,6 +1337,12 @@ fn undefined_int96_order_is_never_trusted() {
             "order={order:?}",
         );
     }
+    assert!(has_untrusted_min_max_order(&schema, Some(&[]), 0));
+    assert!(!has_untrusted_min_max_order(
+        &schema,
+        Some(&[ColumnOrder::INT96_TIMESTAMP_ORDER]),
+        0,
+    ));
 }
 
 #[test]

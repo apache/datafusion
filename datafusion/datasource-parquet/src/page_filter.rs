@@ -744,6 +744,8 @@ impl<'a> PagesPruningStatistics<'a> {
         };
         let page_offsets = offset_index_metadata.page_locations();
         let file_metadata = parquet_metadata.file_metadata();
+        let converter = converter
+            .with_column_orders(file_metadata.column_orders().map(Vec::as_slice));
         let trusted_min_max = !has_untrusted_min_max_order(
             file_metadata.schema_descr(),
             file_metadata.column_orders().map(Vec::as_slice),
