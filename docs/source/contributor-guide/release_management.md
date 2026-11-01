@@ -39,8 +39,6 @@ In general:
 - Patch releases are cut from the corresponding `branch-NN`
 - Only targeted, low-risk fixes should be added to a release branch
 
-The crate version on `main` always has a `-dev` suffix, such as `56.0.0-dev`
-
 Changes reach a release branch in one of two ways:
 
 - (Most common) Fix the issue on `main` and then backport the merged change to the release branch

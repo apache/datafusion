@@ -88,7 +88,7 @@ git checkout -b branch-56    # create local branch
 git push -u apache branch-56 # push branch to apache remote
 ```
 
-### 1b. Bump Version on main
+### 2. Bump Version on main
 
 After creating a new major release branch, open a "version bump PR"
 against `main` that bumps the version to the next development version.
@@ -105,7 +105,7 @@ Development versions are never published to crates.io, so the script leaves
 the user facing examples (such as `docs/source/download.md`) pointing at the
 latest released version.
 
-### 2. Prepare PR to Update the Release Version
+### 3. Prepare PR to Update the Release Version
 
 On the release branch, update the DataFusion version using the following
 Python script:
@@ -130,7 +130,7 @@ Then commit the changes and create a PR targeting the release branch `branch-N`.
 git commit -a -m 'Update version'
 ```
 
-### 3. Protect Release Branch
+### 4. Protect Release Branch
 
 To protect a release candidate branch from accidental merges, create PR against `main`:
 
@@ -153,14 +153,14 @@ branch-55:
 - Merge to `main`.
 - Notify community in Discord/Slack that release branch is created
 
-### 4. Backporting urgent changes
+### 5. Backporting urgent changes
 
 After release branch `branch-N` created, protected and got its version updated, please check if there are any backports expected from the community.
 Please refer to [Backport Flow](../../docs/source/contributor-guide/release_management.md#backport-workflow) for more details.
 
 Backports are important and sometimes unexpected, so please proceed to next release steps once all expected backports are applied.
 
-### 5. Prepare PR to Update Changelog
+### 6. Prepare PR to Update Changelog
 
 Update the changelog in `dev/changelog/`. Each release has its
 own file, such as `dev/changelog/55.2.0.md`, which should include all changes
@@ -208,7 +208,7 @@ Then commit the changes and create a PR targeting the release branch.
 git commit -a -m 'Update changelog'
 ```
 
-### 6. Prepare Release Candidate Artifacts
+### 7. Prepare Release Candidate Artifacts
 
 After the changelog updates merged to `branch-N`, you are ready to create release artifacts based off the
 merged commit.
@@ -266,7 +266,7 @@ Check that the artifacts were uploaded to SVN:
 svn ls https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-55.2.0-rc1/
 ```
 
-### 7. Vote on Release Candidate Artifacts
+### 8. Vote on Release Candidate Artifacts
 
 Send the email output from the script to `dev@datafusion.apache.org`.
 
@@ -285,7 +285,7 @@ review the release candidate.
 
 #### If Changes Are Requested
 
-If the release is not approved or urgent backports requested, please start over from [here](#4-backporting-urgent-changes)
+If the release is not approved or urgent backports requested, please start over from [here](#5-backporting-urgent-changes)
 
 #### If the Vote Passes: Announce the Result
 
@@ -300,7 +300,7 @@ The vote has passed with <NUMBER> +1 votes. Thank you to all who helped
 with the release verification.
 ```
 
-### 8. Finalize the Release
+### 9. Finalize the Release
 
 NOTE: steps in this section can only be done by PMC members after release is approved.
 
@@ -320,7 +320,7 @@ svn ls https://dist.apache.org/repos/dist/release/datafusion/datafusion-55.2.0/
 
 Congratulations! The release is now official!
 
-### 9. Create Release git tags
+### 10. Create Release git tags
 
 Tag the same release candidate commit with the final release tag
 
@@ -398,7 +398,7 @@ git worktree remove /tmp/datafusion-55.0.0
 git worktree remove /tmp/datafusion-asf-site
 ```
 
-### 10. Publish on Crates.io
+### 11. Publish on Crates.io
 
 Only approved releases of the tarball should be published to
 crates.io, in order to conform to Apache Software Foundation
@@ -485,11 +485,11 @@ Caused by:
 Note: [`datafusion` formula](https://formulae.brew.sh/formula/datafusion) is [updated automatically](https://github.com/Homebrew/homebrew-core/pulls?q=is%3Apr+datafusion+is%3Aclosed),
 so no action is needed.
 
-### 11. Sync Changelog and Documentation to main
+### 12. Sync Changelog and Documentation to main
 
 The crate version is **not** synced back to `main`: `main` already carries the
 next development version (such as `57.0.0-dev`) from
-[Bump Version on main](#1b-bump-version-on-main), and the released version
+[Bump Version on main](#2-bump-version-on-main), and the released version
 must never appear on `main`.
 
 Instead, create a PR against `main` that syncs the changelog and updates the
@@ -499,7 +499,7 @@ user facing documentation to reference the new release:
 git fetch apache && git checkout -b sync_change_log apache/main
 ```
 
-- Cherry-pick or patch the changelog updates from step 5
+- Cherry-pick or patch the changelog updates from step 6
 - Update the crate version in the user facing examples to the newly released
   version, for example from `55.1.0` to `56.0.0`:
 
@@ -517,7 +517,7 @@ git fetch apache && git checkout -b sync_change_log apache/main
 The version picker for the published documentation is updated separately, see
 [Publish the versioned documentation](#publish-the-versioned-documentation).
 
-### 12. Add the release to Apache Reporter
+### 13. Add the release to Apache Reporter
 
 When you have published the release, please help the project by adding the release to
 [Apache Reporter](https://reporter.apache.org/). The reporter system should
@@ -528,7 +528,7 @@ the examples from previous releases.
 The release information is used to generate a template for a board report (see example from Apache Arrow project
 [here](https://github.com/apache/arrow/pull/14357)).
 
-### 13. Delete Old RCs and Releases
+### 14. Delete Old RCs and Releases
 
 See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
 for more information.
