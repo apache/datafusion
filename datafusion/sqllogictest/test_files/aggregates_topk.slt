@@ -26,7 +26,7 @@ query TT
 explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc limit 4;
 ----
 logical_plan
-01)Sort: max(traces.timestamp) DESC NULLS FIRST, fetch=4
+01)Sort: "max(traces.timestamp)" DESC NULLS FIRST, fetch=4
 02)--Aggregate: groupBy=[[traces.trace_id]], aggr=[[max(traces.timestamp)]]
 03)----TableScan: traces projection=[trace_id, timestamp]
 physical_plan
@@ -88,7 +88,7 @@ query TT
 explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) desc nulls last limit 4;
 ----
 logical_plan
-01)Sort: max(traces.timestamp) DESC NULLS LAST, fetch=4
+01)Sort: "max(traces.timestamp)" DESC NULLS LAST, fetch=4
 02)--Aggregate: groupBy=[[traces.trace_id]], aggr=[[max(traces.timestamp)]]
 03)----TableScan: traces projection=[trace_id, timestamp]
 physical_plan
@@ -103,7 +103,7 @@ query TT
 explain select trace_id, MIN(timestamp) from traces group by trace_id order by MIN(timestamp) desc limit 4;
 ----
 logical_plan
-01)Sort: min(traces.timestamp) DESC NULLS FIRST, fetch=4
+01)Sort: "min(traces.timestamp)" DESC NULLS FIRST, fetch=4
 02)--Aggregate: groupBy=[[traces.trace_id]], aggr=[[min(traces.timestamp)]]
 03)----TableScan: traces projection=[trace_id, timestamp]
 physical_plan
@@ -118,7 +118,7 @@ query TT
 explain select trace_id, MAX(timestamp) from traces group by trace_id order by MAX(timestamp) asc limit 4;
 ----
 logical_plan
-01)Sort: max(traces.timestamp) ASC NULLS LAST, fetch=4
+01)Sort: "max(traces.timestamp)" ASC NULLS LAST, fetch=4
 02)--Aggregate: groupBy=[[traces.trace_id]], aggr=[[max(traces.timestamp)]]
 03)----TableScan: traces projection=[trace_id, timestamp]
 physical_plan
@@ -209,7 +209,7 @@ explain select category, max(val) max_val from string_topk group by category ord
 ----
 logical_plan
 01)Sort: max_val DESC NULLS LAST, fetch=2
-02)--Projection: string_topk.category, max(string_topk.val) AS max_val
+02)--Projection: string_topk.category, "max(string_topk.val)" AS max_val
 03)----Aggregate: groupBy=[[string_topk.category]], aggr=[[max(string_topk.val)]]
 04)------TableScan: string_topk projection=[category, val]
 physical_plan
@@ -232,7 +232,7 @@ explain select category, max(val) max_val from string_topk_view group by categor
 ----
 logical_plan
 01)Sort: max_val DESC NULLS LAST, fetch=2
-02)--Projection: string_topk_view.category, max(string_topk_view.val) AS max_val
+02)--Projection: string_topk_view.category, "max(string_topk_view.val)" AS max_val
 03)----Aggregate: groupBy=[[string_topk_view.category]], aggr=[[max(string_topk_view.val)]]
 04)------SubqueryAlias: string_topk_view
 05)--------Projection: string_topk.category AS category, string_topk.val AS val
@@ -268,7 +268,7 @@ explain select trace_id, max(trace_id) as max_trace from traces group by trace_i
 ----
 logical_plan
 01)Sort: max_trace DESC NULLS FIRST, fetch=2
-02)--Projection: traces.trace_id, max(traces.trace_id) AS max_trace
+02)--Projection: traces.trace_id, "max(traces.trace_id)" AS max_trace
 03)----Aggregate: groupBy=[[traces.trace_id]], aggr=[[max(traces.trace_id)]]
 04)------TableScan: traces projection=[trace_id]
 physical_plan
@@ -295,7 +295,7 @@ query TT
 explain select trace_id, MAX(timestamp) from traces_utf8view group by trace_id order by MAX(timestamp) desc nulls last limit 4;
 ----
 logical_plan
-01)Sort: max(traces_utf8view.timestamp) DESC NULLS LAST, fetch=4
+01)Sort: "max(traces_utf8view.timestamp)" DESC NULLS LAST, fetch=4
 02)--Aggregate: groupBy=[[traces_utf8view.trace_id]], aggr=[[max(traces_utf8view.timestamp)]]
 03)----TableScan: traces_utf8view projection=[trace_id, timestamp]
 physical_plan
@@ -321,7 +321,7 @@ query TT
 explain select trace_id, MAX(timestamp) from traces_largeutf8 group by trace_id order by MAX(timestamp) desc nulls last limit 4;
 ----
 logical_plan
-01)Sort: max(traces_largeutf8.timestamp) DESC NULLS LAST, fetch=4
+01)Sort: "max(traces_largeutf8.timestamp)" DESC NULLS LAST, fetch=4
 02)--Aggregate: groupBy=[[traces_largeutf8.trace_id]], aggr=[[max(traces_largeutf8.timestamp)]]
 03)----TableScan: traces_largeutf8 projection=[trace_id, timestamp]
 physical_plan
@@ -590,7 +590,7 @@ explain select s, max(y) as max_y from t0 group by s order by max_y desc nulls f
 ----
 logical_plan
 01)Sort: max_y DESC NULLS FIRST, fetch=3
-02)--Projection: t0.s, max(t0.y) AS max_y
+02)--Projection: t0.s, "max(t0.y)" AS max_y
 03)----Aggregate: groupBy=[[t0.s]], aggr=[[max(t0.y)]]
 04)------TableScan: t0 projection=[s, y]
 physical_plan
@@ -611,7 +611,7 @@ EXPLAIN SELECT min_y FROM (SELECT s, MIN(y) AS min_y FROM t0 GROUP BY s) ORDER B
 ----
 logical_plan
 01)Sort: min_y ASC NULLS LAST, fetch=20
-02)--Projection: min(t0.y) AS min_y
+02)--Projection: "min(t0.y)" AS min_y
 03)----Aggregate: groupBy=[[t0.s]], aggr=[[min(t0.y)]]
 04)------TableScan: t0 projection=[s, y]
 physical_plan
@@ -828,7 +828,7 @@ WHERE k IN (SELECT column1 FROM topk_parquet_keys)
 GROUP BY k ORDER BY max(x) DESC NULLS LAST LIMIT 2;
 ----
 logical_plan
-01)Sort: max(topk_parquet.x) DESC NULLS LAST, fetch=2
+01)Sort: "max(topk_parquet.x)" DESC NULLS LAST, fetch=2
 02)--Aggregate: groupBy=[[topk_parquet.k]], aggr=[[max(topk_parquet.x)]]
 03)----LeftSemi Join: CAST(topk_parquet.k AS Int64) = __correlated_sq_1.column1
 04)------TableScan: topk_parquet projection=[k, x]

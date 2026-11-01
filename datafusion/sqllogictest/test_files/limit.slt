@@ -294,7 +294,7 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 11);
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----Limit: skip=11, fetch=3
 04)------TableScan: t1 projection=[], fetch=14
@@ -313,7 +313,7 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 LIMIT 3 OFFSET 8);
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----Limit: skip=8, fetch=3
 04)------TableScan: t1 projection=[], fetch=11
@@ -484,7 +484,7 @@ EXPLAIN SELECT row_number() OVER (ORDER BY id) AS rn, id
 FROM (SELECT id FROM window_over_limit WHERE kind = 'a' LIMIT 5 OFFSET 5);
 ----
 logical_plan
-01)Projection: row_number() ORDER BY [window_over_limit.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, window_over_limit.id
+01)Projection: "row_number() ORDER BY [window_over_limit.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn, window_over_limit.id
 02)--WindowAggr: windowExpr=[[row_number() ORDER BY [window_over_limit.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 03)----Projection: window_over_limit.id
 04)------Limit: skip=5, fetch=5
@@ -518,7 +518,7 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 OFFSET 8);
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----Limit: skip=8, fetch=None
 04)------TableScan: t1 projection=[]
@@ -536,7 +536,7 @@ query TT
 EXPLAIN SELECT COUNT(*) FROM (SELECT a FROM t1 WHERE a > 3 LIMIT 3 OFFSET 6);
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----Projection:
 04)------Limit: skip=6, fetch=3
@@ -1228,7 +1228,7 @@ logical_plan
 02)--Sort: q.sy DESC NULLS FIRST
 03)----SubqueryAlias: q
 04)------Sort: sx DESC NULLS FIRST, fetch=4
-05)--------Projection: t22489.g, sum(t22489.x) AS sx, sum(t22489.y) AS sy
+05)--------Projection: t22489.g, "sum(t22489.x)" AS sx, "sum(t22489.y)" AS sy
 06)----------Aggregate: groupBy=[[t22489.g]], aggr=[[sum(CAST(t22489.x AS Int64)), sum(CAST(t22489.y AS Int64))]]
 07)------------TableScan: t22489 projection=[g, x, y]
 physical_plan

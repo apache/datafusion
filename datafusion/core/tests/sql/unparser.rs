@@ -368,10 +368,10 @@ async fn optimized_duckdb_unparse_qualifies_nested_passthrough_column() -> Resul
         r#"SELECT "o"."order_id", "o"."discount_pct_2" "#,
         r#"FROM "warehouse"."main"."order_items" AS "oi" "#,
         r#"INNER JOIN (SELECT "order_id", "#,
-        r#"CASE WHEN "__common_expr_1" IS NOT NULL "#,
-        r#"THEN "__common_expr_1" ELSE 0.00 END AS "discount_pct_2" "#,
+        r#"CASE WHEN "warehouse.main.orders.discount_pct" IS NOT NULL "#,
+        r#"THEN "warehouse.main.orders.discount_pct" ELSE 0.00 END AS "discount_pct_2" "#,
         r#"FROM (SELECT CAST("o"."discount_pct" AS DECIMAL(22,2)) "#,
-        r#"AS "__common_expr_1", "o"."order_id" "#,
+        r#"AS "warehouse.main.orders.discount_pct", "o"."order_id" "#,
         r#"FROM "warehouse"."main"."orders" AS "o")) AS "o" "#,
         r#"ON "oi"."order_id" = "o"."order_id""#,
     );

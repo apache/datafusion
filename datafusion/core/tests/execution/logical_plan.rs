@@ -43,6 +43,7 @@ async fn count_only_nulls() -> Result<()> {
         relation: None,
         name: "col".to_string(),
         spans: Spans::new(),
+        id: None,
     });
 
     // Aggregation: count(col) AS count

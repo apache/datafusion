@@ -557,7 +557,7 @@ explain with A as (
 ) select array_length(array_agg(distinct a.foo)), sum(distinct 1) from A a group by a.id;
 ----
 logical_plan
-01)Projection: array_length(array_agg(DISTINCT a.foo)), sum(DISTINCT Int64(1))
+01)Projection: array_length("array_agg(DISTINCT a.foo)"), "sum(DISTINCT Int64(1))"
 02)--Aggregate: groupBy=[[a.id]], aggr=[[array_agg(DISTINCT a.foo), sum(DISTINCT Int64(1))]]
 03)----SubqueryAlias: a
 04)------SubqueryAlias: a

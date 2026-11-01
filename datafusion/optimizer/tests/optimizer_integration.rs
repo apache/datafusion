@@ -140,11 +140,11 @@ fn case_when_aggregate() -> Result<()> {
 
     assert_snapshot!(
     format!("{plan}"),
-    @r"
-    Projection: test.col_utf8, sum(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END) AS n
+    @r#"
+    Projection: test.col_utf8, "sum(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END)" AS n
       Aggregate: groupBy=[[test.col_utf8]], aggr=[[sum(CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END) AS sum(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END)]]
         TableScan: test projection=[col_int32, col_utf8]
-    "
+    "#
     );
     Ok(())
 }
@@ -373,12 +373,12 @@ fn push_down_filter_groupby_expr_contains_alias() {
 
     assert_snapshot!(
     format!("{plan}"),
-    @r"
-    Projection: test.col_int32 + test.col_uint32 AS c, count(Int64(1)) AS count(*)
+    @r#"
+    Projection: "test.col_int32 + test.col_uint32" AS c, "count(Int64(1))" AS count(*)
       Aggregate: groupBy=[[CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64)]], aggr=[[count(Int64(1))]]
         Filter: CAST(test.col_int32 AS Int64) + CAST(test.col_uint32 AS Int64) > Int64(3)
           TableScan: test projection=[col_int32, col_uint32]
-    "
+    "#
     );
 }
 
@@ -430,11 +430,11 @@ fn eliminate_redundant_null_check_on_count() {
 
     assert_snapshot!(
     format!("{plan}"),
-    @r"
-    Projection: test.col_int32, count(Int64(1)) AS count(*) AS c
+    @r#"
+    Projection: test.col_int32, "count(Int64(1))" AS count(*) AS c
       Aggregate: groupBy=[[test.col_int32]], aggr=[[count(Int64(1))]]
         TableScan: test projection=[col_int32]
-    "
+    "#
     );
 }
 
@@ -526,7 +526,7 @@ fn recursive_cte_outer_projection_pushdown() -> Result<()> {
     // recursive CTE, even though the outer query only requires col_int32
     assert_snapshot!(
         format!("{plan}"),
-        @r"
+        @"
     SubqueryAlias: nodes
       Projection: id
         RecursiveQuery: is_distinct=false
@@ -551,7 +551,7 @@ fn recursive_cte_with_aliased_self_reference() -> Result<()> {
 
     assert_snapshot!(
         format!("{plan}"),
-        @r"
+        @"
     SubqueryAlias: nodes
       Projection: id
         RecursiveQuery: is_distinct=false
@@ -585,7 +585,7 @@ fn recursive_cte_projection_pushdown_baseline() -> Result<()> {
     // and only the needed column is selected from the recursive table
     assert_snapshot!(
         format!("{plan}"),
-        @r"
+        @"
     SubqueryAlias: countdown
       RecursiveQuery: is_distinct=false
         Projection: test.col_int32 AS n
@@ -848,8 +848,8 @@ fn extension_node_does_not_block_projection_pruning() -> Result<()> {
     OpaqueRequirementsExtension
       Sort: t.a ASC NULLS FIRST, t.ts ASC NULLS FIRST
         Projection: t.a, CAST(t.ts AS Timestamp(ms, "UTC")) AS ts
-          Filter: __common_expr_3 > TimestampMillisecond(1000, Some("UTC")) AND __common_expr_3 < TimestampMillisecond(2000, Some("UTC"))
-            Projection: CAST(t.ts AS Timestamp(ms, "UTC")) AS __common_expr_3, t.a, t.ts
+          Filter: "t.ts" > TimestampMillisecond(1000, Some("UTC")) AND "t.ts" < TimestampMillisecond(2000, Some("UTC"))
+            Projection: CAST(t.ts AS Timestamp(ms, "UTC")), t.a, t.ts
               TableScan: t projection=[a, ts], partial_filters=[CAST(t.ts AS Timestamp(ms, "UTC")) > TimestampMillisecond(1000, Some("UTC")), CAST(t.ts AS Timestamp(ms, "UTC")) < TimestampMillisecond(2000, Some("UTC"))]
     "#,
     );

@@ -255,7 +255,7 @@ EXPLAIN SELECT id, name FROM users QUALIFY COUNT(*) OVER () > 1 ORDER BY id;
 logical_plan
 01)Sort: users.id ASC NULLS LAST
 02)--Projection: users.id, users.name
-03)----Filter: count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Int64(1)
+03)----Filter: "count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" > Int64(1)
 04)------WindowAggr: windowExpr=[[count(Int64(1)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 05)--------TableScan: users projection=[id, name]
 physical_plan
@@ -269,9 +269,9 @@ query TT
 explain select row_number() over (PARTITION BY dept) as rk from users qualify rk > 1;
 ----
 logical_plan
-01)Projection: row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS rk
-02)--Filter: row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > UInt64(1)
-03)----Projection: row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+01)Projection: "row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS rk
+02)--Filter: "row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" > UInt64(1)
+03)----Projection: "row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 04)------WindowAggr: windowExpr=[[row_number() PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 05)--------TableScan: users projection=[dept]
 physical_plan
@@ -292,12 +292,12 @@ HAVING SUM(salary) > 20000
 QUALIFY r > 60000
 ----
 logical_plan
-01)Projection: users.dept, avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS r
-02)--Filter: avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING > Decimal128(60000.000000,14,6)
-03)----Projection: users.dept, avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+01)Projection: users.dept, "avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS r
+02)--Filter: "avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" > Decimal128(60000.000000,14,6)
+03)----Projection: users.dept, "avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
 04)------WindowAggr: windowExpr=[[avg(users.salary) PARTITION BY [users.dept] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 05)--------Projection: users.dept, users.salary
-06)----------Filter: sum(users.salary) > Decimal128(20000.00,20,2)
+06)----------Filter: "sum(users.salary)" > Decimal128(20000.00,20,2)
 07)------------Aggregate: groupBy=[[users.dept, users.salary]], aggr=[[sum(users.salary)]]
 08)--------------Filter: users.salary > Decimal128(5000.00,10,2)
 09)----------------TableScan: users projection=[salary, dept]
@@ -326,9 +326,9 @@ ORDER BY dept;
 ----
 logical_plan
 01)Sort: users.dept ASC NULLS LAST
-02)--Projection: users.dept, sum(users.salary) AS s
-03)----Filter: rank() ORDER BY [sum(users.salary) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(1)
-04)------WindowAggr: windowExpr=[[rank() ORDER BY [sum(users.salary) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+02)--Projection: users.dept, "sum(users.salary)" AS s
+03)----Filter: "rank() ORDER BY [sum(users.salary) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" = UInt64(1)
+04)------WindowAggr: windowExpr=[[rank() ORDER BY ["sum(users.salary)" DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank() ORDER BY [sum(users.salary) DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 05)--------Aggregate: groupBy=[[users.dept]], aggr=[[sum(users.salary)]]
 06)----------TableScan: users projection=[salary, dept]
 physical_plan

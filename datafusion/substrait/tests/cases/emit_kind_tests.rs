@@ -85,11 +85,11 @@ mod tests {
         // note how the Projections are not flattened
         assert_snapshot!(
         plan2,
-        @r"
-        Projection: random() AS c1, data.a + Int64(1) AS c2
+        @r#"
+        Projection: "random()" AS c1, "data.a + Int64(1)" AS c2
           Projection: data.a, data.b, data.c, data.d, data.e, data.f, random(), data.a + Int64(1)
             TableScan: data
-        "
+        "#
                 );
         Ok(())
     }

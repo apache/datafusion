@@ -1996,7 +1996,7 @@ ORDER BY l.col0;
 ----
 logical_plan
 01)Sort: l.col0 ASC NULLS LAST
-02)--Projection: l.col0, last_value(r.col1) ORDER BY [r.col0 ASC NULLS LAST] AS last_col1
+02)--Projection: l.col0, "last_value(r.col1) ORDER BY [r.col0 ASC NULLS LAST]" AS last_col1
 03)----Aggregate: groupBy=[[l.col0, l.col1, l.col2]], aggr=[[last_value(r.col1) ORDER BY [r.col0 ASC NULLS LAST]]]
 04)------Inner Join: l.col0 = r.col0
 05)--------SubqueryAlias: l
@@ -2094,7 +2094,7 @@ EXPLAIN SELECT a, b,
  GROUP BY b, a
 ----
 logical_plan
-01)Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, sum(annotated_data_infinite2.c) AS summation1
+01)Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, "sum(annotated_data_infinite2.c)" AS summation1
 02)--Aggregate: groupBy=[[annotated_data_infinite2.b, annotated_data_infinite2.a]], aggr=[[sum(CAST(annotated_data_infinite2.c AS Int64))]]
 03)----TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
@@ -2125,7 +2125,7 @@ EXPLAIN SELECT a, d,
  GROUP BY d, a
 ----
 logical_plan
-01)Projection: annotated_data_infinite2.a, annotated_data_infinite2.d, sum(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST] AS summation1
+01)Projection: annotated_data_infinite2.a, annotated_data_infinite2.d, "sum(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]" AS summation1
 02)--Aggregate: groupBy=[[annotated_data_infinite2.d, annotated_data_infinite2.a]], aggr=[[sum(CAST(annotated_data_infinite2.c AS Int64)) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]]]
 03)----TableScan: annotated_data_infinite2 projection=[a, c, d]
 physical_plan
@@ -2158,7 +2158,7 @@ EXPLAIN SELECT a, b, FIRST_VALUE(c ORDER BY a DESC) as first_c
   GROUP BY a, b
 ----
 logical_plan
-01)Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, first_value(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST] AS first_c
+01)Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, "first_value(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]" AS first_c
 02)--Aggregate: groupBy=[[annotated_data_infinite2.a, annotated_data_infinite2.b]], aggr=[[first_value(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]]]
 03)----TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
@@ -2184,7 +2184,7 @@ EXPLAIN SELECT a, b, LAST_VALUE(c ORDER BY a DESC) as last_c
   GROUP BY a, b
 ----
 logical_plan
-01)Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, last_value(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST] AS last_c
+01)Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, "last_value(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]" AS last_c
 02)--Aggregate: groupBy=[[annotated_data_infinite2.a, annotated_data_infinite2.b]], aggr=[[last_value(annotated_data_infinite2.c) ORDER BY [annotated_data_infinite2.a DESC NULLS FIRST]]]
 03)----TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
@@ -2211,7 +2211,7 @@ EXPLAIN SELECT a, b, LAST_VALUE(c) as last_c
   GROUP BY a, b
 ----
 logical_plan
-01)Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, last_value(annotated_data_infinite2.c) AS last_c
+01)Projection: annotated_data_infinite2.a, annotated_data_infinite2.b, "last_value(annotated_data_infinite2.c)" AS last_c
 02)--Aggregate: groupBy=[[annotated_data_infinite2.a, annotated_data_infinite2.b]], aggr=[[last_value(annotated_data_infinite2.c)]]
 03)----TableScan: annotated_data_infinite2 projection=[a, b, c]
 physical_plan
@@ -2515,7 +2515,7 @@ EXPLAIN SELECT country, (ARRAY_AGG(amount ORDER BY amount ASC)) AS amounts
   GROUP BY country
 ----
 logical_plan
-01)Projection: sales_global.country, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS amounts
+01)Projection: sales_global.country, "array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]" AS amounts
 02)--Aggregate: groupBy=[[sales_global.country]], aggr=[[array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]]
 03)----TableScan: sales_global projection=[country, amount]
 physical_plan
@@ -2544,7 +2544,7 @@ EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
         GROUP BY s.country
 ----
 logical_plan
-01)Projection: s.country, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
+01)Projection: s.country, "array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]" AS amounts, "sum(s.amount)" AS sum1
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
 04)------TableScan: sales_global projection=[country, amount]
@@ -2592,7 +2592,7 @@ EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.amount DESC) AS amounts,
           GROUP BY s.country
 ----
 logical_plan
-01)Projection: s.country, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
+01)Projection: s.country, "array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]" AS amounts, "sum(s.amount)" AS sum1
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
 04)------Sort: sales_global.country ASC NULLS LAST, fetch=10
@@ -2630,7 +2630,7 @@ EXPLAIN SELECT s.country, s.zip_code, ARRAY_AGG(s.amount ORDER BY s.amount DESC)
           GROUP BY s.country, s.zip_code
 ----
 logical_plan
-01)Projection: s.country, s.zip_code, array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
+01)Projection: s.country, s.zip_code, "array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST]" AS amounts, "sum(s.amount)" AS sum1
 02)--Aggregate: groupBy=[[s.country, s.zip_code]], aggr=[[array_agg(s.amount) ORDER BY [s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
 04)------Sort: sales_global.country ASC NULLS LAST, fetch=10
@@ -2667,7 +2667,7 @@ EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.country DESC) AS amounts
           GROUP BY s.country
 ----
 logical_plan
-01)Projection: s.country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
+01)Projection: s.country, "array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST]" AS amounts, "sum(s.amount)" AS sum1
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
 04)------Sort: sales_global.country ASC NULLS LAST, fetch=10
@@ -2703,7 +2703,7 @@ EXPLAIN SELECT s.country, ARRAY_AGG(s.amount ORDER BY s.country DESC, s.amount D
           GROUP BY s.country
 ----
 logical_plan
-01)Projection: s.country, array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST] AS amounts, sum(s.amount) AS sum1
+01)Projection: s.country, "array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST]" AS amounts, "sum(s.amount)" AS sum1
 02)--Aggregate: groupBy=[[s.country]], aggr=[[array_agg(s.amount) ORDER BY [s.country DESC NULLS FIRST, s.amount DESC NULLS FIRST], sum(CAST(s.amount AS Float64))]]
 03)----SubqueryAlias: s
 04)------Sort: sales_global.country ASC NULLS LAST, fetch=10
@@ -2802,7 +2802,7 @@ EXPLAIN SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
   GROUP BY country
 ----
 logical_plan
-01)Projection: sales_global.country, array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS amounts, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS fv2
+01)Projection: sales_global.country, "array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]" AS amounts, "first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]" AS fv1, "last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]" AS fv2
 02)--Aggregate: groupBy=[[sales_global.country]], aggr=[[array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]]
 03)----TableScan: sales_global projection=[country, amount]
 physical_plan
@@ -2833,7 +2833,7 @@ EXPLAIN SELECT country, ARRAY_AGG(amount ORDER BY amount ASC) AS amounts,
   GROUP BY country
 ----
 logical_plan
-01)Projection: sales_global.country, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS amounts, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS fv2
+01)Projection: sales_global.country, "array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]" AS amounts, "first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]" AS fv1, "last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]" AS fv2
 02)--Aggregate: groupBy=[[sales_global.country]], aggr=[[array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]]
 03)----TableScan: sales_global projection=[country, amount]
 physical_plan
@@ -2865,7 +2865,7 @@ EXPLAIN SELECT country, FIRST_VALUE(amount ORDER BY amount ASC) AS fv1,
   GROUP BY country
 ----
 logical_plan
-01)Projection: sales_global.country, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS fv2, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS amounts
+01)Projection: sales_global.country, "first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]" AS fv1, "last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]" AS fv2, "array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]" AS amounts
 02)--Aggregate: groupBy=[[sales_global.country]], aggr=[[first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]]
 03)----TableScan: sales_global projection=[country, amount]
 physical_plan
@@ -2895,7 +2895,7 @@ EXPLAIN SELECT country, SUM(amount ORDER BY ts DESC) AS sum1,
   GROUP BY country
 ----
 logical_plan
-01)Projection: sales_global.country, sum(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS sum1, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS amounts
+01)Projection: sales_global.country, "sum(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]" AS sum1, "array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]" AS amounts
 02)--Aggregate: groupBy=[[sales_global.country]], aggr=[[sum(CAST(sales_global.amount AS Float64)) ORDER BY [sales_global.ts DESC NULLS FIRST], array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]]
 03)----TableScan: sales_global projection=[country, ts, amount]
 physical_plan
@@ -2929,7 +2929,7 @@ EXPLAIN SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
   GROUP BY country
 ----
 logical_plan
-01)Projection: sales_global.country, first_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS lv1, sum(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS sum1
+01)Projection: sales_global.country, "first_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]" AS fv1, "last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]" AS lv1, "sum(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]" AS sum1
 02)--Aggregate: groupBy=[[sales_global.country]], aggr=[[first_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], sum(CAST(sales_global.amount AS Float64)) ORDER BY [sales_global.ts DESC NULLS FIRST]]]
 03)----TableScan: sales_global projection=[country, ts, amount]
 physical_plan
@@ -2962,7 +2962,7 @@ EXPLAIN SELECT country, FIRST_VALUE(amount ORDER BY ts DESC) as fv1,
   GROUP BY country
 ----
 logical_plan
-01)Projection: sales_global.country, first_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS lv1, sum(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS sum1
+01)Projection: sales_global.country, "first_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]" AS fv1, "last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]" AS lv1, "sum(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]" AS sum1
 02)--Aggregate: groupBy=[[sales_global.country]], aggr=[[first_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST], sum(CAST(sales_global.amount AS Float64)) ORDER BY [sales_global.ts DESC NULLS FIRST]]]
 03)----TableScan: sales_global projection=[country, ts, amount]
 physical_plan
@@ -2992,7 +2992,7 @@ ORDER BY s.sn
 ----
 logical_plan
 01)Sort: s.sn ASC NULLS LAST
-02)--Projection: s.zip_code, s.country, s.sn, s.ts, s.currency, last_value(e.amount) ORDER BY [e.sn ASC NULLS LAST] AS last_rate
+02)--Projection: s.zip_code, s.country, s.sn, s.ts, s.currency, "last_value(e.amount) ORDER BY [e.sn ASC NULLS LAST]" AS last_rate
 03)----Aggregate: groupBy=[[s.sn, s.zip_code, s.country, s.ts, s.currency]], aggr=[[last_value(e.amount) ORDER BY [e.sn ASC NULLS LAST]]]
 04)------Projection: s.zip_code, s.country, s.sn, s.ts, s.currency, e.sn, e.amount
 05)--------Inner Join: s.currency = e.currency Filter: s.ts >= e.ts
@@ -3039,7 +3039,7 @@ EXPLAIN SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
 ----
 logical_plan
 01)Sort: sales_global.country ASC NULLS LAST
-02)--Projection: sales_global.country, first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv2
+02)--Projection: sales_global.country, "first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]" AS fv1, "last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]" AS fv2
 03)----Aggregate: groupBy=[[sales_global.country]], aggr=[[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]]
 04)------TableScan: sales_global projection=[country, ts, amount]
 physical_plan
@@ -3100,7 +3100,7 @@ EXPLAIN SELECT country, FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
 ----
 logical_plan
 01)Sort: sales_global.country ASC NULLS LAST
-02)--Projection: sales_global.country, first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS fv2
+02)--Projection: sales_global.country, "first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]" AS fv1, "last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]" AS fv2
 03)----Aggregate: groupBy=[[sales_global.country]], aggr=[[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]]
 04)------TableScan: sales_global projection=[country, ts, amount]
 physical_plan
@@ -3137,7 +3137,7 @@ EXPLAIN SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
   FROM sales_global
 ----
 logical_plan
-01)Projection: first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv2
+01)Projection: "first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]" AS fv1, "last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]" AS fv2
 02)--Aggregate: groupBy=[[]], aggr=[[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]]
 03)----TableScan: sales_global projection=[ts, amount]
 physical_plan
@@ -3163,7 +3163,7 @@ EXPLAIN SELECT FIRST_VALUE(amount ORDER BY ts ASC) AS fv1,
   FROM sales_global
 ----
 logical_plan
-01)Projection: first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS fv2
+01)Projection: "first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]" AS fv1, "last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]" AS fv2
 02)--Aggregate: groupBy=[[]], aggr=[[first_value(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]]
 03)----TableScan: sales_global projection=[ts, amount]
 physical_plan
@@ -3187,7 +3187,7 @@ EXPLAIN SELECT ARRAY_AGG(amount ORDER BY ts ASC) AS array_agg1
   FROM sales_global
 ----
 logical_plan
-01)Projection: array_agg(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST] AS array_agg1
+01)Projection: "array_agg(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]" AS array_agg1
 02)--Aggregate: groupBy=[[]], aggr=[[array_agg(sales_global.amount) ORDER BY [sales_global.ts ASC NULLS LAST]]]
 03)----TableScan: sales_global projection=[ts, amount]
 physical_plan
@@ -3211,7 +3211,7 @@ EXPLAIN SELECT ARRAY_AGG(amount ORDER BY ts DESC) AS array_agg1
   FROM sales_global
 ----
 logical_plan
-01)Projection: array_agg(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST] AS array_agg1
+01)Projection: "array_agg(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]" AS array_agg1
 02)--Aggregate: groupBy=[[]], aggr=[[array_agg(sales_global.amount) ORDER BY [sales_global.ts DESC NULLS FIRST]]]
 03)----TableScan: sales_global projection=[ts, amount]
 physical_plan
@@ -3235,7 +3235,7 @@ EXPLAIN SELECT ARRAY_AGG(amount ORDER BY amount ASC) AS array_agg1
   FROM sales_global
 ----
 logical_plan
-01)Projection: array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS array_agg1
+01)Projection: "array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]" AS array_agg1
 02)--Aggregate: groupBy=[[]], aggr=[[array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]]
 03)----TableScan: sales_global projection=[amount]
 physical_plan
@@ -3262,7 +3262,7 @@ EXPLAIN SELECT country, ARRAY_AGG(amount ORDER BY amount ASC) AS array_agg1
 ----
 logical_plan
 01)Sort: sales_global.country ASC NULLS LAST
-02)--Projection: sales_global.country, array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS array_agg1
+02)--Projection: sales_global.country, "array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]" AS array_agg1
 03)----Aggregate: groupBy=[[sales_global.country]], aggr=[[array_agg(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]]]
 04)------TableScan: sales_global projection=[country, amount]
 physical_plan
@@ -3297,7 +3297,7 @@ EXPLAIN SELECT country, ARRAY_AGG(amount ORDER BY amount DESC) AS amounts,
 ----
 logical_plan
 01)Sort: sales_global.country ASC NULLS LAST
-02)--Projection: sales_global.country, array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS amounts, first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST] AS fv1, last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST] AS fv2
+02)--Projection: sales_global.country, "array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]" AS amounts, "first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST]" AS fv1, "last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]" AS fv2
 03)----Aggregate: groupBy=[[sales_global.country]], aggr=[[array_agg(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST], first_value(sales_global.amount) ORDER BY [sales_global.amount ASC NULLS LAST], last_value(sales_global.amount) ORDER BY [sales_global.amount DESC NULLS FIRST]]]
 04)------TableScan: sales_global projection=[country, amount]
 physical_plan
@@ -3560,7 +3560,7 @@ EXPLAIN SELECT r.sn, SUM(l.amount), r.amount
 ----
 logical_plan
 01)Sort: r.sn ASC NULLS LAST
-02)--Projection: r.sn, sum(l.amount), r.amount
+02)--Projection: r.sn, "sum(l.amount)", r.amount
 03)----Aggregate: groupBy=[[r.sn, r.amount]], aggr=[[sum(CAST(l.amount AS Float64))]]
 04)------Projection: l.amount, r.sn, r.amount
 05)--------Inner Join:  Filter: l.sn >= r.sn
@@ -3738,7 +3738,7 @@ logical_plan
 02)--Projection: l.zip_code, l.country, l.sn, l.ts, l.currency, l.amount, l.sum_amount
 03)----Aggregate: groupBy=[[l.sn, l.zip_code, l.country, l.ts, l.currency, l.amount, l.sum_amount]], aggr=[[]]
 04)------SubqueryAlias: l
-05)--------Projection: l.zip_code, l.country, l.sn, l.ts, l.currency, l.amount, sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING AS sum_amount
+05)--------Projection: l.zip_code, l.country, l.sn, l.ts, l.currency, l.amount, "sum(l.amount) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING" AS sum_amount
 06)----------WindowAggr: windowExpr=[[sum(CAST(l.amount AS Float64)) ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING]]
 07)------------SubqueryAlias: l
 08)--------------TableScan: sales_global_with_pk projection=[zip_code, country, sn, ts, currency, amount]
@@ -3968,7 +3968,7 @@ FROM multiple_ordered_table
 GROUP BY d;
 ----
 logical_plan
-01)Projection: first_value(multiple_ordered_table.a) ORDER BY [multiple_ordered_table.a ASC NULLS LAST] AS first_a, last_value(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST] AS last_c
+01)Projection: "first_value(multiple_ordered_table.a) ORDER BY [multiple_ordered_table.a ASC NULLS LAST]" AS first_a, "last_value(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST]" AS last_c
 02)--Aggregate: groupBy=[[multiple_ordered_table.d]], aggr=[[first_value(multiple_ordered_table.a) ORDER BY [multiple_ordered_table.a ASC NULLS LAST], last_value(multiple_ordered_table.c) ORDER BY [multiple_ordered_table.c DESC NULLS FIRST]]]
 03)----TableScan: multiple_ordered_table projection=[a, c, d]
 physical_plan
@@ -4030,13 +4030,13 @@ ORDER BY row_n
 logical_plan
 01)Projection: amount_usd
 02)--Sort: row_n ASC NULLS LAST
-03)----Projection: last_value(l.d) ORDER BY [l.a ASC NULLS LAST] AS amount_usd, row_n
+03)----Projection: "last_value(l.d) ORDER BY [l.a ASC NULLS LAST]" AS amount_usd, row_n
 04)------Aggregate: groupBy=[[row_n]], aggr=[[last_value(l.d) ORDER BY [l.a ASC NULLS LAST]]]
 05)--------Projection: l.a, l.d, row_n
 06)----------Inner Join: l.d = r.d Filter: CAST(l.a AS Int64) >= CAST(r.a AS Int64) - Int64(10)
 07)------------SubqueryAlias: l
 08)--------------TableScan: multiple_ordered_table projection=[a, d]
-09)------------Projection: r.a, r.d, row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_n
+09)------------Projection: r.a, r.d, "row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS row_n
 10)--------------WindowAggr: windowExpr=[[row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 11)----------------SubqueryAlias: r
 12)------------------TableScan: multiple_ordered_table projection=[a, d]
@@ -4140,7 +4140,7 @@ GROUP BY c;
 ----
 logical_plan
 01)Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, sum1]], aggr=[[]]
-02)--Projection: multiple_ordered_table_with_pk.c, sum(multiple_ordered_table_with_pk.d) AS sum1
+02)--Projection: multiple_ordered_table_with_pk.c, "sum(multiple_ordered_table_with_pk.d)" AS sum1
 03)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 04)------TableScan: multiple_ordered_table_with_pk projection=[c, d]
 physical_plan
@@ -4157,9 +4157,9 @@ EXPLAIN SELECT c, sum1, SUM(b) OVER() as sumb
     GROUP BY c);
 ----
 logical_plan
-01)Projection: multiple_ordered_table_with_pk.c, sum1, sum(multiple_ordered_table_with_pk.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sumb
+01)Projection: multiple_ordered_table_with_pk.c, sum1, "sum(multiple_ordered_table_with_pk.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS sumb
 02)--WindowAggr: windowExpr=[[sum(CAST(multiple_ordered_table_with_pk.b AS Int64)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-03)----Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
+03)----Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, "sum(multiple_ordered_table_with_pk.d)" AS sum1
 04)------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 05)--------TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
 physical_plan
@@ -4185,11 +4185,11 @@ logical_plan
 01)Projection: lhs.c, rhs.c, lhs.sum1, rhs.sum1
 02)--Inner Join: lhs.b = rhs.b
 03)----SubqueryAlias: lhs
-04)------Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
+04)------Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, "sum(multiple_ordered_table_with_pk.d)" AS sum1
 05)--------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 06)----------TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
 07)----SubqueryAlias: rhs
-08)------Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
+08)------Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b, "sum(multiple_ordered_table_with_pk.d)" AS sum1
 09)--------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 10)----------TableScan: multiple_ordered_table_with_pk projection=[b, c, d]
 physical_plan
@@ -4216,11 +4216,11 @@ logical_plan
 01)Projection: lhs.c, rhs.c, lhs.sum1, rhs.sum1
 02)--Cross Join:
 03)----SubqueryAlias: lhs
-04)------Projection: multiple_ordered_table_with_pk.c, sum(multiple_ordered_table_with_pk.d) AS sum1
+04)------Projection: multiple_ordered_table_with_pk.c, "sum(multiple_ordered_table_with_pk.d)" AS sum1
 05)--------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 06)----------TableScan: multiple_ordered_table_with_pk projection=[c, d]
 07)----SubqueryAlias: rhs
-08)------Projection: multiple_ordered_table_with_pk.c, sum(multiple_ordered_table_with_pk.d) AS sum1
+08)------Projection: multiple_ordered_table_with_pk.c, "sum(multiple_ordered_table_with_pk.d)" AS sum1
 09)--------Aggregate: groupBy=[[multiple_ordered_table_with_pk.c]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 10)----------TableScan: multiple_ordered_table_with_pk projection=[c, d]
 physical_plan
@@ -4243,7 +4243,7 @@ DISTRIBUTE BY a
 ----
 logical_plan
 01)Repartition: DistributeBy(multiple_ordered_table_with_pk.a)
-02)--Projection: multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b, sum(multiple_ordered_table_with_pk.d) AS sum1
+02)--Projection: multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b, "sum(multiple_ordered_table_with_pk.d)" AS sum1
 03)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, multiple_ordered_table_with_pk.b]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 04)------TableScan: multiple_ordered_table_with_pk projection=[a, b, c, d]
 physical_plan_error This feature is not implemented: Physical plan does not support DistributeBy partitioning
@@ -4260,10 +4260,10 @@ UNION ALL
 ----
 logical_plan
 01)Union
-02)--Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, sum(multiple_ordered_table_with_pk.d) AS sum1
+02)--Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, "sum(multiple_ordered_table_with_pk.d)" AS sum1
 03)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 04)------TableScan: multiple_ordered_table_with_pk projection=[a, c, d]
-05)--Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, sum(multiple_ordered_table_with_pk.d) AS sum1
+05)--Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, "sum(multiple_ordered_table_with_pk.d)" AS sum1
 06)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 07)------TableScan: multiple_ordered_table_with_pk projection=[a, c, d]
 physical_plan
@@ -4282,7 +4282,7 @@ EXPLAIN SELECT c, a, SUM(d) as sum1
  GROUP BY c
 ----
 logical_plan
-01)Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, sum(multiple_ordered_table_with_pk.d) AS sum1
+01)Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, "sum(multiple_ordered_table_with_pk.d)" AS sum1
 02)--Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 03)----TableScan: multiple_ordered_table_with_pk projection=[a, c, d]
 physical_plan
@@ -4299,7 +4299,7 @@ EXPLAIN SELECT *
    LIMIT 5)
 ----
 logical_plan
-01)Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, sum(multiple_ordered_table_with_pk.d) AS sum1
+01)Projection: multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a, "sum(multiple_ordered_table_with_pk.d)" AS sum1
 02)--Limit: skip=0, fetch=5
 03)----Aggregate: groupBy=[[multiple_ordered_table_with_pk.c, multiple_ordered_table_with_pk.a]], aggr=[[sum(CAST(multiple_ordered_table_with_pk.d AS Int64))]]
 04)------TableScan: multiple_ordered_table_with_pk projection=[a, c, d]
@@ -4335,7 +4335,7 @@ query TT
 EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT x) FROM t1 GROUP BY y;
 ----
 logical_plan
-01)Projection: sum(DISTINCT t1.x), max(DISTINCT t1.x)
+01)Projection: "sum(DISTINCT t1.x)", "max(DISTINCT t1.x)"
 02)--Aggregate: groupBy=[[t1.y]], aggr=[[sum(DISTINCT CAST(t1.x AS Float64)), max(DISTINCT t1.x)]]
 03)----TableScan: t1 projection=[x, y]
 physical_plan
@@ -4349,7 +4349,7 @@ query TT
 EXPLAIN SELECT SUM(DISTINCT CAST(x AS DOUBLE)), MAX(DISTINCT CAST(x AS DOUBLE)) FROM t1 GROUP BY y;
 ----
 logical_plan
-01)Projection: sum(alias1) AS sum(DISTINCT t1.x), max(alias1) AS max(DISTINCT t1.x)
+01)Projection: "sum(alias1)" AS sum(DISTINCT t1.x), "max(alias1)" AS max(DISTINCT t1.x)
 02)--Aggregate: groupBy=[[t1.y]], aggr=[[sum(alias1), max(alias1)]]
 03)----Aggregate: groupBy=[[t1.y, CAST(t1.x AS Float64) AS alias1]], aggr=[[]]
 04)------TableScan: t1 projection=[x, y]
@@ -4383,7 +4383,7 @@ EXPLAIN SELECT date_bin('15 minutes', ts) as time_chunks
 ----
 logical_plan
 01)Sort: time_chunks DESC NULLS FIRST, fetch=5
-02)--Projection: date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts) AS time_chunks
+02)--Projection: "date_bin(Utf8(""15 minutes""),unbounded_csv_with_timestamps.ts)" AS time_chunks
 03)----Aggregate: groupBy=[[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 900000000000 }"), unbounded_csv_with_timestamps.ts) AS date_bin(Utf8("15 minutes"),unbounded_csv_with_timestamps.ts)]], aggr=[[]]
 04)------TableScan: unbounded_csv_with_timestamps projection=[ts]
 physical_plan
@@ -4436,7 +4436,7 @@ EXPLAIN SELECT extract(month from ts) as months
 ----
 logical_plan
 01)Sort: months DESC NULLS FIRST, fetch=5
-02)--Projection: date_part(Utf8("MONTH"),csv_with_timestamps.ts) AS months
+02)--Projection: "date_part(Utf8(""MONTH""),csv_with_timestamps.ts)" AS months
 03)----Aggregate: groupBy=[[date_part(Utf8("MONTH"), csv_with_timestamps.ts)]], aggr=[[]]
 04)------TableScan: csv_with_timestamps projection=[ts]
 physical_plan
@@ -4546,7 +4546,7 @@ EXPLAIN SELECT c1, count(distinct c2), min(distinct c2), sum(c3), max(c4) FROM a
 ----
 logical_plan
 01)Sort: aggregate_test_100.c1 ASC NULLS LAST
-02)--Projection: aggregate_test_100.c1, count(alias1) AS count(DISTINCT aggregate_test_100.c2), min(alias1) AS min(DISTINCT aggregate_test_100.c2), sum(alias2) AS sum(aggregate_test_100.c3), max(alias3) AS max(aggregate_test_100.c4)
+02)--Projection: aggregate_test_100.c1, "count(alias1)" AS count(DISTINCT aggregate_test_100.c2), "min(alias1)" AS min(DISTINCT aggregate_test_100.c2), "sum(alias2)" AS sum(aggregate_test_100.c3), "max(alias3)" AS max(aggregate_test_100.c4)
 03)----Aggregate: groupBy=[[aggregate_test_100.c1]], aggr=[[count(alias1), min(alias1), sum(alias2), max(alias3)]]
 04)------Aggregate: groupBy=[[aggregate_test_100.c1, aggregate_test_100.c2 AS alias1]], aggr=[[sum(CAST(aggregate_test_100.c3 AS Int64)) AS alias2, max(aggregate_test_100.c4) AS alias3]]
 05)--------TableScan: aggregate_test_100 projection=[c1, c2, c3, c4]
@@ -4716,7 +4716,7 @@ ORDER BY MAX(t1) DESC
 LIMIT 4;
 ----
 logical_plan
-01)Sort: max(timestamp_table.t1) DESC NULLS FIRST, fetch=4
+01)Sort: "max(timestamp_table.t1)" DESC NULLS FIRST, fetch=4
 02)--Aggregate: groupBy=[[timestamp_table.c2]], aggr=[[max(timestamp_table.t1)]]
 03)----TableScan: timestamp_table projection=[t1, c2]
 physical_plan
@@ -5249,7 +5249,7 @@ GROUP BY
     ts_chunk;
 ----
 logical_plan
-01)Projection: date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }"),keywords_stream.ts,Utf8("2000-01-01")) AS ts_chunk, count(keywords_stream.keyword) AS alert_keyword_count
+01)Projection: "date_bin(IntervalMonthDayNano(""IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }""),keywords_stream.ts,Utf8(""2000-01-01""))" AS ts_chunk, "count(keywords_stream.keyword)" AS alert_keyword_count
 02)--Aggregate: groupBy=[[date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }"), keywords_stream.ts, TimestampNanosecond(946684800000000000, None)) AS date_bin(IntervalMonthDayNano("IntervalMonthDayNano { months: 0, days: 0, nanoseconds: 120000000000 }"),keywords_stream.ts,Utf8("2000-01-01"))]], aggr=[[count(keywords_stream.keyword)]]
 03)----LeftSemi Join: keywords_stream.keyword = __correlated_sq_1.keyword
 04)------TableScan: keywords_stream projection=[ts, keyword]
@@ -5727,7 +5727,7 @@ query TT
 explain select * from t group by a, b, c, "😀";
 ----
 logical_plan
-01)Aggregate: groupBy=[[t.a, t.b, t.c, t.😀]], aggr=[[]]
+01)Aggregate: groupBy=[[t.a, t.b, t.c, t."😀"]], aggr=[[]]
 02)--TableScan: t projection=[a, b, c, 😀]
 physical_plan
 01)AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b, c@2 as c, 😀@3 as 😀], aggr=[]

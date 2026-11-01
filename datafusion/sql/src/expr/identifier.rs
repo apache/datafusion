@@ -84,7 +84,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                     return Ok(Expr::OuterReferenceColumn(
                         Arc::clone(field),
-                        Column::from((qualifier, field)),
+                        bind_outer_column(outer, Column::from((qualifier, field))),
                     ));
                 }
             }
@@ -193,7 +193,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
                                     Ok(Expr::OuterReferenceColumn(
                                         Arc::clone(field),
-                                        Column::from((qualifier, field)),
+                                        bind_outer_column(
+                                            outer,
+                                            Column::from((qualifier, field)),
+                                        ),
                                     ))
                                 }
                                 // Found no matching field, will return a default
@@ -353,6 +356,15 @@ fn generate_schema_search_terms(
         let (relation, column_name) = form_identifier(qualifier_and_column).unwrap();
         (relation, column_name, &ids[nested_names_index..])
     })
+}
+
+/// Sets the id of an outer reference to the id of the field of the outer
+/// query's schema that it refers to
+fn bind_outer_column(outer: &DFSchema, column: Column) -> Column {
+    match outer.maybe_index_of_column(&column) {
+        Some(idx) => column.with_id(outer.field_id(idx)),
+        None => column,
+    }
 }
 
 #[cfg(test)]

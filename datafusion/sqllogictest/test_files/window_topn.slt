@@ -44,8 +44,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE rn <= 3;
 ----
 logical_plan
-01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
-02)--Filter: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(3)
+01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
+02)--Filter: "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= UInt64(3)
 03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_t projection=[id, pk, val]
 physical_plan
@@ -112,8 +112,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE rn <= 3;
 ----
 logical_plan
-01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
-02)--Filter: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(3)
+01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
+02)--Filter: "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= UInt64(3)
 03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_t projection=[id, pk, val]
 physical_plan
@@ -133,8 +133,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE 3 >= rn;
 ----
 logical_plan
-01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
-02)--Filter: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(3)
+01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
+02)--Filter: "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= UInt64(3)
 03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_t projection=[id, pk, val]
 physical_plan
@@ -149,7 +149,7 @@ EXPLAIN SELECT * FROM (
 ) WHERE val <= 3;
 ----
 logical_plan
-01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
 02)--Filter: window_topn_t.val <= Int32(3)
 03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_t projection=[id, pk, val]
@@ -184,8 +184,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE 3 < rn;
 ----
 logical_plan
-01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
-02)--Filter: row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW > UInt64(3)
+01)Projection: window_topn_t.id, window_topn_t.pk, window_topn_t.val, "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
+02)--Filter: "row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" > UInt64(3)
 03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_t.pk] ORDER BY [window_topn_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_t projection=[id, pk, val]
 physical_plan
@@ -787,8 +787,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE rk <= 3;
 ----
 logical_plan
-01)Projection: window_topn_rank_t.id, window_topn_rank_t.pk, window_topn_rank_t.val, rank() PARTITION BY [window_topn_rank_t.pk] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rk
-02)--Filter: rank() PARTITION BY [window_topn_rank_t.pk] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(3)
+01)Projection: window_topn_rank_t.id, window_topn_rank_t.pk, window_topn_rank_t.val, "rank() PARTITION BY [window_topn_rank_t.pk] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rk
+02)--Filter: "rank() PARTITION BY [window_topn_rank_t.pk] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= UInt64(3)
 03)----WindowAggr: windowExpr=[[rank() PARTITION BY [window_topn_rank_t.pk] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_rank_t projection=[id, pk, val]
 physical_plan
@@ -893,8 +893,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE rk <= 1;
 ----
 logical_plan
-01)Projection: window_topn_rank_t.id, window_topn_rank_t.pk, window_topn_rank_t.val, rank() PARTITION BY [window_topn_rank_t.pk, window_topn_rank_t.id] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rk
-02)--Filter: rank() PARTITION BY [window_topn_rank_t.pk, window_topn_rank_t.id] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(1)
+01)Projection: window_topn_rank_t.id, window_topn_rank_t.pk, window_topn_rank_t.val, "rank() PARTITION BY [window_topn_rank_t.pk, window_topn_rank_t.id] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rk
+02)--Filter: "rank() PARTITION BY [window_topn_rank_t.pk, window_topn_rank_t.id] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= UInt64(1)
 03)----WindowAggr: windowExpr=[[rank() PARTITION BY [window_topn_rank_t.pk, window_topn_rank_t.id] ORDER BY [window_topn_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_rank_t projection=[id, pk, val]
 physical_plan
@@ -971,8 +971,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE rk = 1;
 ----
 logical_plan
-01)Projection: window_topn_rank_eq_t.id, window_topn_rank_eq_t.pk, window_topn_rank_eq_t.val, rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rk
-02)--Filter: rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(1)
+01)Projection: window_topn_rank_eq_t.id, window_topn_rank_eq_t.pk, window_topn_rank_eq_t.val, "rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rk
+02)--Filter: "rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" = UInt64(1)
 03)----WindowAggr: windowExpr=[[rank() PARTITION BY [window_topn_rank_eq_t.pk] ORDER BY [window_topn_rank_eq_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_rank_eq_t projection=[id, pk, val]
 physical_plan
@@ -1032,8 +1032,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE rk <= 3;
 ----
 logical_plan
-01)Projection: window_topn_rank_dense_t.id, window_topn_rank_dense_t.pk, window_topn_rank_dense_t.val, rank() PARTITION BY [window_topn_rank_dense_t.pk] ORDER BY [window_topn_rank_dense_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rk
-02)--Filter: rank() PARTITION BY [window_topn_rank_dense_t.pk] ORDER BY [window_topn_rank_dense_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(3)
+01)Projection: window_topn_rank_dense_t.id, window_topn_rank_dense_t.pk, window_topn_rank_dense_t.val, "rank() PARTITION BY [window_topn_rank_dense_t.pk] ORDER BY [window_topn_rank_dense_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rk
+02)--Filter: "rank() PARTITION BY [window_topn_rank_dense_t.pk] ORDER BY [window_topn_rank_dense_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= UInt64(3)
 03)----WindowAggr: windowExpr=[[rank() PARTITION BY [window_topn_rank_dense_t.pk] ORDER BY [window_topn_rank_dense_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_rank_dense_t projection=[id, pk, val]
 physical_plan
@@ -1099,8 +1099,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE rk <= 2;
 ----
 logical_plan
-01)Projection: window_topn_rank_null_t.id, window_topn_rank_null_t.pk, window_topn_rank_null_t.val, rank() PARTITION BY [window_topn_rank_null_t.pk] ORDER BY [window_topn_rank_null_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rk
-02)--Filter: rank() PARTITION BY [window_topn_rank_null_t.pk] ORDER BY [window_topn_rank_null_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+01)Projection: window_topn_rank_null_t.id, window_topn_rank_null_t.pk, window_topn_rank_null_t.val, "rank() PARTITION BY [window_topn_rank_null_t.pk] ORDER BY [window_topn_rank_null_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rk
+02)--Filter: "rank() PARTITION BY [window_topn_rank_null_t.pk] ORDER BY [window_topn_rank_null_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= UInt64(2)
 03)----WindowAggr: windowExpr=[[rank() PARTITION BY [window_topn_rank_null_t.pk] ORDER BY [window_topn_rank_null_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_rank_null_t projection=[id, pk, val]
 physical_plan
@@ -1209,8 +1209,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE dr <= 2;
 ----
 logical_plan
-01)Projection: window_topn_dense_rank_t.id, window_topn_dense_rank_t.pk, window_topn_dense_rank_t.val, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS dr
-02)--Filter: dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+01)Projection: window_topn_dense_rank_t.id, window_topn_dense_rank_t.pk, window_topn_dense_rank_t.val, "dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS dr
+02)--Filter: "dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= UInt64(2)
 03)----WindowAggr: windowExpr=[[dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_dense_rank_t projection=[id, pk, val]
 physical_plan
@@ -1287,8 +1287,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE dr <= 2;
 ----
 logical_plan
-01)Projection: window_topn_dense_rank_t.id, window_topn_dense_rank_t.pk, window_topn_dense_rank_t.val, dense_rank() ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS dr
-02)--Filter: dense_rank() ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+01)Projection: window_topn_dense_rank_t.id, window_topn_dense_rank_t.pk, window_topn_dense_rank_t.val, "dense_rank() ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS dr
+02)--Filter: "dense_rank() ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= UInt64(2)
 03)----WindowAggr: windowExpr=[[dense_rank() ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_dense_rank_t projection=[id, pk, val]
 physical_plan
@@ -1306,8 +1306,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE dr <= 3;
 ----
 logical_plan
-01)Projection: window_topn_dense_rank_t.id, window_topn_dense_rank_t.pk, window_topn_dense_rank_t.val, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS dr
-02)--Filter: dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING <= UInt64(3)
+01)Projection: window_topn_dense_rank_t.id, window_topn_dense_rank_t.pk, window_topn_dense_rank_t.val, "dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS dr
+02)--Filter: "dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" <= UInt64(3)
 03)----WindowAggr: windowExpr=[[dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 04)------TableScan: window_topn_dense_rank_t projection=[id, pk, val]
 physical_plan
@@ -1369,8 +1369,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE dr <= 2;
 ----
 logical_plan
-01)Projection: window_topn_dense_rank_t.id, window_topn_dense_rank_t.pk, window_topn_dense_rank_t.val, row_number() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS dr
-02)--Filter: dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+01)Projection: window_topn_dense_rank_t.id, window_topn_dense_rank_t.pk, window_topn_dense_rank_t.val, "row_number() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn, "dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS dr
+02)--Filter: "dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= UInt64(2)
 03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, dense_rank() PARTITION BY [window_topn_dense_rank_t.pk] ORDER BY [window_topn_dense_rank_t.val ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_dense_rank_t projection=[id, pk, val]
 physical_plan
@@ -1459,7 +1459,7 @@ EXPLAIN SELECT id, pk, val FROM (
 ----
 logical_plan
 01)Projection: window_topn_dr_null_t.id, window_topn_dr_null_t.pk, window_topn_dr_null_t.val
-02)--Filter: dense_rank() PARTITION BY [window_topn_dr_null_t.pk] ORDER BY [window_topn_dr_null_t.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(2)
+02)--Filter: "dense_rank() PARTITION BY [window_topn_dr_null_t.pk] ORDER BY [window_topn_dr_null_t.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= UInt64(2)
 03)----WindowAggr: windowExpr=[[dense_rank() PARTITION BY [window_topn_dr_null_t.pk] ORDER BY [window_topn_dr_null_t.val ASC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: window_topn_dr_null_t projection=[id, pk, val]
 physical_plan
@@ -1507,8 +1507,8 @@ EXPLAIN SELECT * FROM (
 ) WHERE rn <= 1;
 ----
 logical_plan
-01)Projection: t.c1, t.c2, row_number() PARTITION BY [t.c1] ORDER BY [t.c2 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
-02)--Filter: row_number() PARTITION BY [t.c1] ORDER BY [t.c2 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW <= UInt64(1)
+01)Projection: t.c1, t.c2, "row_number() PARTITION BY [t.c1] ORDER BY [t.c2 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
+02)--Filter: "row_number() PARTITION BY [t.c1] ORDER BY [t.c2 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" <= UInt64(1)
 03)----WindowAggr: windowExpr=[[row_number() PARTITION BY [t.c1] ORDER BY [t.c2 DESC NULLS FIRST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: t projection=[c1, c2]
 physical_plan

@@ -59,13 +59,13 @@ EXPLAIN SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY co
 logical_plan
 01)Sort: parquet_table.column1 ASC NULLS LAST
 02)--Projection: parquet_table.column1
-03)----Filter: __datafusion_extracted_1 > Int64(2)
-04)------Projection: file_row_index() AS __datafusion_extracted_1, parquet_table.column1
+03)----Filter: "file_row_index()" > Int64(2)
+04)------Projection: file_row_index(), parquet_table.column1
 05)--------TableScan: parquet_table projection=[column1]
 physical_plan
 01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--FilterExec: __datafusion_extracted_1@0 > 2, projection=[column1@1]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as __datafusion_extracted_1, column1], file_type=parquet
+02)--FilterExec: file_row_index()@0 > 2, projection=[column1@1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as file_row_index(), column1], file_type=parquet
 
 query I
 SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
@@ -84,13 +84,13 @@ EXPLAIN SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY co
 logical_plan
 01)Sort: parquet_table.column1 ASC NULLS LAST
 02)--Projection: parquet_table.column1
-03)----Filter: __datafusion_extracted_1 > Int64(2)
-04)------Projection: file_row_index() AS __datafusion_extracted_1, parquet_table.column1
+03)----Filter: "file_row_index()" > Int64(2)
+04)------Projection: file_row_index(), parquet_table.column1
 05)--------TableScan: parquet_table projection=[column1]
 physical_plan
 01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
-02)--FilterExec: __datafusion_extracted_1@0 > 2, projection=[column1@1]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as __datafusion_extracted_1, column1], file_type=parquet
+02)--FilterExec: file_row_index()@0 > 2, projection=[column1@1]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as file_row_index(), column1], file_type=parquet
 
 query I
 SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1

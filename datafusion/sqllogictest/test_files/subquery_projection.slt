@@ -248,7 +248,7 @@ EXPLAIN SELECT id, NULLIF(id, 1) IN (SELECT id FROM r3) AS m FROM nn;
 ----
 logical_plan
 01)Projection: nn.id, __correlated_sq_1.mark AS m
-02)--LeftMark Join: nullif(CAST(nn.id AS Int64), Int64(1)) = __correlated_sq_1.r3.id null_aware
+02)--LeftMark Join: nullif(CAST(nn.id AS Int64), Int64(1)) = __correlated_sq_1."r3.id" null_aware
 03)----TableScan: nn projection=[id]
 04)----SubqueryAlias: __correlated_sq_1
 05)------Projection: CAST(r3.id AS Int64)
@@ -312,7 +312,7 @@ EXPLAIN SELECT id, NULLIF(id, 1) IN (SELECT id FROM r_empty) AS m FROM nn;
 ----
 logical_plan
 01)Projection: nn.id, __correlated_sq_1.mark AS m
-02)--LeftMark Join: nullif(CAST(nn.id AS Int64), Int64(1)) = __correlated_sq_1.r_empty.id null_aware
+02)--LeftMark Join: nullif(CAST(nn.id AS Int64), Int64(1)) = __correlated_sq_1."r_empty.id" null_aware
 03)----TableScan: nn projection=[id]
 04)----SubqueryAlias: __correlated_sq_1
 05)------Projection: CAST(r_empty.id AS Int64)
@@ -371,7 +371,7 @@ query TT
 EXPLAIN SELECT k FROM t1 WHERE NULLIF(t1.k, 1) NOT IN (SELECT t2.k + 10 FROM t2 WHERE t2.k = t1.k);
 ----
 logical_plan
-01)LeftAnti Join: nullif(CAST(t1.k AS Int64), Int64(1)) = __correlated_sq_1.t2.k + Int64(10), t1.k = __correlated_sq_1.k null_aware
+01)LeftAnti Join: nullif(CAST(t1.k AS Int64), Int64(1)) = __correlated_sq_1."t2.k + Int64(10)", t1.k = __correlated_sq_1.k null_aware
 02)--TableScan: t1 projection=[k]
 03)--SubqueryAlias: __correlated_sq_1
 04)----Projection: CAST(t2.k AS Int64) + Int64(10), t2.k
@@ -420,7 +420,7 @@ EXPLAIN SELECT k FROM ra WHERE NULLIF(ra.k, 1) NOT IN (SELECT rb.k FROM rb WHERE
 ----
 logical_plan
 01)Projection: ra.k
-02)--LeftAnti Join: nullif(CAST(ra.k AS Int64), Int64(1)) = __correlated_sq_1.rb.k Filter: __correlated_sq_1.z > ra.z null_aware
+02)--LeftAnti Join: nullif(CAST(ra.k AS Int64), Int64(1)) = __correlated_sq_1."rb.k" Filter: __correlated_sq_1.z > ra.z null_aware
 03)----TableScan: ra projection=[k, z]
 04)----SubqueryAlias: __correlated_sq_1
 05)------Projection: CAST(rb.k AS Int64), rb.z

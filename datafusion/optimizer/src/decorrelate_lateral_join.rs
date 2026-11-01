@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
+use crate::decorrelate::{PlanKey, PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::optimizer::ApplyOrder;
 use crate::utils::evaluates_to_null;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -113,7 +113,7 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     // the map is keyed by LogicalPlan and wrapping changes the plan.
     let collected_count_expr_map = pull_up
         .collected_count_expr_map
-        .get(&rewritten_subquery)
+        .get(&PlanKey::new(&rewritten_subquery))
         .cloned();
 
     // Re-wrap in SubqueryAlias if the original had one, preserving the alias name.
@@ -251,6 +251,8 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
                     relation: qualifier.cloned(),
                     name: name.to_string(),
                     metadata: None,
+                    id: datafusion_common::ColumnId::next(),
+                    kind: expr::AliasKind::Explicit,
                 }));
                 continue;
             }

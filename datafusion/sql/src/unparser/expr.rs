@@ -2066,6 +2066,7 @@ mod tests {
                     relation: Some(TableReference::partial("a", "b")),
                     name: "c".to_string(),
                     spans: Spans::new(),
+                    id: None,
                 })
                 .gt(lit(4)),
                 r#"(b.c > 4)"#,
@@ -2438,6 +2439,7 @@ mod tests {
                         relation: Some(TableReference::partial("schema", "table")),
                         name: "array_col".to_string(),
                         spans: Spans::new(),
+                        id: None,
                     })),
                     outer: false,
                 }),

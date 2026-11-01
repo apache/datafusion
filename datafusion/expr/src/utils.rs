@@ -375,7 +375,11 @@ fn get_exprs_except_skipped(
     columns_to_skip: &HashSet<Column>,
 ) -> Vec<Expr> {
     if columns_to_skip.is_empty() {
-        schema.iter().map(Expr::from).collect::<Vec<Expr>>()
+        schema
+            .columns()
+            .into_iter()
+            .map(Expr::Column)
+            .collect::<Vec<Expr>>()
     } else {
         schema
             .columns()
@@ -1052,16 +1056,70 @@ pub fn passthrough_field_index(expr: &Expr, schema: &DFSchema) -> Option<usize> 
 }
 
 /// Convert any `Expr` to an `Expr::Column`.
+///
+/// The column carries the [`ColumnId`] of the output of `plan` that computes
+/// `expr`, so it refers to that output even if another output has the same
+/// name.
+///
+/// [`ColumnId`]: datafusion_common::ColumnId
 pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     match expr {
         Expr::Column(col) => {
-            let (qualifier, field) = plan.schema().qualified_field_from_column(col)?;
-            Ok(Expr::from(Column::from((qualifier, field))))
+            let schema = plan.schema();
+            let idx = schema.index_of_column(col)?;
+            Ok(Expr::Column(schema.column(idx)))
         }
-        _ => Ok(Expr::Column(Column::from_name(
-            expr.schema_name().to_string(),
-        ))),
+        _ => {
+            let id = output_index_of_expr(expr, plan)
+                .and_then(|idx| plan.schema().field_id(idx));
+            Ok(Expr::Column(
+                Column::from_name(expr.schema_name().to_string()).with_id(id),
+            ))
+        }
     }
+}
+
+/// Is `output` (an output expression of a node) the output that computes
+/// `expr`?
+fn is_output_of(output: &Expr, expr: &Expr) -> bool {
+    output == expr || output.unalias_ref() == expr
+}
+
+/// The index of the output field of `plan` that `expr` computes, if `plan`
+/// is a node that computes its outputs from expressions
+fn output_index_of_expr(expr: &Expr, plan: &LogicalPlan) -> Option<usize> {
+    let outputs: Vec<&Expr> = match plan {
+        LogicalPlan::Projection(projection) => projection.expr.iter().collect(),
+        LogicalPlan::Aggregate(aggregate) => {
+            let mut outputs = grouping_set_to_exprlist(&aggregate.group_expr).ok()?;
+            if matches!(aggregate.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
+                // the internal grouping id column has no expression
+                return outputs
+                    .iter()
+                    .position(|output| is_output_of(output, expr))
+                    .or_else(|| {
+                        let offset = outputs.len() + 1;
+                        aggregate
+                            .aggr_expr
+                            .iter()
+                            .position(|output| is_output_of(output, expr))
+                            .map(|i| i + offset)
+                    });
+            }
+            outputs.extend(aggregate.aggr_expr.iter());
+            outputs
+        }
+        LogicalPlan::Window(window) => {
+            let offset = window.input.schema().fields().len();
+            return window
+                .window_expr
+                .iter()
+                .position(|output| is_output_of(output, expr))
+                .map(|i| i + offset);
+        }
+        _ => return None,
+    };
+    outputs.iter().position(|output| is_output_of(output, expr))
 }
 
 /// Recursively walk an expression tree, collecting the column indexes

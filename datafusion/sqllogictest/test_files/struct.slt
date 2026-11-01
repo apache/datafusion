@@ -1777,9 +1777,9 @@ query TT
 explain select s['b'] from struct_ctor_view where s is not null;
 ----
 logical_plan
-01)Projection: __datafusion_extracted_1 AS struct_ctor_view.s[b]
+01)Projection: "struct_ctor_view.s[b]"
 02)--SubqueryAlias: struct_ctor_view
-03)----Projection: struct_ctor_null.b AS __datafusion_extracted_1
+03)----Projection: struct_ctor_null.b AS struct_ctor_view.s[b]
 04)------TableScan: struct_ctor_null projection=[b]
 physical_plan
 01)ProjectionExec: expr=[b@0 as struct_ctor_view.s[b]]
@@ -1820,15 +1820,15 @@ query TT
 explain select a, s['b'] from (select -a as a, s from leaf_same_name where a > 0);
 ----
 logical_plan
-01)Projection: (- leaf_same_name.a) AS a, __datafusion_extracted_1 AS leaf_same_name.s[b]
+01)Projection: (- leaf_same_name.a) AS a, "leaf_same_name.s[b]"
 02)--Filter: leaf_same_name.a > Int32(0)
-03)----Projection: get_field(leaf_same_name.s, Utf8("b")) AS __datafusion_extracted_1, leaf_same_name.a
+03)----Projection: get_field(leaf_same_name.s, Utf8("b")), leaf_same_name.a
 04)------TableScan: leaf_same_name projection=[a, s]
 physical_plan
-01)ProjectionExec: expr=[(- a@1) as a, __datafusion_extracted_1@0 as leaf_same_name.s[b]]
+01)ProjectionExec: expr=[(- a@1) as a, leaf_same_name.s[b]@0 as leaf_same_name.s[b]]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 03)----FilterExec: a@1 > 0
-04)------ProjectionExec: expr=[get_field(s@1, b) as __datafusion_extracted_1, a@0 as a]
+04)------ProjectionExec: expr=[get_field(s@1, b) as leaf_same_name.s[b], a@0 as a]
 05)--------DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Through a Filter
@@ -1942,14 +1942,14 @@ query TT
 explain select b, a, s['x'] from (select rename_swap_struct.a as b, rename_swap_struct.b as a, s from rename_swap_struct) where a > 15;
 ----
 logical_plan
-01)Projection: rename_swap_struct.a AS b, rename_swap_struct.b AS a, __datafusion_extracted_1 AS rename_swap_struct.s[x]
+01)Projection: rename_swap_struct.a AS b, rename_swap_struct.b AS a, "rename_swap_struct.s[x]"
 02)--Filter: rename_swap_struct.b > Int32(15)
-03)----Projection: get_field(rename_swap_struct.s, Utf8("x")) AS __datafusion_extracted_1, rename_swap_struct.a, rename_swap_struct.b
+03)----Projection: get_field(rename_swap_struct.s, Utf8("x")), rename_swap_struct.a, rename_swap_struct.b
 04)------TableScan: rename_swap_struct projection=[a, b, s]
 physical_plan
-01)ProjectionExec: expr=[a@1 as b, b@2 as a, __datafusion_extracted_1@0 as rename_swap_struct.s[x]]
+01)ProjectionExec: expr=[a@1 as b, b@2 as a, rename_swap_struct.s[x]@0 as rename_swap_struct.s[x]]
 02)--FilterExec: b@2 > 15
-03)----ProjectionExec: expr=[get_field(s@2, x) as __datafusion_extracted_1, a@0 as a, b@1 as b]
+03)----ProjectionExec: expr=[get_field(s@2, x) as rename_swap_struct.s[x], a@0 as a, b@1 as b]
 04)------DataSourceExec: partitions=1, partition_sizes=[1]
 
 statement ok
@@ -1992,11 +1992,11 @@ select env, sum(s['a']) from expanded group by env order by env;
 ----
 logical_plan
 01)Sort: expanded.env ASC NULLS LAST
-02)--Projection: expanded.env, sum(__datafusion_extracted_1) AS sum(expanded.s[a])
-03)----Aggregate: groupBy=[[expanded.env]], aggr=[[sum(CAST(__datafusion_extracted_1 AS Int64))]]
-04)------SubqueryAlias: expanded
+02)--Aggregate: groupBy=[[expanded.env]], aggr=[[sum(CAST("expanded.s[a]" AS Int64))]]
+03)----SubqueryAlias: expanded
+04)------Projection: samples.env AS env, "expanded.s[a]"
 05)--------SubqueryAlias: samples
-06)----------Projection: leaf_merge_source.env, get_field(leaf_merge_source.s, Utf8("a")) AS __datafusion_extracted_1
+06)----------Projection: leaf_merge_source.env, get_field(leaf_merge_source.s, Utf8("a")) AS expanded.s[a]
 07)------------TableScan: leaf_merge_source projection=[s, env]
 
 statement ok

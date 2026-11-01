@@ -4,7 +4,7 @@
 
 use crate::logical_plan::consumer::{NameTracker, SubstraitConsumer};
 use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
-use datafusion::common::{Column, DFSchemaRef, internal_err, not_impl_err};
+use datafusion::common::{DFSchemaRef, internal_err, not_impl_err};
 use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::{
     Aggregate, Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder,
@@ -151,7 +151,7 @@ fn reorder_grouping_set_output(
         (0..grouping_id_index)
             .chain(grouping_id_index + 1..schema.fields().len())
             .chain(std::iter::once(grouping_id_index))
-            .map(|index| Expr::Column(Column::from(schema.qualified_field(index))))
+            .map(|index| Expr::Column(schema.column(index)))
             .collect()
     };
     project(plan, exprs)

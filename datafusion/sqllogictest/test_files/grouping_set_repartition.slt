@@ -106,21 +106,21 @@ ORDER BY channel NULLS FIRST, brand NULLS FIRST;
 ----
 logical_plan
 01)Sort: sub.channel ASC NULLS FIRST, sub.brand ASC NULLS FIRST
-02)--Projection: sub.channel, sub.brand, sum(sub.total) AS grand_total
+02)--Projection: sub.channel, sub.brand, "sum(sub.total)" AS grand_total
 03)----Aggregate: groupBy=[[ROLLUP (sub.channel, sub.brand)]], aggr=[[sum(sub.total)]]
 04)------SubqueryAlias: sub
 05)--------Union
-06)----------Projection: Utf8("store") AS channel, sales.brand, sum(sales.amount) AS total
+06)----------Projection: Utf8("store") AS channel, sales.brand, "sum(sales.amount)" AS total
 07)------------Aggregate: groupBy=[[sales.brand]], aggr=[[sum(CAST(sales.amount AS Int64))]]
 08)--------------Projection: sales.brand, sales.amount
 09)----------------Filter: sales.channel = Utf8View("store")
 10)------------------TableScan: sales projection=[channel, brand, amount], partial_filters=[sales.channel = Utf8View("store")]
-11)----------Projection: Utf8("web") AS channel, sales.brand, sum(sales.amount) AS total
+11)----------Projection: Utf8("web") AS channel, sales.brand, "sum(sales.amount)" AS total
 12)------------Aggregate: groupBy=[[sales.brand]], aggr=[[sum(CAST(sales.amount AS Int64))]]
 13)--------------Projection: sales.brand, sales.amount
 14)----------------Filter: sales.channel = Utf8View("web")
 15)------------------TableScan: sales projection=[channel, brand, amount], partial_filters=[sales.channel = Utf8View("web")]
-16)----------Projection: Utf8("catalog") AS channel, sales.brand, sum(sales.amount) AS total
+16)----------Projection: Utf8("catalog") AS channel, sales.brand, "sum(sales.amount)" AS total
 17)------------Aggregate: groupBy=[[sales.brand]], aggr=[[sum(CAST(sales.amount AS Int64))]]
 18)--------------Projection: sales.brand, sales.amount
 19)----------------Filter: sales.channel = Utf8View("catalog")

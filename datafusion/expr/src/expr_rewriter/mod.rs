@@ -74,6 +74,13 @@ impl<'a> ColumnNormalizer<'a> {
     #[inline]
     pub(crate) fn normalize_column(&mut self, column: Column) -> Result<Column> {
         if column.relation.is_some() {
+            // Already qualified: bind the id of the field it names
+            if column.id.is_none() {
+                let schema = self.plan.schema();
+                if let Some(idx) = schema.maybe_index_of_column(&column) {
+                    return Ok(column.with_id(schema.field_id(idx)));
+                }
+            }
             return Ok(column);
         }
 
@@ -257,7 +264,12 @@ pub fn coerce_plan_expr_for_schema(
             Ok(LogicalPlan::Projection(projection))
         }
         _ => {
-            let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
+            let exprs: Vec<Expr> = plan
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .collect();
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
             let add_project = new_exprs.iter().any(|expr| expr.try_as_col().is_none());
             if add_project {
@@ -282,8 +294,12 @@ fn coerce_exprs_for_schema(
             let new_type = dst_schema.field(idx).data_type();
             if new_type != &expr.get_type(src_schema)? {
                 match expr {
-                    Expr::Alias(Alias { expr, name, .. }) => {
-                        Ok(expr.cast_to(new_type, src_schema)?.alias(name))
+                    // The alias keeps defining the same column (its id, name
+                    // and kind), now of the cast expression
+                    Expr::Alias(alias) => {
+                        let cast =
+                            alias.expr.as_ref().clone().cast_to(new_type, src_schema)?;
+                        Ok(Expr::Alias(alias.with_expr(cast)))
                     }
                     #[expect(deprecated)]
                     Expr::Wildcard { .. } => Ok(expr),
@@ -336,6 +352,11 @@ pub enum SavedName {
     Saved {
         relation: Option<TableReference>,
         name: String,
+        /// The [`ColumnId`] of the column the expression defines, if it is
+        /// an alias with an id
+        ///
+        /// [`ColumnId`]: datafusion_common::ColumnId
+        id: Option<datafusion_common::ColumnId>,
     },
     /// Name is not preserved
     None,
@@ -371,10 +392,15 @@ impl NamePreserver {
                 Expr::Alias(alias) => SavedName::Saved {
                     relation: alias.relation.clone(),
                     name: alias.name.clone(),
+                    id: Some(alias.id),
                 },
                 _ => {
                     let (relation, name) = expr.qualified_name();
-                    SavedName::Saved { relation, name }
+                    SavedName::Saved {
+                        relation,
+                        name,
+                        id: None,
+                    }
                 }
             }
         } else {
@@ -387,12 +413,22 @@ impl SavedName {
     /// Ensures the qualified name of the rewritten expression is preserved
     pub fn restore(self, expr: Expr) -> Expr {
         match self {
-            SavedName::Saved { relation, name } => {
+            SavedName::Saved { relation, name, id } => {
                 let (new_relation, new_name) = expr.qualified_name();
-                if new_relation != relation || new_name != name {
-                    expr.alias_qualified(relation, name)
+                let expr = if new_relation != relation || new_name != name {
+                    // an implicit alias of the old name would hide the new one
+                    expr.into_unaliased_implicit()
+                        .alias_qualified(relation, name)
                 } else {
                     expr
+                };
+                // The rewritten expression still defines the same column
+                match (expr, id) {
+                    (Expr::Alias(alias), Some(id)) => Expr::Alias(alias.with_id(id)),
+                    (expr @ Expr::Column(_), _) | (expr, None) => expr,
+                    (expr, Some(id)) => {
+                        crate::logical_plan::column_ids::named_output_expr(expr, Some(id))
+                    }
                 }
             }
             SavedName::None => expr,

@@ -1294,7 +1294,7 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @r#"
-        Sort: t1.b ASC NULLS LAST, fetch=3
+        Sort: "t1.b" ASC NULLS LAST, fetch=3
           Projection: t1.a, t2.b AS t1.b, t1.b
             Right Join: t1.a = t2.a
               TableScan: t1

@@ -595,9 +595,9 @@ query TT
 explain select unnest(unnest(column3)), column3 from recursive_unnest_table;
 ----
 logical_plan
-01)Projection: __unnest_placeholder(UNNEST(recursive_unnest_table.column3)).c0 AS UNNEST(recursive_unnest_table.column3).c0, __unnest_placeholder(UNNEST(recursive_unnest_table.column3)).c1 AS UNNEST(recursive_unnest_table.column3).c1, recursive_unnest_table.column3
+01)Projection: "__unnest_placeholder(UNNEST(recursive_unnest_table.column3)).c0" AS UNNEST(recursive_unnest_table.column3).c0, "__unnest_placeholder(UNNEST(recursive_unnest_table.column3)).c1" AS UNNEST(recursive_unnest_table.column3).c1, recursive_unnest_table.column3
 02)--Unnest: lists[] structs[__unnest_placeholder(UNNEST(recursive_unnest_table.column3))]
-03)----Projection: __unnest_placeholder(recursive_unnest_table.column3,depth=1) AS UNNEST(recursive_unnest_table.column3) AS __unnest_placeholder(UNNEST(recursive_unnest_table.column3)), recursive_unnest_table.column3
+03)----Projection: "__unnest_placeholder(recursive_unnest_table.column3,depth=1)" AS UNNEST(recursive_unnest_table.column3) AS __unnest_placeholder(UNNEST(recursive_unnest_table.column3)), recursive_unnest_table.column3
 04)------Unnest: lists[__unnest_placeholder(recursive_unnest_table.column3)|depth=1] structs[]
 05)--------Projection: recursive_unnest_table.column3 AS __unnest_placeholder(recursive_unnest_table.column3), recursive_unnest_table.column3
 06)----------TableScan: recursive_unnest_table projection=[column3]
@@ -653,9 +653,9 @@ query TT
 explain select unnest(unnest(unnest(column3)['c1'])), column3 from recursive_unnest_table;
 ----
 logical_plan
-01)Projection: __unnest_placeholder(UNNEST(recursive_unnest_table.column3)[c1],depth=2) AS UNNEST(UNNEST(UNNEST(recursive_unnest_table.column3)[c1])), recursive_unnest_table.column3
+01)Projection: "__unnest_placeholder(UNNEST(recursive_unnest_table.column3)[c1],depth=2)" AS UNNEST(UNNEST(UNNEST(recursive_unnest_table.column3)[c1])), recursive_unnest_table.column3
 02)--Unnest: lists[__unnest_placeholder(UNNEST(recursive_unnest_table.column3)[c1])|depth=2] structs[]
-03)----Projection: get_field(__unnest_placeholder(recursive_unnest_table.column3,depth=1) AS UNNEST(recursive_unnest_table.column3), Utf8("c1")) AS __unnest_placeholder(UNNEST(recursive_unnest_table.column3)[c1]), recursive_unnest_table.column3
+03)----Projection: get_field("__unnest_placeholder(recursive_unnest_table.column3,depth=1)" AS UNNEST(recursive_unnest_table.column3), Utf8("c1")) AS __unnest_placeholder(UNNEST(recursive_unnest_table.column3)[c1]), recursive_unnest_table.column3
 04)------Unnest: lists[__unnest_placeholder(recursive_unnest_table.column3)|depth=1] structs[]
 05)--------Projection: recursive_unnest_table.column3 AS __unnest_placeholder(recursive_unnest_table.column3), recursive_unnest_table.column3
 06)----------TableScan: recursive_unnest_table projection=[column3]
@@ -894,7 +894,7 @@ logical_plan
 02)--SubqueryAlias: u
 03)----TableScan: unnest_table projection=[column1, column2, column3, column4, column5]
 04)--Subquery:
-05)----Projection: __unnest_placeholder(outer_ref(u.column1),depth=1) AS UNNEST(outer_ref(u.column1))
+05)----Projection: "__unnest_placeholder(outer_ref(u.column1),depth=1)" AS UNNEST(outer_ref(u.column1))
 06)------Unnest: lists[__unnest_placeholder(outer_ref(u.column1))|depth=1] structs[]
 07)--------Projection: outer_ref(u.column1) AS __unnest_placeholder(outer_ref(u.column1))
 08)----------EmptyRelation: rows=1
@@ -910,7 +910,7 @@ logical_plan
 03)----TableScan: unnest_table projection=[column1, column2, column3, column4, column5]
 04)--SubqueryAlias: t
 05)----Subquery:
-06)------Projection: __unnest_placeholder(outer_ref(u.column1),depth=1) AS column1
+06)------Projection: "__unnest_placeholder(outer_ref(u.column1),depth=1)" AS column1
 07)--------Unnest: lists[__unnest_placeholder(outer_ref(u.column1))|depth=1] structs[]
 08)----------Projection: outer_ref(u.column1) AS __unnest_placeholder(outer_ref(u.column1))
 09)------------EmptyRelation: rows=1
@@ -965,12 +965,12 @@ EXPLAIN WITH unnested AS (SELECT
   FROM range(1,5)) SELECT array_agg(ar) FROM unnested group by generated_id;
 ----
 logical_plan
-01)Projection: array_agg(unnested.ar)
+01)Projection: "array_agg(unnested.ar)"
 02)--Aggregate: groupBy=[[unnested.generated_id]], aggr=[[array_agg(unnested.ar)]]
 03)----SubqueryAlias: unnested
-04)------Projection: generated_id, __unnest_placeholder(make_array(range().value),depth=1) AS UNNEST(make_array(range().value)) AS ar
+04)------Projection: generated_id, "__unnest_placeholder(make_array(range().value),depth=1)" AS UNNEST(make_array(range().value)) AS ar
 05)--------Unnest: lists[__unnest_placeholder(make_array(range().value))|depth=1] structs[]
-06)----------Projection: row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS generated_id, make_array(range().value) AS __unnest_placeholder(make_array(range().value))
+06)----------Projection: "row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING" AS generated_id, make_array(range().value) AS __unnest_placeholder(make_array(range().value))
 07)------------WindowAggr: windowExpr=[[row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
 08)--------------TableScan: range() projection=[value]
 physical_plan
@@ -1027,7 +1027,7 @@ EXPLAIN SELECT UNNEST(column1), column2 FROM t ORDER BY column2;
 ----
 logical_plan
 01)Sort: t.column2 ASC NULLS LAST
-02)--Projection: __unnest_placeholder(t.column1,depth=1) AS UNNEST(t.column1), t.column2
+02)--Projection: "__unnest_placeholder(t.column1,depth=1)" AS UNNEST(t.column1), t.column2
 03)----Unnest: lists[__unnest_placeholder(t.column1)|depth=1] structs[]
 04)------Projection: t.column1 AS __unnest_placeholder(t.column1), t.column2
 05)--------TableScan: t projection=[column1, column2]
@@ -1042,7 +1042,7 @@ EXPLAIN SELECT UNNEST(column1) as unnested, column2 FROM t ORDER BY 1;
 ----
 logical_plan
 01)Sort: unnested ASC NULLS LAST
-02)--Projection: __unnest_placeholder(t.column1,depth=1) AS UNNEST(t.column1) AS unnested, t.column2
+02)--Projection: "__unnest_placeholder(t.column1,depth=1)" AS UNNEST(t.column1) AS unnested, t.column2
 03)----Unnest: lists[__unnest_placeholder(t.column1)|depth=1] structs[]
 04)------Projection: t.column1 AS __unnest_placeholder(t.column1), t.column2
 05)--------TableScan: t projection=[column1, column2]
@@ -1087,9 +1087,9 @@ EXPLAIN WITH unnested AS (
 ) SELECT * FROM unnested order by 1;
 ----
 logical_plan
-01)Sort: unnested.struct(t.column1,t.column2,t.column3).c0 ASC NULLS LAST
+01)Sort: unnested."struct(t.column1,t.column2,t.column3).c0" ASC NULLS LAST
 02)--SubqueryAlias: unnested
-03)----Projection: __unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0 AS struct(t.column1,t.column2,t.column3).c0, __unnest_placeholder(struct(t.column1,t.column2,t.column3)).c1 AS struct(t.column1,t.column2,t.column3).c1, __unnest_placeholder(struct(t.column1,t.column2,t.column3)).c2 AS struct(t.column1,t.column2,t.column3).c2
+03)----Projection: "__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c0" AS struct(t.column1,t.column2,t.column3).c0, "__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c1" AS struct(t.column1,t.column2,t.column3).c1, "__unnest_placeholder(struct(t.column1,t.column2,t.column3)).c2" AS struct(t.column1,t.column2,t.column3).c2
 04)------Unnest: lists[] structs[__unnest_placeholder(struct(t.column1,t.column2,t.column3))]
 05)--------Projection: struct(t.column1, t.column2, t.column3) AS __unnest_placeholder(struct(t.column1,t.column2,t.column3))
 06)----------TableScan: t projection=[column1, column2, column3]
@@ -1143,7 +1143,7 @@ EXPLAIN SELECT UNNEST(column1), column2 FROM t ORDER BY column2;
 ----
 logical_plan
 01)Sort: t.column2 ASC NULLS LAST
-02)--Projection: __unnest_placeholder(t.column1).s1 AS t.column1.s1, __unnest_placeholder(t.column1).s2 AS t.column1.s2, __unnest_placeholder(t.column1).s3 AS t.column1.s3, t.column2
+02)--Projection: "__unnest_placeholder(t.column1).s1" AS t.column1.s1, "__unnest_placeholder(t.column1).s2" AS t.column1.s2, "__unnest_placeholder(t.column1).s3" AS t.column1.s3, t.column2
 03)----Unnest: lists[] structs[__unnest_placeholder(t.column1)]
 04)------Projection: t.column1 AS __unnest_placeholder(t.column1), t.column2
 05)--------TableScan: t projection=[column1, column2]
@@ -1213,7 +1213,7 @@ EXPLAIN SELECT UNNEST(UNNEST(column1)), UNNEST(column2), UNNEST(column3), column
 ----
 logical_plan
 01)Sort: t.column4 ASC NULLS LAST
-02)--Projection: __unnest_placeholder(t.column1,depth=2) AS UNNEST(UNNEST(t.column1)), __unnest_placeholder(t.column2,depth=1) AS UNNEST(t.column2), __unnest_placeholder(t.column3).s1 AS t.column3.s1, __unnest_placeholder(t.column3).s2 AS t.column3.s2, __unnest_placeholder(t.column3).s3 AS t.column3.s3, t.column4
+02)--Projection: "__unnest_placeholder(t.column1,depth=2)" AS UNNEST(UNNEST(t.column1)), "__unnest_placeholder(t.column2,depth=1)" AS UNNEST(t.column2), "__unnest_placeholder(t.column3).s1" AS t.column3.s1, "__unnest_placeholder(t.column3).s2" AS t.column3.s2, "__unnest_placeholder(t.column3).s3" AS t.column3.s3, t.column4
 03)----Unnest: lists[__unnest_placeholder(t.column1)|depth=2, __unnest_placeholder(t.column2)|depth=1] structs[__unnest_placeholder(t.column3)]
 04)------Projection: t.column1 AS __unnest_placeholder(t.column1), t.column2 AS __unnest_placeholder(t.column2), t.column3 AS __unnest_placeholder(t.column3), t.column4
 05)--------TableScan: t projection=[column1, column2, column3, column4]

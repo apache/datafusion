@@ -51,7 +51,7 @@ EXPLAIN
 SELECT LEAD(empno) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
 ----
 logical_plan
-01)Projection: lead(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+01)Projection: "lead(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
 02)--Limit: skip=0, fetch=3
 03)----WindowAggr: windowExpr=[[lead(employees.empno) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[empno]
@@ -88,7 +88,7 @@ EXPLAIN
 SELECT LEAD(empno, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
 ----
 logical_plan
-01)Projection: lead(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+01)Projection: "lead(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
 02)--Limit: skip=0, fetch=3
 03)----WindowAggr: windowExpr=[[lead(employees.empno, Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[empno]
@@ -184,7 +184,7 @@ LIMIT 3;
 ----
 logical_plan
 01)Sort: t.id ASC NULLS LAST, fetch=3
-02)--Projection: t.id, lag(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(t.v,Int64(-1)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(t.v,Int64(0)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, first_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, last_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(t.v,Int64(2)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+02)--Projection: t.id, "lag(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "lead(t.v,Int64(-1)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "lead(t.v,Int64(0)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "first_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "last_value(t.v) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW", "nth_value(t.v,Int64(2)) IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
 03)----WindowAggr: windowExpr=[[lag(t.v)IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(t.v, Int64(-1))IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(t.v, Int64(0))IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, first_value(t.v)IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, last_value(t.v)IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(t.v, Int64(2))IGNORE NULLS ORDER BY [t.id ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------SubqueryAlias: t
 05)--------Projection: column1 AS id, column2 AS v
@@ -249,7 +249,7 @@ LIMIT 5;
 ----
 logical_plan
 01)Sort: employees.empno ASC NULLS LAST, fetch=5
-02)--Projection: employees.empno, lead(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS lead1, lead(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS lead3, lead(employees.salary,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS lead5
+02)--Projection: employees.empno, "lead(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS lead1, "lead(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS lead3, "lead(employees.salary,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS lead5
 03)----WindowAggr: windowExpr=[[lead(employees.salary, Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(employees.salary, Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lead(employees.salary, Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[empno, salary]
 physical_plan
@@ -285,7 +285,7 @@ EXPLAIN
 SELECT NTH_VALUE(empno, 2) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
 ----
 logical_plan
-01)Projection: nth_value(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+01)Projection: "nth_value(employees.empno,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
 02)--Limit: skip=0, fetch=3
 03)----WindowAggr: windowExpr=[[nth_value(employees.empno, Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[empno]
@@ -322,7 +322,7 @@ EXPLAIN
 SELECT NTH_VALUE(empno, 5) OVER (ORDER BY empno ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM employees LIMIT 3
 ----
 logical_plan
-01)Projection: nth_value(employees.empno,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+01)Projection: "nth_value(employees.empno,Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
 02)--Limit: skip=0, fetch=3
 03)----WindowAggr: windowExpr=[[nth_value(employees.empno, Int64(5)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[empno]
@@ -387,7 +387,7 @@ FROM employees
 LIMIT 5;
 ----
 logical_plan
-01)Projection: employees.depname, employees.empno, sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_sum, avg(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_avg, min(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_min, max(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS running_max
+01)Projection: employees.depname, employees.empno, "sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS running_sum, "avg(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS running_avg, "min(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS running_min, "max(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS running_max
 02)--Limit: skip=0, fetch=5
 03)----WindowAggr: windowExpr=[[sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, avg(CAST(employees.salary AS Float64)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, min(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, max(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[depname, empno, salary]
@@ -450,7 +450,7 @@ LIMIT 5;
 ----
 logical_plan
 01)Sort: employees.empno ASC NULLS LAST, fetch=5
-02)--Projection: employees.empno, row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rnk, dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS drnk
+02)--Projection: employees.empno, "row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn, "rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rnk, "dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS drnk
 03)----WindowAggr: windowExpr=[[row_number() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, dense_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[empno]
 physical_plan
@@ -512,7 +512,7 @@ LIMIT 5;
 ----
 logical_plan
 01)Sort: employees.empno ASC NULLS LAST, fetch=5
-02)--Projection: employees.empno, percent_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS pr, cume_dist() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS cd, ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS nt
+02)--Projection: employees.empno, "percent_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS pr, "cume_dist() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS cd, "ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS nt
 03)----WindowAggr: windowExpr=[[percent_rank() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, cume_dist() ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, ntile(Int64(4)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[empno]
 physical_plan
@@ -577,7 +577,7 @@ LIMIT 5;
 ----
 logical_plan
 01)Sort: employees.empno ASC NULLS LAST, fetch=5
-02)--Projection: employees.empno, first_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS fv, lag(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS l1, last_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS lv, nth_value(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS n3
+02)--Projection: employees.empno, "first_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS fv, "lag(employees.salary,Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS l1, "last_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS lv, "nth_value(employees.salary,Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS n3
 03)----WindowAggr: windowExpr=[[first_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, lag(employees.salary, Int64(1)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, last_value(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW, nth_value(employees.salary, Int64(3)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[empno, salary]
 physical_plan
@@ -620,7 +620,7 @@ LIMIT 5
 ----
 logical_plan
 01)Sort: employees.depname ASC NULLS LAST, fetch=5
-02)--Projection: employees.depname, employees.empno, employees.salary, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW AS running_sum
+02)--Projection: employees.depname, employees.empno, employees.salary, "sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW" AS running_sum
 03)----WindowAggr: windowExpr=[[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[depname, empno, salary]
 physical_plan
@@ -664,7 +664,7 @@ LIMIT 5
 ----
 logical_plan
 01)Sort: employees.depname ASC NULLS LAST, fetch=5
-02)--Projection: employees.depname, employees.empno, employees.salary, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW AS running_sum
+02)--Projection: employees.depname, employees.empno, employees.salary, "sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW" AS running_sum
 03)----WindowAggr: windowExpr=[[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN 1 PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[depname, empno, salary]
 physical_plan
@@ -839,7 +839,7 @@ FROM employees
 LIMIT 3;
 ----
 logical_plan
-01)Projection: employees.empno, employees.salary, lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS lead2
+01)Projection: employees.empno, employees.salary, "lead(employees.salary,Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS lead2
 02)--Limit: skip=0, fetch=3
 03)----WindowAggr: windowExpr=[[lead(employees.salary, Int64(2)) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 04)------TableScan: employees projection=[empno, salary]
@@ -885,7 +885,7 @@ FROM huge_frame_t ORDER BY a LIMIT 2;
 ----
 logical_plan
 01)Sort: huge_frame_t.a ASC NULLS LAST, fetch=2
-02)--Projection: huge_frame_t.a, sum(huge_frame_t.x) ORDER BY [huge_frame_t.a ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING AS s
+02)--Projection: huge_frame_t.a, "sum(huge_frame_t.x) ORDER BY [huge_frame_t.a ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING" AS s
 03)----WindowAggr: windowExpr=[[sum(CAST(huge_frame_t.x AS Int64)) ORDER BY [huge_frame_t.a ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 18446744073709551615 FOLLOWING]]
 04)------TableScan: huge_frame_t projection=[a, x]
 physical_plan

@@ -27,6 +27,9 @@
 //! [`PushDownLeafProjections`]: crate::extract_leaf_expressions::PushDownLeafProjections
 
 use datafusion_expr::logical_plan::MaterializedCtePlan;
+use datafusion_expr::logical_plan::column_ids::{
+    ColumnMap, output_column_id, replace_columns,
+};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -41,7 +44,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     Column, DFSchema, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
-    plan_err, qualified_name,
+    plan_err,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
@@ -972,20 +975,18 @@ impl OptimizerRule for PushDownFilter {
                 Ok(Transformed::yes(LogicalPlan::Sort(sort)))
             }
             LogicalPlan::SubqueryAlias(mut subquery_alias) => {
+                let input_schema = subquery_alias.input.schema();
                 let mut replace_map =
-                    HashMap::with_capacity(subquery_alias.input.schema().fields().len());
-                for (i, (qualifier, field)) in
-                    subquery_alias.input.schema().iter().enumerate()
-                {
-                    let (sub_qualifier, sub_field) =
-                        subquery_alias.schema.qualified_field(i);
-                    replace_map.insert(
-                        qualified_name(sub_qualifier, sub_field.name()),
-                        Expr::Column(Column::new(qualifier.cloned(), field.name())),
+                    ColumnMap::with_capacity(input_schema.fields().len());
+                for i in 0..input_schema.fields().len() {
+                    replace_map.insert_field(
+                        &subquery_alias.schema,
+                        i,
+                        Expr::Column(input_schema.column(i)),
                     );
                 }
 
-                filter.predicate = replace_cols_by_name(filter.predicate, &replace_map)?;
+                filter.predicate = replace_columns(filter.predicate, &replace_map)?;
                 filter.input = subquery_alias.input;
                 subquery_alias.input = Arc::new(LogicalPlan::Filter(filter));
                 Ok(Transformed::yes(LogicalPlan::SubqueryAlias(subquery_alias)))
@@ -1077,20 +1078,20 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::Union(mut union) => {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
-                let mut replace_map = HashMap::with_capacity(union.schema.fields().len());
+                let mut replace_map =
+                    ColumnMap::with_capacity(union.schema.fields().len());
                 for input in union.inputs {
                     replace_map.clear();
-                    for (i, (qualifier, field)) in input.schema().iter().enumerate() {
-                        let (union_qualifier, union_field) =
-                            union.schema.qualified_field(i);
-                        replace_map.insert(
-                            qualified_name(union_qualifier, union_field.name()),
-                            Expr::Column(Column::new(qualifier.cloned(), field.name())),
+                    for i in 0..input.schema().fields().len() {
+                        replace_map.insert_field(
+                            &union.schema,
+                            i,
+                            Expr::Column(input.schema().column(i)),
                         );
                     }
 
                     let push_predicate =
-                        replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
+                        replace_columns(filter.predicate.clone(), &replace_map)?;
                     inputs.push(Arc::new(LogicalPlan::Filter(Filter::new(
                         push_predicate,
                         input,
@@ -1117,14 +1118,19 @@ impl OptimizerRule for PushDownFilter {
                 // After push, we need to replace `a+b` with Column(a)+Column(b)
                 // So we need create a replace_map, add {`a+b` --> Expr(Column(a)+Column(b))}
                 //
-                // Keyed by the output column, the same key `group_expr_columns`
-                // is built from, so a predicate admitted below cannot miss its
-                // replacement. See `replace_cols_by_column` for why the flat
-                // name is not enough.
-                let mut replace_map = HashMap::with_capacity(agg.group_expr.len());
+                // Keyed by the output column (its id, or its qualifier and
+                // name, see `ColumnMap`), so a predicate admitted below cannot
+                // miss its replacement: a qualified column `t.a` and an
+                // unqualified field named `t.a` are different columns.
+                let mut replace_map = ColumnMap::with_capacity(agg.group_expr.len());
                 for expr in &agg.group_expr {
                     let (relation, name) = expr.qualified_name();
-                    replace_map.insert(Column::new(relation, name), unalias(expr));
+                    replace_map.insert(
+                        output_column_id(expr, agg.input.schema()),
+                        relation,
+                        name,
+                        unalias(expr),
+                    );
                 }
 
                 let predicates = split_conjunction_owned(filter.predicate);
@@ -1133,7 +1139,7 @@ impl OptimizerRule for PushDownFilter {
                 for expr in predicates {
                     let cols = expr.column_refs();
                     if cols.iter().all(|c| group_expr_columns.contains(c)) {
-                        push_predicates.push(replace_cols_by_column(expr, &replace_map)?);
+                        push_predicates.push(replace_columns(expr, &replace_map)?);
                     } else {
                         keep_predicates.push(expr);
                     }
@@ -1550,27 +1556,23 @@ fn rewrite_projection(
     // into a filter causes optimizer instability — ExtractLeafExpressions will
     // undo the push-down, creating an infinite loop that runs until the
     // iteration limit is hit).
-    //
-    // Keyed by the output column rather than its flat name, for the reason
-    // given on `replace_cols_by_column`. `EliminateGroupByConstant` can leave a
-    // projection that outputs both `t.a` and `CAST(t.a AS ...)` under that one
-    // name.
-    let (non_pushable_map, pushable_map): (HashMap<_, _>, HashMap<_, _>) = projection
-        .schema
-        .iter()
-        .zip(projection.expr.iter())
-        .map(|((qualifier, field), expr)| {
-            (Column::new(qualifier.cloned(), field.name()), unalias(expr))
-        })
-        .partition(|(_, value)| {
-            value.is_volatile()
-                || value.placement() == ExpressionPlacement::MoveTowardsLeafNodes
-        });
+    let mut non_pushable_map = ColumnMap::new();
+    let mut pushable_map = ColumnMap::with_capacity(projection.expr.len());
+    for (i, expr) in projection.expr.iter().enumerate() {
+        let value = unalias(expr);
+        if value.is_volatile()
+            || value.placement() == ExpressionPlacement::MoveTowardsLeafNodes
+        {
+            non_pushable_map.insert_field(&projection.schema, i, value);
+        } else {
+            pushable_map.insert_field(&projection.schema, i, value);
+        }
+    }
 
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
     for expr in predicates {
-        if contains_column(&expr, &non_pushable_map) {
+        if contain_column(&expr, &non_pushable_map) {
             keep_predicates.push(expr);
         } else {
             push_predicates.push(expr);
@@ -1581,7 +1583,7 @@ fn rewrite_projection(
         // re-write all filters based on this projection
         // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
         projection.input = Arc::new(LogicalPlan::Filter(Filter::new(
-            replace_cols_by_column(expr, &pushable_map)?,
+            replace_columns(expr, &pushable_map)?,
             projection.input,
         )));
 
@@ -1641,28 +1643,6 @@ pub fn replace_cols_by_name(
     .data()
 }
 
-/// Replaces column references by the expression the node below computes for
-/// that column.
-///
-/// Keyed by [`Column`] rather than by its flat name, because a qualified column
-/// `t.a` and an unqualified field named `t.a` are different columns that share a
-/// flat name, and a node can output both.
-fn replace_cols_by_column(
-    e: Expr,
-    replace_map: &HashMap<Column, impl AsRef<Expr>>,
-) -> Result<Expr> {
-    e.transform_up(|expr| {
-        if let Expr::Column(c) = &expr
-            && let Some(new_expr) = replace_map.get(c)
-        {
-            Ok(Transformed::yes(new_expr.as_ref().clone()))
-        } else {
-            Ok(Transformed::no(expr))
-        }
-    })
-    .data()
-}
-
 /// Unalias expression reference.
 fn unalias(expr: &Expr) -> &Expr {
     if let Expr::Alias(alias) = expr {
@@ -1673,8 +1653,8 @@ fn unalias(expr: &Expr) -> &Expr {
 }
 
 /// check whether the expression uses the columns in `check_map`.
-fn contains_column<T>(e: &Expr, check_map: &HashMap<Column, T>) -> bool {
-    e.exists(|expr| Ok(matches!(expr, Expr::Column(c) if check_map.contains_key(c))))
+fn contain_column<T: Clone>(e: &Expr, check_map: &ColumnMap<T>) -> bool {
+    e.exists(|expr| Ok(matches!(expr, Expr::Column(c) if check_map.contains(c))))
         .unwrap()
 }
 
@@ -1920,10 +1900,10 @@ mod tests {
         // filter of key aggregation is commutative
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Aggregate: groupBy=[[test.$a]], aggr=[[sum(test.$b) AS total_salary]]
-          TableScan: test, full_filters=[test.$a > Int64(10)]
-        "
+            @r#"
+        Aggregate: groupBy=[[test."$a"]], aggr=[[sum(test."$b") AS total_salary]]
+          TableScan: test, full_filters=[test."$a" > Int64(10)]
+        "#
         )
     }
 
@@ -2037,10 +2017,10 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        WindowAggr: windowExpr=[[rank() PARTITION BY [test.$a, test.$b] ORDER BY [test.$c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
-          TableScan: test, full_filters=[test.$b > Int64(10)]
-        "
+            @r#"
+        WindowAggr: windowExpr=[[rank() PARTITION BY [test."$a", test."$b"] ORDER BY [test."$c" ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rank() PARTITION BY [test.$a, test.$b] ORDER BY [test.$c ASC NULLS FIRST] ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+          TableScan: test, full_filters=[test."$b" > Int64(10)]
+        "#
         )
     }
 
@@ -2566,23 +2546,23 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
-        Filter: sum(test.c) > Int64(10)
+        @r#"
+        Filter: "sum(test.c)" > Int64(10)
           Filter: b > Int64(10)
             Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]
               Projection: test.a AS b, test.c
                 TableScan: test
-        ",
+        "#,
         );
         // filter is before the projections
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Filter: sum(test.c) > Int64(10)
+            @r#"
+        Filter: "sum(test.c)" > Int64(10)
           Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]
             Projection: test.a AS b, test.c
               TableScan: test, full_filters=[test.a > Int64(10)]
-        "
+        "#
         )
     }
 
@@ -2603,22 +2583,22 @@ mod tests {
 
         // not part of the test, just good to know:
         assert_snapshot!(plan,
-        @r"
-        Filter: sum(test.c) > Int64(10) AND b > Int64(10) AND sum(test.c) < Int64(20)
+        @r#"
+        Filter: "sum(test.c)" > Int64(10) AND b > Int64(10) AND "sum(test.c)" < Int64(20)
           Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]
             Projection: test.a AS b, test.c
               TableScan: test
-        ",
+        "#,
         );
         // filter is before the projections
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Filter: sum(test.c) > Int64(10) AND sum(test.c) < Int64(20)
+            @r#"
+        Filter: "sum(test.c)" > Int64(10) AND "sum(test.c)" < Int64(20)
           Aggregate: groupBy=[[b]], aggr=[[sum(test.c)]]
             Projection: test.a AS b, test.c
               TableScan: test, full_filters=[test.a > Int64(10)]
-        "
+        "#
         )
     }
 
@@ -4474,25 +4454,25 @@ mod tests {
             .build()?;
 
         assert_snapshot!(plan,
-        @r"
+        @r#"
         Projection: t.a, t.r
           Filter: t.a > Int32(5) AND t.r > Float64(0.5)
             SubqueryAlias: t
-              Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r
+              Projection: test1.a, "sum(test1.b)", TestScalarUDF() + Int32(1) AS r
                 Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]
                   TableScan: test1
-        ",
+        "#,
         );
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @r#"
         Projection: t.a, t.r
           SubqueryAlias: t
             Filter: r > Float64(0.5)
-              Projection: test1.a, sum(test1.b), TestScalarUDF() + Int32(1) AS r
+              Projection: test1.a, "sum(test1.b)", TestScalarUDF() + Int32(1) AS r
                 Aggregate: groupBy=[[test1.a]], aggr=[[sum(test1.b)]]
                   TableScan: test1, full_filters=[test1.a > Int32(5)]
-        "
+        "#
         )
     }
 
@@ -4836,7 +4816,7 @@ mod tests {
         // plus pass-through columns.
         let proj = LogicalPlanBuilder::from(table_scan)
             .project(vec![
-                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+                extraction(leaf_udf_expr(col("a"))),
                 col("b"),
                 col("c"),
             ])?
@@ -4850,9 +4830,9 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Filter: test.b > Int64(5)
-          Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b, test.c
+          Projection: leaf_udf(test.a) AS leaf_udf(a), test.b, test.c
             TableScan: test
         "
         )
@@ -4940,7 +4920,7 @@ mod tests {
 
         let proj = LogicalPlanBuilder::from(table_scan)
             .project(vec![
-                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+                extraction(leaf_udf_expr(col("a"))),
                 (col("b") + lit(1i64)).alias("b_plus"),
                 col("c"),
             ])?
@@ -4952,8 +4932,8 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b + Int64(1) AS b_plus, test.c
+            @"
+        Projection: leaf_udf(test.a) AS leaf_udf(a), test.b + Int64(1) AS b_plus, test.c
           TableScan: test, full_filters=[test.c > Int64(5)]
         "
         )

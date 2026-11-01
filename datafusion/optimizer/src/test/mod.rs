@@ -14,6 +14,17 @@ use std::sync::Arc;
 pub mod udfs;
 pub mod user_defined;
 
+/// `expr` as the extraction projection of `ExtractLeafExpressions` defines
+/// it: named after itself, with an alias of kind
+/// [`AliasKind::Extraction`](datafusion_expr::AliasKind::Extraction)
+pub fn extraction(expr: datafusion_expr::Expr) -> datafusion_expr::Expr {
+    let name = expr.schema_name().to_string();
+    datafusion_expr::Expr::Alias(
+        datafusion_expr::expr::Alias::new(expr, None::<&str>, name)
+            .with_kind(datafusion_expr::AliasKind::Extraction),
+    )
+}
+
 pub fn test_table_scan_fields() -> Vec<Field> {
     vec![
         Field::new("a", DataType::UInt32, false),

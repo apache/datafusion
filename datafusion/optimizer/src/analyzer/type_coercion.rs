@@ -433,10 +433,11 @@ impl<'a> TypeCoercionRewriter<'a> {
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
     /// This occurs after wildcard expansion and the coercion of the input expressions.
     pub fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
-        let union_schema = Arc::new(coerce_union_schema_with_schema(
-            &union_plan.inputs,
-            &union_plan.schema,
-        )?);
+        // The coerced union defines the same columns, with the same ids
+        let union_schema = Arc::new(
+            coerce_union_schema_with_schema(&union_plan.inputs, &union_plan.schema)?
+                .with_field_ids(union_plan.schema.field_ids().to_vec())?,
+        );
         let new_inputs = union_plan
             .inputs
             .into_iter()
@@ -444,11 +445,23 @@ impl<'a> TypeCoercionRewriter<'a> {
                 let plan =
                     coerce_plan_expr_for_schema(Arc::unwrap_or_clone(p), &union_schema)?;
                 match plan {
-                    LogicalPlan::Projection(Projection { expr, input, .. }) => {
+                    LogicalPlan::Projection(Projection {
+                        expr,
+                        input,
+                        schema,
+                        ..
+                    }) => {
+                        // The input keeps the ids of the columns it defines
+                        let input_schema = Arc::new(
+                            union_schema
+                                .as_ref()
+                                .clone()
+                                .with_field_ids(schema.field_ids().to_vec())?,
+                        );
                         Ok(Arc::new(project_with_column_index(
                             expr,
                             input,
-                            Arc::clone(&union_schema),
+                            input_schema,
                         )?))
                     }
                     other_plan => Ok(Arc::new(other_plan)),
@@ -1769,6 +1782,7 @@ fn project_with_column_index(
                 relation: _,
                 ref name,
                 spans: _,
+                id: _,
             }) if name != schema.field(i).name() => Ok(e.alias(schema.field(i).name())),
             Expr::Alias { .. } | Expr::Column { .. } => Ok(e),
             #[expect(deprecated)]
@@ -1776,6 +1790,20 @@ fn project_with_column_index(
                 plan_err!("Wildcard should be expanded before type coercion")
             }
             _ => Ok(e.alias(schema.field(i).name())),
+        })
+        // An alias that gives an expression its own name only names the
+        // output (see `named_output_expr`)
+        .map(|e| {
+            e.map(|e| match e {
+                Expr::Alias(alias)
+                    if alias.relation.is_none()
+                        && alias.metadata.is_none()
+                        && alias.name == alias.expr.schema_name().to_string() =>
+                {
+                    Expr::Alias(alias.with_implicit(true))
+                }
+                e => e,
+            })
         })
         .collect::<Result<Vec<_>>>()?;
 

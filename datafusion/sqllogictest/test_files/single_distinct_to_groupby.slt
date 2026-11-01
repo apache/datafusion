@@ -45,7 +45,7 @@ query TT
 EXPLAIN SELECT g, count(*) AS records, count(DISTINCT x) AS distinct_x FROM t GROUP BY g;
 ----
 logical_plan
-01)Projection: t.g, CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS records, count(alias1) AS distinct_x
+01)Projection: t.g, CASE WHEN "sum(alias2)" IS NOT NULL THEN "sum(alias2)" ELSE Int64(0) END AS records, "count(alias1)" AS distinct_x
 02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(alias2), count(alias1)]]
 03)----Aggregate: groupBy=[[t.g, t.x AS alias1]], aggr=[[count(Int64(1)) AS alias2]]
 04)------TableScan: t projection=[g, x]
@@ -58,7 +58,7 @@ SELECT g, count(*) AS records, count(DISTINCT x) AS distinct_x,
 FROM t GROUP BY g;
 ----
 logical_plan
-01)Projection: t.g, CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS records, count(alias1) AS distinct_x, min(alias3) AS min_v, max(alias4) AS max_v, sum(alias5) AS sum_v
+01)Projection: t.g, CASE WHEN "sum(alias2)" IS NOT NULL THEN "sum(alias2)" ELSE Int64(0) END AS records, "count(alias1)" AS distinct_x, "min(alias3)" AS min_v, "max(alias4)" AS max_v, "sum(alias5)" AS sum_v
 02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(alias2), count(alias1), min(alias3), max(alias4), sum(alias5)]]
 03)----Aggregate: groupBy=[[t.g, t.x AS alias1]], aggr=[[count(Int64(1)) AS alias2, min(t.v) AS alias3, max(t.v) AS alias4, sum(CAST(t.v AS Int64)) AS alias5]]
 04)------TableScan: t projection=[g, x, v]
@@ -69,7 +69,7 @@ query TT
 EXPLAIN SELECT g, count(*) FILTER (WHERE v > 1) AS records, count(DISTINCT x) AS distinct_x FROM t GROUP BY g;
 ----
 logical_plan
-01)Projection: t.g, count(Int64(1)) FILTER (WHERE t.v > Int64(1)) AS count(*) FILTER (WHERE t.v > Int64(1)) AS records, count(DISTINCT t.x) AS distinct_x
+01)Projection: t.g, "count(Int64(1)) FILTER (WHERE t.v > Int64(1))" AS count(*) FILTER (WHERE t.v > Int64(1)) AS records, "count(DISTINCT t.x)" AS distinct_x
 02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)) FILTER (WHERE t.v > Int32(1)) AS count(Int64(1)) FILTER (WHERE t.v > Int64(1)), count(DISTINCT t.x)]]
 03)----TableScan: t projection=[g, x, v]
 
@@ -78,7 +78,7 @@ query TT
 EXPLAIN SELECT g, avg(v) AS avg_v, count(DISTINCT x) AS distinct_x FROM t GROUP BY g;
 ----
 logical_plan
-01)Projection: t.g, avg(t.v) AS avg_v, count(DISTINCT t.x) AS distinct_x
+01)Projection: t.g, "avg(t.v)" AS avg_v, "count(DISTINCT t.x)" AS distinct_x
 02)--Aggregate: groupBy=[[t.g]], aggr=[[avg(CAST(t.v AS Float64)), count(DISTINCT t.x)]]
 03)----TableScan: t projection=[g, x, v]
 
@@ -94,7 +94,7 @@ query TT
 EXPLAIN SELECT g, count(*) AS records, count(DISTINCT xi) AS distinct_xi FROM t GROUP BY g;
 ----
 logical_plan
-01)Projection: t.g, count(Int64(1)) AS count(*) AS records, count(DISTINCT t.xi) AS distinct_xi
+01)Projection: t.g, "count(Int64(1))" AS count(*) AS records, "count(DISTINCT t.xi)" AS distinct_xi
 02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)), count(DISTINCT t.xi)]]
 03)----TableScan: t projection=[g, xi]
 
@@ -107,7 +107,7 @@ query TT
 EXPLAIN SELECT g, count(*) AS records, sum(DISTINCT v) AS distinct_v FROM t GROUP BY g;
 ----
 logical_plan
-01)Projection: t.g, count(Int64(1)) AS count(*) AS records, sum(DISTINCT t.v) AS distinct_v
+01)Projection: t.g, "count(Int64(1))" AS count(*) AS records, "sum(DISTINCT t.v)" AS distinct_v
 02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)), sum(DISTINCT CAST(t.v AS Int64))]]
 03)----TableScan: t projection=[g, v]
 
@@ -119,7 +119,7 @@ query TT
 EXPLAIN SELECT g, count(*) AS records, min(DISTINCT v) AS distinct_min_v FROM t GROUP BY g;
 ----
 logical_plan
-01)Projection: t.g, count(Int64(1)) AS count(*) AS records, min(DISTINCT t.v) AS distinct_min_v
+01)Projection: t.g, "count(Int64(1))" AS count(*) AS records, "min(DISTINCT t.v)" AS distinct_min_v
 02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)), min(t.v) AS min(DISTINCT t.v)]]
 03)----TableScan: t projection=[g, v]
 
@@ -129,7 +129,7 @@ query TT
 EXPLAIN SELECT g, sum(v) AS sum_v, count(DISTINCT xi) AS distinct_xi FROM t GROUP BY g;
 ----
 logical_plan
-01)Projection: t.g, sum(alias2) AS sum_v, count(alias1) AS distinct_xi
+01)Projection: t.g, "sum(alias2)" AS sum_v, "count(alias1)" AS distinct_xi
 02)--Aggregate: groupBy=[[t.g]], aggr=[[sum(alias2), count(alias1)]]
 03)----Aggregate: groupBy=[[t.g, t.xi AS alias1]], aggr=[[sum(CAST(t.v AS Int64)) AS alias2]]
 04)------TableScan: t projection=[g, xi, v]
@@ -277,8 +277,8 @@ ORDER BY count(*) DESC, g;
 ----
 logical_plan
 01)Sort: records DESC NULLS FIRST, t.g ASC NULLS LAST
-02)--Projection: t.g, CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS records, count(alias1) AS distinct_x
-03)----Filter: CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END > Int64(1) AND count(alias1) > Int64(0)
+02)--Projection: t.g, CASE WHEN "sum(alias2)" IS NOT NULL THEN "sum(alias2)" ELSE Int64(0) END AS records, "count(alias1)" AS distinct_x
+03)----Filter: CASE WHEN "sum(alias2)" IS NOT NULL THEN "sum(alias2)" ELSE Int64(0) END > Int64(1) AND "count(alias1)" > Int64(0)
 04)------Aggregate: groupBy=[[t.g]], aggr=[[sum(alias2), count(alias1)]]
 05)--------Aggregate: groupBy=[[t.g, t.x AS alias1]], aggr=[[count(Int64(1)) AS alias2]]
 06)----------TableScan: t projection=[g, x]
@@ -454,7 +454,7 @@ query TT
 EXPLAIN SELECT sum(d) AS s, count(DISTINCT x) AS c FROM t_decimal_distinct;
 ----
 logical_plan
-01)Projection: CAST(sum(alias2) AS Decimal128(15, 2)) AS s, count(alias1) AS c
+01)Projection: CAST("sum(alias2)" AS Decimal128(15, 2)) AS s, "count(alias1)" AS c
 02)--Aggregate: groupBy=[[]], aggr=[[sum(alias2), count(alias1)]]
 03)----Aggregate: groupBy=[[t_decimal_distinct.x AS alias1]], aggr=[[sum(t_decimal_distinct.d) AS alias2]]
 04)------TableScan: t_decimal_distinct projection=[d, x]

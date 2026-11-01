@@ -52,6 +52,8 @@ pub fn serialize_expr(
             relation,
             name,
             metadata,
+            id: _,
+            kind: _,
         }) => {
             let alias = Box::new(protobuf::AliasNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),

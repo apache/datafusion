@@ -117,6 +117,7 @@ impl Analyzer {
 
         let start_time = Instant::now();
         let mut new_plan = plan;
+        crate::optimizer::log_column_id_issues(&new_plan, "analyzer input");
 
         // Create an analyzer pass that rewrites `Expr`s to function_calls, as
         // appropriate.
@@ -140,6 +141,10 @@ impl Analyzer {
                 .analyze(new_plan, config)
                 .map_err(|e| e.context(rule.name()))?;
             log_plan(rule.name(), &new_plan);
+            crate::optimizer::log_column_id_issues(
+                &new_plan,
+                &format!("analyzer {}", rule.name()),
+            );
             observer(&new_plan, rule.as_ref());
         }
 

@@ -190,7 +190,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             cte,
                             self.context_provider.get_table_source(table_ref.clone()),
                         ) {
-                            (Some(cte_plan), _) => Ok(cte_plan.clone()),
+                            // each reference to a CTE is a new copy of its columns
+                            (Some(cte_plan), _) => {
+                                cte_plan.clone().with_fresh_column_ids()
+                            }
                             (_, Ok(provider)) => LogicalPlanBuilder::scan(
                                 table_ref.clone(),
                                 provider,

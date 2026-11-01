@@ -26,7 +26,8 @@ use datafusion_common::{
     Column, DFSchema, HashMap, JoinType, Result, assert_eq_or_internal_err,
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
-use datafusion_expr::expr::Alias;
+use datafusion_expr::expr::{Alias, AliasKind};
+use datafusion_expr::logical_plan::column_ids::NodeDefinedIds;
 use datafusion_expr::utils::passthrough_field_index;
 use datafusion_expr::{
     Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScanBuilder, Unnest,
@@ -136,6 +137,9 @@ fn optimize_projections(
                 .transform_data(|plan| optimize_subqueries(plan, config));
         }
         LogicalPlan::Aggregate(aggregate) => {
+            // The new aggregate defines the same grouping set columns
+            let defined =
+                NodeDefinedIds::of_aggregate(&aggregate.group_expr, &aggregate.schema);
             // Split parent requirements to GROUP BY and aggregate sections:
             let n_group_exprs = aggregate.group_expr_len()?;
             // Offset aggregate indices so that they point to valid indices at
@@ -214,12 +218,11 @@ fn optimize_projections(
             .map_data(|aggregate_input| {
                 // Create a new aggregate plan with the updated input and only the
                 // absolutely necessary fields:
-                Aggregate::try_new(
+                defined.restore(LogicalPlan::Aggregate(Aggregate::try_new(
                     Arc::new(aggregate_input),
                     new_group_bys,
                     new_aggr_expr,
-                )
-                .map(LogicalPlan::Aggregate)
+                )?))
             })?
             .transform_data(|plan| optimize_subqueries(plan, config));
         }
@@ -281,6 +284,14 @@ fn optimize_projections(
         // Other node types are handled below
         _ => {}
     }
+
+    // A pruned union keeps the ids of the output columns that remain
+    let union_ids = match &plan {
+        LogicalPlan::Union(union) => {
+            Some((Arc::clone(&union.schema), indices.indices().to_vec()))
+        }
+        _ => None,
+    };
 
     // For other plan node types, calculate indices for columns they use and
     // try to rewrite their children
@@ -501,7 +512,17 @@ fn optimize_projections(
 
     // If any of the children are transformed, we need to potentially update the plan's schema
     if transformed_plan.transformed {
-        transformed_plan.map_data(|plan| plan.recompute_schema())
+        transformed_plan.map_data(|plan| match (plan.recompute_schema()?, union_ids) {
+            (LogicalPlan::Union(union), Some((old_schema, kept))) => {
+                let union = if union.schema.fields().len() == old_schema.fields().len() {
+                    union
+                } else {
+                    union.with_ids_from(&old_schema, &kept)?
+                };
+                Ok(LogicalPlan::Union(union))
+            }
+            (plan, _) => Ok(plan),
+        })
     } else {
         Ok(transformed_plan)
     }
@@ -623,6 +644,8 @@ fn merge_consecutive_projections_one_level(
                 relation,
                 name,
                 metadata,
+                id,
+                kind,
             }) => rewrite_expr(*expr, &prev_projection).map(|result| {
                 result.update_data(|expr| {
                     // After substitution, the inner expression may now have the
@@ -631,14 +654,29 @@ fn merge_consecutive_projections_one_level(
                     // `f(x)`). Wrapping in a redundant self-alias causes a
                     // cosmetic `f(x) AS f(x)` due to Display vs schema_name
                     // formatting differences. Drop the alias when it matches.
-                    if metadata.is_none() && expr.schema_name().to_string() == name {
-                        expr
+                    if metadata.is_none()
+                        && relation.is_none()
+                        && expr.schema_name().to_string() == name
+                    {
+                        // Keep the alias, which defines the output column (its
+                        // id), but as an implicit one: it is not displayed
+                        let kind = match kind {
+                            AliasKind::Explicit => AliasKind::Implicit,
+                            kind => kind,
+                        };
+                        Expr::Alias(
+                            Alias::new(expr, None::<&str>, name)
+                                .with_id(id)
+                                .with_kind(kind),
+                        )
                     } else {
                         Expr::Alias(Alias {
                             expr: Box::new(expr),
                             relation,
                             name,
                             metadata,
+                            id,
+                            kind,
                         })
                     }
                 })
@@ -1826,10 +1864,10 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Aggregate: groupBy=[[]], aggr=[[max(m4.tag.one) AS tag.one]]
+            @r#"
+        Aggregate: groupBy=[[]], aggr=[[max(m4."tag.one") AS tag.one]]
           TableScan: m4 projection=[tag.one]
-        "
+        "#
         )
     }
 
@@ -2329,12 +2367,12 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: test.c, test.a, max(test.b)
+            @r#"
+        Projection: test.c, test.a, "max(test.b)"
           Filter: test.c > Int32(1)
             Aggregate: groupBy=[[test.a, test.c]], aggr=[[max(test.b)]]
               TableScan: test projection=[a, b, c]
-        "
+        "#
         )
     }
 
@@ -2408,13 +2446,13 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, max(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+            @r#"
+        Projection: "max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", "max(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
           WindowAggr: windowExpr=[[max(test.b) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-            Projection: test.b, max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
+            Projection: test.b, "max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING"
               WindowAggr: windowExpr=[[max(test.a) PARTITION BY [test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
                 TableScan: test projection=[a, b]
-        "
+        "#
         )
     }
 

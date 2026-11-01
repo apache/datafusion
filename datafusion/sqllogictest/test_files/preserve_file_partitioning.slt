@@ -209,7 +209,7 @@ query TT
 EXPLAIN SELECT f_dkey, count(*), sum(value) FROM fact_table GROUP BY f_dkey;
 ----
 logical_plan
-01)Projection: fact_table.f_dkey, count(Int64(1)) AS count(*), sum(fact_table.value)
+01)Projection: fact_table.f_dkey, "count(Int64(1))" AS count(*), "sum(fact_table.value)"
 02)--Aggregate: groupBy=[[fact_table.f_dkey]], aggr=[[count(Int64(1)), sum(fact_table.value)]]
 03)----TableScan: fact_table projection=[value, f_dkey]
 physical_plan
@@ -239,7 +239,7 @@ query TT
 EXPLAIN SELECT f_dkey, count(*), sum(value) FROM fact_table GROUP BY f_dkey;
 ----
 logical_plan
-01)Projection: fact_table.f_dkey, count(Int64(1)) AS count(*), sum(fact_table.value)
+01)Projection: fact_table.f_dkey, "count(Int64(1))" AS count(*), "sum(fact_table.value)"
 02)--Aggregate: groupBy=[[fact_table.f_dkey]], aggr=[[count(Int64(1)), sum(fact_table.value)]]
 03)----TableScan: fact_table projection=[value, f_dkey]
 physical_plan
@@ -268,7 +268,7 @@ EXPLAIN SELECT f_dkey, count(*), avg(value) FROM fact_table_ordered GROUP BY f_d
 ----
 logical_plan
 01)Sort: fact_table_ordered.f_dkey ASC NULLS LAST
-02)--Projection: fact_table_ordered.f_dkey, count(Int64(1)) AS count(*), avg(fact_table_ordered.value)
+02)--Projection: fact_table_ordered.f_dkey, "count(Int64(1))" AS count(*), "avg(fact_table_ordered.value)"
 03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey]], aggr=[[count(Int64(1)), avg(fact_table_ordered.value)]]
 04)------TableScan: fact_table_ordered projection=[value, f_dkey]
 physical_plan
@@ -300,7 +300,7 @@ EXPLAIN SELECT f_dkey, count(*), avg(value) FROM fact_table_ordered GROUP BY f_d
 ----
 logical_plan
 01)Sort: fact_table_ordered.f_dkey ASC NULLS LAST
-02)--Projection: fact_table_ordered.f_dkey, count(Int64(1)) AS count(*), avg(fact_table_ordered.value)
+02)--Projection: fact_table_ordered.f_dkey, "count(Int64(1))" AS count(*), "avg(fact_table_ordered.value)"
 03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey]], aggr=[[count(Int64(1)), avg(fact_table_ordered.value)]]
 04)------TableScan: fact_table_ordered projection=[value, f_dkey]
 physical_plan
@@ -334,7 +334,7 @@ ORDER BY f.f_dkey;
 ----
 logical_plan
 01)Sort: f.f_dkey ASC NULLS LAST
-02)--Projection: f.f_dkey, max(d.env), max(d.service), count(Int64(1)) AS count(*), sum(f.value)
+02)--Projection: f.f_dkey, "max(d.env)", "max(d.service)", "count(Int64(1))" AS count(*), "sum(f.value)"
 03)----Aggregate: groupBy=[[f.f_dkey]], aggr=[[max(d.env), max(d.service), count(Int64(1)), sum(f.value)]]
 04)------Projection: f.value, f.f_dkey, d.env, d.service
 05)--------Inner Join: f.f_dkey = d.d_dkey
@@ -387,7 +387,7 @@ ORDER BY f.f_dkey;
 ----
 logical_plan
 01)Sort: f.f_dkey ASC NULLS LAST
-02)--Projection: f.f_dkey, max(d.env), max(d.service), count(Int64(1)) AS count(*), sum(f.value)
+02)--Projection: f.f_dkey, "max(d.env)", "max(d.service)", "count(Int64(1))" AS count(*), "sum(f.value)"
 03)----Aggregate: groupBy=[[f.f_dkey]], aggr=[[max(d.env), max(d.service), count(Int64(1)), sum(f.value)]]
 04)------Projection: f.value, f.f_dkey, d.env, d.service
 05)--------Inner Join: f.f_dkey = d.d_dkey
@@ -433,7 +433,7 @@ EXPLAIN SELECT f_dkey, timestamp, value,
 FROM fact_table_ordered;
 ----
 logical_plan
-01)Projection: fact_table_ordered.f_dkey, fact_table_ordered.timestamp, fact_table_ordered.value, row_number() PARTITION BY [fact_table_ordered.f_dkey] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+01)Projection: fact_table_ordered.f_dkey, fact_table_ordered.timestamp, fact_table_ordered.value, "row_number() PARTITION BY [fact_table_ordered.f_dkey] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
 02)--WindowAggr: windowExpr=[[row_number() PARTITION BY [fact_table_ordered.f_dkey] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 03)----TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
 physical_plan
@@ -474,7 +474,7 @@ EXPLAIN SELECT f_dkey, timestamp, value,
 FROM fact_table_ordered;
 ----
 logical_plan
-01)Projection: fact_table_ordered.f_dkey, fact_table_ordered.timestamp, fact_table_ordered.value, row_number() PARTITION BY [fact_table_ordered.f_dkey] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+01)Projection: fact_table_ordered.f_dkey, fact_table_ordered.timestamp, fact_table_ordered.value, "row_number() PARTITION BY [fact_table_ordered.f_dkey] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
 02)--WindowAggr: windowExpr=[[row_number() PARTITION BY [fact_table_ordered.f_dkey] ORDER BY [fact_table_ordered.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 03)----TableScan: fact_table_ordered projection=[timestamp, value, f_dkey]
 physical_plan
@@ -528,7 +528,7 @@ query TT
 EXPLAIN SELECT f_dkey, count(*), sum(value) FROM high_cardinality_table GROUP BY f_dkey;
 ----
 logical_plan
-01)Projection: high_cardinality_table.f_dkey, count(Int64(1)) AS count(*), sum(high_cardinality_table.value)
+01)Projection: high_cardinality_table.f_dkey, "count(Int64(1))" AS count(*), "sum(high_cardinality_table.value)"
 02)--Aggregate: groupBy=[[high_cardinality_table.f_dkey]], aggr=[[count(Int64(1)), sum(high_cardinality_table.value)]]
 03)----TableScan: high_cardinality_table projection=[value, f_dkey]
 physical_plan
@@ -570,7 +570,7 @@ query TT
 EXPLAIN SELECT f_dkey, count(*), sum(value) FROM high_cardinality_table GROUP BY f_dkey;
 ----
 logical_plan
-01)Projection: high_cardinality_table.f_dkey, count(Int64(1)) AS count(*), sum(high_cardinality_table.value)
+01)Projection: high_cardinality_table.f_dkey, "count(Int64(1))" AS count(*), "sum(high_cardinality_table.value)"
 02)--Aggregate: groupBy=[[high_cardinality_table.f_dkey]], aggr=[[count(Int64(1)), sum(high_cardinality_table.value)]]
 03)----TableScan: high_cardinality_table projection=[value, f_dkey]
 physical_plan
@@ -700,7 +700,7 @@ FROM fact_table
 GROUP BY f_dkey, timestamp;
 ----
 logical_plan
-01)Projection: fact_table.f_dkey, fact_table.timestamp, count(Int64(1)) AS count(*), avg(fact_table.value)
+01)Projection: fact_table.f_dkey, fact_table.timestamp, "count(Int64(1))" AS count(*), "avg(fact_table.value)"
 02)--Aggregate: groupBy=[[fact_table.f_dkey, fact_table.timestamp]], aggr=[[count(Int64(1)), avg(fact_table.value)]]
 03)----TableScan: fact_table projection=[timestamp, value, f_dkey]
 physical_plan
@@ -908,7 +908,7 @@ EXPLAIN SELECT f_dkey, count(*), avg(value) FROM fact_table_ordered GROUP BY f_d
 ----
 logical_plan
 01)Sort: fact_table_ordered.f_dkey ASC NULLS LAST
-02)--Projection: fact_table_ordered.f_dkey, count(Int64(1)) AS count(*), avg(fact_table_ordered.value)
+02)--Projection: fact_table_ordered.f_dkey, "count(Int64(1))" AS count(*), "avg(fact_table_ordered.value)"
 03)----Aggregate: groupBy=[[fact_table_ordered.f_dkey]], aggr=[[count(Int64(1)), avg(fact_table_ordered.value)]]
 04)------TableScan: fact_table_ordered projection=[value, f_dkey]
 physical_plan

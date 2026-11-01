@@ -284,7 +284,7 @@ logical_plan
 06)------Projection: r.n + Int64(1)
 07)--------Filter: r.n < Int64(3)
 08)----------TableScan: r projection=[n]
-09)--Projection: count(Int64(1)) AS count(*)
+09)--Projection: "count(Int64(1))" AS count(*)
 10)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 11)------Cross Join:
 12)--------SubqueryAlias: a
@@ -474,7 +474,7 @@ logical_plan
 01)MaterializedCte: name=c
 02)--SubqueryAlias: c
 03)----TableScan: small projection=[k]
-04)--Projection: count(Int64(1)) AS count(*)
+04)--Projection: "count(Int64(1))" AS count(*)
 05)----Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 06)------Projection:
 07)--------Inner Join: huge.k = c.k
@@ -494,7 +494,7 @@ EXPLAIN WITH c AS NOT MATERIALIZED (SELECT k FROM small)
 SELECT count(*) FROM huge JOIN c ON huge.k = c.k
 ----
 logical_plan
-01)Projection: count(Int64(1)) AS count(*)
+01)Projection: "count(Int64(1))" AS count(*)
 02)--Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
 03)----Projection:
 04)------Inner Join: huge.k = c.k

@@ -10,6 +10,7 @@ use datafusion_common::JoinType;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, DFSchemaRef, Result, ScalarValue, plan_err};
 use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::logical_plan::column_ids::with_output_ids;
 use datafusion_expr::{EmptyRelation, Expr, GroupingSet, Projection, Union, cast, lit};
 
 use crate::optimizer::ApplyOrder;
@@ -195,7 +196,17 @@ impl OptimizerRule for PropagateEmptyRelation {
                     let input_plan = new_inputs.pop().unwrap(); // length checked
                     let child = Arc::unwrap_or_clone(input_plan);
                     if child.schema().eq(plan.schema()) {
-                        Ok(Transformed::yes(child))
+                        // The child now defines the union's columns: it
+                        // takes their ids, which the parent references
+                        let new_ids = child
+                            .schema()
+                            .field_ids()
+                            .iter()
+                            .zip(plan.schema().field_ids())
+                            .filter_map(|(old, new)| Some((*old)?).zip(*new))
+                            .filter(|(old, new)| old != new)
+                            .collect();
+                        Ok(Transformed::yes(child.rename_column_ids(&new_ids)?))
                     } else {
                         // The union takes its field names from its first
                         // input, which may be gone. Map the remaining
@@ -210,6 +221,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                                     .alias_qualified(qualifier.cloned(), field.name())
                             })
                             .collect::<Vec<_>>();
+                        let exprs = with_output_ids(exprs, plan.schema());
                         Ok(Transformed::yes(LogicalPlan::Projection(
                             Projection::try_new(exprs, Arc::new(child))?,
                         )))

@@ -3149,12 +3149,12 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r"
+        @r#"
     +---------------+-------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                |
     +---------------+-------------------------------------------------------------------------------------+
-    | logical_plan  | Sort: count(*) ASC NULLS LAST                                                       |
-    |               |   Projection: t1.b, count(Int64(1)) AS count(*)                                     |
+    | logical_plan  | Sort: "count(*)" ASC NULLS LAST                                                     |
+    |               |   Projection: t1.b, "count(Int64(1))" AS count(*)                                   |
     |               |     Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1))]]                           |
     |               |       TableScan: t1 projection=[b]                                                  |
     | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                                |
@@ -3166,16 +3166,16 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     |               |             DataSourceExec: partitions=1, partition_sizes=[1]                       |
     |               |                                                                                     |
     +---------------+-------------------------------------------------------------------------------------+
-    "
+    "#
     );
 
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
-        @r"
+        @r#"
     +---------------+---------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                  |
     +---------------+---------------------------------------------------------------------------------------+
-    | logical_plan  | Sort: count(*) AS count(*) ASC NULLS LAST                                             |
+    | logical_plan  | Sort: "count(*)" AS count(*) ASC NULLS LAST                                           |
     |               |   Aggregate: groupBy=[[t1.b]], aggr=[[count(Int64(1)) AS count(*)]]                   |
     |               |     TableScan: t1 projection=[b]                                                      |
     | physical_plan | SortPreservingMergeExec: [count(*)@1 ASC NULLS LAST]                                  |
@@ -3186,7 +3186,7 @@ async fn test_count_wildcard_on_sort() -> Result<()> {
     |               |           DataSourceExec: partitions=1, partition_sizes=[1]                           |
     |               |                                                                                       |
     +---------------+---------------------------------------------------------------------------------------+
-    "
+    "#
     );
     Ok(())
 }
@@ -3203,14 +3203,14 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r"
+        @r#"
     +---------------+----------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                 |
     +---------------+----------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | LeftSemi Join: CAST(t1.a AS Int64) = __correlated_sq_1.count(*)                                                      |
+    | logical_plan  | LeftSemi Join: CAST(t1.a AS Int64) = __correlated_sq_1."count(*)"                                                    |
     |               |   TableScan: t1 projection=[a, b]                                                                                    |
     |               |   SubqueryAlias: __correlated_sq_1                                                                                   |
-    |               |     Projection: count(Int64(1)) AS count(*)                                                                          |
+    |               |     Projection: "count(Int64(1))" AS count(*)                                                                        |
     |               |       Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]                                                              |
     |               |         TableScan: t2 projection=[]                                                                                  |
     | physical_plan | HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(count(*)@0, CAST(t1.a AS Int64)@2)], projection=[a@0, b@1] |
@@ -3220,7 +3220,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     |               |     DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
     |               |                                                                                                                      |
     +---------------+----------------------------------------------------------------------------------------------------------------------+
-    "
+    "#
     );
 
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
@@ -3248,11 +3248,11 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     // make sure sql plan same with df plan
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
-        @r"
+        @r#"
     +---------------+----------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                 |
     +---------------+----------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | LeftSemi Join: CAST(t1.a AS Int64) = __correlated_sq_1.count(*)                                                      |
+    | logical_plan  | LeftSemi Join: CAST(t1.a AS Int64) = __correlated_sq_1."count(*)"                                                    |
     |               |   TableScan: t1 projection=[a, b]                                                                                    |
     |               |   SubqueryAlias: __correlated_sq_1                                                                                   |
     |               |     Aggregate: groupBy=[[]], aggr=[[count(Int64(1)) AS count(*)]]                                                    |
@@ -3264,7 +3264,7 @@ async fn test_count_wildcard_on_where_in() -> Result<()> {
     |               |     DataSourceExec: partitions=1, partition_sizes=[1]                                                                |
     |               |                                                                                                                      |
     +---------------+----------------------------------------------------------------------------------------------------------------------+
-    "
+    "#
     );
 
     Ok(())
@@ -3354,7 +3354,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                                                                                                                                                                                                     |
     +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | Projection: count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING AS count(*) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING                                                                                                            |
+    | logical_plan  | Projection: "count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING" AS count(*) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING                                                                                                          |
     |               |   WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]]                                                                                                                                                                                  |
     |               |     TableScan: t1 projection=[a]                                                                                                                                                                                                                                                                         |
     | physical_plan | ProjectionExec: expr=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING@1 as count(*) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]                                                                                               |
@@ -3390,7 +3390,7 @@ async fn test_count_wildcard_on_window() -> Result<()> {
     +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                                                                                                                                                                                                     |
     +---------------+----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+
-    | logical_plan  | Projection: count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING                                                                                                                                                                                                   |
+    | logical_plan  | Projection: "count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING"                                                                                                                                                                                                 |
     |               |   WindowAggr: windowExpr=[[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]]                                                                                                                                                                                  |
     |               |     TableScan: t1 projection=[a]                                                                                                                                                                                                                                                                         |
     | physical_plan | ProjectionExec: expr=[count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING@1 as count(Int64(1)) ORDER BY [t1.a DESC NULLS FIRST] RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING]                                                                                        |
@@ -3530,18 +3530,18 @@ async fn test_count_wildcard_on_aggregate() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r"
+        @r#"
     +---------------+-----------------------------------------------------+
     | plan_type     | plan                                                |
     +---------------+-----------------------------------------------------+
-    | logical_plan  | Projection: count(Int64(1)) AS count(*)             |
+    | logical_plan  | Projection: "count(Int64(1))" AS count(*)           |
     |               |   Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]] |
     |               |     TableScan: t1 projection=[]                     |
     | physical_plan | ProjectionExec: expr=[4 as count(*)]                |
     |               |   PlaceholderRowExec                                |
     |               |                                                     |
     +---------------+-----------------------------------------------------+
-    "
+    "#
     );
 
     // add `.select(vec![count_wildcard()])?` to make sure we can analyze all node instead of just top node.
@@ -3585,17 +3585,17 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&sql_results).unwrap(),
-        @r"
+        @r#"
     +---------------+--------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                     |
     +---------------+--------------------------------------------------------------------------------------------------------------------------+
     | logical_plan  | Projection: t1.a, t1.b                                                                                                   |
-    |               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)         |
-    |               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                          |
+    |               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1."count(*)" END > Int64(0)       |
+    |               |     Projection: t1.a, t1.b, __scalar_sq_1."count(*)", __scalar_sq_1.__always_true                                        |
     |               |       Left Join: t1.a = __scalar_sq_1.a                                                                                  |
     |               |         TableScan: t1 projection=[a, b]                                                                                  |
     |               |         SubqueryAlias: __scalar_sq_1                                                                                     |
-    |               |           Projection: count(Int64(1)) AS count(*), t2.a, Boolean(true) AS __always_true                                  |
+    |               |           Projection: "count(Int64(1))" AS count(*), t2.a, Boolean(true) AS __always_true                                |
     |               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1))]]                                                        |
     |               |               TableScan: t2 projection=[a]                                                                               |
     | physical_plan | FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                      |
@@ -3610,7 +3610,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
     |               |                                                                                                                          |
     +---------------+--------------------------------------------------------------------------------------------------------------------------+
-    "
+    "#
     );
 
     // In the same SessionContext, AliasGenerator will increase subquery_alias id by 1
@@ -3640,17 +3640,17 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
 
     assert_snapshot!(
         pretty_format_batches(&df_results).unwrap(),
-        @r"
+        @r#"
     +---------------+--------------------------------------------------------------------------------------------------------------------------+
     | plan_type     | plan                                                                                                                     |
     +---------------+--------------------------------------------------------------------------------------------------------------------------+
     | logical_plan  | Projection: t1.a, t1.b                                                                                                   |
-    |               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1.count(*) END > Int64(0)         |
-    |               |     Projection: t1.a, t1.b, __scalar_sq_1.count(*), __scalar_sq_1.__always_true                                          |
+    |               |   Filter: CASE WHEN __scalar_sq_1.__always_true IS NULL THEN Int64(0) ELSE __scalar_sq_1."count(*)" END > Int64(0)       |
+    |               |     Projection: t1.a, t1.b, __scalar_sq_1."count(*)", __scalar_sq_1.__always_true                                        |
     |               |       Left Join: t1.a = __scalar_sq_1.a                                                                                  |
     |               |         TableScan: t1 projection=[a, b]                                                                                  |
     |               |         SubqueryAlias: __scalar_sq_1                                                                                     |
-    |               |           Projection: count(*), t2.a, Boolean(true) AS __always_true                                                     |
+    |               |           Projection: "count(*)", t2.a, Boolean(true) AS __always_true                                                   |
     |               |             Aggregate: groupBy=[[t2.a]], aggr=[[count(Int64(1)) AS count(*)]]                                            |
     |               |               TableScan: t2 projection=[a]                                                                               |
     | physical_plan | FilterExec: CASE WHEN __always_true@3 IS NULL THEN 0 ELSE count(*)@2 END > 0, projection=[a@0, b@1]                      |
@@ -3665,7 +3665,7 @@ async fn test_count_wildcard_on_where_scalar_subquery() -> Result<()> {
     |               |       DataSourceExec: partitions=1, partition_sizes=[1]                                                                  |
     |               |                                                                                                                          |
     +---------------+--------------------------------------------------------------------------------------------------------------------------+
-    "
+    "#
     );
 
     Ok(())
@@ -8196,21 +8196,24 @@ async fn test_dataframe_api_select_semantics() -> Result<()> {
     );
 
     // ----------------------------------------------------------------------
-    // Duplicate output names are rejected, like any other projection
+    // Duplicate aliases define two columns, as in SQL
     // ----------------------------------------------------------------------
     // SQL:
     // SELECT COUNT(c9) AS count_c9, COUNT(c9) AS count_c9 FROM t
-    let err = df
-        .clone()
-        .select(vec![
-            count(col("c9")).alias("count_c9"),
-            count(col("c9")).alias("count_c9"),
-        ])
-        .unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("require unique expression names"),
-        "duplicate aliases must be rejected at planning time, got: {msg}"
+    let res = df.clone().select(vec![
+        count(col("c9")).alias("count_c9"),
+        count(col("c9")).alias("count_c9"),
+    ])?;
+
+    assert_batches_eq!(
+        &[
+            "+----------+----------+",
+            "| count_c9 | count_c9 |",
+            "+----------+----------+",
+            "| 100      | 100      |",
+            "+----------+----------+",
+        ],
+        &res.collect().await?
     );
 
     // SQL:

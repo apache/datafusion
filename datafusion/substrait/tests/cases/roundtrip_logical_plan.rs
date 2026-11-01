@@ -465,14 +465,14 @@ async fn aggregate_distinct_with_having_rewritten() -> Result<()> {
     // plan, which the identity test already covers.
     assert_snapshot!(
         plan,
-        @r"
-    Projection: data.a, count(alias1) AS count(DISTINCT data.b)
-      Filter: CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END > Int64(0)
-        Projection: data.a, count(alias1), sum(alias2)
+        @r#"
+    Projection: data.a, "count(alias1)" AS count(DISTINCT data.b)
+      Filter: CASE WHEN "sum(alias2)" IS NOT NULL THEN "sum(alias2)" ELSE Int64(0) END > Int64(0)
+        Projection: data.a, "count(alias1)", "sum(alias2)"
           Aggregate: groupBy=[[data.a, data.c]], aggr=[[count(alias1), sum(alias2)]]
             Aggregate: groupBy=[[data.a, data.c, data.b AS alias1]], aggr=[[count(data.b) AS alias2]]
               TableScan: data projection=[a, b, c]
-    "
+    "#
     );
 
     let proto = to_substrait_plan(&plan, &ctx.state())?;
@@ -570,11 +570,11 @@ async fn aggregate_grouping_rollup() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r"
-    Projection: data.a, data.c, data.e, avg(data.b)
+    @r#"
+    Projection: data.a, data.c, data.e, "avg(data.b)"
       Aggregate: groupBy=[[GROUPING SETS ((data.a, data.c, data.e), (data.a, data.c), (data.a), ())]], aggr=[[avg(data.b)]]
         TableScan: data projection=[a, b, c, e]
-    "
+    "#
     );
     Ok(())
 }
@@ -590,11 +590,11 @@ async fn aggregate_grouping_cube() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r"
-    Projection: data.a, data.c, avg(data.b)
+    @r#"
+    Projection: data.a, data.c, "avg(data.b)"
       Aggregate: groupBy=[[GROUPING SETS ((), (data.a), (data.c), (data.a, data.c))]], aggr=[[avg(data.b)]]
         TableScan: data projection=[a, b, c]
-    "
+    "#
     );
     Ok(())
 }
@@ -610,11 +610,11 @@ async fn multilayer_aggregate() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r"
-    Aggregate: groupBy=[[data.a]], aggr=[[sum(count(data.b)) AS sum(partial_count_b)]]
+    @r#"
+    Aggregate: groupBy=[[data.a]], aggr=[[sum("count(data.b)") AS sum(partial_count_b)]]
       Aggregate: groupBy=[[data.a]], aggr=[[count(data.b)]]
         TableScan: data projection=[a, b]
-    "
+    "#
     );
     Ok(())
 }
@@ -966,13 +966,13 @@ async fn roundtrip_scalar_subquery_projection_with_join_rewrite() -> Result<()> 
 
     assert_snapshot!(
         plan,
-        @r"
-    Projection: data.a, max(data2.b) AS max_b
+        @r#"
+    Projection: data.a, "max(data2.b)" AS max_b
       Left Join:
         TableScan: data projection=[a]
         Aggregate: groupBy=[[]], aggr=[[max(data2.b)]]
           TableScan: data2 projection=[b], partial_filters=[Boolean(true)]
-    "
+    "#
     );
 
     let results = DataFrame::new(ctx.state(), plan).collect().await?;
@@ -1118,16 +1118,16 @@ async fn roundtrip_correlated_scalar_subquery() -> Result<()> {
     assert_eq!(plan.schema(), plan2.schema());
     assert_snapshot!(
     plan2,
-    @r"
+    @r#"
     Projection: data.a
       Filter: data.a < (<subquery>)
         Subquery:
-          Projection: sum(data2.a)
+          Projection: "sum(data2.a)"
             Aggregate: groupBy=[[]], aggr=[[sum(data2.a)]]
               Filter: data2.a = outer_ref(data.a)
                 TableScan: data2
         TableScan: data
-    "
+    "#
             );
     Ok(())
 }
@@ -1472,7 +1472,7 @@ async fn roundtrip_union_all() -> Result<()> {
 async fn simple_intersect() -> Result<()> {
     async fn check_wildcard(syntax: &str) -> Result<()> {
         let expected_plan_str = format!(
-            "Projection: count(Int64(1)) AS {syntax}\
+            "Projection: \"count(Int64(1))\" AS {syntax}\
         \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
         \n    Projection:\
         \n      LeftSemi Join: data.a = data2.a\
@@ -1595,11 +1595,11 @@ async fn aggregate_identical_measures() -> Result<()> {
     let plan = generate_plan_from_substrait(proto_plan).await?;
     assert_snapshot!(
         plan,
-        @r"
-    Projection: __common_expr_1 AS sum_a_1, __common_expr_1 AS sum(data.a)__temp__0 AS sum_a_2
-      Aggregate: groupBy=[[]], aggr=[[sum(data.a) AS __common_expr_1]]
+        @r#"
+    Projection: "sum(data.a)" AS sum_a_1, "sum(data.a)" AS sum(data.a)__temp__0 AS sum_a_2
+      Aggregate: groupBy=[[]], aggr=[[sum(data.a)]]
         TableScan: data projection=[a]
-    "
+    "#
     );
     Ok(())
 }
@@ -1690,7 +1690,7 @@ async fn simple_intersect_table_reuse() -> Result<()> {
 
     async fn check_wildcard(syntax: &str) -> Result<()> {
         let expected_plan_str = format!(
-            "Projection: count(Int64(1)) AS {syntax}\
+            "Projection: \"count(Int64(1))\" AS {syntax}\
         \n  Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]\
         \n    Projection:\
         \n      LeftSemi Join: left.a = right.a\
@@ -2234,11 +2234,11 @@ async fn duplicate_column() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r"
-    Projection: data.a + Int64(1) AS sum_a, data.a + Int64(1) AS data.a + Int64(1)__temp__0 AS sum_a_2
+    @r#"
+    Projection: "data.a + Int64(1)" AS sum_a, "data.a + Int64(1)" AS data.a + Int64(1)__temp__0 AS sum_a_2
       Projection: data.a + Int64(1)
         TableScan: data projection=[a]
-    "
+    "#
         );
     Ok(())
 }

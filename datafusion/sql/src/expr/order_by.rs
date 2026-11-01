@@ -3,9 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{
-    Column, DFSchema, Result, not_impl_err, plan_datafusion_err, plan_err,
-};
+use datafusion_common::{DFSchema, Result, not_impl_err, plan_datafusion_err, plan_err};
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, SortExpr};
 use sqlparser::ast::{
@@ -100,9 +98,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         );
                     }
 
-                    Expr::Column(Column::from(
-                        input_schema.qualified_field(field_index - 1),
-                    ))
+                    // the output at that position, with its id: another
+                    // output may have the same name
+                    Expr::Column(input_schema.column(field_index - 1))
                 }
                 e => {
                     let expr = self.sql_expr_to_logical_expr(

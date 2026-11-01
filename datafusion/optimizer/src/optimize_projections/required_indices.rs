@@ -6,7 +6,7 @@
 
 use crate::utils::for_each_referenced_index;
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{Column, DFSchemaRef, Result};
+use datafusion_common::{DFSchemaRef, Result};
 use datafusion_expr::{Expr, LogicalPlan};
 
 /// Represents columns in a schema which are required (used) by a plan node
@@ -193,7 +193,7 @@ impl RequiredIndices {
     pub fn get_required_exprs(&self, input_schema: &DFSchemaRef) -> Vec<Expr> {
         self.indices
             .iter()
-            .map(|&idx| Expr::from(Column::from(input_schema.qualified_field(idx))))
+            .map(|&idx| Expr::Column(input_schema.column(idx)))
             .collect()
     }
 

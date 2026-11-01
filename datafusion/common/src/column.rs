@@ -10,11 +10,71 @@ use crate::utils::quote_identifier;
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
 use arrow::datatypes::{Field, FieldRef};
 use itertools::Itertools;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+/// A stable identity for a column of a logical plan.
+///
+/// A `ColumnId` is assigned once, to the node or expression that defines the
+/// column (a table scan field, a projection alias, ...). Nodes that pass a
+/// column through (filters, joins, subquery aliases, ...) keep its id, and
+/// references to the column carry the same id. Unlike the column's name, the id
+/// does not change when the column is renamed, requalified, or moved below
+/// another node by an optimizer rule.
+///
+/// An id is allocated ([`ColumnId::next`]) where its column is defined, and
+/// stored with the definition: a table scan field, a `VALUES` column, an
+/// alias (which also names every computed output of a projection, aggregate or
+/// window), or a column that a node defines itself (a union output, a grouping
+/// set column, the mark column of a join, an unnested column). Two scans of the
+/// same table define different columns, so each gets new ids. A node that is
+/// rebuilt keeps the ids of the columns it defines.
+///
+/// Ids are unique within a process. They are not stable across processes and
+/// are not shown in `EXPLAIN` output.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct ColumnId(NonZeroU64);
+
+impl ColumnId {
+    /// Allocate a new, unique [`ColumnId`]
+    pub fn next() -> Self {
+        static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+        let id = NEXT_ID.fetch_add(1, AtomicOrdering::Relaxed);
+        Self(NonZeroU64::new(id).expect("ColumnId overflow"))
+    }
+
+    /// The numeric value of this id
+    pub fn as_u64(&self) -> u64 {
+        self.0.get()
+    }
+}
+
+impl fmt::Display for ColumnId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
 
 /// A named reference to a qualified field in a schema.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// A column may also carry a [`ColumnId`], which identifies the field it
+/// refers to independently of its name. Schema lookups use the id when it is
+/// set (see [`DFSchema::maybe_index_of_column`]).
+///
+/// Two columns are equal if they have the same qualifier and name, and, when
+/// both have an id, the same id: two outputs with the same name but different
+/// ids are different columns. A column without an id is equal to a column with
+/// the same name whatever its id, so code that builds columns from names keeps
+/// working. (Because of that, equality is not transitive between a column
+/// without an id and two columns with different ids. That only happens when a
+/// schema has two fields with the same name, which the ids tell apart.)
+///
+/// Ordering and hashing ignore the id (and the spans).
+#[derive(Clone)]
 pub struct Column {
     /// relation/table reference.
     pub relation: Option<TableReference>,
@@ -22,6 +82,40 @@ pub struct Column {
     pub name: String,
     /// Original source code location, if known
     pub spans: Spans,
+    /// The identity of the field this column refers to, if resolved
+    pub id: Option<ColumnId>,
+}
+
+impl PartialEq for Column {
+    fn eq(&self, other: &Self) -> bool {
+        self.relation == other.relation
+            && self.name == other.name
+            && match (self.id, other.id) {
+                (Some(id), Some(other_id)) => id == other_id,
+                _ => true,
+            }
+    }
+}
+
+impl Eq for Column {}
+
+impl Hash for Column {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.relation.hash(state);
+        self.name.hash(state);
+    }
+}
+
+impl PartialOrd for Column {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Column {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (&self.relation, &self.name).cmp(&(&other.relation, &other.name))
+    }
 }
 
 impl fmt::Debug for Column {
@@ -48,6 +142,7 @@ impl Column {
             relation: relation.map(|r| r.into()),
             name: name.into(),
             spans: Spans::new(),
+            id: None,
         }
     }
 
@@ -57,6 +152,7 @@ impl Column {
             relation: None,
             name: name.into(),
             spans: Spans::new(),
+            id: None,
         }
     }
 
@@ -68,6 +164,7 @@ impl Column {
             relation: None,
             name: name.into(),
             spans: Spans::new(),
+            id: None,
         }
     }
 
@@ -107,6 +204,7 @@ impl Column {
             relation,
             name,
             spans: Spans::new(),
+            id: None,
         })
     }
 
@@ -122,6 +220,7 @@ impl Column {
                 relation: None,
                 name: flat_name,
                 spans: Spans::new(),
+                id: None,
             },
         )
     }
@@ -135,6 +234,7 @@ impl Column {
                 relation: None,
                 name: flat_name,
                 spans: Spans::new(),
+                id: None,
             },
         )
     }
@@ -215,17 +315,29 @@ impl Column {
         using_columns: &[HashSet<Column>],
     ) -> Result<Self> {
         if self.relation.is_some() {
-            return Ok(self);
+            // Already qualified: bind the id of the field it names
+            return Ok(self.bind_id(schemas));
+        }
+
+        // A column with an id refers to the field with that id, even if
+        // another field has the same name
+        if let Some(id) = self.id {
+            for schema in schemas.iter().flat_map(|level| level.iter()) {
+                if let Some(idx) = schema.index_of_column_id(id) {
+                    return Ok(schema.column(idx));
+                }
+            }
         }
 
         for schema_level in schemas {
-            let qualified_fields = schema_level
+            // The matching fields, with their ids
+            let matching_columns = schema_level
                 .iter()
-                .flat_map(|s| s.qualified_fields_with_unqualified_name(&self.name))
+                .flat_map(|s| s.columns_with_unqualified_name(&self.name))
                 .collect::<Vec<_>>();
-            match qualified_fields.len() {
+            match matching_columns.len() {
                 0 => {}
-                1 => return Ok(Column::from(qualified_fields[0])),
+                1 => return Ok(matching_columns.into_iter().next().unwrap()),
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
                     //
@@ -288,6 +400,26 @@ impl Column {
         })
     }
 
+    /// Sets the id of this column to the id of the field it refers to in the
+    /// first of `schemas` (searched level by level) that has the field. An id
+    /// that already identifies a field of `schemas` is kept.
+    fn bind_id(self, schemas: &[&[&DFSchema]]) -> Self {
+        let all_schemas = || schemas.iter().flat_map(|level| level.iter());
+        if let Some(id) = self.id
+            && all_schemas().any(|s| s.index_of_column_id(id).is_some())
+        {
+            return self;
+        }
+        let id = all_schemas().find_map(|s| {
+            s.index_of_column_by_name(self.relation.as_ref(), &self.name)
+                .map(|idx| s.field_id(idx))
+        });
+        match id {
+            Some(id) => self.with_id(id),
+            None => self,
+        }
+    }
+
     /// Returns a reference to the set of locations in the SQL query where this
     /// column appears, if known.
     pub fn spans(&self) -> &Spans {
@@ -304,6 +436,17 @@ impl Column {
     /// appears, if known.
     pub fn with_spans(mut self, spans: Spans) -> Self {
         self.spans = spans;
+        self
+    }
+
+    /// Returns the [`ColumnId`] of the field this column refers to, if known
+    pub fn id(&self) -> Option<ColumnId> {
+        self.id
+    }
+
+    /// Sets the [`ColumnId`] of the field this column refers to
+    pub fn with_id(mut self, id: Option<ColumnId>) -> Self {
+        self.id = id;
         self
     }
 

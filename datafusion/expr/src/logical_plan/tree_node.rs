@@ -26,6 +26,7 @@
 
 use std::sync::Arc;
 
+use crate::logical_plan::column_ids::NodeDefinedIds;
 use crate::logical_plan::plan::RangePartitioning;
 use crate::{
     Aggregate, Analyze, AsOfJoin, AsOfMatch, CreateMemoryTable, CreateView, DdlStatement,
@@ -760,8 +761,11 @@ impl LogicalPlan {
                 input,
                 exec_columns,
                 options,
+                schema,
                 ..
             }) => {
+                // The rebuilt unnest defines the same unnested columns
+                let defined = NodeDefinedIds::of_unnest(&schema);
                 let exprs: Vec<Expr> =
                     exec_columns.into_iter().map(Expr::Column).collect();
                 exprs.map_elements(f)?.map_data(|mapped_exprs| {
@@ -780,11 +784,11 @@ impl LogicalPlan {
                     // the (possibly rewritten) columns rather than carried over
                     // stale. This keeps `map_expressions` consistent with
                     // `with_new_exprs`.
-                    unnest_with_options(
+                    defined.restore(unnest_with_options(
                         Arc::unwrap_or_clone(input),
                         new_columns,
                         options,
-                    )
+                    )?)
                 })?
             }
             LogicalPlan::Dml(DmlStatement {

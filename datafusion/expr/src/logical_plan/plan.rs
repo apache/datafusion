@@ -28,7 +28,7 @@ use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::materialized_cte::{
     MaterializedCte, MaterializedCtePlan, MaterializedCteScan,
 };
-use crate::logical_plan::{DmlStatement, Statement, WriteOp};
+use crate::logical_plan::{DmlStatement, Statement, WriteOp, column_ids};
 use crate::utils::{
     check_aggregate_and_window_nesting, check_no_window_functions,
     enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
@@ -55,7 +55,7 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
+    Column, ColumnId, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
     ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
     aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
@@ -712,6 +712,12 @@ impl LogicalPlan {
     ///
     /// * Does not recursively recompute schema for input (child) plans.
     pub fn recompute_schema(self) -> Result<Self> {
+        // The rebuilt node keeps defining the same columns
+        let defined = column_ids::NodeDefinedIds::of(&self);
+        defined.restore(self.recompute_schema_inner()?)
+    }
+
+    fn recompute_schema_inner(self) -> Result<Self> {
         match self {
             // Since expr may be different than the previous expr, schema of the projection
             // may change. We need to use try_new method instead of try_new_with_schema method.
@@ -859,9 +865,12 @@ impl LogicalPlan {
                 static_term,
                 recursive_term,
                 is_distinct,
-                schema: _,
-            }) => RecursiveQuery::try_new(name, static_term, recursive_term, is_distinct)
-                .map(LogicalPlan::RecursiveQuery),
+                schema,
+            }) => {
+                RecursiveQuery::try_new(name, static_term, recursive_term, is_distinct)?
+                    .with_ids_from(&schema)
+                    .map(LogicalPlan::RecursiveQuery)
+            }
             LogicalPlan::Analyze(_) => Ok(self),
             LogicalPlan::Explain(_) => Ok(self),
             LogicalPlan::TableScan(_) => Ok(self),
@@ -906,6 +915,16 @@ impl LogicalPlan {
     /// let new_plan = plan.new_with_exprs(rewritten_exprs, new_inputs);
     /// ```
     pub fn with_new_exprs(
+        &self,
+        expr: Vec<Expr>,
+        inputs: Vec<LogicalPlan>,
+    ) -> Result<LogicalPlan> {
+        // The rebuilt node keeps defining the same columns
+        let defined = column_ids::NodeDefinedIds::of(self);
+        defined.restore(self.with_new_exprs_inner(expr, inputs)?)
+    }
+
+    fn with_new_exprs_inner(
         &self,
         mut expr: Vec<Expr>,
         inputs: Vec<LogicalPlan>,
@@ -1243,11 +1262,16 @@ impl LogicalPlan {
             LogicalPlan::Union(Union { schema, .. }) => {
                 self.assert_no_expressions(expr)?;
                 let input_schema = inputs[0].schema();
-                // If inputs are not pruned do not change schema.
+                // If inputs are not pruned do not change schema. Otherwise the
+                // union defines new output columns.
                 let schema = if schema.fields().len() == input_schema.fields().len() {
                     Arc::clone(schema)
                 } else {
-                    Arc::clone(input_schema)
+                    let len = input_schema.fields().len();
+                    schema_with_field_ids(
+                        Arc::clone(input_schema),
+                        column_ids::new_output_column_ids(len),
+                    )?
                 };
                 Ok(LogicalPlan::Union(Union {
                     inputs: inputs.into_iter().map(Arc::new).collect(),
@@ -1293,7 +1317,8 @@ impl LogicalPlan {
                     Arc::new(static_term),
                     Arc::new(recursive_term),
                     *is_distinct,
-                )
+                )?
+                .with_ids_from(self.schema())
                 .map(LogicalPlan::RecursiveQuery)
             }
             LogicalPlan::Analyze(a) => {
@@ -1802,9 +1827,12 @@ impl LogicalPlan {
     /// See also: [`crate::utils::columnize_expr`]
     pub fn columnized_output_exprs(&self) -> Result<Vec<(&Expr, Column)>> {
         match self {
+            // keyed by the expression an output computes, without the implicit
+            // alias that names it
             LogicalPlan::Aggregate(aggregate) => Ok(aggregate
                 .output_expressions()?
                 .into_iter()
+                .map(Expr::strip_implicit_alias)
                 .zip(self.schema().columns())
                 .collect()),
             LogicalPlan::Window(Window {
@@ -1824,6 +1852,7 @@ impl LogicalPlan {
                 output_exprs.extend(
                     window_expr
                         .iter()
+                        .map(Expr::strip_implicit_alias)
                         .zip(schema.columns().into_iter().skip(input_len)),
                 );
                 Ok(output_exprs)
@@ -2011,6 +2040,8 @@ impl LogicalPlan {
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+                // Column references are quoted while the plan is displayed
+                let _quote = crate::expr::quote_column_names();
                 let with_schema = false;
                 let mut visitor = IndentVisitor::new(f, with_schema);
                 match self.0.visit_with_subqueries(&mut visitor) {
@@ -2057,6 +2088,8 @@ impl LogicalPlan {
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+                // Column references are quoted while the plan is displayed
+                let _quote = crate::expr::quote_column_names();
                 let with_schema = true;
                 let mut visitor = IndentVisitor::new(f, with_schema);
                 match self.0.visit_with_subqueries(&mut visitor) {
@@ -2077,6 +2110,8 @@ impl LogicalPlan {
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+                // Column references are quoted while the plan is displayed
+                let _quote = crate::expr::quote_column_names();
                 let mut visitor = PgJsonVisitor::new(f);
                 visitor.with_schema(true);
                 match self.0.visit_with_subqueries(&mut visitor) {
@@ -2123,6 +2158,8 @@ impl LogicalPlan {
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+                // Column references are quoted while the plan is displayed
+                let _quote = crate::expr::quote_column_names();
                 let mut visitor = GraphvizVisitor::new(f);
 
                 visitor.start_graph()?;
@@ -2174,6 +2211,8 @@ impl LogicalPlan {
         struct Wrapper<'a>(&'a LogicalPlan);
         impl Display for Wrapper<'_> {
             fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+                // Column references are quoted while the plan is displayed
+                let _quote = crate::expr::quote_column_names();
                 match self.0 {
                     LogicalPlan::EmptyRelation(EmptyRelation {
                         produce_one_row,
@@ -2687,6 +2726,10 @@ impl RecursiveQuery {
     ) -> Result<Self> {
         let schema =
             recursive_query_output_schema(static_term.schema(), recursive_term.schema())?;
+        // The query defines its output columns, as a union does
+        let len = schema.fields().len();
+        let schema =
+            schema_with_field_ids(schema, column_ids::new_output_column_ids(len))?;
         Ok(Self {
             name,
             static_term,
@@ -2694,6 +2737,17 @@ impl RecursiveQuery {
             is_distinct,
             schema,
         })
+    }
+
+    /// Returns this query with the ids of its output columns taken from
+    /// `old_schema`, the schema of the query it replaces, so that a rebuilt
+    /// query keeps defining the same columns
+    pub fn with_ids_from(mut self, old_schema: &DFSchema) -> Result<Self> {
+        if old_schema.fields().len() == self.schema.fields().len() {
+            self.schema =
+                schema_with_field_ids(self.schema, old_schema.field_ids().to_vec())?;
+        }
+        Ok(self)
     }
 }
 
@@ -2785,6 +2839,7 @@ impl PartialOrd for Projection {
 impl Projection {
     /// Create a new Projection
     pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+        let expr = column_ids::named_output_exprs(expr, None);
         let projection_schema = projection_schema(&input, &expr)?;
         Self::try_new_with_schema(expr, input, projection_schema)
     }
@@ -2805,6 +2860,10 @@ impl Projection {
                 schema.fields().len()
             );
         }
+        // Every output is a column or an alias with the column's id
+        let expr = column_ids::named_output_exprs(expr, Some(&schema));
+        let ids = column_ids::output_column_ids(&expr, input.schema());
+        let schema = schema_with_field_ids(schema, ids)?;
         Ok(Self {
             expr,
             input,
@@ -2821,6 +2880,18 @@ impl Projection {
             schema,
         }
     }
+}
+
+/// Returns `schema` with the given [`ColumnId`]s, unless the number of ids
+/// does not match the number of fields
+fn schema_with_field_ids(
+    schema: DFSchemaRef,
+    ids: Vec<Option<ColumnId>>,
+) -> Result<DFSchemaRef> {
+    if ids.len() != schema.fields().len() || schema.field_ids() == ids.as_slice() {
+        return Ok(schema);
+    }
+    Ok(Arc::new(Arc::unwrap_or_clone(schema).with_field_ids(ids)?))
 }
 
 /// Computes the schema of the result produced by applying a projection to the input logical plan.
@@ -2847,11 +2918,16 @@ pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSc
     let metadata = input.schema().metadata().clone();
 
     // Convert expressions to fields with Field properties determined by `Expr::to_field`
-    let schema =
-        DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?
-            .with_functional_dependencies(calc_func_dependencies_for_project(
-                exprs, input,
-            )?)?;
+    let fields = exprlist_to_fields(exprs, input)?;
+    let schema = if fields.len() == exprs.len() {
+        // with the ids of the outputs, so that two outputs with the same name
+        // but different ids are allowed
+        let ids = column_ids::output_column_ids(exprs, input.schema());
+        DFSchema::new_with_field_ids(fields, ids, metadata)?
+    } else {
+        DFSchema::new_with_metadata(fields, metadata)?
+    }
+    .with_functional_dependencies(calc_func_dependencies_for_project(exprs, input)?)?;
 
     Ok(Arc::new(schema))
 }
@@ -2916,7 +2992,8 @@ impl SubqueryAlias {
 
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(alias.clone(), schema)?
-                .with_functional_dependencies(func_dependencies)?,
+                .with_functional_dependencies(func_dependencies)?
+                .with_field_ids(plan.schema().field_ids().to_vec())?,
         );
         Ok(SubqueryAlias {
             input: plan,
@@ -3149,7 +3226,7 @@ impl Window {
             .iter()
             .enumerate()
             .filter_map(|(idx, expr)| {
-                let Expr::WindowFunction(window_fun) = expr else {
+                let Expr::WindowFunction(window_fun) = expr.strip_implicit_alias() else {
                     return None;
                 };
                 let WindowFunction {
@@ -3185,7 +3262,7 @@ impl Window {
         // Validate that FILTER clauses are only used with aggregate window functions
         if let Some(e) = window_expr.iter().find(|e| {
             matches!(
-                e,
+                e.strip_implicit_alias(),
                 Expr::WindowFunction(wf)
                     if !matches!(wf.fun, WindowFunctionDefinition::AggregateUDF(_))
                         && wf.params.filter.is_some()
@@ -3196,11 +3273,15 @@ impl Window {
             );
         }
 
+        let window_expr = column_ids::named_output_exprs(window_expr, None);
+        let mut window_ids = input.schema().field_ids().to_vec();
+        window_ids.extend(column_ids::output_column_ids(&window_expr, input.schema()));
+
         Self::try_new_with_schema(
             window_expr,
             input,
             Arc::new(
-                DFSchema::new_with_metadata(window_fields, metadata)?
+                DFSchema::new_with_field_ids(window_fields, window_ids, metadata)?
                     .with_functional_dependencies(window_func_dependencies)?,
             ),
         )
@@ -3224,6 +3305,21 @@ impl Window {
                 schema.fields().len()
             );
         }
+
+        // Every window expression is an alias with the column's id
+        let window_expr = window_expr
+            .into_iter()
+            .enumerate()
+            .map(|(i, expr)| {
+                column_ids::named_output_expr(
+                    expr,
+                    schema.field_id(input_fields_count + i),
+                )
+            })
+            .collect::<Vec<_>>();
+        let mut ids = input.schema().field_ids().to_vec();
+        ids.extend(column_ids::output_column_ids(&window_expr, input.schema()));
+        let schema = schema_with_field_ids(schema, ids)?;
 
         Ok(Window {
             input,
@@ -3390,6 +3486,10 @@ pub struct TableScanBuilder {
     skip: Option<usize>,
     #[expect(clippy::box_collection)] // additional indirection for smaller size_of()
     statistics_requests: Box<BTreeSet<StatisticsRequest>>,
+    /// The [`ColumnId`] of each source column (by index into the source
+    /// schema) that an existing scan already assigned, kept when the scan is
+    /// rebuilt with a different projection
+    source_column_ids: HashMap<usize, ColumnId>,
 }
 
 impl TableScanBuilder {
@@ -3406,6 +3506,7 @@ impl TableScanBuilder {
             fetch: None,
             skip: None,
             statistics_requests: Box::default(),
+            source_column_ids: HashMap::new(),
         }
     }
 
@@ -3454,6 +3555,7 @@ impl TableScanBuilder {
             fetch,
             skip,
             statistics_requests,
+            source_column_ids,
         } = self;
 
         if table_name.table().is_empty() {
@@ -3485,6 +3587,21 @@ impl TableScanBuilder {
                     DFSchema::try_from_qualified_schema(table_name.clone(), &schema)?;
                 df_schema.with_functional_dependencies(func_dependencies)
             })?;
+        // A scanned column keeps the id it had in the scan this one was
+        // rebuilt from; any other column is defined by this scan
+        let column_id = |i: &usize| {
+            Some(
+                source_column_ids
+                    .get(i)
+                    .copied()
+                    .unwrap_or_else(ColumnId::next),
+            )
+        };
+        let ids = match &projection {
+            Some(p) => p.iter().map(column_id).collect(),
+            None => (0..schema.fields().len()).map(|i| column_id(&i)).collect(),
+        };
+        let projected_schema = projected_schema.with_field_ids(ids)?;
         let projected_schema = Arc::new(projected_schema);
 
         Ok(TableScan {
@@ -3502,6 +3619,20 @@ impl TableScanBuilder {
 
 impl From<TableScan> for TableScanBuilder {
     fn from(scan: TableScan) -> Self {
+        // remember the ids of the scanned columns, by source column index
+        let source_column_ids = scan
+            .projected_schema
+            .field_ids()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, id)| {
+                let source_idx = match &scan.projection {
+                    Some(p) => *p.get(i)?,
+                    None => i,
+                };
+                id.map(|id| (source_idx, id))
+            })
+            .collect();
         Self {
             table_name: scan.table_name,
             source: scan.source,
@@ -3510,6 +3641,7 @@ impl From<TableScan> for TableScanBuilder {
             fetch: scan.fetch,
             skip: scan.skip,
             statistics_requests: scan.statistics_requests,
+            source_column_ids,
         }
     }
 }
@@ -3537,7 +3669,36 @@ impl Union {
     /// Schema data types must match exactly.
     pub fn try_new(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, false, false)?;
+        let schema = Self::with_output_ids(schema, &inputs)?;
         Ok(Union { inputs, schema })
+    }
+
+    /// Gives each output column a new id: a union defines its output columns
+    fn with_output_ids(
+        schema: DFSchemaRef,
+        _inputs: &[Arc<LogicalPlan>],
+    ) -> Result<DFSchemaRef> {
+        let len = schema.fields().len();
+        schema_with_field_ids(schema, column_ids::new_output_column_ids(len))
+    }
+
+    /// Returns this union with the ids of its output columns taken from
+    /// `old_schema` (the schema of the union it replaces): output `i` gets the
+    /// id of output `old_indices[i]` of the old union
+    pub fn with_ids_from(
+        mut self,
+        old_schema: &DFSchema,
+        old_indices: &[usize],
+    ) -> Result<Self> {
+        if old_indices.len() != self.schema.fields().len() {
+            return Ok(self);
+        }
+        let ids = old_indices
+            .iter()
+            .map(|i| old_schema.field_id(*i))
+            .collect();
+        self.schema = schema_with_field_ids(self.schema, ids)?;
+        Ok(self)
     }
 
     /// Constructs new Union instance deriving schema from inputs.
@@ -3546,6 +3707,7 @@ impl Union {
     // TODO (https://github.com/apache/datafusion/issues/14380): Avoid creating uncoerced union at all.
     pub fn try_new_with_loose_types(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, true, false)?;
+        let schema = Self::with_output_ids(schema, &inputs)?;
         Ok(Union { inputs, schema })
     }
 
@@ -3555,6 +3717,7 @@ impl Union {
     pub fn try_new_by_name(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, true, true)?;
         let inputs = Self::rewrite_inputs_from_schema(&schema, inputs)?;
+        let schema = Self::with_output_ids(schema, &inputs)?;
 
         Ok(Union { inputs, schema })
     }
@@ -4183,6 +4346,8 @@ impl DistinctOn {
         }
 
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
+        // Every output is a column or an alias with the column's id
+        let select_expr = column_ids::named_output_exprs(select_expr, None);
         let qualified_fields = exprlist_to_fields(select_expr.as_slice(), &input)?
             .into_iter()
             .collect();
@@ -4190,7 +4355,8 @@ impl DistinctOn {
         let dfschema = DFSchema::new_with_metadata(
             qualified_fields,
             input.schema().metadata().clone(),
-        )?;
+        )?
+        .with_field_ids(column_ids::output_column_ids(&select_expr, input.schema()))?;
 
         let mut distinct_on = DistinctOn {
             on_expr,
@@ -4311,6 +4477,16 @@ impl Aggregate {
 
         let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
 
+        // Every output is a column or an alias with the column's id. The
+        // expressions of a grouping set stay as they are: the aggregate
+        // defines their output columns, with new ids.
+        let group_expr = if is_grouping_set {
+            group_expr
+        } else {
+            column_ids::named_output_exprs(group_expr, None)
+        };
+        let aggr_expr = column_ids::named_output_exprs(aggr_expr, None);
+
         let grouping_expr: Vec<&Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
         let mut qualified_fields = exprlist_to_fields(grouping_expr, &input)?;
@@ -4335,8 +4511,14 @@ impl Aggregate {
 
         qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
 
-        let schema = DFSchema::new_with_metadata(
+        let schema = DFSchema::new_with_field_ids(
             qualified_fields,
+            column_ids::aggregate_output_column_ids(
+                &group_expr,
+                &aggr_expr,
+                input.schema(),
+                None,
+            )?,
             input.schema().metadata().clone(),
         )?;
 
@@ -4370,6 +4552,31 @@ impl Aggregate {
                 schema.fields().len()
             );
         }
+
+        // Every output is a column or an alias with the column's id
+        let group_expr = if matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]) {
+            group_expr
+        } else {
+            group_expr
+                .into_iter()
+                .enumerate()
+                .map(|(i, expr)| column_ids::named_output_expr(expr, schema.field_id(i)))
+                .collect()
+        };
+        let aggr_expr = aggr_expr
+            .into_iter()
+            .enumerate()
+            .map(|(i, expr)| {
+                column_ids::named_output_expr(expr, schema.field_id(group_expr_count + i))
+            })
+            .collect::<Vec<_>>();
+        let ids = column_ids::aggregate_output_column_ids(
+            &group_expr,
+            &aggr_expr,
+            input.schema(),
+            Some(&schema),
+        )?;
+        let schema = schema_with_field_ids(schema, ids)?;
 
         let aggregate_func_dependencies =
             calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
@@ -4994,7 +5201,11 @@ impl PartialOrd for Join {
 }
 
 /// Subquery
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash)]
+///
+/// Two subqueries are equal if they compute the same rows from the same
+/// outer references, even if their plans give the columns they define
+/// different ids (see [`LogicalPlan::is_equivalent_up_to_column_ids`]).
+#[derive(Clone, PartialOrd)]
 pub struct Subquery {
     /// The subquery
     pub subquery: Arc<LogicalPlan>,
@@ -5002,6 +5213,27 @@ pub struct Subquery {
     pub outer_ref_columns: Vec<Expr>,
     /// Span information for subquery projection columns
     pub spans: Spans,
+}
+
+impl PartialEq for Subquery {
+    fn eq(&self, other: &Self) -> bool {
+        self.outer_ref_columns == other.outer_ref_columns
+            && self
+                .subquery
+                .is_equivalent_up_to_column_ids(&other.subquery)
+                .unwrap_or(false)
+    }
+}
+
+impl Eq for Subquery {}
+
+// Hashing ignores column ids (as plan and expression hashing does), so two
+// subqueries that are equal up to their column ids hash the same
+impl Hash for Subquery {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.subquery.hash(state);
+        self.outer_ref_columns.hash(state);
+    }
 }
 
 impl Normalizeable for Subquery {
@@ -5013,7 +5245,10 @@ impl Normalizeable for Subquery {
 impl NormalizeEq for Subquery {
     fn normalize_eq(&self, other: &Self) -> bool {
         // TODO: may be implement NormalizeEq for LogicalPlan?
-        *self.subquery == *other.subquery
+        // equal up to the ids of the columns the subqueries define
+        self.subquery
+            .is_equivalent_up_to_column_ids(&other.subquery)
+            .unwrap_or(false)
             && self.outer_ref_columns.len() == other.outer_ref_columns.len()
             && self
                 .outer_ref_columns
@@ -5286,6 +5521,14 @@ impl Unnest {
 
         let mut list_columns: Vec<(usize, ColumnUnnestList)> = vec![];
         let mut struct_columns = vec![];
+        // the columns to unnest, with the ids of the input columns they read
+        let exec_columns = exec_columns
+            .into_iter()
+            .map(|c| {
+                let id = input.schema().field_id(input.schema().index_of_column(&c)?);
+                Ok(c.with_id(id))
+            })
+            .collect::<Result<Vec<Column>>>()?;
         let indices_to_unnest = exec_columns
             .iter()
             .map(|c| Ok((input.schema().index_of_column(c)?, c)))
@@ -5396,7 +5639,20 @@ impl Unnest {
             .collect::<Vec<_>>();
 
         let metadata = input_schema.metadata().clone();
-        let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
+        // A column that is not unnested passes its input column (and id)
+        // through. An unnested column is defined by the unnest, with a new id
+        // (kept when the unnest is rebuilt, see `NodeDefinedIds`).
+        let ids = dependency_indices
+            .iter()
+            .map(|input_index| {
+                if indices_to_unnest.contains_key(input_index) {
+                    Some(ColumnId::next())
+                } else {
+                    input_schema.field_id(*input_index)
+                }
+            })
+            .collect();
+        let df_schema = DFSchema::new_with_field_ids(fields, ids, metadata)?;
         let list_indices: HashSet<_> =
             list_columns.iter().map(|(index, _)| *index).collect();
         // Struct unnest may replace one input column with several output columns,
@@ -5531,17 +5787,18 @@ mod tests {
     /// write, every owned `map_*` traversal). Its size is set by the largest
     /// variant, so an oversized variant balloons cost for every other variant.
     ///
-    /// Today the size-setter should be `Join` (~176 bytes); `DdlStatement` is
+    /// Today the size-setter should be `Join` (~192 bytes); `DdlStatement` is
     /// boxed precisely so it does not dominate. If you grow a variant, please
     /// box the new large fields rather than letting this number creep up —
     /// see the analogous `test_size_of_expr` in `expr.rs`.
     #[test]
     fn test_size_of_logical_plan() {
         // `LogicalPlan` enum on aarch64 / x86_64. Today this matches
-        // `Join`'s 176 bytes (the enum discriminant fits in `Join`'s
+        // `Join`'s 192 bytes (the enum discriminant fits in `Join`'s
         // alignment padding); if `Join` grows or another variant overtakes
         // it, this number will move with the new size-setter.
-        assert_eq!(size_of::<LogicalPlan>(), 176);
+        // 192 since `Expr` grew by the `Option<ColumnId>` of `Column`; was 176
+        assert_eq!(size_of::<LogicalPlan>(), 192);
         // `DdlStatement` is `Ddl(DdlStatement)`'s payload; keep it below the
         // `Join` ceiling so it never re-becomes the size-setter.
         assert!(

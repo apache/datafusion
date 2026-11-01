@@ -19,6 +19,7 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::logical_plan::LogicalPlan;
+use datafusion_expr::logical_plan::column_ids::NodeDefinedIds;
 use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
     Aggregate, Expr, Projection, bitwise_and, bitwise_or, bitwise_shift_left,
@@ -128,9 +129,14 @@ fn replace_grouping_exprs(
             }
         }
     }
-    // Recreate aggregate without grouping functions
-    let new_aggregate =
-        LogicalPlan::Aggregate(Aggregate::try_new(input, group_expr, new_agg_expr)?);
+    // Recreate aggregate without grouping functions. It defines the same
+    // grouping set columns, which the projection reads.
+    let defined = NodeDefinedIds::of_aggregate(&group_expr, schema);
+    let new_aggregate = defined.restore(LogicalPlan::Aggregate(Aggregate::try_new(
+        input,
+        group_expr,
+        new_agg_expr,
+    )?))?;
     // Create projection with grouping functions calculations
     let projection = LogicalPlan::Projection(Projection::try_new(
         projection_exprs,

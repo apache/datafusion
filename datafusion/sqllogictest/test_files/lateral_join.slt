@@ -775,7 +775,7 @@ logical_plan
 05)------SubqueryAlias: sub
 06)--------Projection: w.id, w.rn, w.t1_id
 07)----------SubqueryAlias: w
-08)------------Projection: t2.id, t2.t1_id, row_number() ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn
+08)------------Projection: t2.id, t2.t1_id, "row_number() ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn
 09)--------------WindowAggr: windowExpr=[[row_number() ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 10)----------------TableScan: t2 projection=[id, t1_id]
 physical_plan
@@ -816,7 +816,7 @@ logical_plan
 03)----Inner Join: t1.id = sub.t1_id
 04)------TableScan: t1 projection=[id]
 05)------SubqueryAlias: sub
-06)--------Projection: t2.id, row_number() PARTITION BY [t2.t1_id] ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS rn, t2.t1_id
+06)--------Projection: t2.id, "row_number() PARTITION BY [t2.t1_id] ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW" AS rn, t2.t1_id
 07)----------WindowAggr: windowExpr=[[row_number() PARTITION BY [t2.t1_id] ORDER BY [t2.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 08)------------TableScan: t2 projection=[id, t1_id]
 physical_plan
@@ -879,7 +879,7 @@ logical_plan
 03)----Left Join: t1.id = sub.t1_id
 04)------TableScan: t1 projection=[id]
 05)------SubqueryAlias: sub
-06)--------Projection: count(Int64(1)) AS cnt, t2.t1_id, Boolean(true) AS __always_true
+06)--------Projection: "count(Int64(1))" AS cnt, t2.t1_id, Boolean(true) AS __always_true
 07)----------Aggregate: groupBy=[[t2.t1_id]], aggr=[[count(Int64(1))]]
 08)------------TableScan: t2 projection=[t1_id]
 physical_plan

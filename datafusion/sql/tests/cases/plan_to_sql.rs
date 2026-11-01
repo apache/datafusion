@@ -101,22 +101,30 @@ fn roundtrip_expr(table: TableReference, sql: &str) -> Result<String> {
 }
 
 fn remove_column_self_aliases(plan: LogicalPlan) -> Result<LogicalPlan> {
-    plan.transform_up_with_subqueries(|plan| {
-        plan.map_expressions(|expr| {
-            if let Expr::Alias(alias) = &expr
-                && alias.relation.is_none()
-                && alias.metadata.is_none()
-                && let Expr::Column(column) = alias.expr.as_ref()
-                && column.relation.is_none()
-                && column.name == alias.name
-            {
-                Ok(Transformed::yes(*alias.expr.clone()))
-            } else {
-                Ok(Transformed::no(expr))
-            }
+    // The id of each removed alias, and the id of the column it named: the
+    // references to the alias now refer to the column
+    let mut alias_ids = std::collections::HashMap::new();
+    let plan = plan
+        .transform_up_with_subqueries(|plan| {
+            plan.map_expressions(|expr| {
+                if let Expr::Alias(alias) = &expr
+                    && alias.relation.is_none()
+                    && alias.metadata.is_none()
+                    && let Expr::Column(column) = alias.expr.as_ref()
+                    && column.relation.is_none()
+                    && column.name == alias.name
+                {
+                    if let Some(column_id) = column.id {
+                        alias_ids.insert(alias.id, column_id);
+                    }
+                    Ok(Transformed::yes(*alias.expr.clone()))
+                } else {
+                    Ok(Transformed::no(expr))
+                }
+            })
         })
-    })
-    .data()
+        .data()?;
+    plan.rename_column_ids(&alias_ids)
 }
 
 #[test]
@@ -285,10 +293,11 @@ fn roundtrip_statement() -> Result<()> {
             .unwrap();
 
         // Explicit output names can add unqualified self-aliases without changing the plan's meaning.
-        assert_eq!(
-            remove_column_self_aliases(plan)?,
-            remove_column_self_aliases(plan_roundtrip)?,
-        );
+        // The two plans give their columns different ids
+        let plan = remove_column_self_aliases(plan)?.with_canonical_column_ids()?;
+        let plan_roundtrip =
+            remove_column_self_aliases(plan_roundtrip)?.with_canonical_column_ids()?;
+        assert_eq!(plan, plan_roundtrip, "{roundtrip_statement}");
     }
 
     Ok(())
@@ -1153,12 +1162,12 @@ fn test_unnest_logical_plan() -> Result<()> {
     let plan = sql_to_rel.sql_statement_to_plan(statement).unwrap();
     assert_snapshot!(
         plan,
-        @r"
-    Projection: __unnest_placeholder(unnest_table.struct_col).field1 AS unnest_table.struct_col.field1, __unnest_placeholder(unnest_table.struct_col).field2 AS unnest_table.struct_col.field2, __unnest_placeholder(unnest_table.array_col,depth=1) AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
+        @r#"
+    Projection: "__unnest_placeholder(unnest_table.struct_col).field1" AS unnest_table.struct_col.field1, "__unnest_placeholder(unnest_table.struct_col).field2" AS unnest_table.struct_col.field2, "__unnest_placeholder(unnest_table.array_col,depth=1)" AS UNNEST(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
       Unnest: lists[__unnest_placeholder(unnest_table.array_col)|depth=1] structs[__unnest_placeholder(unnest_table.struct_col)]
         Projection: unnest_table.struct_col AS __unnest_placeholder(unnest_table.struct_col), unnest_table.array_col AS __unnest_placeholder(unnest_table.array_col), unnest_table.struct_col, unnest_table.array_col
           TableScan: unnest_table
-    "
+    "#
     );
 
     Ok(())

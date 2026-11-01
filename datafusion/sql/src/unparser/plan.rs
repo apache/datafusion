@@ -2720,7 +2720,8 @@ impl Unparser<'_> {
     }
 
     fn select_item_to_sql(&self, expr: &Expr) -> Result<ast::SelectItem> {
-        match expr {
+        // An implicit alias only names an output after its own expression
+        match expr.strip_implicit_alias() {
             Expr::Alias(Alias { expr, name, .. }) => {
                 let inner = self.expr_to_sql(expr)?;
 
@@ -2798,11 +2799,13 @@ impl Unparser<'_> {
                         relation: _,
                         name: left_name,
                         spans: _,
+                        id: _,
                     }),
                     Expr::Column(Column {
                         relation: _,
                         name: right_name,
                         spans: _,
+                        id: _,
                     }),
                 ) if left_name == right_name => {
                     // For example, if the join condition `t1.id = t2.id`
