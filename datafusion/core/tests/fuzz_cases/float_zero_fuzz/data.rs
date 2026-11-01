@@ -8,9 +8,9 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, Float32Array, Float64Array, Int64Array, ListArray, RecordBatch,
+    ArrayRef, AsArray, Float32Array, Float64Array, Int64Array, ListArray, RecordBatch,
 };
-use arrow::datatypes::{DataType, Field, Float64Type, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Schema, SchemaRef};
 use datafusion_common::float_semantics::normalize_floats;
 use rand::Rng;
 use rand::rngs::StdRng;
@@ -63,10 +63,25 @@ fn canon_of(raw: &RecordBatch) -> RecordBatch {
     RecordBatch::try_new(raw.schema(), columns).unwrap()
 }
 
-/// Whether `array` has a `-0.0` at any depth. `normalize_floats` returns
-/// `array` itself when there is nothing to normalize.
+/// Whether `array`, one of the float or list columns of `raw`, has a `-0.0`
+/// at any depth. Checks the values directly rather than asking
+/// `normalize_floats`, which may change more than `-0.0`. A list is checked
+/// through all of its child values, so `array` must not be a slice.
 fn has_negative_zero(array: &ArrayRef) -> bool {
-    !Arc::ptr_eq(&normalize_floats(array), array)
+    match array.data_type() {
+        DataType::Float64 => array
+            .as_primitive::<Float64Type>()
+            .iter()
+            .flatten()
+            .any(|v| v == 0.0 && v.is_sign_negative()),
+        DataType::Float32 => array
+            .as_primitive::<Float32Type>()
+            .iter()
+            .flatten()
+            .any(|v| v == 0.0 && v.is_sign_negative()),
+        DataType::List(_) => has_negative_zero(array.as_list::<i32>().values()),
+        other => panic!("has_negative_zero does not support {other}"),
+    }
 }
 
 /// The 4-row `raw` table from
@@ -166,15 +181,24 @@ fn split(
     (canon_parts, raw_parts)
 }
 
-/// `random` relies on `has_negative_zero` seeing a `-0.0` inside a list,
-/// and only then.
+/// `random` relies on `has_negative_zero` seeing a `-0.0` in every column
+/// type of `raw`, and only a `-0.0`.
 #[test]
-fn has_negative_zero_in_lists() {
+fn has_negative_zero_column_types() {
+    let f64s = |v: f64| -> ArrayRef { Arc::new(Float64Array::from(vec![None, Some(v)])) };
+    let f32s = |v: f32| -> ArrayRef { Arc::new(Float32Array::from(vec![None, Some(v)])) };
     let list = |v: f64| -> ArrayRef {
-        Arc::new(ListArray::from_iter_primitive::<Float64Type, _, _>([Some(
-            vec![Some(1.0), Some(v)],
-        )]))
+        Arc::new(ListArray::from_iter_primitive::<Float64Type, _, _>([
+            None,
+            Some(vec![Some(1.0), Some(v)]),
+        ]))
     };
-    assert!(!has_negative_zero(&list(0.0)));
+    for v in [0.0, 1.0, f64::NAN] {
+        assert!(!has_negative_zero(&f64s(v)), "{v}");
+        assert!(!has_negative_zero(&f32s(v as f32)), "{v}");
+        assert!(!has_negative_zero(&list(v)), "{v}");
+    }
+    assert!(has_negative_zero(&f64s(-0.0)));
+    assert!(has_negative_zero(&f32s(-0.0)));
     assert!(has_negative_zero(&list(-0.0)));
 }
