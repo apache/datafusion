@@ -20,8 +20,8 @@ use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::dyn_eq::DynHash;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
 
-use crate::joins::Map;
 use crate::joins::key_range_bitmap::KeyRangeBitmap;
+use crate::joins::{Map, ReservedMap};
 
 /// RandomState wrapper that preserves the seed used to create it.
 ///
@@ -268,8 +268,8 @@ pub struct HashTableLookupExpr {
     on_columns: Vec<PhysicalExprRef>,
     /// Random state for hashing (with seeds preserved for serialization)
     random_state: SeededRandomState,
-    /// Map to check against (hash table or array map)
-    map: Arc<Map>,
+    /// Map to check against (hash table or array map), with its reservation
+    map: Arc<ReservedMap>,
     /// Description for display
     description: String,
     /// Shared pruning-only view of the build side's key range
@@ -293,6 +293,24 @@ impl HashTableLookupExpr {
         on_columns: Vec<PhysicalExprRef>,
         random_state: SeededRandomState,
         map: Arc<Map>,
+        description: String,
+        pruning_bitmap: Option<Arc<KeyRangeBitmap>>,
+    ) -> Self {
+        Self::new_reserved(
+            on_columns,
+            random_state,
+            Arc::new(ReservedMap::unreserved(map)),
+            description,
+            pruning_bitmap,
+        )
+    }
+
+    /// [`Self::new`] for a join's map, whose memory stays reserved while the
+    /// lookup holds it.
+    pub(crate) fn new_reserved(
+        on_columns: Vec<PhysicalExprRef>,
+        random_state: SeededRandomState,
+        map: Arc<ReservedMap>,
         description: String,
         pruning_bitmap: Option<Arc<KeyRangeBitmap>>,
     ) -> Self {
@@ -329,7 +347,8 @@ impl Hash for HashTableLookupExpr {
         self.description.hash(state);
         self.random_state.seed().hash(state);
         // Hash immutable map identity, consistently with pointer equality below.
-        Arc::as_ptr(&self.map).hash(state);
+        let map: &Map = &self.map;
+        std::ptr::from_ref(map).hash(state);
     }
 }
 
@@ -337,10 +356,11 @@ impl PartialEq for HashTableLookupExpr {
     fn eq(&self, other: &Self) -> bool {
         // Sharing an immutable map implies equal contents, including across
         // prepared-build consumers. Distinct maps need no expensive deep comparison.
+        let (map, other_map): (&Map, &Map) = (&self.map, &other.map);
         self.on_columns == other.on_columns
             && self.description == other.description
             && self.random_state.seed() == other.random_state.seed()
-            && Arc::ptr_eq(&self.map, &other.map)
+            && std::ptr::eq(map, other_map)
     }
 }
 
@@ -382,7 +402,8 @@ impl PhysicalExpr for HashTableLookupExpr {
         // Evaluate columns
         let join_keys = evaluate_columns(&self.on_columns, batch)?;
 
-        match self.map.as_ref() {
+        let map: &Map = &self.map;
+        match map {
             Map::HashMap(map) => {
                 with_hashes(&join_keys, self.random_state.random_state(), |hashes| {
                     let array = map.contain_hashes(hashes);

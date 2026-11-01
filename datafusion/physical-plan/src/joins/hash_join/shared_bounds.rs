@@ -11,8 +11,8 @@ use std::sync::Arc;
 use crate::ExecutionPlan;
 use crate::ExecutionPlanProperties;
 use crate::Partitioning;
-use crate::joins::Map;
 use crate::joins::PartitionMode;
+use crate::joins::ReservedMap;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::not_in::NotIn;
@@ -126,7 +126,7 @@ fn create_membership_predicate(
         }
         // Use hash table lookup for large build sides
         PushdownStrategy::Map(hash_map, pruning_bitmap) => {
-            Ok(Some(Arc::new(HashTableLookupExpr::new(
+            Ok(Some(Arc::new(HashTableLookupExpr::new_reserved(
                 on_right.to_vec(),
                 random_state.clone(),
                 hash_map,
@@ -271,7 +271,7 @@ pub(crate) enum PushdownStrategy {
     InList(ArrayRef),
     /// Use map lookup for large build sides. If `Some` the second field
     /// represents the build side's keys using a bucket bitmap.
-    Map(Arc<Map>, Option<Arc<KeyRangeBitmap>>),
+    Map(Arc<ReservedMap>, Option<Arc<KeyRangeBitmap>>),
     /// There was no data in this partition, do not build a dynamic filter for it
     Empty,
 }
