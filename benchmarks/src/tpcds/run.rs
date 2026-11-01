@@ -6,7 +6,7 @@ use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::util::{BenchmarkRun, CommonOpt, QueryResult, print_memory_stats};
+use crate::util::{BenchmarkRun, CommonOpt, QueryOpt, QueryResult, print_memory_stats};
 
 use arrow::datatypes::Schema;
 use arrow::record_batch::RecordBatch;
@@ -27,8 +27,6 @@ use datafusion_common::{Constraint, Constraints, DEFAULT_PARQUET_EXTENSION, plan
 use clap::Args;
 use log::info;
 
-// hack to avoid `default_value is meaningless for bool` errors
-type BoolDefaultTrue = bool;
 pub const TPCDS_QUERY_START_ID: usize = 1;
 pub const TPCDS_QUERY_END_ID: usize = 99;
 
@@ -165,32 +163,14 @@ pub struct RunOpt {
     #[arg(short = 'o', long = "output")]
     output_path: Option<PathBuf>,
 
-    /// Whether to disable collection of statistics (and cost based optimizations) or not.
-    #[arg(short = 'S', long = "disable-statistics")]
-    disable_statistics: bool,
-
-    /// If true then hash join used, if false then sort merge join
-    /// True by default.
-    #[arg(short = 'j', long = "prefer_hash_join", default_value = "true")]
-    prefer_hash_join: BoolDefaultTrue,
-
-    /// If true then Piecewise Merge Join can be used, if false then it will opt for Nested Loop Join
-    /// False by default.
-    #[arg(
-        short = 'w',
-        long = "enable_piecewise_merge_join",
-        default_value = "false"
-    )]
-    enable_piecewise_merge_join: BoolDefaultTrue,
+    /// Session configuration overrides
+    #[command(flatten)]
+    query_options: QueryOpt,
 
     /// Mark the first column of each table as sorted in ascending order.
     /// The tables should have been created with the `--sort` option for this to have any effect.
     #[arg(short = 't', long = "sorted")]
     sorted: bool,
-
-    /// How many bytes to buffer on the probe side of hash joins.
-    #[arg(long, default_value = "0")]
-    hash_join_buffering_capacity: usize,
 }
 
 impl RunOpt {
@@ -202,15 +182,7 @@ impl RunOpt {
         };
 
         let mut benchmark_run = BenchmarkRun::new();
-        let mut config = self
-            .common
-            .config()?
-            .with_collect_statistics(!self.disable_statistics);
-        config.options_mut().optimizer.prefer_hash_join = self.prefer_hash_join;
-        config.options_mut().optimizer.enable_piecewise_merge_join =
-            self.enable_piecewise_merge_join;
-        config.options_mut().execution.hash_join_buffering_capacity =
-            self.hash_join_buffering_capacity;
+        let config = self.query_options.config(&self.common)?;
         let rt = self.common.build_runtime()?;
         let ctx = SessionContext::new_with_config_rt(config, rt);
         benchmark_run.set_memory_pool(&ctx.runtime_env().memory_pool);
