@@ -211,8 +211,9 @@ impl SortQueryFuzzer {
                     if expected_results.is_none() {
                         expected_results = Some(results);
                     } else if let Some(ref expected) = expected_results {
-                        // Compare displayed values because dictionary NULLs can
-                        // have different physical encodings.
+                        // Check logical equivalence.
+                        // `assert_eq!` may report false failures when logically equivalent
+                        // batches have different physical encodings.
                         check_equality_of_batches(expected, &results).unwrap();
                     } else {
                         unreachable!();
