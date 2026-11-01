@@ -23,7 +23,8 @@
 //!
 //! `project/wide_struct_fields` measures [`EquivalenceProperties::project`] for a
 //! projection that reads many fields of one wide struct column, as flattening a
-//! parsed JSON document does.
+//! parsed JSON document does, with the input ordered by another column or by the
+//! struct itself.
 
 use std::sync::Arc;
 
@@ -197,13 +198,19 @@ fn bench_project_wide_struct_fields(c: &mut Criterion) {
             })
             .collect::<Vec<_>>(),
     ));
-    let mut props = EquivalenceProperties::new(Arc::clone(&schema));
-    props.add_orderings([vec![PhysicalSortExpr::new(col_a, SortOptions::default())]]);
-
-    c.bench_function(
-        &format!("equivalence_properties/project/wide_struct_fields/{READ}_of_{FIELDS}"),
-        |b| b.iter(|| props.project(&mapping, Arc::clone(&output))),
-    );
+    let mut group = c.benchmark_group("equivalence_properties");
+    for (suffix, sort_col) in [("", col_a), ("/ordered_by_s", col_s)] {
+        let mut props = EquivalenceProperties::new(Arc::clone(&schema));
+        props.add_orderings([vec![PhysicalSortExpr::new(
+            sort_col,
+            SortOptions::default(),
+        )]]);
+        group.bench_function(
+            format!("project/wide_struct_fields/{READ}_of_{FIELDS}{suffix}"),
+            |b| b.iter(|| props.project(&mapping, Arc::clone(&output))),
+        );
+    }
+    group.finish();
 }
 
 criterion_group!(

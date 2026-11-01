@@ -227,6 +227,7 @@ impl EquivalenceProperties {
         r_expr: Arc<dyn PhysicalExpr>,
         sort_expr: &PhysicalSortExpr,
         schema: &SchemaRef,
+        column_ranges: &ColumnRanges,
     ) -> Option<PhysicalSortExpr> {
         if r_expr.eq(&sort_expr.expr) {
             // No point in substituting an expression with itself.
@@ -234,8 +235,7 @@ impl EquivalenceProperties {
         }
         let dependencies = Dependencies::new(std::iter::once(sort_expr.clone()));
         let properties =
-            get_expr_properties(&r_expr, &dependencies, schema, &ColumnRanges::default())
-                .ok()?;
+            get_expr_properties(&r_expr, &dependencies, schema, column_ranges).ok()?;
         (properties.strictly_order_preserving
             && properties.sort_properties == SortProperties::Ordered(sort_expr.options))
         .then(|| PhysicalSortExpr::new(r_expr, sort_expr.options))
@@ -915,6 +915,7 @@ impl EquivalenceProperties {
         schema: &SchemaRef,
         mapping: &ProjectionMapping,
         oeq_class: OrderingEquivalenceClass,
+        column_ranges: &ColumnRanges,
     ) -> OrderingEquivalenceClass {
         let new_orderings = oeq_class.into_iter().flat_map(|order| {
             // Modify/expand existing orderings by substituting sort
@@ -933,6 +934,7 @@ impl EquivalenceProperties {
                                 r_expr,
                                 &original_sort_expr,
                                 schema,
+                                column_ranges,
                             )
                         })
                         .chain(std::iter::once(sort_expr))
@@ -1111,13 +1113,15 @@ impl EquivalenceProperties {
     ) -> Vec<LexOrdering> {
         // Normalize source expressions in the mapping:
         let mapping = self.normalize_mapping(mapping);
-        // Get dependency map for existing orderings:
-        oeq_class = Self::substitute_oeq_class(&self.schema, &mapping, oeq_class);
-        let dependency_map = self.construct_dependency_map(oeq_class, &mapping);
-        // Every source is examined, even one that refers to no ordered column (it then gets an
-        // empty set of dependencies), so a wide column referenced by many sources would have its
-        // unbounded range built once per reference.
+        // Substitution examines every source that refers to an ordered column, and building the
+        // orderings examines every source, even one that refers to no ordered column (it then
+        // gets an empty set of dependencies). Sharing one cache across both steps builds the
+        // unbounded range of a wide column referenced by many sources only once.
         let column_ranges = ColumnRanges::default();
+        oeq_class =
+            Self::substitute_oeq_class(&self.schema, &mapping, oeq_class, &column_ranges);
+        // Get dependency map for existing orderings:
+        let dependency_map = self.construct_dependency_map(oeq_class, &mapping);
         let orderings = mapping.iter().flat_map(|(source, targets)| {
             referred_dependencies(&dependency_map, source)
                 .into_iter()

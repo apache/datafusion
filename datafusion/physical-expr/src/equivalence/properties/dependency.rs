@@ -381,12 +381,13 @@ mod tests {
     use crate::{ConstExpr, EquivalenceProperties, ScalarFunctionExpr};
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef, TimeUnit};
     use arrow::record_batch::RecordBatch;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::{Constraint, Constraints, Result};
     use datafusion_expr::ColumnarValue;
     use datafusion_expr::Operator;
+    use datafusion_expr::interval_arithmetic::Interval;
     use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
     use datafusion_functions::string::concat;
     use datafusion_physical_expr_common::sort_expr::{
@@ -1553,15 +1554,16 @@ mod tests {
         Ok(())
     }
 
-    /// A pass-through expression with its own identity that records the data
-    /// type of the range it is given for its child. It keeps its child's
-    /// ordering, or declares itself ascending when `ordered` is set.
+    /// An expression with its own identity that evaluates to its child and
+    /// records the range it is given for its child. Of its
+    /// properties it reports only an ordering: its child's, or ascending when
+    /// `ordered` is set.
     #[derive(Debug)]
     struct RangeProbe {
         child: Arc<dyn PhysicalExpr>,
         id: usize,
         ordered: bool,
-        seen: Arc<std::sync::Mutex<Vec<DataType>>>,
+        seen: Seen,
     }
 
     impl PartialEq for RangeProbe {
@@ -1607,10 +1609,7 @@ mod tests {
             }))
         }
         fn get_properties(&self, children: &[ExprProperties]) -> Result<ExprProperties> {
-            self.seen
-                .lock()
-                .unwrap()
-                .push(children[0].range.data_type());
+            self.seen.lock().unwrap().push(children[0].range.clone());
             let order = if self.ordered {
                 SortProperties::Ordered(SortOptions::default())
             } else {
@@ -1623,7 +1622,7 @@ mod tests {
         }
     }
 
-    type Seen = Arc<std::sync::Mutex<Vec<DataType>>>;
+    type Seen = Arc<std::sync::Mutex<Vec<Interval>>>;
 
     /// Projects each `(child, id, ordered)` through a probe named `p{id}`.
     /// Returns the mapping and, per probe, the range types it will be given.
@@ -1652,7 +1651,7 @@ mod tests {
     fn assert_only_saw(seen: &Seen, expected: &DataType) {
         let seen = seen.lock().unwrap();
         assert!(!seen.is_empty());
-        assert!(seen.iter().all(|t| t == expected), "{seen:?}");
+        assert!(seen.iter().all(|r| &r.data_type() == expected), "{seen:?}");
     }
 
     fn sorted_orderings(properties: &EquivalenceProperties) -> Vec<String> {
@@ -1711,6 +1710,52 @@ mod tests {
             sorted_orderings(&projected),
             vec!["p0@0 ASC", "p1@1 ASC", "p4@4 ASC"]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn project_builds_the_range_of_an_ordered_column_once() -> Result<()> {
+        let fields = Fields::from(vec![
+            Field::new("x", DataType::Int64, true),
+            Field::new("y", DataType::Utf8, true),
+        ]);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "s",
+            DataType::Struct(fields),
+            true,
+        )]));
+        let s = col("s", &schema)?;
+        let mut input = EquivalenceProperties::new(Arc::clone(&schema));
+        input.add_orderings([vec![PhysicalSortExpr::new(
+            Arc::clone(&s),
+            SortOptions::default(),
+        )]]);
+
+        // Every probe refers to the sort key, so both substituting the
+        // ordering and deriving the projected one examine each of them.
+        let (mapping, seen) = probe_mapping(
+            (0..3).map(|id| (Arc::clone(&s), id, false)).collect(),
+            &schema,
+        )?;
+        let projected = input.project(&mapping, output_schema(&mapping, &schema)?);
+
+        assert_eq!(
+            sorted_orderings(&projected),
+            vec!["p0@0 ASC", "p1@1 ASC", "p2@2 ASC"]
+        );
+        // A rebuilt range of a struct holds a new null array.
+        let mut arrays = vec![];
+        for seen in &seen {
+            for range in seen.lock().unwrap().iter() {
+                let datafusion_common::ScalarValue::Struct(array) = range.lower() else {
+                    panic!("{range:?}");
+                };
+                arrays.push(Arc::clone(array));
+            }
+        }
+        // Each probe is examined by both steps.
+        assert!(arrays.len() >= 6, "{}", arrays.len());
+        assert!(arrays.iter().all(|a| Arc::ptr_eq(a, &arrays[0])));
         Ok(())
     }
 
