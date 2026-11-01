@@ -379,14 +379,39 @@ fn is_fixed_offset(tz: &str) -> bool {
     tz == "UTC" || tz.starts_with(['+', '-'])
 }
 
-/// Whether successful casts preserve order when conversion failures return errors.
-/// Unlike `check_bigger_cast`, this allows precision loss and is not sufficient
-/// for propagating distinct counts or the ordering of subsequent sort keys.
-fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) -> bool {
+fn is_binary(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        Binary | LargeBinary | BinaryView | FixedSizeBinary(_)
+    )
+}
+
+/// Temporal types stored as a count of units since the epoch (or midnight),
+/// which a cast from or to a number reads or writes as that count.
+fn is_temporal_count(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        Date32 | Date64 | Timestamp(_, _) | Time32(_) | Time64(_) | Duration(_)
+    )
+}
+
+/// Whether the cast never reverses the order of two values that both convert:
+/// `a <= b` implies `cast(a) <= cast(b)`. Precision loss may merge values, so
+/// this is not sufficient for propagating distinct counts or the ordering of
+/// subsequent sort keys (see [`CastExpr::check_bigger_cast`] for that).
+///
+/// Values that fail to convert are not covered: callers must account for the
+/// error or NULL a failure produces.
+pub fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) -> bool {
     use arrow::datatypes::TimeUnit::*;
     if source_type == target_type
         || (source_type.is_numeric() || *source_type == Boolean)
             && target_type.is_numeric()
+        // Changing the string or binary encoding keeps the byte order.
+        || source_type.is_string() && target_type.is_string()
+        || is_binary(source_type) && is_binary(target_type)
+        || source_type.is_numeric() && is_temporal_count(target_type)
+        || is_temporal_count(source_type) && target_type.is_numeric()
     {
         return true;
     }
@@ -394,7 +419,7 @@ fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) -> b
     // at midnight, and timezone transitions can reverse the local date.
     match (source_type, target_type) {
         (Date32 | Date64, Date32 | Date64)
-        | (Date32 | Date64, Timestamp(_, None))
+        | (Date32 | Date64, Timestamp(_, _))
         | (Timestamp(_, None), Date32) => true,
         (Timestamp(_, Some(tz)), Date32) => is_fixed_offset(tz),
         // Arrow converts timestamps to Date64 by scaling the epoch value,
@@ -406,11 +431,13 @@ fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) -> b
         | (Time32(Second | Millisecond), Time64(Microsecond | Nanosecond))
         | (Time64(Nanosecond), Time64(Microsecond))
         | (Duration(_), Duration(_)) => true,
-        (Timestamp(_, from_tz), Timestamp(_, to_tz)) => {
-            // Adding a timezone to naive timestamps interprets local times;
-            // other timezone changes only change metadata on the epoch value.
-            from_tz.is_some() || to_tz.as_deref().is_none_or(is_fixed_offset)
-        }
+        // Changing the timezone only changes metadata on the epoch value.
+        // Adding a timezone to a naive timestamp (or a date) reads it as a
+        // local time, and Arrow rejects local times that a transition skips
+        // or repeats. A transition skips or repeats exactly the local times
+        // its offset change covers, so the local times that remain keep
+        // their order in UTC.
+        (Timestamp(_, _), Timestamp(_, _)) => true,
         _ => false,
     }
 }
@@ -2283,6 +2310,7 @@ mod tests {
             (Date64, Date32, true),
             (Date32, Timestamp(Nanosecond, None), true),
             (Date64, Timestamp(Second, None), true),
+            (Date32, Timestamp(Second, timezone.clone()), true),
             (Timestamp(Second, None), Date32, true),
             (Timestamp(Second, Some("UTC".into())), Date32, true),
             (Timestamp(Second, Some("+08:00".into())), Date32, true),
@@ -2290,10 +2318,12 @@ mod tests {
             (Timestamp(Second, timezone.clone()), Date64, true),
             (Timestamp(Second, None), Timestamp(Nanosecond, None), true),
             (Timestamp(Nanosecond, None), Timestamp(Second, None), true),
+            // Local times that a transition skips or repeats fail to convert,
+            // and the remaining ones keep their order.
             (
                 Timestamp(Second, None),
                 Timestamp(Second, timezone.clone()),
-                false,
+                true,
             ),
             (
                 Timestamp(Second, None),
@@ -2357,6 +2387,231 @@ mod tests {
                     assert!(!properties.strictly_order_preserving);
                 }
             }
+        }
+    }
+
+    /// Sorted, distinct, non-null sample values of `data_type`, obtained by
+    /// casting a fixed set of seeds and keeping the values that convert.
+    fn order_samples(data_type: &DataType) -> Option<ArrayRef> {
+        use arrow::array::{
+            BooleanArray, FixedSizeBinaryArray, Float64Array, TimestampSecondArray,
+            UInt32Array, make_comparator,
+        };
+        use arrow::compute::{
+            SortOptions, concat, filter, is_not_null, sort_to_indices, take,
+        };
+
+        let seeds: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![
+                i64::MIN,
+                -2_147_483_649,
+                -129,
+                -1,
+                0,
+                1,
+                9,
+                10,
+                127,
+                128,
+                255,
+                256,
+                86_399,
+                // America/Goose_Bay fell back from 00:01 to 23:01 the previous
+                // day at this instant, so the local date goes backwards.
+                562_129_259,
+                562_129_260,
+                2_147_483_647,
+                i64::MAX,
+            ])),
+            Arc::new(Float64Array::from(vec![
+                f64::NEG_INFINITY,
+                -1.5,
+                -0.5,
+                0.0,
+                0.5,
+                1.7,
+                1e300,
+                f64::INFINITY,
+            ])),
+            Arc::new(StringArray::from(vec!["", "-1", "0", "1", "10", "9", "a"])),
+            Arc::new(BooleanArray::from(vec![false, true])),
+            Arc::new(
+                FixedSizeBinaryArray::try_from_iter(
+                    ["abcd", "abce", "zzzz"].into_iter().map(str::as_bytes),
+                )
+                .expect("valid fixed size binary"),
+            ),
+            Arc::new(TimestampSecondArray::from(vec![
+                // 23:00, 00:00 and 01:00 around midnight
+                82_800,
+                86_400,
+                90_000,
+                // Local times around the America/New_York transitions of
+                // 2024: before, inside and after the skipped hour in March and
+                // the repeated hour in November.
+                1_710_035_999,
+                1_710_037_800,
+                1_710_039_600,
+                1_730_595_599,
+                1_730_597_400,
+                1_730_599_200,
+            ])),
+        ];
+        // Cast each seed on its own, so one value that fails to convert does
+        // not discard the others.
+        let parts = seeds
+            .iter()
+            .flat_map(|seed| (0..seed.len()).map(|i| seed.slice(i, 1)))
+            .filter_map(|seed| arrow::compute::cast(&seed, data_type).ok())
+            .map(|array| filter(&array, &is_not_null(&array).unwrap()).unwrap())
+            .filter(|array| !array.is_empty())
+            .collect::<Vec<_>>();
+        if parts.is_empty() {
+            return None;
+        }
+        let parts = parts.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+        let all = concat(&parts).unwrap();
+        let sorted =
+            take(&all, &sort_to_indices(&all, None, None).unwrap(), None).unwrap();
+        let cmp = make_comparator(&sorted, &sorted, SortOptions::default()).unwrap();
+        let distinct = (0..sorted.len())
+            .filter(|&i| i == 0 || cmp(i - 1, i).is_ne())
+            .map(|i| i as u32)
+            .collect::<UInt32Array>();
+        Some(take(&sorted, &distinct, None).unwrap())
+    }
+
+    /// Casts the sorted `samples` to `target` and returns the first pair of
+    /// converted values whose order the cast reverses. Each value is cast on
+    /// its own, and values that fail to convert are skipped:
+    /// `is_order_preserving_cast` does not cover them.
+    ///
+    /// Returns `None` when the cast keeps the order, and `Some(Err(_))` when
+    /// the cast kernel panics.
+    fn order_violation(
+        samples: &ArrayRef,
+        target: &DataType,
+    ) -> Option<std::result::Result<String, String>> {
+        use arrow::array::make_comparator;
+        use arrow::compute::SortOptions;
+
+        let mut converted: Vec<(usize, ArrayRef)> = vec![];
+        for i in 0..samples.len() {
+            let value = samples.slice(i, 1);
+            let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                arrow::compute::cast_with_options(
+                    &value,
+                    target,
+                    &DEFAULT_SAFE_CAST_OPTIONS,
+                )
+            }));
+            match output {
+                Ok(Ok(output)) if output.is_valid(0) => converted.push((i, output)),
+                Ok(_) => {}
+                Err(_) => return Some(Err("cast kernel panicked".to_string())),
+            }
+        }
+        converted.windows(2).find_map(|w| {
+            let ((i, left), (j, right)) = (&w[0], &w[1]);
+            let cmp = make_comparator(left, right, SortOptions::default()).unwrap();
+            cmp(0, 0).is_gt().then(|| {
+                let value = |array: &ArrayRef, i| {
+                    ScalarValue::try_from_array(array, i).unwrap().to_string()
+                };
+                Ok(format!(
+                    "{} -> {}, but {} -> {}",
+                    value(samples, *i),
+                    value(left, 0),
+                    value(samples, *j),
+                    value(right, 0),
+                ))
+            })
+        })
+    }
+
+    /// Checks `is_order_preserving_cast` against the Arrow cast kernel: every
+    /// pair it accepts must keep the order of the sample values that convert.
+    /// Pruning and sort elimination both rely on this rule, so a wrong entry
+    /// drops matching rows or returns unsorted output.
+    #[test]
+    fn test_order_preserving_cast_matches_cast_kernel() {
+        use TimeUnit::*;
+
+        let tz = |unit, tz: &str| Timestamp(unit, Some(tz.into()));
+        let types = [
+            Boolean,
+            Int8,
+            Int16,
+            Int32,
+            Int64,
+            UInt8,
+            UInt16,
+            UInt32,
+            UInt64,
+            Float32,
+            Float64,
+            Decimal128(10, 2),
+            Decimal256(40, 2),
+            Utf8,
+            LargeUtf8,
+            Utf8View,
+            Binary,
+            LargeBinary,
+            BinaryView,
+            FixedSizeBinary(4),
+            Date32,
+            Date64,
+            Timestamp(Second, None),
+            Timestamp(Nanosecond, None),
+            tz(Millisecond, "UTC"),
+            tz(Second, "+05:00"),
+            tz(Second, "America/New_York"),
+            tz(Second, "America/Goose_Bay"),
+            Time32(Second),
+            Time32(Millisecond),
+            Time64(Microsecond),
+            Time64(Nanosecond),
+            Duration(Second),
+            Duration(Nanosecond),
+        ];
+        let mut violations = vec![];
+        for source in &types {
+            let Some(samples) = order_samples(source) else {
+                continue;
+            };
+            for target in &types {
+                if !can_cast_types(source, target)
+                    || !is_order_preserving_cast(source, target)
+                {
+                    continue;
+                }
+                match order_violation(&samples, target) {
+                    None => {}
+                    // A panic is an unchecked overflow in a debug build, which
+                    // wraps in a release build, so it is not evidence of order
+                    // either. These pairs are listed separately in the output.
+                    Some(Err(e)) => println!("{source} -> {target}: {e}"),
+                    Some(Ok(e)) => violations.push(format!("{source} -> {target}: {e}")),
+                }
+            }
+        }
+        assert!(violations.is_empty(), "{}", violations.join("\n"));
+
+        // The samples are able to expose the casts the rule rejects.
+        for (source, target) in [
+            (Utf8, Int32),
+            (Int32, Boolean),
+            (Int16, Binary),
+            (Timestamp(Second, None), Time32(Second)),
+            (tz(Second, "+05:00"), Time64(Nanosecond)),
+            (tz(Second, "America/Goose_Bay"), Date32),
+        ] {
+            assert!(!is_order_preserving_cast(&source, &target));
+            let samples = order_samples(&source).unwrap();
+            assert!(
+                matches!(order_violation(&samples, &target), Some(Ok(_))),
+                "{source} -> {target}: no sample exposes the reversed order"
+            );
         }
     }
 
