@@ -94,6 +94,10 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
+use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+use datafusion_physical_optimizer::sanity_checker::{
+    check_plan_tree_sanity, input_requirements_hold,
+};
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
 use datafusion_physical_plan::joins::PiecewiseMergeJoinExec;
@@ -3481,9 +3485,18 @@ impl DefaultPhysicalPlanner {
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
 
-        // This runs once after all optimizer runs are complete,
-        // to verify that the plan is executable.
-        InvariantChecker(InvariantLevel::Executable).check(&new_plan)?;
+        // This runs once after all optimizer runs are complete, including
+        // rules appended by the user, to verify that the plan is executable.
+        let optimizer_options = &session_state.config_options().optimizer;
+        if let Err(e) = check_plan_tree_sanity(&new_plan, optimizer_options) {
+            return Err(sanity_check_error(
+                e,
+                &new_plan,
+                plan,
+                optimizers,
+                &optimizer_context,
+            ));
+        }
 
         debug!(
             "Optimized physical plan:\n{}\n",
@@ -3691,6 +3704,73 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
         (Ok(_), Err(e1)) => Err(e1),
         (Err(e), Err(_)) => Err(e),
     }
+}
+
+/// Adds context to an error from the final [`check_plan_tree_sanity`].
+///
+/// `EnsureRequirements` makes the order and distribution requirements hold,
+/// and every rule after it must keep them. When they do not hold for
+/// `final_plan`, the context names the rule that broke this contract: either
+/// `EnsureRequirements` itself, or the rule after which the requirements
+/// stopped holding. To find it, `optimizers` run again from `input_plan`, so
+/// planning that succeeds keeps no intermediate plans.
+fn sanity_check_error(
+    error: DataFusionError,
+    final_plan: &Arc<dyn ExecutionPlan>,
+    input_plan: Arc<dyn ExecutionPlan>,
+    optimizers: &[Arc<dyn PhysicalOptimizerRule + Send + Sync>],
+    optimizer_context: &dyn PhysicalOptimizerContext,
+) -> DataFusionError {
+    const SANITY_CHECK: &str = "SanityCheckPlan";
+    let plain_error =
+        |error| DataFusionError::Context(SANITY_CHECK.to_string(), Box::new(error));
+    if input_requirements_hold(final_plan) {
+        // The error is about unbounded inputs or another invariant.
+        return plain_error(error);
+    }
+
+    let ensure_requirements = EnsureRequirements::new();
+    let enforced = optimizers
+        .iter()
+        .rposition(|rule| rule.name() == ensure_requirements.name());
+    // Plans before `EnsureRequirements` need not satisfy the requirements, so
+    // only plans from its last run onwards are checked. Without it, every
+    // plan is checked, starting with the input plan.
+    let first_checked = enforced.unwrap_or(0);
+    let mut held = enforced.is_none() && input_requirements_hold(&input_plan);
+    let mut broken_by = None;
+    let mut plan = input_plan;
+    for (idx, rule) in optimizers.iter().enumerate() {
+        plan = match rule.optimize_with_context(plan, optimizer_context) {
+            Ok(plan) => plan,
+            // The rules did not run as they did before, so no rule is named.
+            Err(_) => return plain_error(error),
+        };
+        if idx >= first_checked {
+            let holds = input_requirements_hold(&plan);
+            if held && !holds {
+                broken_by = Some(rule);
+            }
+            held = holds;
+        }
+    }
+    let context = match (broken_by, enforced) {
+        (Some(rule), _) => format!(
+            "{SANITY_CHECK}: order and distribution requirements stopped holding \
+             after physical optimizer rule '{}'",
+            rule.name()
+        ),
+        (None, Some(_)) => format!(
+            "{SANITY_CHECK}: the plan produced by physical optimizer rule '{}' \
+             does not satisfy the order and distribution requirements",
+            ensure_requirements.name()
+        ),
+        (None, None) => format!(
+            "{SANITY_CHECK}: no physical optimizer rule produced a plan that \
+             satisfies the order and distribution requirements"
+        ),
+    };
+    DataFusionError::Context(context, Box::new(error))
 }
 
 struct OptimizationInvariantChecker<'a> {

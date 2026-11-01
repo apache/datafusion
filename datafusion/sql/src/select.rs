@@ -12,9 +12,10 @@ use crate::query::to_order_by_exprs_with_select;
 use crate::utils::{
     CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
     DedupedProjection, check_columns_satisfy_exprs, extract_aliases, rebase_expr,
-    resolve_aliases_to_exprs, resolve_columns, resolve_positions_to_exprs,
-    rewrite_recursive_unnest_bottom_up, rewrite_recursive_unnests_bottom_up,
-    substitute_top_level_alias, substitute_top_level_aliases_in_sorts,
+    references_volatile_alias, resolve_aliases_to_exprs, resolve_columns,
+    resolve_positions_to_exprs, rewrite_recursive_unnest_bottom_up,
+    rewrite_recursive_unnests_bottom_up, substitute_top_level_alias,
+    substitute_top_level_aliases_in_sorts,
 };
 
 use arrow::datatypes::DataType;
@@ -34,7 +35,8 @@ use datafusion_expr::expr_rewriter::{
 };
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::utils::{
-    expr_as_column_expr, expr_to_columns, find_aggregate_exprs, find_window_exprs,
+    conjunction, expr_as_column_expr, expr_to_columns, find_aggregate_exprs,
+    find_window_exprs, split_conjunction_owned,
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
@@ -191,10 +193,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })
             .collect::<Result<Vec<Expr>>>()?;
 
-        // Optionally the HAVING expression.
+        // Optionally the HAVING expression. Conjuncts that reference a
+        // volatile alias are deferred to `having_post_projection` and planned
+        // above the final projection (see [`references_volatile_alias`]); the
+        // remaining conjuncts take the normal path below the projection.
+        let mut having_post_projection: Option<Expr> = None;
         let having_expr_opt = select
             .having
-            .map::<Result<Expr>, _>(|having_expr| {
+            .map::<Result<Option<Expr>>, _>(|having_expr| {
                 self.warn_on_null_equality_predicate(&having_expr);
                 let window_span = self.window_function_span(&having_expr, &alias_map);
                 let having_expr = self.sql_expr_to_logical_expr(
@@ -202,6 +208,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     &combined_schema,
                     planner_context,
                 )?;
+                // HAVING is evaluated before window functions are computed, so
+                // they may not appear there (checked on a fully dereferenced
+                // copy so that an alias of a window function is rejected too)
+                reject_window_functions(
+                    &resolve_aliases_to_exprs(having_expr.clone(), &alias_map)?,
+                    "HAVING",
+                    QUALIFY_HELP,
+                    window_span,
+                )?;
+                let mut deferred_conjuncts = vec![];
+                let mut normal_conjuncts = vec![];
+                for conjunct in split_conjunction_owned(having_expr) {
+                    if references_volatile_alias(&conjunct, &alias_map)? {
+                        deferred_conjuncts.push(conjunct);
+                    } else {
+                        normal_conjuncts.push(conjunct);
+                    }
+                }
+                // Volatile aliases are never dereferenced; see
+                // [`references_volatile_alias`] for why.
+                having_post_projection = match conjunction(deferred_conjuncts) {
+                    Some(expr) => {
+                        let expr = normalize_col(expr, &projected_plan)?;
+                        let (expr, _) = expr.infer_placeholder_types(&combined_schema)?;
+                        Some(expr)
+                    }
+                    None => None,
+                };
                 // This step "dereferences" any aliases in the HAVING clause.
                 //
                 // This is how we support queries with HAVING expressions that
@@ -215,22 +249,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //
                 //   SELECT c1, MAX(c2) AS m FROM t GROUP BY c1 HAVING MAX(c2) > 10;
                 //
-                let having_expr = resolve_aliases_to_exprs(having_expr, &alias_map)?;
-                // HAVING is evaluated before window functions are computed, so
-                // they may not appear there (checked after alias resolution so
-                // that an alias of a window function is rejected too)
-                reject_window_functions(
-                    &having_expr,
-                    "HAVING",
-                    QUALIFY_HELP,
-                    window_span,
-                )?;
-                let having_expr = normalize_col(having_expr, &projected_plan)?;
-                let (having_expr, _) =
-                    having_expr.infer_placeholder_types(&combined_schema)?;
-                Ok(having_expr)
+                match conjunction(normal_conjuncts) {
+                    Some(expr) => {
+                        let expr = resolve_aliases_to_exprs(expr, &alias_map)?;
+                        let expr = normalize_col(expr, &projected_plan)?;
+                        let (expr, _) = expr.infer_placeholder_types(&combined_schema)?;
+                        Ok(Some(expr))
+                    }
+                    None => Ok(None),
+                }
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
 
         // All of the group by expressions
         let group_by_exprs = if let GroupByExpr::Expressions(exprs, _) = select.group_by {
@@ -284,15 +314,37 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .collect()
         };
 
-        // Optionally the QUALIFY expression.
+        // Optionally the QUALIFY expression. Like HAVING, conjuncts that
+        // reference a volatile alias are deferred to
+        // `qualify_post_projection` and planned above the final projection.
+        let mut qualify_post_projection: Option<Expr> = None;
         let qualify_expr_opt = select
             .qualify
-            .map::<Result<Expr>, _>(|qualify_expr| {
+            .map::<Result<Option<Expr>>, _>(|qualify_expr| {
                 let qualify_expr = self.sql_expr_to_logical_expr(
                     qualify_expr,
                     &combined_schema,
                     planner_context,
                 )?;
+                let mut deferred_conjuncts = vec![];
+                let mut normal_conjuncts = vec![];
+                for conjunct in split_conjunction_owned(qualify_expr) {
+                    if references_volatile_alias(&conjunct, &alias_map)? {
+                        deferred_conjuncts.push(conjunct);
+                    } else {
+                        normal_conjuncts.push(conjunct);
+                    }
+                }
+                // Volatile aliases are never dereferenced; see
+                // [`references_volatile_alias`] for why.
+                qualify_post_projection = match conjunction(deferred_conjuncts) {
+                    Some(expr) => {
+                        let expr = normalize_col(expr, &projected_plan)?;
+                        let (expr, _) = expr.infer_placeholder_types(&combined_schema)?;
+                        Some(expr)
+                    }
+                    None => None,
+                };
                 // This step "dereferences" any aliases in the QUALIFY clause.
                 //
                 // This is how we support queries with QUALIFY expressions that
@@ -306,13 +358,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 //
                 //   select row_number() over (PARTITION BY id) as rk from users qualify row_number() over (PARTITION BY id) > 1;
                 //
-                let qualify_expr = resolve_aliases_to_exprs(qualify_expr, &alias_map)?;
-                let qualify_expr = normalize_col(qualify_expr, &projected_plan)?;
-                let (qualify_expr, _) =
-                    qualify_expr.infer_placeholder_types(&combined_schema)?;
-                Ok(qualify_expr)
+                match conjunction(normal_conjuncts) {
+                    Some(expr) => {
+                        let expr = resolve_aliases_to_exprs(expr, &alias_map)?;
+                        let expr = normalize_col(expr, &projected_plan)?;
+                        let (expr, _) = expr.infer_placeholder_types(&combined_schema)?;
+                        Ok(Some(expr))
+                    }
+                    None => Ok(None),
+                }
             })
-            .transpose()?;
+            .transpose()?
+            .flatten();
 
         // The outer expressions we will search through for aggregates.
         // First, find aggregates in SELECT, HAVING, and QUALIFY
@@ -358,7 +415,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 &aggr_exprs,
             )?
         } else {
-            match having_expr_opt {
+            match having_expr_opt.as_ref().or(having_post_projection.as_ref()) {
                 Some(having_expr) => {
                     return plan_err!(
                         "HAVING clause references: {having_expr} must appear in the GROUP BY clause or be used in an aggregate function"
@@ -367,7 +424,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 None => AggregatePlanResult {
                     plan: base_plan.clone(),
                     select_exprs: select_exprs.clone(),
-                    having_expr: having_expr_opt,
+                    having_expr: None,
                     qualify_expr: qualify_expr_opt,
                     order_by_exprs: order_by_rex,
                     on_exprs: on_exprs_pre_aggr,
@@ -464,6 +521,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan
         };
 
+        // A QUALIFY that was deferred to a post-projection filter still
+        // requires window functions elsewhere in the query. A window function
+        // inside the deferred predicate itself is rejected later with a more
+        // specific error, so it is not counted here.
+        if let Some(qualify_expr) = &qualify_post_projection
+            && window_func_exprs.is_empty()
+            && find_window_exprs(std::iter::once(qualify_expr)).is_empty()
+        {
+            return plan_err!(
+                "QUALIFY clause requires window functions in the SELECT list or QUALIFY clause"
+            );
+        }
+
         // Process distinct clause. For `DISTINCT ON` combined with
         // aggregation, GROUP BY, or window functions we apply DistinctOn
         // *before* the final projection so grouping columns and ORDER BY
@@ -472,11 +542,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // list is wrapped in FIRST_VALUE during lowering).
         let plan = match select.distinct {
             None | Some(Distinct::All) => {
-                self.try_process_unnest(plan, select_exprs_post_aggr)?
+                let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
+                let plan =
+                    self.filter_post_projection(plan, having_post_projection, "HAVING")?;
+                self.filter_post_projection(plan, qualify_post_projection, "QUALIFY")?
             }
             Some(Distinct::Distinct) => {
                 let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
+                // HAVING and QUALIFY are evaluated before DISTINCT
+                let plan =
+                    self.filter_post_projection(plan, having_post_projection, "HAVING")?;
+                let plan = self.filter_post_projection(
+                    plan,
+                    qualify_post_projection,
+                    "QUALIFY",
+                )?;
                 LogicalPlanBuilder::from(plan).distinct()?.build()?
+            }
+            Some(Distinct::On(_))
+                if having_post_projection.is_some()
+                    || qualify_post_projection.is_some() =>
+            {
+                return plan_err!(
+                    "HAVING and QUALIFY expressions that reference aliases of volatile expressions are not supported with DISTINCT ON. Use a subquery instead"
+                );
             }
             Some(Distinct::On(_)) => {
                 if aggr_exprs.is_empty()
@@ -555,6 +644,37 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         let plan = self.order_by(plan, order_by_rex)?;
         Ok(plan)
+    }
+
+    /// Plans a deferred HAVING / QUALIFY predicate — one that references a
+    /// volatile alias (see [`references_volatile_alias`]) — as a `Filter`
+    /// above the final projection, where the alias is a real column.
+    /// Everything the predicate references must be in the projection output;
+    /// anything else is rejected with a suggestion to use a subquery.
+    fn filter_post_projection(
+        &self,
+        plan: LogicalPlan,
+        filter_expr: Option<Expr>,
+        clause: &str,
+    ) -> Result<LogicalPlan> {
+        let Some(expr) = filter_expr else {
+            return Ok(plan);
+        };
+        if !find_aggregate_exprs(std::iter::once(&expr)).is_empty()
+            || !find_window_exprs(std::iter::once(&expr)).is_empty()
+        {
+            return plan_err!(
+                "{clause} clauses that reference an alias of a volatile expression cannot also contain aggregate or window functions. Add the function to the SELECT list and reference it by alias, or use a subquery"
+            );
+        }
+        for column in expr.column_refs() {
+            if plan.schema().qualified_field_from_column(column).is_err() {
+                return plan_err!(
+                    "{clause} clauses that reference an alias of a volatile expression can only reference columns from the SELECT list, but {column} is not in the SELECT list. Use a subquery instead"
+                );
+            }
+        }
+        LogicalPlanBuilder::from(plan).filter(expr)?.build()
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection

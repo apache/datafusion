@@ -3,28 +3,17 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::PhysicalOptimizerRule;
-use datafusion_common::ScalarValue;
+use crate::row_bound::RowBound;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_expr::{LimitEffect, WindowFrameBound, WindowFrameUnits};
-use datafusion_physical_expr::window::{
-    PlainAggregateWindowExpr, SlidingAggregateWindowExpr, StandardWindowExpr,
-    StandardWindowFunctionExpr, WindowExpr,
-};
-use datafusion_physical_plan::execution_plan::CardinalityEffect;
-use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
-use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
-use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
-use std::cmp;
+use datafusion_physical_plan::{ExecutionPlan, LimitBehavior, WindowLookahead};
 use std::sync::Arc;
 
 /// This rule inspects [`ExecutionPlan`]'s attempting to find fetch limits that were not pushed
-/// down by `LimitPushdown` because [BoundedWindowAggExec]s were "in the way". If the window is
-/// bounded by [WindowFrameUnits::Rows] then we calculate the adjustment needed to grow the limit
-/// and continue pushdown.
+/// down by `LimitPushdown` because windows ([`LimitBehavior::Window`]) were "in the way". If a
+/// window's lookahead is known, the limit grows by it and pushdown continues.
 #[derive(Default, Clone, Debug)]
 pub struct LimitPushPastWindows;
 
@@ -91,9 +80,9 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // grow the limit if we hit a window function
-            if let Some(window) = node.downcast_ref::<BoundedWindowAggExec>() {
+            if let LimitBehavior::Window(lookahead) = node.limit_behavior() {
                 phase = Phase::Apply;
-                if !grow_limit(window, &mut ctx) {
+                if !grow_limit(lookahead, &mut ctx) {
                     return reset(node, &mut ctx);
                 }
                 return Ok(Transformed::no(node));
@@ -107,21 +96,13 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
             }
 
             // nodes along the way
-            if !node.supports_limit_pushdown() {
-                return reset(node, &mut ctx);
-            }
-            if let Some(part) = node.downcast_ref::<RepartitionExec>() {
-                let output = part.partitioning().partition_count();
-                let input = part.input().output_partitioning().partition_count();
-                if output < input {
-                    return reset(node, &mut ctx);
-                }
-            }
-            match node.cardinality_effect() {
-                CardinalityEffect::Unknown => return reset(node, &mut ctx),
-                CardinalityEffect::LowerEqual => return reset(node, &mut ctx),
-                CardinalityEffect::Equal => {}
-                CardinalityEffect::GreaterEqual => {}
+            match node.limit_behavior() {
+                LimitBehavior::CopyToChildren | LimitBehavior::MoveToInput => {}
+                LimitBehavior::Merge if node.fetch().is_none() => {}
+                LimitBehavior::Stops
+                | LimitBehavior::Limit { .. }
+                | LimitBehavior::Merge
+                | LimitBehavior::Window(_) => return reset(node, &mut ctx),
             }
 
             Ok(Transformed::no(node))
@@ -138,36 +119,18 @@ impl PhysicalOptimizerRule for LimitPushPastWindows {
     }
 }
 
-fn grow_limit(window: &BoundedWindowAggExec, ctx: &mut TraverseState) -> bool {
-    let mut max_rel = 0;
-    for expr in window.window_expr().iter() {
-        // grow based on function requirements
-        match get_limit_effect(expr) {
-            LimitEffect::None => {}
-            LimitEffect::Unknown => return false,
-            LimitEffect::Relative(rel) => max_rel = max_rel.max(rel),
-            LimitEffect::Absolute(val) => {
-                let cur = ctx.limit.unwrap_or(0);
-                ctx.limit = Some(cur.max(val))
-            }
-        }
-
-        // grow based on frames
-        let frame = expr.get_window_frame();
-        if frame.units != WindowFrameUnits::Rows {
-            return false; // expression-based limits not statically evaluatable
-        }
-        let Some(end_bound) = bound_to_usize(&frame.end_bound) else {
-            return false; // can't optimize unbounded window expressions
-        };
-        ctx.max_lookahead(end_bound);
+fn grow_limit(lookahead: Option<WindowLookahead>, ctx: &mut TraverseState) -> bool {
+    let Some(lookahead) = lookahead else {
+        return false;
+    };
+    if let Some(min_rows) = lookahead.min_rows {
+        ctx.limit = Some(ctx.limit.unwrap_or(0).max(min_rows));
     }
-
-    // finish grow
+    ctx.max_lookahead(lookahead.frame_end);
     // Frame bounds come straight from the query and can be as large as
     // `u64::MAX`, so saturate instead of overflowing. A saturated lookahead
     // makes the `checked_add` in `apply_limit` fail, which skips the pushdown.
-    ctx.max_lookahead(ctx.lookahead.saturating_add(max_rel));
+    ctx.max_lookahead(ctx.lookahead.saturating_add(lookahead.relative));
     true
 }
 
@@ -192,24 +155,16 @@ fn apply_limit(
     };
     let fetch = match node.fetch() {
         None => fetch,
-        Some(existing) => cmp::min(existing, fetch),
+        Some(existing) => existing.min(fetch),
     };
     Some(Transformed::complete(node.with_fetch(Some(fetch)).unwrap()))
 }
 
 fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
-    if let Some(limit) = node.downcast_ref::<GlobalLimitExec>() {
-        ctx.reset_limit(
-            limit
-                .fetch()
-                .map(|fetch| fetch.saturating_add(limit.skip())),
-        );
-        return true;
-    }
     // In distributed execution, GlobalLimitExec becomes LocalLimitExec
     // per partition. Handle it the same way (LocalLimitExec has no skip).
-    if let Some(limit) = node.downcast_ref::<LocalLimitExec>() {
-        ctx.reset_limit(Some(limit.fetch()));
+    if let Some(limit) = RowBound::of_limit_node(node) {
+        ctx.reset_limit(limit.input_rows());
         return true;
     }
     if let Some(limit) = node.downcast_ref::<SortPreservingMergeExec>() {
@@ -219,58 +174,20 @@ fn get_limit(node: &Arc<dyn ExecutionPlan>, ctx: &mut TraverseState) -> bool {
     false
 }
 
-/// Examines the `WindowExpr` and decides:
-/// 1. The expression does not change the window size
-/// 2. The expression grows it by X amount
-/// 3. We don't know
-///
-/// # Arguments
-///
-/// * `expr` the expression to examine
-///
-/// # Returns
-///
-/// The effect on the limit
-fn get_limit_effect(expr: &Arc<dyn WindowExpr>) -> LimitEffect {
-    // White list aggregates
-    if expr.as_any().is::<PlainAggregateWindowExpr>()
-        || expr.as_any().is::<SlidingAggregateWindowExpr>()
-    {
-        return LimitEffect::None;
-    }
-
-    // Grab the window function
-    let Some(swe) = expr.as_any().downcast_ref::<StandardWindowExpr>() else {
-        return LimitEffect::Unknown; // should be only remaining type
-    };
-    let swfe = swe.get_standard_func_expr();
-    let Some(udf) = swfe.as_any().downcast_ref::<WindowUDFExpr>() else {
-        return LimitEffect::Unknown; // should be only remaining type
-    };
-    udf.limit_effect()
-}
-
-fn bound_to_usize(bound: &WindowFrameBound) -> Option<usize> {
-    match bound {
-        WindowFrameBound::Preceding(_) => Some(0),
-        WindowFrameBound::CurrentRow => Some(0),
-        WindowFrameBound::Following(ScalarValue::UInt64(Some(scalar))) => {
-            Some(*scalar as usize)
-        }
-        _ => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ScalarValue;
     use datafusion_expr::WindowFrame;
+    use datafusion_expr::{WindowFrameBound, WindowFrameUnits};
     use datafusion_functions_window::row_number::row_number_udwf;
     use datafusion_physical_expr::expressions::col;
+    use datafusion_physical_expr::window::StandardWindowExpr;
     use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
     use datafusion_physical_plan::InputOrderMode;
     use datafusion_physical_plan::displayable;
+    use datafusion_physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
     use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
     use datafusion_physical_plan::windows::{
         BoundedWindowAggExec, create_udwf_window_expr,
