@@ -43,16 +43,27 @@ const ROUND_SIZES: &[usize] = &[8, 16, 32, 64, 128];
 /// every other pair must pass.
 #[tokio::test(flavor = "multi_thread")]
 async fn float_zero_fixed() {
-    for known in KNOWN_FAILURES {
-        assert!(
-            TEMPLATES.iter().any(|t| t.name == known.template),
-            "KNOWN_FAILURES names unknown template {}",
-            known.template
-        );
-    }
-
     let mut errors = vec![];
+    // Which KNOWN_FAILURES entries apply to some pair that ran.
+    let mut used = vec![false; KNOWN_FAILURES.len()];
     for (template, setting, result) in check_all(&data::fixed(), |_, _| false).await {
+        let applying: Vec<usize> = (0..KNOWN_FAILURES.len())
+            .filter(|&i| {
+                let known = &KNOWN_FAILURES[i];
+                known.template == template.name && (known.applies)(&setting)
+            })
+            .collect();
+        if applying.len() > 1 {
+            errors.push(format!(
+                "{} under {setting:?} matches {} KNOWN_FAILURES entries, \
+                 only the first one counts",
+                template.name,
+                applying.len()
+            ));
+        }
+        for &i in &applying {
+            used[i] = true;
+        }
         match (result, KnownFailure::matches(template, &setting)) {
             (Ok(()), None) | (Err(Failure::Mismatch(_)), Some(_)) => {}
             (Err(failure), None) => errors.push(failure.to_string()),
@@ -64,6 +75,15 @@ async fn float_zero_fixed() {
                 "{} under {setting:?} now passes, remove it from KNOWN_FAILURES ({})",
                 template.name, known.issue
             )),
+        }
+    }
+    for (known, used) in KNOWN_FAILURES.iter().zip(used) {
+        if !used {
+            errors.push(format!(
+                "KNOWN_FAILURES entry for {} applies to no pair that runs: \
+                 the template does not exist or `applies` matches no setting ({})",
+                known.template, known.issue
+            ));
         }
     }
     assert!(errors.is_empty(), "{}", errors.join("\n\n"));
