@@ -58,7 +58,7 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{Array, ArrayRef, AsArray, BooleanBufferBuilder};
+use arrow::array::{Array, ArrayData, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -102,6 +102,30 @@ pub(crate) const HASH_JOIN_SEED: SeededRandomState =
     SeededRandomState::with_seed(12210250226015887276);
 
 const ARRAY_MAP_CREATED_COUNT_METRIC_NAME: &str = "array_map_created_count";
+
+/// The length of the longest array under `data` that `create_hashes` hashes
+/// in full whatever slice of `data` it gets: everything beneath a dictionary
+/// or a list view, at any depth.
+fn unsliced_hash_len(data: &ArrayData) -> usize {
+    let own = match data.data_type() {
+        DataType::Dictionary(_, _)
+        | DataType::ListView(_)
+        | DataType::LargeListView(_) => subtree_max_len(&data.child_data()[0]),
+        _ => 0,
+    };
+    data.child_data()
+        .iter()
+        .map(unsliced_hash_len)
+        .fold(own, usize::max)
+}
+
+/// The longest array anywhere in `data`, including `data` itself.
+fn subtree_max_len(data: &ArrayData) -> usize {
+    data.child_data()
+        .iter()
+        .map(subtree_max_len)
+        .fold(data.len(), usize::max)
+}
 
 /// Decides whether the build side should be joined with an [`ArrayMap`]
 /// (perfect hash join), returning the `(min, max)` key range to build it over.
@@ -681,8 +705,9 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 /// with smaller indices "on the top" of hash table. The build-side batches are first
 /// concatenated in their input order. The hash table is then filled from slices of the
 /// concatenated batch, at most as long as the largest build-side batch (or the longest
-/// key dictionary, when that is longer), starting from the last slice. Each slice is
-/// inserted with the offset of its first row in the concatenated batch.
+/// values under a dictionary or list view in a key, when that is longer), starting
+/// from the last slice. Each slice is inserted with the offset of its first row in
+/// the concatenated batch.
 ///
 /// Example of build phase for 3 record batches, filled from slices of 3 rows:
 ///
@@ -3216,14 +3241,15 @@ fn build_in_memory(
         // Arc is used instead of Box to allow sharing with SharedBuildAccumulator for hash map pushdown
         let mut hashmap = new_join_hashmap(num_rows, &mut reservation, metrics)?;
 
-        // Every slice shares the whole dictionary of a dictionary key, which
-        // `create_hashes` hashes on each call: a slice at least as long as the
-        // dictionary keeps that cost linear in the build rows.
+        // Every slice shares everything beneath a dictionary or list view,
+        // at any depth of a key, which `create_hashes` hashes on each call: a
+        // slice at least as long as the longest of those arrays keeps that
+        // cost linear in the build rows. No slice is longer than the build side.
         let chunk_rows = left_values
             .iter()
-            .filter_map(|values| values.as_any_dictionary_opt())
-            .map(|dict| dict.values().len())
-            .fold(max_batch_rows, usize::max);
+            .map(|values| unsliced_hash_len(&values.to_data()))
+            .fold(max_batch_rows, usize::max)
+            .min(num_rows);
 
         let scratch_reservation = reservation.new_empty();
         if prepared {
@@ -3234,7 +3260,7 @@ fn build_in_memory(
             )?)?;
         }
         // The maximum is known: avoid geometric growth and its excess capacity.
-        let mut hashes_buffer = Vec::with_capacity(chunk_rows.min(num_rows));
+        let mut hashes_buffer = Vec::with_capacity(chunk_rows);
         // `chunk_rows` is 0 when the build side is empty
         let chunk_rows = chunk_rows.max(1);
 
@@ -3478,10 +3504,11 @@ mod tests {
     use crate::joins::join_hash_map::ProbeOffset::AtRow;
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, Date32Array, DictionaryArray,
-        Float32Array, Float64Array, Int32Array, Int64Array, StringArray, StringViewArray,
-        StructArray, UInt32Array, UInt64Array,
+        FixedSizeListArray, Float32Array, Float64Array, Int32Array, Int64Array,
+        ListArray, ListViewArray, StringArray, StringViewArray, StructArray, UInt32Array,
+        UInt64Array,
     };
-    use arrow::buffer::NullBuffer;
+    use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{DataType, Field, Float32Type, Float64Type, Int32Type};
     use datafusion_common::hash_utils::create_hashes;
     use datafusion_common::stats::Precision;
@@ -5143,6 +5170,66 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    /// Only what a slice cannot cut counts, which is everything below a
+    /// dictionary or a list view, also below a struct or a list, but not the
+    /// child of a plain list or fixed size list.
+    #[test]
+    fn unsliced_hash_len_counts_shared_values_at_any_depth() -> Result<()> {
+        let dict: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![0, 1]),
+            Arc::new(StringArray::from(vec!["a", "b", "c", "d", "e"])),
+        )?);
+        let in_struct: ArrayRef = Arc::new(StructArray::from(vec![(
+            Arc::new(Field::new("d", dict.data_type().clone(), false)),
+            Arc::clone(&dict),
+        )]));
+        let list_view: ArrayRef = Arc::new(ListViewArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, false)),
+            ScalarBuffer::from(vec![0, 1]),
+            ScalarBuffer::from(vec![1, 1]),
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+            None,
+        ));
+        let list: ArrayRef =
+            Arc::new(ListArray::from_iter_primitive::<Int32Type, _, _>(vec![
+                Some(vec![Some(1), Some(2), Some(3)]),
+                Some(vec![Some(4), Some(5), Some(6), Some(7)]),
+            ]));
+        let fixed_size_list: ArrayRef = Arc::new(FixedSizeListArray::new(
+            Arc::new(Field::new_list_field(DataType::Int32, false)),
+            2,
+            Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+            None,
+        ));
+        let list_of_dict: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(dict.data_type().clone(), false)),
+            OffsetBuffer::from_lengths([1, 1]),
+            Arc::clone(&dict),
+            None,
+        ));
+        let dict_of_list: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![0, 1]),
+            Arc::clone(&list),
+        )?);
+        for (array, expected) in [
+            (dict.slice(1, 1), 5),
+            (in_struct.slice(1, 1), 5),
+            (list_view.slice(0, 1), 4),
+            (list.slice(0, 1), 0),
+            (fixed_size_list.slice(1, 1), 0),
+            (list_of_dict.slice(1, 1), 5),
+            (dict_of_list.slice(1, 1), 7),
+        ] {
+            assert_eq!(
+                unsliced_hash_len(&array.to_data()),
+                expected,
+                "{}",
+                array.data_type()
+            );
+        }
         Ok(())
     }
 
