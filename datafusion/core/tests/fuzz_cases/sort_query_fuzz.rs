@@ -9,9 +9,11 @@ use std::fmt::Write as _;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use arrow::compute::concat_batches;
 use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{Result, human_readable_size, instant::Instant};
 use datafusion_execution::disk_manager::DiskManagerBuilder;
 use datafusion_execution::memory_pool::{MemoryPool, UnboundedMemoryPool};
@@ -23,8 +25,6 @@ use datafusion_execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBu
 use rand::Rng;
 use rand::prelude::IndexedRandom;
 use rand::{SeedableRng, rngs::StdRng};
-
-use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
 
 use super::aggregation_fuzzer::ColumnDescr;
 use super::record_batch_generator::{RecordBatchGenerator, get_supported_types_columns};
@@ -186,7 +186,7 @@ impl SortQueryFuzzer {
             let init_seed = self.runner_rng.random();
             for query_i in 0..self.queries_per_round {
                 let query_seed = self.runner_rng.random();
-                let mut expected_results: Option<Vec<RecordBatch>> = None; // use first config's result as the expected result
+                let mut expected_results: Option<RecordBatch> = None; // use first config's result as the expected result
                 for config_i in 0..self.config_variations_per_query {
                     if self.should_stop_due_to_time_limit(start_time, round, query_i) {
                         return Ok(());
@@ -214,7 +214,10 @@ impl SortQueryFuzzer {
                         // Check logical equivalence.
                         // `assert_eq!` may report false failures when logically equivalent
                         // batches have different physical encodings.
-                        check_equality_of_batches(expected, &results).unwrap();
+                        assert_eq!(
+                            batches_to_string(std::slice::from_ref(expected)),
+                            batches_to_string(std::slice::from_ref(&results))
+                        );
                     } else {
                         unreachable!();
                     }
@@ -403,6 +406,9 @@ impl SortFuzzerTestGenerator {
 
     /// Generates a random SQL query string and an optional limit value.
     /// Returns a tuple containing the query string and an optional limit.
+    ///
+    /// Every projected column is an ORDER BY key, so tied rows have identical
+    /// output and results can be compared in order, including with LIMIT.
     pub fn generate_random_query(&self, rng_seed: u64) -> (String, Option<usize>) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
@@ -561,7 +567,7 @@ impl SortFuzzerTestGenerator {
         query_seed: u64,
         config_seed: u64,
         compare_sort_paths: bool,
-    ) -> Result<Vec<RecordBatch>> {
+    ) -> Result<RecordBatch> {
         self.init_partitioned_staggered_batches(dataset_seed);
         let (query_str, limit) = self.generate_random_query(query_seed);
         println!("  Query:");
@@ -576,10 +582,11 @@ impl SortFuzzerTestGenerator {
 
         let ctx = self.generate_random_config(config_seed, with_mem_limit, None)?;
         let df = ctx.sql(&query_str).await.unwrap();
-        let results = df.collect().await?;
+        let schema = Arc::clone(df.schema().inner());
+        let results = concat_batches(&schema, &df.collect().await?)?;
 
         // ==== Check the result size is consistent with the limit ====
-        let result_num_rows = results.iter().map(|batch| batch.num_rows()).sum::<usize>();
+        let result_num_rows = results.num_rows();
         let dataset_size = self.dataset_state.as_ref().unwrap().dataset_size;
 
         if let Some(limit) = limit {
@@ -594,9 +601,11 @@ impl SortFuzzerTestGenerator {
                 let ctx =
                     self.generate_random_config(config_seed, false, Some(threshold))?;
                 let actual = ctx.sql(&query_str).await?.collect().await?;
-                check_equality_of_batches(&results, &actual).unwrap_or_else(|err| {
-                    panic!("sort_in_place_threshold_bytes={threshold}: {err:?}")
-                });
+                assert_eq!(
+                    batches_to_string(std::slice::from_ref(&results)),
+                    batches_to_string(&[concat_batches(&schema, &actual)?]),
+                    "sort_in_place_threshold_bytes={threshold}"
+                );
             }
         }
 
@@ -654,6 +663,6 @@ mod test {
 
         let res1 = test_generator.fuzzer_run(1, 2, 3, false).await.unwrap();
         let res2 = test_generator.fuzzer_run(1, 2, 3, false).await.unwrap();
-        check_equality_of_batches(&res1, &res2).unwrap();
+        assert_eq!(batches_to_string(&[res1]), batches_to_string(&[res2]));
     }
 }
