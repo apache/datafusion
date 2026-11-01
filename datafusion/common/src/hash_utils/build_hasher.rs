@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::{AsDynArray, HASH_BUFFER, MAX_BUFFER_SIZE};
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -31,6 +18,8 @@ use crate::cast::{
 };
 use crate::error::Result;
 use crate::error::{_internal_datafusion_err, _internal_err};
+#[cfg(not(feature = "force_hash_collisions"))]
+use crate::float_semantics::hash_input;
 #[cfg(feature = "force_hash_collisions")]
 use arrow::array::Array;
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -168,18 +157,16 @@ build_hasher_hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64, u128)
 build_hasher_hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
 
 macro_rules! build_hasher_hash_float_value {
-    ($(($t:ty, $i:ty)),+) => {
+    ($($t:ty),+) => {
         $(#[cfg(not(feature = "force_hash_collisions"))]
         impl BuildHasherHashValue for $t {
             fn hash_one_with_hasher<S: BuildHasher>(&self, state: &S) -> u64 {
-                let bits = <$i>::from_ne_bytes(self.to_ne_bytes());
-                let bits = if bits << 1 == 0 { 0 } else { bits };
-                state.hash_one(bits)
+                state.hash_one(hash_input(*self).to_bits())
             }
         })+
     };
 }
-build_hasher_hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
+build_hasher_hash_float_value!(half::f16, f32, f64);
 
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_null_with_hasher<S: BuildHasher>(

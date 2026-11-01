@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -1253,11 +1240,12 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 "data_page_row_count_limit",
             )?,
             encoding: value
-                .encoding_opt.clone()
+                .encoding_opt
+                .as_ref()
                 .map(|opt| match opt {
-                    protobuf::parquet_options::EncodingOpt::Encoding(v) => Some(v),
+                    protobuf::parquet_options::EncodingOpt::Encoding(v) => v.parse(),
                 })
-                .unwrap_or(None),
+                .transpose()?,
             bloom_filter_on_read: value.bloom_filter_on_read,
             bloom_filter_on_write: value.bloom_filter_on_write,
             bloom_filter_fpp: value.clone()
@@ -1286,9 +1274,9 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             coerce_int96: value.coerce_int96_opt.as_ref().map(|opt| match opt {
                 protobuf::parquet_options::CoerceInt96Opt::CoerceInt96(v) => v.parse(),
             }).transpose()?,
-            coerce_int96_tz: value.coerce_int96_tz_opt.clone().map(|opt| match opt {
-                protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => Some(v),
-            }).unwrap_or(None),
+            coerce_int96_tz: value.coerce_int96_tz_opt.as_ref().map(|opt| match opt {
+                protobuf::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(v) => v.parse(),
+            }).transpose()?,
             skip_arrow_metadata: value.skip_arrow_metadata,
             write_row_group_number_distinct_values: value.write_row_group_number_distinct_values,
             max_predicate_cache_size: value.max_predicate_cache_size_opt.map(|opt| match opt {
@@ -1454,7 +1442,8 @@ mod tests {
         MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
     };
     use datafusion_common::parquet_config::{
-        DFParquetCompression, DFParquetStatistics, DFTimeUnit, RowGroupRangeAssignment,
+        DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFTimeUnit,
+        RowGroupRangeAssignment,
     };
 
     #[test]
@@ -1669,15 +1658,26 @@ mod tests {
     }
 
     #[test]
+    fn test_parquet_options_coerce_int96_tz_without_unit_round_trip() {
+        let opts = ParquetOptions {
+            coerce_int96_tz: Some("+08".parse().unwrap()),
+            ..ParquetOptions::default()
+        };
+        let recovered = parquet_options_proto_round_trip(opts.clone());
+        assert_eq!(recovered.coerce_int96, None);
+        assert_eq!(recovered.coerce_int96_tz, opts.coerce_int96_tz);
+    }
+
+    #[test]
     fn test_parquet_options_coerce_int96_tz_set_round_trip() {
         let opts = ParquetOptions {
             coerce_int96: Some(DFTimeUnit::Microsecond),
-            coerce_int96_tz: Some("UTC".to_string()),
+            coerce_int96_tz: Some("UTC".parse().unwrap()),
             ..ParquetOptions::default()
         };
         let recovered = parquet_options_proto_round_trip(opts.clone());
         assert_eq!(recovered.coerce_int96, Some(DFTimeUnit::Microsecond));
-        assert_eq!(recovered.coerce_int96_tz, Some("UTC".to_string()));
+        assert_eq!(recovered.coerce_int96_tz, opts.coerce_int96_tz);
     }
 
     #[test]
@@ -1722,6 +1722,37 @@ mod tests {
     }
 
     #[test]
+    fn test_parquet_encoding_round_trip() {
+        for encoding in [None, Some(DFParquetEncoding::ByteStreamSplit)] {
+            let opts = ParquetOptions {
+                encoding,
+                ..ParquetOptions::default()
+            };
+            let recovered = parquet_options_proto_round_trip(opts);
+            assert_eq!(recovered.encoding, encoding);
+        }
+    }
+
+    #[test]
+    fn test_invalid_parquet_encoding_rejected_from_proto() {
+        let opts = ParquetOptions::default();
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        proto.encoding_opt = Some(
+            crate::protobuf_common::parquet_options::EncodingOpt::Encoding(
+                "invalid".to_string(),
+            ),
+        );
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unknown or unsupported parquet encoding: invalid"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn test_invalid_parquet_compression_rejected_from_proto() {
         let opts = ParquetOptions::default();
         let mut proto: crate::protobuf_common::ParquetOptions =
@@ -1736,6 +1767,26 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("zstd compression requires specifying a level such as zstd(4)"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_invalid_parquet_coerce_int96_tz_rejected_from_proto() {
+        // Rejected even when no coerce_int96 unit is set.
+        let opts = ParquetOptions::default();
+        let mut proto: crate::protobuf_common::ParquetOptions =
+            (&opts).try_into().expect("to_proto");
+        proto.coerce_int96_tz_opt = Some(
+            crate::protobuf_common::parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(
+                "Not/A_Timezone".to_string(),
+            ),
+        );
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid time zone: Not/A_Timezone."),
             "unexpected error: {err}"
         );
     }
@@ -1799,12 +1850,12 @@ mod tests {
     fn test_table_parquet_options_coerce_int96_tz_round_trip() {
         let mut opts = TableParquetOptions::default();
         opts.global.coerce_int96 = Some(DFTimeUnit::Microsecond);
-        opts.global.coerce_int96_tz = Some("America/Los_Angeles".to_string());
+        opts.global.coerce_int96_tz = Some("America/Los_Angeles".parse().unwrap());
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
         assert_eq!(recovered.global.coerce_int96, Some(DFTimeUnit::Microsecond));
         assert_eq!(
             recovered.global.coerce_int96_tz,
-            Some("America/Los_Angeles".to_string())
+            opts.global.coerce_int96_tz
         );
     }
 

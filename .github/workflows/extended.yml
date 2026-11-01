@@ -84,6 +84,8 @@ jobs:
           df -h
       - name: Run tests (excluding doctests)
         run: cargo xtask ci step test extended
+      - name: Run spill pool fuzzer with more iterations
+        run: cargo xtask ci step test spill-pool-fuzz
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code

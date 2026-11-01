@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 statement ok
 CREATE TABLE tab0(col0 INTEGER, col1 INTEGER, col2 INTEGER)
@@ -3668,8 +3655,8 @@ ORDER BY r.sn
 query IRR
 SELECT l.sn, l.amount, SUM(l.amount)
   FROM (SELECT *
-    FROM sales_global_with_unique as l
-    LEFT SEMI JOIN sales_global_with_unique as r
+    FROM sales_global_with_pk as l
+    LEFT SEMI JOIN sales_global_with_pk as r
     ON l.amount >= r.amount + 10)
   GROUP BY l.sn
 ORDER BY l.sn
@@ -3678,19 +3665,47 @@ ORDER BY l.sn
 2 75 75
 3 200 200
 4 100 100
-NULL 100 100
 
 # Similarly, left anti join should propagate constraint of left side as is.
 query IRR
 SELECT l.sn, l.amount, SUM(l.amount)
   FROM (SELECT *
-    FROM sales_global_with_unique as l
-    LEFT ANTI JOIN sales_global_with_unique as r
+    FROM sales_global_with_pk as l
+    LEFT ANTI JOIN sales_global_with_pk as r
     ON l.amount >= r.amount + 10)
   GROUP BY l.sn
 ORDER BY l.sn
 ----
 0 30 30
+
+# The propagated unique key of the left side can contain NULL, so it does not
+# determine `l.amount` for the `l.sn = NULL` group and the query is rejected,
+# just as it would be without the join.
+statement error DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "l\.amount" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "l\.sn, sum\(l\.amount\)" appears in the SELECT clause satisfies this requirement
+SELECT l.sn, l.amount, SUM(l.amount)
+  FROM (SELECT *
+    FROM sales_global_with_unique as l
+    LEFT SEMI JOIN sales_global_with_unique as r
+    ON l.amount >= r.amount + 10)
+  GROUP BY l.sn
+ORDER BY l.sn
+
+# Grouping by `l.amount` explicitly is accepted, and the `l.sn = NULL` row
+# comes back as its own group.
+query IRR
+SELECT l.sn, l.amount, SUM(l.amount)
+  FROM (SELECT *
+    FROM sales_global_with_unique as l
+    LEFT SEMI JOIN sales_global_with_unique as r
+    ON l.amount >= r.amount + 10)
+  GROUP BY l.sn, l.amount
+ORDER BY l.sn
+----
+1 50 50
+2 75 75
+3 200 200
+4 100 100
+NULL 100 100
 
 # Should support grouping by list column
 query ?I
@@ -5922,3 +5937,116 @@ from narrow_decimal_multi_group group by 1, 2 order by 1, 2;
 
 statement ok
 drop table narrow_decimal_multi_group;
+
+# EliminateGroupByConstant must not requalify group expressions over a
+# struct field accessed through a subquery alias
+# https://github.com/apache/datafusion/pull/26356
+statement ok
+CREATE TABLE group_by_struct_requalify AS
+SELECT * FROM (VALUES (named_struct('a', 'x', 'b', 1)), (named_struct('a', 'y', 'b', 2))) AS v(s);
+
+query TIII
+SELECT m.s['a'] || '!' AS k1, m.s['b'] AS k2, m.s['b'] + 1 AS k3, count(*) AS n
+FROM (SELECT * FROM group_by_struct_requalify) m
+GROUP BY m.s['a'] || '!', m.s['b'], m.s['b'] + 1
+ORDER BY k2;
+----
+x! 1 2 1
+y! 2 3 1
+
+statement ok
+DROP TABLE group_by_struct_requalify;
+
+# `GROUP BY a, CAST(a AS VARCHAR)` makes the aggregate output two columns that
+# share a flat name, and PushDownFilter used to rewrite a predicate on `a` to
+# whichever of them came last, which gave `Utf8View > Int32` for a valid query.
+# https://github.com/apache/datafusion/issues/26619
+statement ok
+CREATE TABLE group_by_duplicate_name (a INT) AS VALUES (1), (2);
+
+# the aggregate outputs both names
+query I
+SELECT a FROM group_by_duplicate_name
+GROUP BY a, CAST(a AS VARCHAR)
+HAVING a > (SELECT min(a) FROM group_by_duplicate_name);
+----
+2
+
+query I
+SELECT a FROM group_by_duplicate_name GROUP BY a, CAST(a AS VARCHAR) HAVING a > 1;
+----
+2
+
+# the cast is kept in the output, which changes what the later passes see
+query IT
+SELECT a, CAST(a AS VARCHAR) AS s FROM group_by_duplicate_name
+GROUP BY a, CAST(a AS VARCHAR)
+HAVING a > (SELECT min(a) FROM group_by_duplicate_name)
+ORDER BY a;
+----
+2 2
+
+# A control: with the cast first, the plain column is the one the old lookup
+# kept, so this ordering passed before the change. It pins the fact that the
+# answer no longer depends on the order of the group expressions.
+query IT
+SELECT a, CAST(a AS VARCHAR) AS s FROM group_by_duplicate_name
+GROUP BY CAST(a AS VARCHAR), a
+HAVING a > 1
+ORDER BY a;
+----
+2 2
+
+# A control: a predicate on the cast resolved to it either way, so this also
+# passed before the change. It pins the other side of the lookup.
+query IT
+SELECT a, CAST(a AS VARCHAR) AS s FROM group_by_duplicate_name
+GROUP BY a, CAST(a AS VARCHAR)
+HAVING CAST(a AS VARCHAR) > '1'
+ORDER BY a;
+----
+2 2
+
+# The HAVING cases above are all decided in the Aggregate branch. These two
+# reach the projection that EliminateGroupByConstant leaves behind, which
+# outputs `a` and `CAST(a AS VARCHAR)` under one flat name. The predicate has to
+# survive the first pass for the projection to exist by the time it is pushed:
+# once because an OR with an aggregate blocks it, once behind a LIMIT.
+query ITI
+SELECT a, CAST(a AS VARCHAR) AS s, count(*) AS n FROM group_by_duplicate_name
+GROUP BY a, CAST(a AS VARCHAR)
+HAVING a > 1 OR count(*) > 1;
+----
+2 2 1
+
+query IT
+SELECT * FROM (
+  SELECT a, CAST(a AS VARCHAR) AS s FROM group_by_duplicate_name
+  GROUP BY a, CAST(a AS VARCHAR)
+  LIMIT 10
+) WHERE a > 1;
+----
+2 2
+
+# the predicate still reaches the scan
+query TT
+EXPLAIN SELECT a, CAST(a AS VARCHAR) AS s FROM group_by_duplicate_name
+GROUP BY a, CAST(a AS VARCHAR)
+HAVING a > 1;
+----
+logical_plan
+01)Projection: group_by_duplicate_name.a, CAST(group_by_duplicate_name.a AS Utf8View) AS s
+02)--Aggregate: groupBy=[[group_by_duplicate_name.a]], aggr=[[]]
+03)----Filter: group_by_duplicate_name.a > Int32(1)
+04)------TableScan: group_by_duplicate_name projection=[a]
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, CAST(a@0 AS Utf8View) as s]
+02)--AggregateExec: mode=FinalPartitioned, gby=[a@0 as a], aggr=[]
+03)----RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[a@0 as a], aggr=[]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------FilterExec: a@0 > 1
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE group_by_duplicate_name;

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Conversions from the protobuf messages in this crate to their
 //! `datafusion-common` counterparts.
@@ -439,11 +426,13 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 proto.data_page_row_count_limit,
                 "data_page_row_count_limit",
             )?,
-            encoding: proto.encoding_opt.as_ref().map(|opt| match opt {
-                parquet_options::EncodingOpt::Encoding(encoding) => {
-                    encoding.clone()
-                }
-            }),
+            encoding: proto
+                .encoding_opt
+                .as_ref()
+                .map(|opt| match opt {
+                    parquet_options::EncodingOpt::Encoding(encoding) => encoding.parse(),
+                })
+                .transpose()?,
             bloom_filter_on_read: proto.bloom_filter_on_read,
             bloom_filter_on_write: proto.bloom_filter_on_write,
             bloom_filter_fpp: proto
@@ -485,10 +474,9 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 .coerce_int96_tz_opt
                 .as_ref()
                 .map(|opt| match opt {
-                    parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => {
-                        tz.clone()
-                    }
-                }),
+                    parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(tz) => tz.parse(),
+                })
+                .transpose()?,
             max_predicate_cache_size: proto
                 .max_predicate_cache_size_opt
                 .as_ref()
@@ -584,6 +572,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn rejects_invalid_parquet_encoding() {
+        let proto = ParquetOptionsProto {
+            encoding_opt: Some(parquet_options::EncodingOpt::Encoding(
+                "invalid".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unknown or unsupported parquet encoding: invalid")
+        );
+    }
+
+    #[test]
     fn rejects_invalid_parquet_statistics() {
         let proto = ParquetOptionsProto {
             statistics_enabled_opt: Some(
@@ -598,6 +602,40 @@ mod tests {
         assert!(
             err.to_string()
                 .contains("Invalid parquet statistics setting: invalid")
+        );
+    }
+
+    #[test]
+    fn accepts_parquet_coerce_int96_tz_without_unit() {
+        let proto = ParquetOptionsProto {
+            coerce_int96_tz_opt: Some(parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(
+                "+08".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let options = ParquetOptions::try_from(&proto).unwrap();
+        assert_eq!(options.coerce_int96, None);
+        assert_eq!(
+            options.coerce_int96_tz.as_ref().map(|tz| tz.as_str()),
+            Some("+08")
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_parquet_coerce_int96_tz() {
+        let proto = ParquetOptionsProto {
+            coerce_int96_tz_opt: Some(parquet_options::CoerceInt96TzOpt::CoerceInt96Tz(
+                "Not/A_Timezone".to_string(),
+            )),
+            ..Default::default()
+        };
+
+        let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Invalid time zone: Not/A_Timezone."),
+            "unexpected error: {err}"
         );
     }
 }

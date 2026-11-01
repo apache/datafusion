@@ -1,30 +1,22 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Multi-column `(a, b) NOT IN (SELECT x, y ...)` under SQL three-valued logic.
 # A tuple comparison is UNKNOWN only when no element pair is a definite
 # mismatch and at least one of them involves a NULL: `(NULL, 8) = (1, 2)` is
 # `UNKNOWN AND FALSE`, which is FALSE, while `(NULL, 2) = (1, 2)` is UNKNOWN.
 # The batch size sweep exercises the chunked UNKNOWN candidate pairing of the
-# null-aware hash join. Plans are checked in null_aware_anti_join.slt.
+# null-aware hash join. With join reordering on, JoinSelection swaps a NOT IN
+# whose subquery is not larger into a null-aware RightAnti that builds on the
+# subquery and decides each outer row as it streams; with it off, the join
+# stays a LeftAnti that builds on the outer side and decides per build row.
+# Plans are checked in null_aware_anti_join.slt.
 # Matrix rules: no EXPLAIN, no in-file SET of a swept knob, rowsort every
 # multi-row query.
 
 # configMatrix: datafusion.execution.batch_size=1,2,100,8192
+# configMatrix: datafusion.optimizer.join_reordering=true,false
 
 statement ok
 CREATE TABLE mc_outer(a INT, b INT, value TEXT) AS VALUES
@@ -47,6 +39,11 @@ CREATE TABLE mc_inner_no_null(x INT, y INT) AS VALUES
 statement ok
 CREATE TABLE mc_empty(x INT, y INT);
 
+statement ok
+CREATE TABLE mc_inner_all_null(x INT, y INT) AS VALUES
+(NULL, 4),
+(1, NULL);
+
 #############
 ## NULL in the subquery
 #############
@@ -60,6 +57,15 @@ WHERE (a, b) NOT IN (SELECT x, y FROM mc_inner_null);
 ----
 5 6 z
 NULL 8 w
+
+# Every subquery row holds a NULL, so no row can match a whole tuple and only
+# the NULL-aware checks decide. Only (5, 6) has a definite mismatch with both
+# (NULL, 4) and (1, NULL).
+query IIT rowsort
+SELECT * FROM mc_outer
+WHERE (a, b) NOT IN (SELECT x, y FROM mc_inner_all_null);
+----
+5 6 z
 
 #############
 ## NULL only in the outer tuple
@@ -542,6 +548,9 @@ DROP TABLE mc_inner_no_null;
 
 statement ok
 DROP TABLE mc_empty;
+
+statement ok
+DROP TABLE mc_inner_all_null;
 
 statement ok
 DROP TABLE mc3_outer;

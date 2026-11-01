@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{ArrayRef, Int64Array, OffsetSizeTrait};
 use arrow::datatypes::{DataType, Field};
@@ -60,7 +47,6 @@ fn create_args<O: OffsetSizeTrait>(
 
 fn invoke_repeat_with_args(
     args: Vec<ColumnarValue>,
-    repeat_times: i64,
 ) -> Result<ColumnarValue, DataFusionError> {
     let arg_fields = args
         .iter()
@@ -69,11 +55,22 @@ fn invoke_repeat_with_args(
         .collect::<Vec<_>>();
     let config_options = Arc::new(ConfigOptions::default());
 
+    let return_type = string::repeat().return_type(
+        &args
+            .iter()
+            .map(ColumnarValue::data_type)
+            .collect::<Vec<_>>(),
+    )?;
+    let number_rows = match &args[0] {
+        ColumnarValue::Array(array) => array.len(),
+        ColumnarValue::Scalar(_) => 1,
+    };
+
     string::repeat().invoke_with_args(ScalarFunctionArgs {
         args,
         arg_fields,
-        number_rows: repeat_times as usize,
-        return_field: Field::new("f", DataType::Utf8, true).into(),
+        number_rows,
+        return_field: Field::new("f", return_type, true).into(),
         config_options: Arc::clone(&config_options),
     })
 }
@@ -111,7 +108,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                 Field::new("b", DataType::Int64, false).into(),
             ],
             number_rows: 1,
-            return_field: Field::new("f", DataType::Utf8, true).into(),
+            return_field: Field::new("f", DataType::Utf8View, true).into(),
             config_options: Arc::clone(&config_options),
         };
         b.iter(|| black_box(repeat_fn.invoke_with_args(args.clone()).unwrap()))
@@ -131,7 +128,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
-                    black_box(invoke_repeat_with_args(args_cloned, repeat_times))
+                    black_box(invoke_repeat_with_args(args_cloned).unwrap())
                 })
             },
         );
@@ -142,7 +139,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
-                    black_box(invoke_repeat_with_args(args_cloned, repeat_times))
+                    black_box(invoke_repeat_with_args(args_cloned).unwrap())
                 })
             },
         );
@@ -153,7 +150,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
-                    black_box(invoke_repeat_with_args(args_cloned, repeat_times))
+                    black_box(invoke_repeat_with_args(args_cloned).unwrap())
                 })
             },
         );
@@ -173,7 +170,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
-                    black_box(invoke_repeat_with_args(args_cloned, repeat_times))
+                    black_box(invoke_repeat_with_args(args_cloned).unwrap())
                 })
             },
         );
@@ -184,7 +181,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
-                    black_box(invoke_repeat_with_args(args_cloned, repeat_times))
+                    black_box(invoke_repeat_with_args(args_cloned).unwrap())
                 })
             },
         );
@@ -195,7 +192,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
-                    black_box(invoke_repeat_with_args(args_cloned, repeat_times))
+                    black_box(invoke_repeat_with_args(args_cloned).unwrap())
                 })
             },
         );
@@ -210,12 +207,25 @@ fn criterion_benchmark(c: &mut Criterion) {
         group.measurement_time(Duration::from_secs(10));
 
         let args = create_args::<i32>(size, 2, repeat_times, false);
+        // Verify once outside the timed loop that the failure is the expected
+        // overflow error, and not an unrelated error that also happens to fail.
+        let err = invoke_repeat_with_args(args.clone())
+            .expect_err("repeat should reject an overflowing output size")
+            .to_string();
+        assert!(
+            err.contains("string size overflow on repeat"),
+            "unexpected error: {err}"
+        );
         group.bench_function(
             format!("repeat_string overflow [size={size}, repeat_times={repeat_times}]"),
             |b| {
                 b.iter(|| {
                     let args_cloned = args.clone();
-                    black_box(invoke_repeat_with_args(args_cloned, repeat_times))
+                    black_box(
+                        invoke_repeat_with_args(args_cloned).expect_err(
+                            "repeat should reject an overflowing output size",
+                        ),
+                    )
                 })
             },
         );

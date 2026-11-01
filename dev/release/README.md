@@ -90,20 +90,16 @@ git push -u apache branch-55 # push branch to apache remote
 
 ### 2. Prepare PR to Update the Release Version
 
-Update the DataFusion version in the root `Cargo.toml`, in `Cargo.lock` and in the user
-documentation. At the time of this writing the documentation files are
-
-- `docs/source/download.md`
-- `docs/source/user-guide/configs.md`
-- `docs/source/user-guide/crate-configuration.md`
-- `docs/source/user-guide/example-usage.md`
-
-For example, to update the version from `55.1.0` to `55.2.0`:
+Update the DataFusion version using the following Python script:
 
 ```shell
-# version and lockfile
-sed -i '' 's/"55\.1\.0"/"55.2.0"/g' Cargo.toml
-sed -i '' 's/55\.1\.0/55.2.0/' docs/source/download.md docs/source/user-guide/{configs,crate-configuration,example-usage}.md
+# replace NEW_VERSION before executing (e.g., 55.2.0)
+python3 dev/update_datafusion_versions.py NEW_VERSION
+```
+
+This updates the DataFusion version across all files, including documentation. The only extra step required is to update the `Cargo.lock` file, using the following command:
+
+```shell
 cargo update --workspace
 ```
 
@@ -312,6 +308,30 @@ git checkout 55.2.0-rc1
 git tag 55.2.0
 git push apache 55.2.0
 ```
+
+#### Publish the versioned documentation
+
+Open a PR against `main` that adds the release to
+`docs/source/_static/versions.json` immediately after the `Development (main)`
+entry mark it with `"preferred": true`.
+
+Once the PR is merged, the
+[Deploy DataFusion versioned docs](../../.github/workflows/docs_versions.yaml)
+workflow builds the documentation for each release and
+pushes the result to the `asf-site` branch.
+
+To preview a release locally before opening the PR, build the current site
+and then the release with `docs/scripts/build_versions.sh <version>` and serve
+`docs/build/html` over HTTP:
+
+```shell
+cd docs
+uv run --package datafusion-docs ./build.sh
+scripts/build_versions.sh 55.2.0
+python3 -m http.server --directory build/html 8000
+```
+
+Then open http://localhost:8000/ and check the version picker in the navigation bar.
 
 ### 10. Publish on Crates.io
 

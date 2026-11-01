@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SessionState`]: information required to run queries in a session
 
@@ -48,7 +35,7 @@ use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     DFSchema, DataFusionError, ResolvedTableReference, TableReference, config_err,
-    exec_err, plan_datafusion_err,
+    exec_err, plan_datafusion_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
@@ -78,7 +65,9 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::operator_statistics::StatisticsRegistry;
-use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
+use datafusion_session::{
+    CatalogProvider, PhysicalOptimizerContext, PhysicalOptimizerRule, Session,
+};
 #[cfg(feature = "sql")]
 use datafusion_sql::{
     parser::{DFParserBuilder, Statement},
@@ -417,28 +406,54 @@ impl SessionState {
         table_ref: impl Into<TableReference>,
     ) -> datafusion_common::Result<Arc<dyn SchemaProvider>> {
         let resolved_ref = self.resolve_table_ref(table_ref);
-        if self.config().information_schema()
-            && *resolved_ref.schema == *INFORMATION_SCHEMA
+        let catalog_name = resolved_ref.catalog.as_ref();
+
+        // Special case handling for `information_schema`.
+        if *resolved_ref.schema == *INFORMATION_SCHEMA
+            && self.inner.config.information_schema()
         {
-            return Ok(Arc::new(
-                InformationSchemaProvider::new(Arc::clone(&self.inner.catalog_list))
-                    .with_table_functions(self.inner.table_functions.clone()),
-            ));
+            // Resolve catalog to ensure it exists
+            let _ = self.resolve_catalog(catalog_name)?;
+
+            // Create the global information schema
+            let information_schema_provider =
+                InformationSchemaProvider::new(Arc::clone(self.catalog_list()))
+                    .with_information_schema_enabled(true)
+                    .with_table_functions(self.inner.table_functions.clone());
+
+            // If partitioned information schema is enabled, restrict the information schema to
+            // the containing catalog
+            let information_schema_provider =
+                if self.config().partition_information_schema() {
+                    information_schema_provider
+                        .with_catalog_filter(Some(catalog_name.to_string()))
+                } else {
+                    information_schema_provider
+                };
+
+            return Ok(Arc::new(information_schema_provider));
         }
 
-        self.inner
+        let catalog = self.resolve_catalog(catalog_name)?;
+        let Some(schema) = catalog.schema(&resolved_ref.schema) else {
+            return plan_err!("failed to resolve schema: {}", resolved_ref.schema);
+        };
+
+        Ok(schema)
+    }
+
+    fn resolve_catalog(
+        &self,
+        catalog_name: &str,
+    ) -> Result<Arc<dyn CatalogProvider>, DataFusionError> {
+        let catalog = self
+            .inner
             .catalog_list
-            .catalog(&resolved_ref.catalog)
+            .catalog(catalog_name)
             .ok_or_else(|| {
-                plan_datafusion_err!(
-                    "failed to resolve catalog: {}",
-                    resolved_ref.catalog
-                )
-            })?
-            .schema(&resolved_ref.schema)
-            .ok_or_else(|| {
-                plan_datafusion_err!("failed to resolve schema: {}", resolved_ref.schema)
-            })
+                plan_datafusion_err!("failed to resolve catalog: {catalog_name}")
+            })?;
+        Ok(catalog)
     }
 
     /// Add `analyzer_rule` to the end of the list of

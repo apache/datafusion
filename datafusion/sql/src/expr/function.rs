@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
@@ -603,12 +590,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             )?;
 
             let func_deps = schema.functional_dependencies();
-            // Find whether ties are possible in the given ordering
+            // Find whether ties are possible in the given ordering. NULLs sort
+            // together and are peers, so a nullable UNIQUE column, which
+            // permits multiple NULL rows, does not rule out ties.
             let is_ordering_strict = order_by.iter().find_map(|orderby_expr| {
                 if let Expr::Column(col) = &orderby_expr.expr {
                     let idx = schema.index_of_column(col).ok()?;
                     return if func_deps.iter().any(|dep| {
-                        dep.source_indices == [idx] && dep.mode == Dependency::Single
+                        dep.source_indices == [idx]
+                            && dep.mode == Dependency::Single
+                            && dep.is_valid_across_nulls(schema)
                     }) {
                         Some(true)
                     } else {

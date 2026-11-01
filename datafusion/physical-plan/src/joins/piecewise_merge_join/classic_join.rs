@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Stream Implementation for PiecewiseMergeJoin's Classic Join (Left, Right, Full, Inner)
 
@@ -26,7 +13,7 @@ use arrow::{
 };
 use arrow_schema::{DataType, Schema, SchemaRef, SortOptions};
 use datafusion_common::NullEquality;
-use datafusion_common::utils::normalize_float_zero;
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_expr::{ColumnarValue, JoinType, Operator};
@@ -608,7 +595,7 @@ fn buffered_extreme(
     let last = values.slice(end - 1, 1);
     // `apply_cmp` normalizes `-0.0` only in flat float scalars, not inside a
     // `ScalarValue::Dictionary`, so normalize the key before taking it.
-    let extreme = normalize_float_zero(&last);
+    let extreme = normalize_floats(&last);
     Ok(Some(ColumnarValue::Scalar(ScalarValue::try_from_array(
         &extreme, 0,
     )?)))

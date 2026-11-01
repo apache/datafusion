@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! A name-keyed store of decoders for extension types.
 //!
@@ -56,25 +43,26 @@ struct Registered {
 /// A store of extension decoders, keyed by the trait they produce and the name
 /// the encoder wrote on the wire.
 ///
-/// Build one, let every library that ships extension types register into it,
-/// and attach it to the decoding session with `SessionConfig::with_extension`.
-/// A session carries at most one, and attaching another replaces it, so the
-/// application that owns the session is the one that builds it. A library
-/// exposes a function that fills a registry it is handed:
+/// A session carries one registry, as a `SessionConfig` extension. Every
+/// library that ships extension types adds its decoders to that registry with
+/// `SessionConfig::update_extension`, which creates the registry if there is
+/// none:
 ///
 /// ```rust,ignore
 /// // in each library
-/// pub fn register(registry: &mut ProtoDecoderRegistry) -> Result<()> {
-///     register_execution_plan::<MyExec>(registry)?;
-///     register_physical_expr::<MyExpr>(registry)
+/// pub fn register(config: &mut SessionConfig) -> Result<()> {
+///     config.update_extension(MyExec::register_proto)?;
+///     config.update_extension(MyExpr::register_proto)
 /// }
 ///
 /// // in the application that owns the session
-/// let mut registry = ProtoDecoderRegistry::new();
-/// lib_one::register(&mut registry)?;
-/// lib_two::register(&mut registry)?;
-/// let config = SessionConfig::new().with_extension(Arc::new(registry));
+/// let mut config = SessionConfig::new();
+/// lib_one::register(&mut config)?;
+/// lib_two::register(&mut config)?;
 /// ```
+///
+/// Do not attach a registry with `SessionConfig::with_extension`: it replaces
+/// the registry, so it discards the decoders that other libraries added.
 ///
 /// The libraries need to know nothing about each other, and the order they are
 /// called in does not matter: lookup is by name, and a real collision is an

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Distribution enforcement helpers. The standalone `EnforceDistribution`
 //! rule that previously lived here has been retired in favour of
@@ -915,6 +902,20 @@ fn partial_aggregate_output_satisfies_final_partitioning(
         .is_satisfied()
 }
 
+fn partial_aggregate_input_keeps_groups_local(
+    plan: &Arc<dyn ExecutionPlan>,
+    allow_subset_satisfy_partitioning: bool,
+) -> bool {
+    plan.downcast_ref::<AggregateExec>()
+        .is_some_and(|aggregate| {
+            aggregate.mode() == &AggregateMode::Partial
+                && aggregate.input_keeps_groups_local(
+                    aggregate.input().as_ref(),
+                    allow_subset_satisfy_partitioning,
+                )
+        })
+}
+
 /// Adds a [`SortPreservingMergeExec`] or a [`CoalescePartitionsExec`] operator
 /// on top of the given plan node to satisfy a single partition requirement
 /// while preserving ordering constraints.
@@ -1686,10 +1687,13 @@ pub fn ensure_distribution_with_stats(
 
             let preserve_partial_aggregate_partitioning =
                 preserve_file_partition_threshold_met
-                    && partial_aggregate_output_satisfies_final_partitioning(
+                    && (partial_aggregate_output_satisfies_final_partitioning(
                         &plan,
                         allow_subset_satisfy_partitioning,
-                    );
+                    ) || partial_aggregate_input_keeps_groups_local(
+                        &plan,
+                        allow_subset_satisfy_partitioning,
+                    ));
 
             let add_roundrobin = enable_round_robin
                 // Operator benefits from partitioning (e.g. filter):
@@ -1721,6 +1725,9 @@ pub fn ensure_distribution_with_stats(
                 Distribution::HashPartitioned(_) | Distribution::KeyPartitioned(_) => {
                     let child_partitions =
                         child.plan.output_partitioning().partition_count();
+                    // An aggregate can avoid repartitioning if all rows for each group
+                    // are already in one input partition, even when the ordinary
+                    // distribution check fails (#25344). This does not prove join co-partitioning.
                     let partitioning_satisfied = input_distributions
                         .child_satisfaction(
                             child_idx,
@@ -1728,7 +1735,15 @@ pub fn ensure_distribution_with_stats(
                             ChildSatisfactionOptions::new()
                                 .with_allow_subset(allow_subset_satisfy_partitioning),
                         )?
-                        .is_satisfied();
+                        .is_satisfied()
+                        || plan.downcast_ref::<AggregateExec>().is_some_and(
+                            |aggregate| {
+                                aggregate.input_keeps_groups_local(
+                                    child.plan.as_ref(),
+                                    allow_subset_satisfy_partitioning,
+                                )
+                            },
+                        );
                     let preserve_satisfying_file_partitioning =
                         preserve_file_partition_threshold_met
                             && !requires_grouping_id

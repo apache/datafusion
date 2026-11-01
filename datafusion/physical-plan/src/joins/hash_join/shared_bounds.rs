@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Utilities for shared build-side information. Used in dynamic filter pushdown in Hash Joins.
 // TODO: include the link to the Dynamic Filter blog post.
@@ -26,8 +13,9 @@ use crate::ExecutionPlanProperties;
 use crate::Partitioning;
 use crate::joins::Map;
 use crate::joins::PartitionMode;
-use crate::joins::hash_join::exec::{HASH_JOIN_SEED, NullAwareMode};
+use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
+use crate::joins::hash_join::not_in::NotIn;
 use crate::joins::hash_join::partitioned_hash_eval::{
     HashExpr, HashTableLookupExpr, SeededRandomState,
 };
@@ -273,7 +261,7 @@ pub(crate) struct SharedBuildAccumulator {
     null_equality: NullEquality,
     /// Null-aware anti join (`NOT IN`). A probe-side NULL must reach the join so its
     /// three-valued logic can collapse the result, so the pushed filter keeps NULL rows.
-    null_aware: Option<NullAwareMode>,
+    not_in: Option<NotIn>,
 }
 
 /// Strategy for filter pushdown (decided at collection time)
@@ -385,7 +373,7 @@ impl SharedBuildAccumulator {
         on_right: Vec<PhysicalExprRef>,
         repartition_random_state: SeededRandomState,
         null_equality: NullEquality,
-        null_aware: Option<NullAwareMode>,
+        not_in: Option<NotIn>,
     ) -> Self {
         // Troubleshooting: If partition counts are incorrect, verify this logic matches
         // the actual execution pattern in collect_build_side()
@@ -442,7 +430,7 @@ impl SharedBuildAccumulator {
             probe_schema: right_child.schema(),
             probe_range_partitioning,
             null_equality,
-            null_aware,
+            not_in,
         }
     }
 
@@ -822,13 +810,13 @@ impl SharedBuildAccumulator {
         // probe NULL makes `NOT IN` unknown for every build row. A null-equal join needs probe
         // NULLs only to match an actual build-side NULL, so a NULL-free build keeps the filter
         // at full selectivity.
-        let needs_probe_nulls = self.null_aware.is_some()
+        let needs_probe_nulls = self.not_in.is_some()
             || (self.null_equality == NullEquality::NullEqualsNull
                 && build_keys_have_null);
         if !needs_probe_nulls {
             return Ok(filter_expr);
         }
-        let keys = match self.null_aware {
+        let keys = match self.not_in {
             Some(mode) => {
                 let value_keys = mode.value_keys();
                 assert_or_internal_err!(
@@ -898,7 +886,7 @@ pub(super) fn make_partitioned_accumulator_for_test(
         probe_schema,
         probe_range_partitioning: None,
         null_equality: NullEquality::NullEqualsNothing,
-        null_aware: None,
+        not_in: None,
     }
 }
 
@@ -918,6 +906,7 @@ pub(super) fn completed_partitions_for_test(acc: &SharedBuildAccumulator) -> usi
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::joins::hash_join::not_in::{NotInOutput, NotInScope};
 
     use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int32Array};
     use arrow::compute::SortOptions;
@@ -963,7 +952,7 @@ mod tests {
             probe_schema: test_probe_schema(),
             probe_range_partitioning: None,
             null_equality: NullEquality::NullEqualsNothing,
-            null_aware: None,
+            not_in: None,
         }
     }
 
@@ -1451,9 +1440,9 @@ mod tests {
             probe_schema,
             probe_range_partitioning: None,
             null_equality,
-            null_aware: null_aware.then_some(NullAwareMode::LeftAnti {
-                correlated: false,
-                value_keys: 1,
+            not_in: null_aware.then_some(NotIn::BuildRows {
+                scope: NotInScope::Uncorrelated,
+                output: NotInOutput::Rows,
             }),
         }
     }
@@ -1666,9 +1655,9 @@ mod tests {
                 probe_schema: Arc::new(Schema::new(fields)),
                 probe_range_partitioning: None,
                 null_equality: NullEquality::NullEqualsNothing,
-                null_aware: Some(NullAwareMode::LeftMark {
-                    correlated: true,
-                    value_keys,
+                not_in: Some(NotIn::BuildRows {
+                    scope: NotInScope::Correlated { value_keys },
+                    output: NotInOutput::Mark,
                 }),
             };
 

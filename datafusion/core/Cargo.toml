@@ -198,6 +198,11 @@ ignored = ["datafusion-doc", "datafusion-macros", "dashmap"]
 [target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 nix = { version = "0.31.3", features = ["fs"] }
 
+[[test]]
+name = "extended_tests"
+path = "tests/extended_tests.rs"
+required-features = ["extended_tests"]
+
 [[bin]]
 name = "print_config_docs"
 path = "src/bin/print_config_docs.rs"
@@ -244,6 +249,10 @@ name = "math_query_sql"
 [[bench]]
 harness = false
 name = "filter_query_sql"
+
+[[bench]]
+harness = false
+name = "in_list_rewrite"
 
 [[bench]]
 harness = false

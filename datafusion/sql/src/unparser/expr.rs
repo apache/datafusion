@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_expr::expr::{
@@ -1265,7 +1252,7 @@ impl Unparser<'_> {
         Ok(ast::Expr::Cast {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::value(SingleQuotedString(ts))),
-            data_type: self.dialect.timestamp_cast_dtype(&time_unit, &None),
+            data_type: self.dialect.timestamp_cast_dtype(&time_unit, &tz.cloned()),
             format: None,
         })
     }
@@ -2214,7 +2201,7 @@ mod tests {
                     ScalarValue::TimestampSecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01T10:46:41+08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T10:46:41+08:00' AS TIMESTAMP WITH TIME ZONE)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampMillisecond(Some(10001), None), None),
@@ -2225,7 +2212,7 @@ mod tests {
                     ScalarValue::TimestampMillisecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01T08:00:10.001+08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:10.001+08:00' AS TIMESTAMP WITH TIME ZONE)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampMicrosecond(Some(10001), None), None),
@@ -2236,7 +2223,7 @@ mod tests {
                     ScalarValue::TimestampMicrosecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01T08:00:00.010001+08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:00.010001+08:00' AS TIMESTAMP WITH TIME ZONE)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampNanosecond(Some(10001), None), None),
@@ -2247,7 +2234,7 @@ mod tests {
                     ScalarValue::TimestampNanosecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01T08:00:00.000010001+08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:00.000010001+08:00' AS TIMESTAMP WITH TIME ZONE)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Time32Second(Some(10001)), None),
@@ -3082,22 +3069,87 @@ mod tests {
             )
             .build();
 
-        for (dialect, identifier) in [
-            (&default_dialect, "TIMESTAMP"),
-            (&mysql_dialect, "DATETIME"),
+        let timestamp = ScalarValue::TimestampMillisecond(Some(1738285549123), None);
+        let timestamp_with_tz =
+            ScalarValue::TimestampMillisecond(Some(1738285549123), Some("+08:00".into()));
+
+        for (dialect, scalar, expected) in [
+            (
+                &default_dialect,
+                &timestamp,
+                "CAST('2025-01-31 01:05:49.123' AS TIMESTAMP)",
+            ),
+            (
+                &default_dialect,
+                &timestamp_with_tz,
+                "CAST('2025-01-31T09:05:49.123+08:00' AS TIMESTAMP WITH TIME ZONE)",
+            ),
+            (
+                &mysql_dialect,
+                &timestamp,
+                "CAST('2025-01-31 01:05:49.123' AS DATETIME)",
+            ),
+            (
+                &mysql_dialect,
+                &timestamp_with_tz,
+                "CAST('2025-01-31T09:05:49.123+08:00' AS DATETIME)",
+            ),
         ] {
             let unparser = Unparser::new(dialect);
-            let expr = Expr::Literal(
-                ScalarValue::TimestampMillisecond(Some(1738285549123), None),
-                None,
-            );
+            let expr = Expr::Literal(scalar.clone(), None);
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = format!("{ast}");
-            let expected = format!(r#"CAST('2025-01-31 01:05:49.123' AS {identifier})"#);
 
             assert_eq!(actual, expected);
         }
+        Ok(())
+    }
+
+    // MySQL `DATETIME` without precision is `DATETIME(0)` and rounds the
+    // literal to whole seconds, which breaks equality and keyset seeks on
+    // sub-second timestamps. The MySQL dialect must carry the unit's precision.
+    #[test]
+    fn mysql_timestamp_cast_keeps_fractional_precision() -> Result<()> {
+        let unparser = Unparser::new(&MySqlDialect {});
+
+        for (scalar, expected) in [
+            (
+                ScalarValue::TimestampSecond(Some(1789980940), None),
+                "CAST('2026-09-21 08:55:40' AS DATETIME)",
+            ),
+            (
+                ScalarValue::TimestampMillisecond(Some(1789980940006), None),
+                "CAST('2026-09-21 08:55:40.006' AS DATETIME(3))",
+            ),
+            (
+                ScalarValue::TimestampMicrosecond(Some(1789980940006000), None),
+                "CAST('2026-09-21 08:55:40.006' AS DATETIME(6))",
+            ),
+            (
+                ScalarValue::TimestampNanosecond(Some(1789980940006000000), None),
+                "CAST('2026-09-21 08:55:40.006' AS DATETIME(6))",
+            ),
+        ] {
+            let ast = unparser.expr_to_sql(&Expr::Literal(scalar, None))?;
+            assert_eq!(format!("{ast}"), expected);
+        }
+
+        let expr = Expr::Cast(Cast::new(
+            Box::new(col("a")),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        ));
+        let ast = unparser.expr_to_sql(&expr)?;
+        assert_eq!(format!("{ast}"), "CAST(`a` AS DATETIME(6))");
+        Ok(())
+    }
+
+    #[test]
+    fn mysql_int8_cast_uses_signed() -> Result<()> {
+        let unparser = Unparser::new(&MySqlDialect {});
+        let expr = Expr::Cast(Cast::new(Box::new(col("a")), Int8));
+        let ast = unparser.expr_to_sql(&expr)?;
+        assert_eq!(format!("{ast}"), "CAST(`a` AS SIGNED)");
         Ok(())
     }
 
@@ -3746,12 +3798,13 @@ mod tests {
 
         let duckdb_dialect: Arc<dyn Dialect> = Arc::new(DuckDBDialect::new());
         let bigquery_dialect: Arc<dyn Dialect> = Arc::new(BigQueryDialect::new());
+        let snowflake_dialect: Arc<dyn Dialect> = Arc::new(SnowflakeDialect::new());
 
         for (dialect, scalar, expected) in [
             (
                 Arc::clone(&default_dialect),
                 ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
-                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3759,7 +3812,7 @@ mod tests {
                     Some(1757934000123),
                     Some("+01:00".into()),
                 ),
-                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3767,7 +3820,7 @@ mod tests {
                     Some(1757934000123456),
                     Some("-01:00".into()),
                 ),
-                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3775,12 +3828,12 @@ mod tests {
                     Some(1757934000123456789),
                     Some("+00:00".into()),
                 ),
-                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
                 ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
-                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3788,7 +3841,7 @@ mod tests {
                     Some(1757934000123),
                     Some("+01:00".into()),
                 ),
-                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3796,7 +3849,7 @@ mod tests {
                     Some(1757934000123456),
                     Some("-01:00".into()),
                 ),
-                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3804,7 +3857,7 @@ mod tests {
                     Some(1757934000123456789),
                     Some("+00:00".into()),
                 ),
-                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&bigquery_dialect),
@@ -3834,12 +3887,70 @@ mod tests {
                     Some("+00:00".into()),
                 ),
                 "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&snowflake_dialect),
+                ScalarValue::TimestampMillisecond(
+                    Some(1757934000123),
+                    Some("+01:00".into()),
+                ),
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
         ] {
             let unparser = Unparser::new(dialect.as_ref());
 
             let expr = Expr::Literal(scalar, None);
 
+            let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_timestamp_literal_passes_tz_to_dialect() -> Result<()> {
+        // Puts the time zone it receives into the cast type, so the generated
+        // SQL shows which zone the unparser passed to the dialect.
+        struct TzEchoDialect;
+
+        impl Dialect for TzEchoDialect {
+            fn identifier_quote_style(&self, _identifier: &str) -> Option<char> {
+                None
+            }
+
+            fn timestamp_cast_dtype(
+                &self,
+                _time_unit: &TimeUnit,
+                tz: &Option<Arc<str>>,
+            ) -> ast::DataType {
+                match tz {
+                    Some(tz) => ast::DataType::Custom(
+                        ObjectName::from(vec![Ident::new("TIMESTAMPTZ")]),
+                        vec![tz.to_string()],
+                    ),
+                    None => ast::DataType::Timestamp(None, TimezoneInfo::None),
+                }
+            }
+        }
+
+        let unparser = Unparser::new(&TzEchoDialect);
+
+        let literal = Expr::Literal(
+            ScalarValue::TimestampSecond(Some(1704078000), Some("Asia/Tokyo".into())),
+            None,
+        );
+        let cast_expr = cast(
+            col("a"),
+            DataType::Timestamp(TimeUnit::Second, Some("Asia/Tokyo".into())),
+        );
+
+        for (expr, expected) in [
+            (
+                literal,
+                "CAST('2024-01-01T12:00:00+09:00' AS TIMESTAMPTZ(Asia/Tokyo))",
+            ),
+            (cast_expr, "CAST(a AS TIMESTAMPTZ(Asia/Tokyo))"),
+        ] {
             let actual = format!("{}", unparser.expr_to_sql(&expr)?);
             assert_eq!(actual, expected);
         }
