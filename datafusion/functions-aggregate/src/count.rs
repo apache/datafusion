@@ -7,10 +7,10 @@ use arrow::{
     buffer::BooleanBuffer,
     compute,
     datatypes::{
-        DataType, Date32Type, Date64Type, Decimal128Type, Decimal256Type, Field,
-        FieldRef, Float16Type, Float32Type, Float64Type, Int8Type, Int16Type, Int32Type,
-        Int64Type, Time32MillisecondType, Time32SecondType, Time64MicrosecondType,
-        Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
+        DataType, Date32Type, Date64Type, Decimal32Type, Decimal64Type, Decimal128Type,
+        Decimal256Type, Field, FieldRef, Float16Type, Float32Type, Float64Type, Int8Type,
+        Int16Type, Int32Type, Int64Type, Time32MillisecondType, Time32SecondType,
+        Time64MicrosecondType, Time64NanosecondType, TimeUnit, TimestampMicrosecondType,
         TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType,
         UInt8Type, UInt16Type, UInt32Type, UInt64Type,
     },
@@ -180,6 +180,13 @@ fn get_count_accumulator(data_type: &DataType) -> Box<dyn Accumulator> {
         DataType::UInt8 | DataType::Int8 | DataType::UInt16 | DataType::Int16 => {
             get_small_int_accumulator(data_type).unwrap()
         }
+
+        DataType::Decimal32(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+            Decimal32Type,
+        >::new(data_type)),
+        DataType::Decimal64(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
+            Decimal64Type,
+        >::new(data_type)),
         DataType::Decimal128(_, _) => Box::new(PrimitiveDistinctCountAccumulator::<
             Decimal128Type,
         >::new(data_type)),
@@ -280,6 +287,11 @@ impl AggregateUDFImpl for Count {
         Ok(DataType::Int64)
     }
 
+    fn return_field(&self, _arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Int64, false)))
+    }
+
+    // Keep the deprecated method consistent with `return_field` until it is removed
     fn is_nullable(&self) -> bool {
         false
     }

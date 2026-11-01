@@ -141,6 +141,31 @@ compatibility with benchmark files and direct Criterion runs. Direct
 `cargo bench --bench sql` invocations cannot accept custom arguments, so they
 still use environment variables.
 
+DataFusion session settings are read through `SessionConfig::from_env()` in both
+CLI and direct Criterion runs. Use the standard `DATAFUSION_*` environment variables:
+
+| Setting                        | Environment variable                                |
+| ------------------------------ | --------------------------------------------------- |
+| Parallel partitions            | `DATAFUSION_EXECUTION_TARGET_PARTITIONS`            |
+| Batch size                     | `DATAFUSION_EXECUTION_BATCH_SIZE`                   |
+| Sort spill reservation (bytes) | `DATAFUSION_EXECUTION_SORT_SPILL_RESERVATION_BYTES` |
+| Prefer hash joins              | `DATAFUSION_OPTIMIZER_PREFER_HASH_JOIN`             |
+| Enable Piecewise Merge Join    | `DATAFUSION_OPTIMIZER_ENABLE_PIECEWISE_MERGE_JOIN`  |
+| Hash join buffering capacity   | `DATAFUSION_EXECUTION_HASH_JOIN_BUFFERING_CAPACITY` |
+| Collect statistics             | `DATAFUSION_EXECUTION_COLLECT_STATISTICS`           |
+
+Explicit CLI settings override environment settings; otherwise DataFusion's defaults
+apply. The old `PARTITIONS`, `BATCH_SIZE`, `SORT_SPILL_RESERVATION_BYTES`,
+`PREFER_HASH_JOIN`, and `HASH_JOIN_BUFFERING_CAPACITY` environment variables are
+no longer used. For example:
+
+```shell
+DATAFUSION_EXECUTION_TARGET_PARTITIONS=2 DATAFUSION_OPTIMIZER_PREFER_HASH_JOIN=false cargo bench --bench sql
+```
+
+Memory limits and pool types configure `RuntimeEnv` separately. `MEMORY_LIMIT`
+(or `--memory-limit`) takes precedence over `DATAFUSION_RUNTIME_MEMORY_LIMIT`.
+
 The SQL benchmarking tool uses the following environment variables:
 
 | Environment Variable  | Description                                                                                                                                                                                       |
@@ -171,8 +196,6 @@ Some benchmarks use custom environment variables as outlined below:
 | H2O_FILE_TYPE                | Used in the h2o benchmark to specify which file type to query against. The valid options are `csv` and `parquet`         | `csv`         |
 | CLICKBENCH_TYPE              | The type of partitioning for the clickbench benchmark. Valid options are `single` and `partitioned`                      | `single`      | 
 | H2O_BENCH_SIZE               | Used in the h2o benchmark. The valid options are `small`, `medium` and `big`                                             | `small`       |                           
-| PREFER_HASH_JOIN             | Control datafusion's config option `datafusion.optimizer.prefer_hash_join`                                               | true          |
-| HASH_JOIN_BUFFERING_CAPACITY | Control datafusion's config option `datafusion.execution.hash_join_buffering_capacity`                                   | 0             |
 | BENCH_SORTED                 | Used in the sort_tpch benchmark to indicate whether the lineitem table should be sorted.                                 | false         |
 | SORTED_BY                    | Used in the clickbench_sorted benchmark to indicate the column to sort by.                                               | `EventTime`   |
 | SORTED_ORDER                 | Used in the clickbench_sorted benchmark to indicate the sort order of the column.                                        | `ASC`         |
@@ -422,7 +445,7 @@ QUERY_NUMBER_PADDED=01
 The echo directive allows for echoing a string to stdout during the execution of the benchmark and may be useful for
 debugging.<br/><br/>Example:<br/>
 <blockquote>
-echo The value for batch size is ${BATCH_SIZE:-8192}
+echo The value for batch size is ${DATAFUSION_EXECUTION_BATCH_SIZE:-8192}
 </blockquote>
 
 </td>

@@ -345,7 +345,13 @@ PG_COMPAT=true cargo test --features=postgres --test sqllogictests
 Test files in `tpch` directory runs against the `TPCH` data set (SF =
 0.1), which must be generated before running. You can use following
 command to generate tpch data, assuming you are in the repository
-root:
+root, either with `uvx` and `tpchgen-cli`:
+
+```shell
+uvx tpchgen-cli tbl -v -s 0.1 --output-dir datafusion/sqllogictest/test_files/tpch/data
+```
+
+or with `docker`:
 
 ```shell
 mkdir -p datafusion/sqllogictest/test_files/tpch/data
