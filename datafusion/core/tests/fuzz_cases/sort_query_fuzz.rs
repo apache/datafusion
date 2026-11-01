@@ -10,10 +10,10 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::compute::concat_batches;
+use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
-use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{Result, human_readable_size, instant::Instant};
 use datafusion_execution::disk_manager::DiskManagerBuilder;
 use datafusion_execution::memory_pool::{MemoryPool, UnboundedMemoryPool};
@@ -211,14 +211,7 @@ impl SortQueryFuzzer {
                     if expected_results.is_none() {
                         expected_results = Some(results);
                     } else if let Some(ref expected) = expected_results {
-                        // Check logical equivalence.
-                        // `assert_eq!` directly on `RecordBatch` may report false
-                        // failures when logically equivalent batches have different
-                        // physical encodings, so here it compares formatted batches.
-                        assert_eq!(
-                            batches_to_string(std::slice::from_ref(expected)),
-                            batches_to_string(std::slice::from_ref(&results))
-                        );
+                        assert_batches_equal_in_order(expected, &results, "");
                     } else {
                         unreachable!();
                     }
@@ -602,16 +595,33 @@ impl SortFuzzerTestGenerator {
                 let ctx =
                     self.generate_random_config(config_seed, false, Some(threshold))?;
                 let actual = ctx.sql(&query_str).await?.collect().await?;
-                assert_eq!(
-                    batches_to_string(std::slice::from_ref(&results)),
-                    batches_to_string(&[concat_batches(&schema, &actual)?]),
-                    "sort_in_place_threshold_bytes={threshold}"
+                assert_batches_equal_in_order(
+                    &results,
+                    &concat_batches(&schema, &actual)?,
+                    &format!("sort_in_place_threshold_bytes={threshold}"),
                 );
             }
         }
 
         Ok(results)
     }
+}
+
+/// Compares rows in order by their displayed values, so logically equal
+/// batches with different physical encodings (e.g. dictionaries) still match.
+#[track_caller]
+fn assert_batches_equal_in_order(
+    expected: &RecordBatch,
+    actual: &RecordBatch,
+    msg: &str,
+) {
+    let expected = pretty_format_batches(std::slice::from_ref(expected))
+        .unwrap()
+        .to_string();
+    let actual = pretty_format_batches(std::slice::from_ref(actual))
+        .unwrap()
+        .to_string();
+    assert_eq!(expected, actual, "{msg}");
 }
 
 #[cfg(test)]
@@ -664,6 +674,6 @@ mod test {
 
         let res1 = test_generator.fuzzer_run(1, 2, 3, false).await.unwrap();
         let res2 = test_generator.fuzzer_run(1, 2, 3, false).await.unwrap();
-        assert_eq!(batches_to_string(&[res1]), batches_to_string(&[res2]));
+        assert_batches_equal_in_order(&res1, &res2, "");
     }
 }
