@@ -212,8 +212,9 @@ impl SortQueryFuzzer {
                         expected_results = Some(results);
                     } else if let Some(ref expected) = expected_results {
                         // Check logical equivalence.
-                        // `assert_eq!` may report false failures when logically equivalent
-                        // batches have different physical encodings.
+                        // `assert_eq!` directly on `RecordBatch` may report false
+                        // failures when logically equivalent batches have different
+                        // physical encodings, so here it compares formatted batches.
                         assert_eq!(
                             batches_to_string(std::slice::from_ref(expected)),
                             batches_to_string(std::slice::from_ref(&results))
