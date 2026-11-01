@@ -644,6 +644,7 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.null_equality,
             &self.join_type,
             &self.schema,
+            self.filter.as_ref(),
         )?;
         Ok(Arc::new(match &self.projection {
             Some(projection) => stats.project(Some(projection)),
