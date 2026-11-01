@@ -101,10 +101,6 @@ cargo update --workspace       # updates Cargo.lock
 ./dev/update_config_docs.sh    # regenerates docs/source/user-guide/configs.md
 ```
 
-Development versions are never published to crates.io, so the script leaves
-the user facing examples (such as `docs/source/download.md`) pointing at the
-latest released version.
-
 ### 3. Prepare PR to Update the Release Version
 
 On the release branch, update the DataFusion version using the following
