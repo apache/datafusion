@@ -207,6 +207,61 @@ statement ok
 set datafusion.execution.target_partitions = 4;
 
 ###
+### Outer join NULL padding invalidates computed equalities
+###
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE padded_l(k INT) AS VALUES (1), (2), (3);
+
+statement ok
+CREATE TABLE padded_r(k INT, a INT) AS VALUES (1, 1), (2, 2);
+
+# On the unmatched row, rr.x is NULL but the CASE expression is 0.
+# Their input equality must not remove the outer sort.
+query I
+SELECT y FROM (
+  SELECT CASE WHEN a IS NULL THEN 0 ELSE a END AS y FROM (
+    SELECT rr.x, rr.a
+    FROM (SELECT k, a, CASE WHEN a IS NULL THEN 0 ELSE a END AS x FROM padded_r) rr
+    RIGHT JOIN padded_l ON padded_l.k = rr.k
+    ORDER BY rr.x LIMIT 100
+  )
+) ORDER BY y;
+----
+0
+1
+2
+
+# The filter-derived equality from #26036 is also invalid on padded rows.
+statement ok
+CREATE TABLE padded_filter(a INT, b INT) AS VALUES (2, 2), (3, 3), (5, 5), (6, 6), (7, 7), (8, 8);
+
+query III
+SELECT padded_l.k, rr.a, rr.b FROM padded_l
+LEFT JOIN (SELECT a, b FROM padded_filter WHERE b = coalesce(a, 0)) rr
+ON padded_l.k = rr.b
+ORDER BY coalesce(rr.a, 0), padded_l.k;
+----
+1 NULL NULL
+2 2 2
+3 3 3
+
+statement ok
+DROP TABLE padded_filter;
+
+statement ok
+DROP TABLE padded_l;
+
+statement ok
+DROP TABLE padded_r;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+###
 ### Functions whose ordering cannot be derived from their input
 ###
 

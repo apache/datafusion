@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use super::ProjectionMapping;
-use crate::expressions::Literal;
+use crate::expressions::{Column, Literal};
 use crate::physical_expr::add_offset_to_expr;
 use crate::projection::ProjectionTargets;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
@@ -174,6 +174,14 @@ pub struct EquivalenceClass {
 }
 
 impl EquivalenceClass {
+    /// Keeps what still holds on a join side whose unmatched rows are padded
+    /// with NULLs: padded columns stay equal to each other, but constants and
+    /// computed members do not (`coalesce(a, 0)` is 0 where `a` is NULL).
+    fn null_pad(&mut self) {
+        self.constant = None;
+        self.exprs.retain(|expr| expr.is::<Column>());
+    }
+
     // Create a new equivalence class from a pre-existing collection.
     pub fn new(exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>) -> Self {
         let mut class = Self::default();
@@ -849,10 +857,10 @@ impl EquivalenceGroup {
                         .cloned()
                         .map(|mut cls| {
                             // Rows without a match on the left side are
-                            // padded with NULLs, so its constants no
-                            // longer hold.
+                            // padded with NULLs, so its constants and computed
+                            // equalities no longer hold.
                             if matches!(join_type, JoinType::Right | JoinType::Full) {
-                                cls.constant = None;
+                                cls.null_pad();
                             }
                             cls
                         })
@@ -862,13 +870,13 @@ impl EquivalenceGroup {
                                 .map(|cls| {
                                     let mut cls = cls.try_with_offset(left_size as _)?;
                                     // Rows without a match on the right side are
-                                    // padded with NULLs, so its constants no
-                                    // longer hold.
+                                    // padded with NULLs, so its constants and computed
+                                    // equalities no longer hold.
                                     if matches!(
                                         join_type,
                                         JoinType::Left | JoinType::Full
                                     ) {
-                                        cls.constant = None;
+                                        cls.null_pad();
                                     }
                                     Ok(cls)
                                 })
