@@ -2132,7 +2132,7 @@ fn get_preimage(
     if func.signature().volatility != Volatility::Immutable {
         return Ok(PreimageResult::None);
     }
-    // We can get duplicate expressions due to preimage rewrites
+    // We can get duplicate expressions due to preimage rewrites due to volatile arguments
     if args.iter().any(Expr::is_volatile) {
         return Ok(PreimageResult::None);
     }
