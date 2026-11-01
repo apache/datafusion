@@ -2,10 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion_common::Result;
 use futures::Stream;
+use futures::future::BoxFuture;
 use std::io::Write;
 use std::path::Path;
 use std::pin::Pin;
@@ -13,7 +13,6 @@ use std::sync::Arc;
 
 /// Abstraction over a spill file backend.
 /// Implementations handle their own quota enforcement and blocking concerns.
-#[async_trait]
 pub trait SpillFile: Send + Sync {
     /// Returns the OS path if this is a local file, None otherwise.
     fn path(&self) -> Option<&Path> {
@@ -34,10 +33,14 @@ pub trait SpillFile: Send + Sync {
     /// The default implementation adapts [`Self::open_writer`] for backwards
     /// compatibility. Backends with native asynchronous I/O should override
     /// this method to avoid blocking an async executor.
-    async fn open_async_writer(&self) -> Result<Box<dyn AsyncSpillWriter>> {
-        Ok(Box::new(BlockingSpillWriterAdapter {
-            inner: self.open_writer()?,
-        }))
+    fn open_async_writer<'a>(
+        &'a self,
+    ) -> BoxFuture<'a, Result<Box<dyn AsyncSpillWriter>>> {
+        Box::pin(async move {
+            Ok(Box::new(BlockingSpillWriterAdapter {
+                inner: self.open_writer()?,
+            }) as Box<dyn AsyncSpillWriter>)
+        })
     }
 }
 
@@ -60,24 +63,23 @@ pub trait SpillWriter: Write + Send {
 /// DataFusion makes a best-effort attempt to abort writers dropped by query
 /// cancellation. Backends should still configure lifecycle cleanup for
 /// abandoned uploads because cleanup cannot run after process termination.
-#[async_trait]
 pub trait AsyncSpillWriter: Send {
     /// Writes all bytes in `data` to the spill file.
-    async fn write_all(&mut self, data: Bytes) -> Result<()>;
+    fn write_all<'a>(&'a mut self, data: Bytes) -> BoxFuture<'a, Result<()>>;
 
     /// Flushes buffered data, if supported by the backend.
     ///
     /// This does not finish the writer or require the spill file to become
     /// visible to readers. [`Self::finish`] is the commit boundary.
-    async fn flush(&mut self) -> Result<()> {
-        Ok(())
+    fn flush<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
     }
 
     /// Finishes and commits the spill file.
     ///
     /// A successful call is terminal. If committing returns an error, the
     /// caller will invoke [`Self::abort`] before dropping the writer.
-    async fn finish(&mut self) -> Result<()>;
+    fn finish<'a>(&'a mut self) -> BoxFuture<'a, Result<()>>;
 
     /// Aborts an uncommitted spill write and cleans up backend resources.
     ///
@@ -88,8 +90,8 @@ pub trait AsyncSpillWriter: Send {
     /// Implementations should bound their own abort latency to avoid holding
     /// DataFusion's limited cleanup slots indefinitely. DataFusion does not
     /// impose a timeout because the caller's runtime may not have a time driver.
-    async fn abort(&mut self) -> Result<()> {
-        Ok(())
+    fn abort<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async { Ok(()) })
     }
 }
 
@@ -97,21 +99,26 @@ struct BlockingSpillWriterAdapter {
     inner: Box<dyn SpillWriter>,
 }
 
-#[async_trait]
 impl AsyncSpillWriter for BlockingSpillWriterAdapter {
-    async fn write_all(&mut self, data: Bytes) -> Result<()> {
-        self.inner.write_all(&data)?;
-        Ok(())
+    fn write_all<'a>(&'a mut self, data: Bytes) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            self.inner.write_all(&data)?;
+            Ok(())
+        })
     }
 
-    async fn flush(&mut self) -> Result<()> {
-        self.inner.flush()?;
-        Ok(())
+    fn flush<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            self.inner.flush()?;
+            Ok(())
+        })
     }
 
-    async fn finish(&mut self) -> Result<()> {
-        self.inner.flush()?;
-        self.inner.finish()
+    fn finish<'a>(&'a mut self) -> BoxFuture<'a, Result<()>> {
+        Box::pin(async move {
+            self.inner.flush()?;
+            self.inner.finish()
+        })
     }
 }
 

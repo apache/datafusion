@@ -2,12 +2,12 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use futures::future::BoxFuture;
 use std::fmt::{self, Formatter};
 use std::sync::Arc;
 
 use arrow::array::record_batch;
 use arrow::datatypes::{self as arrow_schema, SchemaRef};
-use async_trait::async_trait;
 use datafusion::catalog::{Session, TableProvider};
 use datafusion::common::Result;
 use datafusion::common::config::ConfigOptions;
@@ -170,7 +170,6 @@ impl PhysicalOptimizerRule for CustomLimitRule {
 #[derive(Debug, Clone)]
 struct CustomExec(Arc<dyn ExecutionPlan>);
 
-#[async_trait]
 impl TableProvider for CustomExec {
     fn schema(&self) -> SchemaRef {
         self.0.schema()
@@ -180,30 +179,33 @@ impl TableProvider for CustomExec {
         TableType::Base
     }
 
-    async fn scan(
-        &self,
-        _: &dyn Session,
-        projection: Option<&[usize]>,
-        _: &[Expr],
+    fn scan<'a>(
+        &'a self,
+        _: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        _: &'a [Expr],
         _: Option<usize>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(self.clone());
-        // Keep identity projections out of the plan so sort pushdown reaches
-        // this custom node before native projection-specific handling.
-        if let Some(projection) = projection
-            && !projection
-                .iter()
-                .copied()
-                .eq(0..self.0.schema().fields().len())
-        {
-            let expressions = ProjectionExprs::from_indices(projection, &self.0.schema());
-            Ok(Arc::new(ProjectionExec::try_new(
-                expressions.iter().cloned(),
-                plan,
-            )?))
-        } else {
-            Ok(plan)
-        }
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(async move {
+            let plan: Arc<dyn ExecutionPlan> = Arc::new(self.clone());
+            // Keep identity projections out of the plan so sort pushdown reaches
+            // this custom node before native projection-specific handling.
+            if let Some(projection) = projection
+                && !projection
+                    .iter()
+                    .copied()
+                    .eq(0..self.0.schema().fields().len())
+            {
+                let expressions =
+                    ProjectionExprs::from_indices(projection, &self.0.schema());
+                Ok(
+                    Arc::new(ProjectionExec::try_new(expressions.iter().cloned(), plan)?)
+                        as Arc<dyn ExecutionPlan>,
+                )
+            } else {
+                Ok(plan)
+            }
+        })
     }
 }
 

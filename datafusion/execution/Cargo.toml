@@ -54,7 +54,6 @@ sql = []
 [dependencies]
 arrow = { workspace = true }
 arrow-buffer = { workspace = true }
-async-trait = { workspace = true }
 bytes = { workspace = true }
 dashmap = { workspace = true }
 datafusion-common = { workspace = true, default-features = false }

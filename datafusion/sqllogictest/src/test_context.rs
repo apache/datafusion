@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use futures::future::BoxFuture;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
@@ -46,7 +47,6 @@ use range_partitioning::{
     register_range_sorted_time_bin_table,
 };
 
-use async_trait::async_trait;
 use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::memory_pool::UnboundedMemoryPool;
@@ -318,24 +318,24 @@ impl TestContext {
 struct StrictOrdersSchema {
     orders: Arc<dyn TableProvider>,
 }
-
-#[async_trait]
 impl SchemaProvider for StrictOrdersSchema {
     fn table_names(&self) -> Vec<String> {
         vec!["orders".to_string()]
     }
 
-    async fn table(
-        &self,
-        name: &str,
-    ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError> {
-        match name {
-            "orders" => Ok(Some(Arc::clone(&self.orders))),
-            other => panic!(
-                "unexpected table lookup: {other}. This maybe indicates a CTE reference was \
-                 incorrectly treated as a catalog table reference."
-            ),
-        }
+    fn table<'a>(
+        &'a self,
+        name: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>, DataFusionError>> {
+        Box::pin(async move {
+            match name {
+                "orders" => Ok(Some(Arc::clone(&self.orders))),
+                other => panic!(
+                    "unexpected table lookup: {other}. This maybe indicates a CTE reference was \
+                     incorrectly treated as a catalog table reference."
+                ),
+            }
+        })
     }
 
     fn table_exist(&self, name: &str) -> bool {
@@ -516,8 +516,6 @@ async fn register_parquet_missing_bounds(test_ctx: &mut TestContext) {
 pub fn register_temp_table(ctx: &SessionContext) {
     #[derive(Debug)]
     struct TestTable(TableType);
-
-    #[async_trait]
     impl TableProvider for TestTable {
         fn schema(&self) -> SchemaRef {
             unimplemented!()
@@ -527,14 +525,14 @@ pub fn register_temp_table(ctx: &SessionContext) {
             self.0
         }
 
-        async fn scan(
-            &self,
-            _state: &dyn Session,
-            _: Option<&[usize]>,
-            _: &[Expr],
+        fn scan<'a>(
+            &'a self,
+            _state: &'a dyn Session,
+            _: Option<&'a [usize]>,
+            _: &'a [Expr],
             _: Option<usize>,
-        ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-            unimplemented!()
+        ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>, DataFusionError>> {
+            Box::pin(async move { unimplemented!() })
         }
     }
 
@@ -900,13 +898,12 @@ fn register_async_abs_udf(ctx: &SessionContext) {
             not_impl_err!("{} can only be called from async contexts", self.name())
         }
     }
-    #[async_trait]
     impl AsyncScalarUDFImpl for AsyncAbs {
-        async fn invoke_async_with_args(
+        fn invoke_async_with_args(
             &self,
             args: ScalarFunctionArgs,
-        ) -> Result<ColumnarValue> {
-            return self.inner_abs.invoke_with_args(args);
+        ) -> BoxFuture<'_, Result<ColumnarValue>> {
+            Box::pin(async move { self.inner_abs.invoke_with_args(args) })
         }
     }
     let async_abs = AsyncAbs::new();

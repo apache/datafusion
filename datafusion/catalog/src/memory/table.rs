@@ -42,7 +42,6 @@ use datafusion_physical_plan::{
 };
 use datafusion_session::Session;
 
-use async_trait::async_trait;
 use futures::future::BoxFuture;
 use log::debug;
 use parking_lot::Mutex;
@@ -167,8 +166,6 @@ impl MemTable {
         MemTable::try_new(schema, data).map(|table| table.with_constraints(constraints))
     }
 }
-
-#[async_trait]
 impl TableProvider for MemTable {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.schema)
@@ -182,22 +179,13 @@ impl TableProvider for MemTable {
         TableType::Base
     }
 
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
-        &'life0 self,
-        state: &'life1 dyn Session,
-        projection: Option<&'life2 [usize]>,
-        filters: &'life3 [Expr],
+    fn scan<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
         limit: Option<usize>,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        'life2: 'async_trait,
-        'life3: 'async_trait,
-        Self: 'async_trait,
-    {
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         self.scan_boxed(state, projection, filters, limit)
     }
 
@@ -215,19 +203,12 @@ impl TableProvider for MemTable {
     /// * A plan that returns the number of rows written.
     ///
     /// [`SessionState`]: https://docs.rs/datafusion/latest/datafusion/execution/session_state/struct.SessionState.html
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn insert_into<'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        state: &'life1 dyn Session,
+    fn insert_into<'a>(
+        &'a self,
+        state: &'a dyn Session,
         input: Arc<dyn ExecutionPlan>,
         insert_op: InsertOp,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         self.insert_into_boxed(state, input, insert_op)
     }
 
@@ -235,35 +216,21 @@ impl TableProvider for MemTable {
         self.column_defaults.get(column)
     }
 
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn delete_from<'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        state: &'life1 dyn Session,
+    fn delete_from<'a>(
+        &'a self,
+        state: &'a dyn Session,
         filters: Vec<Expr>,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         // Planning a `DELETE` needs no await, so the future is ready at once.
         Box::pin(ready(self.delete_from_inner(state, &filters)))
     }
 
-    // Hand-written `#[async_trait]` expansion to reduce compile time. See
-    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
-    fn update<'life0, 'life1, 'async_trait>(
-        &'life0 self,
-        state: &'life1 dyn Session,
+    fn update<'a>(
+        &'a self,
+        state: &'a dyn Session,
         assignments: Vec<(String, Expr)>,
         filters: Vec<Expr>,
-    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
-    where
-        'life0: 'async_trait,
-        'life1: 'async_trait,
-        Self: 'async_trait,
-    {
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
         // Planning an `UPDATE` needs no await, so the future is ready at once.
         Box::pin(ready(self.update_inner(state, &assignments, &filters)))
     }

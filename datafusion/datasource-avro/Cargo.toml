@@ -42,7 +42,6 @@ proto = [
 [dependencies]
 arrow = { workspace = true }
 arrow-avro = { workspace = true }
-async-trait = { workspace = true }
 bytes = { workspace = true }
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }

@@ -2,11 +2,11 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use futures::future::BoxFuture;
 use std::process::Command;
 
 use rstest::rstest;
 
-use async_trait::async_trait;
 use futures::TryStreamExt;
 use insta::internals::SettingsBindDropGuard;
 use insta::{Settings, glob};
@@ -902,26 +902,26 @@ SELECT * from CARS LIMIT 1;
 }
 
 /// Add the RustFS connection information to a Command.
-#[async_trait]
 trait RustfsCommandExt {
-    async fn with_rustfs(
-        &mut self,
-        container: &ContainerAsync<GenericImage>,
-    ) -> &mut Self;
+    fn with_rustfs<'a>(
+        &'a mut self,
+        container: &'a ContainerAsync<GenericImage>,
+    ) -> BoxFuture<'a, &'a mut Self>;
 }
 
-#[async_trait]
 impl RustfsCommandExt for Command {
-    async fn with_rustfs(
-        &mut self,
-        container: &ContainerAsync<GenericImage>,
-    ) -> &mut Self {
-        let port = container.get_host_port_ipv4(9000).await.unwrap();
+    fn with_rustfs<'a>(
+        &'a mut self,
+        container: &'a ContainerAsync<GenericImage>,
+    ) -> BoxFuture<'a, &'a mut Self> {
+        Box::pin(async move {
+            let port = container.get_host_port_ipv4(9000).await.unwrap();
 
-        self.env_clear()
-            .env("AWS_ACCESS_KEY_ID", RUSTFS_ACCESS_KEY)
-            .env("AWS_SECRET_ACCESS_KEY", RUSTFS_SECRET_KEY)
-            .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
-            .env("AWS_ALLOW_HTTP", "true")
+            self.env_clear()
+                .env("AWS_ACCESS_KEY_ID", RUSTFS_ACCESS_KEY)
+                .env("AWS_SECRET_ACCESS_KEY", RUSTFS_SECRET_KEY)
+                .env("AWS_ENDPOINT", format!("http://localhost:{port}"))
+                .env("AWS_ALLOW_HTTP", "true")
+        })
     }
 }

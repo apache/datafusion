@@ -13,6 +13,7 @@ mod tests {
     use crate::test_util::parquet_test_data;
     use datafusion_common::test_util::batches_to_string;
     use datafusion_expr::{col, lit};
+    use futures::future::BoxFuture;
 
     #[tokio::test]
     async fn issue_3242() -> Result<()> {
@@ -451,7 +452,6 @@ mod tests {
     #[derive(Debug)]
     struct NotInlinedView(crate::datasource::ViewTable);
 
-    #[async_trait::async_trait]
     impl crate::datasource::TableProvider for NotInlinedView {
         fn schema(&self) -> arrow::datatypes::SchemaRef {
             self.0.schema()
@@ -461,14 +461,15 @@ mod tests {
             self.0.table_type()
         }
 
-        async fn scan(
-            &self,
-            state: &dyn crate::catalog::Session,
-            projection: Option<&[usize]>,
-            filters: &[datafusion_expr::Expr],
+        fn scan<'a>(
+            &'a self,
+            state: &'a dyn crate::catalog::Session,
+            projection: Option<&'a [usize]>,
+            filters: &'a [datafusion_expr::Expr],
             limit: Option<usize>,
-        ) -> Result<std::sync::Arc<dyn crate::physical_plan::ExecutionPlan>> {
-            self.0.scan(state, projection, filters, limit).await
+        ) -> BoxFuture<'a, Result<std::sync::Arc<dyn crate::physical_plan::ExecutionPlan>>>
+        {
+            Box::pin(async move { self.0.scan(state, projection, filters, limit).await })
         }
     }
 

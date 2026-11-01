@@ -1751,7 +1751,6 @@ mod tests {
     use std::fmt::{Debug, Formatter};
 
     use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
-    use async_trait::async_trait;
 
     use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue, Spans};
     use datafusion_expr::expr::{ScalarFunction, SetComparison, SetQuantifier};
@@ -3464,8 +3463,6 @@ mod tests {
     struct PushDownProvider {
         pub filter_support: TableProviderFilterPushDown,
     }
-
-    #[async_trait]
     impl TableSource for PushDownProvider {
         fn schema(&self) -> SchemaRef {
             Arc::new(Schema::new(vec![
