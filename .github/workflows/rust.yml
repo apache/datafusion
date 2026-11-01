@@ -462,8 +462,6 @@ jobs:
           save-if: ${{ github.ref_name == 'main' }}
           shared-key: "amd-ci"
       - name: Run tests (excluding doctests and datafusion-cli)
-        env:
-          RUST_BACKTRACE: 1
         run: cargo xtask ci step test workspace
       - name: Run SQLLogicTests with coverage
         env:
@@ -533,13 +531,6 @@ jobs:
           ci/scripts/retry timeout 120 docker pull "$RUSTFS_IMAGE" \
             || echo "::warning::Could not pre-pull $RUSTFS_IMAGE, the tests will pull it themselves"
       - name: Run tests (excluding doctests)
-        env:
-          RUST_BACKTRACE: 1
-          AWS_ENDPOINT: http://127.0.0.1:9000
-          AWS_ACCESS_KEY_ID: TEST-DataFusionLogin
-          AWS_SECRET_ACCESS_KEY: TEST-DataFusionPassword
-          TEST_STORAGE_INTEGRATION: 1
-          AWS_ALLOW_HTTP: true
         run: cargo xtask ci step test cli
       - name: Verify Working Directory Clean
         run: git diff --exit-code

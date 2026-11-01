@@ -1333,6 +1333,168 @@ RESET datafusion.execution.parquet.pushdown_filters;
 statement ok
 drop table t;
 
+##########
+# Casting a timestamp to a time-of-day wraps at midnight
+#
+# https://github.com/apache/datafusion/issues/26451
+##########
+
+# Pruning must never change a query's answer. A cast whose output does not
+# preserve the ordering of its input can invert the bounds derived from
+# statistics, which makes pruning discard row groups that do contain matching
+# rows. Every predicate below is therefore run twice: once against an
+# in-memory table, which is never pruned and so gives the ground truth, and
+# once against the same rows stored as Parquet. The two must agree.
+
+# Three timestamps at 23:00, 00:00 and 01:00, written as a single row group so
+# that the row group's min/max bracket midnight. Casting those bounds to
+# time-of-day turns them into 23:00:00 and 01:00:00, which excludes every value
+# that actually lies between them.
+statement ok
+CREATE TABLE source_data(ts TIMESTAMP) AS VALUES
+  (TIMESTAMP '2024-03-10 23:00:00'),
+  (TIMESTAMP '2024-03-11 00:00:00'),
+  (TIMESTAMP '2024-03-11 01:00:00');
+
+statement ok
+COPY (SELECT ts FROM source_data)
+TO 'test_files/scratch/push_down_filter_parquet/timestamp_to_time/timestamps.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '3');
+
+statement ok
+CREATE EXTERNAL TABLE timestamps
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/timestamp_to_time/timestamps.parquet';
+
+# Equality against the row at midnight.
+query P
+SELECT ts FROM source_data WHERE CAST(ts AS TIME) = TIME '00:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00
+
+query P
+SELECT ts FROM timestamps WHERE CAST(ts AS TIME) = TIME '00:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00
+
+# Range predicate spanning the wrap point.
+query P
+SELECT ts FROM source_data WHERE CAST(ts AS TIME) < TIME '02:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00
+2024-03-11T01:00:00
+
+query P
+SELECT ts FROM timestamps WHERE CAST(ts AS TIME) < TIME '02:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00
+2024-03-11T01:00:00
+
+# The same predicates spelled with arrow_cast, which also reaches Time32.
+query P
+SELECT ts FROM source_data
+WHERE arrow_cast(ts, 'Time32(Second)') = arrow_cast('00:00:00', 'Time32(Second)')
+ORDER BY ts;
+----
+2024-03-11T00:00:00
+
+query P
+SELECT ts FROM timestamps
+WHERE arrow_cast(ts, 'Time32(Second)') = arrow_cast('00:00:00', 'Time32(Second)')
+ORDER BY ts;
+----
+2024-03-11T00:00:00
+
+query P
+SELECT ts FROM source_data
+WHERE arrow_cast(ts, 'Time32(Second)') < arrow_cast('02:00:00', 'Time32(Second)')
+ORDER BY ts;
+----
+2024-03-11T00:00:00
+2024-03-11T01:00:00
+
+query P
+SELECT ts FROM timestamps
+WHERE arrow_cast(ts, 'Time32(Second)') < arrow_cast('02:00:00', 'Time32(Second)')
+ORDER BY ts;
+----
+2024-03-11T00:00:00
+2024-03-11T01:00:00
+
+statement ok
+DROP TABLE timestamps;
+
+##########
+# The same wrap happens at the local midnight of a timezone-aware column
+##########
+
+# The same three local wall-clock times, tagged +05:00, so the instants
+# actually stored are 18:00, 19:00 and 20:00 UTC on 2024-03-10. Those are
+# monotonic and fall inside a single UTC day, so the min/max bounds only
+# invert if the cast honours the column's timezone.
+statement ok
+CREATE TABLE source_data_tz AS
+SELECT arrow_cast(ts, 'Timestamp(Nanosecond, Some("+05:00"))') AS ts
+FROM source_data;
+
+statement ok
+DROP TABLE source_data;
+
+statement ok
+COPY (SELECT ts FROM source_data_tz)
+TO 'test_files/scratch/push_down_filter_parquet/timestamp_to_time/timestamps_tz.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '3');
+
+statement ok
+CREATE EXTERNAL TABLE timestamps_tz
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/timestamp_to_time/timestamps_tz.parquet';
+
+# Pin the shape of the data this section depends on: the local times have to
+# straddle a local midnight while the stored instants stay monotonic within a
+# single UTC day. Without this, a change to how a timezone is attached would
+# leave the queries below passing while no longer exercising the wrap at all.
+query TIT
+SELECT
+  ts::string AS local_time,
+  to_unixtime(ts) AS stored_instant,
+  CAST(ts AS TIME)::string AS time_of_day
+FROM timestamps_tz ORDER BY ts;
+----
+2024-03-10T23:00:00+05:00 1710093600 23:00:00
+2024-03-11T00:00:00+05:00 1710097200 00:00:00
+2024-03-11T01:00:00+05:00 1710100800 01:00:00
+
+query P
+SELECT ts FROM source_data_tz WHERE CAST(ts AS TIME) = TIME '00:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00+05:00
+
+query P
+SELECT ts FROM timestamps_tz WHERE CAST(ts AS TIME) = TIME '00:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00+05:00
+
+query P
+SELECT ts FROM source_data_tz WHERE CAST(ts AS TIME) < TIME '02:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00+05:00
+2024-03-11T01:00:00+05:00
+
+query P
+SELECT ts FROM timestamps_tz WHERE CAST(ts AS TIME) < TIME '02:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00+05:00
+2024-03-11T01:00:00+05:00
+
+statement ok
+DROP TABLE timestamps_tz;
+
+statement ok
+DROP TABLE source_data_tz;
+
 # A predicate that the Parquet scan keeps only for pruning
 # (pushdown_filters = false) must not make the scan claim equivalences.
 # Each file is sorted by (a, b). If the scan claims that `a` is constant,

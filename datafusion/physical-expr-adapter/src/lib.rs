@@ -17,5 +17,5 @@ pub mod schema_rewriter;
 pub use schema_rewriter::{
     BatchAdapter, BatchAdapterFactory, DefaultPhysicalExprAdapter,
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
-    replace_columns_with_literals,
+    replace_columns_with_literals, replace_columns_with_literals_keeping_metadata,
 };

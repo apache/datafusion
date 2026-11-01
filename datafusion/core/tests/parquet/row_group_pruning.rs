@@ -7,8 +7,8 @@
 //! expected.
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array, RecordBatch};
-use arrow_schema::{DataType, Field, Schema};
+use arrow::array::{ArrayRef, Int32Array, RecordBatch, TimestampSecondArray};
+use arrow_schema::{DataType, Field, Schema, TimeUnit};
 use datafusion::prelude::SessionConfig;
 use datafusion_common::{DataFusionError, ScalarValue};
 use itertools::Itertools;
@@ -291,6 +291,51 @@ async fn prune_timestamps_seconds() {
         .with_expected_rows(10)
         .test_row_group_prune()
         .await;
+}
+
+#[tokio::test]
+async fn timestamp_to_time_cast_across_midnight_is_not_pruned() {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "ts",
+        DataType::Timestamp(TimeUnit::Second, None),
+        false,
+    )]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(TimestampSecondArray::from(vec![
+            82_800, 86_400, 90_000,
+        ]))],
+    )
+    .unwrap();
+
+    for (time_type, op, literal, expected_rows) in [
+        ("Time32(Second)", "=", "00:00:00", 1),
+        ("Time32(Second)", "<", "02:00:00", 2),
+        ("Time64(Nanosecond)", "=", "00:00:00", 1),
+        ("Time64(Nanosecond)", "<", "02:00:00", 2),
+    ] {
+        let query = format!(
+            "SELECT ts FROM t WHERE arrow_cast(ts, '{time_type}') {op} \
+             arrow_cast('{literal}', '{time_type}')"
+        );
+
+        RowGroupPruningTest::new()
+            .with_scenario(Scenario::Timestamps)
+            .with_query(&query)
+            .with_expected_errors(Some(0))
+            .with_matched_by_stats(Some(1))
+            .with_fully_matched_by_stats(Some(0))
+            .with_pruned_by_stats(Some(0))
+            .with_pruned_files(Some(0))
+            .with_limit_pruned_row_groups(Some(0))
+            .with_expected_rows(expected_rows)
+            .test_row_group_prune_with_custom_data(
+                Arc::clone(&schema),
+                vec![batch.clone()],
+                3,
+            )
+            .await;
+    }
 }
 
 #[tokio::test]
