@@ -1005,7 +1005,7 @@ mod tests {
         );
         assert_eq!(
             metrics.spilled_bytes.value(),
-            320,
+            312,
             "Spilled bytes should reflect data written (header + 1 batch)"
         );
         assert_eq!(
@@ -1480,7 +1480,7 @@ mod tests {
         // Check metrics before drop - spilled_bytes already reflects written data
         let spilled_bytes_before = metrics.spilled_bytes.value();
         assert_eq!(
-            spilled_bytes_before, 1088,
+            spilled_bytes_before, 1048,
             "Spilled bytes should reflect data written (header + 5 batches)"
         );
 

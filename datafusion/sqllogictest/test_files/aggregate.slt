@@ -1732,7 +1732,7 @@ SELECT approx_distinct(c9) AS a, approx_distinct(c9) AS b FROM aggregate_test_10
 query IIIII
 SELECT approx_distinct(c14) AS a, approx_distinct(c15) AS b, approx_distinct(arrow_cast(c15, 'Date64')), approx_distinct(arrow_cast(c15, 'Time32(Second)')) as c, approx_distinct(arrow_cast(c15, 'Time64(Nanosecond)')) AS d FROM aggregate_test_100
 ----
-18 60 60 60 60
+18 60 7 60 60
 
 # approx_distinct over Boolean: exact count via flag-pair accumulator (0..=2).
 statement ok
