@@ -434,6 +434,7 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 })
                 .transpose()?,
             bloom_filter_on_read: proto.bloom_filter_on_read,
+            dictionary_filter_on_read: proto.dictionary_filter_on_read,
             bloom_filter_on_write: proto.bloom_filter_on_write,
             bloom_filter_fpp: proto
                 .bloom_filter_fpp_opt
