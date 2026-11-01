@@ -213,11 +213,7 @@ async fn sized_merge_retains_reservation_until_builder_drop() -> Result<()> {
         build_merge_builder(spill_manager, Arc::clone(&schema), files, &pool, ROWS)
             .with_replay_headroom(true)
             .with_intermediate_merge_sizing(Some(ROWS));
-    let MergeStep::Stream { stream, .. } =
-        builder.merge_sorted_runs_within_mem_limit(false)?
-    else {
-        panic!("six inputs should be selected for the intermediate merge");
-    };
+    let stream = builder.merge_sorted_runs_within_mem_limit()?;
     assert_eq!(builder.sorted_spill_files.len(), 2);
     let retained = 4 * 7 * batch_memory;
     assert_eq!(builder.reservation.size(), retained);
