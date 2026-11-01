@@ -17,7 +17,7 @@ use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::expr_schema::ExprSchemable;
 use datafusion_expr::{
-    AggregateUDF, Expr, cast, col,
+    AggregateUDF, DistinctHandling, Expr, cast, col,
     expr::AggregateFunction,
     lit,
     logical_plan::{Aggregate, LogicalPlan},
@@ -164,9 +164,10 @@ fn is_single_distinct_agg(
 
     // Aggregates with DistinctHandling::Unsupported (e.g. approx_median) cannot
     // run natively with DISTINCT; they must always be rewritten.
-    if distinct_aggs.iter().any(|(func, _)| {
-        func.distinct_handling() == datafusion_expr::DistinctHandling::Unsupported
-    }) {
+    if distinct_aggs
+        .iter()
+        .any(|(func, _)| func.distinct_handling() == DistinctHandling::Unsupported)
+    {
         return Ok(true);
     }
 
@@ -1421,8 +1422,8 @@ mod tests {
             unimplemented!("not needed for optimizer tests")
         }
 
-        fn distinct_handling(&self) -> datafusion_expr::DistinctHandling {
-            datafusion_expr::DistinctHandling::Unsupported
+        fn distinct_handling(&self) -> DistinctHandling {
+            DistinctHandling::Unsupported
         }
     }
 
