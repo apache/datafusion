@@ -63,6 +63,14 @@ pub struct BatchBuilder {
     /// The accumulated stream indexes from which to pull rows
     /// Consists of a tuple of `(batch_idx, row_idx)`
     indices: Vec<(usize, usize)>,
+
+    /// Average row size of the current batch of each stream, set by
+    /// [`Self::push_batch`]. Empty unless [`Self::track_pending_bytes`] was called.
+    row_bytes: Vec<usize>,
+
+    /// Estimated size of the rows in `indices`: the sum of their batches'
+    /// average row sizes.
+    pending_bytes: usize,
 }
 
 impl BatchBuilder {
@@ -79,6 +87,8 @@ impl BatchBuilder {
             batches: Vec::with_capacity(stream_count * 2),
             cursors: vec![BatchCursor::RELEASED; stream_count],
             indices: Vec::with_capacity(batch_size),
+            row_bytes: vec![],
+            pending_bytes: 0,
             reservation,
             batches_mem_used: 0,
             initial_reservation,
@@ -88,6 +98,9 @@ impl BatchBuilder {
     /// Append a new batch in `stream_idx`
     pub fn push_batch(&mut self, stream_idx: usize, batch: RecordBatch) -> Result<()> {
         let size = get_record_batch_memory_size(&batch);
+        if let Some(row_bytes) = self.row_bytes.get_mut(stream_idx) {
+            *row_bytes = size.div_ceil(batch.num_rows().max(1));
+        }
         self.batches_mem_used += size;
         // Only request additional memory from the pool when actual batch
         // usage exceeds the current reservation (which may include
@@ -116,11 +129,26 @@ impl BatchBuilder {
         let row_idx = cursor.row_idx;
         cursor.row_idx += 1;
         self.indices.push((cursor.batch_idx, row_idx));
+        if let Some(row_bytes) = self.row_bytes.get(stream_idx) {
+            self.pending_bytes += row_bytes;
+        }
     }
 
     /// Returns the number of in-progress rows in this [`BatchBuilder`]
     pub fn len(&self) -> usize {
         self.indices.len()
+    }
+
+    /// Starts estimating [`Self::pending_bytes`]. Merges that do not cap their
+    /// output by bytes skip the per-row bookkeeping.
+    pub fn track_pending_bytes(&mut self) {
+        self.row_bytes = vec![0; self.cursors.len()];
+    }
+
+    /// Estimated in-memory size of the batch [`Self::build_record_batch`] would
+    /// build now, if [`Self::track_pending_bytes`] was called, otherwise 0.
+    pub fn pending_bytes(&self) -> usize {
+        self.pending_bytes
     }
 
     /// Returns `true` if this [`BatchBuilder`] contains no in-progress rows
@@ -161,7 +189,9 @@ impl BatchBuilder {
         columns: Vec<ArrayRef>,
     ) -> Result<RecordBatch> {
         // Remove consumed indices, keeping any remaining for the next call.
+        let rows_before = self.indices.len();
         self.indices.drain(..rows_to_emit);
+        self.pending_bytes = self.pending_bytes * self.indices.len() / rows_before;
 
         if self.indices.is_empty() {
             self.retain_cursor_batches();

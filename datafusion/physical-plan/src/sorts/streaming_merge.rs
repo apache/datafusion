@@ -30,7 +30,7 @@ macro_rules! primitive_merge_helper {
 }
 
 macro_rules! merge_helper {
-    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
+    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $max_batch_bytes:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
         let streams =
             FieldCursorStream::<$t>::new($sort, $streams, $reservation.new_empty());
         return Ok(SortPreservingMergeStream::new(
@@ -42,6 +42,7 @@ macro_rules! merge_helper {
             $reservation,
             $enable_round_robin_tie_breaker,
         )
+        .with_max_batch_bytes($max_batch_bytes)
         .into_stream());
     }};
 }
@@ -86,6 +87,7 @@ pub struct StreamingMergeBuilder<'a> {
     /// Leave memory for the aggregate consuming the merged spill rows.
     reserve_replay_headroom: bool,
     min_spill_batch_rows: Option<usize>,
+    max_batch_bytes: Option<usize>,
     enable_round_robin_tie_breaker: bool,
 }
 
@@ -171,6 +173,14 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
+    /// Emit a batch once it holds about this many bytes, even if it has fewer
+    /// than `batch_size` rows. Set by [`MultiLevelMergeBuilder`] for merges of
+    /// spilled runs.
+    pub(super) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
+        self.max_batch_bytes = max_batch_bytes;
+        self
+    }
+
     /// See [SortPreservingMergeExec::with_round_robin_repartition] for more
     /// information.
     ///
@@ -206,6 +216,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             merge_pool,
             reserve_replay_headroom,
             min_spill_batch_rows,
+            max_batch_bytes,
             fetch,
             expressions,
             enable_round_robin_tie_breaker,
@@ -268,12 +279,12 @@ impl<'a> StreamingMergeBuilder<'a> {
             let sort = expressions[0].clone();
             let data_type = sort.expr.data_type(schema.as_ref())?;
             downcast_primitive! {
-                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker),
-                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::Utf8View => merge_helper!(StringViewArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
+                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker),
+                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::Utf8View => merge_helper!(StringViewArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
                 _ => {}
             }
         }
@@ -293,6 +304,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             reservation,
             enable_round_robin_tie_breaker,
         )
+        .with_max_batch_bytes(max_batch_bytes)
         .into_stream())
     }
 }

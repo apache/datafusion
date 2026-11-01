@@ -30,6 +30,7 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::IncrementalSortIterator;
+use crate::sorts::multi_level_merge::max_spill_batch_bytes;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
@@ -348,7 +349,8 @@ impl ExternalSorter {
             metrics.spill_metrics.clone(),
             Arc::clone(&schema),
         )
-        .with_compression_type(spill_compression);
+        .with_compression_type(spill_compression)
+        .with_max_batch_bytes(max_spill_batch_bytes(sort_spill_reservation_bytes));
 
         let in_mem_batches_counter = (!schema
             .fields()

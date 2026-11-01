@@ -24,6 +24,7 @@ use std::vec;
 use super::aggregate_hash_table::{accumulator_phases, create_group_accumulator};
 use super::order::GroupClustering;
 use super::skip_partial::SkipAggregationProbe;
+use super::spill::bound_spill_batches_by_first_spill;
 use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
@@ -36,6 +37,7 @@ use crate::aggregates::{
     group_id_array, max_duplicate_ordinal,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
+use crate::sorts::multi_level_merge::max_spill_batch_bytes;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::stream::EmptyRecordBatchStream;
@@ -560,7 +562,14 @@ impl GroupedHashAggregateStream {
             metrics::SpillMetrics::new(&agg.metrics, partition),
             Arc::clone(&spill_schema),
         )
-        .with_compression_type(context.session_config().spill_compression());
+        .with_compression_type(context.session_config().spill_compression())
+        .with_max_batch_bytes(max_spill_batch_bytes(
+            context
+                .session_config()
+                .options()
+                .execution
+                .sort_spill_reservation_bytes,
+        ));
 
         let spill_state = SpillState {
             spills: vec![],
@@ -1249,6 +1258,13 @@ impl GroupedHashAggregateStream {
                 "Failed to reserve memory for sort during spill: {err}"
             )
         })?;
+
+        if self.spill_state.spills.is_empty() {
+            self.spill_state.spill_manager = bound_spill_batches_by_first_spill(
+                &self.spill_state.spill_manager,
+                &emit,
+            )?;
+        }
 
         let sorted_iter = IncrementalSortIterator::new(
             emit,

@@ -152,6 +152,23 @@ pub(crate) struct MultiLevelMergeBuilder {
     enable_round_robin_tie_breaker: bool,
 }
 
+/// Largest in-memory size of a batch in a sorted spill run, such that the
+/// smallest merge (two runs, one batch read ahead from each) fits in
+/// `merge_memory`. Each batch is charged twice its size (see
+/// [`get_reserved_bytes_for_record_batch_size`]).
+///
+/// The sort passes `sort_spill_reservation_bytes`, the workspace it holds for
+/// its merge. The aggregate, which holds no workspace, also passes half of the
+/// memory it held when it spilled.
+pub(crate) fn max_spill_batch_bytes(merge_memory: usize) -> usize {
+    const MIN_SPILL_BATCH_BYTES: usize = 64 * 1024;
+    let per_batch = get_reserved_bytes_for_record_batch_size(1, 1);
+    (merge_memory / (MIN_SPILL_MERGE_FAN_IN * per_batch)).max(MIN_SPILL_BATCH_BYTES)
+}
+
+/// A merge pass needs at least two inputs to make progress.
+const MIN_SPILL_MERGE_FAN_IN: usize = 2;
+
 impl Debug for MultiLevelMergeBuilder {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "MultiLevelMergeBuilder")
@@ -521,6 +538,7 @@ impl MultiLevelMergeBuilder {
             .with_schema(Arc::clone(&self.schema))
             .with_expressions(&self.expr)
             .with_batch_size(output_batch_size)
+            .with_max_batch_bytes(self.spill_manager.max_batch_bytes())
             .with_fetch(self.fetch)
             .with_metrics(if is_output {
                 // Only add the metrics to the last run
@@ -898,7 +916,7 @@ fn effective_spill_merge_fan_in(configured_fan_in: usize) -> usize {
     if configured_fan_in == 0 {
         usize::MAX
     } else {
-        configured_fan_in.max(2)
+        configured_fan_in.max(MIN_SPILL_MERGE_FAN_IN)
     }
 }
 
