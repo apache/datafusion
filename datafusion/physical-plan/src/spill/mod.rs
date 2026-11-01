@@ -7,6 +7,7 @@
 pub(crate) mod in_progress_spill_file;
 pub(crate) mod replayable_spill_input;
 pub(crate) mod spill_manager;
+pub(crate) mod spill_pieces;
 pub mod spill_pool;
 use datafusion_execution::spill_file::{AsyncSpillWriter, SpillWriter};
 // Moved for refactor, re-export to keep the public API stable

@@ -12,8 +12,8 @@ use datafusion_common::exec_datafusion_err;
 use datafusion_execution::spill_file::SpillFile;
 
 use super::{
-    AsyncIPCStreamWriter, IPCStreamEncoder, IPCStreamWriter, gc_view_arrays,
-    spill_manager::{GetSlicedSize, SpillManager},
+    AsyncIPCStreamWriter, IPCStreamEncoder, IPCStreamWriter, spill_manager::SpillManager,
+    spill_pieces::SpillPieces,
 };
 
 enum InProgressWriter {
@@ -50,7 +50,12 @@ impl InProgressSpillFile {
     /// buffers. When a view array is sliced, it still references the original full buffers,
     /// causing massive spill files without GC (see issue #19414: 820MB → 33MB after GC).
     ///
-    /// Returns the post-GC sliced memory size of the batch for memory accounting.
+    /// When the spill manager bounds batch bytes (see
+    /// [`SpillManager::with_max_batch_bytes`]), a larger batch is written as
+    /// several smaller batches in the same row order.
+    ///
+    /// Returns the post-GC sliced memory size of the largest batch written, which
+    /// is the largest batch a reader of the file decodes.
     ///
     /// # Errors
     /// - Returns an error if the file is not active (has been finalized)
@@ -63,7 +68,7 @@ impl InProgressSpillFile {
             ));
         }
 
-        let gc_batch = gc_view_arrays(batch)?;
+        let pieces = SpillPieces::new(batch, self.spill_manager.max_batch_bytes())?;
 
         if self.writer.is_none() {
             // Use the SpillManager's declared schema rather than the batch's schema.
@@ -84,18 +89,23 @@ impl InProgressSpillFile {
                 self.spill_manager.metrics.spill_file_count.add(1);
             }
         }
+        let mut max_size = 0;
         if let Some(InProgressWriter::Sync(writer)) = &mut self.writer {
-            // The writer calculates how many serialized bytes were emitted
-            let (spilled_rows, delta_bytes) = writer.write(&gc_batch)?;
+            for piece in pieces {
+                let (piece, size) = piece?;
+                // The writer calculates how many serialized bytes were emitted
+                let (spilled_rows, delta_bytes) = writer.write(&piece)?;
 
-            self.spill_manager.metrics.spilled_rows.add(spilled_rows);
-            self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+                self.spill_manager.metrics.spilled_rows.add(spilled_rows);
+                self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+                max_size = max_size.max(size);
+            }
         } else if self.writer.is_some() {
             return Err(exec_datafusion_err!(
                 "Cannot use synchronous append after asynchronous spill writing has started"
             ));
         }
-        gc_batch.get_sliced_size()
+        Ok(max_size)
     }
 
     /// Appends a `RecordBatch` using the asynchronous spill writer.
@@ -106,7 +116,7 @@ impl InProgressSpillFile {
             ));
         }
 
-        let gc_batch = gc_view_arrays(batch)?;
+        let pieces = SpillPieces::new(batch, self.spill_manager.max_batch_bytes())?;
 
         if self.writer.is_none() {
             let schema = self.spill_manager.schema();
@@ -128,12 +138,17 @@ impl InProgressSpillFile {
             }
         }
 
+        let mut max_size = 0;
         match &mut self.writer {
             Some(InProgressWriter::Async(writer)) => {
-                let (spilled_rows, delta_bytes) = writer.write(&gc_batch).await?;
+                for piece in pieces {
+                    let (piece, size) = piece?;
+                    let (spilled_rows, delta_bytes) = writer.write(&piece).await?;
 
-                self.spill_manager.metrics.spilled_rows.add(spilled_rows);
-                self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+                    self.spill_manager.metrics.spilled_rows.add(spilled_rows);
+                    self.spill_manager.metrics.spilled_bytes.add(delta_bytes);
+                    max_size = max_size.max(size);
+                }
             }
             Some(InProgressWriter::Sync(_)) => {
                 return Err(exec_datafusion_err!(
@@ -146,7 +161,7 @@ impl InProgressSpillFile {
                 ));
             }
         }
-        gc_batch.get_sliced_size()
+        Ok(max_size)
     }
 
     pub fn flush(&mut self) -> Result<()> {
