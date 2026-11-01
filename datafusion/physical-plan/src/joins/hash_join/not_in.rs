@@ -1244,12 +1244,14 @@ where
     /// is marked.
     ///
     /// When the pairs decide the build rows, the unmarked build rows are
-    /// paired in chunks of `batch_size` rows, and `probe_rows` is called
-    /// again for each chunk. Neither side is then held whole: a large build
-    /// side, as when this pairing stands in for a scope map that the memory
-    /// pool declined, or a probe batch larger than the batch size. A chunk is
-    /// filled with unmarked rows only, so a build side with few unmarked rows
-    /// left pairs them all at once, as a single chunk would.
+    /// paired in chunks of `batch_size` rows. Neither side is then held
+    /// whole: a large build side, as when this pairing stands in for a scope
+    /// map that the memory pool declined, or a probe batch larger than the
+    /// batch size. Up to `batch_size` probe rows are kept for every chunk.
+    /// More are produced again for each chunk by calling `probe_rows`, which
+    /// costs less than pairing them with the chunk. A chunk is filled with
+    /// unmarked rows only, so a build side with few unmarked rows left pairs
+    /// them all at once, as a single chunk would.
     fn cross_product<P: Iterator<Item = u32>>(
         &mut self,
         build_rows: impl Iterator<Item = u64>,
@@ -1257,8 +1259,15 @@ where
     ) -> Result<()> {
         match self.marks {
             UnknownMarks::Build(bitmap) => {
-                if probe_rows().next().is_none() {
+                // A few probe rows can be spread over a large probe batch, so
+                // keep them rather than walk the batch for every chunk.
+                let mut kept: Vec<u32> = probe_rows().take(self.batch_size + 1).collect();
+                if kept.is_empty() {
                     return Ok(());
+                }
+                let keep_probe_rows = kept.len() <= self.batch_size;
+                if !keep_probe_rows {
+                    kept = vec![];
                 }
                 let mut build_rows = build_rows.peekable();
                 let mut chunk = Vec::with_capacity(self.batch_size);
@@ -1275,7 +1284,13 @@ where
                     }
                     // The chunk holds no row marked so far.
                     self.needs_refresh = false;
-                    self.pair_unmarked(&mut chunk, probe_rows(), |b, p| (b, p))?;
+                    if keep_probe_rows {
+                        self.pair_unmarked(&mut chunk, kept.iter().copied(), |b, p| {
+                            (b, p)
+                        })?;
+                    } else {
+                        self.pair_unmarked(&mut chunk, probe_rows(), |b, p| (b, p))?;
+                    }
                 }
                 Ok(())
             }
@@ -1391,6 +1406,8 @@ where
         }
         let mut groups = hash_groups(&rest);
         if rest.is_empty() || !saves_work(rest.len(), groups.len()) {
+            // The groups are found again from where the lookups stop.
+            drop(groups);
             self.wasted_matches = 0;
             let Some((offset, _)) = self.lookup_each_row(
                 scope_map,
@@ -1916,6 +1933,7 @@ mod tests {
                 Ok(())
             };
 
+            let probe_walks = std::cell::Cell::new(0);
             let mut pairs = UnmarkedPairs::new(marks, self.batch_size, mark);
             if self.through_scope_map {
                 let mut scope_map = JoinHashMapU64::with_capacity(self.build_rows.len());
@@ -1937,6 +1955,7 @@ mod tests {
                 )?;
             } else {
                 pairs.cross_product(self.build_rows.iter().copied(), || {
+                    probe_walks.set(probe_walks.get() + 1);
                     self.probe_rows.iter().copied()
                 })?;
             }
@@ -1958,6 +1977,7 @@ mod tests {
                     max_decided_rows,
                     sends,
                     sent_pairs,
+                    probe_walks: probe_walks.get(),
                     foreign_marks,
                 },
             ))
@@ -1975,6 +1995,8 @@ mod tests {
         /// The chunks of pairs sent, and the pairs in them.
         sends: usize,
         sent_pairs: usize,
+        /// The calls of the `probe_rows` of a cross product.
+        probe_walks: usize,
         /// The rows that `foreign_marks` marked.
         foreign_marks: Vec<usize>,
     }
@@ -2163,8 +2185,9 @@ mod tests {
     }
 
     /// A cross product with marks on the build rows holds at most a batch of
-    /// build rows at once, however many build rows there are. No pair passes,
-    /// so no row is marked and every build row is paired.
+    /// build rows at once, however many build rows there are, and at most a
+    /// batch of probe rows. No pair passes, so no row is marked and every
+    /// build row is paired.
     #[test]
     fn cross_product_chunks_the_build_rows() -> Result<()> {
         let (num_build, batch_size) = (10_000, 64);
@@ -2185,6 +2208,17 @@ mod tests {
         let (marks, stats) = case.run()?;
         assert!(!marks.contains(&true));
         assert_eq!(stats.max_decided_rows, batch_size);
+        // The three probe rows are kept for all 157 chunks.
+        assert_eq!(stats.probe_walks, 1);
+        // More probe rows than a batch are produced again for each chunk.
+        let (marks, stats) = Case {
+            probe_keys: vec![0; batch_size + 1],
+            probe_rows: (0..=batch_size as u32).collect(),
+            ..case
+        }
+        .run()?;
+        assert!(!marks.contains(&true));
+        assert_eq!(stats.probe_walks, 1 + num_build.div_ceil(batch_size));
         Ok(())
     }
 
