@@ -489,22 +489,20 @@ next development version (such as `57.0.0-dev`) from
 must never appear on `main`.
 
 Instead, create a PR against `main` that syncs the changelog and updates the
-user facing documentation to reference the new release:
+user-facing documentation to reference the new release:
 
 ```shell
 git fetch apache && git checkout -b sync_change_log apache/main
 ```
 
 - Cherry-pick or patch the changelog updates from step 6
-- Update the crate version in the user facing examples to the newly released
+- Update the crate version in the user-facing examples to the newly released
   version, for example from `55.1.0` to `56.0.0`:
 
   ```shell
   sed -i '' 's/55\.1\.0/56.0.0/' docs/source/download.md docs/source/user-guide/{crate-configuration,example-usage}.md
   ```
 
-- Do **not** change `Cargo.toml`, `Cargo.lock`, `docs/source/user-guide/configs.md`
-  or `ci/scripts/release_version_labeler.js`, which must keep the `-dev` version
 - Commit changes, `git commit -a -m 'Sync changelog and docs for 56.0.0 to main'`
 - Push to `origin/sync_change_log`
 - Create a PR against `main`.

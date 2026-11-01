@@ -101,7 +101,7 @@ def main():
 
     if is_prerelease(new_version):
         # Development versions (e.g. `56.0.0-dev`) are never published to
-        # crates.io, so leave the user facing examples pointing at the
+        # crates.io, so leave the user-facing examples pointing at the
         # latest released version
         print(f'{new_version} is a development version, not updating docs examples')
     else:
