@@ -40,13 +40,13 @@
 # in RG 0) would let min/max statistics alone prune everything before the
 # dictionary stage ever runs, which defeats the point of this file.
 #
-# `dictionary_filter_on_read` (like other `format.*`/reader options) is
-# captured into the table's options at `CREATE EXTERNAL TABLE` time, not
-# re-read from the session config on every query. So this file creates
-# table `t` *twice* against the same underlying file: once before the `SET`
-# below (to show the off-by-default plan) and once after (to show the
-# flag actually taking effect) -- toggling the `SET` against a single,
-# already-created `t` would silently have no effect on either plan.
+# When a scan is planned, the session's `dictionary_filter_on_read` overrides
+# the table's own `format.dictionary_filter_on_read` option, so a `SET` takes
+# effect even for a table that already exists. This file still creates table
+# `t` *twice* against the same underlying file -- once before the `SET` below
+# (the off-by-default plan) and once after (the flag taking effect) -- only to
+# keep the two sets of plans in separate, readable sections; the second
+# `CREATE EXTERNAL TABLE` is not what enables the flag.
 
 statement ok
 set datafusion.explain.analyze_level = summary;
@@ -130,8 +130,8 @@ set datafusion.execution.parquet.dictionary_filter_on_read = true;
 # plan just above, min/max statistics alone can't prune any row group here
 # (every group's [min, max] contains 'm') -- only the dictionary stage can,
 # and does: row_groups_pruned_dictionary goes from "3 total -> 3 matched" to
-# "3 total -> 0 matched". `t` is (re)created here, after the `SET`, so its
-# options now capture dictionary_filter_on_read=true.
+# "3 total -> 0 matched". The session setting alone enables the stage here;
+# recreating `t` after the `SET` makes no difference to that.
 ########
 
 statement ok

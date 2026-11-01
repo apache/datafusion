@@ -484,7 +484,7 @@ fn prune_by_dictionary(path: &Path, shape: &QueryShape) -> Vec<usize> {
             &file, metadata, idx, column_idx,
         ) {
             stats
-                .insert(shape.column_name, &dict)
+                .insert(shape.column_name, &dict, col_meta)
                 .expect("decode dictionary");
         }
         row_group_dictionaries[idx] = stats;

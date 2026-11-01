@@ -508,6 +508,12 @@ impl RowGroupAccessPlanFilter {
     /// `row_group_dictionaries[idx]` contains the exact dictionary values for
     /// the parquet row group at index `idx`.
     ///
+    /// This evaluates every row group that is still scanned, including those
+    /// whose entry is empty (which can never be pruned but is counted as
+    /// matched). The opener instead evaluates only row groups that have a
+    /// dictionary worth reading, via `prune_one_dictionary`, and
+    /// counts the others as matched itself.
+    ///
     /// # Panics
     /// if `row_group_dictionaries` does not have the same number of row groups as this set
     pub fn prune_by_dictionary(
@@ -518,28 +524,40 @@ impl RowGroupAccessPlanFilter {
     ) {
         assert_eq!(row_group_dictionaries.len(), self.access_plan.len());
         for (idx, stats) in row_group_dictionaries.iter().enumerate() {
-            if !self.access_plan.should_scan(idx) {
-                continue;
-            }
+            self.prune_one_dictionary(idx, predicate, metrics, stats);
+        }
+    }
 
-            // Can this group be pruned?
-            let prune_group = match predicate.prune(stats) {
-                Ok(values) => !values[0],
-                Err(e) => {
-                    log::debug!(
-                        "Error evaluating row group predicate on dictionary: {e}"
-                    );
-                    metrics.predicate_evaluation_errors.add(1);
-                    false
-                }
-            };
-
-            if prune_group {
-                metrics.row_groups_pruned_dictionary.add_pruned(1);
-                self.access_plan.skip(idx)
-            } else {
-                metrics.row_groups_pruned_dictionary.add_matched(1);
+    /// Evaluate the dictionary of the parquet row group at `idx`, skipping the
+    /// row group if its values cannot satisfy `predicate`. Does nothing for a
+    /// row group that is no longer scanned.
+    ///
+    /// Evaluating one row group at a time lets its decoded values be released
+    /// before the next row group's dictionary arrives.
+    pub(crate) fn prune_one_dictionary(
+        &mut self,
+        idx: usize,
+        predicate: &PruningPredicate,
+        metrics: &ParquetFileMetrics,
+        stats: &DictionaryStatistics,
+    ) {
+        if !self.access_plan.should_scan(idx) {
+            return;
+        }
+        let prune_group = match predicate.prune(stats) {
+            Ok(values) => !values[0],
+            Err(e) => {
+                log::debug!("Error evaluating row group predicate on dictionary: {e}");
+                metrics.predicate_evaluation_errors.add(1);
+                false
             }
+        };
+
+        if prune_group {
+            metrics.row_groups_pruned_dictionary.add_pruned(1);
+            self.access_plan.skip(idx)
+        } else {
+            metrics.row_groups_pruned_dictionary.add_matched(1);
         }
     }
 }

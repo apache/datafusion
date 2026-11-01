@@ -43,8 +43,7 @@ use parquet::file::metadata::ColumnChunkMetaData;
 /// Parquet row groups based on the query predicate. Unlike bloom filters,
 /// which are probabilistic, the values stored here are assumed to be the
 /// *exact* set of distinct values present in the column for the row group --
-/// callers must only [`insert`](Self::insert) dictionaries for column chunks
-/// that pass [`is_fully_dictionary_encoded`], or pruning will be unsound.
+/// [`Self::insert`] checks column-chunk metadata before accepting values.
 #[derive(Debug, Clone, Default)]
 pub struct DictionaryStatistics {
     /// Per-column exact value sets, keyed by predicate column name. Values
@@ -72,18 +71,23 @@ impl DictionaryStatistics {
     /// `Binary` array (e.g. from
     /// `ParquetRecordBatchStreamBuilder::get_column_chunk_dictionary`).
     ///
-    /// # Panics / Errors
+    /// Returns an error if the metadata cannot prove that every data page
+    /// uses the dictionary. In that case the values are not inserted.
     ///
-    /// This does not itself verify that the column chunk is fully
-    /// dictionary-encoded -- see [`is_fully_dictionary_encoded`]. Passing a
-    /// dictionary that is only a subset of the chunk's actual values (e.g.
-    /// because part of the chunk fell back to `PLAIN`) will make pruning
-    /// unsound.
+    /// `column_metadata` must describe the same column chunk that
+    /// `dictionary` was read from: this check cannot detect a mismatched
+    /// pairing, so the caller remains responsible for it.
     pub fn insert(
         &mut self,
         column: impl Into<String>,
         dictionary: &ArrayRef,
+        column_metadata: &ColumnChunkMetaData,
     ) -> Result<()> {
+        if !is_fully_dictionary_encoded(column_metadata) {
+            return internal_err!(
+                "Cannot insert a dictionary from a column chunk with non-dictionary data pages"
+            );
+        }
         let values = match dictionary.data_type() {
             DataType::Binary => dictionary
                 .as_any()
@@ -104,6 +108,38 @@ impl DictionaryStatistics {
         self.column_values.insert(column.into(), values);
         Ok(())
     }
+}
+
+/// Maximum on-disk size of a dictionary page region (header included) that is
+/// read for pruning.
+///
+/// This bounds the I/O spent per column chunk, not memory: decoded values are
+/// held as hash sets that the memory pool does not track, and can be several
+/// times larger than the page on disk. At most
+/// [`DICTIONARY_READ_CONCURRENCY`] row groups are decoded at once per file,
+/// each with one set per predicate column.
+pub(crate) const MAX_DICTIONARY_PAGE_BYTES: i64 = 128 * 1024 * 1024;
+
+/// Number of row groups of one file whose dictionaries are read concurrently.
+///
+/// Enough GETs in flight to hide typical object-store latency, without letting
+/// one file fan out to every row group at once.
+pub(crate) const DICTIONARY_READ_CONCURRENCY: usize = 4;
+
+/// Returns true if the dictionary page of `col_meta` is worth reading for
+/// pruning: the chunk is fully dictionary-encoded (see
+/// [`is_fully_dictionary_encoded`]) and the region between the dictionary
+/// offset and the first data page, which is exactly what is fetched, is at
+/// most [`MAX_DICTIONARY_PAGE_BYTES`]. Missing or inconsistent offsets make the
+/// chunk ineligible.
+pub(crate) fn eligible_dictionary_page(col_meta: &ColumnChunkMetaData) -> bool {
+    is_fully_dictionary_encoded(col_meta)
+        && col_meta.dictionary_page_offset().is_some_and(|start| {
+            col_meta
+                .data_page_offset()
+                .checked_sub(start)
+                .is_some_and(|size| (0..=MAX_DICTIONARY_PAGE_BYTES).contains(&size))
+        })
 }
 
 /// Returns `value` normalized to its raw byte representation, if `value` is
@@ -151,10 +187,9 @@ impl PruningStatistics for DictionaryStatistics {
     /// (`Some(true)`), `values`.
     ///
     /// Because the dictionary is the row group's *complete* set of distinct
-    /// values (guaranteed by the caller checking
-    /// [`is_fully_dictionary_encoded`] before inserting it), this can prove
-    /// both directions exactly, unlike a bloom filter's probabilistic
-    /// "definitely absent" only.
+    /// values (guaranteed by the [`is_fully_dictionary_encoded`] check in
+    /// [`Self::insert`]), this can prove both directions exactly, unlike a
+    /// bloom filter's probabilistic "definitely absent" only.
     fn contained(
         &self,
         column: &Column,
@@ -239,6 +274,33 @@ mod tests {
     use parquet::schema::types::{SchemaDescriptor, Type as SchemaType};
 
     #[test]
+    fn eligible_dictionary_page_requires_a_consistent_offset_range() -> Result<()> {
+        let schema_descr = SchemaDescriptor::new(Arc::new(
+            SchemaType::group_type_builder("schema")
+                .with_fields(vec![Arc::new(
+                    SchemaType::primitive_type_builder("s", Type::BYTE_ARRAY).build()?,
+                )])
+                .build()?,
+        ));
+        let chunk = |dictionary_offset: Option<i64>, data_offset: i64| {
+            ColumnChunkMetaData::builder(schema_descr.column(0))
+                .set_dictionary_page_offset(dictionary_offset)
+                .set_data_page_offset(data_offset)
+                .set_page_encoding_stats_mask(EncodingMask::new_from_encodings(
+                    [Encoding::RLE_DICTIONARY].iter(),
+                ))
+                .build()
+        };
+
+        assert!(eligible_dictionary_page(&chunk(Some(10), 110)?));
+        // The data pages cannot start before the dictionary page they use.
+        assert!(!eligible_dictionary_page(&chunk(Some(110), 10)?));
+        // Without a dictionary offset there is no known range to fetch.
+        assert!(!eligible_dictionary_page(&chunk(None, 110)?));
+        Ok(())
+    }
+
+    #[test]
     fn is_fully_dictionary_encoded_requires_only_dictionary_encoding() {
         let schema_descr = Arc::new(SchemaDescriptor::new(Arc::new(
             SchemaType::group_type_builder("schema")
@@ -261,6 +323,26 @@ mod tests {
                 .build()
                 .unwrap();
         assert!(is_fully_dictionary_encoded(&fully_dictionary_encoded));
+        let dictionary: ArrayRef = Arc::new(BinaryArray::from(vec![b"a".as_slice()]));
+        let mut stats = DictionaryStatistics::new();
+        stats
+            .insert("s", &dictionary, &fully_dictionary_encoded)
+            .unwrap();
+
+        for size in [MAX_DICTIONARY_PAGE_BYTES, MAX_DICTIONARY_PAGE_BYTES + 1] {
+            let metadata = ColumnChunkMetaData::builder(schema_descr.column(0))
+                .set_dictionary_page_offset(Some(0))
+                .set_data_page_offset(size)
+                .set_page_encoding_stats_mask(EncodingMask::new_from_encodings(
+                    [Encoding::RLE_DICTIONARY].iter(),
+                ))
+                .build()
+                .unwrap();
+            assert_eq!(
+                eligible_dictionary_page(&metadata),
+                size <= MAX_DICTIONARY_PAGE_BYTES
+            );
+        }
 
         // Plain fallback mid-chunk: a dictionary page exists, but at least
         // one data page used PLAIN, so the dictionary is not exhaustive.
@@ -273,6 +355,8 @@ mod tests {
             .build()
             .unwrap();
         assert!(!is_fully_dictionary_encoded(&plain_fallback));
+        assert!(stats.insert("plain", &dictionary, &plain_fallback).is_err());
+        assert!(!stats.column_values.contains_key("plain"));
 
         // No dictionary page at all.
         let no_dictionary = ColumnChunkMetaData::builder(schema_descr.column(0))
@@ -416,7 +500,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        let num_row_groups = builder.metadata().num_row_groups();
+        let metadata = Arc::clone(builder.metadata());
+        let num_row_groups = metadata.num_row_groups();
         let mut row_group_dictionaries = Vec::with_capacity(num_row_groups);
         row_group_dictionaries.resize_with(num_row_groups, DictionaryStatistics::new);
 
@@ -424,7 +509,7 @@ mod tests {
             let mut dict_stats =
                 DictionaryStatistics::with_capacity(parquet_columns.len());
             for (column_name, column_idx) in &parquet_columns {
-                let col_meta = builder.metadata().row_group(idx).column(*column_idx);
+                let col_meta = metadata.row_group(idx).column(*column_idx);
                 if !is_fully_dictionary_encoded(col_meta) {
                     continue;
                 }
@@ -438,7 +523,7 @@ mod tests {
                             continue;
                         }
                     };
-                dict_stats.insert(column_name, &dict).unwrap();
+                dict_stats.insert(column_name, &dict, col_meta).unwrap();
             }
             row_group_dictionaries[idx] = dict_stats;
         }
