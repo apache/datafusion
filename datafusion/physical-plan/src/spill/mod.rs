@@ -22,8 +22,8 @@ use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 
 use arrow::array::{
-    Array, ArrayRef, BinaryViewArray, BufferSpec, GenericByteViewArray, StringViewArray,
-    layout, make_array,
+    Array, ArrayRef, AsArray, BinaryViewArray, BufferSpec, GenericByteViewArray,
+    StringViewArray, layout, make_array,
 };
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -38,6 +38,7 @@ use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 #[cfg(test)]
 use arrow_ipc::writer::StreamWriter;
 use arrow_ipc::{CompressionType, root_as_message};
+use arrow_select::dictionary::garbage_collect_any_dictionary;
 
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{Result, internal_datafusion_err};
@@ -772,33 +773,45 @@ const VIEW_SIZE_BYTES: usize = 16;
 ///   `List`, `Map`, `Union`, `Dictionary`, and other child-bearing arrays are compacted too
 /// - The Arrow `gc()` method itself is optimized and only copies referenced data
 pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
-    gc_view_arrays_of_columns(batch, |_| true)
+    gc_arrays_of_columns(batch, |_, _| true, false)
 }
 
-/// Like [`gc_view_arrays`], but only compacts the view arrays of nested
-/// columns, such as lists of strings.
+/// Like [`gc_view_arrays`], but only compacts `columns`, and also removes the
+/// dictionary values that no key of theirs references.
+///
+/// `take` and `slice` keep every value of a dictionary, so a few rows taken
+/// from a large batch carry the values of all its rows.
+pub(crate) fn gc_columns(batch: &RecordBatch, columns: &[usize]) -> Result<RecordBatch> {
+    gc_arrays_of_columns(batch, |index, _| columns.contains(&index), true)
+}
+
+/// Like [`gc_view_arrays`], but only compacts nested columns, such as lists of
+/// strings, and also removes the dictionary values that no key of theirs
+/// references.
 ///
 /// A batch built by `interleave`, such as the output of a sort-preserving
-/// merge, references the whole data buffers of the batches it takes rows from.
-/// An accumulator that keeps the arrays it merges, such as `array_agg`, keeps
-/// those buffers alive with each group. Top-level columns are left as they
-/// are, since group keys and the accumulators of top-level states typically
-/// copy the values they keep.
-pub(crate) fn gc_nested_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
-    gc_view_arrays_of_columns(batch, |array| array.data_type().is_nested())
+/// merge, references the whole data buffers of the batches it takes rows
+/// from, and can hold all their dictionary values. An accumulator that keeps
+/// the arrays it merges, such as `array_agg`, keeps them alive with each
+/// group. Top-level columns are left as they are, since group keys and the
+/// accumulators of top-level states typically copy the values they keep.
+pub(crate) fn gc_nested_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
+    gc_arrays_of_columns(batch, |_, array| array.data_type().is_nested(), true)
 }
 
-/// Compacts the view arrays of the columns of `batch` that `include` selects.
-fn gc_view_arrays_of_columns(
+/// Compacts the view arrays of the columns of `batch` that `include` selects
+/// by index, and their dictionary arrays if `dictionaries` is set.
+fn gc_arrays_of_columns(
     batch: &RecordBatch,
-    include: impl Fn(&ArrayRef) -> bool,
+    include: impl Fn(usize, &ArrayRef) -> bool,
+    dictionaries: bool,
 ) -> Result<RecordBatch> {
     let mut mutated = false;
     let mut new_columns: Vec<Arc<dyn Array>> = Vec::with_capacity(batch.num_columns());
 
-    for array in batch.columns() {
-        let (gc_array, array_mutated) = if include(array) {
-            gc_array(array)?
+    for (index, array) in batch.columns().iter().enumerate() {
+        let (gc_array, array_mutated) = if include(index, array) {
+            gc_array(array, dictionaries)?
         } else {
             (Arc::clone(array), false)
         };
@@ -813,7 +826,9 @@ fn gc_view_arrays_of_columns(
     }
 }
 
-fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
+/// Compacts the view arrays in `array`, and its dictionary arrays if
+/// `dictionaries` is set. Also returns whether anything was compacted.
+fn gc_array(array: &ArrayRef, dictionaries: bool) -> Result<(ArrayRef, bool)> {
     match array.data_type() {
         DataType::Utf8View => {
             let string_view = array
@@ -835,7 +850,18 @@ fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
                 None => (Arc::clone(array), false),
             })
         }
-        _ => gc_array_children(array),
+        DataType::Dictionary(_, _) if dictionaries => {
+            let dictionary = array.as_any_dictionary();
+            let gc = garbage_collect_any_dictionary(dictionary)?;
+            let gc = gc.as_any_dictionary();
+            let shrunk = gc.values().len() < dictionary.values().len();
+            let (values, values_mutated) = gc_array(gc.values(), dictionaries)?;
+            if !shrunk && !values_mutated {
+                return Ok((Arc::clone(array), false));
+            }
+            Ok((gc.with_values(values), true))
+        }
+        _ => gc_array_children(array, dictionaries),
     }
 }
 
@@ -920,7 +946,7 @@ fn dedup_buffer_entries(buffers: &[Buffer]) -> (Vec<u32>, Vec<Buffer>) {
     (remap, unique)
 }
 
-fn gc_array_children(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
+fn gc_array_children(array: &ArrayRef, dictionaries: bool) -> Result<(ArrayRef, bool)> {
     let data = array.to_data();
     if data.child_data().is_empty() {
         return Ok((Arc::clone(array), false));
@@ -930,7 +956,7 @@ fn gc_array_children(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
     let mut child_data = Vec::with_capacity(data.child_data().len());
     for child in data.child_data() {
         let child_array = make_array(child.clone());
-        let (gc_child, child_mutated) = gc_array(&child_array)?;
+        let (gc_child, child_mutated) = gc_array(&child_array, dictionaries)?;
         mutated |= child_mutated;
         child_data.push(gc_child.to_data());
     }
@@ -2719,7 +2745,7 @@ mod tests {
     }
 
     #[test]
-    fn test_gc_nested_view_arrays_skips_top_level_columns() -> Result<()> {
+    fn test_gc_nested_arrays_skips_top_level_columns() -> Result<()> {
         use arrow::buffer::Buffer;
 
         let strings: Vec<String> = (0..400)
@@ -2749,9 +2775,9 @@ mod tests {
         let batch =
             RecordBatch::try_new(schema, vec![Arc::clone(&top_level), list_array])?;
 
-        // `gc_view_arrays` compacts the top-level column, `gc_nested_view_arrays` does not
+        // `gc_view_arrays` compacts the top-level column, `gc_nested_arrays` does not
         assert!(!Arc::ptr_eq(gc_view_arrays(&batch)?.column(0), &top_level));
-        let gc_batch = gc_nested_view_arrays(&batch)?;
+        let gc_batch = gc_nested_arrays(&batch)?;
         assert!(Arc::ptr_eq(gc_batch.column(0), &top_level));
 
         let gc_list_values =
@@ -2764,6 +2790,67 @@ mod tests {
             calculate_string_view_waste_ratio(gc_list_values) < 0.2,
             "GC should compact nested List child views"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_columns_compacts_dictionaries() -> Result<()> {
+        use arrow::array::{DictionaryArray, ListArray};
+        use arrow::buffer::OffsetBuffer;
+        use arrow::datatypes::Int32Type;
+
+        // Every column references a few of the same 100 values
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..100).map(|i| format!("value {i}")),
+        ));
+        let dictionary = |keys: Vec<i32>| {
+            DictionaryArray::new(Int32Array::from(keys), Arc::clone(&values))
+        };
+        let decode = |array: &ArrayRef| -> Vec<String> {
+            let dictionary = array.as_dictionary::<Int32Type>();
+            let strings = dictionary.downcast_dict::<StringArray>().unwrap();
+            strings
+                .into_iter()
+                .map(|s| s.unwrap().to_string())
+                .collect()
+        };
+        let list = ListArray::new(
+            Arc::new(Field::new_list_field(
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            )),
+            OffsetBuffer::from_lengths([2, 1]),
+            Arc::new(dictionary(vec![7, 3, 7])),
+            None,
+        );
+        let batch = RecordBatch::try_from_iter(vec![
+            ("compacted", Arc::new(dictionary(vec![5, 9])) as ArrayRef),
+            ("other", Arc::new(dictionary(vec![1, 2])) as ArrayRef),
+            ("list", Arc::new(list) as ArrayRef),
+        ])?;
+
+        // `gc_view_arrays` leaves dictionaries as they are
+        let gc_batch = gc_view_arrays(&batch)?;
+        for (column, gc_column) in batch.columns().iter().zip(gc_batch.columns()) {
+            assert!(Arc::ptr_eq(column, gc_column));
+        }
+
+        // `gc_columns` keeps only the values that the given columns reference
+        let gc_batch = gc_columns(&batch, &[0, 2])?;
+        let compacted = gc_batch.column(0);
+        assert_eq!(compacted.as_any_dictionary().values().len(), 2);
+        assert_eq!(decode(compacted), ["value 5", "value 9"]);
+        assert!(Arc::ptr_eq(gc_batch.column(1), batch.column(1)));
+        let list_values = gc_batch.column(2).as_list::<i32>().values();
+        assert_eq!(list_values.as_any_dictionary().values().len(), 2);
+        assert_eq!(decode(list_values), ["value 7", "value 3", "value 7"]);
+
+        // `gc_nested_arrays` compacts only the nested column
+        let gc_batch = gc_nested_arrays(&batch)?;
+        assert!(Arc::ptr_eq(gc_batch.column(0), batch.column(0)));
+        let list_values = gc_batch.column(2).as_list::<i32>().values();
+        assert_eq!(list_values.as_any_dictionary().values().len(), 2);
 
         Ok(())
     }

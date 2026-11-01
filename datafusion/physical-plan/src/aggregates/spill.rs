@@ -24,7 +24,7 @@ use crate::SendableRecordBatchStream;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::gc_nested_view_arrays;
+use crate::spill::gc_nested_arrays;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::RecordBatchStreamAdapter;
 
@@ -314,12 +314,13 @@ impl AggregateSpill {
             .with_intermediate_merge_sizing(Some(min_spill_batch_rows))
             .build()?;
         // A merged batch references the whole data buffers of the spilled
-        // batches its rows come from. Replay keeps the list states of a group,
-        // such as those of `array_agg`, until the group completes, so compact
-        // them to hold only the bytes of their own rows.
+        // batches its rows come from, and can hold all their dictionary
+        // values. Replay keeps the list states of a group, such as those of
+        // `array_agg`, until the group completes, so compact them to hold only
+        // the bytes of their own rows.
         let merged: SendableRecordBatchStream = Box::pin(RecordBatchStreamAdapter::new(
             merged.schema(),
-            merged.map(|batch| gc_nested_view_arrays(&batch?)),
+            merged.map(|batch| gc_nested_arrays(&batch?)),
         ));
         let replay = ClusteredFinalAggregateStream::new_with_input_and_metrics(
             &replay_agg,

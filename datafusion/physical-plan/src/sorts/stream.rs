@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::sorts::cursor::{ArrayValues, CursorArray, RowValues};
+use crate::spill::gc_columns;
 use crate::spill::spilled_row_sizes::SpilledRowSizes;
 use crate::{EmptyRecordBatchStream, SendableRecordBatchStream};
 use crate::{PhysicalExpr, PhysicalSortExpr};
@@ -370,7 +371,9 @@ impl IncrementalSortIterator {
 
     /// Also limits each chunk to `max_batch_bytes`, by the size its rows take
     /// once spilled (see [`SpilledRowSizes`]). A row larger than that is
-    /// returned on its own.
+    /// returned on its own. Chunks hold only the dictionary values of their
+    /// own rows in the columns where that size counts them (see
+    /// [`SpilledRowSizes::compacted_columns`]).
     pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: usize) -> Self {
         self.max_batch_bytes = Some(max_batch_bytes);
         self
@@ -446,6 +449,17 @@ impl Iterator for IncrementalSortIterator {
                     Ok(batch) => batch,
                     Err(e) => return Some(Err(e.into())),
                 };
+                // `take` keeps every dictionary value, while the row sizes
+                // count only the values of the rows of `compacted_columns`
+                let new_batch = match &self.row_sizes {
+                    Some(row_sizes) if !row_sizes.compacted_columns().is_empty() => {
+                        match gc_columns(&new_batch, row_sizes.compacted_columns()) {
+                            Ok(batch) => batch,
+                            Err(e) => return Some(Err(e)),
+                        }
+                    }
+                    _ => new_batch,
+                };
 
                 self.cursor += batch_size;
 
@@ -485,7 +499,7 @@ impl FusedIterator for IncrementalSortIterator {}
 mod tests {
     use super::*;
     use crate::memory::MemoryStream;
-    use arrow::array::{ArrayRef, AsArray, Int32Array, StringArray};
+    use arrow::array::{ArrayRef, AsArray, DictionaryArray, Int32Array, StringArray};
     use arrow::datatypes::{DataType, Field, Int32Type};
     use arrow_schema::SchemaRef;
     use datafusion_common::DataFusionError;
@@ -693,6 +707,48 @@ mod tests {
         let iter =
             IncrementalSortIterator::new(keys, expressions, 50).with_max_batch_bytes(100);
         assert_eq!(chunk_lens(iter)?, vec![25, 25, 25, 25, 1]);
+        Ok(())
+    }
+
+    #[test]
+    fn incremental_sort_iterator_compacts_unique_dictionaries() -> Result<()> {
+        // Keys 99 down to 0, each with its own 100 byte value in `unique`, and
+        // one of four values, each of 25 keys, in `shared`
+        let keys: Vec<i32> = (0..100).rev().collect();
+        let values: Vec<String> = keys.iter().map(|key| format!("{key:0>100}")).collect();
+        let unique: DictionaryArray<Int32Type> =
+            values.iter().map(String::as_str).collect();
+        let shared: DictionaryArray<Int32Type> = keys
+            .iter()
+            .map(|key| ["a", "b", "c", "d"][*key as usize / 25])
+            .collect();
+        let shared_values = shared.values().to_data();
+        let batch = RecordBatch::try_from_iter(vec![
+            ("key", Arc::new(Int32Array::from(keys)) as ArrayRef),
+            ("unique", Arc::new(unique) as ArrayRef),
+            ("shared", Arc::new(shared) as ArrayRef),
+        ])?;
+        let expressions = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "key",
+            &batch.schema(),
+        )?)])
+        .unwrap();
+
+        // A row takes 4 bytes of key and 4 of `shared` key, plus a 4 byte key,
+        // a 4 byte offset and 100 bytes of value in `unique`, so 10 rows fit
+        // in 1200 bytes
+        let chunks = IncrementalSortIterator::new(batch, expressions, 50)
+            .with_max_batch_bytes(1200)
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(chunks.len(), 10);
+        for chunk in &chunks {
+            // Each chunk holds the unique values of its own rows, and shares
+            // the values of the other dictionary
+            let unique = chunk.column(1).as_any_dictionary();
+            assert_eq!(unique.values().len(), chunk.num_rows());
+            let shared = chunk.column(2).as_any_dictionary();
+            assert!(shared.values().to_data().ptr_eq(&shared_values));
+        }
         Ok(())
     }
 

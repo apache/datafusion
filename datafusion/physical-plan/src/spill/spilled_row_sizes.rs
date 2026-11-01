@@ -4,22 +4,27 @@
 
 //! Per-row sizes of a batch once it is written to a spill file.
 
-use arrow::array::{Array, AsArray, RecordBatch};
+use arrow::array::{
+    AnyDictionaryArray, Array, ArrayRef, AsArray, RecordBatch, downcast_integer_array,
+    make_array,
+};
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::datatypes::DataType;
+use arrow::datatypes::{ArrowNativeType, DataType};
 use arrow_data::MAX_INLINE_VIEW_LEN;
 
 use super::VIEW_SIZE_BYTES;
 
 /// Estimates how many bytes each row of a batch takes once written to a spill
-/// file, where view arrays are compacted (see [`super::gc_view_arrays`]).
+/// file, where view arrays are compacted (see [`super::gc_view_arrays`]), and
+/// so are the dictionaries of [`Self::compacted_columns`].
 ///
 /// A row counts its fixed-width values, the offsets and bytes of its
-/// variable-width values, and the elements of its nested values. Buffers that
-/// every row shares, such as validity bitmaps and dictionary values, are not
-/// counted. Each view counts the bytes of its value, so views that share bytes
-/// are counted as if compaction copied them, although it can write shared bytes
-/// only once.
+/// variable-width values, the elements of its nested values, and the values
+/// that the keys of compacted dictionaries reference. Buffers that every row
+/// shares, such as validity bitmaps and the values of other dictionaries, are
+/// not counted. Each view counts the bytes of its value, and each key the
+/// value it references, so rows that share bytes are counted as if compaction
+/// copied them, although it can write shared bytes only once.
 pub(crate) struct SpilledRowSizes {
     /// Bytes that every row takes in the fixed-width columns
     fixed: usize,
@@ -27,14 +32,20 @@ pub(crate) struct SpilledRowSizes {
     variable: Vec<ColumnSize>,
     /// See [`Self::max_row`]
     max_row: usize,
+    /// See [`Self::compacted_columns`]
+    compacted_columns: Vec<usize>,
 }
 
 impl SpilledRowSizes {
     pub(crate) fn new(batch: &RecordBatch) -> Self {
         let mut fixed = 0;
         let mut variable = vec![];
-        for column in batch.columns() {
+        let mut compacted_columns = vec![];
+        for (index, column) in batch.columns().iter().enumerate() {
             let column = ColumnSize::new(column.as_ref());
+            if column.compacted() {
+                compacted_columns.push(index);
+            }
             match column.fixed() {
                 Some(width) => fixed += width,
                 None => variable.push(column),
@@ -47,6 +58,7 @@ impl SpilledRowSizes {
             fixed,
             variable,
             max_row,
+            compacted_columns,
         }
     }
 
@@ -66,6 +78,20 @@ impl SpilledRowSizes {
     pub(crate) fn max_row(&self) -> usize {
         self.max_row
     }
+
+    /// Returns the columns with dictionaries whose values are mostly unique.
+    /// Their rows count the values their keys reference, so batches taken
+    /// from them must be compacted to hold only those values (see
+    /// [`super::gc_columns`]).
+    ///
+    /// `take` keeps every value of a dictionary, so a batch of a few rows
+    /// would otherwise hold the values of all rows, such as the `array_agg`
+    /// states of every group. Compacting writes a value once per batch that
+    /// references it, while a dictionary that consecutive batches share is
+    /// written only once, so values that many keys reference stay shared.
+    pub(crate) fn compacted_columns(&self) -> &[usize] {
+        &self.compacted_columns
+    }
 }
 
 /// Size model of one column, see [`SpilledRowSizes`].
@@ -82,6 +108,10 @@ enum ColumnSize {
     FixedSizeList(usize, Box<ColumnSize>),
     /// A row of each field.
     Struct(Vec<ColumnSize>),
+    /// A key of the given width per row, plus the value it references unless
+    /// the key is null. Only dictionaries that are compacted are sized this
+    /// way, the others take the bytes of their keys only.
+    Dictionary(usize, ArrayRef, Box<ColumnSize>),
 }
 
 impl ColumnSize {
@@ -120,7 +150,17 @@ impl ColumnSize {
                     .collect(),
             ),
             DataType::Dictionary(key, _) => {
-                Self::Fixed(key.primitive_width().unwrap_or_default())
+                let width = key.primitive_width().unwrap_or_default();
+                let dictionary = array.as_any_dictionary();
+                if should_compact(dictionary) {
+                    Self::Dictionary(
+                        width,
+                        make_array(dictionary.keys().to_data()),
+                        Box::new(Self::new(dictionary.values().as_ref())),
+                    )
+                } else {
+                    Self::Fixed(width)
+                }
             }
             DataType::FixedSizeBinary(size) => Self::Fixed(*size as usize),
             DataType::Null | DataType::Boolean => Self::Fixed(0),
@@ -132,13 +172,26 @@ impl ColumnSize {
         }
     }
 
+    /// Returns whether this column has a dictionary that is compacted.
+    fn compacted(&self) -> bool {
+        match self {
+            Self::Dictionary(_, _, _) => true,
+            Self::List(_, values) | Self::FixedSizeList(_, values) => values.compacted(),
+            Self::Struct(fields) => fields.iter().any(Self::compacted),
+            Self::Fixed(_) | Self::Bytes(_) | Self::Views(_) => false,
+        }
+    }
+
     /// Returns the size in bytes of every row, if they all have the same size.
     fn fixed(&self) -> Option<usize> {
         match self {
             Self::Fixed(width) => Some(*width),
             Self::FixedSizeList(size, values) => values.fixed().map(|width| size * width),
             Self::Struct(fields) => fields.iter().map(Self::fixed).sum(),
-            Self::Bytes(_) | Self::Views(_) | Self::List(_, _) => None,
+            Self::Bytes(_)
+            | Self::Views(_)
+            | Self::List(_, _)
+            | Self::Dictionary(_, _, _) => None,
         }
     }
 
@@ -160,6 +213,7 @@ impl ColumnSize {
             Self::Struct(fields) => fields
                 .iter()
                 .fold(0, |bytes, field| bytes.saturating_add(field.max_row())),
+            Self::Dictionary(width, _, values) => width.saturating_add(values.max_row()),
         }
     }
 
@@ -180,8 +234,29 @@ impl ColumnSize {
             Self::Struct(fields) => {
                 fields.iter().map(|field| field.rows(start, end)).sum()
             }
+            Self::Dictionary(width, keys, values) => {
+                let value_bytes = downcast_integer_array!(
+                    keys => (start..end)
+                        .filter(|&row| keys.is_valid(row))
+                        .map(|row| {
+                            let key = keys.value(row).as_usize();
+                            values.rows(key, key + 1)
+                        })
+                        .sum::<usize>(),
+                    data_type => unreachable!("dictionary keys of type {data_type}")
+                );
+                num_rows * width + value_bytes
+            }
         }
     }
+}
+
+/// Returns whether to compact the batches of `dictionary`, which is when fewer
+/// than two keys reference each of its values on average (see
+/// [`SpilledRowSizes::compacted_columns`]).
+fn should_compact(dictionary: &dyn AnyDictionaryArray) -> bool {
+    let keys = dictionary.keys();
+    keys.len() - keys.null_count() < 2 * dictionary.values().len()
 }
 
 /// Returns the size in bytes of a view, plus its value unless it is inlined.
@@ -374,12 +449,76 @@ mod tests {
     }
 
     #[test]
-    fn dictionaries_count_their_keys() {
-        let dictionary: ArrayRef = Arc::new(
-            vec!["a long dictionary value", "b"]
-                .into_iter()
-                .collect::<DictionaryArray<Int32Type>>(),
+    fn dictionaries_of_unique_values_count_them() {
+        let values = StringArray::from(vec!["a long dictionary value", "b", "cc"]);
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::new(
+            Int32Array::from(vec![Some(2), None, Some(0)]),
+            Arc::new(values),
+        ));
+        // A 4 byte key, plus the 4 byte offset and the bytes of the value it
+        // references. A null key references none.
+        let long_row = 4 + 4 + 23;
+        assert_eq!(
+            row_sizes(vec![Arc::clone(&dictionary)]),
+            (vec![4 + 4 + 2, 4, long_row], long_row)
         );
-        assert_eq!(row_sizes(vec![dictionary]), (vec![4, 4], 4));
+        let sizes = SpilledRowSizes::new(&batch(vec![dictionary]));
+        assert_eq!(sizes.compacted_columns(), [0]);
+    }
+
+    #[test]
+    fn dictionaries_of_shared_values_count_their_keys() {
+        // Two keys reference each value, which every batch keeps
+        let dictionary: ArrayRef = Arc::new(
+            vec![
+                "a long dictionary value",
+                "b",
+                "a long dictionary value",
+                "b",
+            ]
+            .into_iter()
+            .collect::<DictionaryArray<Int32Type>>(),
+        );
+        assert_eq!(row_sizes(vec![Arc::clone(&dictionary)]), (vec![4; 4], 4));
+        let sizes = SpilledRowSizes::new(&batch(vec![dictionary]));
+        assert!(sizes.compacted_columns().is_empty());
+    }
+
+    #[test]
+    fn nested_dictionaries_count_their_values() {
+        let values = DictionaryArray::new(
+            Int32Array::from(vec![0, 1, 2]),
+            Arc::new(StringArray::from(vec![
+                "x".repeat(20),
+                "y".repeat(5),
+                "z".repeat(30),
+            ])),
+        );
+        let list: ArrayRef = Arc::new(ListArray::new(
+            Arc::new(Field::new_list_field(values.data_type().clone(), true)),
+            OffsetBuffer::new(vec![0, 2, 3, 3].into()),
+            Arc::new(values),
+            None,
+        ));
+        // An offset, plus a key, an offset and the bytes of the value of each
+        // element. The bound takes two elements of the largest size.
+        assert_eq!(
+            row_sizes(vec![Arc::clone(&list)]),
+            (vec![4 + 28 + 13, 4 + 38, 4], 4 + 2 * 38)
+        );
+        let sizes = SpilledRowSizes::new(&batch(vec![list]));
+        assert_eq!(sizes.compacted_columns(), [0]);
+    }
+
+    #[test]
+    fn empty_nested_dictionaries_count_nothing() {
+        // The values of null lists are an empty dictionary, without values
+        let dictionary =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let list: ArrayRef = Arc::new(ListArray::new_null(
+            Arc::new(Field::new_list_field(dictionary, true)),
+            2,
+        ));
+        assert_eq!(row_sizes(vec![list]), (vec![4, 4], 4));
     }
 }
