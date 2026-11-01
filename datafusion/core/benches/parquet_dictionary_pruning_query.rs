@@ -22,8 +22,12 @@
 //! only measures the *cost* of the pruning decision itself (calling
 //! `prune_by_statistics` / `prune_by_bloom_filters` / `prune_by_dictionary`
 //! directly, no `SessionContext`, no scan). This benchmark instead runs
-//! full SQL queries end to end (`SessionContext::sql` -> `DataFrame::collect`)
-//! against real Parquet files, over a dataset shaped like observability
+//! planned SQL scans (`ExecutionPlan::execute` -> `collect`, with registration
+//! and planning outside the timed section) against real Parquet files. Each
+//! variant keeps one `SessionContext` for all iterations, so footers are read
+//! once, during registration and planning, and then served from the session's
+//! metadata cache: the timed section does not include a cold footer fetch.
+//! The dataset is shaped like observability
 //! span/log data -- the case this optimization is unambiguously the right
 //! tool for:
 //!
@@ -99,6 +103,8 @@
 //! `ROW_GROUPS` (default 64), `ROWS_PER_ROW_GROUP` (default 65536),
 //! `SPANS_PER_TRACE` (default 32), `ATTRIBUTE_PAD_LEN` (default 160),
 //! `TRACE_IN_LIST_LEN` (default 32).
+//! Set `BENCH_GET_LATENCY_MS=50` to add 50 ms to each object-store GET;
+//! leaving it unset measures local filesystem reads.
 
 use std::collections::HashMap;
 use std::hint::black_box;
@@ -110,7 +116,7 @@ use arrow::array::{
     ArrayRef, Int64Array, RecordBatch, StringArray, TimestampMillisecondArray,
 };
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
-use criterion::{Criterion, criterion_group, criterion_main};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use datafusion::physical_plan::display::DisplayableExecutionPlan;
 use datafusion::physical_plan::metrics::{MetricValue, MetricsSet};
 use datafusion::physical_plan::{ExecutionPlan, collect};
@@ -118,15 +124,21 @@ use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion_common::Result;
 use datafusion_common::format::MetricType;
 use datafusion_datasource_parquet::is_fully_dictionary_encoded;
+use object_store::ObjectStoreExt;
+use object_store::memory::InMemory;
+use object_store::path::Path as ObjectPath;
+use object_store::throttle::{ThrottleConfig, ThrottledStore};
 use parquet::arrow::ArrowWriter;
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
+use parquet::schema::types::ColumnPath;
 use rand::rngs::SmallRng;
 use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use tempfile::TempDir;
 use tokio::runtime::Runtime;
+use url::Url;
 
 /// Fixed seed so the generated dataset (and the needle trace ids computed
 /// against it) is identical from run to run.
@@ -244,10 +256,8 @@ fn trace_id_for_index(global_trace_index: u64) -> String {
     format!("{hi:016x}{lo:016x}")
 }
 
-/// A 16-hex-char span id. High cardinality (one per row): the dictionary
-/// for this column is expected to overflow into a `PLAIN` fallback -- see
-/// the "Out of scope" note in the module doc about a future negative
-/// benchmark variant using this column.
+/// A 16-hex-char span id. Its dictionary is disabled in the benchmark files
+/// so the no-candidate query always exercises the metadata preflight path.
 fn span_id_for_index(global_row_index: u64) -> String {
     let v = splitmix64(global_row_index ^ SPAN_ID_SALT);
     format!("{v:016x}")
@@ -404,6 +414,12 @@ fn tenant_not_in_query() -> String {
     )
 }
 
+fn no_dictionary_candidate_query() -> String {
+    // span_id has a distinct value per row and is written without dictionaries.
+    // The absent value leaves every row group under consideration.
+    "SELECT ts, service, name, duration_ns, attributes FROM spans WHERE span_id = '8888888888888888'".to_string()
+}
+
 /// Which on-disk index (if any) a [`BenchVariant`] reads for its predicate
 /// column, and therefore whether `bytes_scanned` can be split into index
 /// bytes vs. data-page bytes. `Mixed` (`bloom_and_dictionary`) keeps that
@@ -506,6 +522,7 @@ fn build_dataset() -> Result<Dataset> {
     let spans_props = WriterProperties::builder()
         .set_max_row_group_row_count(Some(config.rows_per_row_group))
         .set_dictionary_enabled(true)
+        .set_column_dictionary_enabled(ColumnPath::from("span_id"), false)
         .set_compression(compression)
         .build();
     // Bloom filters off by default (matches DataFusion's own default), on
@@ -514,6 +531,7 @@ fn build_dataset() -> Result<Dataset> {
     let spans_bloom_props = WriterProperties::builder()
         .set_max_row_group_row_count(Some(config.rows_per_row_group))
         .set_dictionary_enabled(true)
+        .set_column_dictionary_enabled(ColumnPath::from("span_id"), false)
         .set_compression(compression)
         .set_bloom_filter_enabled(true)
         .build();
@@ -565,6 +583,13 @@ fn build_dataset() -> Result<Dataset> {
                  shrink ROWS_PER_ROW_GROUP or SPANS_PER_TRACE"
             );
         }
+    }
+    let span_id_idx = schema.index_of("span_id").expect("known column");
+    for rg in 0..config.row_groups {
+        assert!(
+            !is_fully_dictionary_encoded(metadata.row_group(rg).column(span_id_idx)),
+            "span_id unexpectedly offers a dictionary candidate in row group {rg}"
+        );
     }
 
     // The `bloom_filter` variant's index bytes come from spans_bloom.parquet
@@ -659,19 +684,6 @@ fn session_config(variant: &BenchVariant) -> SessionConfig {
     opts.execution.parquet.dictionary_filter_on_read = variant.dictionary_filter_on_read;
     opts.execution.parquet.bloom_filter_on_read = variant.bloom_filter_on_read;
     cfg
-}
-
-async fn run_query(variant: &BenchVariant, path: &Path, query: &str) -> Vec<RecordBatch> {
-    let ctx = SessionContext::new_with_config(session_config(variant));
-    ctx.register_parquet(
-        "spans",
-        path.to_str().expect("utf8 path"),
-        ParquetReadOptions::default(),
-    )
-    .await
-    .expect("register spans table");
-    let df = ctx.sql(query).await.expect("plan query");
-    df.collect().await.expect("collect query")
 }
 
 struct ScanEvidence {
@@ -824,7 +836,14 @@ async fn print_evidence_table(dataset: &Dataset) {
             let evidence = scan_evidence(variant, path, &sql).await;
             let line = &evidence.datasource_line;
             let stats = metric_value(line, "row_groups_pruned_statistics");
-            let bloom = metric_value(line, "row_groups_pruned_bloom_filter");
+            // Plan display omits an idle Bloom pruning metric (#25822), which
+            // is the case for every variant that does not enable bloom
+            // filtering, so the key is absent from the line rather than zero.
+            let bloom = if line.contains("row_groups_pruned_bloom_filter=") {
+                metric_value(line, "row_groups_pruned_bloom_filter")
+            } else {
+                "(idle, not displayed)"
+            };
             let dict = metric_value(line, "row_groups_pruned_dictionary");
             println!("--- {query_name} / {} ---", variant.name);
             println!("  row_groups_pruned_statistics:   {stats}");
@@ -1047,6 +1066,36 @@ async fn print_evidence_table(dataset: &Dataset) {
             other => unreachable!("unknown query shape {other}"),
         }
     }
+    // Only the file without bloom filters: a bloom filter on `span_id` would
+    // prune this query itself and hide the dictionary stage's behavior.
+    for variant in BENCH_VARIANTS
+        .iter()
+        .filter(|variant| matches!(variant.file, DatasetFile::Spans))
+    {
+        let evidence = scan_evidence(
+            variant,
+            dataset.path_for(variant.file),
+            &no_dictionary_candidate_query(),
+        )
+        .await;
+        let (total, matched, _) =
+            pruning_counts(&evidence.metrics, "row_groups_pruned_statistics");
+        assert_eq!((total, matched), (config.row_groups, config.row_groups));
+        let (total, matched, _) =
+            pruning_counts(&evidence.metrics, "row_groups_pruned_dictionary");
+        assert_eq!(
+            (total, matched),
+            (config.row_groups, config.row_groups),
+            "dictionary unexpectedly pruned a row group"
+        );
+        println!(
+            "no_dictionary_candidate / {}: {} bytes scanned, {} of {} row groups retained by the dictionary stage",
+            variant.name,
+            scan_bytes(&evidence.metrics),
+            matched,
+            config.row_groups
+        );
+    }
     println!("=== end pruning evidence ===\n");
 }
 
@@ -1060,14 +1109,65 @@ fn bench_query(
     let mut group = c.benchmark_group(group_name);
     for variant in &BENCH_VARIANTS {
         let path = dataset.path_for(variant.file).to_path_buf();
-        let query = sql.to_string();
         let variant = *variant;
+        // Keep registration and planning out of the timed scan execution.
+        let ctx = rt.block_on(async {
+            let ctx = SessionContext::new_with_config(session_config(&variant));
+            let latency_ms = env_usize("BENCH_GET_LATENCY_MS", 0);
+            let scan_path = if latency_ms == 0 {
+                path.to_str().expect("utf8 path").to_string()
+            } else {
+                let base = Url::parse("bench://dictionary/").unwrap();
+                let memory = InMemory::new();
+                memory
+                    .put(
+                        &ObjectPath::from(path.file_name().unwrap().to_str().unwrap()),
+                        std::fs::read(&path).unwrap().into(),
+                    )
+                    .await
+                    .unwrap();
+                let throttled = ThrottledStore::new(
+                    memory,
+                    ThrottleConfig {
+                        wait_get_per_call: Duration::from_millis(latency_ms as u64),
+                        ..Default::default()
+                    },
+                );
+                ctx.register_object_store(&base, Arc::new(throttled));
+                format!(
+                    "bench://dictionary/{}",
+                    path.file_name().unwrap().to_str().unwrap()
+                )
+            };
+            ctx.register_parquet("spans", &scan_path, ParquetReadOptions::default())
+                .await
+                .expect("register spans table");
+            ctx
+        });
+        let task_ctx = ctx.task_ctx();
         group.bench_function(variant.name, |b| {
-            b.to_async(rt).iter(|| {
-                let path = path.clone();
-                let query = query.clone();
-                async move { black_box(run_query(&variant, &path, &query).await) }
-            })
+            b.to_async(rt).iter_batched(
+                || {
+                    tokio::task::block_in_place(|| {
+                        rt.block_on(async {
+                            ctx.sql(sql)
+                                .await
+                                .expect("plan query")
+                                .create_physical_plan()
+                                .await
+                                .expect("create physical plan")
+                        })
+                    })
+                },
+                |plan| async {
+                    black_box(
+                        collect(plan, Arc::clone(&task_ctx))
+                            .await
+                            .expect("execute query"),
+                    )
+                },
+                BatchSize::PerIteration,
+            )
         });
     }
     group.finish();
@@ -1086,6 +1186,13 @@ fn parquet_dictionary_pruning_query(c: &mut Criterion) {
     bench_query(c, &rt, dataset, "trace_lookup", &trace_lookup_sql);
     bench_query(c, &rt, dataset, "trace_lookup_in", &trace_lookup_in_sql);
     bench_query(c, &rt, dataset, "tenant_not_in", &tenant_not_in_sql);
+    bench_query(
+        c,
+        &rt,
+        dataset,
+        "no_dictionary_candidate",
+        &no_dictionary_candidate_query(),
+    );
 }
 
 criterion_group! {

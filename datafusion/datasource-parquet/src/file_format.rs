@@ -654,6 +654,13 @@ impl FileFormat for ParquetFormat {
             .cloned()
             .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
         source = source.with_table_parquet_options(self.options.clone());
+        source = source.with_dictionary_filter_on_read(
+            state
+                .config_options()
+                .execution
+                .parquet
+                .dictionary_filter_on_read,
+        );
 
         // Use the CachedParquetFileReaderFactory
         let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();

@@ -487,7 +487,8 @@ impl ParquetSource {
 
     /// If enabled, the reader will use fully dictionary-encoded `BYTE_ARRAY`
     /// column chunks as an exact row-group membership index. Defaults to
-    /// false.
+    /// false. Directly constructed sources retain this value; scans planned
+    /// through `ParquetFormat` use the current session setting instead.
     pub fn with_dictionary_filter_on_read(
         mut self,
         dictionary_filter_on_read: bool,

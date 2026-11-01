@@ -1401,6 +1401,9 @@ config_namespace! {
         /// `NOT IN`/`!=` predicates. Only column chunks whose page encoding
         /// statistics prove every data page came from the dictionary are
         /// used; chunks that fell back to `PLAIN` encoding are ignored.
+        /// When planning a scan, the current session value overrides the
+        /// corresponding table format option. Already planned scans retain
+        /// the value selected when they were planned.
         pub dictionary_filter_on_read: bool, default = false
 
         /// (reading) The maximum predicate cache size, in bytes. When
