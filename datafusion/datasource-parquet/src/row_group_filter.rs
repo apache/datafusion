@@ -525,6 +525,7 @@ impl<'a> RowGroupPruningStatistics<'a> {
             self.arrow_schema,
             self.parquet_schema,
         )?
+        .with_column_orders(self.column_orders)
         // Missing counts cannot rule out nulls, either when pruning groups or
         // when proving that every row matches the predicate.
         .with_missing_null_counts_as_zero(false))
