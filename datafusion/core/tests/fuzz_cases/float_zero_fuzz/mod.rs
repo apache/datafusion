@@ -109,7 +109,8 @@ async fn float_zero_negative_literal() {
 enum Failure {
     /// Both queries ran, but the results differ.
     Mismatch(String),
-    /// Only one of the queries ran.
+    /// One or both of the queries failed. A failure on both tables usually
+    /// means the template itself is broken.
     Error(String),
 }
 
@@ -152,7 +153,8 @@ async fn check_all(
     }
     let mut results = Vec::with_capacity(num_pairs);
     while let Some(joined) = join_set.join_next().await {
-        // Re-raise a panic from `check` with its own message.
+        // A panic inside a query is a bug of its own: re-raise it with its
+        // own message.
         results
             .push(joined.unwrap_or_else(|e| std::panic::resume_unwind(e.into_panic())));
     }
@@ -181,10 +183,10 @@ async fn check(
     let (mut canon, mut raw) = match (canon, raw) {
         (Ok(canon), Ok(raw)) => (format_rows(&canon), format_rows(&raw)),
         (Err(canon), Err(raw)) => {
-            panic!(
+            return Err(Failure::Error(format!(
                 "{}\nfails on both tables\n  raw:   {raw}\n  canon: {canon}",
                 describe()
-            )
+            )));
         }
         (Ok(_), Err(e)) => {
             return Err(Failure::Error(format!("{}\nraw fails: {e}", describe())));
