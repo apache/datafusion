@@ -7,8 +7,8 @@
 Loads ``conf.py`` from a``docs/source`` directory located at
 ``DATAFUSION_DOCS_SOURCE`` and overrides the following settings:
 - the version string (``DATAFUSION_DOCS_VERSION``),
-- the site base URL used for the sitemap
-- the version switcher.
+- the version switcher,
+- the sitemap and canonical URL (both disabled, see below).
 
 Why?
 
@@ -39,10 +39,16 @@ html_logo = str(source / html_logo)
 html_favicon = str(source / html_favicon)
 
 version = release = os.environ["DATAFUSION_DOCS_VERSION"]
-html_baseurl = f"https://datafusion.apache.org/versions/{version}/"
-sitemap_url_scheme = "{link}"
-if "sphinx_sitemap" not in extensions:
-    extensions.append("sphinx_sitemap")
+
+# Only the development documentation at the site root should be indexed by
+# search engines. Sphinx emits a `<link rel="canonical">` tag on every page
+# when `html_baseurl` is set, and sphinx-sitemap uses the same setting to
+# write `sitemap.xml`. With the tag's `html_baseurl` each versioned page would
+# declare itself canonical and compete with the root copy of the same page,
+# so clear it and skip the sitemap for release builds. The root `robots.txt`
+# only references the root `sitemap.xml`.
+html_baseurl = ""
+extensions = [ext for ext in extensions if ext != "sphinx_sitemap"]
 html_context = {**html_context, "github_repo": "datafusion", "github_version": version}
 html_theme_options = {
     **html_theme_options,
