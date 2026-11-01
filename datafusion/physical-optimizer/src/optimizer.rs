@@ -101,12 +101,13 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 /// The invariants above hold for rules whose [`PhysicalOptimizerRule::phase`]
 /// is [`PhysicalOptimizerPhase::Optimizer`]. Rules that run
 /// before the plan meets its distribution and ordering requirements return
-/// [`PhysicalOptimizerPhase::Analyzer`]: in the default list, every rule up to
-/// and including [`EnsureRequirements`], which inserts the repartitioning and
-/// sorting the requirements need. An analyzer rule keeps the results unchanged
-/// but may leave requirements unmet, so analyzer rules cannot be reordered
-/// freely. The physical planner fails planning when a rule list puts an
-/// analyzer rule after an optimizer rule.
+/// [`PhysicalOptimizerPhase::Analyzer`]: in the default list, every rule before
+/// [`EnsureRequirements`]. An analyzer rule keeps the results unchanged but
+/// may leave requirements unmet, so analyzer rules cannot be reordered freely.
+/// [`EnsureRequirements`] returns [`PhysicalOptimizerPhase::Enforcement`]: it
+/// inserts the repartitioning and sorting the requirements need. The physical
+/// planner fails planning when a rule list puts a rule before a rule of an
+/// earlier phase.
 ///
 /// The post-optimization [`FilterPushdown`] is an exception to invariant 2: it
 /// runs after every other optimizer rule, because later rewrites can break the
@@ -308,8 +309,8 @@ mod tests {
     use super::*;
 
     /// The rules that run before `EnsureRequirements` declare the analyzer
-    /// phase, and so does `EnsureRequirements` itself; the rest declare the
-    /// optimizer phase.
+    /// phase, `EnsureRequirements` declares the enforcement phase, and the
+    /// rest declare the optimizer phase.
     #[test]
     fn default_rules_declare_their_phase() {
         let rules = PhysicalOptimizer::new().rules;
@@ -318,10 +319,10 @@ mod tests {
             .position(|rule| rule.name() == "EnsureRequirements")
             .unwrap();
         for (idx, rule) in rules.iter().enumerate() {
-            let expected = if idx <= enforcement {
-                PhysicalOptimizerPhase::Analyzer
-            } else {
-                PhysicalOptimizerPhase::Optimizer
+            let expected = match idx.cmp(&enforcement) {
+                std::cmp::Ordering::Less => PhysicalOptimizerPhase::Analyzer,
+                std::cmp::Ordering::Equal => PhysicalOptimizerPhase::Enforcement,
+                std::cmp::Ordering::Greater => PhysicalOptimizerPhase::Optimizer,
             };
             assert_eq!(rule.phase(), expected, "{}", rule.name());
         }

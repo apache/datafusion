@@ -69,12 +69,13 @@ Rule order matters. The default pipeline may change between releases.
 The same rule name may appear more than once when the default pipeline runs it
 in multiple passes.
 
-Rules 1 to 8 are analyzer rules (`PhysicalOptimizerRule::phase` returns
+Rules 1 to 7 are analyzer rules (`PhysicalOptimizerRule::phase` returns
 `PhysicalOptimizerPhase::Analyzer`): they run before the plan meets its
-distribution and ordering requirements, which `EnsureRequirements` makes hold.
-The other rules are optimizer rules: each receives a plan that meets the
-requirements and must return one. The physical planner fails planning when a
-rule list puts an analyzer rule after an optimizer rule.
+distribution and ordering requirements. Rule 8, `EnsureRequirements`, is the
+enforcement rule (`PhysicalOptimizerPhase::Enforcement`): it makes the
+requirements hold. The other rules are optimizer rules: each receives a plan
+that meets the requirements and must return one. The physical planner fails
+planning when a rule list puts a rule before a rule of an earlier phase.
 
 After the last rule, including any rule added by the user, the physical planner
 checks that the final plan meets its ordering, distribution, and infinite-input

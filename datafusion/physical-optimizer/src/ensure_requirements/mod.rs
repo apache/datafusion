@@ -274,7 +274,7 @@ impl PhysicalOptimizerRule for EnsureRequirements {
     }
 
     fn phase(&self) -> PhysicalOptimizerPhase {
-        PhysicalOptimizerPhase::Analyzer
+        PhysicalOptimizerPhase::Enforcement
     }
 }
 

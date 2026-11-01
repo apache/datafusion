@@ -185,24 +185,26 @@ pub trait PhysicalOptimizerRule: Debug + std::any::Any {
     /// has to run before `EnsureRequirements`, because enforcement reads what
     /// it changes or because it needs the plan before enforcement adds
     /// repartitions and sorts, returns [`PhysicalOptimizerPhase::Analyzer`].
-    /// A wrapper that only observes another rule, for tracing for example,
-    /// returns that rule's phase.
+    /// A rule that makes the requirements hold, such as `EnsureRequirements`,
+    /// returns [`PhysicalOptimizerPhase::Enforcement`]. A wrapper that only
+    /// observes another rule, for tracing for example, returns that rule's
+    /// phase.
     fn phase(&self) -> PhysicalOptimizerPhase;
 }
 
-/// The two phases of physical optimization. The physical planner runs every
-/// [`Analyzer`](Self::Analyzer) rule before the first
-/// [`Optimizer`](Self::Optimizer) rule, and fails planning when a rule list
-/// puts an analyzer rule after an optimizer rule.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The phases of physical optimization, in the order they run. The physical
+/// planner fails planning when a rule list puts a rule before a rule of an
+/// earlier phase.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[non_exhaustive]
 pub enum PhysicalOptimizerPhase {
     /// Runs while the requirements are only declared. The rule must keep the
     /// results unchanged, may leave requirements unmet, and must stay correct
-    /// on a plan that already contains repartitions and sorts. The last
-    /// analyzer rule, `EnsureRequirements` in the default list, leaves a plan
-    /// that meets every requirement.
+    /// on a plan that already contains repartitions and sorts.
     Analyzer,
+    /// Makes every distribution and ordering requirement hold, as
+    /// `EnsureRequirements` does in the default list.
+    Enforcement,
     /// Receives a plan that meets every requirement and must return one that
     /// does, with the same results.
     Optimizer,

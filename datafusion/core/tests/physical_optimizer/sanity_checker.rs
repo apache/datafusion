@@ -24,6 +24,7 @@ use datafusion_common::{JoinType, NullEquality, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Literal, col};
 use datafusion_physical_expr::{Partitioning, RangePartitioning, SplitPoint};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
+use datafusion_physical_optimizer::join_selection::JoinSelection;
 use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
 use datafusion_physical_optimizer::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
@@ -1040,11 +1041,11 @@ impl PhysicalOptimizerRule for RemoveSorts {
     }
 }
 
-/// [`RemoveSorts`] declared as an analyzer rule.
+/// [`RemoveSorts`] declared as an enforcement rule.
 #[derive(Debug)]
-struct RemoveSortsInAnalyzer;
+struct RemoveSortsInEnforcement;
 
-impl PhysicalOptimizerRule for RemoveSortsInAnalyzer {
+impl PhysicalOptimizerRule for RemoveSortsInEnforcement {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -1062,7 +1063,7 @@ impl PhysicalOptimizerRule for RemoveSortsInAnalyzer {
     }
 
     fn phase(&self) -> PhysicalOptimizerPhase {
-        PhysicalOptimizerPhase::Analyzer
+        PhysicalOptimizerPhase::Enforcement
     }
 }
 
@@ -1119,16 +1120,16 @@ async fn test_final_check_without_ensure_requirements() -> Result<()> {
     Ok(())
 }
 
-/// The analyzer rules must leave a plan whose requirements hold. When they do
-/// not, the error names the last analyzer rule.
+/// The enforcement rules must leave a plan whose requirements hold. When they
+/// do not, the error names the last enforcement rule.
 #[tokio::test]
-async fn test_final_check_names_last_analyzer_rule() -> Result<()> {
+async fn test_final_check_names_last_enforcement_rule() -> Result<()> {
     let mut rules = PhysicalOptimizer::new().rules;
-    let analyzer_rules = rules
+    let enforcement = rules
         .iter()
-        .take_while(|rule| rule.phase() == PhysicalOptimizerPhase::Analyzer)
-        .count();
-    rules.insert(analyzer_rules, Arc::new(RemoveSortsInAnalyzer));
+        .rposition(|rule| rule.phase() == PhysicalOptimizerPhase::Enforcement)
+        .unwrap();
+    rules.insert(enforcement + 1, Arc::new(RemoveSortsInEnforcement));
     let state = SessionStateBuilder::new()
         .with_default_features()
         .with_physical_optimizer_rules(rules)
@@ -1138,6 +1139,28 @@ async fn test_final_check_names_last_analyzer_rule() -> Result<()> {
         error.starts_with(
             "SanityCheckPlan: the plan produced by physical optimizer rule \
              'remove_sorts' does not satisfy the order and distribution requirements"
+        ),
+        "{error}"
+    );
+    Ok(())
+}
+
+/// Analyzer rules without an enforcement rule never make the requirements
+/// hold, so no rule is named.
+#[tokio::test]
+async fn test_final_check_without_enforcement_names_no_rule() -> Result<()> {
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_physical_optimizer_rules(vec![
+            Arc::new(JoinSelection::new()),
+            Arc::new(RemoveSorts),
+        ])
+        .build();
+    let error = plan_window_query(state).await.unwrap_err().to_string();
+    assert!(
+        error.starts_with(
+            "SanityCheckPlan: no physical optimizer rule produced a plan that \
+             satisfies the order and distribution requirements"
         ),
         "{error}"
     );
