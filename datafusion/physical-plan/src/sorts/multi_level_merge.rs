@@ -15,7 +15,7 @@ use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::{Result, resources_err};
-use datafusion_execution::memory_pool::{MemoryReservation, MergeMemoryPool};
+use datafusion_execution::memory_pool::{MemoryPool, MemoryReservation, MergeMemoryPool};
 
 use crate::sorts::builder::try_grow_reservation_to_at_least;
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
@@ -117,13 +117,14 @@ use futures::{Stream, StreamExt};
 ///    each run it reads, times the number of batches read ahead.
 /// 2. **Adaptive Buffer Sizing**: Reads fewer batches ahead when memory is
 ///    constrained.
-/// 3. **Replay Headroom**: When the caller asks for it (the aggregate replaying
-///    its spills), a run is admitted only if the pool could give as much again.
-///    Only the two runs a pass needs, with one batch read ahead, may use the
-///    whole pool.
+/// 3. **Headroom**: A run is admitted only if the pool could give as much again
+///    as the merge takes beyond the workspace it already holds. That much is left
+///    for the consumer of the merge (the aggregate replaying its spills) and for
+///    other operators sharing the pool. Only the two runs a pass needs, with one
+///    batch read ahead, may use the whole pool.
 /// 4. **Spill-to-Disk**: Spill to disk when we cannot merge all runs in memory.
-///    When the caller asks for it, an intermediate pass merges only as many runs
-///    as needed for the remaining runs to fit one final pass.
+///    An intermediate pass merges only as many runs as needed for the remaining
+///    runs to fit one final pass.
 ///
 /// If two runs do not fit even with one batch read ahead (single rows or columns
 /// that cannot be split, or a pool smaller than the bound was chosen for), the
@@ -139,10 +140,6 @@ pub(crate) struct MultiLevelMergeBuilder {
     reservation: MemoryReservation,
     /// Workspace retained across intermediate spill passes.
     merge_pool: Option<Arc<MergeMemoryPool>>,
-    /// Leave memory for the aggregate consuming the merged spill rows.
-    reserve_replay_headroom: bool,
-    /// Avoid merging more runs than needed before the final replay pass.
-    size_intermediate_merges: bool,
     fetch: Option<usize>,
     enable_round_robin_tie_breaker: bool,
 }
@@ -194,8 +191,6 @@ impl MultiLevelMergeBuilder {
             batch_size,
             reservation,
             merge_pool: None,
-            reserve_replay_headroom: false,
-            size_intermediate_merges: false,
             enable_round_robin_tie_breaker,
             fetch,
         }
@@ -203,23 +198,6 @@ impl MultiLevelMergeBuilder {
 
     pub(super) fn with_merge_pool(mut self, pool: Option<Arc<MergeMemoryPool>>) -> Self {
         self.merge_pool = pool;
-        self
-    }
-
-    /// Leave replay headroom while selecting merge buffers.
-    pub(super) fn with_replay_headroom(mut self, reserve: bool) -> Self {
-        self.reserve_replay_headroom = reserve;
-        self
-    }
-
-    pub(super) fn with_intermediate_merge_sizing(
-        mut self,
-        min_spill_batch_rows: Option<usize>,
-    ) -> Self {
-        // Short inputs can produce larger batches when merged, reducing the next
-        // pass's fan-in. Fetch can also leave intermediate runs with short batches.
-        self.size_intermediate_merges = self.fetch.is_none()
-            && min_spill_batch_rows.is_some_and(|rows| rows >= self.batch_size);
         self
     }
 
@@ -252,9 +230,9 @@ impl MultiLevelMergeBuilder {
             }
 
             // Need to sort to a spill file
-            let Some((file, max_record_batch_memory, max_batch_rows)) = self
+            let Some((file, max_record_batch_memory)) = self
                 .spill_manager
-                .spill_record_batch_stream_and_return_max_batch_stats(
+                .spill_record_batch_stream_and_return_max_batch_memory(
                     &mut stream,
                     "MultiLevelMergeBuilder intermediate spill",
                 )
@@ -262,10 +240,6 @@ impl MultiLevelMergeBuilder {
             else {
                 continue;
             };
-
-            // Offset overflow or the byte bound can end batches early. Keep
-            // sizing disabled once a run cannot fill its output batch.
-            self.size_intermediate_merges &= max_batch_rows >= self.batch_size;
 
             self.sorted_spill_files.push(SortedSpillFile {
                 file,
@@ -333,43 +307,36 @@ impl MultiLevelMergeBuilder {
                         &mut memory_reservation,
                     )?;
 
-                if self.size_intermediate_merges
+                if self.fetch.is_none()
                     && self.sorted_streams.is_empty()
                     && !self.sorted_spill_files.is_empty()
                 {
-                    // The next admission starts with two read buffers per run.
-                    // Fit both those buffers and any replay headroom in the
-                    // existing grant: another partition may take every spare
-                    // byte while this intermediate pass writes to disk.
-                    let final_fan_in = sorted_spill_files.len() * buffer_size / 2;
-                    let final_fan_in = if self.reserve_replay_headroom {
-                        final_fan_in / 2
-                    } else {
-                        final_fan_in
-                    };
+                    // This is an intermediate pass. Merge only as many runs as
+                    // needed for the rest to fit the final pass, which starts
+                    // with two read buffers per run and leaves headroom. Size it
+                    // within the grant this pass holds: another partition may
+                    // take every spare byte while this pass writes to disk.
+                    let widest = sorted_spill_files
+                        .iter()
+                        .chain(&self.sorted_spill_files)
+                        .map(|run| run.max_record_batch_memory)
+                        .max()
+                        .unwrap_or_default();
+                    let per_run =
+                        2 * get_reserved_bytes_for_record_batch_size(widest, widest);
+                    let final_fan_in = (memory_reservation.size() / per_run.max(1) / 2)
+                        .min(self.max_fan_in());
                     let needed =
                         (self.sorted_spill_files.len() + sorted_spill_files.len() + 1)
-                            .saturating_sub(final_fan_in);
+                            .saturating_sub(final_fan_in)
+                            .max(MIN_SPILL_MERGE_FAN_IN);
                     if needed < sorted_spill_files.len() {
-                        let first = &sorted_spill_files[0];
-                        // A wider pending run can change the next pass's
-                        // fan-in and add intermediate work. Apply this sizing
-                        // heuristic only to uniform run budgets.
-                        let uniform_runs = sorted_spill_files
-                            .iter()
-                            .chain(&self.sorted_spill_files)
-                            .all(|file| {
-                                file.max_record_batch_memory
-                                    == first.max_record_batch_memory
-                            });
-                        if uniform_runs {
-                            let unused = sorted_spill_files.split_off(needed);
-                            self.sorted_spill_files.splice(0..0, unused);
-                            // Keep the grant through intermediate EOF and the
-                            // spill write, then transfer it to the next admission.
-                            // This does not reserve additional pool memory.
-                            self.reservation = memory_reservation.take();
-                        }
+                        let unused = sorted_spill_files.split_off(needed);
+                        self.sorted_spill_files.splice(0..0, unused);
+                        // Keep the grant through intermediate EOF and the
+                        // spill write, then transfer it to the next admission.
+                        // This does not reserve additional pool memory.
+                        self.reservation = memory_reservation.take();
                     }
                 }
 
@@ -469,11 +436,11 @@ impl MultiLevelMergeBuilder {
     /// Returns the sorted spill files to read in the next pass, and how many
     /// batches to read ahead from each.
     ///
-    /// Takes as many runs as fit, at least `minimum_number_of_required_streams`,
-    /// leaving replay headroom if the caller asked for it (see the type docs). If
-    /// the minimum does not fit, retries with fewer batches read ahead; with one
-    /// batch read ahead the minimum only has to fit the pool, or the pool's error
-    /// is returned.
+    /// Takes as many runs as fit, at least `minimum_number_of_required_streams`.
+    /// Every run must leave as much again as the merge takes beyond the
+    /// workspace it already holds (see the type docs). If the minimum does not
+    /// fit, retries with fewer batches read ahead; with one batch read ahead the
+    /// minimum only has to fit the pool, or the pool's error is returned.
     fn get_sorted_spill_files_to_merge(
         &mut self,
         buffer_len: usize,
@@ -482,6 +449,12 @@ impl MultiLevelMergeBuilder {
     ) -> Result<(Vec<SortedSpillFile>, usize)> {
         assert_ne!(buffer_len, 0, "Buffer length must be greater than 0");
         let max_spill_files = self.max_fan_in();
+        // Workspace the merge already holds (`sort_spill_reservation_bytes`,
+        // retained by the sort's merge pool) takes nothing from others.
+        let owned = self
+            .merge_pool
+            .as_ref()
+            .map_or_else(|| reservation.size(), |pool| pool.reserved());
         let mut number_of_spills = 0;
         let mut accepted_memory: usize = 0;
 
@@ -498,20 +471,17 @@ impl MultiLevelMergeBuilder {
                 ) * buffer_len;
             // Only the minimum merge with one batch read ahead may use the
             // whole pool: without it, the merge cannot make progress at all.
-            let check_headroom = self.reserve_replay_headroom
-                && !(buffer_len == 1
-                    && number_of_spills < minimum_number_of_required_streams);
-            let admission = if check_headroom {
-                // Ask the pool for merge buffers plus equal replay space, then
-                // return the spare bytes before exposing the merge stream.
-                match total_needed.checked_mul(2) {
+            let admission = if buffer_len == 1
+                && number_of_spills < minimum_number_of_required_streams
+            {
+                try_grow_reservation_to_at_least(reservation, total_needed)
+            } else {
+                match total_needed.checked_add(total_needed.saturating_sub(owned)) {
                     Some(with_headroom) => {
                         try_grow_reservation_to_at_least(reservation, with_headroom)
                     }
                     None => resources_err!("Spill merge headroom exceeds usize::MAX"),
                 }
-            } else {
-                try_grow_reservation_to_at_least(reservation, total_needed)
             };
             match admission {
                 Ok(()) => {
@@ -543,9 +513,9 @@ impl MultiLevelMergeBuilder {
             }
         }
 
-        if self.reserve_replay_headroom && reservation.size() > accepted_memory {
-            // `total_needed` may include a rejected candidate. Keep only the
-            // buffers that were admitted, releasing temporary replay headroom.
+        // Keep only the buffers that were admitted, releasing the headroom. If
+        // no run was admitted, the reservation stays with the in-memory merge.
+        if number_of_spills > 0 && reservation.size() > accepted_memory {
             reservation.shrink(reservation.size() - accepted_memory);
         }
 
@@ -722,12 +692,11 @@ mod tests {
 
     #[rstest::rstest]
     #[case::full_batches(8, 128, 6)]
-    #[case::replay_headroom_limits_sizing(9, 128, 7)]
+    #[case::headroom_limits_sizing(9, 128, 7)]
     #[case::unchanged_selection(13, 128, 7)]
     #[case::short_batches(9, 64, 7)]
     #[tokio::test]
     async fn intermediate_merge_sizing_preserves_final_output(
-        #[values(false, true)] size_intermediate_merges: bool,
         #[case] runs: usize,
         #[case] rows: usize,
         #[case] sized_intermediate_inputs: usize,
@@ -750,38 +719,27 @@ mod tests {
         // headroom. The retained buffer grant can admit three final inputs plus
         // their replay headroom, so eight runs need six merged inputs. Nine or
         // thirteen runs require all seven and exercise the unchanged selection.
-        // Short input batches can grow when merged, so they must keep the original
-        // selection to avoid adding a pass with the larger output batch budget.
         let pool: Arc<dyn MemoryPool> =
             Arc::new(GreedyMemoryPool::new(8 * 7 * batch_memory));
-        let mut builder =
-            build_merge_builder(spill_manager, Arc::clone(&schema), files, &pool, 128)
-                .with_replay_headroom(true);
-        if size_intermediate_merges {
-            builder = builder.with_intermediate_merge_sizing(Some(rows));
-        }
+        let builder =
+            build_merge_builder(spill_manager, Arc::clone(&schema), files, &pool, 128);
         let stream = builder.create_spillable_merge_stream();
         let batches: Vec<RecordBatch> = stream.try_collect().await?;
         let merged = concat_batches(&schema, &batches)?;
         let expected = Int64Array::from_iter_values(0..(runs * rows) as i64);
         assert_eq!(merged.column(0).as_primitive::<Int64Type>(), &expected);
-        let intermediate_inputs = if size_intermediate_merges {
-            sized_intermediate_inputs
-        } else {
-            7
-        };
-        assert_eq!(spilled_rows.value(), (runs + intermediate_inputs) * rows);
+        assert_eq!(
+            spilled_rows.value(),
+            (runs + sized_intermediate_inputs) * rows
+        );
         assert_eq!(pool.reserved(), 0);
         assert_eq!(env.disk_manager.spilling_progress().active_files_count, 0);
         assert_eq!(env.disk_manager.used_disk_space(), 0);
         Ok(())
     }
 
-    #[rstest::rstest]
     #[tokio::test]
-    async fn intermediate_merge_sizing_preserves_heterogeneous_runs(
-        #[values(false, true)] size_intermediate_merges: bool,
-    ) -> Result<()> {
+    async fn intermediate_merge_sizing_preserves_heterogeneous_runs() -> Result<()> {
         use arrow::array::StringArray;
         use arrow::buffer::{Buffer, OffsetBuffer};
 
@@ -834,9 +792,7 @@ mod tests {
         let pool: Arc<dyn MemoryPool> =
             Arc::new(GreedyMemoryPool::new(8 * (wide + small + small / 2)));
         let builder =
-            build_merge_builder(spill_manager, Arc::clone(&schema), files, &pool, rows)
-                .with_replay_headroom(true)
-                .with_intermediate_merge_sizing(size_intermediate_merges.then_some(rows));
+            build_merge_builder(spill_manager, Arc::clone(&schema), files, &pool, rows);
         let batches: Vec<RecordBatch> = builder
             .create_spillable_merge_stream()
             .try_collect()
@@ -910,10 +866,9 @@ mod tests {
         Ok(())
     }
 
-    /// With one batch read ahead, the two runs a pass needs only have to fit
-    /// the pool, not the replay headroom.
+    /// The two runs a pass needs only have to fit the pool, not the headroom.
     #[tokio::test]
-    async fn replay_headroom_allows_the_minimum_without_headroom() -> Result<()> {
+    async fn minimum_merge_needs_no_headroom() -> Result<()> {
         let env = Arc::new(RuntimeEnv::default());
         let schema = test_schema();
         let spill_manager = build_spill_manager(&env, &schema);
@@ -924,8 +879,7 @@ mod tests {
         let pool_size = 6 * batch_memory;
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(pool_size));
         let mut builder =
-            build_merge_builder(spill_manager, Arc::clone(&schema), spills, &pool, 8192)
-                .with_replay_headroom(true);
+            build_merge_builder(spill_manager, Arc::clone(&schema), spills, &pool, 8192);
 
         let mut reservation = builder.reservation.new_empty();
         let (spills, buffer_len) =
@@ -951,8 +905,9 @@ mod tests {
         Ok(())
     }
 
-    /// With replay headroom, reading two batches ahead must also leave as much
-    /// again for the replay; otherwise the merge reads one batch ahead.
+    /// Without workspace (the aggregate's merge), reading two batches ahead
+    /// must also leave as much again for the replay; otherwise the merge reads
+    /// one batch ahead.
     #[test]
     fn read_ahead_needs_headroom() -> Result<()> {
         let env = Arc::new(RuntimeEnv::default());
@@ -964,8 +919,7 @@ mod tests {
         let batch_memory = spills[0].max_record_batch_memory;
         // Two batches read ahead from two runs take 8 batches of the pool's 9.
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(9 * batch_memory));
-        let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 1)
-            .with_replay_headroom(true);
+        let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 1);
         let mut reservation = builder.reservation.new_empty();
         let (spills, buffer_len) =
             builder.get_sorted_spill_files_to_merge(2, 2, &mut reservation)?;
@@ -978,7 +932,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_headroom_is_released_after_rejected_candidate() -> Result<()> {
+    fn headroom_is_released_after_rejected_candidate() -> Result<()> {
         let env = Arc::new(RuntimeEnv::default());
         let schema = test_schema();
         let spill_manager = build_spill_manager(&env, &schema);
@@ -988,8 +942,7 @@ mod tests {
         let batch_memory = spills[0].max_record_batch_memory;
         let pool: Arc<dyn MemoryPool> =
             Arc::new(GreedyMemoryPool::new(10 * batch_memory));
-        let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 1)
-            .with_replay_headroom(true);
+        let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 1);
         let mut reservation = builder.reservation.new_empty();
         let (spills, buffer_len) =
             builder.get_sorted_spill_files_to_merge(1, 2, &mut reservation)?;
@@ -1010,7 +963,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn replay_headroom_still_enforces_the_actual_pool() -> Result<()> {
+    async fn minimum_merge_still_enforces_the_actual_pool() -> Result<()> {
         let env = Arc::new(RuntimeEnv::default());
         let schema = test_schema();
         let spill_manager = build_spill_manager(&env, &schema);
@@ -1019,8 +972,7 @@ mod tests {
         let batch_memory = first.max_record_batch_memory;
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(3 * batch_memory));
         let builder =
-            build_merge_builder(spill_manager, schema, vec![first, second], &pool, 8192)
-                .with_replay_headroom(true);
+            build_merge_builder(spill_manager, schema, vec![first, second], &pool, 8192);
         let mut stream = builder.create_spillable_merge_stream();
         let error = stream.next().await.unwrap().unwrap_err();
         assert!(

@@ -105,8 +105,6 @@ pub(super) struct AggregateSpill {
     spill_manager: SpillManager,
     /// Spill runs waiting to be merged, all sorted by `spill_expr`.
     spills: Vec<SortedSpillFile>,
-    /// Minimum, across original runs, of each run's largest batch row count.
-    min_spill_batch_rows: usize,
     /// Describes this stream's spill requests, and prefixes its internal errors.
     label: &'static str,
 }
@@ -198,7 +196,6 @@ impl AggregateSpill {
             spill_expr,
             spill_manager,
             spills: vec![],
-            min_spill_batch_rows: batch_size,
             label,
         })
     }
@@ -223,7 +220,6 @@ impl AggregateSpill {
                 bound_spill_batches_by_first_spill(&self.spill_manager, &state_batch)?;
         }
 
-        let max_batch_rows = state_batch.num_rows().min(self.batch_size);
         let sorted_iter = IncrementalSortIterator::new(
             state_batch,
             self.spill_expr.clone(),
@@ -244,7 +240,6 @@ impl AggregateSpill {
             file,
             max_record_batch_memory,
         });
-        self.min_spill_batch_rows = self.min_spill_batch_rows.min(max_batch_rows);
 
         Ok(())
     }
@@ -286,7 +281,6 @@ impl AggregateSpill {
             spill_expr,
             spill_manager,
             spills,
-            min_spill_batch_rows,
             label: _,
         } = self;
 
@@ -303,8 +297,6 @@ impl AggregateSpill {
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
             .with_reservation(merge_reservation)
-            .with_replay_headroom()
-            .with_intermediate_merge_sizing(Some(min_spill_batch_rows))
             .build()?;
         let replay = ClusteredFinalAggregateStream::new_with_input_and_metrics(
             &replay_agg,

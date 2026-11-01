@@ -158,32 +158,29 @@ impl SpillManager {
         Ok(file.map(|f| (f, max_record_batch_size)))
     }
 
-    /// Spill a stream of `RecordBatch`es and return the file, maximum batch memory,
-    /// and maximum batch row count.
-    pub(crate) async fn spill_record_batch_stream_and_return_max_batch_stats(
+    /// Spill a stream of `RecordBatch`es and return the file and the size of the
+    /// largest batch written.
+    pub(crate) async fn spill_record_batch_stream_and_return_max_batch_memory(
         &self,
         stream: &mut SendableRecordBatchStream,
         request_description: &str,
-    ) -> Result<Option<(Arc<dyn SpillFile>, usize, usize)>> {
+    ) -> Result<Option<(Arc<dyn SpillFile>, usize)>> {
         use futures::StreamExt;
 
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
         let result = async {
             let mut max_record_batch_size = 0;
-            let mut max_batch_rows = 0;
 
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
                 let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
-
                 max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
-                max_batch_rows = max_batch_rows.max(batch.num_rows());
             }
 
             let file = in_progress_file.finish_async().await?;
 
-            Ok(file.map(|f| (f, max_record_batch_size, max_batch_rows)))
+            Ok(file.map(|f| (f, max_record_batch_size)))
         }
         .await;
 
@@ -470,7 +467,7 @@ mod tests {
             Box::pin(RecordBatchStreamAdapter::new(schema, input));
 
         let error = manager
-            .spill_record_batch_stream_and_return_max_batch_stats(
+            .spill_record_batch_stream_and_return_max_batch_memory(
                 &mut stream,
                 "abort-test",
             )

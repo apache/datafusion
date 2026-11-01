@@ -1365,7 +1365,6 @@ impl GroupedHashAggregateStream {
                 .with_batch_size(self.batch_size)
                 .with_reservation(self.reservation.new_empty())
                 .with_merge_pool(Arc::clone(&self.merge_pool))
-                .with_replay_headroom()
                 .build()?;
             self.input_done = false;
 
