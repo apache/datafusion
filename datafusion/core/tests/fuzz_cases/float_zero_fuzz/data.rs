@@ -128,7 +128,8 @@ fn pool_value(rng: &mut impl Rng) -> Option<f64> {
 }
 
 /// `num_rows` random rows, split into random batches over 1 to 3 partitions.
-/// Retries until `raw` has a `-0.0` both at the top level and inside a list.
+/// Retries until every float column of `raw` (`a`, `a32` and the lists in
+/// `k`) has a `-0.0`.
 pub fn random(rng: &mut StdRng, num_rows: usize) -> Dataset {
     let schema = schema();
     let raw = loop {
@@ -151,8 +152,9 @@ pub fn random(rng: &mut StdRng, num_rows: usize) -> Dataset {
                 .collect(),
         }
         .into_batch(&schema);
-        if has_negative_zero(raw.column_by_name("a").unwrap())
-            && has_negative_zero(raw.column_by_name("k").unwrap())
+        if ["a", "a32", "k"]
+            .iter()
+            .all(|name| has_negative_zero(raw.column_by_name(name).unwrap()))
         {
             break raw;
         }
