@@ -8,7 +8,9 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-use datafusion_physical_optimizer::{PhysicalOptimizerContext, PhysicalOptimizerRule};
+use datafusion_physical_optimizer::{
+    PhysicalOptimizerContext, PhysicalOptimizerPhase, PhysicalOptimizerRule,
+};
 use datafusion_physical_plan::ExecutionPlan;
 use stabby::string::String as SString;
 use tokio::runtime::Handle;
@@ -265,6 +267,14 @@ impl FFI_PhysicalOptimizerRule {
 /// no guarantees about being able to access the data in `private_data`. Any functions
 /// defined on this struct must only use the stable functions provided in
 /// FFI_PhysicalOptimizerRule to interact with the foreign rule.
+///
+/// A foreign rule reports [`PhysicalOptimizerPhase::Optimizer`]:
+/// `FFI_PhysicalOptimizerRule` does not
+/// carry the phase, so that its layout stays compatible with DataFusion 55. A
+/// rule that comes back to the library that created it is unwrapped and keeps
+/// its own phase.
+///
+/// [`PhysicalOptimizerPhase::Optimizer`]: datafusion_physical_optimizer::PhysicalOptimizerPhase::Optimizer
 #[derive(Debug)]
 pub struct ForeignPhysicalOptimizerRule {
     name: String,
@@ -335,6 +345,11 @@ impl PhysicalOptimizerRule for ForeignPhysicalOptimizerRule {
     fn schema_check(&self) -> bool {
         unsafe { (self.rule.schema_check)(&self.rule) }
     }
+
+    // `FFI_PhysicalOptimizerRule` does not carry the phase; see the type docs.
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Optimizer
+    }
 }
 
 #[cfg(test)]
@@ -374,6 +389,10 @@ mod tests {
         fn schema_check(&self) -> bool {
             self.schema_check
         }
+
+        fn phase(&self) -> PhysicalOptimizerPhase {
+            PhysicalOptimizerPhase::Optimizer
+        }
     }
 
     /// A rule that returns an error from `optimize` but succeeds when
@@ -406,6 +425,36 @@ mod tests {
 
         fn schema_check(&self) -> bool {
             true
+        }
+
+        fn phase(&self) -> PhysicalOptimizerPhase {
+            PhysicalOptimizerPhase::Optimizer
+        }
+    }
+
+    /// A rule that leaves the plan unchanged and declares the analyzer phase.
+    #[derive(Debug)]
+    struct AnalyzerNoOpRule;
+
+    impl PhysicalOptimizerRule for AnalyzerNoOpRule {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(plan)
+        }
+
+        fn name(&self) -> &str {
+            "analyzer_no_op_rule"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+
+        fn phase(&self) -> PhysicalOptimizerPhase {
+            PhysicalOptimizerPhase::Analyzer
         }
     }
 
@@ -481,6 +530,24 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    /// `FFI_PhysicalOptimizerRule` does not carry the phase: a foreign rule
+    /// reports the optimizer phase, while a rule that comes back to the
+    /// library that created it keeps its own phase.
+    #[test]
+    fn test_phase_across_ffi() {
+        let rule: Arc<dyn PhysicalOptimizerRule + Send + Sync> =
+            Arc::new(AnalyzerNoOpRule);
+
+        let local_ffi = FFI_PhysicalOptimizerRule::new(Arc::clone(&rule), None);
+        let local: Arc<dyn PhysicalOptimizerRule + Send + Sync> = (&local_ffi).into();
+        assert_eq!(local.phase(), PhysicalOptimizerPhase::Analyzer);
+
+        let mut foreign_ffi = FFI_PhysicalOptimizerRule::new(rule, None);
+        foreign_ffi.library_marker_id = crate::mock_foreign_marker_id;
+        let foreign: Arc<dyn PhysicalOptimizerRule + Send + Sync> = (&foreign_ffi).into();
+        assert_eq!(foreign.phase(), PhysicalOptimizerPhase::Optimizer);
     }
 
     #[test]

@@ -32,7 +32,9 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_physical_plan::statistics::StatisticsContext;
 
 // Re-export from this module for backwards compatibility.
-pub use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule};
+pub use datafusion_session::{
+    PhysicalOptimizerContext, PhysicalOptimizerPhase, PhysicalOptimizerRule,
+};
 
 pub use datafusion_session::with_statistics_context;
 
@@ -94,19 +96,21 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 ///    rules in a different order must still yield a valid plan that produces
 ///    the same results.
 ///
-/// ### Exceptions
+/// ### Analyzer rules
 ///
-/// Some built-in rules do not yet fully satisfy the invariants above because
-/// they are responsible for making an initial plan *executable* rather than for
-/// optimizing an existing plan:
+/// The invariants above hold for rules whose [`PhysicalOptimizerRule::phase`]
+/// is [`PhysicalOptimizerPhase::Optimizer`]. Rules that run
+/// before the plan meets its distribution and ordering requirements return
+/// [`PhysicalOptimizerPhase::Analyzer`]: in the default list, every rule up to
+/// and including [`EnsureRequirements`], which inserts the repartitioning and
+/// sorting the requirements need. An analyzer rule keeps the results unchanged
+/// but may leave requirements unmet, so analyzer rules cannot be reordered
+/// freely. The physical planner fails planning when a rule list puts an
+/// analyzer rule after an optimizer rule.
 ///
-/// - [`EnsureRequirements`] inserts the repartitioning and sorting needed to
-///   satisfy the distribution and ordering requirements.
-/// - [`OutputRequirements`] records output requirements.
-///
-/// Custom pipelines must keep these rules in a compatible relative order. We
-/// are working to remove these exceptions, so that all rules can be reordered
-/// freely.
+/// The post-optimization [`FilterPushdown`] is an exception to invariant 2: it
+/// runs after every other optimizer rule, because later rewrites can break the
+/// links between a dynamic filter and the operators that use it.
 ///
 /// After the last rule, including rules added by the user, the physical
 /// planner rejects the plan if its requirements are not satisfied (see
@@ -296,5 +300,30 @@ impl PhysicalOptimizer {
     /// governing non-default optimizer pipelines.
     pub fn with_rules(rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>) -> Self {
         Self { rules }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The rules that run before `EnsureRequirements` declare the analyzer
+    /// phase, and so does `EnsureRequirements` itself; the rest declare the
+    /// optimizer phase.
+    #[test]
+    fn default_rules_declare_their_phase() {
+        let rules = PhysicalOptimizer::new().rules;
+        let enforcement = rules
+            .iter()
+            .position(|rule| rule.name() == "EnsureRequirements")
+            .unwrap();
+        for (idx, rule) in rules.iter().enumerate() {
+            let expected = if idx <= enforcement {
+                PhysicalOptimizerPhase::Analyzer
+            } else {
+                PhysicalOptimizerPhase::Optimizer
+            };
+            assert_eq!(rule.phase(), expected, "{}", rule.name());
+        }
     }
 }

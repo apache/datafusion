@@ -17,7 +17,7 @@ use datafusion::logical_expr::{Expr, Operator, TableType};
 use datafusion::physical_expr::expressions::{binary, col, lit, negative};
 use datafusion::physical_expr::projection::ProjectionExprs;
 use datafusion::physical_expr::{PhysicalExpr, PhysicalSortExpr};
-use datafusion::physical_optimizer::PhysicalOptimizerRule;
+use datafusion::physical_optimizer::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 use datafusion::physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use datafusion::physical_plan::projection::ProjectionExec;
@@ -162,6 +162,11 @@ impl PhysicalOptimizerRule for CustomLimitRule {
 
     fn schema_check(&self) -> bool {
         true
+    }
+
+    // `sort_pushdown.slt` inserts this rule before `EnsureRequirements`.
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Analyzer
     }
 }
 

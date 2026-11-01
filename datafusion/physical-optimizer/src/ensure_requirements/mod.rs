@@ -140,10 +140,10 @@ pub mod enforce_sorting;
 
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
 use crate::optimizer::{
     ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
 };
+use crate::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -271,6 +271,10 @@ impl PhysicalOptimizerRule for EnsureRequirements {
 
     fn schema_check(&self) -> bool {
         true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Analyzer
     }
 }
 

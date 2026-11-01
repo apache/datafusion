@@ -20,7 +20,7 @@
 
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
+use crate::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 
 use datafusion_common::{Result, assert_eq_or_internal_err, config::ConfigOptions};
 use datafusion_physical_expr::PhysicalExpr;
@@ -421,6 +421,13 @@ impl PhysicalOptimizerRule for FilterPushdown {
 
     fn schema_check(&self) -> bool {
         true // Filter pushdown does not change the schema of the plan
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        match self.phase {
+            FilterPushdownPhase::Pre => PhysicalOptimizerPhase::Analyzer,
+            FilterPushdownPhase::Post => PhysicalOptimizerPhase::Optimizer,
+        }
     }
 }
 

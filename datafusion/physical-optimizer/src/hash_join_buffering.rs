@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::PhysicalOptimizerRule;
+use crate::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 use datafusion_common::JoinSide;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -93,5 +93,9 @@ impl PhysicalOptimizerRule for HashJoinBuffering {
 
     fn schema_check(&self) -> bool {
         true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Optimizer
     }
 }

@@ -24,8 +24,9 @@ use datafusion_common::{JoinType, NullEquality, Result, ScalarValue};
 use datafusion_physical_expr::expressions::{Literal, col};
 use datafusion_physical_expr::{Partitioning, RangePartitioning, SplitPoint};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
-use datafusion_physical_optimizer::PhysicalOptimizerRule;
+use datafusion_physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion_physical_optimizer::sanity_checker::check_plan_tree_sanity;
+use datafusion_physical_optimizer::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 use datafusion_physical_plan::joins::{StreamJoinPartitionMode, SymmetricHashJoinExec};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
@@ -1033,6 +1034,36 @@ impl PhysicalOptimizerRule for RemoveSorts {
     fn schema_check(&self) -> bool {
         true
     }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Optimizer
+    }
+}
+
+/// [`RemoveSorts`] declared as an analyzer rule.
+#[derive(Debug)]
+struct RemoveSortsInAnalyzer;
+
+impl PhysicalOptimizerRule for RemoveSortsInAnalyzer {
+    fn optimize(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        config: &ConfigOptions,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        RemoveSorts.optimize(plan, config)
+    }
+
+    fn name(&self) -> &str {
+        "remove_sorts"
+    }
+
+    fn schema_check(&self) -> bool {
+        true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Analyzer
+    }
 }
 
 async fn plan_window_query(state: SessionState) -> Result<Arc<dyn ExecutionPlan>> {
@@ -1082,6 +1113,31 @@ async fn test_final_check_without_ensure_requirements() -> Result<()> {
         error.starts_with(
             "SanityCheckPlan: no physical optimizer rule produced a plan that \
              satisfies the order and distribution requirements"
+        ),
+        "{error}"
+    );
+    Ok(())
+}
+
+/// The analyzer rules must leave a plan whose requirements hold. When they do
+/// not, the error names the last analyzer rule.
+#[tokio::test]
+async fn test_final_check_names_last_analyzer_rule() -> Result<()> {
+    let mut rules = PhysicalOptimizer::new().rules;
+    let analyzer_rules = rules
+        .iter()
+        .take_while(|rule| rule.phase() == PhysicalOptimizerPhase::Analyzer)
+        .count();
+    rules.insert(analyzer_rules, Arc::new(RemoveSortsInAnalyzer));
+    let state = SessionStateBuilder::new()
+        .with_default_features()
+        .with_physical_optimizer_rules(rules)
+        .build();
+    let error = plan_window_query(state).await.unwrap_err().to_string();
+    assert!(
+        error.starts_with(
+            "SanityCheckPlan: the plan produced by physical optimizer rule \
+             'remove_sorts' does not satisfy the order and distribution requirements"
         ),
         "{error}"
     );

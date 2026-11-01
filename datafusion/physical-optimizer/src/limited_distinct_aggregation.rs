@@ -17,7 +17,7 @@ use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 
-use crate::PhysicalOptimizerRule;
+use crate::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 
 /// Pushes a soft limit into unordered DISTINCT aggregations. For
 /// `SELECT DISTINCT a FROM t LIMIT 10`, any ten distinct values are sufficient:
@@ -166,6 +166,10 @@ impl PhysicalOptimizerRule for LimitedDistinctAggregation {
 
     fn schema_check(&self) -> bool {
         true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Analyzer
     }
 }
 

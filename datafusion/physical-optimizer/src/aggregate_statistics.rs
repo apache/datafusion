@@ -19,8 +19,8 @@ use datafusion_physical_plan::udaf::{
 use datafusion_physical_plan::{ExecutionPlan, expressions};
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
 use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
+use crate::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default, Debug)]
@@ -107,6 +107,10 @@ impl PhysicalOptimizerRule for AggregateStatistics {
     /// This rule will change the nullable properties of the schema, disable the schema check.
     fn schema_check(&self) -> bool {
         false
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Analyzer
     }
 }
 

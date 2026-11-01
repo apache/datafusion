@@ -41,7 +41,7 @@
 //!
 //! Related issue: <https://github.com/apache/datafusion/issues/17348>
 
-use crate::PhysicalOptimizerRule;
+use crate::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
@@ -214,5 +214,9 @@ impl PhysicalOptimizerRule for PushdownSort {
 
     fn schema_check(&self) -> bool {
         true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Optimizer
     }
 }

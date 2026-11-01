@@ -7,7 +7,7 @@
 //! projections one by one if the operator below is amenable to this. If a
 //! projection reaches a source, it can even disappear from the plan entirely.
 
-use crate::PhysicalOptimizerRule;
+use crate::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 use arrow::datatypes::{Fields, Schema, SchemaRef};
 use datafusion_common::alias::AliasGenerator;
 use std::collections::HashSet;
@@ -70,6 +70,10 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
 
     fn schema_check(&self) -> bool {
         true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Optimizer
     }
 }
 

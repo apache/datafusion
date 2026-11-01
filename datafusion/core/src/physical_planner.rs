@@ -94,7 +94,6 @@ use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
 };
-use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
 use datafusion_physical_optimizer::sanity_checker::{
     check_plan_tree_sanity, input_requirements_hold,
 };
@@ -107,7 +106,9 @@ use datafusion_physical_plan::recursive_query::RecursiveQueryExec;
 use datafusion_physical_plan::scalar_subquery::{ScalarSubqueryExec, ScalarSubqueryLink};
 use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion_physical_plan::unnest::ListUnnest;
-use datafusion_session::{PhysicalOptimizerContext, PhysicalOptimizerRule, Session};
+use datafusion_session::{
+    PhysicalOptimizerContext, PhysicalOptimizerPhase, PhysicalOptimizerRule, Session,
+};
 
 use async_trait::async_trait;
 use datafusion_physical_plan::async_func::{AsyncFuncExec, AsyncMapper};
@@ -3450,6 +3451,7 @@ impl DefaultPhysicalPlanner {
     {
         let plan = bind_materialized_cte_scans(plan, session_state)?;
         let optimizers = session_state.physical_optimizers();
+        let analyzer_rules = analyzer_rule_count(optimizers)?;
         debug!(
             "Input physical plan:\n{}\n",
             displayable(plan.as_ref()).indent(false)
@@ -3494,6 +3496,7 @@ impl DefaultPhysicalPlanner {
                 &new_plan,
                 plan,
                 optimizers,
+                analyzer_rules,
                 &optimizer_context,
             ));
         }
@@ -3706,19 +3709,50 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
     }
 }
 
+/// Returns how many rules at the start of `rules` are
+/// [`PhysicalOptimizerPhase::Analyzer`] rules. Fails when an analyzer rule
+/// comes after an optimizer rule: optimizer rules may assume that the plan
+/// meets its requirements, which only holds after the last analyzer rule.
+fn analyzer_rule_count(
+    rules: &[Arc<dyn PhysicalOptimizerRule + Send + Sync>],
+) -> Result<usize> {
+    let is_analyzer = |rule: &&Arc<dyn PhysicalOptimizerRule + Send + Sync>| {
+        rule.phase() == PhysicalOptimizerPhase::Analyzer
+    };
+    let count = rules.iter().take_while(is_analyzer).count();
+    if let Some(late) = rules[count..].iter().position(|rule| is_analyzer(&rule)) {
+        let early = rules[count].name();
+        return plan_err!(
+            "Physical optimizer rule '{early}' (position {}) is an optimizer rule \
+             but runs before analyzer rule '{}' (position {}). Optimizer rules \
+             assume the plan meets its distribution and ordering requirements, so \
+             they must run after every analyzer rule. Move '{early}' after the \
+             analyzer rules. Return PhysicalOptimizerPhase::Analyzer from its \
+             phase() only if it is written to run before the requirements are \
+             enforced",
+            count + 1,
+            rules[count + late].name(),
+            count + late + 1
+        );
+    }
+    Ok(count)
+}
+
 /// Adds context to an error from the final [`check_plan_tree_sanity`].
 ///
-/// `EnsureRequirements` makes the order and distribution requirements hold,
-/// and every rule after it must keep them. When they do not hold for
-/// `final_plan`, the context names the rule that broke this contract: either
-/// `EnsureRequirements` itself, or the rule after which the requirements
-/// stopped holding. To find it, `optimizers` run again from `input_plan`, so
-/// planning that succeeds keeps no intermediate plans.
+/// The last of the first `analyzer_rules` rules, `EnsureRequirements` in the
+/// default list, makes the order and distribution requirements hold, and every
+/// rule after it must keep them. When they do not hold for `final_plan`, the
+/// context names the rule that broke this contract: either that last analyzer
+/// rule, or the rule after which the requirements stopped holding. To find
+/// it, `optimizers` run again from `input_plan`, so planning that succeeds
+/// keeps no intermediate plans.
 fn sanity_check_error(
     error: DataFusionError,
     final_plan: &Arc<dyn ExecutionPlan>,
     input_plan: Arc<dyn ExecutionPlan>,
     optimizers: &[Arc<dyn PhysicalOptimizerRule + Send + Sync>],
+    analyzer_rules: usize,
     optimizer_context: &dyn PhysicalOptimizerContext,
 ) -> DataFusionError {
     const SANITY_CHECK: &str = "SanityCheckPlan";
@@ -3729,13 +3763,10 @@ fn sanity_check_error(
         return plain_error(error);
     }
 
-    let ensure_requirements = EnsureRequirements::new();
-    let enforced = optimizers
-        .iter()
-        .rposition(|rule| rule.name() == ensure_requirements.name());
-    // Plans before `EnsureRequirements` need not satisfy the requirements, so
-    // only plans from its last run onwards are checked. Without it, every
-    // plan is checked, starting with the input plan.
+    let enforced = analyzer_rules.checked_sub(1);
+    // Plans before the last analyzer rule need not satisfy the requirements,
+    // so only plans from its output onwards are checked. Without analyzer
+    // rules, every plan is checked, starting with the input plan.
     let first_checked = enforced.unwrap_or(0);
     let mut held = enforced.is_none() && input_requirements_hold(&input_plan);
     let mut broken_by = None;
@@ -3760,10 +3791,10 @@ fn sanity_check_error(
              after physical optimizer rule '{}'",
             rule.name()
         ),
-        (None, Some(_)) => format!(
+        (None, Some(idx)) => format!(
             "{SANITY_CHECK}: the plan produced by physical optimizer rule '{}' \
              does not satisfy the order and distribution requirements",
-            ensure_requirements.name()
+            optimizers[idx].name()
         ),
         (None, None) => format!(
             "{SANITY_CHECK}: no physical optimizer rule produced a plan that \
@@ -3979,6 +4010,10 @@ mod tests {
 
         fn schema_check(&self) -> bool {
             true
+        }
+
+        fn phase(&self) -> PhysicalOptimizerPhase {
+            PhysicalOptimizerPhase::Optimizer
         }
     }
 
@@ -4247,6 +4282,152 @@ mod tests {
         let recorded = recorded.lock();
         assert_eq!(recorded.len(), 2);
         assert!(Arc::ptr_eq(&recorded[0], &recorded[1]));
+        Ok(())
+    }
+
+    /// Leaves the plan unchanged and declares the phase it is given.
+    #[derive(Debug)]
+    struct NoopRule(PhysicalOptimizerPhase);
+
+    impl PhysicalOptimizerRule for NoopRule {
+        fn optimize(
+            &self,
+            plan: Arc<dyn ExecutionPlan>,
+            _config: &ConfigOptions,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            Ok(plan)
+        }
+
+        fn name(&self) -> &str {
+            "noop"
+        }
+
+        fn schema_check(&self) -> bool {
+            true
+        }
+
+        fn phase(&self) -> PhysicalOptimizerPhase {
+            self.0
+        }
+    }
+
+    /// The default rules followed by `rule`.
+    async fn plan_with_rule_in_front(rule: NoopRule) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>> =
+            vec![Arc::new(rule)];
+        rules.extend(
+            datafusion_physical_optimizer::optimizer::PhysicalOptimizer::new().rules,
+        );
+        let session_state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_physical_optimizer_rules(rules)
+            .build();
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        session_state.create_physical_plan(&logical_plan).await
+    }
+
+    /// An optimizer rule in front of the analyzer rules fails planning, and
+    /// the error names both rules.
+    #[tokio::test]
+    async fn analyzer_rule_after_optimizer_rule_fails_planning() {
+        let error = plan_with_rule_in_front(NoopRule(PhysicalOptimizerPhase::Optimizer))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains(
+                "Physical optimizer rule 'noop' (position 1) is an optimizer rule \
+                 but runs before analyzer rule 'OutputRequirements' (position 2)"
+            ),
+            "{error}"
+        );
+    }
+
+    /// The default rules with `LimitPushdown` moved to just before
+    /// `EnsureRequirements`, where it would see a plan that does not meet its
+    /// requirements yet, fail planning.
+    #[tokio::test]
+    async fn limit_pushdown_before_enforcement_fails_planning() -> Result<()> {
+        let mut rules =
+            datafusion_physical_optimizer::optimizer::PhysicalOptimizer::new().rules;
+        let limit_pushdown = rules
+            .iter()
+            .position(|rule| rule.name() == "LimitPushdown")
+            .unwrap();
+        let limit_pushdown = rules.remove(limit_pushdown);
+        let enforcement = rules
+            .iter()
+            .position(|rule| rule.name() == "EnsureRequirements")
+            .unwrap();
+        rules.insert(enforcement, limit_pushdown);
+        let session_state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_physical_optimizer_rules(rules)
+            .build();
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        let error = session_state
+            .create_physical_plan(&logical_plan)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("'LimitPushdown' (position 8"), "{error}");
+        assert!(
+            error.contains("'EnsureRequirements' (position 9"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    /// Running `EnsureRequirements` again after the optimizer rules fails
+    /// planning.
+    #[tokio::test]
+    async fn enforcement_after_optimizer_rules_fails_planning() -> Result<()> {
+        let session_state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_physical_optimizer_rule(Arc::new(
+                datafusion_physical_optimizer::ensure_requirements::EnsureRequirements::new(),
+            ))
+            .build();
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        let error = session_state
+            .create_physical_plan(&logical_plan)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("'EnsureRequirements' (position 22"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    /// An analyzer rule appended after the default rules runs after the
+    /// optimizer rules, so planning fails.
+    #[tokio::test]
+    async fn appended_analyzer_rule_fails_planning() -> Result<()> {
+        let session_state = SessionStateBuilder::new()
+            .with_default_features()
+            .with_physical_optimizer_rule(Arc::new(NoopRule(
+                PhysicalOptimizerPhase::Analyzer,
+            )))
+            .build();
+        let logical_plan = LogicalPlanBuilder::empty(false).build()?;
+        let error = session_state
+            .create_physical_plan(&logical_plan)
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("is an optimizer rule but runs before analyzer rule 'noop'"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    /// The same rule declared as an analyzer rule may run before enforcement.
+    #[tokio::test]
+    async fn analyzer_rule_before_enforcement_plans() -> Result<()> {
+        plan_with_rule_in_front(NoopRule(PhysicalOptimizerPhase::Analyzer)).await?;
         Ok(())
     }
 
@@ -5933,6 +6114,10 @@ digraph {
         }
         fn schema_check(&self) -> bool {
             true
+        }
+
+        fn phase(&self) -> PhysicalOptimizerPhase {
+            PhysicalOptimizerPhase::Optimizer
         }
     }
 

@@ -32,7 +32,7 @@ use datafusion_physical_plan::{
     ChildSatisfactionOptions, ExecutionPlanProperties, get_plan_string,
 };
 
-use crate::PhysicalOptimizerRule;
+use crate::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 use datafusion_physical_expr_common::sort_expr::format_physical_sort_requirement_list;
 use itertools::izip;
 
@@ -73,6 +73,10 @@ impl PhysicalOptimizerRule for SanityCheckPlan {
 
     fn schema_check(&self) -> bool {
         true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Optimizer
     }
 }
 

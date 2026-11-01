@@ -6,7 +6,9 @@ use std::sync::Arc;
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
-use datafusion_physical_optimizer::{PhysicalOptimizerContext, PhysicalOptimizerRule};
+use datafusion_physical_optimizer::{
+    PhysicalOptimizerContext, PhysicalOptimizerPhase, PhysicalOptimizerRule,
+};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::limit::GlobalLimitExec;
 
@@ -32,6 +34,10 @@ impl PhysicalOptimizerRule for AddLimitRule {
 
     fn schema_check(&self) -> bool {
         true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Optimizer
     }
 }
 
@@ -72,6 +78,10 @@ impl PhysicalOptimizerRule for ContextAwareAddLimitRule {
 
     fn schema_check(&self) -> bool {
         true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Optimizer
     }
 }
 

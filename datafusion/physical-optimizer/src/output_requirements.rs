@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
+use crate::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
@@ -364,6 +364,13 @@ impl PhysicalOptimizerRule for OutputRequirements {
 
     fn schema_check(&self) -> bool {
         true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        match self.mode {
+            RuleMode::Add => PhysicalOptimizerPhase::Analyzer,
+            RuleMode::Remove => PhysicalOptimizerPhase::Optimizer,
+        }
     }
 }
 

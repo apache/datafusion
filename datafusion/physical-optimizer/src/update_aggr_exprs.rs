@@ -18,7 +18,7 @@ use datafusion_physical_plan::aggregates::{
 use datafusion_physical_plan::windows::get_ordered_partition_by_indices;
 use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
-use crate::PhysicalOptimizerRule;
+use crate::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 
 /// This optimizer rule checks ordering requirements of aggregate expressions.
 ///
@@ -128,6 +128,10 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
 
     fn schema_check(&self) -> bool {
         true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Optimizer
     }
 }
 

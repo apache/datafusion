@@ -50,11 +50,11 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
 use crate::optimizer::{
     ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
 };
 use crate::row_bound::{RowBound, limit_node, place};
+use crate::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
@@ -103,6 +103,10 @@ impl PhysicalOptimizerRule for LimitPushdown {
 
     fn schema_check(&self) -> bool {
         true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Optimizer
     }
 }
 

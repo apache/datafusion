@@ -44,7 +44,8 @@ pub use crate::catalog::{
     EmptyCatalogProviderList,
 };
 pub use crate::physical_optimizer::{
-    PhysicalOptimizerContext, PhysicalOptimizerRule, with_statistics_context,
+    PhysicalOptimizerContext, PhysicalOptimizerPhase, PhysicalOptimizerRule,
+    with_statistics_context,
 };
 pub use crate::planner::{
     ExtensionPlanner, PhysicalPlanner, QueryPlanner, UnsupportedQueryPlanner,

@@ -10,7 +10,7 @@
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
 
-use crate::PhysicalOptimizerRule;
+use crate::{PhysicalOptimizerPhase, PhysicalOptimizerRule};
 
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
@@ -111,6 +111,10 @@ impl PhysicalOptimizerRule for EnsureCooperative {
     fn schema_check(&self) -> bool {
         // Wrapping a leaf in YieldStreamExec preserves the schema, so it is safe.
         true
+    }
+
+    fn phase(&self) -> PhysicalOptimizerPhase {
+        PhysicalOptimizerPhase::Optimizer
     }
 }
 
