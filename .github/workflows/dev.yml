@@ -88,7 +88,7 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1  # v7.1.0
         with:
           node-version: "24"
-      - run: node --test ci/scripts/test_fork_ci_status.cjs
+      - run: node --test ci/scripts/test_fork_ci_status.cjs ci/scripts/test_cancel_merge_queue_runs.cjs
 
   typos:
     name: Spell Check with Typos

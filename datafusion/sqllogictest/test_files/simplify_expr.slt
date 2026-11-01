@@ -296,10 +296,10 @@ explain select price from decimal_prices where cast(price as decimal(38,15)) in 
 );
 ----
 logical_plan
-01)Filter: CAST(decimal_prices.price AS Decimal128(38, 15)) IN ([Decimal128(4.000000000000000,38,15), Decimal128(4.000000000000001,38,15), Decimal128(NULL,38,15)])
+01)Filter: CAST(decimal_prices.price AS Decimal128(38, 15)) IN ([Decimal128(4.000000000000000,38,15), Decimal128(4.000000000000001,38,15)])
 02)--TableScan: decimal_prices projection=[price]
 physical_plan
-01)FilterExec: CAST(price@0 AS Decimal128(38, 15)) IN (SET) ([4.000000000000000, 4.000000000000001, NULL])
+01)FilterExec: CAST(price@0 AS Decimal128(38, 15)) IN (SET) ([4.000000000000000, 4.000000000000001])
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT

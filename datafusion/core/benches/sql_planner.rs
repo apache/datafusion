@@ -334,6 +334,29 @@ fn union_orderby_query(n: usize) -> String {
     query
 }
 
+/// `levels` nested projections over `t1`, each computing `width` expressions
+/// from the layer below, with the outermost query selecting `outer_columns`.
+fn wide_projection_stack_query(
+    levels: usize,
+    width: usize,
+    outer_columns: usize,
+) -> String {
+    let mut query = "t1".to_string();
+    let mut input_prefix = "a";
+    for level in 0..levels {
+        let prefix = if level % 2 == 0 { "p" } else { "q" };
+        let exprs: Vec<String> = (0..width)
+            .map(|i| format!("{input_prefix}{i} + {input_prefix}{i} AS {prefix}{i}"))
+            .collect();
+        query = format!("(SELECT {} FROM {query}) AS s{level}", exprs.join(", "));
+        input_prefix = prefix;
+    }
+    let columns: Vec<String> = (0..outer_columns)
+        .map(|i| format!("{input_prefix}{i}"))
+        .collect();
+    format!("SELECT {} FROM {query}", columns.join(", "))
+}
+
 fn criterion_benchmark(c: &mut Criterion) {
     // CI uses the small checked-in fixture; performance runs use the full dataset.
     let clickbench_data_path =
@@ -1084,6 +1107,18 @@ fn criterion_benchmark(c: &mut Criterion) {
         c.bench_function("optimizer_wide_aggregate_100", |b| {
             b.iter(|| optimize_plan(&ctx, &plan))
         });
+    }
+
+    // Stacked wide projections of computed expressions (many expressions per
+    // node over a wide input, as produced by layered views). Each expression
+    // reads its input column twice so the layers are not merged.
+    for (name, outer_columns) in [
+        ("optimizer_wide_projection_stack_all", 200),
+        ("optimizer_wide_projection_stack_half", 100),
+    ] {
+        let query = wide_projection_stack_query(4, 200, outer_columns);
+        let plan = analyzed_plan(&ctx, &rt, &query);
+        c.bench_function(name, |b| b.iter(|| optimize_plan(&ctx, &plan)));
     }
 
     // Subquery (tests decorrelation rules)

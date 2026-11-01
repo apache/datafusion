@@ -1054,6 +1054,81 @@ DROP TABLE smj_nocol_a;
 statement ok
 DROP TABLE smj_nocol_b;
 
+# Regression test for #26003: semi/anti/mark joins must compare key groups
+# that cross an input batch boundary for key types `compare_join_arrays`
+# did not handle.
+statement ok
+CREATE TABLE smj_tz_events AS
+  SELECT arrow_cast(to_timestamp(value), 'Timestamp(Microsecond, Some("UTC"))') AS ts
+  FROM generate_series(1, 100000);
+
+statement ok
+CREATE TABLE smj_tz_alerts AS
+  SELECT arrow_cast(to_timestamp(value * 7), 'Timestamp(Microsecond, Some("UTC"))') AS ts
+  FROM generate_series(1, 20000);
+
+query I
+SELECT count(*) FROM smj_tz_events e WHERE EXISTS (SELECT 1 FROM smj_tz_alerts a WHERE a.ts = e.ts);
+----
+14285
+
+query I
+SELECT count(*) FROM smj_tz_events e WHERE e.ts IN (SELECT ts FROM smj_tz_alerts);
+----
+14285
+
+query I
+SELECT count(*) FROM smj_tz_events e WHERE NOT EXISTS (SELECT 1 FROM smj_tz_alerts a WHERE a.ts = e.ts);
+----
+85715
+
+statement ok
+DROP TABLE smj_tz_events;
+
+statement ok
+DROP TABLE smj_tz_alerts;
+
+statement ok
+set datafusion.execution.batch_size = 2;
+
+statement ok
+CREATE TABLE smj_key_l AS SELECT
+  arrow_cast(k, 'Dictionary(Int32, Utf8)') AS d,
+  arrow_cast(k, 'Decimal256(40, 2)') AS dec,
+  arrow_cast(arrow_cast(k, 'Int64'), 'Time64(Nanosecond)') AS t
+FROM (VALUES ('1'), ('2'), ('2'), ('2'), ('3'), ('4')) v(k);
+
+statement ok
+CREATE TABLE smj_key_r AS SELECT
+  arrow_cast(k, 'Dictionary(Int32, Utf8)') AS d,
+  arrow_cast(k, 'Decimal256(40, 2)') AS dec,
+  arrow_cast(arrow_cast(k, 'Int64'), 'Time64(Nanosecond)') AS t
+FROM (VALUES ('2'), ('2'), ('2'), ('4'), ('5')) v(k);
+
+query I
+SELECT count(*) FROM smj_key_l l WHERE EXISTS (SELECT 1 FROM smj_key_r r WHERE r.d = l.d);
+----
+4
+
+query I
+SELECT count(*) FROM smj_key_l l WHERE NOT EXISTS (SELECT 1 FROM smj_key_r r WHERE r.dec = l.dec);
+----
+2
+
+query I
+SELECT count(*) FROM smj_key_l l WHERE l.t IN (SELECT t FROM smj_key_r);
+----
+4
+
+statement ok
+DROP TABLE smj_key_l;
+
+statement ok
+DROP TABLE smj_key_r;
+
+statement ok
+RESET datafusion.execution.batch_size;
+
 # Config reset
 statement ok
 RESET datafusion.optimizer.prefer_hash_join;
