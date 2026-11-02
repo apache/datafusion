@@ -12,6 +12,7 @@ use std::fmt::Write as _;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
+use arrow::array::{ArrayRef, Int32Array, RecordBatch};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
@@ -23,11 +24,16 @@ use object_store::{
     GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
+use parquet::arrow::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use url::Url;
 
 // Tests are in submodules
 mod bloom_filter_io;
+mod filter_pushdown_io;
+mod row_group_pruning_io;
+mod topk_io;
 
 #[derive(Debug, Clone)]
 struct ByteRangeDescriptor {
@@ -320,4 +326,33 @@ impl ParquetIoTest {
         }
         output
     }
+}
+
+/// Returns a Parquet file with three row groups of three rows each:
+///
+/// | row group | id      | val       |
+/// |-----------|---------|-----------|
+/// | 0         | 1, 2, 3 | 0, 5, 10  |
+/// | 1         | 4, 5, 6 | 0, 7, 10  |
+/// | 2         | 7, 8, 9 | 0, 5, 10  |
+///
+/// `id` is sorted, so its row group statistics are disjoint and predicates on
+/// it can prune row groups. `val` has the same min/max (`0`/`10`) in every row
+/// group, so statistics cannot prune row groups for predicates such as
+/// `val = 7`, even though only row group 1 contains a match.
+pub(crate) fn three_row_group_file() -> Bytes {
+    let id: ArrayRef = Arc::new(Int32Array::from_iter_values(1..=9));
+    let val: ArrayRef = Arc::new(Int32Array::from(vec![0, 5, 10, 0, 7, 10, 0, 5, 10]));
+    let batch = RecordBatch::try_from_iter([("id", id), ("val", val)]).unwrap();
+
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(3))
+        .build();
+
+    let mut buffer = Vec::new();
+    let mut writer =
+        ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    Bytes::from(buffer)
 }
