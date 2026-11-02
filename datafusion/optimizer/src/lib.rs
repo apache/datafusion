@@ -44,7 +44,6 @@ pub mod eliminate_nested_union {
     pub type EliminateNestedUnion = OptimizeUnions;
 }
 pub mod eliminate_outer_join;
-pub mod evaluation_sites;
 pub mod extract_equijoin_predicate;
 pub mod extract_leaf_expressions;
 pub mod filter_null_join_keys;
