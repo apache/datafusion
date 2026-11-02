@@ -243,7 +243,7 @@ impl DefaultPhysicalPlanner {
         let plan = self
             .create_initial_plan(logical_plan, session_state)
             .await?;
-        self.optimize_physical_plan(plan, session_state, |_, _| {})
+        self.optimize_physical_plan_with_observer(plan, session_state, None)
     }
 }
 
@@ -545,7 +545,7 @@ mod frozen_cte {
         fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
             match t {
                 DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                    write!(f, "MaterializedCteExec: name={}", self.buffer.name())
+                    write!(f, "FrozenMaterializedCteExec: name={}", self.buffer.name())
                 }
                 DisplayFormatType::TreeRender => write!(f, "name={}", self.buffer.name()),
             }
@@ -554,7 +554,7 @@ mod frozen_cte {
 
     impl ExecutionPlan for FrozenMaterializedCteExec {
         fn name(&self) -> &'static str {
-            "MaterializedCteExec"
+            "FrozenMaterializedCteExec"
         }
 
         fn properties(&self) -> &Arc<PlanProperties> {
@@ -637,9 +637,113 @@ mod frozen_cte {
             Ok(FilterPushdownPropagation::if_any(child_pushdown_result))
         }
     }
+
+    /// How a [`FrozenMaterializedCteExec`] is shown to the observer of the
+    /// optimizers, for example in `EXPLAIN VERBOSE`.
+    ///
+    /// The body is a child here, so the plan display shows it. The
+    /// optimizers never see this node.
+    #[derive(Debug)]
+    pub(super) struct ShownFrozenMaterializedCteExec {
+        body: Arc<dyn ExecutionPlan>,
+        continuation: Arc<dyn ExecutionPlan>,
+        buffer: Arc<MaterializedCteBuffer>,
+    }
+
+    impl ShownFrozenMaterializedCteExec {
+        pub(super) fn new(frozen: &FrozenMaterializedCteExec) -> Self {
+            Self {
+                body: Arc::clone(&frozen.body),
+                continuation: Arc::clone(&frozen.continuation),
+                buffer: Arc::clone(&frozen.buffer),
+            }
+        }
+    }
+
+    impl DisplayAs for ShownFrozenMaterializedCteExec {
+        fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
+            let frozen = FrozenMaterializedCteExec::new(
+                Arc::clone(&self.body),
+                Arc::clone(&self.continuation),
+                Arc::clone(&self.buffer),
+            );
+            frozen.fmt_as(t, f)
+        }
+    }
+
+    impl ExecutionPlan for ShownFrozenMaterializedCteExec {
+        fn name(&self) -> &'static str {
+            "FrozenMaterializedCteExec"
+        }
+
+        fn properties(&self) -> &Arc<PlanProperties> {
+            self.continuation.properties()
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn ExecutionPlan>> {
+            vec![&self.body, &self.continuation]
+        }
+
+        fn apply_expressions(
+            &self,
+            _f: &mut dyn FnMut(&Arc<dyn PhysicalExpr>) -> Result<TreeNodeRecursion>,
+        ) -> Result<TreeNodeRecursion> {
+            Ok(TreeNodeRecursion::Continue)
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            mut children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> Result<Arc<dyn ExecutionPlan>> {
+            if children.len() != 2 {
+                return internal_err!("ShownFrozenMaterializedCteExec takes 2 children");
+            }
+            let continuation = children.pop().unwrap();
+            let body = children.pop().unwrap();
+            Ok(Arc::new(Self {
+                body,
+                continuation,
+                buffer: Arc::clone(&self.buffer),
+            }))
+        }
+
+        fn execute(
+            &self,
+            _partition: usize,
+            _context: Arc<TaskContext>,
+        ) -> Result<SendableRecordBatchStream> {
+            internal_err!("ShownFrozenMaterializedCteExec is only used for display")
+        }
+
+        /// The output is the output of the continuation, as for
+        /// [`FrozenMaterializedCteExec`].
+        fn statistics_from_inputs(
+            &self,
+            input_stats: &[Arc<Statistics>],
+            _args: &StatisticsArgs,
+        ) -> Result<Arc<Statistics>> {
+            Ok(Arc::clone(&input_stats[1]))
+        }
+    }
 }
 
-use frozen_cte::FrozenMaterializedCteExec;
+use frozen_cte::{FrozenMaterializedCteExec, ShownFrozenMaterializedCteExec};
+
+/// Make a copy of `plan` to show to the observer of the optimizers, in which
+/// each [`FrozenMaterializedCteExec`] shows its body as a child.
+fn show_frozen_materialized_ctes(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    Arc::clone(plan)
+        .transform_up(|node| {
+            let Some(frozen) = node.downcast_ref::<FrozenMaterializedCteExec>() else {
+                return Ok(Transformed::no(node));
+            };
+            let shown = ShownFrozenMaterializedCteExec::new(frozen);
+            Ok(Transformed::yes(Arc::new(shown) as Arc<dyn ExecutionPlan>))
+        })
+        .map(|t| t.data)
+}
 
 /// Make each [`MaterializedCteExec`] of the final `plan` the owner of its
 /// buffer. The planner makes more than one plan with the same buffers.
@@ -3610,7 +3714,9 @@ impl DefaultPhysicalPlanner {
     ///    from the optimizers in this step, so they are not changed, and the
     ///    properties of the scans stay true.
     ///
-    /// The observer sees only the rules of step 4.
+    /// The observer sees only the rules of step 4. In the plans that it sees,
+    /// each body is shown as a child of a `FrozenMaterializedCteExec`, a
+    /// node that exists only during this step.
     pub fn optimize_physical_plan<F>(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -3624,10 +3730,30 @@ impl DefaultPhysicalPlanner {
             |plan: &Arc<dyn ExecutionPlan>, optimizer: &dyn PhysicalOptimizerRule| {
                 observer(plan.as_ref(), optimizer)
             };
+        self.optimize_physical_plan_with_observer(
+            plan,
+            session_state,
+            Some(&mut observer),
+        )
+    }
+
+    /// See [`Self::optimize_physical_plan`]. Without an observer, the plans
+    /// to show are not made.
+    fn optimize_physical_plan_with_observer(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        session_state: &dyn Session,
+        mut observer: Option<&mut OptimizerObserver>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         let ctes = materialized_ctes(&plan)?;
         let plan = bind_materialized_cte_scans(plan, &ctes)?;
         if ctes.is_empty() {
-            return self.run_physical_optimizers(plan, session_state, &mut observer);
+            return match observer {
+                Some(observer) => {
+                    self.run_physical_optimizers(plan, session_state, observer)
+                }
+                None => self.run_physical_optimizers(plan, session_state, &mut |_, _| {}),
+            };
         }
         let ctes = materialized_ctes(&plan)?;
         let statistics_context = match session_state.statistics_registry() {
@@ -3661,8 +3787,18 @@ impl DefaultPhysicalPlanner {
         }
 
         let plan = freeze_materialized_ctes(plan, &bodies)?;
+        let mut show_plan =
+            |plan: &Arc<dyn ExecutionPlan>, optimizer: &dyn PhysicalOptimizerRule| {
+                let Some(observer) = observer.as_mut() else {
+                    return;
+                };
+                match show_frozen_materialized_ctes(plan) {
+                    Ok(shown) => observer(&shown, optimizer),
+                    Err(_) => observer(plan, optimizer),
+                }
+            };
         let optimized =
-            self.run_physical_optimizers(plan, session_state, &mut observer)?;
+            self.run_physical_optimizers(plan, session_state, &mut show_plan)?;
         let optimized = thaw_materialized_ctes(optimized)?;
         register_materialized_ctes(&optimized)?;
         Ok(optimized)
@@ -6654,6 +6790,7 @@ mod materialized_cte_tests {
     use crate::physical_plan::repartition::RepartitionExec;
     use crate::physical_plan::{ChildrenPropertiesMode, ReplaceChildrenOptions};
     use crate::prelude::{SessionConfig, SessionContext};
+    use arrow::array::AsArray;
     use datafusion_common::config::ConfigOptions;
     use datafusion_common::test_util::batches_to_sort_string;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -6781,6 +6918,68 @@ mod materialized_cte_tests {
         | 2 | 30       |
         +---+----------+
         ");
+        Ok(())
+    }
+
+    /// In `EXPLAIN VERBOSE`, the plans after each rule show the frozen node
+    /// with its body, and the final plan shows the `MaterializedCteExec`.
+    #[tokio::test]
+    async fn explain_verbose_shows_frozen_body() -> Result<()> {
+        let config = SessionConfig::new()
+            .with_target_partitions(4)
+            .set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+        let ctx = SessionContext::new_with_config(config);
+        ctx.sql("CREATE TABLE t AS VALUES (1, 10), (1, 20), (2, 30)")
+            .await?
+            .collect()
+            .await?;
+        let batches = ctx
+            .sql(&format!("EXPLAIN VERBOSE {QUERY}"))
+            .await?
+            .collect()
+            .await?;
+        let mut plans = vec![];
+        for batch in &batches {
+            let plan_type = batch.column(0).as_string::<i32>();
+            let plan = batch.column(1).as_string::<i32>();
+            for row in 0..batch.num_rows() {
+                plans.push((
+                    plan_type.value(row).to_string(),
+                    plan.value(row).to_string(),
+                ));
+            }
+        }
+        let after_rules = plans
+            .iter()
+            .filter(|(plan_type, plan)| {
+                plan_type.starts_with("physical_plan after")
+                    && plan != "SAME TEXT AS ABOVE"
+            })
+            .collect::<Vec<_>>();
+        assert!(!after_rules.is_empty());
+        for (plan_type, plan) in after_rules {
+            let lines = plan.lines().collect::<Vec<_>>();
+            let frozen = lines
+                .iter()
+                .position(|line| line.contains("FrozenMaterializedCteExec: name=c"))
+                .unwrap_or_else(|| panic!("{plan_type}:\n{plan}"));
+            // The first child is the body, which computes `s`.
+            assert!(
+                lines[frozen + 1].contains(
+                    "ProjectionExec: expr=[column1@0 as g, sum(t.column2)@1 as s]"
+                ),
+                "{plan_type}:\n{plan}"
+            );
+        }
+        let (_, final_plan) = plans
+            .iter()
+            .find(|(plan_type, _)| plan_type == "physical_plan")
+            .unwrap();
+        assert!(
+            final_plan.contains("MaterializedCteExec: name=c"),
+            "{final_plan}"
+        );
+        assert!(!final_plan.contains("Frozen"), "{final_plan}");
         Ok(())
     }
 
