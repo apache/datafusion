@@ -61,9 +61,9 @@ logical_plan
 03)----Aggregate: groupBy=[[all_nations.o_year]], aggr=[[sum(CASE WHEN all_nations.nation = Utf8View("BRAZIL") THEN all_nations.volume ELSE Decimal128(0.0000,38,4) END) AS sum(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Int64(0) END), sum(all_nations.volume)]]
 04)------SubqueryAlias: all_nations
 05)--------Projection: date_part(Utf8("YEAR"), orders.o_orderdate) AS o_year, lineitem.l_extendedprice * (Decimal128(1,20,0) - lineitem.l_discount) AS volume, n2.n_name AS nation
-06)----------LeftSemi Join: n1.n_regionkey = region.r_regionkey
-07)------------Projection: lineitem.l_extendedprice, lineitem.l_discount, orders.o_orderdate, n1.n_regionkey, n2.n_name
-08)--------------Inner Join: supplier.s_nationkey = n2.n_nationkey
+06)----------Inner Join: supplier.s_nationkey = n2.n_nationkey
+07)------------Projection: lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, orders.o_orderdate
+08)--------------LeftSemi Join: n1.n_regionkey = region.r_regionkey
 09)----------------Projection: lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, orders.o_orderdate, n1.n_regionkey
 10)------------------Inner Join: customer.c_nationkey = n1.n_nationkey
 11)--------------------Projection: lineitem.l_extendedprice, lineitem.l_discount, supplier.s_nationkey, orders.o_orderdate, customer.c_nationkey
@@ -84,11 +84,11 @@ logical_plan
 26)------------------------TableScan: customer projection=[c_custkey, c_nationkey]
 27)--------------------SubqueryAlias: n1
 28)----------------------TableScan: nation projection=[n_nationkey, n_regionkey]
-29)----------------SubqueryAlias: n2
-30)------------------TableScan: nation projection=[n_nationkey, n_name]
-31)------------Projection: region.r_regionkey
-32)--------------Filter: region.r_name = Utf8View("AMERICA")
-33)----------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8View("AMERICA")]
+29)----------------Projection: region.r_regionkey
+30)------------------Filter: region.r_name = Utf8View("AMERICA")
+31)--------------------TableScan: region projection=[r_regionkey, r_name], partial_filters=[region.r_name = Utf8View("AMERICA")]
+32)------------SubqueryAlias: n2
+33)--------------TableScan: nation projection=[n_nationkey, n_name]
 physical_plan
 01)SortPreservingMergeExec: [o_year@0 ASC NULLS LAST]
 02)--SortExec: expr=[o_year@0 ASC NULLS LAST], preserve_partitioning=[true]
@@ -97,10 +97,10 @@ physical_plan
 05)--------RepartitionExec: partitioning=Hash([o_year@0], 4), input_partitions=4
 06)----------AggregateExec: mode=Partial, gby=[o_year@0 as o_year], aggr=[sum(CASE WHEN all_nations.nation = BRAZIL THEN all_nations.volume ELSE 0.0000 END) as sum(CASE WHEN all_nations.nation = Utf8("BRAZIL") THEN all_nations.volume ELSE Int64(0) END), sum(all_nations.volume)]
 07)------------ProjectionExec: expr=[date_part(YEAR, o_orderdate@0) as o_year, l_extendedprice@1 * (1 - l_discount@2) as volume, n_name@3 as nation]
-08)--------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(n_regionkey@3, r_regionkey@0)], projection=[o_orderdate@2, l_extendedprice@0, l_discount@1, n_name@4]
-09)----------------RepartitionExec: partitioning=Hash([n_regionkey@3], 4), input_partitions=4
-10)------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@2, n_nationkey@0)], projection=[l_extendedprice@0, l_discount@1, o_orderdate@3, n_regionkey@4, n_name@6]
-11)--------------------RepartitionExec: partitioning=Hash([s_nationkey@2], 4), input_partitions=4
+08)--------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(s_nationkey@2, n_nationkey@0)], projection=[o_orderdate@3, l_extendedprice@0, l_discount@1, n_name@5]
+09)----------------RepartitionExec: partitioning=Hash([s_nationkey@2], 4), input_partitions=4
+10)------------------HashJoinExec: mode=Partitioned, join_type=LeftSemi, on=[(n_regionkey@4, r_regionkey@0)], projection=[l_extendedprice@0, l_discount@1, s_nationkey@2, o_orderdate@3]
+11)--------------------RepartitionExec: partitioning=Hash([n_regionkey@4], 4), input_partitions=4
 12)----------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(c_nationkey@4, n_nationkey@0)], projection=[l_extendedprice@0, l_discount@1, s_nationkey@2, o_orderdate@3, n_regionkey@6]
 13)------------------------RepartitionExec: partitioning=Hash([c_nationkey@4], 4), input_partitions=4
 14)--------------------------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(o_custkey@3, c_custkey@0)], projection=[l_extendedprice@0, l_discount@1, s_nationkey@2, o_orderdate@4, c_nationkey@6]
@@ -124,9 +124,9 @@ physical_plan
 32)------------------------------DataSourceExec: file_groups={4 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl:0..606529], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl:606529..1213058], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl:1213058..1819587], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/customer.tbl:1819587..2426114]]}, projection=[c_custkey, c_nationkey], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
 33)------------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=1
 34)--------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_regionkey], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
-35)--------------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=1
-36)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
-37)----------------RepartitionExec: partitioning=Hash([r_regionkey@0], 4), input_partitions=4
-38)------------------FilterExec: r_name@1 = AMERICA, projection=[r_regionkey@0]
-39)--------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-40)----------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/region.tbl]]}, projection=[r_regionkey, r_name], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
+35)--------------------RepartitionExec: partitioning=Hash([r_regionkey@0], 4), input_partitions=4
+36)----------------------FilterExec: r_name@1 = AMERICA, projection=[r_regionkey@0]
+37)------------------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+38)--------------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/region.tbl]]}, projection=[r_regionkey, r_name], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
+39)----------------RepartitionExec: partitioning=Hash([n_nationkey@0], 4), input_partitions=1
+40)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/tpch/data/nation.tbl]]}, projection=[n_nationkey, n_name], constraints=[PrimaryKey([0])], file_type=csv, has_header=false
