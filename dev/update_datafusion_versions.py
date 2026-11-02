@@ -80,6 +80,19 @@ def update_ci(new_version: str):
         fd.write(content)
 
 
+USER_FACING_DOCS = [
+    "README.md",
+    "docs/source/download.md",
+    "docs/source/user-guide/example-usage.md",
+    "docs/source/user-guide/crate-configuration.md",
+]
+
+
+def update_user_facing_docs(new_version: str):
+    for path in USER_FACING_DOCS:
+        update_docs(path, new_version)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description=(
@@ -87,10 +100,26 @@ def main():
             'in downstream crates.'
         ))
     parser.add_argument('new_version', type=str, help='new datafusion version (e.g. `56.0.0` or `56.0.0-dev`)')
+    parser.add_argument(
+        '--user-facing-docs-only',
+        action='store_true',
+        help=(
+            'only update the version in the user-facing documentation examples '
+            '(e.g. `docs/source/download.md`). Used to sync docs on `main` after a release'
+        ))
     args = parser.parse_args()
 
     new_version = args.new_version
     repo_root = Path(__file__).parent.parent.absolute()
+
+    if args.user_facing_docs_only:
+        if is_prerelease(new_version):
+            parser.error(
+                f'{new_version} is a development version; user-facing docs '
+                'should only reference released versions')
+        print(f'Updating user-facing docs in {repo_root} to {new_version}')
+        update_user_facing_docs(new_version)
+        return
 
     print(f'Updating workspace in {repo_root} to {new_version}')
     update_workspace_version(new_version)
@@ -105,13 +134,9 @@ def main():
         # latest released version
         print(f'{new_version} is a development version, not updating docs examples')
     else:
-        update_docs("README.md", new_version)
-        update_docs("docs/source/download.md", new_version)
-        update_docs("docs/source/user-guide/example-usage.md", new_version)
-        update_docs("docs/source/user-guide/crate-configuration.md", new_version)
+        update_user_facing_docs(new_version)
 
     update_ci(new_version)
-
 
 if __name__ == "__main__":
     main()

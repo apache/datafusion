@@ -98,7 +98,8 @@ For example, after creating `branch-56` from `main`, bump `main` to `57.0.0-dev`
 ```shell
 python3 dev/update_datafusion_versions.py 57.0.0-dev
 cargo update --workspace       # updates Cargo.lock
-./dev/update_config_docs.sh    # regenerates docs/source/user-guide/configs.md
+# reformat the docs (version is updated)
+./ci/scripts/doc_prettier_check.sh --write --allow-dirty
 ```
 
 ### 3. Prepare PR to Update the Release Version
@@ -452,11 +453,11 @@ git fetch apache && git checkout -b sync_change_log apache/main
 ```
 
 - Cherry-pick or patch the changelog updates from step 6
-- Update the crate version in the user-facing examples to the newly released
-  version, for example from `55.1.0` to `56.0.0`:
+- Update the crate version in the user-facing examples (such as
+  `docs/source/download.md`) to the newly released version, for example `56.0.0`:
 
   ```shell
-  sed -i '' 's/55\.1\.0/56.0.0/' docs/source/download.md docs/source/user-guide/{crate-configuration,example-usage}.md
+  python3 dev/update_datafusion_versions.py --user-facing-docs-only 56.0.0
   ```
 
 - Commit changes, `git commit -a -m 'Sync changelog and docs for 56.0.0 to main'`
