@@ -710,7 +710,7 @@ fn buffer_to_bytes(buffer: Buffer) -> bytes::Bytes {
 }
 
 // Returns the maximum byte alignment required by any field in the schema (>= 8), derived from Arrow buffer layouts.
-fn get_max_alignment_for_schema(schema: &Schema) -> usize {
+pub(crate) fn get_max_alignment_for_schema(schema: &Schema) -> usize {
     let minimum_alignment = 8;
     let mut max_alignment = minimum_alignment;
     for field in schema.fields() {

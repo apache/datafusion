@@ -5,8 +5,10 @@
 //! Create a stream that do a multi level merge stream
 
 use crate::metrics::BaselineMetrics;
+use crate::spill::spill_pieces::recorded_size;
 use crate::{EmptyRecordBatchStream, SpillManager};
 use arrow::array::RecordBatch;
+use datafusion_common::config::SpillCompression;
 use std::fmt::{Debug, Formatter};
 use std::mem;
 use std::pin::Pin;
@@ -21,7 +23,6 @@ use crate::sorts::builder::try_grow_reservation_to_at_least;
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::gc_view_arrays;
-use crate::spill::spill_manager::GetSlicedSize;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -750,14 +751,16 @@ impl MultiLevelMergeBuilder {
             let mut all_singletons = true;
             let mut max_is_singleton = false;
             let mut decoded_max = 0;
+            let compressed =
+                self.spill_manager.compression != SpillCompression::Uncompressed;
             max_batch_rows = 0;
             while let Some(batch) = source.next().await {
                 let batch = batch?;
                 max_batch_rows = max_batch_rows.max(batch.num_rows());
                 all_singletons &= batch.num_rows() == 1;
-                decoded_max = decoded_max.max(batch.get_sliced_size()?);
+                decoded_max = decoded_max.max(recorded_size(&batch, compressed)?);
                 if batch.num_rows() == 1
-                    && gc_view_arrays(&batch)?.get_sliced_size()? >= old_max
+                    && recorded_size(&gc_view_arrays(&batch)?, compressed)? >= old_max
                 {
                     max_is_singleton = true;
                     break;
@@ -1658,7 +1661,7 @@ mod tests {
         )?;
         let batch = source.next().await.unwrap()?;
         assert_eq!(batch.num_rows(), 1);
-        assert!(gc_view_arrays(&batch)?.get_sliced_size()? < stored_max);
+        assert!(recorded_size(&gc_view_arrays(&batch)?, false)? < stored_max);
         drop((source, batch));
 
         // The stale estimate needs four batches for the minimum merge. Test

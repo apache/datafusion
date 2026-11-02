@@ -4,6 +4,7 @@
 
 //! Define the `InProgressSpillFile` struct, which represents an in-progress spill file used for writing `RecordBatch`es to disk, created by `SpillManager`.
 
+use datafusion_common::config::SpillCompression;
 use datafusion_common::{Result, internal_datafusion_err};
 use std::sync::Arc;
 
@@ -89,7 +90,11 @@ impl InProgressSpillFile {
             ));
         }
 
-        let pieces = SpillPieces::new(batch, self.max_batch_bytes)?;
+        let pieces = SpillPieces::new(
+            batch,
+            self.max_batch_bytes,
+            self.spill_manager.compression != SpillCompression::Uncompressed,
+        )?;
 
         if self.writer.is_none() {
             // Use the SpillManager's declared schema rather than the batch's schema.
@@ -147,7 +152,11 @@ impl InProgressSpillFile {
             ));
         }
 
-        let pieces = SpillPieces::new(batch, self.max_batch_bytes)?;
+        let pieces = SpillPieces::new(
+            batch,
+            self.max_batch_bytes,
+            self.spill_manager.compression != SpillCompression::Uncompressed,
+        )?;
 
         if self.writer.is_none() {
             let schema = self.spill_manager.schema();
@@ -286,7 +295,7 @@ mod tests {
     use arrow::array::{
         Array, ArrayRef, AsArray, BinaryViewArray, DictionaryArray, Int32Array,
         Int64Array, ListBuilder, MapBuilder, StringArray, StringBuilder, StringViewArray,
-        StructArray, UInt32Array,
+        StructArray, UInt8Array, UInt32Array,
     };
     use arrow_schema::{DataType, Field, Fields, Schema, SchemaRef};
     use datafusion_common::utils::memory::get_record_batch_memory_size;
@@ -673,8 +682,8 @@ mod tests {
             )])),
             vec![Arc::new(dictionary)],
         )?;
-        let pieces =
-            SpillPieces::new(&batch, Some(1024 * 1024))?.collect::<Result<Vec<_>>>()?;
+        let pieces = SpillPieces::new(&batch, Some(1024 * 1024), false)?
+            .collect::<Result<Vec<_>>>()?;
         assert_eq!(pieces.len(), 1);
         assert_eq!(pieces[0].0, batch);
         Ok(())
@@ -733,8 +742,8 @@ mod tests {
             false,
         )]));
         let batch = RecordBatch::try_new(schema, vec![list_view])?;
-        let pieces =
-            SpillPieces::new(&batch, Some(16 * 1024))?.collect::<Result<Vec<_>>>()?;
+        let pieces = SpillPieces::new(&batch, Some(16 * 1024), false)?
+            .collect::<Result<Vec<_>>>()?;
         assert_eq!(pieces.len(), 1);
         assert_eq!(pieces[0].0, batch);
         Ok(())
@@ -760,6 +769,25 @@ mod tests {
         Ok(())
     }
 
+    /// With many narrow columns the IPC padding of each buffer is larger than the data, so
+    /// the recorded size must include it or a reader decodes more than was reserved.
+    #[tokio::test]
+    async fn recorded_size_includes_ipc_padding() -> Result<()> {
+        let schema = Arc::new(Schema::new(
+            (0..4096)
+                .map(|i| Field::new(format!("c{i}"), DataType::UInt8, false))
+                .collect::<Vec<_>>(),
+        ));
+        let columns = (0..4096)
+            .map(|_| Arc::new(UInt8Array::from_iter_values(0..17)) as ArrayRef)
+            .collect();
+        let batch = RecordBatch::try_new(schema, columns)?;
+        // `round_trip` checks every batch read back against the recorded size.
+        let (read, _) = round_trip(std::slice::from_ref(&batch), 64 * 1024).await?;
+        assert_same_rows(&read, std::slice::from_ref(&batch));
+        Ok(())
+    }
+
     /// A piece whose dictionary keys are all null has no used values. After the unused
     /// values are dropped the dictionary is empty, which must not panic when measured, and
     /// must read back as nulls.
@@ -778,7 +806,7 @@ mod tests {
         // Pieces of at most 4 rows: the first ones have only null keys.
         let budget = 4 * WIDE + WIDE / 2;
         let pieces =
-            SpillPieces::new(&batch, Some(budget))?.collect::<Result<Vec<_>>>()?;
+            SpillPieces::new(&batch, Some(budget), false)?.collect::<Result<Vec<_>>>()?;
         assert!(pieces.len() > 1);
         assert!(
             pieces.iter().any(|(piece, _)| piece
@@ -788,7 +816,7 @@ mod tests {
                 .is_empty()),
             "expected a piece with an empty dictionary"
         );
-        SpillPieces::new(&batch.slice(0, 0), Some(budget))?
+        SpillPieces::new(&batch.slice(0, 0), Some(budget), false)?
             .collect::<Result<Vec<_>>>()?;
 
         let (read, _) = round_trip(std::slice::from_ref(&batch), budget).await?;
@@ -964,6 +992,102 @@ mod tests {
         let (read, max_memory) = round_trip(std::slice::from_ref(&batch), budget).await?;
         assert_bounded(&read, max_memory, budget);
         assert_same_rows(&read, &[batch]);
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+/// The recorded size bounds what a reader decodes, for every codec and for buffer types
+/// whose IPC padding or decompressed allocation is larger than their data.
+mod decoded_size_bound_tests {
+    use super::*;
+    use arrow::array::*;
+    use arrow_schema::{DataType, Field, Schema};
+    use datafusion_common::config::SpillCompression;
+    use datafusion_common::utils::memory::get_record_batch_memory_size;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_physical_expr_common::metrics::{
+        ExecutionPlanMetricsSet, SpillMetrics,
+    };
+    use futures::TryStreamExt;
+
+    fn cols(n: usize, rows: usize) -> Vec<(String, RecordBatch)> {
+        let mk = |name: &str, dt: DataType, f: &dyn Fn() -> ArrayRef| {
+            let schema = Arc::new(Schema::new(
+                (0..n)
+                    .map(|i| Field::new(format!("c{i}"), dt.clone(), true))
+                    .collect::<Vec<_>>(),
+            ));
+            (
+                name.to_string(),
+                RecordBatch::try_new(schema, (0..n).map(|_| f()).collect()).unwrap(),
+            )
+        };
+        vec![
+            mk("u8", DataType::UInt8, &|| {
+                Arc::new(UInt8Array::from_iter_values((0..rows).map(|i| i as u8)))
+            }),
+            mk("i64_nulls", DataType::Int64, &|| {
+                Arc::new(Int64Array::from_iter(
+                    (0..rows).map(|i| (i % 2 == 0).then_some(i as i64)),
+                ))
+            }),
+            mk("bool", DataType::Boolean, &|| {
+                Arc::new(BooleanArray::from_iter((0..rows).map(|i| Some(i % 2 == 0))))
+            }),
+            mk("utf8", DataType::Utf8, &|| {
+                Arc::new(StringArray::from_iter_values(
+                    (0..rows).map(|i| format!("v{i}")),
+                ))
+            }),
+            mk("utf8view", DataType::Utf8View, &|| {
+                Arc::new(StringViewArray::from_iter_values(
+                    (0..rows).map(|i| format!("a-long-string-value-{i}")),
+                ))
+            }),
+            mk("dec256", DataType::Decimal256(40, 2), &|| {
+                Arc::new(
+                    Decimal256Array::from_iter_values(
+                        (0..rows).map(|i| arrow::datatypes::i256::from_i128(i as i128)),
+                    )
+                    .with_precision_and_scale(40, 2)
+                    .unwrap(),
+                )
+            }),
+        ]
+    }
+
+    #[tokio::test]
+    async fn recorded_size_bounds_decoded_batch() -> Result<()> {
+        for comp in [
+            SpillCompression::Uncompressed,
+            SpillCompression::Lz4Frame,
+            SpillCompression::Zstd,
+        ] {
+            for (n, rows) in [(256usize, 17usize), (4, 4000)] {
+                for (name, batch) in cols(n, rows) {
+                    let runtime = Arc::new(RuntimeEnvBuilder::new().build()?);
+                    let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+                    let m = Arc::new(
+                        SpillManager::new(runtime, metrics, batch.schema())
+                            .with_compression_type(comp),
+                    );
+                    let mut f = m
+                        .create_in_progress_file("t")?
+                        .with_max_batch_bytes(Some(1 << 30));
+                    let rec = f.append_batch(&batch)?;
+                    let file = f.finish()?.unwrap();
+                    let read: Vec<RecordBatch> =
+                        m.read_spill_as_stream(file, None)?.try_collect().await?;
+                    let actual =
+                        read.iter().map(get_record_batch_memory_size).max().unwrap();
+                    assert!(
+                        actual <= rec + crate::spill::SPILL_BATCH_MEMORY_MARGIN,
+                        "{comp:?} {name} cols={n} rows={rows}: recorded {rec}, decoded {actual}"
+                    );
+                }
+            }
+        }
         Ok(())
     }
 }

@@ -9,12 +9,13 @@ use std::sync::Arc;
 
 use arrow::array::{ArrayRef, AsArray, RecordBatch, RecordBatchOptions, make_array};
 use arrow::datatypes::{DataType, Schema};
+use arrow_data::ArrayData;
 use arrow_data::transform::MutableArrayData;
 use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::Result;
 
-use super::gc_view_arrays;
 use super::spill_manager::GetSlicedSize;
+use super::{gc_view_arrays, get_max_alignment_for_schema};
 
 /// The pieces that one appended batch is written as, in row order.
 ///
@@ -24,7 +25,7 @@ use super::spill_manager::GetSlicedSize;
 ///
 /// When the batch is larger than `max_batch_bytes`, it is cut into equal row ranges by its
 /// average row size. Each range is copied out with [`compact`], so that it holds only its
-/// own rows, and measured with [`GetSlicedSize`]. A range that is still too large (the rows
+/// own rows, and measured with [`decoded_size`]. A range that is still too large (the rows
 /// differ in size) is halved until it fits or has one row. Pieces are produced one at a
 /// time, so that the caller can write each one before the next is copied.
 ///
@@ -32,6 +33,8 @@ use super::spill_manager::GetSlicedSize;
 pub(crate) struct SpillPieces {
     batch: RecordBatch,
     max_batch_bytes: usize,
+    /// The padding a reader can add to each buffer, see [`decoded_size`].
+    alignment: usize,
     /// Row ranges still to produce, the next one last.
     pending: Vec<Range<usize>>,
     /// The whole batch, when it is written as one piece.
@@ -42,14 +45,17 @@ impl SpillPieces {
     pub(crate) fn new(
         batch: &RecordBatch,
         max_batch_bytes: Option<usize>,
+        compressed: bool,
     ) -> Result<Self> {
         let batch = gc_view_arrays(batch)?;
-        let size = batch.get_sliced_size()?;
+        let alignment = padding_alignment(batch.schema_ref(), compressed);
+        let size = decoded_size(&batch, alignment)?;
         let rows = batch.num_rows();
         let whole = |batch, size| Self {
             whole: Some((batch, size)),
             batch: RecordBatch::new_empty(Arc::new(Schema::empty())),
             max_batch_bytes: 0,
+            alignment,
             pending: vec![],
         };
         let Some(max_batch_bytes) = max_batch_bytes
@@ -61,7 +67,7 @@ impl SpillPieces {
         // them once before choosing the row ranges, so that the ranges are sized by what
         // the batch uses and the pieces do not each prune the whole dictionary again.
         let batch = prune_dictionaries(&batch)?;
-        let size = batch.get_sliced_size()?;
+        let size = decoded_size(&batch, alignment)?;
         if size <= max_batch_bytes {
             return Ok(whole(batch, size));
         }
@@ -77,6 +83,7 @@ impl SpillPieces {
         Ok(Self {
             batch,
             max_batch_bytes,
+            alignment,
             pending,
             whole: None,
         })
@@ -84,7 +91,7 @@ impl SpillPieces {
 }
 
 impl Iterator for SpillPieces {
-    /// A piece and its size, as [`GetSlicedSize`] measures it.
+    /// A piece and its size, as [`decoded_size`] measures it.
     type Item = Result<(RecordBatch, usize)>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -96,7 +103,7 @@ impl Iterator for SpillPieces {
                 Ok(piece) => piece,
                 Err(e) => return Some(Err(e)),
             };
-            let size = match piece.get_sliced_size() {
+            let size = match decoded_size(&piece, self.alignment) {
                 Ok(size) => size,
                 Err(e) => return Some(Err(e)),
             };
@@ -110,6 +117,43 @@ impl Iterator for SpillPieces {
         }
         None
     }
+}
+
+/// The capacity granularity of arrow's `MutableBuffer`, which a compressed buffer is
+/// decompressed into.
+const DECOMPRESSED_ALIGNMENT: usize = 64;
+
+/// An upper bound on the memory a reader uses for `batch` once decoded from IPC: its
+/// [`GetSlicedSize`] plus up to `alignment` bytes of padding for every buffer. Without
+/// compression the buffers are slices of the message body, where the IPC writer pads each
+/// one to the schema's alignment; with compression each is decompressed into its own
+/// allocation, rounded up to [`DECOMPRESSED_ALIGNMENT`]. For many narrow columns the
+/// padding can be larger than the data.
+/// The size recorded for a batch written to a spill file, as [`SpillPieces`] measures it.
+/// Use it wherever a batch read back is compared with the recorded size.
+pub(crate) fn recorded_size(batch: &RecordBatch, compressed: bool) -> Result<usize> {
+    decoded_size(batch, padding_alignment(batch.schema_ref(), compressed))
+}
+
+/// The padding a reader can add to each buffer of `schema`. A compressed buffer is
+/// decompressed into its own allocation, whose capacity arrow rounds up to
+/// [`DECOMPRESSED_ALIGNMENT`].
+fn padding_alignment(schema: &Schema, compressed: bool) -> usize {
+    let alignment = get_max_alignment_for_schema(schema);
+    if compressed {
+        alignment.max(DECOMPRESSED_ALIGNMENT)
+    } else {
+        alignment
+    }
+}
+
+fn decoded_size(batch: &RecordBatch, alignment: usize) -> Result<usize> {
+    fn buffers(data: &ArrayData) -> usize {
+        // One validity buffer, which the writer emits even when it is empty.
+        1 + data.buffers().len() + data.child_data().iter().map(buffers).sum::<usize>()
+    }
+    let buffers: usize = batch.columns().iter().map(|c| buffers(&c.to_data())).sum();
+    Ok(batch.get_sliced_size()? + buffers * alignment)
 }
 
 /// Copies a slice so that it holds only its own rows: list children are narrowed to the
