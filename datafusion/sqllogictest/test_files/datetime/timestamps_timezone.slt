@@ -489,14 +489,11 @@ RESET datafusion.execution.time_zone
 ##########
 ## SECTION 8: comparison and equality across tz-aware and tz-naive
 ##
-## The pins here record three behaviours. A tz-naive side is read in the other
+## The pins here record two behaviours. A tz-naive side is read in the other
 ## operand's zone, where PostgreSQL uses the session zone:
 ## https://github.com/apache/datafusion/issues/13212
 ## `'...Z'::timestamptz` is tz-naive while the session zone is unset
 ## (SECTION 0): https://github.com/apache/datafusion/issues/25166
-## And under a non-UTC session zone, unwrap_cast rewrites a tz-naive column
-## compared against a tz-aware literal into a different comparison:
-## https://github.com/apache/datafusion/issues/25095
 ##########
 
 statement ok
@@ -628,7 +625,7 @@ RESET datafusion.execution.time_zone
 # (+08:00) is 2024-10-31 16:00 UTC, so the literal comparison must agree with the
 # column-vs-column comparison. PostgreSQL and DuckDB under
 # TimeZone='Asia/Singapore' return 1, 0, 1, 1.
-# See https://github.com/apache/datafusion/issues/25095
+# Regression test for https://github.com/apache/datafusion/issues/25095
 statement ok
 SET datafusion.execution.time_zone = 'Asia/Singapore'
 
@@ -674,7 +671,7 @@ DROP TABLE issue_25095_u
 # tz-naive column cast to a fixed offset zone and compared against a literal in
 # that zone. Both sides display as 2024-01-01T10:00:00+05:00, so the literal
 # comparison must return the same row as the column comparison.
-# See https://github.com/apache/datafusion/issues/25941
+# Regression test for https://github.com/apache/datafusion/issues/25941
 statement ok
 CREATE TABLE issue_25941_t AS VALUES (TIMESTAMP '2024-01-01 10:00:00')
 
