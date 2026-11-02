@@ -802,4 +802,284 @@ mod tests {
 
         Arc::new(schema)
     }
+
+    /// Files sharing the table `(a INT, b TEXT, c INT, d TEXT)` but written
+    /// with different header layouts
+    const HEADER_LAYOUT_FILES: [(&str, &str); 3] = [
+        ("full.csv", "a,b,c,d\n1,x,10,p\n4,y,40,s\n"),
+        ("missing_middle.csv", "a,d\n2,q\n5,t\n"),
+        ("reordered.csv", "d,extra,c,a\nr,ignored,30,3\n"),
+    ];
+
+    #[derive(Debug, Clone, Copy)]
+    enum HeaderLayoutRead {
+        Local,
+        /// Tiny object store chunks so the header spans several chunks
+        Chunked,
+        /// Byte-range partitions that start mid-file
+        Repartitioned,
+    }
+
+    fn write_header_layout_files(dir: &std::path::Path) -> Result<()> {
+        for (name, contents) in HEADER_LAYOUT_FILES {
+            fs::write(dir.join(name), contents)?;
+        }
+        Ok(())
+    }
+
+    async fn header_layout_table(
+        ctx: &SessionContext,
+        location: &str,
+        options: &str,
+    ) -> Result<()> {
+        ctx.sql(&format!(
+            "CREATE EXTERNAL TABLE t (a INT, b TEXT, c INT, d TEXT) \
+             STORED AS CSV LOCATION '{location}' \
+             OPTIONS ('format.has_header' 'true'{options})"
+        ))
+        .await?
+        .collect()
+        .await?;
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::local(HeaderLayoutRead::Local)]
+    #[case::chunked(HeaderLayoutRead::Chunked)]
+    #[case::repartitioned(HeaderLayoutRead::Repartitioned)]
+    #[tokio::test]
+    async fn csv_match_columns_by_header(#[case] read: HeaderLayoutRead) -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        write_header_layout_files(tmp_dir.path())?;
+
+        let ctx = match read {
+            HeaderLayoutRead::Local | HeaderLayoutRead::Chunked => SessionContext::new(),
+            HeaderLayoutRead::Repartitioned => SessionContext::new_with_config(
+                SessionConfig::new()
+                    .with_target_partitions(4)
+                    .with_repartition_file_min_size(1),
+            ),
+        };
+        if matches!(read, HeaderLayoutRead::Chunked) {
+            ctx.register_object_store(
+                &Url::parse("file://").unwrap(),
+                Arc::new(ChunkedStore::new(Arc::new(LocalFileSystem::new()), 3)),
+            );
+        }
+        header_layout_table(
+            &ctx,
+            &format!("{}/", tmp_dir.path().display()),
+            ", 'format.match_columns_by_header' 'true'",
+        )
+        .await?;
+
+        let plan = ctx
+            .sql("SELECT * FROM t")
+            .await?
+            .create_physical_plan()
+            .await?;
+        let plan = datafusion_physical_plan::displayable(plan.as_ref())
+            .indent(true)
+            .to_string();
+        assert!(plan.contains("match_columns_by_header=true"), "{plan}");
+        if matches!(read, HeaderLayoutRead::Repartitioned) {
+            assert!(plan.contains("missing_middle.csv:"), "{plan}");
+        }
+
+        let all = ctx
+            .sql("SELECT * FROM t ORDER BY a")
+            .await?
+            .collect()
+            .await?;
+        let projected = ctx
+            .sql("SELECT d, c FROM t ORDER BY d")
+            .await?
+            .collect()
+            .await?;
+        let missing_only = ctx
+            .sql("SELECT count(b), count(*) FROM t")
+            .await?
+            .collect()
+            .await?;
+
+        insta::allow_duplicates! {
+            assert_snapshot!(batches_to_string(&all), @r"
+            +---+---+----+---+
+            | a | b | c  | d |
+            +---+---+----+---+
+            | 1 | x | 10 | p |
+            | 2 |   |    | q |
+            | 3 |   | 30 | r |
+            | 4 | y | 40 | s |
+            | 5 |   |    | t |
+            +---+---+----+---+
+            ");
+            assert_snapshot!(batches_to_string(&projected), @r"
+            +---+----+
+            | d | c  |
+            +---+----+
+            | p | 10 |
+            | q |    |
+            | r | 30 |
+            | s | 40 |
+            | t |    |
+            +---+----+
+            ");
+            assert_snapshot!(batches_to_string(&missing_only), @r"
+            +------------+----------+
+            | count(t.b) | count(*) |
+            +------------+----------+
+            | 2          | 5        |
+            +------------+----------+
+            ");
+        }
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::local(HeaderLayoutRead::Local)]
+    #[case::chunked(HeaderLayoutRead::Chunked)]
+    #[case::repartitioned(HeaderLayoutRead::Repartitioned)]
+    #[tokio::test]
+    async fn csv_match_columns_by_header_with_comments(
+        #[case] read: HeaderLayoutRead,
+    ) -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        fs::write(
+            tmp_dir.path().join("a.csv"),
+            "# generated\n# by test\nd,c,a\nr,30,3\n# trailing\ns,40,4\n",
+        )?;
+
+        let ctx = match read {
+            HeaderLayoutRead::Local | HeaderLayoutRead::Chunked => SessionContext::new(),
+            HeaderLayoutRead::Repartitioned => SessionContext::new_with_config(
+                SessionConfig::new()
+                    .with_target_partitions(4)
+                    .with_repartition_file_min_size(1),
+            ),
+        };
+        if matches!(read, HeaderLayoutRead::Chunked) {
+            ctx.register_object_store(
+                &Url::parse("file://").unwrap(),
+                Arc::new(ChunkedStore::new(Arc::new(LocalFileSystem::new()), 3)),
+            );
+        }
+        header_layout_table(
+            &ctx,
+            &format!("{}/", tmp_dir.path().display()),
+            ", 'format.match_columns_by_header' 'true', 'format.comment' '#'",
+        )
+        .await?;
+
+        let batches = ctx
+            .sql("SELECT * FROM t ORDER BY a")
+            .await?
+            .collect()
+            .await?;
+        insta::allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +---+---+----+---+
+            | a | b | c  | d |
+            +---+---+----+---+
+            | 3 |   | 30 | r |
+            | 4 |   | 40 | s |
+            +---+---+----+---+
+            ");
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn csv_match_columns_by_header_with_truncated_rows() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        fs::write(tmp_dir.path().join("a.csv"), "d,a,c\nr,1,10\ns,2\n")?;
+
+        let ctx = SessionContext::new();
+        header_layout_table(
+            &ctx,
+            &format!("{}/", tmp_dir.path().display()),
+            ", 'format.match_columns_by_header' 'true', 'format.truncated_rows' 'true'",
+        )
+        .await?;
+
+        let batches = ctx
+            .sql("SELECT * FROM t ORDER BY a")
+            .await?
+            .collect()
+            .await?;
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +---+---+----+---+
+        | a | b | c  | d |
+        +---+---+----+---+
+        | 1 |   | 10 | r |
+        | 2 |   |    | s |
+        +---+---+----+---+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn csv_columns_mapped_by_position_by_default() -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        fs::write(tmp_dir.path().join("a.csv"), "a,d\n2,q\n")?;
+
+        let ctx = SessionContext::new();
+        header_layout_table(
+            &ctx,
+            &format!("{}/", tmp_dir.path().display()),
+            ", 'format.truncated_rows' 'true'",
+        )
+        .await?;
+
+        let batches = ctx.sql("SELECT * FROM t").await?.collect().await?;
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +---+---+---+---+
+        | a | b | c | d |
+        +---+---+---+---+
+        | 2 | q |   |   |
+        +---+---+---+---+
+        ");
+        Ok(())
+    }
+
+    #[cfg(feature = "compression")]
+    #[tokio::test]
+    async fn csv_match_columns_by_header_gzip() -> Result<()> {
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+
+        let tmp_dir = TempDir::new()?;
+        for (name, contents) in HEADER_LAYOUT_FILES {
+            let file = File::create(tmp_dir.path().join(format!("{name}.gz")))?;
+            let mut encoder = GzEncoder::new(file, Compression::default());
+            encoder.write_all(contents.as_bytes())?;
+            encoder.finish()?;
+        }
+
+        let ctx = SessionContext::new();
+        header_layout_table(
+            &ctx,
+            &format!("{}/", tmp_dir.path().display()),
+            ", 'format.match_columns_by_header' 'true', 'format.compression' 'gzip'",
+        )
+        .await?;
+
+        let batches = ctx
+            .sql("SELECT * FROM t ORDER BY a")
+            .await?
+            .collect()
+            .await?;
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +---+---+----+---+
+        | a | b | c  | d |
+        +---+---+----+---+
+        | 1 | x | 10 | p |
+        | 2 |   |    | q |
+        | 3 |   | 30 | r |
+        | 4 | y | 40 | s |
+        | 5 |   |    | t |
+        +---+---+----+---+
+        ");
+        Ok(())
+    }
 }
