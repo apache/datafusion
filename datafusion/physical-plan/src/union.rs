@@ -1225,10 +1225,14 @@ mod tests {
         let schema = first.schema();
         let grouping = vec![col("a", &schema)?, col("b", &schema)?];
         // Only the complete tuple is contiguous, and one run spans batches.
-        let partitions = vec![vec![first, second], vec![]];
-        let left = TestMemoryExec::try_new(&partitions, Arc::clone(&schema), None)?
+        let left_partitions = vec![vec![first, second], vec![]];
+        let right_partitions = vec![vec![
+            test::build_table_i32_two_cols(("a", &vec![1, 2, 1]), ("b", &vec![0, 1, 1])),
+            test::build_table_i32_two_cols(("a", &vec![1, 2, 2]), ("b", &vec![1, 0, 0])),
+        ]];
+        let left = TestMemoryExec::try_new(&left_partitions, Arc::clone(&schema), None)?
             .try_with_grouping_information(vec![grouping.clone()])?;
-        let right = TestMemoryExec::try_new(&partitions[..1], schema, None)?
+        let right = TestMemoryExec::try_new(&right_partitions, schema, None)?
             .try_with_grouping_information(vec![grouping.clone()])?;
         let union = UnionExec::try_new(vec![Arc::new(left), Arc::new(right)])?;
         let properties = union.equivalence_properties();
@@ -1242,7 +1246,8 @@ mod tests {
         ));
 
         let context = Arc::new(TaskContext::default());
-        for (partition, expected) in partitions.iter().chain(&partitions[..1]).enumerate()
+        for (partition, expected) in
+            left_partitions.iter().chain(&right_partitions).enumerate()
         {
             let actual =
                 crate::common::collect(union.execute(partition, Arc::clone(&context))?)

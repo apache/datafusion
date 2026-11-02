@@ -697,24 +697,35 @@ mod tests {
     }
 
     #[test]
-    fn test_union_preserves_common_grouping() -> Result<()> {
+    fn test_union_preserves_only_common_groupings() -> Result<()> {
         let schema = create_test_schema()?;
         UnionEquivalenceTest::new(&schema)
-            .with_child_grouping(vec![vec!["a", "b"]], &schema)?
-            .with_child_grouping(vec![vec!["b", "a"]], &schema)?
+            .with_child_grouping(
+                vec![vec!["e"], vec!["a", "b"], vec!["c", "d"]],
+                &schema,
+            )?
+            .with_child_grouping(
+                vec![vec!["f"], vec!["d", "c"], vec!["b", "a"]],
+                &schema,
+            )?
             .with_expected_sort(vec![])?
-            .with_expected_grouping(vec![vec!["a", "b"]])?
+            .with_expected_grouping(vec![vec!["a", "b"], vec!["c", "d"]])?
             .run()
     }
 
     #[test]
     fn test_union_drops_grouping_missing_from_an_input() -> Result<()> {
         let schema = create_test_schema()?;
-        UnionEquivalenceTest::new(&schema)
-            .with_child_grouping(vec![vec!["a", "b"]], &schema)?
-            .with_child_sort(vec![], &schema)?
-            .with_expected_sort(vec![])?
-            .run()
+        for add_ordered_input in [false, true] {
+            let mut test = UnionEquivalenceTest::new(&schema)
+                .with_child_grouping(vec![vec!["a", "b"]], &schema)?
+                .with_child_sort(vec![], &schema)?;
+            if add_ordered_input {
+                test = test.with_child_sort(vec![vec!["a", "b"]], &schema)?;
+            }
+            test.with_expected_sort(vec![])?.run()?;
+        }
+        Ok(())
     }
 
     #[test]
