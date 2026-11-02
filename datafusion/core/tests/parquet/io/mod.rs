@@ -17,15 +17,17 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{
     GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
 use parquet::file::reader::{FileReader, SerializedFileReader};
+use url::Url;
 
 mod bloom_filter_io;
 
@@ -36,12 +38,12 @@ struct ByteRangeDescriptor {
 }
 
 #[derive(Debug, Clone, Default)]
-pub(crate) struct ParquetFileLayout {
+struct ParquetFileLayout {
     descriptors: Vec<ByteRangeDescriptor>,
 }
 
 impl ParquetFileLayout {
-    pub(crate) fn new(bytes: &Bytes) -> Self {
+    fn new(bytes: &Bytes) -> Self {
         let cursor = bytes.clone();
         let reader = SerializedFileReader::new(cursor).expect("valid parquet file");
         let metadata = reader.metadata();
@@ -118,7 +120,7 @@ impl ParquetFileLayout {
 }
 
 #[derive(Debug)]
-pub(crate) struct InstrumentedObjectStore {
+struct InstrumentedObjectStore {
     inner: Arc<dyn ObjectStore>,
     layout: ParquetFileLayout,
     file_size: u64,
@@ -126,7 +128,7 @@ pub(crate) struct InstrumentedObjectStore {
 }
 
 impl InstrumentedObjectStore {
-    pub(crate) fn new(
+    fn new(
         inner: Arc<dyn ObjectStore>,
         layout: ParquetFileLayout,
         file_size: u64,
@@ -245,30 +247,79 @@ impl ObjectStore for InstrumentedObjectStore {
     }
 }
 
-pub(crate) async fn run_query_and_collect_events(
-    ctx: &SessionContext,
-    sql: &str,
-    events: &Arc<Mutex<Vec<String>>>,
-) -> String {
-    events.lock().unwrap().clear();
+/// Test fixture: a single Parquet file registered as table `t`, read through an
+/// [`InstrumentedObjectStore`] that records every storage request.
+///
+/// Typical use:
+///
+/// ```text
+/// let test = ParquetIoTest::new(file_bytes, SessionConfig::new()).await;
+/// assert_snapshot!(test.query("SELECT * FROM t WHERE ...").await, @"...");
+/// ```
+pub(crate) struct ParquetIoTest {
+    ctx: SessionContext,
+    events: Arc<Mutex<Vec<String>>>,
+}
 
-    let df = ctx.sql(sql).await.unwrap();
-    let mut stream = df.execute_stream().await.unwrap();
+impl ParquetIoTest {
+    /// Stores `file_bytes` as `mem:///table.parquet` and registers it as table
+    /// `t` in a new [`SessionContext`] created with `config`.
+    pub(crate) async fn new(file_bytes: Bytes, config: SessionConfig) -> Self {
+        let file_size = file_bytes.len() as u64;
+        let layout = ParquetFileLayout::new(&file_bytes);
 
-    let mut row_count = 0;
-    while let Some(batch) = stream.next().await {
-        let batch = batch.unwrap();
-        row_count += batch.num_rows();
-        events
-            .lock()
-            .unwrap()
-            .push(format!("Produce batch ({} rows)", batch.num_rows()));
+        let memory_store = Arc::new(InMemory::new());
+        memory_store
+            .put_opts(
+                &Path::from("table.parquet"),
+                PutPayload::from(file_bytes),
+                PutOptions::default(),
+            )
+            .await
+            .unwrap();
+
+        let events = Arc::new(Mutex::new(Vec::new()));
+        let instrumented_store = Arc::new(InstrumentedObjectStore::new(
+            memory_store,
+            layout,
+            file_size,
+            Arc::clone(&events),
+        ));
+
+        let ctx = SessionContext::new_with_config(config);
+        ctx.register_object_store(&Url::parse("mem://").unwrap(), instrumented_store);
+        ctx.register_parquet("t", "mem:///table.parquet", ParquetReadOptions::default())
+            .await
+            .unwrap();
+
+        Self { ctx, events }
     }
 
-    let recorded = events.lock().unwrap().clone();
-    let mut output = format!("--- Query: {sql} ({row_count} rows) ---\n");
-    for event in recorded {
-        let _ = writeln!(output, "{event}");
+    /// Runs `sql` and returns the storage requests and output batches it
+    /// produced, formatted for snapshot comparison.
+    ///
+    /// Only events recorded while running this query are included.
+    pub(crate) async fn query(&self, sql: &str) -> String {
+        self.events.lock().unwrap().clear();
+
+        let df = self.ctx.sql(sql).await.unwrap();
+        let mut stream = df.execute_stream().await.unwrap();
+
+        let mut row_count = 0;
+        while let Some(batch) = stream.next().await {
+            let batch = batch.unwrap();
+            row_count += batch.num_rows();
+            self.events
+                .lock()
+                .unwrap()
+                .push(format!("Produce batch ({} rows)", batch.num_rows()));
+        }
+
+        let recorded = self.events.lock().unwrap().clone();
+        let mut output = format!("--- Query: {sql} ({row_count} rows) ---\n");
+        for event in recorded {
+            let _ = writeln!(output, "{event}");
+        }
+        output
     }
-    output
 }
