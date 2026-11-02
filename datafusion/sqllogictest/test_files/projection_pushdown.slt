@@ -2109,7 +2109,7 @@ SET datafusion.execution.target_partitions = 4;
 # reused. Projection pushdown must not merge the outer projection into the file
 # scan when doing so would inline and duplicate the volatile expression.
 # Reproduces only against a file scan (not an in-memory table); if the volatile
-# expression is duplicated, the two references diverge and `x = y` is false.
+# expression is duplicated, it is evaluated two times per row.
 #####################
 
 statement ok
@@ -2121,15 +2121,20 @@ statement ok
 CREATE EXTERNAL TABLE volatile_scan STORED AS PARQUET
 LOCATION 'test_files/scratch/projection_pushdown/volatile.parquet';
 
-# The two references to the aliased `random()` value must be equal on every
-# row: the expression is evaluated once and reused, not inlined twice.
-query B rowsort
-SELECT s.x = s.y
-FROM (SELECT r AS x, r AS y FROM (SELECT random() AS r FROM volatile_scan) AS t) AS s;
+# The aliased volatile value is evaluated one time per row and reused, not
+# inlined twice.
+query II rowsort
+SELECT s.x, s.y
+FROM (SELECT r AS x, r AS y FROM (SELECT counted_volatile(id) AS r FROM volatile_scan) AS t) AS s;
 ----
-true
-true
-true
+1 1
+2 2
+3 3
+
+query I
+SELECT evaluations();
+----
+3
 
 #####################
 # Section: leaf expression extraction does not duplicate volatile expressions
@@ -2176,37 +2181,52 @@ logical_plan
 statement ok
 set datafusion.explain.logical_plan_only = false;
 
-# Every row's `field` is the `a` field of that row's own struct.
-query B
-SELECT bool_and(field = s['a'])
+# The struct is evaluated one time per row; `field` reads it.
+query II
+SELECT count(s), sum(field)
 FROM (
   SELECT s, s['a'] AS field
-  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000))
+  FROM (SELECT named_struct('a', counted_volatile(value)) AS s FROM generate_series(1, 10))
 );
 ----
-true
+10 55
 
-# Same invariant when the extraction is routed into one side of a join.
-query B
-SELECT bool_and(field = s['a'])
+query I
+SELECT evaluations();
+----
+10
+
+# Same when the extraction is routed into one side of a join.
+query II
+SELECT count(s), sum(field)
 FROM (
   SELECT l.s, l.s['a'] AS field
-  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000)) AS l
+  FROM (SELECT named_struct('a', counted_volatile(value)) AS s FROM generate_series(1, 10)) AS l
   INNER JOIN (SELECT 1 AS k) AS r ON true
 );
 ----
-true
+10 55
 
-# Every surviving row satisfies the predicate it was filtered on.
-query B
-SELECT bool_and(s['a'] > 0.5)
+query I
+SELECT evaluations();
+----
+10
+
+# The filter tests the struct that is returned, not a second evaluation.
+query I
+SELECT count(s)
 FROM (
   SELECT s
-  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000))
-  WHERE s['a'] > 0.5
+  FROM (SELECT named_struct('a', counted_volatile(value)) AS s FROM generate_series(1, 10))
+  WHERE s['a'] > 5
 );
 ----
-true
+5
+
+query I
+SELECT evaluations();
+----
+10
 
 #####################
 # Section: expensive expressions are not re-inlined by projection pushdown

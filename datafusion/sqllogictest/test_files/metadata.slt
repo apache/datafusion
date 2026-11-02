@@ -548,6 +548,77 @@ select arrow_metadata((select id from table_with_metadata where id = 1));
 ----
 {metadata_key: the id field}
 
+# coalesce, nvl, ifnull and nvl2: conflicting extension types are a planning error
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  with_metadata(name, 'ARROW:extension:name', 'a.type'),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select nvl2(id,
+  with_metadata(name, 'ARROW:extension:name', 'a.type'),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+# These functions are rewritten to CASE before execution, so arrow_metadata()
+# does not observe the field they compute during planning. The tests below
+# observe it through the planning error instead: the outer coalesce only
+# reports 'a.type' if the inner expression carried it.
+
+# coalesce propagates an extension type its arguments agree on
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  coalesce(
+    with_metadata(name, 'ARROW:extension:name', 'a.type'),
+    with_metadata(l_name, 'ARROW:extension:name', 'a.type')),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+# An untyped NULL argument does not block the extension type
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  coalesce(NULL, with_metadata(name, 'ARROW:extension:name', 'a.type')),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+# An argument without metadata does not block the extension type of a later argument
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  coalesce(upper(name), with_metadata(l_name, 'ARROW:extension:name', 'a.type')),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  nvl(with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  ifnull(with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+# nvl2 propagates the extension type of its second and third arguments
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select coalesce(
+  nvl2(id, with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+
+# The first argument of nvl2 is only tested for NULL; its extension type does not propagate
+query T
+select coalesce(
+  nvl2(with_metadata(id, 'ARROW:extension:name', 'a.type'), name, l_name),
+  with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
+from table_with_metadata;
+----
+NULL
+l_bar
+baz
+
 statement ok
 drop table table_with_metadata;
 
