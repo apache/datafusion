@@ -1181,21 +1181,9 @@ impl ExternalSorter {
 /// does not write, read and merge tiny batches. Below that headroom the merge cannot fit
 /// in it anyway, and takes the rest from the memory pool, as it does without a bound.
 fn spill_max_batch_bytes(sort_spill_reservation_bytes: usize) -> usize {
-    let fits = |batch: usize| {
-        MIN_SPILL_MERGE_FAN_IN * get_reserved_bytes_for_record_batch_size(batch, batch)
-            <= sort_spill_reservation_bytes
-    };
-    // Binary search for the largest batch size that fits: `fits` is true up to it.
-    let (mut fitting, mut too_large) = (0, sort_spill_reservation_bytes + 1);
-    while too_large - fitting > 1 {
-        let mid = fitting + (too_large - fitting) / 2;
-        if fits(mid) {
-            fitting = mid;
-        } else {
-            too_large = mid;
-        }
-    }
-    fitting.max(MIN_SPILL_MAX_BATCH_BYTES)
+    // Each batch reserves `get_reserved_bytes_for_record_batch_size(b, b)`, which is `2 * b`.
+    (sort_spill_reservation_bytes / (2 * MIN_SPILL_MERGE_FAN_IN))
+        .max(MIN_SPILL_MAX_BATCH_BYTES)
 }
 
 /// The smallest bound [`spill_max_batch_bytes`] returns.
@@ -2942,6 +2930,14 @@ mod tests {
         // A small or zero headroom gets the floor.
         assert_eq!(spill_max_batch_bytes(0), MIN_SPILL_MAX_BATCH_BYTES);
         assert_eq!(spill_max_batch_bytes(1024), MIN_SPILL_MAX_BATCH_BYTES);
+        // The largest headroom does not overflow.
+        let bound = spill_max_batch_bytes(usize::MAX);
+        assert_eq!(bound, usize::MAX / (2 * MIN_SPILL_MERGE_FAN_IN));
+        assert!(
+            MIN_SPILL_MERGE_FAN_IN
+                .checked_mul(get_reserved_bytes_for_record_batch_size(bound, bound))
+                .is_some()
+        );
     }
 
     #[tokio::test]
