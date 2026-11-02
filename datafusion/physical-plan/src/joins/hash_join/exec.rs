@@ -119,6 +119,39 @@ fn unsliced_hash_len(data: &ArrayData) -> usize {
         .fold(own, usize::max)
 }
 
+/// A build slice is this many times longer than the shared values beneath a
+/// dictionary or list view that it rehashes, so rehashing them adds at most
+/// about 1/16 to the hashing work.
+const SHARED_VALUES_SLICE_FACTOR: usize = 16;
+
+/// The headroom from [`SHARED_VALUES_SLICE_FACTOR`] stops at this many rows
+/// (8 MiB of hashes), so a large merged dictionary cannot grow the hashes
+/// buffer and scratch space to the whole build side. Past it only the
+/// rehashing overhead grows, and it stays linear in the build rows.
+const MAX_HASH_CHUNK_ROWS: usize = 1 << 20;
+
+/// The number of rows in each slice the hash map is filled from.
+///
+/// A slice is never shorter than the largest build batch or the longest
+/// shared values under any key, which keeps hashing linear in the build rows.
+/// The overhead ratio is per key column, so the longest key counts, not the sum.
+/// Beyond that, a slice is [`SHARED_VALUES_SLICE_FACTOR`] times the shared
+/// values, up to [`MAX_HASH_CHUNK_ROWS`], and never longer than the build side.
+fn hash_chunk_rows(
+    left_values: &[ArrayRef],
+    max_batch_rows: usize,
+    num_rows: usize,
+) -> usize {
+    let shared = left_values
+        .iter()
+        .map(|values| unsliced_hash_len(&values.to_data()))
+        .max()
+        .unwrap_or(0);
+    let base = max_batch_rows.max(shared);
+    let amortized = base.max(shared.saturating_mul(SHARED_VALUES_SLICE_FACTOR));
+    amortized.min(base.max(MAX_HASH_CHUNK_ROWS)).min(num_rows)
+}
+
 /// The longest array anywhere in `data`, including `data` itself.
 fn subtree_max_len(data: &ArrayData) -> usize {
     data.child_data()
@@ -704,10 +737,11 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 /// hash table is updated by iterating the build-side rows in reverse order, which keeps rows
 /// with smaller indices "on the top" of hash table. The build-side batches are first
 /// concatenated in their input order. The hash table is then filled from slices of the
-/// concatenated batch, at most as long as the largest build-side batch (or the longest
-/// values under a dictionary or list view in a key, when that is longer), starting
-/// from the last slice. Each slice is inserted with the offset of its first row in
-/// the concatenated batch.
+/// concatenated batch, as long as the largest build-side batch. When a key has values
+/// under a dictionary or list view, which every slice hashes in full, slices grow to 16
+/// times the length of those values, capped at 2^20 rows unless the values alone are
+/// longer. Filling starts from the last slice, and each slice is inserted with the offset
+/// of its first row in the concatenated batch.
 ///
 /// Example of build phase for 3 record batches, filled from slices of 3 rows:
 ///
@@ -3242,14 +3276,11 @@ fn build_in_memory(
         let mut hashmap = new_join_hashmap(num_rows, &mut reservation, metrics)?;
 
         // Every slice shares everything beneath a dictionary or list view,
-        // at any depth of a key, which `create_hashes` hashes on each call: a
-        // slice at least as long as the longest of those arrays keeps that
-        // cost linear in the build rows. No slice is longer than the build side.
-        let chunk_rows = left_values
-            .iter()
-            .map(|values| unsliced_hash_len(&values.to_data()))
-            .fold(max_batch_rows, usize::max)
-            .min(num_rows);
+        // at any depth of a key, which `create_hashes` hashes on each call:
+        // slices `SHARED_VALUES_SLICE_FACTOR` times longer than those values
+        // (up to `MAX_HASH_CHUNK_ROWS`, never shorter than the values or the
+        // largest batch) keep that cost small.
+        let chunk_rows = hash_chunk_rows(&left_values, max_batch_rows, num_rows);
 
         let scratch_reservation = reservation.new_empty();
         if prepared {
@@ -5233,9 +5264,52 @@ mod tests {
         Ok(())
     }
 
-    /// Build batches sharing one key dictionary that is longer than each batch
-    /// fill the hash map from slices longer than the batches, which must join
-    /// as if the build side were a single batch.
+    /// A key with shared values gets slices `SHARED_VALUES_SLICE_FACTOR` times
+    /// longer than those values, up to `MAX_HASH_CHUNK_ROWS` unless the values
+    /// alone are longer, and never longer than the build side.
+    #[test]
+    fn hash_chunk_rows_amortizes_shared_values() -> Result<()> {
+        fn dict(values: i32) -> Result<ArrayRef> {
+            Ok(Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![0]),
+                Arc::new(Int32Array::from_iter_values(0..values)),
+            )?))
+        }
+        let plain: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+        let cases = [
+            (
+                vec![dict(8192)?],
+                8192,
+                2_097_152,
+                SHARED_VALUES_SLICE_FACTOR * 8192,
+            ),
+            (vec![Arc::clone(&plain)], 8192, 2_097_152, 8192),
+            // The largest batch is longer than 16 times the dictionary
+            (vec![dict(100)?], 8192, 2_097_152, 8192),
+            (vec![Arc::clone(&plain), dict(8192)?], 8192, 50_000, 50_000),
+            // Values longer than the cap are the slice length, not 16 times them
+            (vec![dict(2_097_152)?], 8192, 4_194_304, 2_097_152),
+            (vec![dict(100_000)?], 8192, 4_194_304, MAX_HASH_CHUNK_ROWS),
+            // A batch longer than the cap is still the slice length
+            (vec![dict(1000)?], 2_097_152, 4_194_304, 2_097_152),
+            (vec![], 8192, 0, 0),
+            (vec![dict(8)?], 8192, 0, 0),
+        ];
+        for (case, (keys, max_batch_rows, num_rows, expected)) in
+            cases.into_iter().enumerate()
+        {
+            assert_eq!(
+                hash_chunk_rows(&keys, max_batch_rows, num_rows),
+                expected,
+                "case {case}"
+            );
+        }
+        Ok(())
+    }
+
+    /// Build batches sharing one key dictionary fill the hash map from slices
+    /// longer than the batches, which must join as if the build side were a
+    /// single batch.
     #[tokio::test]
     async fn join_keeps_build_order_with_dictionary_keys() -> Result<()> {
         let dict_type =
@@ -5245,27 +5319,30 @@ mod tests {
             Field::new("b1", dict_type.clone(), true),
         ]));
         // Concatenation keeps a dictionary shared by every batch as is, so the
-        // 12 build rows are filled from slices of 5 rows: [0, 5), [5, 10) and
-        // [10, 12), each crossing the 2-row batch boundaries.
-        let values: ArrayRef = Arc::new(StringArray::from(vec!["x", "y", "z", "w", "v"]));
-        let batch = |a: Vec<i32>, keys: Vec<Option<i32>>| -> Result<RecordBatch> {
-            let b1 = DictionaryArray::<Int32Type>::try_new(
-                Int32Array::from(keys),
-                Arc::clone(&values),
-            )?;
-            Ok(RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Int32Array::from(a)), Arc::new(b1)],
-            )?)
-        };
-        let batches = vec![
-            batch(vec![1, 2], vec![Some(0), None])?,
-            batch(vec![3, 4], vec![Some(1), Some(2)])?,
-            batch(vec![5, 6], vec![Some(0), Some(1)])?,
-            batch(vec![7, 8], vec![Some(3), Some(0)])?,
-            batch(vec![9, 10], vec![None, Some(1)])?,
-            batch(vec![11, 12], vec![Some(0), Some(1)])?,
-        ];
+        // 45 build rows, in 3-row batches over 2 dictionary values, are filled
+        // from slices of 32 rows: [0, 32) and [32, 45). The first boundary is
+        // inside the batch [30, 33), and "x" has matches in both slices.
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["x", "y"]));
+        // Every fifth row has a null key, the others alternate "x" and "y"
+        let key = |a1: i32| (a1 % 5 != 0).then_some((a1 + 1) % 2);
+        let batches = (1..=45)
+            .step_by(3)
+            .map(|first| {
+                let a1: Vec<i32> = (first..first + 3).collect();
+                let b1 = DictionaryArray::<Int32Type>::try_new(
+                    a1.iter().map(|&a1| key(a1)).collect(),
+                    Arc::clone(&values),
+                )?;
+                Ok(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(Int32Array::from(a1)), Arc::new(b1)],
+                )?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        assert_eq!(
+            hash_chunk_rows(&[Arc::clone(batches[0].column(1))], 3, 45),
+            32
+        );
         let right_schema = Arc::new(Schema::new(vec![
             Field::new("a2", DataType::Int32, false),
             Field::new("b2", dict_type, true),
@@ -5273,10 +5350,10 @@ mod tests {
         let right = RecordBatch::try_new(
             Arc::clone(&right_schema),
             vec![
-                Arc::new(Int32Array::from(vec![10, 30])),
+                Arc::new(Int32Array::from(vec![10])),
                 Arc::new(DictionaryArray::<Int32Type>::try_new(
-                    Int32Array::from(vec![0, 1]),
-                    Arc::new(StringArray::from(vec!["x", "y"])),
+                    Int32Array::from(vec![0]),
+                    Arc::new(StringArray::from(vec!["x"])),
                 )?),
             ],
         )?;
@@ -5301,13 +5378,23 @@ mod tests {
         | a1 | b1 | a2 | b2 |
         +----+----+----+----+
         | 1  | x  | 10 | x  |
-        | 5  | x  | 10 | x  |
-        | 8  | x  | 10 | x  |
+        | 3  | x  | 10 | x  |
+        | 7  | x  | 10 | x  |
+        | 9  | x  | 10 | x  |
         | 11 | x  | 10 | x  |
-        | 3  | y  | 30 | y  |
-        | 6  | y  | 30 | y  |
-        | 10 | y  | 30 | y  |
-        | 12 | y  | 30 | y  |
+        | 13 | x  | 10 | x  |
+        | 17 | x  | 10 | x  |
+        | 19 | x  | 10 | x  |
+        | 21 | x  | 10 | x  |
+        | 23 | x  | 10 | x  |
+        | 27 | x  | 10 | x  |
+        | 29 | x  | 10 | x  |
+        | 31 | x  | 10 | x  |
+        | 33 | x  | 10 | x  |
+        | 37 | x  | 10 | x  |
+        | 39 | x  | 10 | x  |
+        | 41 | x  | 10 | x  |
+        | 43 | x  | 10 | x  |
         +----+----+----+----+
         ");
         Ok(())
