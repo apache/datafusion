@@ -259,11 +259,16 @@ physical_plan
 01)AggregateExec: mode=Single, gby=[], aggr=[sum(sum_simplify_t.column1 + Int64(1)) FILTER (WHERE sum_simplify_t.column1 > Int64(1)), sum(sum_simplify_t.column1 + Int64(1)) FILTER (WHERE sum_simplify_t.column1 > Int64(0))]
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
-# volatile aggregate arguments
-query B
-SELECT SUM(random() + 1) < SUM(random() + 2) FROM sum_simplify_t;
+# volatile aggregate arguments: each call is evaluated one time per row
+query II
+SELECT SUM(counted_volatile(column1) + 1), SUM(counted_volatile(column1) + 2) FROM sum_simplify_t;
 ----
-true
+7 10
+
+query I
+SELECT evaluations();
+----
+8
 
 query TT
 EXPLAIN SELECT SUM(random() + 1) < SUM(random() + 2) FROM sum_simplify_t;

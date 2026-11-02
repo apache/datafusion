@@ -696,20 +696,26 @@ physical_plan
 06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 07)------------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=10000, batch_size=8192]
 
-query B
-SELECT k FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY random() < 0.5) WHERE k;
+# The key is evaluated one time per input row, by the aggregate.
+query BI
+SELECT k, c FROM (SELECT counted_volatile(value) <= 3 AS k, count(*) AS c FROM generate_series(1, 10) GROUP BY counted_volatile(value) <= 3) WHERE k;
 ----
-true
-
-query B
-SELECT k FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY k) WHERE NOT k;
-----
-false
+true 3
 
 query I
-SELECT sum(c) FROM (SELECT random() < 0.5 AS k, count(*) AS c FROM generate_series(1, 10000) GROUP BY random() < 0.5) WHERE k OR NOT k;
+SELECT evaluations();
 ----
-10000
+10
+
+query BI
+SELECT k, c FROM (SELECT counted_volatile(value) <= 3 AS k, count(*) AS c FROM generate_series(1, 10) GROUP BY k) WHERE NOT k;
+----
+false 7
+
+query I
+SELECT evaluations();
+----
+10
 
 # Window filter pushdown over expression PARTITION BY keys.
 #
