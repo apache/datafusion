@@ -19,7 +19,7 @@ use super::ParquetIoTest;
 #[tokio::test]
 async fn test_parquet_bloom_filter_io_matching() {
     let test = bloom_filter_test().await;
-    // loads the Bloom filters, finds a match, then reads the data pages and
+    // Loads the Bloom filters, finds a match, then reads the data pages and
     // produces a batch.
     assert_snapshot!(test.query("SELECT * FROM t WHERE a = 10 AND b = 100").await, @r"
     --- Query: SELECT * FROM t WHERE a = 10 AND b = 100 (1 rows) ---
@@ -38,6 +38,9 @@ async fn test_parquet_bloom_filter_io_matching() {
 async fn test_parquet_bloom_filter_io_pruned() {
     let test = bloom_filter_test().await;
     // Currently the Bloom filters for all candidate columns (`a` and `b`) are
+    // loaded upfront. With incremental pruning
+    // (https://github.com/apache/datafusion/issues/25811), `a` would be
+    // evaluated first and the Bloom filter for `b` would not be loaded.
     assert_snapshot!(test.query("SELECT * FROM t WHERE a = 999 AND b = 100").await, @r"
     --- Query: SELECT * FROM t WHERE a = 999 AND b = 100 (0 rows) ---
     Read Parquet footer (offsets 0..678)
