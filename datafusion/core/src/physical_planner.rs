@@ -14,6 +14,7 @@ use crate::datasource::physical_plan::{FileOutputMode, FileSinkConfig};
 use crate::datasource::{DefaultTableSource, source_as_provider};
 use crate::error::{DataFusionError, Result};
 use crate::execution::context::ExecutionProps;
+use crate::execution::session_state::SessionState;
 use crate::logical_expr::utils::generate_sort_key;
 use crate::logical_expr::{
     Aggregate, EmptyRelation, Join, Projection, Sort, TableScan, Unnest, Values, Window,
@@ -47,11 +48,12 @@ use crate::physical_plan::{
 };
 use crate::schema_equivalence::schema_satisfied_by;
 
-use arrow::array::{ArrayRef, RecordBatch, UInt64Array, builder::StringBuilder};
+use arrow::array::{ArrayRef, RecordBatch, UInt64Array};
 use arrow::compute::SortOptions;
-use arrow::datatypes::Schema;
+use arrow::datatypes::{DataType, Schema};
 use arrow_schema::Field;
 use datafusion_catalog::ScanArgs;
+use datafusion_catalog::information_schema::InformationSchemaProvider;
 use datafusion_common::Column;
 use datafusion_common::HashMap as DFHashMap;
 use datafusion_common::config::ConfigOptions;
@@ -80,10 +82,10 @@ use datafusion_expr::physical_planning_context::{
 };
 use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
-    Analyze, BinaryExpr, DescribeTable, DmlStatement, Explain, ExplainFormat, Extension,
-    FetchType, Filter, JoinType, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
-    MaterializedCteScan, Operator, RecursiveQuery, SkipType, StringifiedPlan,
-    WindowFrame, WindowFrameBound, WriteOp,
+    Analyze, BinaryExpr, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
+    Filter, JoinType, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
+    MaterializedCteScan, Operator, RecursiveQuery, Show, ShowKind, SkipType,
+    StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{
     AggregateFunctionExpr, LoweredAggregate, LoweredAggregateBuilder,
@@ -91,6 +93,10 @@ use datafusion_physical_expr::aggregate::{
 use datafusion_physical_expr::expressions::Literal;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalSortExpr, create_physical_sort_exprs,
+};
+use datafusion_physical_optimizer::ensure_requirements::EnsureRequirements;
+use datafusion_physical_optimizer::sanity_checker::{
+    check_plan_tree_sanity, input_requirements_hold,
 };
 use datafusion_physical_plan::empty::EmptyExec;
 use datafusion_physical_plan::execution_plan::InvariantLevel;
@@ -780,11 +786,11 @@ impl DefaultPhysicalPlanner {
     async fn map_logical_node_to_physical(
         &self,
         node: &LogicalPlan,
-        session_state: &dyn Session,
+        session: &dyn Session,
         planning_ctx: &PhysicalPlanningContext,
         children: ChildrenContainer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        let execution_props = session_state.execution_props();
+        let execution_props = session.execution_props();
         let exec_node: Arc<dyn ExecutionPlan> = match node {
             // Leaves (no children)
             LogicalPlan::TableScan(scan) => {
@@ -813,7 +819,7 @@ impl DefaultPhysicalPlanner {
                         .with_limit(*fetch)
                         .with_skip(*offset)
                         .with_statistics_requests(&stats_requests);
-                    let res = source.scan_with_args(session_state, opts).await?;
+                    let res = source.scan_with_args(session, opts).await?;
                     Arc::clone(res.plan())
                 } else {
                     let mut maybe_plan = None;
@@ -823,7 +829,7 @@ impl DefaultPhysicalPlanner {
                         }
 
                         maybe_plan = planner
-                            .plan_table_scan(self, scan, session_state, planning_ctx)
+                            .plan_table_scan(self, scan, session, planning_ctx)
                             .await?;
                     }
 
@@ -868,12 +874,71 @@ impl DefaultPhysicalPlanner {
                 produce_one_row: true,
                 schema,
             }) => Arc::new(PlaceholderRowExec::new(Arc::clone(schema.inner()))),
-            LogicalPlan::DescribeTable(DescribeTable {
-                schema,
-                output_schema,
+            LogicalPlan::Show(Show {
+                kind: ShowKind::Tables,
+                ..
+            }) => create_information_schema_provider(session).show_tables()?,
+            LogicalPlan::Show(Show {
+                kind: ShowKind::Describe { schema },
+                ..
+            }) => create_information_schema_provider(session).describe_schema(schema)?,
+            LogicalPlan::Show(Show {
+                kind: ShowKind::Columns { table_ref, detail },
+                ..
             }) => {
-                let output_schema = Arc::clone(output_schema.inner());
-                self.plan_describe(&Arc::clone(schema), output_schema)?
+                let catalog_options = &session.config_options().catalog;
+                let resolved = table_ref.clone().resolve(
+                    &catalog_options.default_catalog,
+                    &catalog_options.default_schema,
+                );
+                create_information_schema_provider(session)
+                    .show_columns(&resolved, *detail)
+                    .await?
+            }
+            LogicalPlan::Show(Show {
+                kind: ShowKind::CreateTable { table_ref },
+                ..
+            }) => {
+                let catalog_options = &session.config_options().catalog;
+                let resolved = table_ref.clone().resolve(
+                    &catalog_options.default_catalog,
+                    &catalog_options.default_schema,
+                );
+
+                create_information_schema_provider(session)
+                    .show_create_table(&resolved)
+                    .await?
+            }
+            LogicalPlan::Show(Show {
+                kind: ShowKind::Variables { name, verbose },
+                ..
+            }) => create_information_schema_provider(session).show_variables(
+                session.config_options(),
+                session.runtime_env(),
+                name.as_deref(),
+                *verbose,
+            )?,
+            LogicalPlan::Show(Show {
+                kind: ShowKind::Functions { filter },
+                ..
+            }) => {
+                // Table functions (UDTFs) are only reachable through the
+                // concrete `SessionState` (the `Session` trait has no
+                // accessor for them); a custom `Session` implementor will
+                // simply see no `TABLE`-typed routines in `SHOW FUNCTIONS`.
+                let table_functions = session
+                    .as_any()
+                    .downcast_ref::<SessionState>()
+                    .map(|state| state.table_functions().clone())
+                    .unwrap_or_default();
+                create_information_schema_provider(session)
+                    .with_table_functions(table_functions)
+                    .show_functions(
+                        session.scalar_functions(),
+                        session.aggregate_functions(),
+                        session.window_functions(),
+                        filter.as_deref(),
+                    )?
             }
 
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => {
@@ -882,7 +947,7 @@ impl DefaultPhysicalPlanner {
                     scan.id.as_u64(),
                     &scan.name,
                     Arc::clone(scan.schema.inner()),
-                    session_state.config().target_partitions(),
+                    session.config().target_partitions(),
                 ))
             }
 
@@ -907,7 +972,7 @@ impl DefaultPhysicalPlanner {
                 // the column name rather than column name + explicit data type.
                 let table_partition_cols = partition_by
                     .iter()
-                    .map(|s| (s.to_string(), arrow::datatypes::DataType::Null))
+                    .map(|s| (s.to_string(), DataType::Null))
                     .collect::<Vec<_>>();
 
                 let keep_partition_by_columns = match source_option_tuples
@@ -915,7 +980,7 @@ impl DefaultPhysicalPlanner {
                     .map(|v| v.trim())
                 {
                     None => {
-                        session_state
+                        session
                             .config()
                             .options()
                             .execution
@@ -952,8 +1017,8 @@ impl DefaultPhysicalPlanner {
                     .map(|(k, v)| (k.clone(), v.clone()))
                     .collect();
 
-                let sink_format = file_type_to_format(file_type)?
-                    .create(session_state, &format_options)?;
+                let sink_format =
+                    file_type_to_format(file_type)?.create(session, &format_options)?;
 
                 // Determine extension based on format extension and compression
                 let file_extension = match sink_format.compression_type() {
@@ -982,7 +1047,7 @@ impl DefaultPhysicalPlanner {
                 sink_format
                     .create_writer_physical_plan(
                         input_exec,
-                        session_state,
+                        session,
                         config,
                         ordering.map(Into::into),
                     )
@@ -997,7 +1062,7 @@ impl DefaultPhysicalPlanner {
                     let input_exec = children.one()?;
                     provider
                         .table_provider
-                        .insert_into(session_state, input_exec, *insert_op)
+                        .insert_into(session, input_exec, *insert_op)
                         .await?
                 } else {
                     return exec_err!(
@@ -1024,7 +1089,7 @@ impl DefaultPhysicalPlanner {
                                 extract_dml_filters(input, table_name, &allowed_refs)?;
                             provider
                                 .table_provider
-                                .delete_from(session_state, filters)
+                                .delete_from(session, filters)
                                 .await
                                 .map_err(|e| {
                                     e.context(format!(
@@ -1062,7 +1127,7 @@ impl DefaultPhysicalPlanner {
                             let assignments = extract_update_assignments(input)?;
                             provider
                                 .table_provider
-                                .update(session_state, assignments, filters)
+                                .update(session, assignments, filters)
                                 .await
                                 .map_err(|e| {
                                     e.context(format!(
@@ -1086,7 +1151,7 @@ impl DefaultPhysicalPlanner {
                 if let Some(provider) = target.downcast_ref::<DefaultTableSource>() {
                     provider
                         .table_provider
-                        .truncate(session_state)
+                        .truncate(session)
                         .await
                         .map_err(|e| {
                             e.context(format!(
@@ -1115,7 +1180,7 @@ impl DefaultPhysicalPlanner {
                 );
                 provider
                     .merge_into(
-                        session_state,
+                        session,
                         input_exec,
                         merge_schema,
                         merge_op.on.clone(),
@@ -1182,8 +1247,8 @@ impl DefaultPhysicalPlanner {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let can_repartition = session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_window_functions();
+                let can_repartition = session.config().target_partitions() > 1
+                    && session.config().repartition_window_functions();
 
                 let uses_bounded_memory =
                     window_expr.iter().all(|e| e.uses_bounded_memory());
@@ -1206,7 +1271,7 @@ impl DefaultPhysicalPlanner {
             }
             LogicalPlan::Aggregate(aggregate) => self.plan_aggregate(
                 aggregate,
-                session_state,
+                session,
                 planning_ctx,
                 execution_props,
                 children,
@@ -1243,7 +1308,7 @@ impl DefaultPhysicalPlanner {
                             Arc::clone(&runtime_expr[0]),
                             physical_input,
                         )
-                        .with_batch_size(session_state.config().batch_size())
+                        .with_batch_size(session.config().batch_size())
                         .build()?
                     }
                     PlanAsyncExpr::Async(
@@ -1263,7 +1328,7 @@ impl DefaultPhysicalPlanner {
                         .apply_projection(Some(
                             (0..input.schema().fields().len()).collect::<Vec<_>>(),
                         ))?
-                        .with_batch_size(session_state.config().batch_size())
+                        .with_batch_size(session.config().batch_size())
                         .build()?
                     }
                     _ => {
@@ -1273,7 +1338,7 @@ impl DefaultPhysicalPlanner {
                     }
                 };
 
-                let selectivity = session_state
+                let selectivity = session
                     .config()
                     .options()
                     .optimizer
@@ -1655,12 +1720,12 @@ impl DefaultPhysicalPlanner {
                 };
 
                 let prefer_hash_join =
-                    session_state.config_options().optimizer.prefer_hash_join;
+                    session.config_options().optimizer.prefer_hash_join;
                 // Null-aware joins are pinned to CollectLeft hash joins (see
                 // `HashJoinExec::null_aware`): never repartition them, and
                 // never route them to the sort-merge path below.
-                let can_repartition_join = session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_joins()
+                let can_repartition_join = session.config().target_partitions() > 1
+                    && session.config().repartition_joins()
                     && !*null_aware;
 
                 // Only `HashJoinExec` implements null-aware semantics, and it
@@ -1681,7 +1746,7 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
                         && total_filters == 1
-                        && session_state
+                        && session
                             .config_options()
                             .optimizer
                             .enable_piecewise_merge_join
@@ -1786,7 +1851,7 @@ impl DefaultPhysicalPlanner {
                             (on_left, on_right),
                             op,
                             *join_type,
-                            session_state.config().target_partitions(),
+                            session.config().target_partitions(),
                         )?)
                     } else {
                         // there is no equal join condition, use the nested loop join
@@ -1798,8 +1863,8 @@ impl DefaultPhysicalPlanner {
                             None,
                         )?)
                     }
-                } else if session_state.config().target_partitions() > 1
-                    && session_state.config().repartition_joins()
+                } else if session.config().target_partitions() > 1
+                    && session.config().repartition_joins()
                     && !prefer_hash_join
                     && !*null_aware
                 // Null-aware joins (e.g. `NOT IN` with a nullable subquery) must
@@ -1955,7 +2020,7 @@ impl DefaultPhysicalPlanner {
                             node.as_ref(),
                             &logical_input,
                             &children,
-                            session_state,
+                            session,
                             planning_ctx,
                         )
                         .await?;
@@ -2281,6 +2346,15 @@ impl DefaultPhysicalPlanner {
             ))
         }
     }
+}
+
+fn create_information_schema_provider(
+    session: &dyn Session,
+) -> InformationSchemaProvider {
+    // Do not set a catalog filter. `SHOW` statements describe all catalogs,
+    // regardless of `SessionConfig::partition_information_schema`
+    let provider = InformationSchemaProvider::new(session.catalog_list());
+    provider.with_information_schema_enabled(session.config().information_schema())
 }
 
 /// Expand and align a GROUPING SET expression.
@@ -2735,7 +2809,7 @@ fn extract_dml_filters(
             // Plans without filter information
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Values(_)
-            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Show(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Distinct(_)
@@ -3411,9 +3485,18 @@ impl DefaultPhysicalPlanner {
             observer(new_plan.as_ref(), optimizer.as_ref())
         }
 
-        // This runs once after all optimizer runs are complete,
-        // to verify that the plan is executable.
-        InvariantChecker(InvariantLevel::Executable).check(&new_plan)?;
+        // This runs once after all optimizer runs are complete, including
+        // rules appended by the user, to verify that the plan is executable.
+        let optimizer_options = &session_state.config_options().optimizer;
+        if let Err(e) = check_plan_tree_sanity(&new_plan, optimizer_options) {
+            return Err(sanity_check_error(
+                e,
+                &new_plan,
+                plan,
+                optimizers,
+                &optimizer_context,
+            ));
+        }
 
         debug!(
             "Optimized physical plan:\n{}\n",
@@ -3429,43 +3512,6 @@ impl DefaultPhysicalPlanner {
             displayable(new_plan.as_ref()).indent(true)
         );
         Ok(new_plan)
-    }
-
-    // return an record_batch which describes a table's schema.
-    fn plan_describe(
-        &self,
-        table_schema: &Arc<Schema>,
-        output_schema: Arc<Schema>,
-    ) -> Result<Arc<dyn ExecutionPlan>> {
-        let mut column_names = StringBuilder::new();
-        let mut data_types = StringBuilder::new();
-        let mut is_nullables = StringBuilder::new();
-        for field in table_schema.fields() {
-            column_names.append_value(field.name());
-
-            // "System supplied type" --> Use debug format of the datatype
-            let data_type = field.data_type();
-            data_types.append_value(format!("{data_type}"));
-
-            // "YES if the column is possibly nullable, NO if it is known not nullable. "
-            let nullable_str = if field.is_nullable() { "YES" } else { "NO" };
-            is_nullables.append_value(nullable_str);
-        }
-
-        let record_batch = RecordBatch::try_new(
-            output_schema,
-            vec![
-                Arc::new(column_names.finish()),
-                Arc::new(data_types.finish()),
-                Arc::new(is_nullables.finish()),
-            ],
-        )?;
-
-        let schema = record_batch.schema();
-        let partitions = vec![vec![record_batch]];
-        let projection = None;
-        let mem_exec = MemorySourceConfig::try_new_exec(&partitions, schema, projection)?;
-        Ok(mem_exec)
     }
 
     /// Build physical plans for scalar subqueries and assign each an ordinal
@@ -3658,6 +3704,73 @@ fn tuple_err<T, R>(value: (Result<T>, Result<R>)) -> Result<(T, R)> {
         (Ok(_), Err(e1)) => Err(e1),
         (Err(e), Err(_)) => Err(e),
     }
+}
+
+/// Adds context to an error from the final [`check_plan_tree_sanity`].
+///
+/// `EnsureRequirements` makes the order and distribution requirements hold,
+/// and every rule after it must keep them. When they do not hold for
+/// `final_plan`, the context names the rule that broke this contract: either
+/// `EnsureRequirements` itself, or the rule after which the requirements
+/// stopped holding. To find it, `optimizers` run again from `input_plan`, so
+/// planning that succeeds keeps no intermediate plans.
+fn sanity_check_error(
+    error: DataFusionError,
+    final_plan: &Arc<dyn ExecutionPlan>,
+    input_plan: Arc<dyn ExecutionPlan>,
+    optimizers: &[Arc<dyn PhysicalOptimizerRule + Send + Sync>],
+    optimizer_context: &dyn PhysicalOptimizerContext,
+) -> DataFusionError {
+    const SANITY_CHECK: &str = "SanityCheckPlan";
+    let plain_error =
+        |error| DataFusionError::Context(SANITY_CHECK.to_string(), Box::new(error));
+    if input_requirements_hold(final_plan) {
+        // The error is about unbounded inputs or another invariant.
+        return plain_error(error);
+    }
+
+    let ensure_requirements = EnsureRequirements::new();
+    let enforced = optimizers
+        .iter()
+        .rposition(|rule| rule.name() == ensure_requirements.name());
+    // Plans before `EnsureRequirements` need not satisfy the requirements, so
+    // only plans from its last run onwards are checked. Without it, every
+    // plan is checked, starting with the input plan.
+    let first_checked = enforced.unwrap_or(0);
+    let mut held = enforced.is_none() && input_requirements_hold(&input_plan);
+    let mut broken_by = None;
+    let mut plan = input_plan;
+    for (idx, rule) in optimizers.iter().enumerate() {
+        plan = match rule.optimize_with_context(plan, optimizer_context) {
+            Ok(plan) => plan,
+            // The rules did not run as they did before, so no rule is named.
+            Err(_) => return plain_error(error),
+        };
+        if idx >= first_checked {
+            let holds = input_requirements_hold(&plan);
+            if held && !holds {
+                broken_by = Some(rule);
+            }
+            held = holds;
+        }
+    }
+    let context = match (broken_by, enforced) {
+        (Some(rule), _) => format!(
+            "{SANITY_CHECK}: order and distribution requirements stopped holding \
+             after physical optimizer rule '{}'",
+            rule.name()
+        ),
+        (None, Some(_)) => format!(
+            "{SANITY_CHECK}: the plan produced by physical optimizer rule '{}' \
+             does not satisfy the order and distribution requirements",
+            ensure_requirements.name()
+        ),
+        (None, None) => format!(
+            "{SANITY_CHECK}: no physical optimizer rule produced a plan that \
+             satisfies the order and distribution requirements"
+        ),
+    };
+    DataFusionError::Context(context, Box::new(error))
 }
 
 struct OptimizationInvariantChecker<'a> {

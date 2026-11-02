@@ -21,6 +21,8 @@ the release process builds docs with the following command from a main
 checkout:
 
 sphinx-build -c docs/scripts/release
+
+See docs/scripts/build_versions.sh for building past releases
 """
 
 import os
