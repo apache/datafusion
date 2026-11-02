@@ -369,7 +369,33 @@ pub fn create_physical_expr(
                 } else {
                     None
                 };
-            Ok(expressions::case(expr, when_then_expr, else_expr)?)
+            let physical_case =
+                expressions::CaseExpr::try_new(expr, when_then_expr, else_expr)?;
+            if physical_case.has_unmarked_result_summaries(input_schema)?
+                && case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, result)| result.as_ref())
+                    .chain(case.else_expr.iter().map(AsRef::as_ref))
+                    .all(|result| {
+                        matches!(
+                            result,
+                            Expr::Column(_) | Expr::Literal(_, _) | Expr::Case(_)
+                        )
+                    })
+            {
+                // Pin even an empty summary: argument fields may be requested per batch.
+                // Reuse nested empty pins; aliases and other lowered wrappers still need
+                // their logical field because lowering can discard their metadata.
+                Ok(Arc::new(
+                    physical_case.with_empty_logical_result_metadata(input_schema)?,
+                ))
+            } else {
+                Ok(Arc::new(
+                    physical_case
+                        .with_logical_result_field(&e.to_field(input_dfschema)?.1),
+                ))
+            }
         }
         Expr::Cast(Cast { expr, field }) => expressions::cast_with_target_field(
             create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?,
@@ -735,7 +761,7 @@ mod tests {
     use datafusion_expr::physical_planning_context::{
         ScalarSubqueryResults, SubqueryIndex,
     };
-    use datafusion_expr::{LogicalPlanBuilder, col, scalar_subquery};
+    use datafusion_expr::{LogicalPlanBuilder, col, scalar_subquery, when};
 
     use super::*;
 
@@ -751,6 +777,270 @@ mod tests {
             &ExecutionProps::new(),
             &PhysicalPlanningContext::default(),
         )
+    }
+
+    #[test]
+    fn case_empty_typed_null_else_matches_implicit_else() -> Result<()> {
+        let schema = Schema::empty();
+        let then =
+            datafusion_expr::lit_with_metadata(7_i32, Some(FieldMetadata::default()));
+        let implicit = when(lit(true), then.clone()).end()?;
+        let explicit =
+            when(lit(true), then).otherwise(datafusion_expr::lit_with_metadata(
+                ScalarValue::Int32(None),
+                Some(FieldMetadata::default()),
+            ))?;
+        let implicit = logical2physical(&implicit, &schema);
+        let explicit = logical2physical(&explicit, &schema);
+        assert!(implicit.eq(&explicit));
+        Ok(())
+    }
+
+    #[test]
+    fn case_metadata_matches_logical_field_after_alias_lowering() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        let mut aliased = col("a");
+        for _ in 0..10 {
+            aliased = aliased.alias("nested");
+        }
+        let marked = |arg| {
+            datafusion_functions::core::expr_fn::with_metadata(vec![
+                arg,
+                lit("source"),
+                lit("test"),
+            ])
+        };
+        let logical = when(lit(true), marked(aliased)).otherwise(marked(col("a")))?;
+        let logical_field = logical.to_field(&df_schema)?.1;
+        assert_eq!(
+            logical_field.metadata(),
+            &Metadata::new().with("source", "test")
+        );
+
+        let physical = create_physical_expr(
+            &logical,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        assert_eq!(
+            physical.return_field(&schema)?.metadata(),
+            logical_field.metadata()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn case_metadata_survives_an_unmarked_first_column() -> Result<()> {
+        let metadata = Metadata::new().with("source", "later_branch");
+        let schema = Schema::new(vec![
+            Field::new("flag", DataType::Boolean, false),
+            Field::new("plain", DataType::Int32, false),
+            Field::new("marked", DataType::Int32, false).with_metadata(metadata.clone()),
+        ]);
+        let logical = when(col("flag"), col("plain")).otherwise(col("marked"))?;
+        let physical = lower_cast_expr(&logical, &schema)?;
+        assert!(physical.is::<expressions::CaseExpr>());
+        let first_field = physical.return_field(&schema)?;
+        let second_field = physical.return_field(&schema)?;
+        assert_eq!(first_field.metadata(), &metadata);
+        assert!(Arc::ptr_eq(
+            first_field.metadata().as_arc().unwrap(),
+            second_field.metadata().as_arc().unwrap(),
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn case_metadata_survives_a_marked_typed_null_else() -> Result<()> {
+        let metadata = Metadata::new().with("source", "typed_null_else");
+        let schema = Schema::new(vec![
+            Field::new("flag", DataType::Boolean, false),
+            Field::new("plain", DataType::Int32, false),
+        ]);
+        let logical = when(col("flag"), col("plain")).otherwise(
+            datafusion_expr::lit_with_metadata(
+                ScalarValue::Int32(None),
+                Some(FieldMetadata::from(metadata.clone())),
+            ),
+        )?;
+        let logical_field = logical.to_field(&DFSchema::try_from(schema.clone())?)?.1;
+        assert_eq!(logical_field.metadata(), &metadata);
+        let physical = lower_cast_expr(&logical, &schema)?;
+        assert_eq!(physical.return_field(&schema)?.metadata(), &metadata);
+        Ok(())
+    }
+
+    #[test]
+    fn nested_case_metadata_matches_logical_field() -> Result<()> {
+        let metadata = std::collections::HashMap::from([(
+            "source".to_string(),
+            "nested".to_string(),
+        )]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, false).with_metadata(metadata),
+        ]);
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        let inner = when(lit(true), col("a")).otherwise(col("a"))?;
+        let outer = when(lit(true), inner.clone()).otherwise(inner)?;
+        let logical_field = outer.to_field(&df_schema)?.1;
+        let physical = create_physical_expr(
+            &outer,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        assert_eq!(
+            physical.return_field(&schema)?.metadata(),
+            logical_field.metadata()
+        );
+
+        let mut aliased = col("a");
+        for _ in 0..10 {
+            aliased = aliased.alias("nested");
+        }
+        let marked = |arg| {
+            datafusion_functions::core::expr_fn::with_metadata(vec![
+                arg,
+                lit("source"),
+                lit("test"),
+            ])
+        };
+        let inner = when(lit(true), marked(aliased)).otherwise(marked(col("a")))?;
+        let outer = when(lit(true), inner.clone()).otherwise(inner)?;
+        let logical_field = outer.to_field(&df_schema)?.1;
+        let physical = create_physical_expr(
+            &outer,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        assert_eq!(
+            physical.return_field(&schema)?.metadata(),
+            logical_field.metadata()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn nested_case_marked_typed_null_matches_logical_field() -> Result<()> {
+        use arrow_schema::extension::EXTENSION_TYPE_NAME_KEY;
+
+        let metadata = std::collections::HashMap::from([(
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "geoarrow.wkb".to_string(),
+        )]);
+        let schema = Schema::new(vec![
+            Field::new("binary", DataType::LargeBinary, false)
+                .with_metadata(metadata.clone()),
+        ]);
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        let typed_null = Expr::Cast(Cast::new(
+            Box::new(lit(ScalarValue::Null)),
+            DataType::Binary,
+        ));
+        let marked_null = typed_null.alias_with_metadata(
+            "marked_null",
+            Some(FieldMetadata::from(metadata.clone())),
+        );
+        let nested = when(lit(true), marked_null).otherwise(lit(ScalarValue::Null))?;
+        let cast_nested = Expr::Cast(Cast::new(Box::new(nested), DataType::LargeBinary));
+        assert!(cast_nested.to_field(&df_schema)?.1.metadata().is_empty());
+        let outer = when(lit(true), cast_nested).otherwise(col("binary"))?;
+        let logical_field = outer.to_field(&df_schema)?.1;
+        assert_eq!(logical_field.metadata(), &metadata);
+        let physical = create_physical_expr(
+            &outer,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        assert_eq!(
+            physical.return_field(&schema)?.metadata(),
+            logical_field.metadata()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn case_null_scalar_variable_matches_logical_field() -> Result<()> {
+        use datafusion_expr::var_provider::{VarProvider, VarType};
+
+        #[derive(Debug)]
+        struct NullBinaryProvider;
+
+        impl VarProvider for NullBinaryProvider {
+            fn get_value(&self, _names: Vec<String>) -> Result<ScalarValue> {
+                Ok(ScalarValue::Binary(None))
+            }
+
+            fn get_type(&self, _names: &[String]) -> Option<DataType> {
+                Some(DataType::Binary)
+            }
+        }
+
+        let metadata = std::collections::HashMap::from([(
+            "source".to_string(),
+            "marked".to_string(),
+        )]);
+        let schema = Schema::new(vec![
+            Field::new("binary", DataType::Binary, false).with_metadata(metadata.clone()),
+        ]);
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        let variable = Expr::ScalarVariable(
+            Arc::new(Field::new("variable", DataType::Binary, true)),
+            vec!["@variable".to_string()],
+        );
+        let logical = when(lit(true), variable).otherwise(col("binary"))?;
+        let logical_field = logical.to_field(&df_schema)?.1;
+        assert_eq!(logical_field.metadata(), &metadata);
+        let mut props = ExecutionProps::new();
+        props.add_var_provider(VarType::UserDefined, Arc::new(NullBinaryProvider));
+        let physical = create_physical_expr(
+            &logical,
+            &df_schema,
+            &props,
+            &PhysicalPlanningContext::default(),
+        )?;
+        assert_eq!(
+            physical.return_field(&schema)?.metadata(),
+            logical_field.metadata()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn case_marked_not_matches_logical_field() -> Result<()> {
+        let existing = std::collections::HashMap::from([(
+            "origin".to_string(),
+            "input".to_string(),
+        )]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Boolean, false).with_metadata(existing),
+            Field::new("b", DataType::Boolean, false),
+        ]);
+        let df_schema = DFSchema::try_from(schema.clone())?;
+        let marked = |arg| {
+            datafusion_functions::core::expr_fn::with_metadata(vec![
+                arg,
+                lit("source"),
+                lit("test"),
+            ])
+        };
+        let logical = when(lit(true), marked(!col("a"))).otherwise(marked(col("b")))?;
+        let logical_field = logical.to_field(&df_schema)?.1;
+        let physical = create_physical_expr(
+            &logical,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        assert_eq!(
+            physical.return_field(&schema)?.metadata(),
+            logical_field.metadata()
+        );
+        Ok(())
     }
 
     fn as_planner_cast(physical: &Arc<dyn PhysicalExpr>) -> &expressions::CastExpr {

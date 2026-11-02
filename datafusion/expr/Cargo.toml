@@ -82,3 +82,7 @@ harness = false
 [[bench]]
 name = "normalize_columns"
 harness = false
+
+[[bench]]
+name = "case_field_metadata"
+harness = false

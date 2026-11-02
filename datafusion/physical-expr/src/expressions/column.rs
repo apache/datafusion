@@ -8,7 +8,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::physical_expr::PhysicalExpr;
-use arrow::datatypes::FieldRef;
+use arrow::datatypes::{Field, FieldRef};
 use arrow::{
     datatypes::{DataType, Schema, SchemaRef},
     record_batch::RecordBatch,
@@ -82,6 +82,11 @@ impl Column {
     /// Get the column's schema index
     pub fn index(&self) -> usize {
         self.index
+    }
+
+    pub(crate) fn field<'a>(&self, input_schema: &'a Schema) -> Result<&'a Field> {
+        self.bounds_check(input_schema)?;
+        Ok(input_schema.field(self.index))
     }
 }
 
@@ -256,12 +261,29 @@ pub fn with_new_schema(
 mod test {
     use super::Column;
     use crate::physical_expr::PhysicalExpr;
+    use datafusion_common::Result;
 
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use arrow::record_batch::RecordBatch;
 
     use std::sync::Arc;
+
+    #[test]
+    fn borrowed_field_preserves_identity_and_bounds_errors() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("foo", DataType::Utf8, true)]);
+        let column = Column::new("foo", 0);
+        assert!(std::ptr::eq(column.field(&schema)?, schema.field(0)));
+        let invalid = Column::new("id", 9);
+        assert_eq!(
+            invalid.field(&schema).expect_err("error").strip_backtrace(),
+            invalid
+                .return_field(&schema)
+                .expect_err("error")
+                .strip_backtrace()
+        );
+        Ok(())
+    }
 
     #[test]
     fn out_of_bounds_data_type() {

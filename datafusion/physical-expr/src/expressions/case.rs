@@ -6,7 +6,8 @@ mod literal_lookup_table;
 
 use super::{Column, Literal};
 use crate::expressions::{
-    BinaryExpr, CastExpr, LambdaVariable, NegativeExpr, NotExpr, lit, try_cast,
+    BinaryExpr, CastExpr, LambdaVariable, NegativeExpr, NotExpr, TryCastExpr, lit,
+    try_cast,
 };
 use crate::{PhysicalExpr, ScalarFunctionExpr};
 use arrow::array::*;
@@ -14,9 +15,13 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
     FilterBuilder, FilterPredicate, is_not_null, not, nullif, prep_null_mask_filter,
 };
-use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
+use arrow::datatypes::{
+    DataType, Field, FieldRef, Metadata, Schema, UInt32Type, UnionMode,
+};
 use arrow::error::ArrowError;
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_or_internal_err, exec_err,
     internal_datafusion_err, internal_err,
@@ -295,6 +300,8 @@ pub struct CaseExpr {
     body: CaseBody,
     /// Evaluation method to use
     eval_method: EvalMethod,
+    /// Logical metadata with its storage-type guard, inferred before physical lowering.
+    logical_result_field: Option<(DataType, Metadata)>,
 }
 
 // eval_method is functionally derived from body, so excluding it from
@@ -303,12 +310,13 @@ pub struct CaseExpr {
 impl Hash for CaseExpr {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         self.body.hash(state);
+        self.logical_result_field.hash(state);
     }
 }
 
 impl PartialEq for CaseExpr {
     fn eq(&self, other: &Self) -> bool {
-        self.body == other.body
+        self.body == other.body && self.logical_result_field == other.logical_result_field
     }
 }
 
@@ -673,11 +681,17 @@ impl CaseExpr {
         when_then_expr: Vec<WhenThen>,
         else_expr: Option<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
-        // normalize null literals to None in the else_expr (this already happens
-        // during SQL planning, but not necessarily for other use cases)
+        // Unmarked and untyped NULL literals can be omitted. Typed NULL metadata
+        // contributes to the result field even though it has no non-null values.
         let else_expr = match &else_expr {
             Some(e) => match e.downcast_ref::<Literal>() {
-                Some(lit) if lit.value().is_null() => None,
+                Some(lit)
+                    if lit.value().is_null()
+                        && (lit.metadata().is_empty()
+                            || matches!(lit.value(), ScalarValue::Null)) =>
+                {
+                    None
+                }
                 _ => else_expr,
             },
             _ => else_expr,
@@ -695,7 +709,67 @@ impl CaseExpr {
 
         let eval_method = Self::find_best_eval_method(&body)?;
 
-        Ok(Self { body, eval_method })
+        Ok(Self {
+            body,
+            eval_method,
+            logical_result_field: None,
+        })
+    }
+
+    /// Preserve the logical CASE result metadata across physical lowering.
+    ///
+    /// Type and nullability are still derived from the body. Metadata is suppressed
+    /// if rewriting the children changes the result's storage type.
+    pub fn with_logical_result_field(mut self, field: &FieldRef) -> Self {
+        self.logical_result_field =
+            Some((field.data_type().clone(), field.metadata().clone()));
+        self
+    }
+
+    pub(crate) fn has_unmarked_result_summaries(
+        &self,
+        input_schema: &Schema,
+    ) -> Result<bool> {
+        for result in self
+            .body
+            .when_then_expr
+            .iter()
+            .map(|(_, result)| result)
+            .chain(self.body.else_expr.iter())
+        {
+            if let Some(nested) = result.downcast_ref::<Self>() {
+                if nested
+                    .logical_result_field
+                    .as_ref()
+                    .is_some_and(|(_, metadata)| metadata.is_empty())
+                {
+                    continue;
+                }
+                return Ok(false);
+            }
+            if let Some(literal) = result.downcast_ref::<Literal>() {
+                if literal.metadata().is_empty() {
+                    continue;
+                }
+                return Ok(false);
+            }
+            if let Some(column) = result.downcast_ref::<Column>()
+                && column.field(input_schema)?.metadata().is_empty()
+            {
+                continue;
+            }
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn with_empty_logical_result_metadata(
+        mut self,
+        input_schema: &Schema,
+    ) -> Result<Self> {
+        self.logical_result_field =
+            Some((self.data_type(input_schema)?, Metadata::new()));
+        Ok(self)
     }
 
     fn find_best_eval_method(body: &CaseBody) -> Result<EvalMethod> {
@@ -707,16 +781,23 @@ impl CaseExpr {
             return Ok(EvalMethod::WithExpression(body.project()?));
         }
 
+        let null_else = body.else_expr.as_ref().is_none_or(|expr| {
+            expr.downcast_ref::<Literal>()
+                .is_some_and(|literal| literal.value().is_null())
+        });
         Ok(
             if body.when_then_expr.len() == 1
                 && is_cheap_and_infallible(&(body.when_then_expr[0].1))
-                && body.else_expr.is_none()
+                && null_else
             {
                 EvalMethod::InfallibleExprOrNull
             } else if body.when_then_expr.len() == 1
                 && body.when_then_expr[0].1.is::<Literal>()
-                && body.else_expr.is_some()
-                && body.else_expr.as_ref().unwrap().is::<Literal>()
+                && !null_else
+                && body
+                    .else_expr
+                    .as_ref()
+                    .is_some_and(|expr| expr.is::<Literal>())
             {
                 EvalMethod::ScalarOrScalar
             } else if body.when_then_expr.len() == 1 {
@@ -1199,10 +1280,17 @@ impl CaseExpr {
             // All input rows are true, just call the 'then' expression
             self.body.when_then_expr[0].1.evaluate(batch)
         } else if !when_value.has_true() {
-            // All input rows are false/null, just call the 'else' expression
+            // A retained literal NULL carries metadata, not a fixed result type:
+            // child rewrites can change the CASE storage type independently.
             match &self.body.else_expr {
-                Some(else_expr) => else_expr.evaluate(batch),
-                None => {
+                Some(else_expr)
+                    if !else_expr
+                        .downcast_ref::<Literal>()
+                        .is_some_and(|literal| literal.value().is_null()) =>
+                {
+                    else_expr.evaluate(batch)
+                }
+                _ => {
                     let return_type = self.data_type(&batch.schema())?;
                     Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
                         &return_type,
@@ -1243,9 +1331,199 @@ impl CaseExpr {
     }
 }
 
+// Resolve nested CASE fields bottom-up so field names and nullability are not
+// recomputed for every suffix of a nested CASE chain.
+fn case_result_field_metadata(
+    case: &CaseExpr,
+    input_schema: &Schema,
+) -> Result<(DataType, Metadata)> {
+    struct BranchField {
+        field: FieldRef,
+        certainly_null: bool,
+    }
+
+    enum Work<'a> {
+        Visit(&'a dyn PhysicalExpr),
+        FinishCase(&'a CaseExpr),
+        FinishCast(&'a DataType),
+    }
+
+    fn schedule_case<'a>(case: &'a CaseExpr, work: &mut Vec<Work<'a>>) {
+        work.push(Work::FinishCase(case));
+        work.extend(
+            case.body
+                .else_expr
+                .iter()
+                .map(|expr| Work::Visit(expr.as_ref())),
+        );
+        work.extend(
+            case.body
+                .when_then_expr
+                .iter()
+                .rev()
+                .map(|(_, expr)| Work::Visit(expr.as_ref())),
+        );
+    }
+
+    let mut work = Vec::new();
+    let mut fields = Vec::new();
+    schedule_case(case, &mut work);
+    while let Some(item) = work.pop() {
+        match item {
+            Work::Visit(expr) => {
+                if let Some(nested) = expr.downcast_ref::<CaseExpr>() {
+                    schedule_case(nested, &mut work);
+                } else if let Some(cast) = expr.downcast_ref::<CastExpr>() {
+                    if let Some(metadata) = cast.target_metadata() {
+                        fields.push(BranchField {
+                            field: Arc::new(
+                                Field::new("", cast.cast_type().clone(), true)
+                                    .with_metadata(metadata.clone()),
+                            ),
+                            certainly_null: false,
+                        });
+                    } else {
+                        work.push(Work::FinishCast(cast.cast_type()));
+                        work.push(Work::Visit(cast.expr().as_ref()));
+                    }
+                } else if let Some(cast) = expr.downcast_ref::<TryCastExpr>() {
+                    if let Some(metadata) = cast.target_metadata() {
+                        fields.push(BranchField {
+                            field: Arc::new(
+                                Field::new("", cast.cast_type().clone(), true)
+                                    .with_metadata(metadata.clone()),
+                            ),
+                            certainly_null: false,
+                        });
+                    } else {
+                        work.push(Work::FinishCast(cast.cast_type()));
+                        work.push(Work::Visit(cast.expr().as_ref()));
+                    }
+                } else if let Some(negative) = expr.downcast_ref::<NegativeExpr>() {
+                    work.push(Work::Visit(negative.arg().as_ref()));
+                } else if expr.is::<NotExpr>() {
+                    fields.push(BranchField {
+                        field: Arc::new(Field::new("", DataType::Boolean, true)),
+                        certainly_null: false,
+                    });
+                } else {
+                    let field = expr.return_field(input_schema)?;
+                    fields.push(BranchField {
+                        field,
+                        certainly_null: expr
+                            .downcast_ref::<Literal>()
+                            .is_some_and(|literal| literal.value().is_null()),
+                    });
+                }
+            }
+            Work::FinishCast(target) => {
+                let Some(mut source) = fields.pop() else {
+                    return internal_err!("Missing CASE cast input field");
+                };
+                let mut metadata = source.field.metadata().clone();
+                metadata.remove(EXTENSION_TYPE_NAME_KEY);
+                metadata.remove(EXTENSION_TYPE_METADATA_KEY);
+                source.field = Arc::new(
+                    Field::new("", target.clone(), true).with_metadata(metadata),
+                );
+                fields.push(source);
+            }
+            Work::FinishCase(case) => {
+                let count = case.body.when_then_expr.len()
+                    + usize::from(case.body.else_expr.is_some());
+                if fields.len() < count {
+                    return internal_err!("Missing CASE result fields");
+                }
+                let start = fields.len() - count;
+                let mut then_type = DataType::Null;
+                let mut else_type = DataType::Null;
+                let mut branch_type = None;
+                let mut type_conflict = false;
+                let mut certainly_null = true;
+                for (index, branch) in fields[start..].iter().enumerate() {
+                    let data_type = branch.field.data_type();
+                    if index < case.body.when_then_expr.len() {
+                        if then_type.is_null() && !data_type.is_null() {
+                            then_type = data_type.clone();
+                        }
+                    } else {
+                        else_type = data_type.clone();
+                    }
+                    certainly_null &= branch.certainly_null;
+                    if data_type.is_null()
+                        || (branch.certainly_null && branch.field.metadata().is_empty())
+                    {
+                        continue;
+                    }
+                    if branch_type.as_ref().is_some_and(|other| other != data_type) {
+                        type_conflict = true;
+                    }
+                    branch_type.get_or_insert_with(|| data_type.clone());
+                }
+                let data_type = if then_type.is_null() {
+                    else_type
+                } else {
+                    then_type
+                };
+                let mut field = Field::new("", data_type, true);
+                if let Some((logical_type, logical_metadata)) = &case.logical_result_field
+                {
+                    if logical_type == field.data_type() {
+                        field = field.with_metadata(logical_metadata.clone());
+                    }
+                } else {
+                    let metadata = coerced_fields_metadata(
+                        fields[start..].iter().map(|branch| branch.field.as_ref()),
+                    )?;
+                    if !type_conflict && branch_type.as_ref() == Some(field.data_type()) {
+                        field = metadata.add_to_field(field);
+                    }
+                }
+                fields.truncate(start);
+                fields.push(BranchField {
+                    field: Arc::new(field),
+                    certainly_null,
+                });
+            }
+        }
+    }
+    let Some(result) = fields.pop() else {
+        return internal_err!("Missing CASE output field");
+    };
+    Ok((
+        result.field.data_type().clone(),
+        result.field.metadata().clone(),
+    ))
+}
+
 impl PhysicalExpr for CaseExpr {
     fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
         self.body.data_type(input_schema)
+    }
+
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        let data_type = self.data_type(input_schema)?;
+        let nullable = self.nullable(input_schema)?;
+        if let Some((logical_type, logical_metadata)) = &self.logical_result_field {
+            let field = Field::new(format!("{self}"), data_type, nullable);
+            return Ok(Arc::new(if logical_type == field.data_type() {
+                field.with_metadata(logical_metadata.clone())
+            } else {
+                field
+            }));
+        }
+        if self.has_unmarked_result_summaries(input_schema)? {
+            return Ok(Arc::new(Field::new(format!("{self}"), data_type, nullable)));
+        }
+        let (branch_type, metadata) = case_result_field_metadata(self, input_schema)?;
+        let metadata = if branch_type == data_type {
+            metadata
+        } else {
+            Metadata::new()
+        };
+        Ok(Arc::new(
+            Field::new(format!("{self}"), data_type, nullable).with_metadata(metadata),
+        ))
     }
 
     fn nullable(&self, input_schema: &Schema) -> Result<bool> {
@@ -1372,11 +1650,15 @@ impl PhysicalExpr for CaseExpr {
                     ),
                     (false, false) => (None, &children[0..children.len()], None),
                 };
-            Ok(Arc::new(CaseExpr::try_new(
+            let mut rebuilt = CaseExpr::try_new(
                 expr.cloned(),
                 when_then_expr.iter().cloned().tuples().collect(),
                 else_expr.cloned(),
-            )?))
+            )?;
+            rebuilt
+                .logical_result_field
+                .clone_from(&self.logical_result_field);
+            Ok(Arc::new(rebuilt))
         }
     }
 
@@ -1414,6 +1696,7 @@ impl PhysicalExpr for CaseExpr {
             body,
             // Derived from `body` by `try_new` on decode.
             eval_method: _,
+            logical_result_field: _,
         } = self;
         let CaseBody {
             expr,
@@ -1442,6 +1725,21 @@ impl PhysicalExpr for CaseExpr {
                         .as_ref()
                         .map(|expr| ctx.encode_child(expr).map(Box::new))
                         .transpose()?,
+                    logical_result_type: self
+                        .logical_result_field
+                        .as_ref()
+                        .map(|(data_type, _)| data_type.try_into())
+                        .transpose()?,
+                    logical_result_metadata: self
+                        .logical_result_field
+                        .as_ref()
+                        .map(|(_, metadata)| {
+                            metadata
+                                .iter()
+                                .map(|(key, value)| (key.clone(), value.clone()))
+                                .collect()
+                        })
+                        .unwrap_or_default(),
                 },
             ))),
         }))
@@ -1467,9 +1765,11 @@ impl CaseExpr {
             expr,
             when_then_expr,
             else_expr,
+            logical_result_type,
+            logical_result_metadata,
         } = &**case;
 
-        Ok(Arc::new(CaseExpr::try_new(
+        let mut expr = CaseExpr::try_new(
             expr.as_deref().map(|expr| ctx.decode(expr)).transpose()?,
             when_then_expr
                 .iter()
@@ -1496,7 +1796,16 @@ impl CaseExpr {
                 .as_deref()
                 .map(|expr| ctx.decode(expr))
                 .transpose()?,
-        )?))
+        )?;
+        if let Some(logical_type) = logical_result_type {
+            expr.logical_result_field = Some((
+                logical_type.try_into()?,
+                logical_result_metadata.clone().into(),
+            ));
+        } else if !logical_result_metadata.is_empty() {
+            return internal_err!("CaseExpr logical metadata requires a result type");
+        }
+        Ok(Arc::new(expr))
     }
 }
 
@@ -1582,6 +1891,60 @@ pub fn case(
 mod tests {
     use super::*;
 
+    use std::collections::HashMap;
+
+    std::thread_local! {
+        static COUNTED_COLUMN_DISPLAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static COUNTED_COLUMN_FIELDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+        static COUNTED_COLUMN_NULLABLE: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+
+    #[derive(Debug, Hash, PartialEq, Eq)]
+    struct CountedColumn(Column);
+
+    impl std::fmt::Display for CountedColumn {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            COUNTED_COLUMN_DISPLAYS.with(|count| count.set(count.get() + 1));
+            std::fmt::Display::fmt(&self.0, f)
+        }
+    }
+
+    impl PhysicalExpr for CountedColumn {
+        fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+            self.0.data_type(input_schema)
+        }
+
+        fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+            COUNTED_COLUMN_NULLABLE.with(|count| count.set(count.get() + 1));
+            self.0.nullable(input_schema)
+        }
+
+        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+            self.0.evaluate(batch)
+        }
+
+        fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+            COUNTED_COLUMN_FIELDS.with(|count| count.set(count.get() + 1));
+            self.0.return_field(input_schema)
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            assert!(children.is_empty());
+            Ok(self)
+        }
+
+        fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            self.0.fmt_sql(f)
+        }
+    }
+
     use crate::expressions;
     use crate::expressions::{binary, cast, col, is_not_null};
     use arrow::buffer::Buffer;
@@ -1589,6 +1952,7 @@ mod tests {
     use arrow::datatypes::Field;
     use datafusion_common::cast::{as_float64_array, as_int32_array};
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::metadata::FieldMetadata;
     use datafusion_common::plan_err;
     use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
     use datafusion_expr::type_coercion::binary::type_union_coercion;
@@ -1642,6 +2006,529 @@ mod tests {
         fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
             self.inner.fmt_sql(f)
         }
+    }
+
+    #[test]
+    fn case_result_field_metadata() -> Result<()> {
+        let metadata = HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "geoarrow.wkb".to_string(),
+        )]);
+        let other = HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "arrow.uuid".to_string(),
+        )]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Binary, false).with_metadata(metadata.clone()),
+            Field::new("b", DataType::Binary, false).with_metadata(metadata.clone()),
+            Field::new("c", DataType::Binary, false).with_metadata(other),
+            Field::new("d", DataType::Binary, false),
+        ]);
+        for (else_column, expected_metadata) in [
+            (Some("b"), &metadata),
+            (Some("d"), &metadata),
+            (None, &metadata),
+        ] {
+            let else_expr = else_column.map(|name| col(name, &schema)).transpose()?;
+            let expr = case(None, vec![(lit(true), col("a", &schema)?)], else_expr)?;
+            assert_eq!(expr.return_field(&schema)?.metadata(), expected_metadata);
+        }
+
+        let conflicting = case(
+            None,
+            vec![(lit(true), col("a", &schema)?)],
+            Some(col("c", &schema)?),
+        )?;
+        let error = conflicting.return_field(&schema).unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("differing values of 'ARROW:extension:name'"),
+            "{error}"
+        );
+
+        let unmarked_first = case(
+            None,
+            vec![(lit(true), col("d", &schema)?)],
+            Some(col("a", &schema)?),
+        )?;
+        assert_eq!(unmarked_first.return_field(&schema)?.metadata(), &metadata);
+
+        let null_else = case(
+            None,
+            vec![(lit(true), col("a", &schema)?)],
+            Some(lit(ScalarValue::Null)),
+        )?;
+        assert_eq!(null_else.return_field(&schema)?.metadata(), &metadata);
+
+        let null_first = case(
+            None,
+            vec![(lit(true), lit(ScalarValue::Null))],
+            Some(col("a", &schema)?),
+        )?;
+        assert_eq!(null_first.return_field(&schema)?.metadata(), &metadata);
+
+        let typed_null = Arc::new(Literal::new_with_metadata(
+            ScalarValue::Binary(None),
+            Some(FieldMetadata::from(metadata.clone())),
+        ));
+        let typed_null_case = case(
+            None,
+            vec![(lit(true), typed_null)],
+            Some(col("a", &schema)?),
+        )?;
+        assert_eq!(typed_null_case.return_field(&schema)?.metadata(), &metadata);
+
+        let cast_metadata =
+            HashMap::from([("logical".to_string(), "number".to_string())]);
+        let cast_schema = Schema::new(vec![
+            Field::new("small", DataType::Int32, false)
+                .with_metadata(cast_metadata.clone()),
+            Field::new("large", DataType::Int64, false)
+                .with_metadata(cast_metadata.clone()),
+        ]);
+        let nested = case(
+            None,
+            vec![(lit(true), col("small", &cast_schema)?)],
+            Some(col("small", &cast_schema)?),
+        )?;
+        let casted = cast(nested, &cast_schema, DataType::Int64)?;
+        let cast_case = case(
+            None,
+            vec![(lit(true), casted)],
+            Some(col("large", &cast_schema)?),
+        )?;
+        assert_eq!(
+            cast_case.return_field(&cast_schema)?.metadata(),
+            &cast_metadata
+        );
+
+        let try_cast_null =
+            Arc::new(TryCastExpr::new(lit(ScalarValue::Null), DataType::Int64));
+        let try_cast_case = case(
+            None,
+            vec![(lit(true), try_cast_null)],
+            Some(col("large", &cast_schema)?),
+        )?;
+        assert_eq!(
+            try_cast_case.return_field(&cast_schema)?.metadata(),
+            &cast_metadata
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn case_marked_typed_null_else_retains_metadata() -> Result<()> {
+        let metadata = Metadata::new().with("source", "typed_null_else");
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("flag", DataType::Boolean, true),
+            Field::new("a", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(BooleanArray::from(vec![Some(true), Some(false), None])),
+                Arc::new(Int32Array::from(vec![7, 8, 9])),
+            ],
+        )?;
+        let typed_null: Arc<dyn PhysicalExpr> = Arc::new(Literal::new_with_metadata(
+            ScalarValue::Int32(None),
+            Some(FieldMetadata::from(metadata.clone())),
+        ));
+        let expr = CaseExpr::try_new(
+            None,
+            vec![(col("flag", &schema)?, col("a", &schema)?)],
+            Some(typed_null),
+        )?;
+        assert_eq!(expr.return_field(&schema)?.metadata(), &metadata);
+        assert!(expr.else_expr().is_some());
+        assert!(matches!(expr.eval_method, EvalMethod::InfallibleExprOrNull));
+        assert!(expr.return_field(&schema)?.is_nullable());
+        let expected = Int32Array::from(vec![Some(7), None, None]);
+        assert_eq!(
+            as_int32_array(
+                expr.evaluate(&batch)?
+                    .into_array(batch.num_rows())?
+                    .as_ref()
+            )?,
+            &expected
+        );
+        let expr = Arc::new(expr);
+        let children = expr.children().into_iter().map(Arc::clone).collect();
+        let rewritten = Arc::clone(&expr).with_new_children(children)?;
+        assert_eq!(rewritten.return_field(&schema)?.metadata(), &metadata);
+
+        for metadata in [None, Some(FieldMetadata::default())] {
+            let plain_null = CaseExpr::try_new(
+                None,
+                vec![(col("flag", &schema)?, col("a", &schema)?)],
+                Some(Arc::new(Literal::new_with_metadata(
+                    ScalarValue::Int32(None),
+                    metadata,
+                ))),
+            )?;
+            assert!(plain_null.else_expr().is_none());
+            assert!(plain_null.return_field(&schema)?.metadata().is_empty());
+            assert!(matches!(
+                plain_null.eval_method,
+                EvalMethod::InfallibleExprOrNull
+            ));
+        }
+
+        let untyped_null = CaseExpr::try_new(
+            None,
+            vec![(col("flag", &schema)?, col("a", &schema)?)],
+            Some(Arc::new(Literal::new_with_metadata(
+                ScalarValue::Null,
+                Some(FieldMetadata::from(metadata)),
+            ))),
+        )?;
+        assert!(untyped_null.return_field(&schema)?.metadata().is_empty());
+        assert_eq!(
+            as_int32_array(
+                untyped_null
+                    .evaluate(&batch)?
+                    .into_array(batch.num_rows())?
+                    .as_ref()
+            )?,
+            &expected
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn case_marked_null_else_preserves_scalar_evaluation() -> Result<()> {
+        let metadata = Metadata::new().with("source", "null_else");
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![0; 8192]))],
+        )?;
+        for null in [ScalarValue::Null, ScalarValue::Int32(None)] {
+            let expected_metadata = if matches!(null, ScalarValue::Null) {
+                Metadata::new()
+            } else {
+                metadata.clone()
+            };
+            for (then, value) in [
+                (lit(7_i32), 7),
+                (binary(lit(1_i32), Operator::Plus, lit(2_i32), &schema)?, 3),
+            ] {
+                for predicate in [Some(true), Some(false), None] {
+                    let expr = CaseExpr::try_new(
+                        None,
+                        vec![(lit(ScalarValue::Boolean(predicate)), Arc::clone(&then))],
+                        Some(Arc::new(Literal::new_with_metadata(
+                            null.clone(),
+                            Some(FieldMetadata::from(metadata.clone())),
+                        ))),
+                    )?;
+                    let field = expr.return_field(&schema)?;
+                    assert_eq!(field.data_type(), &DataType::Int32);
+                    assert_eq!(field.metadata(), &expected_metadata);
+                    let ColumnarValue::Scalar(actual) = expr.evaluate(&batch)? else {
+                        panic!("Scalar CASE should not materialize an array");
+                    };
+                    assert_eq!(
+                        actual,
+                        ScalarValue::Int32(
+                            predicate.filter(|selected| *selected).map(|_| value)
+                        )
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn case_marked_null_else_recomputes_type_after_rewrite() -> Result<()> {
+        let schema = Schema::empty();
+        let metadata = Metadata::new().with("source", "typed_null_else");
+        let typed_null: Arc<dyn PhysicalExpr> = Arc::new(Literal::new_with_metadata(
+            ScalarValue::Int32(None),
+            Some(FieldMetadata::from(metadata.clone())),
+        ));
+        for predicate in [Some(false), None] {
+            let when = lit(ScalarValue::Boolean(predicate));
+            let original = Arc::new(
+                CaseExpr::try_new(
+                    None,
+                    vec![(Arc::clone(&when), lit(7_i32))],
+                    Some(Arc::clone(&typed_null)),
+                )?
+                .with_logical_result_field(&Arc::new(
+                    Field::new("case", DataType::Int32, true)
+                        .with_metadata(metadata.clone()),
+                )),
+            );
+            let rewritten = original.with_new_children(vec![
+                when,
+                lit(2_147_483_648_i64),
+                Arc::clone(&typed_null),
+            ])?;
+            let field = rewritten.return_field(&schema)?;
+            assert_eq!(field.data_type(), &DataType::Int64);
+            assert!(field.metadata().is_empty());
+            let ColumnarValue::Scalar(actual) =
+                rewritten.evaluate(&RecordBatch::new_empty(Arc::new(schema.clone())))?
+            else {
+                panic!("Scalar CASE should not materialize an array");
+            };
+            assert_eq!(actual, ScalarValue::Int64(None));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn case_logical_field_survives_rewriting_children() -> Result<()> {
+        let metadata = HashMap::from([("source".to_string(), "physical".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Binary, false).with_metadata(metadata.clone()),
+            Field::new("b", DataType::Binary, false).with_metadata(metadata),
+        ]);
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(
+            CaseExpr::try_new(
+                None,
+                vec![(lit(true), col("a", &schema)?)],
+                Some(col("b", &schema)?),
+            )?
+            .with_logical_result_field(&Arc::new(Field::new(
+                "logical_case",
+                DataType::Binary,
+                true,
+            ))),
+        );
+        assert!(expr.return_field(&schema)?.metadata().is_empty());
+        let children = expr.children().into_iter().cloned().collect();
+        let rewritten = expr.with_new_children(children)?;
+        assert!(rewritten.return_field(&schema)?.metadata().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn case_logical_field_shares_metadata_allocation() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Binary, false)]);
+        let logical = Arc::new(
+            Field::new("logical_case", DataType::Binary, false)
+                .with_metadata(Metadata::new().with("source", "logical")),
+        );
+        let expr = CaseExpr::try_new(
+            None,
+            vec![(lit(true), col("a", &schema)?)],
+            Some(col("a", &schema)?),
+        )?
+        .with_logical_result_field(&logical);
+        for _ in 0..10 {
+            let field = expr.return_field(&schema)?;
+            assert!(Arc::ptr_eq(
+                logical.metadata().as_arc().unwrap(),
+                field.metadata().as_arc().unwrap(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn case_logical_field_does_not_pin_rewritten_type_or_nullability() -> Result<()> {
+        let metadata = Metadata::new().with("source", "logical");
+        let expr: Arc<dyn PhysicalExpr> = Arc::new(
+            CaseExpr::try_new(None, vec![(lit(true), lit(1_i32))], Some(lit(0_i32)))?
+                .with_logical_result_field(&Arc::new(
+                    Field::new("logical_case", DataType::Int32, false)
+                        .with_metadata(metadata.clone()),
+                )),
+        );
+        let schema = Schema::empty();
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(schema.clone()),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(1)),
+        )?;
+        let widened = Arc::clone(&expr).with_new_children(vec![
+            lit(true),
+            lit(2_147_483_648_i64),
+            lit(0_i64),
+        ])?;
+        let field = widened.return_field(&schema)?;
+        assert_eq!(field.data_type(), &DataType::Int64);
+        assert!(field.metadata().is_empty());
+        let values = widened.evaluate(&batch)?.into_array(1)?;
+        let expected: ArrayRef =
+            Arc::new(Int64Array::from(vec![Some(2_147_483_648_i64)]));
+        assert_eq!(values.as_ref(), expected.as_ref());
+
+        let nullable = expr.with_new_children(vec![
+            lit(true),
+            lit(ScalarValue::Int32(None)),
+            lit(0_i32),
+        ])?;
+        let field = nullable.return_field(&schema)?;
+        assert!(field.is_nullable());
+        assert_eq!(field.metadata(), &metadata);
+        Ok(())
+    }
+
+    #[test]
+    fn nested_case_logical_pins_do_not_repeat_leaf_inference() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let logical = Arc::new(
+            Field::new("logical_case", DataType::Int32, true)
+                .with_metadata(Metadata::new().with("source", "logical")),
+        );
+        for depth in [4, 8, 16] {
+            let mut expr: Arc<dyn PhysicalExpr> =
+                Arc::new(CountedColumn(Column::new("a", 0)));
+            for _ in 0..depth {
+                expr = Arc::new(
+                    CaseExpr::try_new(None, vec![(lit(true), lit(0_i32))], Some(expr))?
+                        .with_logical_result_field(&logical),
+                );
+            }
+            COUNTED_COLUMN_FIELDS.with(|count| count.set(0));
+            COUNTED_COLUMN_NULLABLE.with(|count| count.set(0));
+            let field = expr.return_field(&schema)?;
+            assert!(field.is_nullable());
+            assert_eq!(field.metadata(), logical.metadata());
+            assert_eq!(COUNTED_COLUMN_FIELDS.with(|count| count.get()), 0);
+            assert_eq!(COUNTED_COLUMN_NULLABLE.with(|count| count.get()), 1);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn case_not_does_not_inherit_input_metadata() -> Result<()> {
+        let metadata = HashMap::from([("logical".to_string(), "boolean".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Boolean, false)
+                .with_metadata(Metadata::new().with("not_input", "must_not_leak")),
+            Field::new("b", DataType::Boolean, false).with_metadata(metadata.clone()),
+        ]);
+        let negated: Arc<dyn PhysicalExpr> = Arc::new(NotExpr::new(col("a", &schema)?));
+        let expr = case(None, vec![(lit(true), negated)], Some(col("b", &schema)?))?;
+        let field = expr.return_field(&schema)?;
+        assert_eq!(field.metadata(), &metadata);
+        assert!(!field.metadata().contains_key("not_input"));
+
+        let column: Arc<dyn PhysicalExpr> = Arc::new(CountedColumn(Column::new("a", 0)));
+        for depth in [16, 64] {
+            let mut nested = Arc::clone(&column);
+            for _ in 0..depth {
+                nested = case(
+                    None,
+                    vec![(lit(true), Arc::new(NotExpr::new(nested)))],
+                    Some(col("b", &schema)?),
+                )?;
+            }
+            COUNTED_COLUMN_FIELDS.with(|count| count.set(0));
+            let nested_case = nested.downcast_ref::<CaseExpr>().ok_or_else(|| {
+                internal_datafusion_err!("Expected nested CASE expression")
+            })?;
+            super::case_result_field_metadata(nested_case, &schema)?;
+            assert_eq!(COUNTED_COLUMN_FIELDS.with(|count| count.get()), 0);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn case_explicitly_marked_null_cast_matches_logical_field() -> Result<()> {
+        let metadata = HashMap::from([(
+            EXTENSION_TYPE_NAME_KEY.to_string(),
+            "geoarrow.wkb".to_string(),
+        )]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::LargeBinary, false).with_metadata(metadata.clone()),
+        ]);
+        let target_field: FieldRef = Arc::new(
+            Field::new("marked_null", DataType::Binary, true)
+                .with_metadata(metadata.clone()),
+        );
+        let marked_nulls: [Arc<dyn PhysicalExpr>; 2] = [
+            Arc::new(CastExpr::new_with_target_field(
+                lit(ScalarValue::Null),
+                Arc::clone(&target_field),
+                None,
+            )),
+            Arc::new(TryCastExpr::new_with_target_field(
+                lit(ScalarValue::Null),
+                target_field,
+            )),
+        ];
+        for marked_null in marked_nulls {
+            let all_null = case(
+                None,
+                vec![(lit(true), marked_null)],
+                Some(lit(ScalarValue::Null)),
+            )?;
+            let type_only_cast: Arc<dyn PhysicalExpr> =
+                Arc::new(CastExpr::new(all_null, DataType::LargeBinary, None));
+            assert!(type_only_cast.return_field(&schema)?.metadata().is_empty());
+            let outer = case(
+                None,
+                vec![(lit(true), type_only_cast)],
+                Some(col("a", &schema)?),
+            )?;
+            assert_eq!(outer.return_field(&schema)?.metadata(), &metadata);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn case_function_metadata_preserves_cached_fields_at_any_depth() -> Result<()> {
+        let metadata = HashMap::from([("logical".to_string(), "binary".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Binary, false).with_metadata(metadata.clone()),
+            Field::new("b", DataType::Binary, false),
+        ]);
+        let udf = Arc::new(datafusion_expr::expr_fn::create_udf(
+            "marked_identity",
+            vec![DataType::Binary],
+            DataType::Binary,
+            datafusion_expr::Volatility::Immutable,
+            Arc::new(|args| Ok(args[0].clone())),
+        ));
+        let function_field: FieldRef = Arc::new(
+            Field::new("marked_identity", DataType::Binary, true)
+                .with_metadata(metadata.clone()),
+        );
+        let options = Arc::new(ConfigOptions::default());
+        for depth in [2, 9, 32, 128] {
+            let mut branch = col("a", &schema)?;
+            for _ in 0..depth {
+                branch = Arc::new(ScalarFunctionExpr::new(
+                    "marked_identity",
+                    Arc::clone(&udf),
+                    vec![branch],
+                    Arc::clone(&function_field),
+                    Arc::clone(&options),
+                ));
+            }
+            let expr = case(None, vec![(lit(true), branch)], Some(col("b", &schema)?))?;
+            let field = expr.return_field(&schema)?;
+            assert_eq!(field.metadata(), &metadata);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn nested_case_metadata_field_names_scale_linearly() -> Result<()> {
+        let metadata = HashMap::from([("logical".to_string(), "binary".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Binary, false).with_metadata(metadata.clone()),
+        ]);
+        let column: Arc<dyn PhysicalExpr> = Arc::new(CountedColumn(Column::new("a", 0)));
+        let mut display_counts = Vec::new();
+        for depth in [16, 64] {
+            let mut expr = Arc::clone(&column);
+            for _ in 0..depth {
+                expr = case(None, vec![(lit(true), Arc::clone(&column))], Some(expr))?;
+            }
+            COUNTED_COLUMN_DISPLAYS.with(|count| count.set(0));
+            assert_eq!(expr.return_field(&schema)?.metadata(), &metadata);
+            display_counts.push(COUNTED_COLUMN_DISPLAYS.with(|count| count.get()));
+        }
+        assert!(display_counts[1] <= display_counts[0] * 5);
+        Ok(())
     }
 
     #[test]
@@ -3741,6 +4628,7 @@ mod proto_tests {
     use datafusion_physical_expr_common::physical_expr::proto_encode::PhysicalExprEncodeCtx;
     use datafusion_proto_models::protobuf;
     use datafusion_proto_models::protobuf::{PhysicalExprNode, PhysicalWhenThen};
+    use std::collections::HashMap;
 
     fn proto_case_fixture() -> CaseExpr {
         let schema = Schema::new(vec![Field::new("a", DataType::Boolean, true)]);
@@ -3774,6 +4662,8 @@ mod proto_tests {
                     expr,
                     when_then_expr,
                     else_expr,
+                    logical_result_type: None,
+                    logical_result_metadata: Default::default(),
                 },
             ))),
         }
@@ -3800,6 +4690,32 @@ mod proto_tests {
         assert!(case_node.when_then_expr[0].when_expr.is_some());
         assert!(case_node.when_then_expr[0].then_expr.is_some());
         assert!(case_node.else_expr.is_some());
+        assert!(case_node.logical_result_type.is_none());
+        assert!(case_node.logical_result_metadata.is_empty());
+    }
+
+    #[test]
+    fn proto_preserves_logical_case_field() -> Result<()> {
+        let metadata = HashMap::from([("source".to_string(), "logical".to_string())]);
+        let case = proto_case_fixture().with_logical_result_field(&Arc::new(
+            Field::new("case", DataType::Int32, false).with_metadata(metadata.clone()),
+        ));
+        let encoder = StubEncoder::ok();
+        let encoded = case
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))?
+            .expect("CaseExpr should encode");
+        let decoder = StubDecoder::ok();
+        let decoded = CaseExpr::try_from_proto(
+            &encoded,
+            &PhysicalExprDecodeCtx::new(&Schema::empty(), &decoder),
+        )?;
+        let decoded = decoded.downcast_ref::<CaseExpr>().expect("CaseExpr");
+        assert_eq!(decoded.logical_result_field, case.logical_result_field);
+        assert_eq!(
+            decoded.logical_result_field.as_ref().unwrap().1,
+            Metadata::from(metadata)
+        );
+        Ok(())
     }
 
     #[test]
