@@ -30,6 +30,7 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::IncrementalSortIterator;
+use crate::sorts::multi_level_merge::MIN_SPILL_MERGE_FAN_IN;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
@@ -298,6 +299,9 @@ struct ExternalSorter {
     /// Reservation for in_mem_batches
     reservation: MemoryReservation,
     spill_manager: SpillManager,
+    /// Bound on the size of each batch this sort and its merge write to spill files. See
+    /// [`spill_max_batch_bytes`].
+    spill_max_batch_bytes: usize,
 
     /// Reservation for the merging of in-memory batches. If the sort
     /// might spill, `sort_spill_reservation_bytes` will be
@@ -361,6 +365,7 @@ impl ExternalSorter {
             in_mem_batches: vec![],
             in_mem_batches_counter,
             in_progress_spill_file: None,
+            spill_max_batch_bytes: spill_max_batch_bytes(sort_spill_reservation_bytes),
             finished_spill_files: vec![],
             expr,
             metrics,
@@ -424,6 +429,7 @@ impl ExternalSorter {
             StreamingMergeBuilder::new()
                 .with_sorted_spill_files(std::mem::take(&mut self.finished_spill_files))
                 .with_spill_manager(self.spill_manager.clone())
+                .with_spill_max_batch_bytes(Some(self.spill_max_batch_bytes))
                 .with_schema(Arc::clone(&self.schema))
                 .with_expressions(&self.expr.clone())
                 .with_metrics(self.metrics.baseline.clone())
@@ -479,8 +485,12 @@ impl ExternalSorter {
 
         // Lazily initialize the in-progress spill file
         if self.in_progress_spill_file.is_none() {
-            self.in_progress_spill_file =
-                Some((self.spill_manager.create_in_progress_file("Sorting")?, 0));
+            self.in_progress_spill_file = Some((
+                self.spill_manager
+                    .create_in_progress_file("Sorting")?
+                    .with_max_batch_bytes(Some(self.spill_max_batch_bytes)),
+                0,
+            ));
         }
 
         debug!("Spilling sort data of ExternalSorter to disk whilst inserting");
@@ -1158,6 +1168,38 @@ impl ExternalSorter {
         stream
     }
 }
+
+/// The bound on the in-memory size of each batch that [`ExternalSorter`] spills.
+///
+/// The merge of the spill files starts with `sort_spill_reservation_bytes` of headroom.
+/// It reads at least [`MIN_SPILL_MERGE_FAN_IN`] files, and reserves
+/// [`get_reserved_bytes_for_record_batch_size`] of the largest batch for each, with
+/// read-ahead reduced to one batch under pressure. The bound is the largest batch size for
+/// which that minimum merge fits in the headroom, found from the same formula.
+///
+/// The bound is at least [`MIN_SPILL_MAX_BATCH_BYTES`], so that a small or zero headroom
+/// does not write, read and merge tiny batches. Below that headroom the merge cannot fit
+/// in it anyway, and takes the rest from the memory pool, as it does without a bound.
+fn spill_max_batch_bytes(sort_spill_reservation_bytes: usize) -> usize {
+    let fits = |batch: usize| {
+        MIN_SPILL_MERGE_FAN_IN * get_reserved_bytes_for_record_batch_size(batch, batch)
+            <= sort_spill_reservation_bytes
+    };
+    // Binary search for the largest batch size that fits: `fits` is true up to it.
+    let (mut fitting, mut too_large) = (0, sort_spill_reservation_bytes + 1);
+    while too_large - fitting > 1 {
+        let mid = fitting + (too_large - fitting) / 2;
+        if fits(mid) {
+            fitting = mid;
+        } else {
+            too_large = mid;
+        }
+    }
+    fitting.max(MIN_SPILL_MAX_BATCH_BYTES)
+}
+
+/// The smallest bound [`spill_max_batch_bytes`] returns.
+const MIN_SPILL_MAX_BATCH_BYTES: usize = 64 * 1024;
 
 /// Estimate how much memory is needed to sort a `RecordBatch`.
 ///
@@ -2883,6 +2925,23 @@ mod tests {
             let array_ref: ArrayRef = Arc::new(array);
             RecordBatch::try_new(schema, vec![array_ref]).unwrap()
         }
+    }
+
+    #[test]
+    fn test_spill_max_batch_bytes_fits_minimum_merge() {
+        let minimum_merge = |bound| {
+            MIN_SPILL_MERGE_FAN_IN
+                * get_reserved_bytes_for_record_batch_size(bound, bound)
+        };
+        for headroom in [1024 * 1024, 10 * 1024 * 1024, 10 * 1024 * 1024 + 7] {
+            let bound = spill_max_batch_bytes(headroom);
+            // The largest bound whose minimum merge fits in the headroom.
+            assert!(minimum_merge(bound) <= headroom, "headroom {headroom}");
+            assert!(minimum_merge(bound + 1) > headroom, "headroom {headroom}");
+        }
+        // A small or zero headroom gets the floor.
+        assert_eq!(spill_max_batch_bytes(0), MIN_SPILL_MAX_BATCH_BYTES);
+        assert_eq!(spill_max_batch_bytes(1024), MIN_SPILL_MAX_BATCH_BYTES);
     }
 
     #[tokio::test]
