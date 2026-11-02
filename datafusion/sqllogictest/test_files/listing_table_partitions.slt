@@ -127,3 +127,120 @@ select year, count(*) from root_file_test group by year order by year;
 ----
 2024 2
 2025 1
+
+# Test: with listing_table_strict_partitions, files outside the partition
+# structure are an error instead of being skipped
+
+# Disable the list files cache so the stale root file, written after the
+# table was created, is listed
+statement count 0
+set datafusion.runtime.list_files_cache_limit = "0K";
+
+query I
+select count(*) from root_file_test;
+----
+3
+
+statement count 0
+set datafusion.execution.listing_table_strict_partitions = true;
+
+query error DataFusion error: Error during planning: File '.*root_file_skipped/stale\.parquet' in table '.*' does not match partition columns \["year"\]: it is not under a directory for every partition column\. Set datafusion\.execution\.listing_table_strict_partitions = false to skip such files
+select count(*) from root_file_test;
+
+# Only listed files are checked: a partition filter narrows the listing
+# prefix to year=2025/, so the root file is never listed
+query ITT
+select column1, column2, year from root_file_test where year = '2025';
+----
+3 charlie 2025
+
+# Declaring fewer partition columns than the directories have is an error
+statement count 0
+create external table multi_part_only_a
+stored as parquet
+partitioned by (a)
+location 'test_files/scratch/listing_table_partitions/multi_part/';
+
+query error DataFusion error: Error during planning: File '.*multi_part/a=1/b=[0-9]+/file1\.parquet' in table '.*' does not match partition columns \["a"\]: directory 'b=[0-9]+' is not a declared partition column
+select * from multi_part_only_a;
+
+# Also for tables without partition columns
+query error DataFusion error: Error during planning: File '.*multi_part/a=1/b=[0-9]+/file1\.parquet' in table '.*' does not match partition columns \[\]: directory 'a=1' is not a declared partition column
+select * from infer_disabled;
+
+# Matching files are read as usual
+query TTT
+select * from multi_part order by column1;
+----
+bar 1 100
+baz 1 200
+foo 1 100
+
+query I
+copy (values(1))
+to 'test_files/scratch/listing_table_partitions/partition_filename/year=2024/a=b.parquet';
+----
+1
+
+statement count 0
+create external table partition_filename (column1 bigint, year varchar)
+stored as parquet
+partitioned by (year)
+location 'test_files/scratch/listing_table_partitions/partition_filename/';
+
+query IT
+select * from partition_filename;
+----
+1 2024
+
+query I
+copy (values(2))
+to 'test_files/scratch/listing_table_partitions/partition_filename/year=2025.parquet';
+----
+1
+
+query error File '.*partition_filename/year=2025\.parquet'.*does not match partition columns \["year"\]: it is not under a directory for every partition column
+select * from partition_filename;
+
+query I
+copy (values(3))
+to 'test_files/scratch/listing_table_partitions/nested_partition_filename/year=2024/month=01/a=b.parquet';
+----
+1
+
+statement count 0
+create external table nested_partition_filename (column1 bigint, year varchar, month varchar)
+stored as parquet
+partitioned by (year, month)
+location 'test_files/scratch/listing_table_partitions/nested_partition_filename/';
+
+query ITT
+select * from nested_partition_filename;
+----
+3 2024 01
+
+query I
+copy (values(4))
+to 'test_files/scratch/listing_table_partitions/nested_partition_filename/year=2024/month=02.parquet';
+----
+1
+
+query error File '.*nested_partition_filename/year=2024/month=02\.parquet'.*does not match partition columns \["year", "month"\]: it is not under a directory for every partition column
+select * from nested_partition_filename;
+
+statement count 0
+set datafusion.execution.listing_table_strict_partitions = false;
+
+statement count 0
+reset datafusion.runtime.list_files_cache_limit;
+
+statement count 0
+reset datafusion.catalog.create_default_catalog_and_schema;
+
+# Without strict partitions, undeclared partition directories are read
+query TT
+select * from multi_part_only_a order by column1;
+----
+bar 1
+baz 1
+foo 1
