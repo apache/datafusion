@@ -1304,9 +1304,14 @@ ac
 
 # Verify that multiple calls to volatile functions like `random()` are not combined / optimized away
 query B
-SELECT r FROM (SELECT r1 == r2 r, r1, r2 FROM (SELECT random()+1 r1, random()+1 r2) WHERE r1 > 0 AND r2 > 0)
+SELECT r FROM (SELECT r1 == r2 r, r1, r2 FROM (SELECT counted_volatile(1)+1 r1, counted_volatile(1)+1 r2) WHERE r1 > 0 AND r2 > 0)
 ----
-false
+true
+
+query I
+SELECT evaluations();
+----
+2
 
 # Verify that rand() is accepted as an alias for random()
 query TB
