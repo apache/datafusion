@@ -613,7 +613,7 @@ example, to configure <code class="docutils literal notranslate"><span class="pr
 </tr>
 <tr class="row-even"><td><p>datafusion.execution.parquet.skip_metadata</p></td>
 <td><p>true</p></td>
-<td><p>(reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata</p></td>
+<td><p>(reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata. Arrow extension types (the <code class="docutils literal notranslate"><span class="pre">ARROW:extension:name</span></code> and <code class="docutils literal notranslate"><span class="pre">ARROW:extension:metadata</span></code> field metadata) are kept, because they are part of the type of a column</p></td>
 </tr>
 <tr class="row-odd"><td><p>datafusion.execution.parquet.metadata_size_hint</p></td>
 <td><p>524288</p></td>
