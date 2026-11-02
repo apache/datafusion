@@ -1195,7 +1195,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 && !info.get_data_type(&left)?.is_floating()
                 && is_zero(&right) =>
             {
-                Transformed::yes(*right)
+                simplify_to_zero_case(info, right, &left, &Multiply)?
             }
             // 0 * A --> 0 (if A is not null and not floating, since 0 * NAN -> NAN)
             Expr::BinaryExpr(BinaryExpr {
@@ -1206,7 +1206,7 @@ impl TreeNodeRewriter for Simplifier<'_> {
                 && !info.get_data_type(&right)?.is_floating()
                 && is_zero(&left) =>
             {
-                Transformed::yes(*left)
+                simplify_to_zero_case(info, left, &right, &Multiply)?
             }
 
             //
@@ -2431,6 +2431,30 @@ fn simplify_right_is_one_case(
     }
 }
 
+/// Simplify a binary expression to `zero`, preserving the data type the
+/// expression itself would have produced.
+///
+/// Mirrors [`simplify_right_is_one_case`]. Returning the zero operand as-is
+/// drops the coercion the binary expression carried: `Int64 * Decimal128(20, 0)`
+/// has result type `Decimal128(38, 0)`, so a bare `Decimal128(20, 0)` zero no
+/// longer matches what the rest of the plan was built around.
+fn simplify_to_zero_case(
+    info: &SimplifyContext,
+    zero: Box<Expr>,
+    other: &Expr,
+    op: &Operator,
+) -> Result<Transformed<Expr>> {
+    let zero_type = info.get_data_type(&zero)?;
+    let other_type = info.get_data_type(other)?;
+    match BinaryTypeCoercer::new(&other_type, op, &zero_type).get_result_type() {
+        // Only cast if the types differ
+        Ok(result_type) if zero_type != result_type => {
+            Ok(Transformed::yes(Expr::Cast(Cast::new(zero, result_type))))
+        }
+        _ => Ok(Transformed::yes(*zero)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2843,6 +2867,25 @@ mod tests {
 
         let expr = lit(ScalarValue::Decimal128(Some(10000000000), 31, 10)) * col("c2");
         assert_eq!(simplify(expr), expected);
+    }
+
+    #[test]
+    fn test_simplify_multiply_by_zero_preserves_result_type() {
+        let schema = expr_test_schema();
+
+        // `Int64 * Decimal128(20, 0)` has result type `Decimal128(38, 0)`.
+        // Folding to the zero operand used to leave a `Decimal128(20, 0)`
+        // behind, so the comparison the plan was built around no longer
+        // matched: it failed in interval analysis while planning, or in the
+        // comparison kernel once there were rows.
+        let expr = col("c3_non_null") * lit(ScalarValue::Decimal128(Some(0), 20, 0));
+        let before = expr.get_type(&schema).unwrap();
+        assert_eq!(before, DataType::Decimal128(38, 0));
+        assert_eq!(simplify(expr).get_type(&schema).unwrap(), before);
+
+        // Where the types already agree, the zero is returned unchanged.
+        let expr = col("c3_non_null") * lit(0i64);
+        assert_eq!(simplify(expr), lit(0i64));
     }
 
     #[test]
