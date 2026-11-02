@@ -21,8 +21,9 @@ use crate::push_decoder::{
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
-    BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
-    ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn, RowGroupAccess,
+    BloomFilterStatistics, CreateReaderArgs, Int96Coercer, ParquetAccessPlan,
+    ParquetFileMetrics, ParquetFileReaderFactory, ParquetRowSelection,
+    ParquetVirtualColumn, RowGroupAccess,
     schema_coercion::apply_file_schema_type_coercions_with_rle,
 };
 use arrow::array::RecordBatch;
@@ -841,14 +842,15 @@ impl ParquetMorselizer {
 
         // The reader records into this file's metrics rather than registering
         // its own set, so each opened file registers one set of file metrics.
-        let async_file_reader: Box<dyn AsyncFileReader> = self
-            .parquet_file_reader_factory
-            .create_reader_with_file_metrics(
-                self.partition_index,
-                partitioned_file.clone(),
-                metadata_size_hint,
-                &self.metrics,
-                file_metrics.clone(),
+        let async_file_reader: Box<dyn AsyncFileReader> =
+            self.parquet_file_reader_factory.create_reader_with_args(
+                CreateReaderArgs::new(
+                    self.partition_index,
+                    partitioned_file.clone(),
+                    &self.metrics,
+                )
+                .with_metadata_size_hint(metadata_size_hint)
+                .with_file_metrics(file_metrics.clone()),
             )?;
 
         // Calculate the output schema from the original projection (before literal replacement)
@@ -1510,12 +1512,14 @@ impl RowGroupsPrunedParquetOpen {
                 let prepared = &self.prepared.loaded.prepared;
                 prepared
                     .parquet_file_reader_factory
-                    .create_reader_with_file_metrics(
-                        prepared.partition_index,
-                        prepared.partitioned_file.clone(),
-                        prepared.metadata_size_hint,
-                        &prepared.metrics,
-                        prepared.file_metrics.clone(),
+                    .create_reader_with_args(
+                        CreateReaderArgs::new(
+                            prepared.partition_index,
+                            prepared.partitioned_file.clone(),
+                            &prepared.metrics,
+                        )
+                        .with_metadata_size_hint(prepared.metadata_size_hint)
+                        .with_file_metrics(prepared.file_metrics.clone()),
                     )?
             };
 
@@ -3482,13 +3486,11 @@ mod test {
     /// Direct `MetricsSet` lookup, not plan display: idle Bloom metrics are
     /// omitted from displayed plans even when the counters remain registered.
     ///
-    /// Opening one file still registers this name more than once:
-    /// `prepare_open_file` creates `ParquetFileMetrics`, and each
-    /// `ParquetFileReaderFactory::create_reader` call (initial reader plus
-    /// Bloom replacement reader) creates another independent set. Sum the
+    /// Opening one file registers one set of file metrics, shared with the
+    /// readers it creates (initial reader plus Bloom replacement reader). A
+    /// scan of several files registers this name once per file, so sum the
     /// counters the same way `MetricsSet::sum_by_name` aggregates pruning
-    /// metrics. Only the opener's set is incremented by Bloom pruning; the
-    /// reader copies stay at zero.
+    /// metrics.
     fn bloom_filter_pruning_metrics(metrics: &ExecutionPlanMetricsSet) -> (usize, usize) {
         use datafusion_physical_plan::metrics::MetricValue;
         match metrics

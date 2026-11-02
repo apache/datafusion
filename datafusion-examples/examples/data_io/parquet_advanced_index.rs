@@ -19,7 +19,7 @@ use datafusion::datasource::TableProvider;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::physical_plan::parquet::ParquetAccessPlan;
 use datafusion::datasource::physical_plan::{
-    FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
+    CreateReaderArgs, FileScanConfigBuilder, ParquetFileReaderFactory, ParquetSource,
 };
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::logical_expr::utils::conjunction;
@@ -37,7 +37,6 @@ use datafusion::physical_expr::PhysicalExpr;
 use datafusion::physical_expr::utils::{Guarantee, LiteralGuarantee};
 use datafusion::physical_optimizer::pruning::PruningPredicateBuilder;
 use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::prelude::*;
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch, StringArray};
@@ -539,16 +538,14 @@ impl CachedParquetFileReaderFactory {
 }
 
 impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
-    fn create_reader(
+    fn create_reader_with_args(
         &self,
-        _partition_index: usize,
-        partitioned_file: PartitionedFile,
-        _metadata_size_hint: Option<usize>,
-        _metrics: &ExecutionPlanMetricsSet,
+        args: CreateReaderArgs,
     ) -> Result<Box<dyn AsyncFileReader + Send>> {
         // for this example we ignore the partition index and metrics
         // but in a real system you would likely use them to report details on
-        // the performance of the reader.
+        // the performance of the reader, recording into
+        // `args.file_metrics_or_register()`.
         //
         // We also ignore the metadata size hint as this reader always serves
         // metadata from the pre-populated `self.metadata` cache, so it never
@@ -556,6 +553,7 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
         // implementation would likely pass the hint to
         // `ParquetMetaDataReader::with_prefetch_hint` to reduce the number of
         // IO requests needed to load the footer.
+        let partitioned_file = args.into_partitioned_file();
         let filename = partitioned_file
             .object_meta
             .location

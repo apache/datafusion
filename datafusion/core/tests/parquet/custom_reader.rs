@@ -13,10 +13,9 @@ use arrow::record_batch::RecordBatch;
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{
-    ParquetFileMetrics, ParquetFileReaderFactory, ParquetSource,
+    CreateReaderArgs, ParquetFileMetrics, ParquetFileReaderFactory, ParquetSource,
 };
 use datafusion::physical_plan::collect;
-use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
 use datafusion::prelude::SessionContext;
 use datafusion_common::Result;
 use datafusion_common::test_util::batches_to_sort_string;
@@ -176,28 +175,23 @@ async fn custom_payload_and_access_plan_coexist() {
 struct InMemoryParquetFileReaderFactory(Arc<dyn ObjectStore>);
 
 impl ParquetFileReaderFactory for InMemoryParquetFileReaderFactory {
-    fn create_reader(
+    fn create_reader_with_args(
         &self,
-        partition_index: usize,
-        partitioned_file: PartitionedFile,
-        metadata_size_hint: Option<usize>,
-        metrics: &ExecutionPlanMetricsSet,
+        args: CreateReaderArgs,
     ) -> Result<Box<dyn AsyncFileReader + Send>> {
-        let metadata = partitioned_file
+        let metadata = args
+            .partitioned_file()
             .extension::<String>()
             .expect("has user defined metadata");
 
         assert_eq!(EXPECTED_USER_DEFINED_METADATA, &metadata[..]);
 
-        let parquet_file_metrics = ParquetFileMetrics::new(
-            partition_index,
-            partitioned_file.object_meta.location.as_ref(),
-            metrics,
-        );
+        let parquet_file_metrics = args.file_metrics_or_register();
+        let metadata_size_hint = args.metadata_size_hint();
 
         Ok(Box::new(ParquetFileReader {
             store: Arc::clone(&self.0),
-            meta: partitioned_file.object_meta,
+            meta: args.into_partitioned_file().object_meta,
             metrics: parquet_file_metrics,
             metadata_size_hint,
         }))
