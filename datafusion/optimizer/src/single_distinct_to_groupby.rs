@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use arrow::datatypes::DataType;
 
 use datafusion_common::{
     DFSchema, DataFusionError, HashSet, Result, assert_or_internal_err,
@@ -1556,8 +1556,7 @@ mod tests {
     // prefer_memory=true must NOT skip the rewrite for Utf8 columns.
     // Single-phase distinct on strings causes heavy per-value heap allocation churn
     // and actually increases peak memory compared to the 2-phase rewrite.
-    fn single_distinct_aggregation_prefer_memory_true_rewrites_for_utf8()
-    -> Result<()> {
+    fn single_distinct_aggregation_prefer_memory_true_rewrites_for_utf8() -> Result<()> {
         // test_table_scan_utf8_b() has column `b` as Utf8.
         let table_scan = test_table_scan_utf8_b()?;
 
