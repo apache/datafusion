@@ -1241,7 +1241,6 @@ fn test_idempotent_sort_merge_join() {
                 nulls_first: false,
             }],
             NullEquality::NullEqualsNothing,
-            false,
         )
         .expect("SortMergeJoinExec creation failed"),
     );

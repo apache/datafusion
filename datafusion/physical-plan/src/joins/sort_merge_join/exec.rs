@@ -198,9 +198,11 @@ pub struct SortMergeJoinExec {
 impl SortMergeJoinExec {
     /// Tries to create a new [SortMergeJoinExec].
     /// The inputs are sorted using `sort_options` are applied to the columns in the `on`
+    ///
+    /// Null-aware semantics are disabled by default. Enable them with
+    /// [`Self::with_null_aware`].
     /// # Error
     /// This function errors when it is not possible to join the left and right sides on keys `on`.
-    #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         left: Arc<dyn ExecutionPlan>,
         right: Arc<dyn ExecutionPlan>,
@@ -209,17 +211,7 @@ impl SortMergeJoinExec {
         join_type: JoinType,
         sort_options: Vec<SortOptions>,
         null_equality: NullEquality,
-        null_aware: bool,
     ) -> Result<Self> {
-        if null_aware {
-            NullAwareMode::try_new(
-                join_type,
-                on.len(),
-                filter.is_some(),
-                null_equality,
-                &sort_options,
-            )?;
-        }
         let left_schema = left.schema();
         let right_schema = right.schema();
 
@@ -274,7 +266,7 @@ impl SortMergeJoinExec {
             right_sort_exprs,
             sort_options,
             null_equality,
-            null_aware,
+            null_aware: false,
             projection: None,
             cache: Arc::new(cache),
         })
@@ -459,8 +451,8 @@ impl SortMergeJoinExec {
             self.join_type().swap(),
             self.sort_options.clone(),
             self.null_equality,
-            self.null_aware,
         )?
+        .with_null_aware(self.null_aware)?
         .with_projection(swap_join_projection(
             left.schema().fields().len(),
             right.schema().fields().len(),
@@ -678,8 +670,8 @@ impl ExecutionPlan for SortMergeJoinExec {
                         self.join_type,
                         self.sort_options.clone(),
                         self.null_equality,
-                        self.null_aware,
                     )?
+                    .with_null_aware(self.null_aware)?
                     .with_projection(self.projection.clone())?,
                 )),
                 _ => internal_err!("SortMergeJoin wrong number of children"),
@@ -838,16 +830,18 @@ impl ExecutionPlan for SortMergeJoinExec {
             self.filter().as_ref(),
             &column_indices,
         )? {
-            Ok(Some(Arc::new(SortMergeJoinExec::try_new(
-                Arc::new(projected_left_child),
-                Arc::new(projected_right_child),
-                join_on,
-                join_filter,
-                self.join_type,
-                self.sort_options.clone(),
-                self.null_equality,
-                self.null_aware,
-            )?)))
+            Ok(Some(Arc::new(
+                SortMergeJoinExec::try_new(
+                    Arc::new(projected_left_child),
+                    Arc::new(projected_right_child),
+                    join_on,
+                    join_filter,
+                    self.join_type,
+                    self.sort_options.clone(),
+                    self.null_equality,
+                )?
+                .with_null_aware(self.null_aware)?,
+            )))
         } else {
             try_embed_projection(projection, self)
         }
@@ -1042,8 +1036,8 @@ impl SortMergeJoinExec {
                 join_type,
                 sort_options,
                 null_equality,
-                *null_aware,
             )?
+            .with_null_aware(*null_aware)?
             .with_projection(projection)?,
         ))
     }

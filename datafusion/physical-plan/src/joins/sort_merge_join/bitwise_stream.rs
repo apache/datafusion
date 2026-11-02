@@ -1200,7 +1200,7 @@ impl BitwiseSortMergeJoinStream {
                 if self.subquery_state == SubqueryState::HasNull =>
             {
                 // NOT IN cannot be TRUE for any outer row when the inner
-                // input contains a NULL key. (following NOT IN semetics)
+                // input contains a NULL key. (following NOT IN semantics)
                 return Ok(());
             }
             Some(NullAwareMode::LeftAnti) => {}

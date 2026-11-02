@@ -415,7 +415,6 @@ fn roundtrip_sort_merge_join_with_projection() -> Result<()> {
                     JoinType::Inner,
                     vec![SortOptions::default()],
                     NullEquality::NullEqualsNothing,
-                    false,
                 )?
                 .with_projection(projection.clone())?,
             ),
@@ -453,8 +452,8 @@ fn roundtrip_sort_merge_join_null_aware() -> Result<()> {
                     JoinType::LeftAnti,
                     vec![SortOptions::new(false, true)],
                     NullEquality::NullEqualsNothing,
-                    null_aware,
                 )?
+                .with_null_aware(null_aware)?
                 .with_projection(projection.clone())?,
             );
             let decoded = roundtrip_test_and_return(
@@ -476,6 +475,48 @@ fn roundtrip_sort_merge_join_null_aware() -> Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+#[test]
+fn sort_merge_join_decode_validates_null_aware() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, true)]));
+    let plan = Arc::new(SortMergeJoinExec::try_new(
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        Arc::new(EmptyExec::new(schema)),
+        vec![(
+            Arc::new(Column::new("key", 0)) as _,
+            Arc::new(Column::new("key", 0)) as _,
+        )],
+        None,
+        JoinType::Inner,
+        vec![SortOptions::new(false, true)],
+        NullEquality::NullEqualsNothing,
+    )?);
+    let bytes =
+        physical_plan_to_bytes_with_proto_converter(plan, &codec, &proto_converter)?;
+    let mut node = protobuf::PhysicalPlanNode::decode(bytes.as_ref())
+        .expect("encoded physical plan must decode");
+    let Some(PhysicalPlanType::SortMergeJoin(join)) = node.physical_plan_type.as_mut()
+    else {
+        panic!("expected a SortMergeJoin node");
+    };
+    // The ordinary Inner join is valid, but enabling null awareness is not.
+    join.null_aware = true;
+    let err = physical_plan_from_bytes_with_proto_converter(
+        &node.encode_to_vec(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &proto_converter,
+    )
+    .expect_err("decoding must validate null-aware join restrictions");
+    assert!(
+        err.to_string()
+            .contains("null-aware SortMergeJoin only supports LeftAnti")
+    );
     Ok(())
 }
 
@@ -544,7 +585,6 @@ fn roundtrip_sort_merge_join() -> Result<()> {
                         join_type,
                         sort_options.clone(),
                         null_equality,
-                        false,
                     )?),
                     &ctx,
                     &codec,
