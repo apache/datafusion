@@ -424,7 +424,9 @@ mod tests {
     use crate::aggregates::GroupClusteringMode;
     use crate::aggregates::PhysicalGroupBy;
     use crate::aggregates::clustered_test_util::{
-        assert_completed_groups_emitted_under_limit, full_batches, sum_over_sorted_input,
+        aggregate_expr_over_sorted_input, aggregate_over_sorted_input,
+        assert_completed_groups_emitted_under_limit, assert_output_unchanged_under_limit,
+        collect_under_limit, distinct_key_batches, full_batches, sum_over_sorted_input,
     };
     use crate::test::TestMemoryExec;
     use arrow::array::{ArrayRef, Float64Array, Int64Array, ListArray};
@@ -434,6 +436,9 @@ mod tests {
         GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
     };
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_functions_aggregate::any_value::any_value_udaf;
+    use datafusion_functions_aggregate::approx_distinct::approx_distinct_udaf;
+    use datafusion_functions_aggregate::first_last::first_value_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -558,5 +563,90 @@ mod tests {
         let plan = sum_over_sorted_input(AggregateMode::Partial, &["k"], full_batches())?;
         assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
         assert_completed_groups_emitted_under_limit(&plan).await
+    }
+
+    /// Like [`completed_groups_under_memory_pressure`], but with accumulators
+    /// that keep per-batch scratch. For example, `APPROX_DISTINCT` keeps the
+    /// hashes of the last batch (64 KB for 8192 rows), and the
+    /// `GroupsAccumulatorAdapter` of `ANY_VALUE` keeps its per-batch indices
+    /// (~160 KB). After the completed groups are emitted, the accumulators must
+    /// release that scratch too. The limit fits the active group, but not the
+    /// scratch.
+    #[tokio::test]
+    async fn completed_groups_release_accumulator_scratch() -> Result<()> {
+        for udaf in [approx_distinct_udaf(), any_value_udaf()] {
+            let plan = aggregate_over_sorted_input(
+                AggregateMode::Partial,
+                &["k"],
+                distinct_key_batches(),
+                udaf,
+            )?;
+            assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+            assert_output_unchanged_under_limit(&plan, 64 * 1024).await?;
+        }
+        Ok(())
+    }
+
+    /// Like [`completed_groups_release_accumulator_scratch`], but the active
+    /// group holds most rows of the batch. The `GroupsAccumulatorAdapter` of
+    /// `ANY_VALUE` keeps the row indices it collected for each group (32 KB for
+    /// the 8191 rows of the active group), so it must release them too.
+    #[tokio::test]
+    async fn active_group_releases_adapter_indices() -> Result<()> {
+        let keys = std::iter::once(0)
+            .chain(std::iter::repeat_n(1, 8191))
+            .collect();
+        let plan = aggregate_over_sorted_input(
+            AggregateMode::Partial,
+            &["k"],
+            vec![vec![keys]],
+            any_value_udaf(),
+        )?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_output_unchanged_under_limit(&plan, 16 * 1024).await
+    }
+
+    /// Like [`completed_groups_release_accumulator_scratch`], with the native
+    /// `FIRST_VALUE(v ORDER BY v)` accumulator. It keeps a bitmap of the
+    /// groups each batch updated, which grows to one bit per group (16 KB for
+    /// 131072 groups), so it must release that bitmap too.
+    #[tokio::test]
+    async fn completed_groups_release_first_value_bitmap() -> Result<()> {
+        let plan = aggregate_expr_over_sorted_input(
+            AggregateMode::Partial,
+            &["k"],
+            vec![vec![(0..131072).collect()]],
+            first_value_udaf(),
+            |builder, schema| {
+                Ok(builder
+                    .order_by(vec![PhysicalSortExpr::new_default(col("v", schema)?)]))
+            },
+        )?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_output_unchanged_under_limit(&plan, 16 * 1024).await
+    }
+
+    /// With partial group clustering, the stream emits every state under
+    /// memory pressure, so the output is not compared. After the emit, the
+    /// accumulators must release their per-batch scratch, or reserving the
+    /// empty table fails the limit.
+    #[tokio::test]
+    async fn emitted_states_release_accumulator_scratch() -> Result<()> {
+        let batches = [0..8193, 8192..16385, 16384..24576]
+            .into_iter()
+            .map(|range| vec![range.clone().collect(), range.collect()])
+            .collect();
+        let plan = aggregate_over_sorted_input(
+            AggregateMode::Partial,
+            &["k", "k2"],
+            batches,
+            approx_distinct_udaf(),
+        )?;
+        assert!(matches!(
+            plan.group_clustering_mode(),
+            GroupClusteringMode::Partial(_)
+        ));
+        collect_under_limit(&plan, 64 * 1024).await?;
+        Ok(())
     }
 }

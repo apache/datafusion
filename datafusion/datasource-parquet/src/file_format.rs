@@ -21,6 +21,7 @@ pub use crate::schema_coercion::{
 pub use crate::sink::ParquetSink;
 
 use arrow::datatypes::{DataType, FieldRef, Fields, Metadata, Schema, SchemaRef};
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
@@ -38,10 +39,12 @@ use datafusion_common::{
     DEFAULT_PARQUET_EXTENSION, DataFusionError, GetExt, Result, internal_datafusion_err,
     internal_err, not_impl_err,
 };
+use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::sink::DataSinkExec;
 use datafusion_datasource::write::get_writer_schema;
+use datafusion_execution::cache::cache_manager::FileMetadataCache;
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, LexRequirement};
 use datafusion_physical_plan::ExecutionPlan;
@@ -242,7 +245,8 @@ impl ParquetFormat {
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator
-/// of Schemas
+/// of Schemas, except for the extension type of the fields, which is part
+/// of the type of a field.
 fn clear_metadata(
     schemas: impl IntoIterator<Item = Schema>,
 ) -> impl Iterator<Item = Schema> {
@@ -251,7 +255,16 @@ fn clear_metadata(
             .fields()
             .iter()
             .map(|field| {
-                field.as_ref().clone().with_metadata(Metadata::new()) // clear meta
+                let metadata = field
+                    .metadata()
+                    .iter()
+                    .filter(|(key, _)| {
+                        key.as_str() == EXTENSION_TYPE_NAME_KEY
+                            || key.as_str() == EXTENSION_TYPE_METADATA_KEY
+                    })
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Metadata>();
+                field.as_ref().clone().with_metadata(metadata)
             })
             .collect::<Fields>();
         Schema::new(fields)
@@ -386,6 +399,32 @@ async fn get_file_decryption_properties(
     _file_path: &Path,
 ) -> Result<Option<Arc<FileDecryptionProperties>>> {
     Ok(None)
+}
+
+/// Fetch the footer of `object` and compute its statistics and ordering for
+/// [`ParquetFormat::infer_stats_and_ordering`].
+async fn fetch_stats_and_ordering(
+    store: &dyn ObjectStore,
+    object: &ObjectMeta,
+    metadata_size_hint: Option<usize>,
+    file_decryption_properties: Option<Arc<FileDecryptionProperties>>,
+    file_metadata_cache: Arc<FileMetadataCache>,
+    table_schema: &SchemaRef,
+) -> Result<datafusion_datasource::file_format::FileMeta> {
+    let metadata = DFParquetMetadata::new(store, object)
+        .with_metadata_size_hint(metadata_size_hint)
+        .with_decryption_properties(file_decryption_properties)
+        .with_file_metadata_cache(Some(file_metadata_cache))
+        .fetch_metadata()
+        .await?;
+    let statistics =
+        DFParquetMetadata::statistics_from_parquet_metadata(&metadata, table_schema)?;
+    let ordering =
+        crate::metadata::ordering_from_parquet_metadata(&metadata, table_schema)?;
+    Ok(
+        datafusion_datasource::file_format::FileMeta::new(statistics)
+            .with_ordering(ordering),
+    )
 }
 
 #[async_trait]
@@ -562,22 +601,42 @@ impl FileFormat for ParquetFormat {
                 .await?;
         let file_metadata_cache =
             state.runtime_env().cache_manager.get_file_metadata_cache();
-        let metadata = DFParquetMetadata::new(store, object)
-            .with_metadata_size_hint(self.metadata_size_hint())
-            .with_decryption_properties(file_decryption_properties)
-            .with_file_metadata_cache(Some(file_metadata_cache))
-            .fetch_metadata()
-            .await?;
-        let statistics = DFParquetMetadata::statistics_from_parquet_metadata(
-            &metadata,
-            &table_schema,
-        )?;
-        let ordering =
-            crate::metadata::ordering_from_parquet_metadata(&metadata, &table_schema)?;
-        Ok(
-            datafusion_datasource::file_format::FileMeta::new(statistics)
-                .with_ordering(ordering),
-        )
+        let metadata_size_hint = self.metadata_size_hint();
+
+        // Decoding the footer and converting its statistics is CPU bound and
+        // grows with the number of columns. Callers such as `ListingTable` run
+        // this for many files concurrently from a single planning task, so run
+        // it in its own task to spread that work over the runtime's threads
+        // instead of decoding every file on the thread polling the planner.
+        // As in `spawn_buffered`, only spawn from a multi-thread tokio runtime.
+        let store = Arc::clone(store);
+        let object = object.clone();
+        let fetch = async move {
+            fetch_stats_and_ordering(
+                store.as_ref(),
+                &object,
+                metadata_size_hint,
+                file_decryption_properties,
+                file_metadata_cache,
+                &table_schema,
+            )
+            .await
+        };
+        match tokio::runtime::Handle::try_current() {
+            Ok(handle)
+                if handle.runtime_flavor()
+                    == tokio::runtime::RuntimeFlavor::MultiThread =>
+            {
+                SpawnedTask::spawn(fetch)
+                    .join_unwind()
+                    .await
+                    .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))?
+            }
+            // Otherwise do the work on this task, where the caller polls it
+            // together with the other files (for example in `ListingTable`'s
+            // `buffer_unordered`).
+            _ => fetch.await,
+        }
     }
 
     async fn create_physical_plan(
