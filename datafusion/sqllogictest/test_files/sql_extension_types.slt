@@ -1,0 +1,136 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Tests for built-in mapping of SQL types to Arrow canonical extension types.
+# See: https://arrow.apache.org/docs/format/CanonicalExtensions.html
+
+#######
+# UUID Extension Type
+#######
+
+# CAST to UUID preserves extension metadata
+query ?T
+SELECT CAST(X'00010203040506070809000102030506' AS UUID),
+       arrow_metadata(CAST(X'00010203040506070809000102030506' AS UUID), 'ARROW:extension:name');
+----
+00010203040506070809000102030506 arrow.uuid
+
+# Test table creation and various insertion methods (Null, Naked Binary, and Cast)
+statement ok
+CREATE TABLE test_uuid (value UUID);
+
+query TTT
+DESCRIBE test_uuid;
+----
+value FixedSizeBinary(16) YES
+
+# 1. NULL insertion
+statement ok
+INSERT INTO test_uuid VALUES (NULL);
+
+# 2. Exercises Implicit Promotion to UUID from binary
+statement ok
+INSERT INTO test_uuid VALUES (X'00010203040506070809000102030506');
+
+# 3. Explicit CAST
+statement ok
+INSERT INTO test_uuid VALUES (CAST(X'00010203040506070809000102030507' AS UUID));
+
+query T
+SELECT arrow_metadata(value, 'ARROW:extension:name') FROM test_uuid;
+----
+arrow.uuid
+arrow.uuid
+arrow.uuid
+
+# Batch of multiple values (some NULL)
+statement ok
+INSERT INTO test_uuid VALUES 
+  (CAST(X'00010203040506070809000102030506' AS UUID)),
+  (NULL),
+  (CAST(X'00010203040506070809000102030507' AS UUID));
+
+query I
+SELECT COUNT(*) FROM test_uuid;
+----
+6
+
+statement ok
+DROP TABLE test_uuid;
+
+#######
+# JSON Extension Type
+#######
+
+# CAST to JSON preserves extension metadata
+query TT
+SELECT CAST('{"a": 1}' AS JSON),
+       arrow_metadata(CAST('{"a": 1}' AS JSON), 'ARROW:extension:name');
+----
+{"a": 1} arrow.json
+
+statement ok
+CREATE TABLE test_json (data JSON);
+
+query TTT
+DESCRIBE test_json;
+----
+data Utf8 YES
+
+# 1. NULL insertion
+statement ok
+INSERT INTO test_json VALUES (NULL);
+
+# 2. Bare string literal (Implicit Promotion)
+statement ok
+INSERT INTO test_json VALUES ('{"bare": "literal"}');
+
+# 3. Explicit CAST
+statement ok
+INSERT INTO test_json VALUES (CAST('{"hello": "world"}' AS JSON));
+
+query T
+SELECT arrow_metadata(data, 'ARROW:extension:name') FROM test_json;
+----
+arrow.json
+arrow.json
+arrow.json
+
+# Verify Type Decay: Concatenation results in a bare Utf8 string
+query T
+SELECT arrow_metadata(data || '{"extra": 1}', 'ARROW:extension:name') FROM test_json;
+----
+NULL
+NULL
+NULL
+
+statement ok
+DROP TABLE test_json;
+
+#######
+# Error Handling
+#######
+
+# Error: Cannot cast an integer to UUID
+statement error Unsupported CAST from Int64 to FixedSizeBinary\(16\)
+SELECT CAST(12345 AS UUID);
+
+# Error: Cannot cast a short string to UUID
+statement error Unsupported CAST from Utf8 to FixedSizeBinary\(16\)
+SELECT CAST('too-short' AS UUID);
+
+# This should trigger cast plan_err: "Types don't match and no valid cast exists"
+# Because 'not-a-uuid' is Utf8, and it's being compared to a UUID target in a VALUES list.
+statement ok
+CREATE TABLE t1 (id UUID);
+
+# Then, try to insert the invalid type
+statement error Types don't match and no valid cast exists, received data of type Utf8 for field of type FixedSizeBinary\(16\)
+INSERT INTO t1 VALUES ('not-a-uuid');
+
+statement ok
+INSERT INTO t1 VALUES (NULL);
+
+statement ok
+DROP TABLE t1;

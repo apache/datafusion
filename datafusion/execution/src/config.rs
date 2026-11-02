@@ -214,18 +214,18 @@ impl SessionConfig {
         self.options.execution.target_partitions
     }
 
-    /// Get [`system_catalog`]
-    ///
-    /// [`system_catalog`]: datafusion_common::config::CatalogOptions::system_catalog
-    pub fn system_catalog(&self) -> Option<&str> {
-        self.options.catalog.system_catalog.as_deref()
-    }
-
     /// Get [`information_schema`]
     ///
     /// [`information_schema`]: datafusion_common::config::CatalogOptions::information_schema
     pub fn information_schema(&self) -> bool {
         self.options.catalog.information_schema
+    }
+
+    /// Get [`partition_information_schema`]
+    ///
+    /// [`partition_information_schema`]: datafusion_common::config::CatalogOptions::partition_information_schema
+    pub fn partition_information_schema(&self) -> bool {
+        self.options.catalog.partition_information_schema
     }
 
     /// Get [`create_default_catalog_and_schema`]
@@ -306,11 +306,11 @@ impl SessionConfig {
         self
     }
 
-    /// Set [`system_catalog`]
+    /// Set [`partition_information_schema`]
     ///
-    /// [`system_catalog`]: datafusion_common::config::CatalogOptions::system_catalog
-    pub fn with_system_catalog(mut self, catalog_name: Option<String>) -> Self {
-        self.options_mut().catalog.system_catalog = catalog_name;
+    /// [`partition_information_schema`]: datafusion_common::config::CatalogOptions::partition_information_schema
+    pub fn with_partition_information_schema(mut self, partition: bool) -> Self {
+        self.options_mut().catalog.partition_information_schema = partition;
         self
     }
 
