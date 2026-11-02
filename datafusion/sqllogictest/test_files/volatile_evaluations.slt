@@ -160,5 +160,19 @@ SELECT evaluations();
 ----
 10
 
+# https://github.com/apache/datafusion/issues/25329
+# Known bug: in a Filter, leaf extraction copies the call into the extracted
+# `get_field`, so it is evaluated two times. The count must be 10.
+query I
+SELECT count(*) FROM (SELECT named_struct('x', a, 'y', a) AS s FROM t)
+WHERE counted_immutable(s) IS NOT NULL AND counted_immutable(s)['x'] > 5;
+----
+5
+
+query I
+SELECT evaluations();
+----
+20
+
 statement ok
 DROP TABLE t;
