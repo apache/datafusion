@@ -29,6 +29,7 @@ use datafusion_common::{
     validate_range_split_points,
 };
 use datafusion_physical_expr::{RangePartitioning, SplitPoint};
+use std::ops::Range;
 
 /// A router for assigning rows to range partitions.
 #[derive(Debug, Clone)]
@@ -39,7 +40,7 @@ pub(crate) struct RangeRouter {
     inner: RangeRouterInner,
     /// When outer bounds are included in `split_points`, only these partitions
     /// are valid. Partitions before/after this range contain out-of-bounds keys.
-    valid_partitions: Option<std::ops::Range<usize>>,
+    valid_partitions: Option<Range<usize>>,
 }
 
 #[derive(Debug, Clone)]
