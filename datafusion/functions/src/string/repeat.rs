@@ -22,6 +22,8 @@ use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 
+const MAX_REPEAT_SIZE: usize = i32::MAX as usize;
+
 #[user_doc(
     doc_section(label = "String Functions"),
     description = "Returns a string with an input string repeated a specified number.",
@@ -119,13 +121,13 @@ impl ScalarUDFImpl for RepeatFunc {
 
                 let result = match string_scalar {
                     ScalarValue::Utf8View(Some(s)) => ScalarValue::Utf8View(Some(
-                        compute_repeat(s, count, i32::MAX as usize)?,
+                        compute_repeat(s, count, MAX_REPEAT_SIZE)?,
                     )),
                     ScalarValue::Utf8(Some(s)) => ScalarValue::Utf8(Some(
-                        compute_repeat(s, count, i32::MAX as usize)?,
+                        compute_repeat(s, count, MAX_REPEAT_SIZE)?,
                     )),
                     ScalarValue::LargeUtf8(Some(s)) => ScalarValue::LargeUtf8(Some(
-                        compute_repeat(s, count, i64::MAX as usize)?,
+                        compute_repeat(s, count, MAX_REPEAT_SIZE)?,
                     )),
                     _ => {
                         return internal_err!(
@@ -225,7 +227,7 @@ fn repeat(string_array: &ArrayRef, count_array: &ArrayRef) -> Result<ArrayRef> {
         LargeUtf8 => {
             let string_arr = string_array.as_string::<i64>();
             let (total_capacity, max_item_capacity) =
-                calculate_capacities(&string_arr, number_array, i64::MAX as usize)?;
+                calculate_capacities(&string_arr, number_array, MAX_REPEAT_SIZE)?;
             let builder = GenericStringArrayBuilder::<i64>::with_capacity(
                 string_array.len(),
                 total_capacity,
@@ -454,6 +456,21 @@ mod tests {
             Utf8,
             StringArray
         );
+        test_function!(
+            RepeatFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("Pg")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(1i64 << 60))),
+            ],
+            exec_err!(
+                "string size overflow on repeat, max size is {}, but got {}",
+                i32::MAX,
+                2usize * (1usize << 60)
+            ),
+            &str,
+            LargeUtf8,
+            LargeStringArray
+        );
 
         Ok(())
     }
@@ -511,6 +528,18 @@ mod tests {
     fn test_repeat_string_array_overflow() {
         let strings: ArrayRef = Arc::new(StringArray::from(vec![Some("abc")]));
         let counts: ArrayRef = Arc::new(Int64Array::from(vec![Some(i64::MAX)]));
+
+        let err = super::repeat(&strings, &counts).unwrap_err().to_string();
+        assert!(
+            err.contains("string size overflow on repeat"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_repeat_large_string_array_overflow() {
+        let strings: ArrayRef = Arc::new(LargeStringArray::from(vec![Some("abc")]));
+        let counts: ArrayRef = Arc::new(Int64Array::from(vec![Some(1i64 << 60)]));
 
         let err = super::repeat(&strings, &counts).unwrap_err().to_string();
         assert!(
