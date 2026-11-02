@@ -3,10 +3,11 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::fuzz_cases::equivalence::utils::{
-    NULL_PCTS, TestScalarUDF, assert_random_ordering_satisfy_is_sound,
-    contains_conservative_ordering_op, create_random_schema, create_test_params,
-    create_test_schema_2, generate_table_for_eq_properties, generate_table_for_orderings,
-    is_table_same_after_sort,
+    ALL_SORT_OPTIONS, NULL_PCTS, TestScalarUDF, assert_random_ordering_satisfy_is_sound,
+    contains_conservative_ordering_op, create_random_schema,
+    create_random_table_with_casts_and_windows, create_test_params, create_test_schema_2,
+    generate_table_for_eq_properties, generate_table_for_orderings,
+    is_table_same_after_sort, random_sort_options,
 };
 use arrow::array::{ArrayRef, Float64Array, RecordBatch, new_null_array};
 use arrow::compute::{SortOptions, sort};
@@ -23,6 +24,7 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use itertools::Itertools;
 use rand::rngs::StdRng;
+use rand::seq::SliceRandom;
 use rand::{Rng, SeedableRng};
 use std::sync::Arc;
 
@@ -235,24 +237,69 @@ fn test_ordering_satisfy_with_equivalence_complex_random() -> Result<()> {
     Ok(())
 }
 
-const ALL_SORT_OPTIONS: [SortOptions; 4] = [
-    SortOptions {
-        descending: false,
-        nulls_first: false,
-    },
-    SortOptions {
-        descending: false,
-        nulls_first: true,
-    },
-    SortOptions {
-        descending: true,
-        nulls_first: false,
-    },
-    SortOptions {
-        descending: true,
-        nulls_first: true,
-    },
-];
+/// Checks `ordering_satisfy` on tables with cast equalities and the orderings
+/// of whole-partition windows (see `create_random_table_with_casts_and_windows`):
+/// every ordering it claims must hold on the rows, and the orderings that
+/// follow from the declared properties must be claimed.
+#[test]
+fn test_ordering_satisfy_with_casts_and_windows_random() -> Result<()> {
+    const N_RANDOM_TABLES: u64 = 100;
+    const N_ELEMENTS: usize = 125;
+    const N_DISTINCT: usize = 5;
+    const MAX_KEYS: usize = 4;
+    const SAMPLED_REQUIREMENT_PROBABILITY: f64 = 0.3;
+
+    for (seed, &null_pct) in (0..N_RANDOM_TABLES).cartesian_product(NULL_PCTS) {
+        let table = create_random_table_with_casts_and_windows(
+            seed, null_pct, N_ELEMENTS, N_DISTINCT,
+        )?;
+        let eq_properties = &table.eq_properties;
+        let context =
+            format!("seed: {seed}, null_pct: {null_pct}, eq_properties: {eq_properties}");
+        for ordering in &table.provable_orderings {
+            assert!(
+                is_table_same_after_sort(ordering.clone(), &table.batch)?,
+                "{context}, does not hold: {ordering}"
+            );
+            assert!(
+                eq_properties.ordering_satisfy(ordering.clone())?,
+                "{context}, not proven: {ordering}"
+            );
+        }
+
+        let mut rng = StdRng::seed_from_u64(seed);
+        for n_keys in 1..=MAX_KEYS {
+            for mut indices in (0..table.keys.len()).combinations(n_keys) {
+                if n_keys > 2 && !rng.random_bool(SAMPLED_REQUIREMENT_PROBABILITY) {
+                    continue;
+                }
+                indices.shuffle(&mut rng);
+                // Mostly in the direction each key is sorted in, so that many
+                // requirements hold and their claims get checked:
+                let sort_exprs = indices
+                    .iter()
+                    .map(|&idx| {
+                        let (expr, options) = &table.keys[idx];
+                        let options = match options {
+                            Some(options) if rng.random_bool(0.75) => *options,
+                            _ => random_sort_options(&mut rng),
+                        };
+                        PhysicalSortExpr::new(Arc::clone(expr), options)
+                    })
+                    .collect::<Vec<_>>();
+                let ordering = LexOrdering::new(sort_exprs).unwrap();
+                if eq_properties.ordering_satisfy(ordering.clone())? {
+                    assert!(
+                        is_table_same_after_sort(ordering.clone(), &table.batch)?,
+                        "{context}, claimed: {ordering}"
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
 
 /// Returns `0.0..=5.0` and `n_nulls` NULLs, sorted with `options`.
 fn sorted_f64_array(options: SortOptions, n_nulls: usize) -> Result<ArrayRef> {
