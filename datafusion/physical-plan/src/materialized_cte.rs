@@ -58,6 +58,7 @@ use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, SpillFile, TaskContext};
+use datafusion_physical_expr::equivalence::AcrossPartitions;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -312,6 +313,10 @@ impl MaterializedCteBuffer {
 
     fn set_body(&self, body: Arc<dyn ExecutionPlan>) {
         *self.body.lock() = Some(body);
+    }
+
+    fn body(&self) -> Option<Arc<dyn ExecutionPlan>> {
+        self.body.lock().clone()
     }
 
     fn reset(&self) {
@@ -803,7 +808,8 @@ impl MaterializedCteScanExec {
     /// partitioning, or when its schema is not the schema of the scan.
     ///
     /// The caller must make sure that the body of the plan that is executed
-    /// is `body`, or has the same properties.
+    /// is `body`, or has the same properties. Otherwise the scan returns an
+    /// internal error when it executes.
     pub fn with_body_properties(&self, body: &dyn ExecutionPlan) -> Option<Self> {
         let body_schema = body.schema();
         let same_columns = self.schema.fields().len() == body_schema.fields().len()
@@ -840,6 +846,62 @@ impl MaterializedCteScanExec {
             metrics: ExecutionPlanMetricsSet::new(),
             cache: Arc::new(cache),
         })
+    }
+
+    /// Check that `body` has the properties that this scan copied from the
+    /// body in [`Self::with_body_properties`].
+    ///
+    /// The planner does not change the body after the copy, but a rewrite of
+    /// the plan after planning (for example in a distributed engine) could,
+    /// and a scan that reports properties that its rows do not have gives
+    /// wrong results.
+    fn check_body_properties(&self, body: &dyn ExecutionPlan) -> Result<()> {
+        let claimed = &self.cache.eq_properties;
+        let actual = body.equivalence_properties();
+        let same_partitioning = match &self.cache.partitioning {
+            hash @ Partitioning::Hash(_, _) => body.output_partitioning() == hash,
+            _ => true,
+        };
+        let mut satisfied = same_partitioning
+            && claimed
+                .constraints()
+                .iter()
+                .all(|c| actual.constraints().contains(c))
+            && claimed.eq_group().iter().all(|class| {
+                let mut exprs = class.iter();
+                exprs.next().is_none_or(|first| {
+                    exprs.all(|expr| actual.eq_group().exprs_equal(first, expr))
+                })
+            })
+            && claimed.constants().iter().all(|constant| {
+                match (
+                    &constant.across_partitions,
+                    actual.is_expr_constant(&constant.expr),
+                ) {
+                    (_, None) => false,
+                    (AcrossPartitions::Heterogeneous, Some(_)) => true,
+                    (
+                        AcrossPartitions::Uniform(None),
+                        Some(AcrossPartitions::Uniform(_)),
+                    ) => true,
+                    (AcrossPartitions::Uniform(claimed), Some(actual)) => {
+                        actual == AcrossPartitions::Uniform(claimed.clone())
+                    }
+                }
+            });
+        for ordering in claimed.oeq_class().iter() {
+            if !satisfied {
+                break;
+            }
+            satisfied = actual.ordering_satisfy(ordering.clone())?;
+        }
+        if !satisfied {
+            return internal_err!(
+                "MaterializedCteScanExec {} reports properties that the CTE body does not have",
+                self.name
+            );
+        }
+        Ok(())
     }
 
     /// The partition count of this scan.
@@ -928,6 +990,11 @@ impl ExecutionPlan for MaterializedCteScanExec {
                 self.name
             );
         };
+        if self.mirrors_body
+            && let Some(body) = buffer.body()
+        {
+            self.check_body_properties(body.as_ref())?;
+        }
         let mut output = buffer.materialize(context)?;
         let output_partitions = self.partition_count();
         let mirrors_body = self.mirrors_body;
@@ -1195,6 +1262,59 @@ mod tests {
             error
                 .to_string()
                 .contains("has 2 partitions, but the CTE body has 3"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    /// Execute partition 0 of a scan with the properties of `body`, after the
+    /// body of its CTE is replaced with `final_body`, and return the error.
+    async fn mirror_scan_error(
+        body: Arc<dyn ExecutionPlan>,
+        final_body: Arc<dyn ExecutionPlan>,
+    ) -> Result<String> {
+        let (exec, scan) = bound_scan(Arc::clone(&body));
+        let scan = scan.with_body_properties(body.as_ref()).unwrap();
+        let _exec = MaterializedCteExec::new(
+            final_body,
+            Arc::new(EmptyExec::new(body.schema())),
+            Arc::clone(exec.buffer()),
+        );
+        let context = Arc::new(TaskContext::default());
+        let result = match scan.execute(0, context) {
+            Ok(stream) => collect(stream).await,
+            Err(e) => Err(e),
+        };
+        Ok(result.unwrap_err().to_string())
+    }
+
+    #[tokio::test]
+    async fn mirror_scan_rejects_unsorted_body() -> Result<()> {
+        let error =
+            mirror_scan_error(sorted(unsorted_body(2)?)?, unsorted_body(2)?).await?;
+        assert!(
+            error.contains("reports properties that the CTE body does not have"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mirror_scan_rejects_other_hash_keys() -> Result<()> {
+        let body = hash_partitioned(unsorted_body(1)?, 2)?;
+        let schema = body.schema();
+        let a_plus_one = Arc::new(datafusion_physical_expr::expressions::BinaryExpr::new(
+            col("a", &schema)?,
+            datafusion_expr::Operator::Plus,
+            lit(1i32),
+        )) as Arc<dyn PhysicalExpr>;
+        let final_body = Arc::new(RepartitionExec::try_new(
+            unsorted_body(1)?,
+            Partitioning::Hash(vec![a_plus_one], 2),
+        )?);
+        let error = mirror_scan_error(body, final_body).await?;
+        assert!(
+            error.contains("reports properties that the CTE body does not have"),
             "{error}"
         );
         Ok(())
