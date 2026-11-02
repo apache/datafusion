@@ -800,9 +800,9 @@ impl MaterializedCteScanExec {
         }
     }
 
-    /// Give the scan the partition count of `body`, its output ordering and
-    /// its hash partitioning. Partition `p` of the scan then replays
-    /// partition `p` of the body.
+    /// Give the scan the partition count of `body`, its hash partitioning and
+    /// its equivalence properties (orderings, equivalences and constants).
+    /// Partition `p` of the scan then replays partition `p` of the body.
     ///
     /// Returns `None` when `body` has no output ordering and no hash
     /// partitioning, or when its schema is not the schema of the scan.
@@ -822,7 +822,7 @@ impl MaterializedCteScanExec {
         if !same_columns {
             return None;
         }
-        let ordering = body.output_ordering().cloned();
+        let ordering = body.output_ordering();
         let partitioning = match body.output_partitioning() {
             hash @ Partitioning::Hash(_, _) => Some(hash.clone()),
             _ => None,
@@ -831,8 +831,15 @@ impl MaterializedCteScanExec {
             return None;
         }
         let partitions = body.output_partitioning().partition_count();
+        // The schemas have the same columns, so the orderings, equivalences
+        // and constants of the body are valid for the scan.
+        let eq_properties = body
+            .equivalence_properties()
+            .clone()
+            .with_new_schema(Arc::clone(&self.schema))
+            .ok()?;
         let cache = Self::compute_properties(
-            EquivalenceProperties::new_with_orderings(Arc::clone(&self.schema), ordering),
+            eq_properties,
             partitioning.unwrap_or(Partitioning::UnknownPartitioning(partitions)),
         );
         Some(Self {
@@ -1055,7 +1062,9 @@ mod tests {
     use super::*;
     use crate::common::collect;
     use crate::empty::EmptyExec;
+    use crate::filter::FilterExec;
     use crate::filter_pushdown::PushedDown;
+    use crate::projection::ProjectionExec;
     use crate::repartition::RepartitionExec;
     use crate::sorts::sort::SortExec;
     use crate::statistics::StatisticsContext;
@@ -1316,6 +1325,67 @@ mod tests {
         assert!(
             error.contains("reports properties that the CTE body does not have"),
             "{error}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mirror_scan_rejects_body_without_constant() -> Result<()> {
+        let only_ones =
+            |input: Arc<dyn ExecutionPlan>| -> Result<Arc<dyn ExecutionPlan>> {
+                let predicate =
+                    Arc::new(datafusion_physical_expr::expressions::BinaryExpr::new(
+                        col("a", &input.schema())?,
+                        datafusion_expr::Operator::Eq,
+                        lit(1i32),
+                    ));
+                Ok(Arc::new(FilterExec::try_new(predicate, input)?))
+            };
+        let body = only_ones(hash_partitioned(unsorted_body(1)?, 2)?)?;
+        let final_body = hash_partitioned(unsorted_body(1)?, 2)?;
+        let error = mirror_scan_error(body, final_body).await?;
+        assert!(
+            error.contains("reports properties that the CTE body does not have"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    /// The scan reports the constants and the equivalences of the body, not
+    /// only its first ordering.
+    #[test]
+    fn mirror_scan_reports_body_equivalences() -> Result<()> {
+        let input = hash_partitioned(unsorted_body(1)?, 2)?;
+        let predicate = Arc::new(datafusion_physical_expr::expressions::BinaryExpr::new(
+            col("a", &input.schema())?,
+            datafusion_expr::Operator::Eq,
+            lit(1i32),
+        ));
+        let body: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let (_exec, scan) = bound_scan(Arc::clone(&body));
+        let scan = scan.with_body_properties(body.as_ref()).unwrap();
+        let a = col("a", &scan.schema())?;
+        assert!(
+            scan.properties()
+                .eq_properties
+                .is_expr_constant(&a)
+                .is_some()
+        );
+
+        let a = col("a", &int_schema())?;
+        let projection = ProjectionExec::try_new(
+            vec![(Arc::clone(&a), "a".to_string()), (a, "b".to_string())],
+            unsorted_body(2)?,
+        )?;
+        let body = sorted(Arc::new(projection))?;
+        let (_exec, scan) = bound_scan(Arc::clone(&body));
+        let scan = scan.with_body_properties(body.as_ref()).unwrap();
+        let b = col("b", &scan.schema())?;
+        assert!(
+            scan.properties()
+                .eq_properties
+                .ordering_satisfy([PhysicalSortExpr::new_default(b)])?
         );
         Ok(())
     }
