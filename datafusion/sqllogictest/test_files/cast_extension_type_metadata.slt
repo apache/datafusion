@@ -86,7 +86,8 @@ FROM (
 00010203040506070809000102030506 NULL
 
 # Extension types of Parquet columns are visible to expressions evaluated in the scan,
-# also when the scan replaces a constant column with a literal from the statistics
+# also when the scan replaces a constant column with a literal from the statistics.
+# skip_metadata = true clears field metadata but keeps extension types.
 statement ok
 COPY (
     SELECT CAST(arrow_cast(X'00010203040506070809000102030506', 'FixedSizeBinary(16)') AS UUID) AS uuid_val
@@ -95,7 +96,7 @@ TO 'test_files/scratch/cast_extension_type_metadata/uuid.parquet'
 STORED AS PARQUET;
 
 statement ok
-SET datafusion.execution.parquet.skip_metadata = false;
+SET datafusion.execution.parquet.skip_metadata = true;
 
 statement ok
 CREATE EXTERNAL TABLE uuid_parquet
@@ -112,3 +113,46 @@ DROP TABLE uuid_parquet;
 
 statement ok
 RESET datafusion.execution.parquet.skip_metadata;
+
+# Schema inference over several files with skip_metadata = true (the default) keeps the
+# extension type and clears the other field metadata, even if it conflicts between files.
+# A file without the extension type does not remove it.
+statement ok
+COPY (
+    SELECT with_metadata(
+        with_metadata(with_metadata(1, 'ARROW:extension:name', 'example.ext'), 'ARROW:extension:metadata', '{"width":5}'),
+        'other', 'bar'
+    ) AS id
+)
+TO 'test_files/scratch/cast_extension_type_metadata/merge/1.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (
+    SELECT with_metadata(
+        with_metadata(with_metadata(2, 'ARROW:extension:name', 'example.ext'), 'ARROW:extension:metadata', '{"width":5}'),
+        'other', 'baz'
+    ) AS id
+)
+TO 'test_files/scratch/cast_extension_type_metadata/merge/2.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY (SELECT 3 AS id)
+TO 'test_files/scratch/cast_extension_type_metadata/merge/3.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE merged
+STORED AS PARQUET
+LOCATION 'test_files/scratch/cast_extension_type_metadata/merge/';
+
+query I?
+SELECT id, arrow_metadata(id) FROM merged ORDER BY id;
+----
+1 {ARROW:extension:metadata: {"width":5}, ARROW:extension:name: example.ext}
+2 {ARROW:extension:metadata: {"width":5}, ARROW:extension:name: example.ext}
+3 {ARROW:extension:metadata: {"width":5}, ARROW:extension:name: example.ext}
+
+statement ok
+DROP TABLE merged;
