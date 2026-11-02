@@ -16,8 +16,7 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Metadata, Schema, SchemaRef, TimeUnit, UInt32Type,
-    UnionFields,
+    DataType, Field, Fields, Schema, SchemaRef, TimeUnit, UInt32Type, UnionFields,
 };
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
@@ -28,7 +27,6 @@ use datafusion::common::stats::Precision;
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
-use datafusion::logical_expr::planner::TypePlanner;
 use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
@@ -44,7 +42,8 @@ use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
 use range_partitioning::{
-    register_range_partitioned_table, register_range_sorted_time_bin_table,
+    register_range_partitioned_table, register_range_sorted_day_bin_table,
+    register_range_sorted_time_bin_table,
 };
 
 use async_trait::async_trait;
@@ -58,10 +57,10 @@ use datafusion::physical_plan::operator_statistics::{
 };
 use datafusion::physical_plan::statistics::StatisticsArgs;
 use log::info;
-use sqlparser::ast;
 use tempfile::TempDir;
 
 mod custom_sort_pushdown;
+mod evaluation_counter;
 mod range_partitioning;
 
 /// Context for running tests
@@ -70,22 +69,6 @@ pub struct TestContext {
     ctx: SessionContext,
     /// Temporary directory created and cleared at the end of the test
     test_dir: Option<TempDir>,
-}
-
-#[derive(Debug)]
-struct SqlLogicTestTypePlanner;
-
-impl TypePlanner for SqlLogicTestTypePlanner {
-    fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
-        match sql_type {
-            ast::DataType::Uuid => Ok(Some(Arc::new(
-                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
-                ),
-            ))),
-            _ => Ok(None),
-        }
-    }
 }
 
 impl TestContext {
@@ -135,14 +118,6 @@ impl TestContext {
 
         if matches!(
             relative_path.file_name().and_then(|name| name.to_str()),
-            Some("cast_extension_type_metadata.slt")
-        ) {
-            state_builder =
-                state_builder.with_type_planner(Arc::new(SqlLogicTestTypePlanner));
-        }
-
-        if matches!(
-            relative_path.file_name().and_then(|name| name.to_str()),
             Some("statistics_registry.slt")
         ) {
             // Replaces the join estimate with the Cartesian product
@@ -188,6 +163,7 @@ impl TestContext {
         let state = state_builder.build();
 
         let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
+        evaluation_counter::register_evaluation_counter(test_ctx.session_ctx());
 
         match file_name {
             "sort_pushdown.slt" => {
@@ -245,6 +221,7 @@ impl TestContext {
             "range_sorted_time_bin_agg.slt" => {
                 info!("Registering range-sorted time-bin table");
                 register_range_sorted_time_bin_table(test_ctx.session_ctx());
+                register_range_sorted_day_bin_table(test_ctx.session_ctx());
             }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");

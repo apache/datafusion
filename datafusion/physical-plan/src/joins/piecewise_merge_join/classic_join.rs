@@ -4,9 +4,12 @@
 
 //! Stream Implementation for PiecewiseMergeJoin's Classic Join (Left, Right, Full, Inner)
 
-use arrow::array::{Array, AsArray, new_null_array};
+use arrow::array::{
+    Array, ArrayData, AsArray, MutableArrayData, RecordBatchOptions, make_array,
+    new_null_array,
+};
 use arrow::buffer::BooleanBuffer;
-use arrow::compute::{BatchCoalescer, filter, not, prep_null_mask_filter, take};
+use arrow::compute::{filter, not, prep_null_mask_filter, take};
 use arrow::{
     array::{ArrayRef, BooleanArray, RecordBatch, UInt32Array},
     compute::{SortColumn, filter_record_batch, lexsort_to_indices, take_record_batch},
@@ -20,6 +23,8 @@ use datafusion_expr::{ColumnarValue, JoinType, Operator};
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::datum::apply_cmp;
 use futures::{Stream, StreamExt};
+use std::collections::VecDeque;
+use std::ops::Range;
 use std::sync::atomic::Ordering as AtomicOrdering;
 use std::task::ready;
 use std::{sync::Arc, task::Poll};
@@ -27,8 +32,7 @@ use std::{sync::Arc, task::Poll};
 use crate::handle_state;
 use crate::joins::piecewise_merge_join::exec::{BufferedSide, BufferedSideReadyState};
 use crate::joins::piecewise_merge_join::utils::{
-    first_match, is_match, matches_on_equal, need_produce_result_in_final,
-    non_null_range, unmatched_buffered_batch,
+    first_match, is_match, matches_on_equal, need_produce_result_in_final, non_null_range,
 };
 use crate::joins::utils::JoinKeyComparator;
 use crate::joins::utils::{BuildProbeJoinMetrics, StatefulStreamResult};
@@ -197,6 +201,9 @@ impl ClassicPWMJStream {
 
         self.buffered_extreme =
             buffered_extreme(buffered_data.values(), self.sort_option)?;
+        self.batch_process_state
+            .output_batches
+            .set_buffered(buffered_data.batch());
 
         // We will start fetching stream batches for classic joins
         self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
@@ -245,8 +252,8 @@ impl ClassicPWMJStream {
 
                 // Rows that can match no buffered row are settled before the sort (see
                 // `split_off_never_matching`); only the rest are sorted and scanned.
-                let buffered_values =
-                    self.buffered_side.try_as_ready()?.buffered_data.values();
+                let buffered_data = &self.buffered_side.try_as_ready()?.buffered_data;
+                let buffered_values = buffered_data.values();
                 let matchable = matchable_rows(
                     &stream_values,
                     buffered_values,
@@ -257,7 +264,7 @@ impl ClassicPWMJStream {
                 let candidates = split_off_never_matching(
                     &matchable,
                     self.join_type,
-                    &self.schema,
+                    buffered_data.batch().schema_ref(),
                     &batch,
                     &stream_values,
                     &mut self.batch_process_state.output_batches,
@@ -309,6 +316,9 @@ impl ClassicPWMJStream {
         let buffered_side = self.buffered_side.try_as_ready_mut()?;
         let stream_batch = self.state.try_as_process_stream_batch_mut()?;
 
+        // Output leaves only through the queue: one push can complete several
+        // batches, so emit them one per poll and transition only once the queue
+        // is empty, so no output is lost.
         if let Some(batch) = self
             .batch_process_state
             .output_batches
@@ -317,35 +327,31 @@ impl ClassicPWMJStream {
             return Ok(StatefulStreamResult::Ready(Some(batch)));
         }
 
-        // A finished scan can leave several completed batches queued; emit
-        // them one per poll and transition only once the queue is empty, so
-        // no output is lost.
         if !self.batch_process_state.continue_process {
-            if let Some(batch) = self.batch_process_state.next_drained_batch()? {
-                return Ok(StatefulStreamResult::Ready(Some(batch)));
+            // Pending rows index this stream batch, so a later flush would gather them from
+            // another one. Unmatched rows are only emitted after this point, so this one check
+            // covers them too.
+            let pending = self.batch_process_state.output_batches.pending_rows();
+            if pending != 0 {
+                return internal_err!(
+                    "PiecewiseMergeJoin: moving to the next stream batch with {pending} matched rows pending"
+                );
             }
-
             self.state = PiecewiseMergeJoinStreamState::FetchStreamBatch;
             return Ok(StatefulStreamResult::Continue);
         }
 
-        // Produce more work
-        let batch = resolve_classic_join(
+        // Scan until a batch completes or the stream batch is exhausted; either
+        // way, re-enter through the guards above.
+        resolve_classic_join(
             buffered_side,
             stream_batch,
-            &self.schema,
             self.operator,
             self.sort_option,
             self.join_type,
             &mut self.batch_process_state,
         )?;
-
-        if !self.batch_process_state.continue_process {
-            // Scan finished; re-enter through the drain guard above.
-            return Ok(StatefulStreamResult::Continue);
-        }
-
-        Ok(StatefulStreamResult::Ready(Some(batch)))
+        Ok(StatefulStreamResult::Continue)
     }
 
     // Process remaining unmatched rows
@@ -360,7 +366,11 @@ impl ClassicPWMJStream {
         }
 
         if !self.batch_process_state.continue_process {
-            if let Some(batch) = self.batch_process_state.next_drained_batch()? {
+            if let Some(batch) = self
+                .batch_process_state
+                .output_batches
+                .next_completed_batch()
+            {
                 return Ok(StatefulStreamResult::Ready(Some(batch)));
             }
 
@@ -372,25 +382,23 @@ impl ClassicPWMJStream {
         let buffered_data = Arc::clone(&self.buffered_side.try_as_ready()?.buffered_data);
         let buffered_batch = buffered_data.batch();
 
+        // Every match marks the suffix `[k, non_null_end)`, so the buffered rows that were
+        // never matched are the complementary prefix `[0, min_marked)` -- which includes any
+        // leading NULL keys, as the scan starts past them -- plus any trailing NULL keys.
+        let buffered_len = buffered_batch.num_rows();
         let (_, non_null_end) =
             non_null_range(buffered_data.values().as_ref(), self.sort_option);
-        let min_marked = buffered_data.min_marked.load(AtomicOrdering::SeqCst);
-        let new_buffered_batch =
-            unmatched_buffered_batch(buffered_batch, min_marked, non_null_end)?;
-        let mut buffered_columns = new_buffered_batch.columns().to_vec();
+        let min_marked = buffered_data
+            .min_marked
+            .load(AtomicOrdering::SeqCst)
+            .min(non_null_end);
 
-        let streamed_columns: Vec<ArrayRef> = self
-            .streamed_schema
-            .fields()
-            .iter()
-            .map(|f| new_null_array(f.data_type(), new_buffered_batch.num_rows()))
-            .collect();
-
-        buffered_columns.extend(streamed_columns);
-
-        let batch = RecordBatch::try_new(Arc::clone(&self.schema), buffered_columns)?;
-
-        self.batch_process_state.output_batches.push_batch(batch)?;
+        self.batch_process_state
+            .output_batches
+            .push_unmatched_buffered(
+                &self.streamed_schema,
+                &[0..min_marked, non_null_end..buffered_len],
+            )?;
 
         self.batch_process_state.continue_process = false;
         // Re-enter through the drain guard above.
@@ -399,8 +407,8 @@ impl ClassicPWMJStream {
 }
 
 struct BatchProcessState {
-    // Used to pick up from the last index on the stream side
-    output_batches: Box<BatchCoalescer>,
+    // Output rows of the join, gathered into `batch_size` batches
+    output_batches: OutputBuffer,
     // Used to store the start index on the buffered side; used to resume processing on the correct
     // row
     start_buffer_idx: usize,
@@ -418,7 +426,7 @@ struct BatchProcessState {
 impl BatchProcessState {
     pub(crate) fn new(schema: Arc<Schema>, batch_size: usize) -> Self {
         Self {
-            output_batches: Box::new(BatchCoalescer::new(schema, batch_size)),
+            output_batches: OutputBuffer::new(schema, batch_size),
             start_buffer_idx: 0,
             start_stream_idx: 0,
             continue_process: true,
@@ -432,13 +440,204 @@ impl BatchProcessState {
         self.continue_process = true;
         self.batch_min_marked = usize::MAX;
     }
+}
 
-    // `None` guarantees the coalescer holds no pending rows, so the caller
-    // may safely transition state without losing output.
-    fn next_drained_batch(&mut self) -> Result<Option<RecordBatch>> {
-        self.output_batches.finish_buffered_batch()?;
-        Ok(self.output_batches.next_completed_batch())
+/// Collects the join's output into `batch_size` batches. The pending rows are runs of
+/// buffered rows paired with streamed indices; a batch copies each buffered column once
+/// over all its runs and gathers each streamed column once.
+struct OutputBuffer {
+    schema: SchemaRef,
+    batch_size: usize,
+    // The buffered batch's columns, set once the buffered side is ready. Held as
+    // `ArrayData` so a flush doesn't convert them again.
+    buffered_columns: Vec<ArrayData>,
+    // `(start, len)` pairs the buffered rows `[start, start + len)` with the next `len`
+    // streamed indices.
+    buffered_runs: Vec<(usize, usize)>,
+    streamed_indices: Vec<u32>,
+    completed: VecDeque<RecordBatch>,
+}
+
+impl OutputBuffer {
+    fn new(schema: SchemaRef, batch_size: usize) -> Self {
+        Self {
+            schema,
+            batch_size,
+            buffered_columns: vec![],
+            buffered_runs: Vec::with_capacity(batch_size),
+            streamed_indices: Vec::with_capacity(batch_size),
+            completed: VecDeque::new(),
+        }
     }
+
+    fn set_buffered(&mut self, buffered_batch: &RecordBatch) {
+        self.buffered_columns = buffered_batch
+            .columns()
+            .iter()
+            .map(|column| column.to_data())
+            .collect();
+    }
+
+    fn pending_rows(&self) -> usize {
+        self.streamed_indices.len()
+    }
+
+    fn has_completed_batch(&self) -> bool {
+        !self.completed.is_empty()
+    }
+
+    fn next_completed_batch(&mut self) -> Option<RecordBatch> {
+        self.completed.pop_front()
+    }
+
+    /// Pairs streamed row `streamed_idx` with every buffered row in `buffered_range`.
+    fn push_matched(
+        &mut self,
+        stream_batch: &RecordBatch,
+        buffered_range: Range<usize>,
+        streamed_idx: usize,
+    ) -> Result<()> {
+        let mut start = buffered_range.start;
+        while start < buffered_range.end {
+            let n =
+                (self.batch_size - self.pending_rows()).min(buffered_range.end - start);
+            self.buffered_runs.push((start, n));
+            self.streamed_indices
+                .extend(std::iter::repeat_n(streamed_idx as u32, n));
+            start += n;
+            if self.pending_rows() == self.batch_size {
+                self.flush(stream_batch)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Emits `unmatched`, streamed rows that match no buffered row, with null buffered
+    /// columns.
+    fn push_unmatched_streamed(
+        &mut self,
+        buffered_schema: &Schema,
+        unmatched: &RecordBatch,
+    ) -> Result<()> {
+        for (start, len) in chunks(0..unmatched.num_rows(), self.batch_size) {
+            let columns = null_columns(buffered_schema, len)
+                .chain(unmatched.slice(start, len).columns().iter().cloned())
+                .collect();
+            self.push_columns(columns, len)?;
+        }
+        Ok(())
+    }
+
+    /// Emits the buffered rows in `buffered_ranges` with null streamed columns, packed
+    /// into `batch_size` batches across the ranges.
+    ///
+    /// The rows are copied, not sliced: a slice would keep all of the buffered batch alive
+    /// and report its full buffers to memory accounting downstream, once per batch. A
+    /// copied `Utf8View`/`BinaryView` column is the exception: it still references every
+    /// data buffer of the buffered column.
+    fn push_unmatched_buffered(
+        &mut self,
+        streamed_schema: &Schema,
+        buffered_ranges: &[Range<usize>],
+    ) -> Result<()> {
+        let mut runs = Vec::new();
+        let mut len = 0;
+        for range in buffered_ranges {
+            let mut start = range.start;
+            while start < range.end {
+                let n = (self.batch_size - len).min(range.end - start);
+                runs.push((start, n));
+                len += n;
+                start += n;
+                if len == self.batch_size {
+                    self.push_unmatched_runs(streamed_schema, &runs, len)?;
+                    runs.clear();
+                    len = 0;
+                }
+            }
+        }
+        if len > 0 {
+            self.push_unmatched_runs(streamed_schema, &runs, len)?;
+        }
+        Ok(())
+    }
+
+    fn push_unmatched_runs(
+        &mut self,
+        streamed_schema: &Schema,
+        runs: &[(usize, usize)],
+        num_rows: usize,
+    ) -> Result<()> {
+        let columns = copy_runs(&self.buffered_columns, runs, num_rows)?
+            .into_iter()
+            .chain(null_columns(streamed_schema, num_rows))
+            .collect();
+        self.push_columns(columns, num_rows)
+    }
+
+    /// Builds the pending rows into a completed batch.
+    fn flush(&mut self, stream_batch: &RecordBatch) -> Result<()> {
+        let num_rows = self.pending_rows();
+        if num_rows == 0 {
+            return Ok(());
+        }
+        let mut columns =
+            copy_runs(&self.buffered_columns, &self.buffered_runs, num_rows)?;
+        self.buffered_runs.clear();
+
+        let streamed_indices = UInt32Array::from(std::mem::replace(
+            &mut self.streamed_indices,
+            Vec::with_capacity(self.batch_size),
+        ));
+        for column in stream_batch.columns() {
+            columns.push(take(column.as_ref(), &streamed_indices, None)?);
+        }
+        self.push_columns(columns, num_rows)
+    }
+
+    fn push_columns(&mut self, columns: Vec<ArrayRef>, num_rows: usize) -> Result<()> {
+        let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
+        self.completed.push_back(RecordBatch::try_new_with_options(
+            Arc::clone(&self.schema),
+            columns,
+            &options,
+        )?);
+        Ok(())
+    }
+}
+
+// Splits `range` into `(start, len)` chunks of at most `size` rows.
+fn chunks(range: Range<usize>, size: usize) -> impl Iterator<Item = (usize, usize)> {
+    let end = range.end;
+    range
+        .step_by(size)
+        .map(move |start| (start, size.min(end - start)))
+}
+
+// All-null columns of `len` rows for the fields of `schema`.
+fn null_columns(schema: &Schema, len: usize) -> impl Iterator<Item = ArrayRef> + '_ {
+    schema
+        .fields()
+        .iter()
+        .map(move |f| new_null_array(f.data_type(), len))
+}
+
+// Copies `runs` of the rows of `columns` into new columns of `num_rows` rows.
+fn copy_runs(
+    columns: &[ArrayData],
+    runs: &[(usize, usize)],
+    num_rows: usize,
+) -> Result<Vec<ArrayRef>> {
+    columns
+        .iter()
+        .map(|data| {
+            let mut copy = MutableArrayData::try_new(vec![data], false, num_rows)?;
+            for &(start, len) in runs {
+                copy.try_extend(0, start, start + len)?;
+            }
+            Ok(make_array(copy.freeze()))
+        })
+        .collect()
 }
 
 impl Stream for ClassicPWMJStream {
@@ -457,12 +656,11 @@ impl Stream for ClassicPWMJStream {
 fn resolve_classic_join(
     buffered_side: &mut BufferedSideReadyState,
     stream_batch: &SortedStreamBatch,
-    join_schema: &SchemaRef,
     operator: Operator,
     sort_options: SortOptions,
     join_type: JoinType,
     batch_process_state: &mut BatchProcessState,
-) -> Result<RecordBatch> {
+) -> Result<()> {
     // Buffered NULL keys sort to one end and never match, so the scan stops before any
     // trailing ones; `start_buffer_idx` already starts it past any leading ones.
     let (_, buffered_len) =
@@ -507,78 +705,61 @@ fn resolve_classic_join(
                 "PiecewiseMergeJoin: streamed row {row_idx} reached the scan without a match"
             );
         }
-        let count = buffered_len - buffer_idx;
 
-        let batch = build_matched_indices_and_mark_buffered(
-            (buffer_idx, count),
-            (row_idx, count),
+        mark_buffered(
+            buffer_idx,
             buffered_side,
-            stream_batch,
             join_type,
-            join_schema,
             &mut batch_process_state.batch_min_marked,
+        );
+        batch_process_state.output_batches.push_matched(
+            &stream_batch.batch,
+            buffer_idx..buffered_len,
+            row_idx,
         )?;
 
-        batch_process_state.output_batches.push_batch(batch)?;
-
-        // Flush batch and update pointers if we have a completed batch
-        if let Some(batch) = batch_process_state.output_batches.next_completed_batch() {
+        // Stop once a batch completes, and update pointers to resume from the next row
+        if batch_process_state.output_batches.has_completed_batch() {
             batch_process_state.start_buffer_idx = buffer_idx;
             batch_process_state.start_stream_idx = row_idx + 1;
-            return Ok(batch);
+            return Ok(());
         }
     }
 
+    // Flush the partial last batch: the pending rows index into this stream batch, so they
+    // can't wait for the next one
+    batch_process_state
+        .output_batches
+        .flush(&stream_batch.batch)?;
+
     batch_process_state.continue_process = false;
-    Ok(RecordBatch::new_empty(Arc::clone(join_schema)))
+    Ok(())
 }
 
-// Builds a record batch from indices ranges on the buffered and streamed side.
+// Marks the matched buffered suffix `[start, non_null_end)`.
 //
-// The two ranges are: buffered_range: (start index, count) and streamed_range: (start index, count) due
-// to batch.slice(start, count).
-fn build_matched_indices_and_mark_buffered(
-    buffered_range: (usize, usize),
-    streamed_range: (usize, usize),
-    buffered_side: &mut BufferedSideReadyState,
-    stream_batch: &SortedStreamBatch,
+// A match emits every non-null buffered row from the first match on, so the union of
+// everything marked is `[min over matches, non_null_end)` and lowering a single watermark
+// records it exactly. That replaces a mutex plus one `set_bit` per matched row, which was
+// `O(buffered_len)` work for *every* matched streamed row.
+//
+// `buffer_idx` is monotone non-decreasing across a stream batch, so only the batch's
+// first match can lower the watermark; `batch_min_marked` keeps the atomic off the hot
+// path for all the others. It survives the early returns that hand back a completed
+// output batch mid-scan, and `reset()` clears it for the next stream batch.
+fn mark_buffered(
+    start: usize,
+    buffered_side: &BufferedSideReadyState,
     join_type: JoinType,
-    join_schema: &SchemaRef,
     batch_min_marked: &mut usize,
-) -> Result<RecordBatch> {
-    // Mark the matched buffered rows. `buffered_range` is always the suffix
-    // `[start, buffered_len)` -- a match emits every buffered row from the first match on --
-    // so the union of everything marked is `[min over matches, buffered_len)` and lowering a
-    // single watermark records it exactly. That replaces a mutex plus one `set_bit` per
-    // matched row, which was `O(buffered_len)` work for *every* matched streamed row.
-    //
-    // `buffer_idx` is monotone non-decreasing across a stream batch, so only the batch's
-    // first match can lower the watermark; `batch_min_marked` keeps the atomic off the hot
-    // path for all the others. It survives the early returns that hand back a completed
-    // output batch mid-scan, and `reset()` clears it for the next stream batch.
-    if need_produce_result_in_final(join_type) && buffered_range.0 < *batch_min_marked {
-        *batch_min_marked = buffered_range.0;
+) {
+    if need_produce_result_in_final(join_type) && start < *batch_min_marked {
+        *batch_min_marked = start;
         buffered_side
             .buffered_data
             .min_marked
-            .fetch_min(buffered_range.0, AtomicOrdering::SeqCst);
+            .fetch_min(start, AtomicOrdering::SeqCst);
     }
-
-    let new_buffered_batch = buffered_side
-        .buffered_data
-        .batch()
-        .slice(buffered_range.0, buffered_range.1);
-    let mut buffered_columns = Vec::with_capacity(join_schema.fields().len());
-    buffered_columns.extend_from_slice(new_buffered_batch.columns());
-
-    let indices = UInt32Array::from_value(streamed_range.0 as u32, streamed_range.1);
-    let new_stream_batch = take_record_batch(&stream_batch.batch, &indices)?;
-    buffered_columns.extend_from_slice(new_stream_batch.columns());
-
-    Ok(RecordBatch::try_new(
-        Arc::clone(join_schema),
-        buffered_columns,
-    )?)
 }
 
 // The last non-null key of the sorted buffered side, or `None` when it is empty or every key
@@ -672,10 +853,10 @@ fn matchable_rows(
 fn split_off_never_matching(
     matchable: &BooleanArray,
     join_type: JoinType,
-    join_schema: &SchemaRef,
+    buffered_schema: &Schema,
     batch: &RecordBatch,
     stream_values: &ArrayRef,
-    output_batches: &mut BatchCoalescer,
+    output_batches: &mut OutputBuffer,
 ) -> Result<Option<(UInt32Array, ArrayRef)>> {
     if matchable.true_count() == batch.num_rows() {
         return Ok(None);
@@ -683,38 +864,13 @@ fn split_off_never_matching(
 
     if matches!(join_type, JoinType::Right | JoinType::Full) {
         let unmatched = filter_record_batch(batch, &not(matchable)?)?;
-        output_batches
-            .push_batch(null_padded_streamed_batch(&unmatched, join_schema)?)?;
+        output_batches.push_unmatched_streamed(buffered_schema, &unmatched)?;
     }
 
     let positions =
         UInt32Array::from_iter_values(matchable.values().set_indices().map(|i| i as u32));
     let keys = filter(stream_values.as_ref(), matchable)?;
     Ok(Some((positions, keys)))
-}
-
-// Joins streamed rows with NULLs for every buffered column.
-fn null_padded_streamed_batch(
-    streamed_batch: &RecordBatch,
-    join_schema: &SchemaRef,
-) -> Result<RecordBatch> {
-    let streamed_columns = streamed_batch.columns().to_vec();
-    let buffered_cols_len = join_schema.fields().len() - streamed_columns.len();
-
-    let num_rows = streamed_batch.num_rows();
-    let mut buffered_columns: Vec<ArrayRef> = join_schema
-        .fields()
-        .iter()
-        .take(buffered_cols_len)
-        .map(|field| new_null_array(field.data_type(), num_rows))
-        .collect();
-
-    buffered_columns.extend(streamed_columns);
-
-    Ok(RecordBatch::try_new(
-        Arc::clone(join_schema),
-        buffered_columns,
-    )?)
 }
 
 #[cfg(test)]
@@ -727,7 +883,9 @@ mod tests {
         stream::RecordBatchStreamAdapter,
         test::{TestMemoryExec, assert_join_metrics, build_table_i32},
     };
-    use arrow::array::{Date32Array, Date64Array};
+    use arrow::array::{
+        Date32Array, Date64Array, Int32Array, StringArray, StringViewArray,
+    };
     use arrow_schema::Field;
     use datafusion_common::instant::Instant;
     use datafusion_common::test_util::batches_to_string;
@@ -752,6 +910,34 @@ mod tests {
         let batch = build_table_i32(a, b, c);
         let schema = batch.schema();
         TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
+    }
+
+    // Like `build_table`, with `c` a string column of `payload_type` (`Utf8` or `Utf8View`).
+    fn build_string_payload_batch(
+        a: (&str, &[i32]),
+        b: (&str, &[i32]),
+        c: (&str, &[&str]),
+        payload_type: &DataType,
+    ) -> RecordBatch {
+        let payload: ArrayRef = match payload_type {
+            DataType::Utf8 => Arc::new(StringArray::from(c.1.to_vec())),
+            DataType::Utf8View => Arc::new(StringViewArray::from(c.1.to_vec())),
+            other => panic!("not a string payload type: {other}"),
+        };
+        let schema = Schema::new(vec![
+            Field::new(a.0, DataType::Int32, false),
+            Field::new(b.0, DataType::Int32, false),
+            Field::new(c.0, payload_type.clone(), false),
+        ]);
+        RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Int32Array::from(a.1.to_vec())),
+                Arc::new(Int32Array::from(b.1.to_vec())),
+                payload,
+            ],
+        )
+        .unwrap()
     }
 
     fn build_date_table(
@@ -1037,6 +1223,166 @@ mod tests {
         assert!(batches.is_empty());
 
         assert_join_metrics!(metrics, 0);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_left_unmatched_buffered_batches_report_own_memory() -> Result<()> {
+        use datafusion_common::utils::memory::get_record_batch_memory_size;
+
+        // No buffered key is below the only streamed key, so all 2000 buffered rows are
+        // emitted unmatched in 20 batches. Downstream operators such as `SortExec` reserve
+        // each batch's memory size; were the batches slices of the buffered side, each
+        // would report all of it and the total would be ~20x the buffered side.
+        let n = 2000;
+        let keys: Vec<i32> = (0..n).collect();
+        let left_batch = build_table_i32(("a1", &keys), ("b1", &keys), ("c1", &keys));
+        let buffered_size = get_record_batch_memory_size(&left_batch);
+        let schema = left_batch.schema();
+        let left = TestMemoryExec::try_new_exec(&[vec![left_batch]], schema, None)?;
+        let right = build_table(("a2", &vec![10]), ("b1", &vec![0]), ("c2", &vec![70]));
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(100)),
+        );
+        let batches = join(left, right, on, Operator::Lt, JoinType::Left)?
+            .execute(0, task_ctx)?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        assert_eq!(batches.len(), 20);
+        assert_eq!(
+            batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            n as usize
+        );
+        // The copied buffered columns add up to the buffered side, the null streamed
+        // columns to about as much again.
+        let reported: usize = batches.iter().map(get_record_batch_memory_size).sum();
+        assert!(
+            reported < 3 * buffered_size,
+            "output batches report {reported} bytes for a {buffered_size}-byte buffered side"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_left_unmatched_utf8_buffered_batches_report_own_memory() -> Result<()> {
+        use datafusion_common::utils::memory::get_record_batch_memory_size;
+
+        // As `join_left_unmatched_buffered_batches_report_own_memory`, with a `Utf8`
+        // payload: the copied offsets and values of each batch cover only its own rows.
+        // `Utf8View` is left out, as a copied view column references all the data buffers.
+        let n = 2000;
+        let keys: Vec<i32> = (0..n).collect();
+        let strings: Vec<String> = (0..n).map(|i| format!("payload-{i:024}")).collect();
+        let strings: Vec<&str> = strings.iter().map(String::as_str).collect();
+        let left_batch = build_string_payload_batch(
+            ("a1", &keys),
+            ("b1", &keys),
+            ("c1", &strings),
+            &DataType::Utf8,
+        );
+        let buffered_size = get_record_batch_memory_size(&left_batch);
+        let schema = left_batch.schema();
+        let left = TestMemoryExec::try_new_exec(&[vec![left_batch]], schema, None)?;
+        let right = build_table(("a2", &vec![10]), ("b1", &vec![0]), ("c2", &vec![70]));
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(100)),
+        );
+        let batches = join(left, right, on, Operator::Lt, JoinType::Left)?
+            .execute(0, task_ctx)?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        assert_eq!(batches.len(), 20);
+        assert_eq!(
+            batches.iter().map(|b| b.num_rows()).sum::<usize>(),
+            n as usize
+        );
+        let reported: usize = batches.iter().map(get_record_batch_memory_size).sum();
+        assert!(
+            reported < 3 * buffered_size,
+            "output batches report {reported} bytes for a {buffered_size}-byte buffered side"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_full_less_than_string_payloads() -> Result<()> {
+        // The buffered side arrives sorted descending, as `<` requires. Both matched
+        // streamed rows pair with the 3-row suffix `b1 in (3, 2, 1)`, so at batch_size=4 the
+        // second suffix straddles an output batch. The unmatched streamed row (b1=0) is
+        // settled before the scan, and the unmatched buffered row (b1=7) comes last.
+        // Payloads are strings on both sides: buffered runs are copied, streamed rows
+        // gathered, and both sides null-padded. Strings over 12 bytes live in the view data buffers,
+        // shorter ones inline in the views.
+        for payload_type in [DataType::Utf8, DataType::Utf8View] {
+            let left_batch = build_string_payload_batch(
+                ("a1", &[1, 2, 3, 4]),
+                ("b1", &[7, 3, 2, 1]),
+                (
+                    "c1",
+                    &["unmatched buffered", "b3", "buffered row b1=2", "b1"],
+                ),
+                &payload_type,
+            );
+            let right_batch = build_string_payload_batch(
+                ("a2", &[10, 20, 30]),
+                ("b1", &[4, 4, 0]),
+                ("c2", &["streamed row a2=10", "s20", "unmatched streamed"]),
+                &payload_type,
+            );
+            let (ls, rs) = (left_batch.schema(), right_batch.schema());
+            let left = TestMemoryExec::try_new_exec(&[vec![left_batch]], ls, None)?;
+            let right = TestMemoryExec::try_new_exec(&[vec![right_batch]], rs, None)?;
+            let on = (
+                Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+            );
+
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(SessionConfig::new().with_batch_size(4)),
+            );
+            let batches = join(left, right, on, Operator::Lt, JoinType::Full)?
+                .execute(0, task_ctx)?
+                .try_collect::<Vec<_>>()
+                .await?;
+
+            for batch in &batches {
+                assert_eq!(batch.column(2).data_type(), &payload_type);
+                assert_eq!(batch.column(5).data_type(), &payload_type);
+            }
+            let batch_rows: Vec<usize> = batches.iter().map(|b| b.num_rows()).collect();
+            assert_eq!(batch_rows, vec![1, 4, 2, 1], "{payload_type}");
+            insta::allow_duplicates! {
+                assert_snapshot!(batches_to_string(&batches), @r"
+                +----+----+--------------------+----+----+--------------------+
+                | a1 | b1 | c1                 | a2 | b1 | c2                 |
+                +----+----+--------------------+----+----+--------------------+
+                |    |    |                    | 30 | 0  | unmatched streamed |
+                | 2  | 3  | b3                 | 10 | 4  | streamed row a2=10 |
+                | 3  | 2  | buffered row b1=2  | 10 | 4  | streamed row a2=10 |
+                | 4  | 1  | b1                 | 10 | 4  | streamed row a2=10 |
+                | 2  | 3  | b3                 | 20 | 4  | s20                |
+                | 3  | 2  | buffered row b1=2  | 20 | 4  | s20                |
+                | 4  | 1  | b1                 | 20 | 4  | s20                |
+                | 1  | 7  | unmatched buffered |    |    |                    |
+                +----+----+--------------------+----+----+--------------------+
+                ");
+            }
+        }
         Ok(())
     }
 
@@ -1872,6 +2218,160 @@ mod tests {
         ");
 
         assert_join_metrics!(metrics, 4);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_right_less_than_never_matching_rows_split_by_batch_size() -> Result<()>
+    {
+        // Four streamed rows (b1 <= 1) match nothing, as `1` is the smallest buffered key;
+        // they are emitted before the scan, in input order, as batches of at most
+        // batch_size=2. The matching row (b1=5) pairs with all three buffered rows.
+        let left = build_table(
+            ("a1", &vec![1, 2, 3]),
+            ("b1", &vec![3, 2, 1]),
+            ("c1", &vec![7, 8, 9]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20, 30, 40, 50]),
+            ("b1", &vec![0, 1, 0, 5, 0]),
+            ("c2", &vec![70, 80, 90, 100, 110]),
+        );
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(2)),
+        );
+        let batches = join(left, right, on, Operator::Lt, JoinType::Right)?
+            .execute(0, task_ctx)?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let batch_rows: Vec<usize> = batches.iter().map(|b| b.num_rows()).collect();
+        assert_eq!(batch_rows, vec![2, 2, 2, 1]);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+----+----+-----+
+        | a1 | b1 | c1 | a2 | b1 | c2  |
+        +----+----+----+----+----+-----+
+        |    |    |    | 10 | 0  | 70  |
+        |    |    |    | 20 | 1  | 80  |
+        |    |    |    | 30 | 0  | 90  |
+        |    |    |    | 50 | 0  | 110 |
+        | 1  | 3  | 7  | 40 | 5  | 100 |
+        | 2  | 2  | 8  | 40 | 5  | 100 |
+        | 3  | 1  | 9  | 40 | 5  | 100 |
+        +----+----+----+----+----+-----+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_inner_less_than_one_row_completes_several_batches() -> Result<()> {
+        // At batch_size=2, streamed row b1=6 pairs with all five buffered rows, so one
+        // push completes two batches and leaves one row pending. b1=3 then resumes the
+        // scan and pairs with b1 in (2, 1).
+        let left = build_table(
+            ("a1", &vec![1, 2, 3, 4, 5]),
+            ("b1", &vec![5, 4, 3, 2, 1]),
+            ("c1", &vec![7, 8, 9, 10, 11]),
+        );
+        let right = build_table(
+            ("a2", &vec![10, 20]),
+            ("b1", &vec![6, 3]),
+            ("c2", &vec![70, 80]),
+        );
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(2)),
+        );
+        let batches = join(left, right, on, Operator::Lt, JoinType::Inner)?
+            .execute(0, task_ctx)?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let batch_rows: Vec<usize> = batches.iter().map(|b| b.num_rows()).collect();
+        assert_eq!(batch_rows, vec![2, 2, 2, 1]);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+----+----+----+
+        | a1 | b1 | c1 | a2 | b1 | c2 |
+        +----+----+----+----+----+----+
+        | 1  | 5  | 7  | 10 | 6  | 70 |
+        | 2  | 4  | 8  | 10 | 6  | 70 |
+        | 3  | 3  | 9  | 10 | 6  | 70 |
+        | 4  | 2  | 10 | 10 | 6  | 70 |
+        | 5  | 1  | 11 | 10 | 6  | 70 |
+        | 4  | 2  | 10 | 20 | 3  | 80 |
+        | 5  | 1  | 11 | 20 | 3  | 80 |
+        +----+----+----+----+----+----+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn join_left_less_than_unmatched_prefix_and_trailing_nulls() -> Result<()> {
+        use arrow::array::Int32Array;
+
+        // The buffered side arrives sorted as `<` requires: {9, 8, 7, 1, NULL, NULL}, NULLs
+        // last. Only `1 < 5`
+        // matches, so the unmatched rows are the prefix {9, 8, 7} and the trailing NULL
+        // keys, packed together into batches of 2, 2 and 1 at batch_size=2.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a1", DataType::Int32, false),
+            Field::new("b1", DataType::Int32, true),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6])),
+                Arc::new(Int32Array::from(vec![
+                    Some(9),
+                    Some(8),
+                    Some(7),
+                    Some(1),
+                    None,
+                    None,
+                ])),
+            ],
+        )?;
+        let left = TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?;
+        let right = build_table(("a2", &vec![10]), ("b1", &vec![5]), ("c2", &vec![70]));
+        let on = (
+            Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
+            Arc::new(Column::new_with_schema("b1", &right.schema())?) as _,
+        );
+
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(2)),
+        );
+        let batches = join(left, right, on, Operator::Lt, JoinType::Left)?
+            .execute(0, task_ctx)?
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        let batch_rows: Vec<usize> = batches.iter().map(|b| b.num_rows()).collect();
+        assert_eq!(batch_rows, vec![1, 2, 2, 1]);
+        assert_snapshot!(batches_to_string(&batches), @r"
+        +----+----+----+----+----+
+        | a1 | b1 | a2 | b1 | c2 |
+        +----+----+----+----+----+
+        | 4  | 1  | 10 | 5  | 70 |
+        | 1  | 9  |    |    |    |
+        | 2  | 8  |    |    |    |
+        | 3  | 7  |    |    |    |
+        | 5  |    |    |    |    |
+        | 6  |    |    |    |    |
+        +----+----+----+----+----+
+        ");
         Ok(())
     }
 

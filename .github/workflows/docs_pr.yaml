@@ -51,20 +51,7 @@ jobs:
         with:
           submodules: true
           fetch-depth: 1
-      - name: Setup Rust toolchain
-        uses: ./.github/actions/setup-rustup
-      - name: Setup uv
-        uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e  # v10.3.2
-      - name: Install doc dependencies
-        run: uv sync --package datafusion-docs
-      - name: Install Graphviz
-        run: |
-          set -x
-          sudo apt-get update
-          sudo apt-get install -y graphviz
-      - name: Install cargo-depgraph
-        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91  # v2.87.31
-        with:
-          tool: cargo-depgraph@1.6
+      - name: Setup docs builder
+        uses: ./.github/actions/setup-docs-builder
       - name: Build docs html and check for warnings
         run: ./ci/scripts/check_docs_html.sh # fails on errors

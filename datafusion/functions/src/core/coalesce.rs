@@ -6,6 +6,7 @@ use arrow::array::{BooleanArray, new_null_array};
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{and, is_not_null, is_null};
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{Result, exec_err, internal_err, plan_err};
 use datafusion_expr::binary::try_type_union_resolution;
 use datafusion_expr::conditional_expressions::CaseBuilder;
@@ -77,7 +78,14 @@ impl ScalarUDFImpl for CoalesceFunc {
             .find_or_first(|d| !d.is_null())
             .unwrap()
             .clone();
-        Ok(Field::new(self.name(), return_type, nullable).into())
+        // Propagate field metadata (e.g. Arrow extension types) from the
+        // arguments that can supply a value; see `coerced_fields_metadata`
+        // for the merge semantics.
+        let metadata =
+            coerced_fields_metadata(args.arg_fields.iter().map(|f| f.as_ref()))?;
+        Ok(metadata
+            .add_to_field(Field::new(self.name(), return_type, nullable))
+            .into())
     }
 
     fn simplify(

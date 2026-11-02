@@ -585,12 +585,21 @@ impl Dialect for MySqlDialect {
         ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
     }
 
+    fn int8_cast_dtype(&self) -> ast::DataType {
+        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
+    }
+
     fn timestamp_cast_dtype(
         &self,
-        _time_unit: &TimeUnit,
+        time_unit: &TimeUnit,
         _tz: &Option<Arc<str>>,
     ) -> ast::DataType {
-        ast::DataType::Datetime(None)
+        let precision = match time_unit {
+            TimeUnit::Second => None,
+            TimeUnit::Millisecond => Some(3),
+            TimeUnit::Microsecond | TimeUnit::Nanosecond => Some(6),
+        };
+        ast::DataType::Datetime(precision)
     }
 
     fn requires_derived_table_alias(&self) -> bool {
