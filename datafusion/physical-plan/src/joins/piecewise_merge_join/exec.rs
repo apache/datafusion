@@ -2,13 +2,14 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::array::Array;
+use arrow::array::{Array, new_empty_array};
 use arrow::{
     array::{ArrayRef, RecordBatch},
-    compute::{concat, concat_batches},
+    compute::concat,
 };
 use arrow_schema::{SchemaRef, SortOptions};
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{JoinSide, Result, internal_datafusion_err, internal_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::{
@@ -29,6 +30,7 @@ use std::sync::atomic::AtomicUsize;
 
 use crate::execution_plan::{EmissionType, boundedness_from_children};
 
+use crate::joins::logical_batch::LogicalBatch;
 use crate::joins::piecewise_merge_join::classic_join::{
     ClassicPWMJStream, PiecewiseMergeJoinStreamState,
 };
@@ -1001,32 +1003,48 @@ async fn build_buffered_data(
         })
         .await?;
 
-    let single_batch = concat_batches(&schema, batches.iter())?;
+    // Keep the buffered batches as they arrived, addressed as one logical batch,
+    // instead of copying every column of the buffered side into a single
+    // contiguous batch.
+    let batch = LogicalBatch::new(Arc::clone(&schema), batches)?;
 
-    // Evaluate physical expression on the buffered side.
-    let buffered_values = on_buffered
-        .evaluate(&single_batch)?
-        .into_array(single_batch.num_rows())?;
+    // Evaluate the join key on each buffered batch and concatenate just that
+    // single (sorted) key column: the merge needs the key as one contiguous,
+    // globally sorted array.
+    let key_arrays = batch
+        .batches()
+        .iter()
+        .map(|batch| on_buffered.evaluate(batch)?.into_array(batch.num_rows()))
+        .collect::<Result<Vec<_>>>()?;
+    let buffered_values = if key_arrays.is_empty() {
+        new_empty_array(&on_buffered.data_type(&schema)?)
+    } else {
+        concat(&key_arrays.iter().map(|a| a.as_ref()).collect::<Vec<_>>())?
+    };
 
-    // We add the single batch size + the memory of the join keys
-    // size of the size estimation
-    let size_estimation = get_record_batch_memory_size(&single_batch)
-        + buffered_values.get_array_memory_size();
+    // The batches were reserved as they were collected above, so charge only
+    // what the key column adds on top of them: nothing when it is a plain
+    // column of a single batch, which shares that batch's buffers.
+    let mut memory_counter = RecordBatchMemoryCounter::new();
+    for batch in batch.batches() {
+        memory_counter.count_batch(batch);
+    }
+    let size_estimation = memory_counter.count_array(buffered_values.as_ref());
     reservation.try_grow(size_estimation)?;
     metrics.build_mem_used.add(size_estimation);
 
-    let buffered_data = BufferedSideData::new(
-        single_batch,
-        buffered_values,
-        remaining_partitions,
-        reservation,
-    );
+    let buffered_data =
+        BufferedSideData::new(batch, buffered_values, remaining_partitions, reservation);
 
     Ok(buffered_data)
 }
 
 pub(super) struct BufferedSideData {
-    pub(super) batch: RecordBatch,
+    /// The buffered rows, kept as the batches they arrived in and addressed by
+    /// global row index, see [`LogicalBatch`].
+    batch: LogicalBatch,
+    /// The (globally sorted) join key, one contiguous array across every
+    /// buffered batch for the merge.
     values: ArrayRef,
     pub(super) remaining_partitions: AtomicUsize,
     /// The start of the matched non-null suffix, or `usize::MAX` before the
@@ -1047,7 +1065,7 @@ pub(super) struct BufferedSideData {
 
 impl BufferedSideData {
     pub(super) fn new(
-        batch: RecordBatch,
+        batch: LogicalBatch,
         values: ArrayRef,
         remaining_partitions: usize,
         reservation: MemoryReservation,
@@ -1061,7 +1079,7 @@ impl BufferedSideData {
         }
     }
 
-    pub(super) fn batch(&self) -> &RecordBatch {
+    pub(super) fn batch(&self) -> &LogicalBatch {
         &self.batch
     }
 

@@ -58,7 +58,19 @@ impl KeyRangeBitmap {
         max: &ScalarValue,
         distinct_keys: usize,
     ) -> Option<Self> {
-        if !ArrayMap::is_supported_type(array.data_type()) {
+        Self::try_new_from_arrays(std::slice::from_ref(array), min, max, distinct_keys)
+    }
+
+    /// Like [`Self::try_new`], over keys split across several `arrays` of one
+    /// type, such as the per-batch key arrays of a build side that was not
+    /// concatenated.
+    pub fn try_new_from_arrays(
+        arrays: &[ArrayRef],
+        min: &ScalarValue,
+        max: &ScalarValue,
+        distinct_keys: usize,
+    ) -> Option<Self> {
+        if !ArrayMap::is_supported_type(arrays.first()?.data_type()) {
             return None;
         }
         let offset = ArrayMap::key_to_u64(min)?;
@@ -76,7 +88,11 @@ impl KeyRangeBitmap {
 
         let shift = (0u32..63).find(|s| (span >> s) < buckets).unwrap_or(63);
 
-        let bits = bucket_bits(array, offset, shift, buckets);
+        let mut words = MutableBuffer::new_null(buckets as usize);
+        for array in arrays {
+            set_bucket_bits(array.as_ref(), offset, shift, buckets, &mut words);
+        }
+        let bits = BooleanBuffer::new(words.into(), 0, buckets as usize);
 
         // Every bucket set means nothing can be excluded.
         let reachable = ((span >> shift) + 1) as usize;
@@ -141,9 +157,15 @@ impl KeyRangeBitmap {
     }
 }
 
-/// One bit per bucket, set for each bucket holding a non-null key of `keys`.
-fn bucket_bits(keys: &dyn Array, offset: u64, shift: u32, buckets: u64) -> BooleanBuffer {
-    let mut words = MutableBuffer::new_null(buckets as usize);
+/// Sets the bit of each bucket holding a non-null key of `keys` in `words`,
+/// which holds one bit per bucket.
+fn set_bucket_bits(
+    keys: &dyn Array,
+    offset: u64,
+    shift: u32,
+    buckets: u64,
+    words: &mut MutableBuffer,
+) {
     downcast_integer_array!(
         keys => {
             let bytes = words.as_slice_mut();
@@ -159,7 +181,6 @@ fn bucket_bits(keys: &dyn Array, offset: u64, shift: u32, buckets: u64) -> Boole
         }
         _ => unreachable!("guarded by ArrayMap::is_supported_type"),
     );
-    BooleanBuffer::new(words.into(), 0, buckets as usize)
 }
 
 #[cfg(test)]

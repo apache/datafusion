@@ -5133,6 +5133,53 @@ pub(crate) mod tests {
         Ok(())
     }
 
+    // Full join where the BUILD (left) side is split across multiple record
+    // batches, so the build side is collected without concatenation. Exercises
+    // resolving global left-row indices to `(batch, row)` for matched rows and
+    // slicing unmatched-left ranges across batch boundaries.
+    #[rstest]
+    #[tokio::test]
+    async fn join_full_with_filter_multi_batch_left(
+        #[values(1, 2, 16)] batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = new_task_ctx(batch_size);
+        // Split the build (left) side into single-row batches.
+        let left = build_table(
+            ("a1", &vec![5, 9, 11]),
+            ("b1", &vec![5, 8, 8]),
+            ("c1", &vec![50, 90, 110]),
+            Some(1),
+            Vec::new(),
+        );
+        let right = build_right_table();
+
+        let filter = prepare_join_filter();
+        let (columns, batches, metrics) = multi_partitioned_join_collect(
+            left,
+            right,
+            &JoinType::Full,
+            Some(filter),
+            task_ctx,
+        )
+        .await?;
+        assert_eq!(columns, vec!["a1", "b1", "c1", "a2", "b2", "c2"]);
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r#"
+            +----+----+-----+----+----+-----+
+            | a1 | b1 | c1  | a2 | b2 | c2  |
+            +----+----+-----+----+----+-----+
+            |    |    |     | 10 | 10 | 100 |
+            |    |    |     | 12 | 10 | 40  |
+            | 11 | 8  | 110 |    |    |     |
+            | 5  | 5  | 50  | 2  | 2  | 80  |
+            | 9  | 8  | 90  |    |    |     |
+            +----+----+-----+----+----+-----+
+            "#));
+
+        assert_join_metrics!(metrics, 5);
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_left_semi_join_reports_final_emission() -> Result<()> {
         let left = build_left_table();
