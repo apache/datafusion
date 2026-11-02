@@ -1308,3 +1308,177 @@ physical_plan
 05)--------BoundedWindowAggExec: wdw=[sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING: Field { "sum(employees.salary) ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING], mode=[Sorted]
 06)----------SortExec: TopK(fetch=6), expr=[empno@0 ASC NULLS LAST], preserve_partitioning=[false]
 07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[empno, salary], file_type=csv, has_header=true
+
+# A `SortPreservingMergeExec` emits its input's first rows in order, so its fetch
+# bounds every partition below it as well -- the same reading `limit_pushdown` has
+# of `LimitBehavior::Merge`, where the limit stays above and each child gets a copy.
+# `apply_limit` took the traversal state, which is right for a `SortExec` because a
+# sort reorders its input, but it threw that bound away at a merge: a second window
+# below the merge kept a full sort although the merge's fetch bounded it.
+#
+# A `PARTITION BY` window is what puts a merge in the middle, so the inner window
+# here partitions and the outer one does not; without it there is no merge and the
+# shape degenerates into the stacked-window case above. Three other properties are
+# load-bearing: the outer SELECT must read `s1`, or projection pushdown drops the
+# inner window entirely; both levels must order by the same two columns, or
+# `EnforceSorting` puts another per-partition SortExec between the merge and the
+# inner window and the chain the merge starts is reset there, never reaching the
+# inner window's sort; and the outer frame must end after the current row, or it
+# adds no lookahead, the merge's fetch is just the limit, and the test no longer
+# tells `5 + 1` apart from `5`.
+#
+# The fetch the merge is given is `5 + 1`, and that 6 is what starts the next chain,
+# so the sort under the inner window gets `6 + 1`.
+
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query TIII
+SELECT depname, empno, s1,
+       sum(s1) OVER (ORDER BY depname, empno ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS s2
+FROM (
+  SELECT depname, empno,
+         sum(salary) OVER (PARTITION BY depname ORDER BY empno
+                           ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS s1
+  FROM employees
+)
+ORDER BY depname, empno LIMIT 5;
+----
+a 102 5141431160 11022181173
+a 363 5880750013 10041486965
+a 829 4160736952 5060807172
+a 2555 900070220 5372396992
+a 2809 4472326772 8621826796
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query TIII
+SELECT depname, empno, s1,
+       sum(s1) OVER (ORDER BY depname, empno ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS s2
+FROM (
+  SELECT depname, empno,
+         sum(salary) OVER (PARTITION BY depname ORDER BY empno
+                           ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS s1
+  FROM employees
+)
+ORDER BY depname, empno LIMIT 5;
+----
+a 102 5141431160 11022181173
+a 363 5880750013 10041486965
+a 829 4160736952 5060807172
+a 2555 900070220 5372396992
+a 2809 4472326772 8621826796
+
+query TT
+EXPLAIN
+SELECT depname, empno, s1,
+       sum(s1) OVER (ORDER BY depname, empno ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS s2
+FROM (
+  SELECT depname, empno,
+         sum(salary) OVER (PARTITION BY depname ORDER BY empno
+                           ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS s1
+  FROM employees
+)
+ORDER BY depname, empno LIMIT 5;
+----
+logical_plan
+01)Sort: employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST, fetch=5
+02)--Projection: employees.depname, employees.empno, s1, sum(s1) ORDER BY [employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING AS s2
+03)----WindowAggr: windowExpr=[[sum(s1) ORDER BY [employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING]]
+04)------Projection: employees.depname, employees.empno, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING AS s1
+05)--------WindowAggr: windowExpr=[[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING]]
+06)----------TableScan: employees projection=[depname, empno, salary]
+physical_plan
+01)ProjectionExec: expr=[depname@0 as depname, empno@1 as empno, s1@2 as s1, sum(s1) ORDER BY [employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING@3 as s2]
+02)--GlobalLimitExec: skip=0, fetch=5
+03)----BoundedWindowAggExec: wdw=[sum(s1) ORDER BY [employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING: Field { "sum(s1) ORDER BY [employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING], mode=[Sorted]
+04)------SortPreservingMergeExec: [depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], fetch=6
+05)--------ProjectionExec: expr=[depname@0 as depname, empno@1 as empno, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING@3 as s1]
+06)----------BoundedWindowAggExec: wdw=[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING: Field { "sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING], mode=[Sorted]
+07)------------SortExec: TopK(fetch=7), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST]
+08)--------------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=1, maintains_sort_order=true
+09)----------------SortExec: TopK(fetch=7), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
+10)------------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno, salary], file_type=csv, has_header=true
+
+# The same shape with the limit moved inside the subquery, so nothing above the
+# outer window hands the walk a limit at all. The merge's *own* fetch is still a
+# bound on everything below it, and starting the next chain from it is the only
+# thing that gets a fetch to the sort under the inner window: here the sort gets
+# `5 + 1` from a limit the rule never had in hand.
+#
+# This is not the previous case written twice. Replacing
+# `fetch.or_else(|| node.fetch())` with `fetch` leaves the previous case green and
+# turns this one red, because there `fetch` is `Some(6)` and here it is `None`.
+# The results differ too: the last row's `s2` has no following row to read, since
+# the `LIMIT 5` is applied before the outer window rather than after it.
+
+statement ok
+set datafusion.optimizer.enable_window_limits = false;
+
+query TIII
+SELECT depname, empno, s1,
+       sum(s1) OVER (ORDER BY depname, empno ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS s2
+FROM (
+  SELECT depname, empno,
+         sum(salary) OVER (PARTITION BY depname ORDER BY empno
+                           ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS s1
+  FROM employees
+  ORDER BY depname, empno LIMIT 5
+);
+----
+a 102 5141431160 11022181173
+a 363 5880750013 10041486965
+a 829 4160736952 5060807172
+a 2555 900070220 5372396992
+a 2809 4472326772 4472326772
+
+statement ok
+set datafusion.optimizer.enable_window_limits = true;
+
+query TIII
+SELECT depname, empno, s1,
+       sum(s1) OVER (ORDER BY depname, empno ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS s2
+FROM (
+  SELECT depname, empno,
+         sum(salary) OVER (PARTITION BY depname ORDER BY empno
+                           ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS s1
+  FROM employees
+  ORDER BY depname, empno LIMIT 5
+);
+----
+a 102 5141431160 11022181173
+a 363 5880750013 10041486965
+a 829 4160736952 5060807172
+a 2555 900070220 5372396992
+a 2809 4472326772 4472326772
+
+query TT
+EXPLAIN
+SELECT depname, empno, s1,
+       sum(s1) OVER (ORDER BY depname, empno ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS s2
+FROM (
+  SELECT depname, empno,
+         sum(salary) OVER (PARTITION BY depname ORDER BY empno
+                           ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING) AS s1
+  FROM employees
+  ORDER BY depname, empno LIMIT 5
+);
+----
+logical_plan
+01)Projection: employees.depname, employees.empno, s1, sum(s1) ORDER BY [employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING AS s2
+02)--WindowAggr: windowExpr=[[sum(s1) ORDER BY [employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING]]
+03)----Sort: employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST, fetch=5
+04)------Projection: employees.depname, employees.empno, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING AS s1
+05)--------WindowAggr: windowExpr=[[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING]]
+06)----------TableScan: employees projection=[depname, empno, salary]
+physical_plan
+01)ProjectionExec: expr=[depname@0 as depname, empno@1 as empno, s1@2 as s1, sum(s1) ORDER BY [employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING@3 as s2]
+02)--BoundedWindowAggExec: wdw=[sum(s1) ORDER BY [employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING: Field { "sum(s1) ORDER BY [employees.depname ASC NULLS LAST, employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING], mode=[Sorted]
+03)----SortPreservingMergeExec: [depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], fetch=5
+04)------ProjectionExec: expr=[depname@0 as depname, empno@1 as empno, sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING@3 as s1]
+05)--------BoundedWindowAggExec: wdw=[sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING: Field { "sum(employees.salary) PARTITION BY [employees.depname] ORDER BY [employees.empno ASC NULLS LAST] ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING": nullable UInt64 }, frame: ROWS BETWEEN CURRENT ROW AND 1 FOLLOWING], mode=[Sorted]
+06)----------SortExec: TopK(fetch=6), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true], sort_prefix=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST]
+07)------------RepartitionExec: partitioning=Hash([depname@0], 4), input_partitions=1, maintains_sort_order=true
+08)--------------SortExec: TopK(fetch=6), expr=[depname@0 ASC NULLS LAST, empno@1 ASC NULLS LAST], preserve_partitioning=[true]
+09)----------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/testing/data/csv/aggregate_test_100_with_dates.csv]]}, projection=[depname, empno, salary], file_type=csv, has_header=true

@@ -166,22 +166,23 @@ fn apply_limit(
     let TraverseState {
         limit, lookahead, ..
     } = std::mem::take(ctx);
-    let Some(fetch) = limit else {
-        return Some(Transformed::no(Arc::clone(node)));
-    };
     // A fetch that overflows can't drop any rows, so skip the pushdown rather
     // than turning the sort into a TopK that holds every row and can't spill.
-    let Some(fetch) = fetch.checked_add(lookahead) else {
+    let fetch = limit
+        .and_then(|limit| limit.checked_add(lookahead))
+        .map(|fetch| node.fetch().map_or(fetch, |existing| existing.min(fetch)));
+    // A `SortPreservingMergeExec` emits its input's first rows in order, so its
+    // fetch bounds every partition below it too: start the next chain from it.
+    // This sits before the early return below on purpose -- with no limit in hand
+    // the merge is left alone, but its own fetch is still a bound to carry down.
+    if node.is::<SortPreservingMergeExec>() {
+        ctx.reset_limit(fetch.or_else(|| node.fetch()));
+    }
+    let Some(fetch) = fetch else {
         return Some(Transformed::no(Arc::clone(node)));
     };
-    let fetch = match node.fetch() {
-        None => fetch,
-        Some(existing) => existing.min(fetch),
-    };
-    // Carry on past this sort rather than stopping. `ctx` is back to its default
-    // above, which is exactly what it held at the start of the traversal, so
-    // walking the subtree below is equivalent to running the rule on it afresh
-    // -- and that subtree may hold another independent limit over another window.
+    // Carry on past this sort rather than stopping: the subtree below may hold
+    // another independent limit over another window.
     Some(Transformed::yes(node.with_fetch(Some(fetch)).unwrap()))
 }
 
