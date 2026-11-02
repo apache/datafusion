@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`PruningPredicate`] to apply filter [`Expr`] to prune "containers"
 //! based on statistics (e.g. Parquet Row Groups)
@@ -1362,6 +1349,16 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
         }
         _ => to_type,
     };
+    // Casting a timestamp to a time-of-day wraps at midnight and does not
+    // preserve ordering across day boundaries. Casting timestamp min/max
+    // statistics could therefore produce invalid bounds and prune matches.
+    if matches!(from_type, DataType::Timestamp(_, _))
+        && matches!(to_type, DataType::Time32(_) | DataType::Time64(_))
+    {
+        return plan_err!(
+            "Try Cast/Cast with from type {from_type} to type {to_type} is not supported"
+        );
+    }
     // If both types are strings or both are not strings (number, timestamp, etc)
     // then we can compare them.
     // PruningPredicate does not support casting of strings to numbers and such.
@@ -4982,6 +4979,56 @@ mod tests {
         assert_eq!(predicate_expr.to_string(), expected_expr);
 
         Ok(())
+    }
+
+    #[test]
+    fn row_group_predicate_cast_timestamp_to_time() {
+        // A timezone shifts where the day boundary falls but does not remove
+        // it, so a timezone-aware timestamp is just as unsafe to prune on.
+        for timestamp_type in [
+            DataType::Timestamp(TimeUnit::Second, None),
+            DataType::Timestamp(TimeUnit::Second, Some("+05:00".into())),
+            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+        ] {
+            assert_timestamp_to_time_cast_is_not_prunable(timestamp_type);
+        }
+    }
+
+    /// Asserts that no comparison of `CAST`/`TRY_CAST` from `timestamp_type` to
+    /// a time-of-day produces a pruning expression.
+    fn assert_timestamp_to_time_cast_is_not_prunable(timestamp_type: DataType) {
+        let schema = Schema::new(vec![Field::new("ts", timestamp_type, false)]);
+
+        for (time_type, literal) in [
+            (
+                DataType::Time32(TimeUnit::Second),
+                ScalarValue::Time32Second(Some(0)),
+            ),
+            (
+                DataType::Time32(TimeUnit::Millisecond),
+                ScalarValue::Time32Millisecond(Some(0)),
+            ),
+            (
+                DataType::Time64(TimeUnit::Microsecond),
+                ScalarValue::Time64Microsecond(Some(0)),
+            ),
+            (
+                DataType::Time64(TimeUnit::Nanosecond),
+                ScalarValue::Time64Nanosecond(Some(0)),
+            ),
+        ] {
+            for expr in [
+                cast(col("ts"), time_type.clone()).eq(lit(literal.clone())),
+                try_cast(col("ts"), time_type).eq(lit(literal)),
+            ] {
+                let predicate_expr = test_build_predicate_expression(
+                    &expr,
+                    &schema,
+                    &mut RequiredColumns::new(),
+                );
+                assert_eq!(predicate_expr.to_string(), "true");
+            }
+        }
     }
 
     #[test]

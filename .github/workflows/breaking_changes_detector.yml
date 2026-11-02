@@ -86,13 +86,13 @@ jobs:
       # preinstalled on ubuntu-latest runners.
       - name: Install protoc
         if: steps.changed_crates.outputs.packages != ''
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2.87.29
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91  # v2.87.31
         with:
           tool: protoc@3.21.12
 
       - name: Install cargo-semver-checks
         if: steps.changed_crates.outputs.packages != ''
-        uses: taiki-e/install-action@8cca0918f8471c33515202b73f56ab27f2bed283  # v2.87.29
+        uses: taiki-e/install-action@1e29709c0ec63babbe8f266397a465f29a825f91  # v2.87.31
         with:
           tool: cargo-semver-checks
 

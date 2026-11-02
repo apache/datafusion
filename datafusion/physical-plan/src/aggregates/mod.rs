@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Aggregate functionality
 //!
@@ -1479,22 +1466,25 @@ impl AggregateExec {
             eq_properties.add_constants(new_constants)?;
         }
 
-        // Group by expression will be a distinct value after the aggregation.
-        // Add it into the constraint set.
-        let mut constraints = eq_properties.constraints().to_vec();
-        let new_constraint = Constraint::Unique(
-            group_expr_mapping
-                .iter()
-                .flat_map(|(_, target_cols)| {
-                    target_cols.iter().filter_map(|(expr, _)| {
-                        expr.downcast_ref::<Column>().map(|c| c.index())
+        // Only final output is unique on the group keys. Partial output can repeat a
+        // group within a partition (early emission, skipped partial aggregation) and
+        // across partitions once they are merged.
+        if mode.output_mode() == AggregateOutputMode::Final {
+            let mut constraints = eq_properties.constraints().to_vec();
+            let new_constraint = Constraint::Unique(
+                group_expr_mapping
+                    .iter()
+                    .flat_map(|(_, target_cols)| {
+                        target_cols.iter().filter_map(|(expr, _)| {
+                            expr.downcast_ref::<Column>().map(|c| c.index())
+                        })
                     })
-                })
-                .collect(),
-        );
-        constraints.push(new_constraint);
-        eq_properties =
-            eq_properties.with_constraints(Constraints::new_unverified(constraints));
+                    .collect(),
+            );
+            constraints.push(new_constraint);
+            eq_properties =
+                eq_properties.with_constraints(Constraints::new_unverified(constraints));
+        }
 
         // Get output partitioning:
         let input_partitioning = input.output_partitioning().clone();
@@ -5403,6 +5393,19 @@ mod tests {
         assert_eq!(
             aggregate.required_input_ordering(),
             vec![Some(OrderingRequirements::new_soft(input_ordering.into()))]
+        );
+        let expected_constraints = match mode.output_mode() {
+            AggregateOutputMode::Final => {
+                Constraints::new_unverified(vec![Constraint::Unique(vec![0, 1])])
+            }
+            AggregateOutputMode::Partial => Constraints::default(),
+        };
+        assert_eq!(
+            aggregate
+                .properties()
+                .equivalence_properties()
+                .constraints(),
+            &expected_constraints
         );
         Ok(())
     }

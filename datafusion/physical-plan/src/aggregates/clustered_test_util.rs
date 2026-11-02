@@ -1,26 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Test helpers for the clustered aggregate streams under memory pressure.
 
 use std::sync::Arc;
 
 use arrow::array::{ArrayRef, Int64Array};
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::test_util::batches_to_string;
 use datafusion_common::{DataFusionError, Result};
@@ -31,6 +18,7 @@ use datafusion_execution::memory_pool::{
     GreedyMemoryPool, MemoryPool, UnboundedMemoryPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+use datafusion_expr::AggregateUDF;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_physical_expr::PhysicalSortExpr;
 use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -46,6 +34,17 @@ use crate::test::TestMemoryExec;
 /// groups complete within each batch under full group clustering.
 pub(super) fn full_batches() -> Vec<Vec<Vec<i64>>> {
     vec![vec![(0..=256).collect()], vec![(256..=512).collect()]]
+}
+
+/// Key columns of three batches of 8192 distinct keys sorted on `k`, where each
+/// batch shares its first key with the previous one. Aggregating a batch grows
+/// the table for about 8192 groups, while the active group needs a few KB.
+pub(super) fn distinct_key_batches() -> Vec<Vec<Vec<i64>>> {
+    vec![
+        vec![(0..8193).collect()],
+        vec![(8192..16385).collect()],
+        vec![(16384..24576).collect()],
+    ]
 }
 
 /// Key column of two batches that hold the same single key, so no group
@@ -66,6 +65,30 @@ pub(super) fn sum_over_sorted_input(
     keys: &[&str],
     batches: Vec<Vec<Vec<i64>>>,
 ) -> Result<AggregateExec> {
+    aggregate_over_sorted_input(mode, keys, batches, sum_udaf())
+}
+
+/// Like [`sum_over_sorted_input`], but aggregates `v` with `udaf`. For `Final`
+/// mode, the state of `udaf` must be a single `Int64` column.
+pub(super) fn aggregate_over_sorted_input(
+    mode: AggregateMode,
+    keys: &[&str],
+    batches: Vec<Vec<Vec<i64>>>,
+    udaf: Arc<AggregateUDF>,
+) -> Result<AggregateExec> {
+    aggregate_expr_over_sorted_input(mode, keys, batches, udaf, |builder, _| Ok(builder))
+}
+
+/// Like [`aggregate_over_sorted_input`], but `configure` can change the
+/// aggregate expression, given the input schema. For example, it can add
+/// `ORDER BY v`.
+pub(super) fn aggregate_expr_over_sorted_input(
+    mode: AggregateMode,
+    keys: &[&str],
+    batches: Vec<Vec<Vec<i64>>>,
+    udaf: Arc<AggregateUDF>,
+    configure: impl FnOnce(AggregateExprBuilder, &SchemaRef) -> Result<AggregateExprBuilder>,
+) -> Result<AggregateExec> {
     let fields = keys
         .iter()
         .chain(&["v"])
@@ -78,10 +101,13 @@ pub(super) fn sum_over_sorted_input(
             .collect::<Result<_>>()?,
     );
     let aggregate_exprs = vec![Arc::new(
-        AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
-            .schema(Arc::clone(&schema))
-            .alias("sum")
-            .build()?,
+        configure(
+            AggregateExprBuilder::new(Arc::clone(&udaf), vec![col("v", &schema)?]),
+            &schema,
+        )?
+        .schema(Arc::clone(&schema))
+        .alias(udaf.name())
+        .build()?,
     )];
 
     let (input_schema, group_by) = if mode == AggregateMode::Final {
@@ -160,6 +186,16 @@ async fn collect_with_held_memory(
     Ok((output, held))
 }
 
+/// Runs `plan` under `limit`.
+pub(super) async fn collect_under_limit(
+    plan: &AggregateExec,
+    limit: usize,
+) -> Result<Vec<RecordBatch>> {
+    let (output, _) =
+        collect_with_held_memory(plan, Arc::new(GreedyMemoryPool::new(limit))).await?;
+    Ok(output)
+}
+
 /// Returns the memory `plan` holds when handing off output without a limit.
 pub(super) async fn held_memory(plan: &AggregateExec) -> Result<usize> {
     let (_, held) =
@@ -177,6 +213,20 @@ pub(super) async fn assert_completed_groups_emitted_under_limit(
         collect_with_held_memory(plan, Arc::new(UnboundedMemoryPool::default())).await?;
     let (actual, _) =
         collect_with_held_memory(plan, Arc::new(GreedyMemoryPool::new(held))).await?;
+    assert_eq!(batches_to_string(&actual), batches_to_string(&expected));
+    Ok(())
+}
+
+/// Runs `plan` without a memory limit, then under `limit`. The result must not
+/// change.
+pub(super) async fn assert_output_unchanged_under_limit(
+    plan: &AggregateExec,
+    limit: usize,
+) -> Result<()> {
+    let (expected, _) =
+        collect_with_held_memory(plan, Arc::new(UnboundedMemoryPool::default())).await?;
+    let (actual, _) =
+        collect_with_held_memory(plan, Arc::new(GreedyMemoryPool::new(limit))).await?;
     assert_eq!(batches_to_string(&actual), batches_to_string(&expected));
     Ok(())
 }

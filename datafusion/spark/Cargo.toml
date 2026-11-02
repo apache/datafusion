@@ -109,4 +109,8 @@ name = "floor"
 
 [[bench]]
 harness = false
+name = "from_utc_timestamp"
+
+[[bench]]
+harness = false
 name = "stack"

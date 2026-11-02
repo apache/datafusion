@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //!  [`TreeNode`] based visiting and rewriting for [`LogicalPlan`]s
 //!
@@ -409,7 +396,7 @@ impl TreeNode for LogicalPlan {
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
             | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
-            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            | LogicalPlan::Show(_) => Transformed::no(self),
         })
     }
 }
@@ -546,7 +533,7 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => Ok(TreeNodeRecursion::Continue),
+            | LogicalPlan::Show(_) => Ok(TreeNodeRecursion::Continue),
         }
     }
 
@@ -557,6 +544,9 @@ impl LogicalPlan {
     /// # Notes
     /// * Similar to [`TreeNode::map_children`] but for this node's expressions.
     /// * Visits only the top level expressions (Does not recurse into each expression)
+    /// * A `Projection` whose expressions were rewritten gets its schema derived
+    ///   again from the new expressions, so the new expressions must resolve
+    ///   against the current input.
     pub fn map_expressions<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
         self,
         mut f: F,
@@ -566,13 +556,25 @@ impl LogicalPlan {
                 expr,
                 input,
                 schema,
-            }) => expr.map_elements(f)?.update_data(|expr| {
-                LogicalPlan::Projection(Projection {
-                    expr,
-                    input,
-                    schema,
-                })
-            }),
+            }) => {
+                let expr = expr.map_elements(f)?;
+                if expr.transformed {
+                    // A projection's output fields are derived from its
+                    // expressions, so rewritten expressions need a freshly
+                    // derived schema.
+                    expr.map_data(|expr| {
+                        Projection::try_new(expr, input).map(LogicalPlan::Projection)
+                    })?
+                } else {
+                    expr.update_data(|expr| {
+                        LogicalPlan::Projection(Projection {
+                            expr,
+                            input,
+                            schema,
+                        })
+                    })
+                }
+            }
             LogicalPlan::Values(Values { schema, values }) => values
                 .map_elements(f)?
                 .update_data(|values| LogicalPlan::Values(Values { schema, values })),
@@ -834,7 +836,7 @@ impl LogicalPlan {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => Transformed::no(self),
+            | LogicalPlan::Show(_) => Transformed::no(self),
         })
     }
 
