@@ -1769,6 +1769,25 @@ Code that reads <code class="docutils literal notranslate"><span class="pre">Fil
 reordered should call <code class="docutils literal notranslate"><span class="pre">FileScanConfig::preserves_file_order()</span></code> instead, which
 also accounts for the output ordering.</p>
 </section>
+<section id="logicalplan-map-expressions-re-derives-a-projection-s-schema">
+<h3><code class="docutils literal notranslate"><span class="pre">LogicalPlan::map_expressions</span></code> re-derives a <code class="docutils literal notranslate"><span class="pre">Projection</span></code>’s schema<a class="headerlink" href="#logicalplan-map-expressions-re-derives-a-projection-s-schema" title="Link to this heading">#</a></h3>
+<p>When <code class="docutils literal notranslate"><span class="pre">LogicalPlan::map_expressions</span></code> rewrites any expression of a <code class="docutils literal notranslate"><span class="pre">Projection</span></code>,
+it now derives the output schema again from the new expressions instead of
+keeping the old one. See <a class="reference external" href="https://github.com/apache/datafusion/pull/24281">#24281</a>.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Renaming rewrites, such as <code class="docutils literal notranslate"><span class="pre">unalias</span></code>, now change the returned plan’s
+<code class="docutils literal notranslate"><span class="pre">schema()</span></code>.</p></li>
+<li><p>Rewrites whose new expressions reference columns of an input that is only
+installed afterwards (for example with <code class="docutils literal notranslate"><span class="pre">with_new_exprs</span></code>) now fail with a
+schema error on a <code class="docutils literal notranslate"><span class="pre">Projection</span></code>.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>For the second case, rewrite the <code class="docutils literal notranslate"><span class="pre">Projection</span></code>’s <code class="docutils literal notranslate"><span class="pre">expr</span></code> directly instead of
+through <code class="docutils literal notranslate"><span class="pre">map_expressions</span></code>, and build the projection once the new input is in
+place, with <code class="docutils literal notranslate"><span class="pre">Projection::try_new</span></code>, or with <code class="docutils literal notranslate"><span class="pre">Projection::try_new_with_schema</span></code> to
+keep a schema you already have.</p>
+</section>
 <section id="sanitycheckplan-is-deprecated-and-no-longer-in-the-default-physical-optimizer-rules">
 <h3><code class="docutils literal notranslate"><span class="pre">SanityCheckPlan</span></code> is deprecated and no longer in the default physical optimizer rules<a class="headerlink" href="#sanitycheckplan-is-deprecated-and-no-longer-in-the-default-physical-optimizer-rules" title="Link to this heading">#</a></h3>
 <p>The physical planner now runs the <code class="docutils literal notranslate"><span class="pre">SanityCheckPlan</span></code> check itself on the final
@@ -1922,6 +1941,7 @@ until the method is removed, as callers of the deprecated method still use them.
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logicalplan-describetable-is-replaced-by-logicalplan-show"><code class="docutils literal notranslate"><span class="pre">LogicalPlan::DescribeTable</span></code> is replaced by <code class="docutils literal notranslate"><span class="pre">LogicalPlan::Show</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#extension-physicalexprs-can-decode-by-name-instead-of-through-a-codec">Extension <code class="docutils literal notranslate"><span class="pre">PhysicalExpr</span></code>s can decode by name instead of through a codec</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#order-preservation-hooks-for-limit-pushdown-are-deprecated">Order-preservation hooks for limit pushdown are deprecated</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logicalplan-map-expressions-re-derives-a-projection-s-schema"><code class="docutils literal notranslate"><span class="pre">LogicalPlan::map_expressions</span></code> re-derives a <code class="docutils literal notranslate"><span class="pre">Projection</span></code>’s schema</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sanitycheckplan-is-deprecated-and-no-longer-in-the-default-physical-optimizer-rules"><code class="docutils literal notranslate"><span class="pre">SanityCheckPlan</span></code> is deprecated and no longer in the default physical optimizer rules</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-is-nullable-is-deprecated"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_nullable</span></code> is deprecated</a></li>
 </ul>
