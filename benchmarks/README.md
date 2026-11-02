@@ -127,7 +127,7 @@ The benchmark runs with `prefer_hash_join == true` by default, which enforces HA
 To run TPCH benchmarks with join other than HASH:
 
 ```shell
-PREFER_HASH_JOIN=false ./bench.sh run tpch
+DATAFUSION_OPTIMIZER_PREFER_HASH_JOIN=false ./bench.sh run tpch
 ```
 
 ### Configure with environment variables

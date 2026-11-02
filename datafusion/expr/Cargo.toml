@@ -76,5 +76,9 @@ env_logger = { workspace = true }
 insta = { workspace = true }
 
 [[bench]]
+name = "find_valid_equijoin_key_pair"
+harness = false
+
+[[bench]]
 name = "normalize_columns"
 harness = false

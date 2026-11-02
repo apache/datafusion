@@ -813,6 +813,35 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tpch_init_preserves_session_settings() {
+        use crate::sql_benchmark::QueryDirective;
+        use datafusion::prelude::SessionConfig;
+
+        let mut config = SessionConfig::new();
+        config.options_mut().optimizer.prefer_hash_join = false;
+        config.options_mut().execution.hash_join_buffering_capacity = 4096;
+        let ctx = SessionContext::new_with_config(config);
+        let directory = default_sql_benchmark_directory();
+        // Exercise the suite's real init SQL without loading the TPC-H dataset.
+        for entry in fs::read_dir(directory.join("tpch/benchmarks")).unwrap() {
+            let benchmark = SqlBenchmark::new(&ctx, entry.unwrap().path(), &directory)
+                .await
+                .unwrap();
+            if let Some(queries) = benchmark.queries().get(&QueryDirective::Init) {
+                for query in queries {
+                    ctx.sql(query).await.unwrap().collect().await.unwrap();
+                }
+            }
+        }
+        let config = ctx.copied_config();
+        assert!(!config.options().optimizer.prefer_hash_join);
+        assert_eq!(
+            config.options().execution.hash_join_buffering_capacity,
+            4096
+        );
+    }
+
+    #[tokio::test]
     async fn sql_memory_limit_keeps_the_peak_recorder() {
         // The harness installs a recorder for its own limit; the SQL limit
         // replaces that pool, and the recorder must follow it.
