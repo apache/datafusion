@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use arrow::datatypes::DataType;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
@@ -109,16 +110,48 @@ impl CountRollup {
 
 /// Check whether all aggregate exprs are eligible for the single-distinct-to-group-by rewrite.
 ///
-/// When `prefer_memory` is true, the rewrite is skipped to reduce peak memory usage
-/// at the cost of runtime (the engine falls back to native aggregation rather than
-/// materializing the two-phase `(group, distinct value)` intermediate set).
+/// When `prefer_memory` is true, the rewrite is skipped only for `GROUP BY` queries
+/// on fixed-width primitive types, where it reliably reduces peak memory without
+/// regressing throughput. Variable-length types (strings, binary) and un-grouped
+/// aggregates always continue with the 2-phase rewrite.
 /// Aggregates with [`DistinctHandling::Unsupported`] (e.g. `approx_median`) cannot
 /// run natively with `DISTINCT` and are always rewritten.
+
+/// Returns `true` for fixed-width primitive types where single-phase distinct
+/// accumulation avoids heap allocation churn.
+fn is_fixed_width_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Boolean
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(_, _)
+            | DataType::Duration(_)
+            | DataType::Interval(_)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+    )
+}
+
 fn is_single_distinct_agg(
     aggr_expr: &[Expr],
     input_schema: &DFSchema,
     count_rollup: Option<&CountRollup>,
     prefer_memory: bool,
+    has_group_by: bool,
 ) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
@@ -171,11 +204,25 @@ fn is_single_distinct_agg(
         return Ok(true);
     }
 
-    // When prefer_memory is set, skip the rewrite to keep peak memory lower at
-    // the cost of throughput. The native GroupsAccumulator path avoids
-    // materialising the inner (group, distinct-value) grouping state.
-    if prefer_memory {
-        return Ok(false);
+    // When prefer_memory is set, skip the rewrite only when it actually helps:
+    //   - The query has a GROUP BY. Without it, the 2-phase rewrite is the only
+    //     way to parallelize un-grouped distinct work across threads; disabling it
+    //     forces everything onto a single partition (1.6x–3.4x slowdown).
+    //   - The distinct argument is a fixed-width primitive type. For variable-length
+    //     types (Utf8, Binary, …) single-phase accumulators suffer heavy per-value
+    //     heap allocation churn that increases both memory and latency.
+    if prefer_memory && has_group_by {
+        // Resolve the data type of each distinct argument.
+        let all_fixed_width = distinct_aggs.iter().all(|(_, args)| {
+            args.iter().all(|arg| {
+                arg.get_type(input_schema)
+                    .map(|dt| is_fixed_width_type(&dt))
+                    .unwrap_or(false)
+            })
+        });
+        if all_fixed_width {
+            return Ok(false);
+        }
     }
 
     if has_count_rollup && !rewrite_pays_for_count(&distinct_aggs, input_schema)? {
@@ -260,6 +307,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 input.schema(),
                 count_rollup.as_ref(),
                 prefer_memory,
+                !group_expr.is_empty(),
             )? && !contains_grouping_set(&group_expr) =>
             {
                 let group_size = group_expr.len();
@@ -1474,6 +1522,58 @@ mod tests {
             @r"
         Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b)]] [a:UInt32, count(DISTINCT test.b):Int64]
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    // prefer_memory=true must NOT skip the rewrite when there is no GROUP BY:
+    // without the 2-phase path DataFusion cannot parallelize un-grouped distinct
+    // work and the whole aggregation is forced onto a single thread.
+    fn single_distinct_aggregation_prefer_memory_true_rewrites_when_no_group_by()
+    -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // No GROUP BY: only a bare count(DISTINCT b).
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_prefer_memory(true);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Projection: count(alias1) AS count(DISTINCT test.b) [count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
+            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[]] [alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    // prefer_memory=true must NOT skip the rewrite for Utf8 columns.
+    // Single-phase distinct on strings causes heavy per-value heap allocation churn
+    // and actually increases peak memory compared to the 2-phase rewrite.
+    fn single_distinct_aggregation_prefer_memory_true_rewrites_for_utf8()
+    -> Result<()> {
+        // test_table_scan_utf8_b() has column `b` as Utf8.
+        let table_scan = test_table_scan_utf8_b()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_prefer_memory(true);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:Utf8]
+              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
         "
         )
     }
