@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use super::ProjectionMapping;
-use crate::expressions::Literal;
+use crate::expressions::{Column, Literal};
 use crate::physical_expr::add_offset_to_expr;
 use crate::projection::ProjectionTargets;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
@@ -17,7 +17,9 @@ use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequire
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Result, ScalarValue};
 use datafusion_expr::sort_properties::SortProperties;
-use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use datafusion_physical_expr_common::physical_expr::{
+    format_physical_expr_list, is_volatile,
+};
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -172,6 +174,14 @@ pub struct EquivalenceClass {
 }
 
 impl EquivalenceClass {
+    /// Keeps what still holds on a join side whose unmatched rows are padded
+    /// with NULLs: padded columns stay equal to each other, but constants and
+    /// computed members do not (`coalesce(a, 0)` is 0 where `a` is NULL).
+    fn null_pad(&mut self) {
+        self.constant = None;
+        self.exprs.retain(|expr| expr.is::<Column>());
+    }
+
     // Create a new equivalence class from a pre-existing collection.
     pub fn new(exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>) -> Self {
         let mut class = Self::default();
@@ -740,6 +750,7 @@ impl EquivalenceGroup {
         let mut new_constants = vec![];
         let mut new_classes =
             IndexMap::<_, EquivalenceClass>::with_capacity(mapping.len());
+        let mut augmented = None;
         for (source, targets) in mapping.iter() {
             // We need to find equivalent projected expressions. For example,
             // consider a table with columns `[a, b, c]` with `a` == `b`, and
@@ -750,6 +761,15 @@ impl EquivalenceGroup {
             let cls = new_classes.entry(normalized_expr).or_default();
             for (target, _) in targets.iter() {
                 cls.push(Arc::clone(target));
+            }
+            // Retain deterministic expressions as equalities so orderings derived
+            // through strict functions can be inferred after a merge clears orderings.
+            if !source.children().is_empty() && !is_volatile(source) {
+                let augmented = augmented
+                    .get_or_insert_with(|| self.augment_projection_mapping(mapping));
+                if let Some(projected) = Self::project_expr_indirect(augmented, source) {
+                    cls.push(projected);
+                }
             }
             // Save new constants arising from the projection:
             if let Some(across) = self.is_expr_constant(source) {
@@ -837,10 +857,10 @@ impl EquivalenceGroup {
                         .cloned()
                         .map(|mut cls| {
                             // Rows without a match on the left side are
-                            // padded with NULLs, so its constants no
-                            // longer hold.
+                            // padded with NULLs, so its constants and computed
+                            // equalities no longer hold.
                             if matches!(join_type, JoinType::Right | JoinType::Full) {
-                                cls.constant = None;
+                                cls.null_pad();
                             }
                             cls
                         })
@@ -850,13 +870,13 @@ impl EquivalenceGroup {
                                 .map(|cls| {
                                     let mut cls = cls.try_with_offset(left_size as _)?;
                                     // Rows without a match on the right side are
-                                    // padded with NULLs, so its constants no
-                                    // longer hold.
+                                    // padded with NULLs, so its constants and computed
+                                    // equalities no longer hold.
                                     if matches!(
                                         join_type,
                                         JoinType::Left | JoinType::Full
                                     ) {
-                                        cls.constant = None;
+                                        cls.null_pad();
                                     }
                                     Ok(cls)
                                 })
