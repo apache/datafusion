@@ -849,7 +849,7 @@ fn env_usize(var: &str) -> Option<usize> {
 
 type AxisGenerator = Box<dyn Fn(DataProfile, Cardinality, usize) -> Vec<RecordBatch>>;
 
-/// Benchmarks `SortExec` on a single partition across the following axes.
+/// Benchmarks `SortExec` on a single partition (default 1M rows) across the following axes.
 /// 1. Sort columns
 ///     - single column with a specialized impl (primitive or byte(view))
 ///     - multiple columns, which will use fallback impl
