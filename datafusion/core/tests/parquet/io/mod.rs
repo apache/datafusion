@@ -6,10 +6,7 @@
 //!
 //! Provides an instrumented [`ObjectStore`] that records storage requests and
 //! correlates each requested byte range with the Parquet file structure it
-//! covers (footer, page index, Bloom filter, data pages), so the resulting
-//! trace can be compared against `insta` snapshots.
-//!
-//! The actual tests live in the submodules.
+//! covers, so the resulting trace can be compared against `insta` snapshots.
 
 use std::fmt::Write as _;
 use std::ops::Range;
@@ -29,6 +26,7 @@ use object_store::{
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use url::Url;
 
+// Tests are in submodules
 mod bloom_filter_io;
 
 #[derive(Debug, Clone)]
