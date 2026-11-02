@@ -70,12 +70,10 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                     take_optimizable_value_from_statistics(&statistics_args, expr)
                 {
                     // Keep the metadata of the aggregate field, such as an extension type
-                    let metadata = Some(FieldMetadata::from(field.as_ref()))
-                        .filter(|metadata| !metadata.is_empty());
                     projections.push(ProjectionExpr {
                         expr: Arc::new(Literal::new_with_metadata(
                             optimizable_statistic,
-                            metadata,
+                            Some(FieldMetadata::from(field.as_ref())),
                         )),
                         alias: name,
                     });

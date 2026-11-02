@@ -11,13 +11,13 @@ mod min_max_struct;
 use arrow::array::{ArrayRef, ArrowPrimitiveType, downcast_primitive};
 use arrow::datatypes::{DataType, FieldRef, Float16Type, Float32Type, Float64Type};
 use datafusion_common::float_semantics::{float_gt, float_lt};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Result, exec_err, internal_err};
 use datafusion_functions_aggregate_common::aggregate::groups_accumulator::prim_op::PrimitiveGroupsAccumulator;
 use datafusion_physical_expr::expressions;
 use std::cmp::Ordering;
 use std::fmt::Debug;
-use std::sync::Arc;
 
 use crate::min_max::min_max_bytes::MinMaxBytesAccumulator;
 use crate::min_max::min_max_struct::MinMaxStructAccumulator;
@@ -215,9 +215,7 @@ fn min_max_return_field(
     arg_fields: &[FieldRef],
 ) -> Result<FieldRef> {
     let field = udaf_default_return_field(func, arg_fields)?;
-    Ok(Arc::new(
-        Arc::unwrap_or_clone(field).with_metadata(arg_fields[0].metadata().clone()),
-    ))
+    Ok(FieldMetadata::from(arg_fields[0].as_ref()).add_to_field_ref(field))
 }
 
 impl AggregateUDFImpl for Max {
