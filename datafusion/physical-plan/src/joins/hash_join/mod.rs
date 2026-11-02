@@ -18,6 +18,13 @@
 //! [`BatchedJoinProcessor`]: batched_join_processor::BatchedJoinProcessor
 //! [`Map`]: crate::joins::Map
 
+/// # Public Only for Internal Use:
+///
+/// This is not a public API and is for internal use only; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[doc(hidden)]
+pub use bloom_filter::BloomFilterExpr;
 pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 /// # Public Only for Internal Use:
 ///
@@ -29,6 +36,7 @@ pub use partitioned_hash_eval::HashTableLookupExpr;
 pub use partitioned_hash_eval::{HashExpr, SeededRandomState};
 
 mod batched_join_processor;
+mod bloom_filter;
 mod build;
 mod exec;
 mod inlist_builder;
