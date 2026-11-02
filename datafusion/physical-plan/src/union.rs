@@ -1216,6 +1216,69 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn test_union_preserves_grouped_partition_streams() -> Result<()> {
+        let first =
+            test::build_table_i32_two_cols(("a", &vec![2, 2, 1]), ("b", &vec![0, 0, 1]));
+        let second =
+            test::build_table_i32_two_cols(("a", &vec![1, 2, 1]), ("b", &vec![1, 1, 0]));
+        let schema = first.schema();
+        let grouping = vec![col("a", &schema)?, col("b", &schema)?];
+        // Only the complete tuple is contiguous, and one run spans batches.
+        let partitions = vec![vec![first, second], vec![]];
+        let left = TestMemoryExec::try_new(&partitions, Arc::clone(&schema), None)?
+            .try_with_grouping_information(vec![grouping.clone()])?;
+        let right = TestMemoryExec::try_new(&partitions[..1], schema, None)?
+            .try_with_grouping_information(vec![grouping.clone()])?;
+        let union = UnionExec::try_new(vec![Arc::new(left), Arc::new(right)])?;
+        let properties = union.equivalence_properties();
+        assert!(properties.grouping_satisfy(grouping)?);
+        assert!(!properties.grouping_satisfy([col("a", &union.schema())?])?);
+        assert!(!properties.grouping_satisfy([col("b", &union.schema())?])?);
+        assert!(union.output_ordering().is_none());
+        assert!(matches!(
+            union.output_partitioning(),
+            Partitioning::UnknownPartitioning(3)
+        ));
+
+        let context = Arc::new(TaskContext::default());
+        for (partition, expected) in partitions.iter().chain(&partitions[..1]).enumerate()
+        {
+            let actual =
+                crate::common::collect(union.execute(partition, Arc::clone(&context))?)
+                    .await?;
+            assert_eq!(&actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_interleave_drops_grouping() -> Result<()> {
+        let schema = create_test_schema()?;
+        let grouping = vec![col("a", &schema)?, col("b", &schema)?];
+        let source = TestMemoryExec::try_new(&[vec![]], schema, None)?
+            .try_with_grouping_information(vec![grouping.clone()])?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            Arc::new(source),
+            Partitioning::Hash(grouping.clone(), 1),
+        )?);
+        assert!(
+            input
+                .equivalence_properties()
+                .grouping_satisfy(grouping.clone())?
+        );
+
+        let interleave: Arc<dyn ExecutionPlan> =
+            Arc::new(InterleaveExec::try_new(vec![Arc::clone(&input), input])?);
+        assert!(interleave.equivalence_properties().geq_class().is_empty());
+        assert!(
+            !interleave
+                .equivalence_properties()
+                .grouping_satisfy(grouping)?
+        );
+        Ok(())
+    }
+
     fn stats_merge_inputs() -> (SchemaRef, Statistics, Statistics, Statistics) {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::UInt32, true)]));
 
