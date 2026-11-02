@@ -11015,6 +11015,57 @@ mod tests {
         Ok(())
     }
 
+    /// A probe batch with more NULL-valued rows than the batch size, spread
+    /// among other rows. The NULL-valued rows past the first batch of them
+    /// decide `(3, 7)` and `(4, 9)`, so the pairing must find them again at
+    /// their own rows for every chunk of build rows that the first batch
+    /// leaves undecided.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_anti_multi_column_null_probe_rows_past_batch(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        let left = build_table_two_cols(
+            ("a", &vec![Some(3), Some(4), Some(6)]),
+            ("b", &vec![Some(7), Some(9), Some(6)]),
+        );
+        let right = build_table_two_cols(
+            ("a", &vec![Some(1), None, None, Some(5), None, None]),
+            (
+                "b",
+                &vec![Some(1), Some(8), Some(8), Some(5), Some(7), Some(9)],
+            ),
+        );
+        let on = ["a", "b"]
+            .into_iter()
+            .map(|name| {
+                Ok((
+                    Arc::new(Column::new_with_schema(name, &left.schema())?) as _,
+                    Arc::new(Column::new_with_schema(name, &right.schema())?) as _,
+                ))
+            })
+            .collect::<Result<JoinOn>>()?;
+        // Both elements are value keys, so the NULL-valued probe rows are
+        // paired with every build row.
+        let join = HashJoinExecBuilder::new(left, right, on, JoinType::LeftAnti)
+            .with_partition_mode(PartitionMode::CollectLeft)
+            .with_null_aware(true)
+            .with_null_aware_value_keys(2)
+            .build()?;
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +---+---+
+            | a | b |
+            +---+---+
+            | 6 | 6 |
+            +---+---+
+            ");
+        }
+        Ok(())
+    }
+
     /// Swaps a null-aware `LeftAnti` into the `RightAnti` that `JoinSelection`
     /// plans, with its own build state so that both can be executed.
     fn swap_for_separate_execution(
