@@ -1308,6 +1308,12 @@ SELECT x.a, (SELECT max(y.b) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HA
 query error Physical plan does not support logical expression ScalarSubquery
 SELECT x.a, (SELECT sum(y.b) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING count(*) = 0) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
 
+# The HAVING reads a different aggregate than the output and also filters out a
+# non-empty group (`a = 1`, where `count(*)` is 2). Errors rather than returning
+# wrong rows. Expected `(1, NULL), (2, NULL), (3, NULL), (4, 7)`.
+query error Physical plan does not support logical expression ScalarSubquery
+SELECT x.a, (SELECT sum(y.b) FROM (VALUES (1, 10), (1, 5), (3, NULL), (4, 7)) AS y(a, b) WHERE y.a = x.a HAVING count(*) < 2) AS v FROM (VALUES (1), (2), (3), (4)) AS x(a) ORDER BY x.a;
+
 # Still decorrelated: the HAVING is applied to `count(*)`.
 query II
 SELECT x.a, (SELECT count(*) FROM (VALUES (1, 10)) AS y(a, b) WHERE y.a = x.a HAVING count(*) = 0) AS v FROM (VALUES (1), (2)) AS x(a) ORDER BY x.a;
