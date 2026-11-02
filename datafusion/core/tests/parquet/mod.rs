@@ -31,7 +31,6 @@ use parquet::file::properties::{EnabledStatistics, WriterProperties};
 use std::sync::Arc;
 use tempfile::NamedTempFile;
 
-mod bloom_filter_io;
 mod content_defined_chunking;
 mod custom_reader;
 mod dynamic_row_group_pruning;
@@ -41,6 +40,7 @@ mod expr_adapter;
 mod external_access_plan;
 mod file_statistics;
 mod filter_pushdown;
+mod io;
 mod ordering;
 mod page_pruning;
 mod row_group_pruning;
