@@ -1027,8 +1027,15 @@ impl JoinFuzzTestCase {
         let mut nlj_formatted_sorted: Vec<&str> = nlj_formatted.trim().lines().collect();
         nlj_formatted_sorted.sort_unstable();
 
-        for batch_size in self.batch_sizes {
-            let session_config = SessionConfig::new().with_batch_size(*batch_size);
+        // Exercise both hash join implementations with the same inputs and batch sizes.
+        for (batch_size, enable_migration_hash_join) in
+            self.batch_sizes.iter().cartesian_product([true, false])
+        {
+            let mut session_config = SessionConfig::new().with_batch_size(*batch_size);
+            session_config
+                .options_mut()
+                .execution
+                .enable_migration_hash_join = enable_migration_hash_join;
             let ctx = SessionContext::new_with_config(session_config);
             let task_ctx = ctx.task_ctx();
 
@@ -1062,7 +1069,9 @@ impl JoinFuzzTestCase {
                 let fuzz_debug = "fuzz_test_debug";
                 std::fs::remove_dir_all(fuzz_debug).unwrap_or(());
                 std::fs::create_dir_all(fuzz_debug).unwrap();
-                let out_dir_name = &format!("{fuzz_debug}/batch_size_{batch_size}");
+                let out_dir_name = &format!(
+                    "{fuzz_debug}/batch_size_{batch_size}_enable_migration_hash_join_{enable_migration_hash_join}"
+                );
                 println!(
                     "Test result data mismatch found. HJ rows {hj_rows}, SMJ rows {smj_rows}, NLJ rows {nlj_rows}"
                 );
@@ -1125,7 +1134,7 @@ impl JoinFuzzTestCase {
 
             if join_tests.contains(&NljHj) {
                 let err_msg_rowcnt = format!(
-                    "NestedLoopJoinExec and HashJoinExec produced different row counts, batch_size: {batch_size}"
+                    "NestedLoopJoinExec and HashJoinExec produced different row counts, batch_size: {batch_size}, enable_migration_hash_join: {enable_migration_hash_join}"
                 );
                 assert_eq!(nlj_rows, hj_rows, "{}", err_msg_rowcnt.as_str());
                 if nlj_rows == 0 && hj_rows == 0 {
@@ -1134,7 +1143,7 @@ impl JoinFuzzTestCase {
                 }
 
                 let err_msg_contents = format!(
-                    "NestedLoopJoinExec and HashJoinExec produced different results, batch_size: {batch_size}"
+                    "NestedLoopJoinExec and HashJoinExec produced different results, batch_size: {batch_size}, enable_migration_hash_join: {enable_migration_hash_join}"
                 );
                 // row level compare if any of joins returns the result
                 // the reason is different formatting when there is no rows
@@ -1154,12 +1163,12 @@ impl JoinFuzzTestCase {
 
             if join_tests.contains(&HjSmj) {
                 let err_msg_row_cnt = format!(
-                    "HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {batch_size}"
+                    "HashJoinExec and SortMergeJoinExec produced different row counts, batch_size: {batch_size}, enable_migration_hash_join: {enable_migration_hash_join}"
                 );
                 assert_eq!(hj_rows, smj_rows, "{}", err_msg_row_cnt.as_str());
 
                 let err_msg_contents = format!(
-                    "SortMergeJoinExec and HashJoinExec produced different results, batch_size: {batch_size}"
+                    "SortMergeJoinExec and HashJoinExec produced different results, batch_size: {batch_size}, enable_migration_hash_join: {enable_migration_hash_join}"
                 );
                 // row level compare if any of joins returns the result
                 // the reason is different formatting when there is no rows
