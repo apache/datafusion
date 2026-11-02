@@ -18,10 +18,12 @@ use crate::filter_pushdown::{
 };
 use crate::joins::Map;
 use crate::joins::array_map::ArrayMap;
+use crate::joins::hash_join::bloom_filter;
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::not_in::{NotIn, NotInBuild};
 use crate::joins::hash_join::shared_bounds::{
-    ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
+    ColumnBounds, GlobalFilterOptions, PartitionBounds, PushdownStrategy,
+    SharedBuildAccumulator,
 };
 use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
@@ -57,6 +59,7 @@ use crate::{
     },
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
+use parquet::bloom_filter::Sbbf;
 
 use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
 use arrow::compute::concat_batches;
@@ -205,6 +208,9 @@ struct JoinBuildData {
     bounds: Option<PartitionBounds>,
     /// IN-list values or a hash-table reference used for filter pushdown.
     membership: PushdownStrategy,
+    /// Bloom filter of the build keys, for the global dynamic filter. `None`
+    /// when no bloom filter is possible for this build.
+    bloom_filter: Option<Arc<Sbbf>>,
     // Keep the reservation after the allocations it accounts for.
     reservation: MemoryReservation,
 }
@@ -270,6 +276,11 @@ impl JoinLeftData {
     /// returns a reference to the InList values for filter pushdown
     pub(super) fn membership(&self) -> &PushdownStrategy {
         &self.build.membership
+    }
+
+    /// Bloom filter of the build keys, for the dynamic filter.
+    pub(super) fn bloom_filter(&self) -> Option<&Arc<Sbbf>> {
+        self.build.bloom_filter.as_ref()
     }
 
     /// Borrow bounds without sharing a consuming join's dynamic-filter state.
@@ -1688,7 +1699,8 @@ impl ExecutionPlan for HashJoinExec {
                             repartition_random_state,
                             self.null_equality,
                             not_in,
-                            &context.session_config().options().optimizer,
+                            GlobalFilterOptions::new(context.session_config().options())
+                                .with_memory_pool(Arc::clone(context.memory_pool())),
                         ))
                     })))
                 })
@@ -1725,6 +1737,7 @@ impl ExecutionPlan for HashJoinExec {
                     not_in,
                     array_map_created_count,
                     BuildMode::Ordinary,
+                    1,
                 ))
             })?,
             (None, PartitionMode::Partitioned) => {
@@ -1747,6 +1760,7 @@ impl ExecutionPlan for HashJoinExec {
                     not_in,
                     array_map_created_count,
                     BuildMode::Ordinary,
+                    self.left.output_partitioning().partition_count(),
                 ))
             }
             (None, PartitionMode::Auto) => {
@@ -3060,6 +3074,7 @@ async fn collect_left_input(
     not_in: Option<NotIn>,
     array_map_created_count: Count,
     mode: BuildMode,
+    num_build_partitions: usize,
 ) -> Result<JoinLeftData> {
     let schema = left_stream.schema();
     let prepared = mode == BuildMode::Prepared;
@@ -3153,6 +3168,7 @@ async fn collect_left_input(
         not_in,
         &array_map_created_count,
         prepared,
+        num_build_partitions,
     )
 }
 
@@ -3184,6 +3200,7 @@ fn build_in_memory(
     not_in: Option<NotIn>,
     array_map_created_count: &Count,
     prepared: bool,
+    num_build_partitions: usize,
 ) -> Result<JoinLeftData> {
     let is_phj_candidate = is_perfect_hash_join_candidate(on_left, schema)?;
 
@@ -3374,6 +3391,29 @@ fn build_in_memory(
         bounds = None;
     }
 
+    // Fill the bloom filter of this partition's keys here, in its build task,
+    // so the finalizing task only ORs the partition filters. Partitions hold
+    // disjoint keys of similar counts, so the filter is sized for the keys of
+    // all partitions estimated from this one.
+    let bloom_filter = if !should_compute_dynamic_filters
+        || matches!(membership, PushdownStrategy::Empty)
+        || left_values.is_empty()
+    {
+        None
+    } else {
+        let filter = bloom_filter::partition_filter(
+            &left_values,
+            map.num_of_distinct_key()
+                .saturating_mul(num_build_partitions),
+            GlobalFilterOptions::new(config).bloom_filter,
+            &reservation,
+        )?;
+        if let Some(filter) = &filter {
+            metrics.build_mem_used.add(filter.num_blocks() * 32);
+        }
+        filter.map(Arc::new)
+    };
+
     if prepared {
         batches.clear();
         // Prepared keys are direct columns. IN-list arrays share these batch
@@ -3394,6 +3434,7 @@ fn build_in_memory(
             values: normalized_values,
             bounds,
             membership,
+            bloom_filter,
             reservation,
         }),
         not_in,
@@ -4277,6 +4318,7 @@ mod tests {
             None,
             Count::new(),
             BuildMode::Ordinary,
+            1,
         )
         .await?;
         Ok((left_data, metrics))
@@ -9817,9 +9859,7 @@ mod tests {
     ///
     /// Here the build-side logical NULL lives in exactly one build partition, so
     /// the `keys_have_null` flag has to survive the per-partition aggregation in
-    /// `build_partitioned_filter` and widen the *routed* filter as a whole: the
-    /// probe NULL is routed to a single `CASE` branch, and OR-ing `IS NULL` into
-    /// that one branch would still drop it for every other route.
+    /// `build_partitioned_filter` and widen the global filter as a whole.
     #[tokio::test]
     async fn test_partitioned_null_equal_dynamic_filter_keeps_probe_nulls_for_build_logical_null()
     -> Result<()> {
@@ -9898,11 +9938,11 @@ mod tests {
 
         dynamic_filter.wait_complete().await;
         let filter = dynamic_filter.current()?.to_string();
-        // The aggregated build-side NULL must widen the whole merged filter once,
-        // at the top: `c2 IS NULL OR <membership over every partition>`.
+        // The aggregated build-side NULL must widen the global filter once, at the
+        // top: `c2 IS NULL OR <filter of all partitions>`.
         assert!(
             filter.starts_with("c2@0 IS NULL OR"),
-            "expected the IS NULL disjunct to wrap the whole routed filter, got: {filter}"
+            "expected the IS NULL disjunct to wrap the whole filter, got: {filter}"
         );
 
         // The NULL-NULL row (d1 = 200, d2 = 20) is only produced if the probe
