@@ -1,0 +1,135 @@
+<!---
+  Licensed to the Apache Software Foundation (ASF) under one
+  or more contributor license agreements.  See the NOTICE file
+  distributed with this work for additional information
+  regarding copyright ownership.  The ASF licenses this file
+  to you under the Apache License, Version 2.0 (the
+  "License"); you may not use this file except in compliance
+  with the License.  You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+  Unless required by applicable law or agreed to in writing,
+  software distributed under the License is distributed on an
+  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+  KIND, either express or implied.  See the License for the
+  specific language governing permissions and limitations
+  under the License.
+-->
+
+# Upgrade Guides
+
+## DataFusion 47.0.0
+
+This section calls out some of the major changes in the `47.0.0` release of DataFusion.
+
+Here are some example upgrade PRs that demonstrate changes required when upgrading from DataFusion 46.0.0:
+
+- [delta-rs Upgrade to `47.0.0`](https://github.com/delta-io/delta-rs/pull/3378)
+- [DataFusion Comet Upgrade to `47.0.0`](https://github.com/apache/datafusion-comet/pull/1563)
+- [Sail Upgrade to `47.0.0`](https://github.com/lakehq/sail/pull/434)
+
+### Upgrades to `arrow-rs` and `arrow-parquet` 55.0.0 and `object_store` 0.12.0
+
+Several APIs are changed in the underlying arrow and parquet libraries to use a
+`u64` instead of `usize` to better support WASM (See [#7371] and [#6961])
+
+Additionally `ObjectStore::list` and `ObjectStore::list_with_offset` have been changed to return `static` lifetimes (See [#6619])
+
+[#6619]: https://github.com/apache/arrow-rs/pull/6619
+[#7371]: https://github.com/apache/arrow-rs/pull/7371
+
+This requires converting from `usize` to `u64` occasionally as well as changes to `ObjectStore` implementations such as
+
+```rust
+# /* comment to avoid running
+impl Objectstore {
+    ...
+    // The range is now a u64 instead of usize
+    async fn get_range(&self, location: &Path, range: Range<u64>) -> ObjectStoreResult<Bytes> {
+        self.inner.get_range(location, range).await
+    }
+    ...
+    // the lifetime is now 'static instead of `_ (meaning the captured closure can't contain references)
+    // (this also applies to list_with_offset)
+    fn list(&self, prefix: Option<&Path>) -> BoxStream<'static, ObjectStoreResult<ObjectMeta>> {
+        self.inner.list(prefix)
+    }
+}
+# */
+```
+
+The `ParquetObjectReader` has been updated to no longer require the object size
+(it can be fetched using a single suffix request). See [#7334] for details
+
+[#7334]: https://github.com/apache/arrow-rs/pull/7334
+
+Pattern in DataFusion `46.0.0`:
+
+```rust
+# /* comment to avoid running
+let meta: ObjectMeta = ...;
+let reader = ParquetObjectReader::new(store, meta);
+# */
+```
+
+Pattern in DataFusion `47.0.0`:
+
+```rust
+# /* comment to avoid running
+let meta: ObjectMeta = ...;
+let reader = ParquetObjectReader::new(store, location)
+  .with_file_size(meta.size);
+# */
+```
+
+### `DisplayFormatType::TreeRender`
+
+DataFusion now supports [`tree` style explain plans]. Implementations of
+`Executionplan` must also provide a description in the
+`DisplayFormatType::TreeRender` format. This can be the same as the existing
+`DisplayFormatType::Default`.
+
+[`tree` style explain plans]: https://datafusion.apache.org/user-guide/sql/explain.html#tree-format-default
+
+### Removed Deprecated APIs
+
+Several APIs have been removed in this release. These were either deprecated
+previously or were hard to use correctly such as the multiple different
+`ScalarUDFImpl::invoke*` APIs. See [#15130], [#15123], and [#15027] for more
+details.
+
+[#15130]: https://github.com/apache/datafusion/pull/15130
+[#15123]: https://github.com/apache/datafusion/pull/15123
+[#15027]: https://github.com/apache/datafusion/pull/15027
+
+### `FileScanConfig` --> `FileScanConfigBuilder`
+
+Previously, `FileScanConfig::build()` directly created ExecutionPlans. In
+DataFusion 47.0.0 this has been changed to use `FileScanConfigBuilder`. See
+[#15352] for details.
+
+[#15352]: https://github.com/apache/datafusion/pull/15352
+
+Pattern in DataFusion `46.0.0`:
+
+```rust
+# /* comment to avoid running
+let plan = FileScanConfig::new(url, schema, Arc::new(file_source))
+  .with_statistics(stats)
+  ...
+  .build()
+# */
+```
+
+Pattern in DataFusion `47.0.0`:
+
+```rust
+# /* comment to avoid running
+let config = FileScanConfigBuilder::new(url, Arc::new(file_source))
+  .with_statistics(stats)
+  ...
+  .build();
+let scan = DataSourceExec::from_data_source(config);
+# */
+```

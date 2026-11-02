@@ -1,0 +1,26 @@
+# Apache DataFusion
+
+> Apache DataFusion is an extensible query engine written in Rust that uses Apache Arrow as its in-memory format. This file is a directory of agent-facing entry points for the DataFusion ecosystem — the Rust core query engine and its subprojects. Subproject `llms.txt` files contain the project-specific guidance for writing code against each one.
+
+## Core DataFusion (Rust)
+
+- [User guide](https://datafusion.apache.org/user-guide/introduction.html): install, example usage, SQL, DataFrame, expressions, configuration, explain plans.
+- [Library user guide](https://datafusion.apache.org/library-user-guide/index.html): embedding DataFusion, extending SQL, custom table providers, building logical plans, the query optimizer.
+- [Contributor guide](https://datafusion.apache.org/contributor-guide/index.html): development environment, architecture, testing, release management, governance.
+- [Rust API docs (`docs.rs`)](https://docs.rs/datafusion/latest/datafusion/): generated reference for the `datafusion` crate.
+- [GitHub repository](https://github.com/apache/datafusion): source, issues, pull requests.
+
+## Subprojects
+
+Each subproject may expose its own `llms.txt` at `<docs root>/llms.txt` — agents following the [llmstxt.org](https://llmstxt.org) convention can probe these paths for project-specific guidance.
+
+- [DataFusion Python](https://datafusion.apache.org/python/): Python bindings — SQL and lazy DataFrame API over Apache Arrow.
+- [DataFusion Ballista](https://datafusion.apache.org/ballista/): distributed execution extension for DataFusion.
+- [DataFusion Comet](https://datafusion.apache.org/comet/): Apache Spark accelerator built on DataFusion.
+
+## Optional
+
+- [Blog](https://datafusion.apache.org/blog/): release notes and ecosystem updates.
+- [crates.io `datafusion`](https://crates.io/crates/datafusion): published crate.
+- [Code of conduct](https://github.com/apache/datafusion/blob/main/CODE_OF_CONDUCT.md)
+- [Apache Software Foundation](https://apache.org)
