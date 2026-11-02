@@ -433,7 +433,10 @@ fn materialized_cte_order(
 /// A CTE body after the optimizers ran on it.
 struct OptimizedCteBody {
     plan: Arc<dyn ExecutionPlan>,
+    /// The statistics of all partitions.
     statistics: Arc<Statistics>,
+    /// The statistics of each partition.
+    partition_statistics: Vec<Arc<Statistics>>,
 }
 
 /// Prepare `plan` for the optimizers, after the bodies in `bodies` are
@@ -452,7 +455,10 @@ fn freeze_materialized_ctes(
         if let Some(scan) = node.downcast_ref::<MaterializedCteScanExec>()
             && let Some(body) = bodies.get(&scan.id())
         {
-            let scan = scan.with_body_statistics(Arc::clone(&body.statistics));
+            let scan = scan.with_body_statistics(
+                Arc::clone(&body.statistics),
+                body.partition_statistics.clone(),
+            );
             let scan = scan
                 .with_body_properties(body.plan.as_ref())
                 .unwrap_or(scan);
@@ -3777,11 +3783,19 @@ impl DefaultPhysicalPlanner {
             let optimized = thaw_materialized_ctes(Arc::clone(optimized))?;
             let statistics =
                 statistics_context.compute(optimized.as_ref(), &StatisticsArgs::new())?;
+            let partition_statistics =
+                (0..optimized.output_partitioning().partition_count())
+                    .map(|partition| {
+                        let args = StatisticsArgs::new().with_partition(Some(partition));
+                        statistics_context.compute(optimized.as_ref(), &args)
+                    })
+                    .collect::<Result<_>>()?;
             bodies.insert(
                 id,
                 OptimizedCteBody {
                     plan: optimized,
                     statistics,
+                    partition_statistics,
                 },
             );
         }
@@ -6792,6 +6806,7 @@ mod materialized_cte_tests {
     use crate::prelude::{SessionConfig, SessionContext};
     use arrow::array::AsArray;
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::stats::Precision;
     use datafusion_common::test_util::batches_to_sort_string;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -6918,6 +6933,47 @@ mod materialized_cte_tests {
         | 2 | 30       |
         +---+----------+
         ");
+        Ok(())
+    }
+
+    /// Each partition of a scan that replays one body partition has the
+    /// statistics of that body partition.
+    #[tokio::test]
+    async fn scan_has_partition_statistics_of_body() -> Result<()> {
+        let config = SessionConfig::new()
+            .with_target_partitions(4)
+            .set_str("datafusion.sql_parser.dialect", "PostgreSQL");
+        let ctx = SessionContext::new_with_config(config);
+        ctx.sql(
+            "CREATE TABLE t AS SELECT value % 50 AS column1, value AS column2 \
+             FROM generate_series(1, 4000)",
+        )
+        .await?
+        .collect()
+        .await?;
+        let plan = ctx.sql(QUERY).await?.create_physical_plan().await?;
+        let mut cte = None;
+        let mut scan = None;
+        plan.apply(|node| {
+            if node.downcast_ref::<MaterializedCteExec>().is_some() {
+                cte = Some(Arc::clone(node));
+            }
+            if node.downcast_ref::<MaterializedCteScanExec>().is_some() {
+                scan = Some(Arc::clone(node));
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        let body = Arc::clone(cte.unwrap().children()[0]);
+        let scan = scan.unwrap();
+        assert_eq!(scan.output_partitioning().partition_count(), 4);
+        let context = StatisticsContext::new();
+        for partition in 0..4 {
+            let args = StatisticsArgs::new().with_partition(Some(partition));
+            let body_statistics = context.compute(body.as_ref(), &args)?;
+            let scan_statistics = context.compute(scan.as_ref(), &args)?;
+            assert_ne!(scan_statistics.num_rows, Precision::Absent);
+            assert_eq!(scan_statistics, body_statistics);
+        }
         Ok(())
     }
 

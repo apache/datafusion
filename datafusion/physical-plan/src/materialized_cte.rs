@@ -689,6 +689,15 @@ impl ExecutionPlan for MaterializedCteExec {
     }
 }
 
+/// The statistics of a CTE body, copied to its scans.
+#[derive(Debug, Clone)]
+struct BodyStatistics {
+    /// The statistics of all partitions.
+    total: Arc<Statistics>,
+    /// The statistics of each partition, or empty when they are not known.
+    partitions: Arc<[Arc<Statistics>]>,
+}
+
 /// Reads the buffered output of a [`MaterializedCteExec`] body.
 ///
 /// Partition `p` of a scan with `n` partitions replays the body partitions
@@ -712,13 +721,13 @@ pub struct MaterializedCteScanExec {
     /// True when the scan has the partition count, the output ordering and
     /// the hash partitioning of the body. See [`Self::with_body_properties`].
     mirrors_body: bool,
-    /// The statistics of all partitions of the body.
+    /// The statistics of the body.
     ///
     /// These are valid only because the scan always returns every row of
     /// the body. If an operator that changes the rows (for example a limit
     /// or a filter) is ever pushed down into this scan, these statistics
     /// must be updated to match.
-    statistics: Option<Arc<Statistics>>,
+    statistics: Option<BodyStatistics>,
     buffer: Option<Arc<MaterializedCteBuffer>>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
@@ -782,18 +791,27 @@ impl MaterializedCteScanExec {
     }
 
     /// Copy this scan, with the statistics of all partitions of the CTE
-    /// body.
+    /// body (`statistics`) and the statistics of each partition of the body
+    /// (`partition_statistics`, empty when they are not known).
     ///
     /// The scan returns every row of the body, so the statistics stay
-    /// correct when the body is rewritten to a plan that gives the same rows.
-    pub fn with_body_statistics(&self, statistics: Arc<Statistics>) -> Self {
+    /// correct when the body is rewritten to a plan that gives the same rows
+    /// in the same partitions.
+    pub fn with_body_statistics(
+        &self,
+        statistics: Arc<Statistics>,
+        partition_statistics: Vec<Arc<Statistics>>,
+    ) -> Self {
         Self {
             id: self.id,
             name: self.name.clone(),
             schema: Arc::clone(&self.schema),
             partitions: self.partitions,
             mirrors_body: self.mirrors_body,
-            statistics: Some(statistics),
+            statistics: Some(BodyStatistics {
+                total: statistics,
+                partitions: partition_statistics.into(),
+            }),
             buffer: self.buffer.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             cache: Arc::clone(&self.cache),
@@ -1036,23 +1054,40 @@ impl ExecutionPlan for MaterializedCteScanExec {
     /// Returns the statistics that the planner copied from the CTE body.
     /// See [`Self::with_body_statistics`].
     ///
-    /// The statistics of one partition are known only when the scan has one
-    /// partition.
-    ///
-    /// TODO: support multiple partitions, see
-    /// <https://github.com/apache/datafusion/issues/26424>.
+    /// Partition `p` of a scan with `n` partitions replays the body
+    /// partitions `p, p + n, ...`, so its statistics are those of these body
+    /// partitions, merged.
     fn statistics_from_inputs(
         &self,
         _input_stats: &[Arc<Statistics>],
         args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        match &self.statistics {
-            Some(statistics)
-                if args.partition().is_none() || self.partition_count() == 1 =>
-            {
-                Ok(Arc::clone(statistics))
+        let unknown = || Ok(Arc::new(Statistics::new_unknown(&self.schema)));
+        let Some(statistics) = &self.statistics else {
+            return unknown();
+        };
+        let output_partitions = self.partition_count();
+        let partition = match args.partition() {
+            None => return Ok(Arc::clone(&statistics.total)),
+            Some(_) if output_partitions == 1 => {
+                return Ok(Arc::clone(&statistics.total));
             }
-            _ => Ok(Arc::new(Statistics::new_unknown(&self.schema))),
+            Some(partition) => partition,
+        };
+        let replayed = statistics
+            .partitions
+            .iter()
+            .skip(partition)
+            .step_by(output_partitions)
+            .map(|statistics| statistics.as_ref())
+            .collect::<Vec<_>>();
+        match replayed.as_slice() {
+            [] => unknown(),
+            [one] => Ok(Arc::new((*one).clone())),
+            many => Ok(Arc::new(Statistics::try_merge_iter(
+                many.iter().copied(),
+                &self.schema,
+            )?)),
         }
     }
 }
@@ -1136,13 +1171,60 @@ mod tests {
         let statistics = context.compute(&scan, &StatisticsArgs::new())?;
         assert_eq!(statistics.num_rows, Precision::Absent);
 
-        let scan = scan.with_body_statistics(body_statistics);
+        let scan = scan.with_body_statistics(body_statistics, vec![]);
         let statistics = context.compute(&scan, &StatisticsArgs::new())?;
         assert_eq!(statistics.num_rows, Precision::Exact(6));
-        // The 4 scan partitions do not map to the 2 body partitions.
+        // Without the statistics of each body partition, the statistics of
+        // one scan partition are not known.
         let args = StatisticsArgs::new().with_partition(Some(0));
         let statistics = context.compute(&scan, &args)?;
         assert_eq!(statistics.num_rows, Precision::Absent);
+        Ok(())
+    }
+
+    /// The number of rows of each partition of `scan`.
+    fn partition_rows(scan: &MaterializedCteScanExec) -> Result<Vec<Precision<usize>>> {
+        let context = StatisticsContext::new();
+        (0..scan.partition_count())
+            .map(|partition| {
+                let args = StatisticsArgs::new().with_partition(Some(partition));
+                Ok(context.compute(scan, &args)?.num_rows)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scan_reports_body_partition_statistics() -> Result<()> {
+        // A body with 3 partitions of 3 rows.
+        let schema = int_schema();
+        let rows = |rows| {
+            Arc::new(
+                Statistics::new_unknown(&schema).with_num_rows(Precision::Exact(rows)),
+            )
+        };
+        let statistics = rows(9);
+        let partition_statistics = vec![rows(3); 3];
+        let scan = |partitions: usize| {
+            let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
+            MaterializedCteScanExec::new(0, "c", Arc::clone(&schema), partitions)
+                .bind(buffer)
+                .with_body_statistics(
+                    Arc::clone(&statistics),
+                    partition_statistics.clone(),
+                )
+        };
+        let exact = Precision::Exact;
+        // One scan partition for each body partition.
+        assert_eq!(partition_rows(&scan(3))?, vec![exact(3); 3]);
+        // Scan partition 0 replays the body partitions 0 and 2.
+        assert_eq!(partition_rows(&scan(2))?, vec![exact(6), exact(3)]);
+        // One scan partition replays all body partitions.
+        assert_eq!(partition_rows(&scan(1))?, vec![exact(9)]);
+        // Scan partition 3 replays no body partition.
+        assert_eq!(
+            partition_rows(&scan(4))?,
+            vec![exact(3), exact(3), exact(3), Precision::Absent]
+        );
         Ok(())
     }
 
@@ -1176,7 +1258,7 @@ mod tests {
         let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
         let scan = MaterializedCteScanExec::new(0, "c", Arc::new(schema.clone()), 1)
             .bind(buffer)
-            .with_body_statistics(computed);
+            .with_body_statistics(computed, vec![]);
         // Every column keeps its min, max, null count, distinct count and
         // byte size, in the order of the scan schema.
         let statistics = context.compute(&scan, &StatisticsArgs::new())?;
