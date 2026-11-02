@@ -7,6 +7,9 @@
 //! Provides an instrumented [`ObjectStore`] that records storage requests and
 //! correlates each requested byte range with the Parquet file structure it
 //! covers, so the resulting trace can be compared against `insta` snapshots.
+//!
+//! `ListingTable`object store access tests live in
+//! [`datafusion/core/tests/datasource/object_store_access.rs`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/datasource/object_store_access.rs).
 
 use std::fmt::Write as _;
 use std::ops::Range;
