@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 statement ok
 create table t(a int, b string) as values (1, 'a'), (2, NULL), (NULL, 'c');
@@ -247,6 +234,205 @@ physical_plan
 
 statement ok
 drop table dates;
+
+# Decimal casts from integer or decimal sources unwrap for aligned literals
+# when the target only adds scale, while an unaligned IN member keeps the cast.
+# NULL inputs retain SQL comparison behavior.
+statement ok
+create table decimal_prices(
+  price decimal(38,2),
+  price30 decimal(30,2),
+  price28 decimal(28,0),
+  price36 decimal(36,4)
+) as values
+  (4.00, 4.00, 4, 4.0000),
+  (-1.00, -1.00, -1, -1.0000),
+  (0.00, 0.00, 0, 0.0000),
+  (5.00, 5.00, 5, 5.0000),
+  (NULL, NULL, NULL, NULL);
+
+query TT
+explain select price from decimal_prices where price = 4.00;
+----
+logical_plan
+01)Filter: decimal_prices.price = Decimal128(4.00,38,2)
+02)--TableScan: decimal_prices projection=[price]
+physical_plan
+01)FilterExec: price@0 = 4.00
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query BBBBBBBB
+select
+  cast(price as decimal(38,15)) = 4.000000000000000,
+  cast(price as decimal(38,15)) <> 4.000000000000000,
+  cast(price as decimal(38,15)) < 4.000000000000000,
+  cast(price as decimal(38,15)) <= 4.000000000000000,
+  cast(price as decimal(38,15)) > 4.000000000000000,
+  cast(price as decimal(38,15)) >= 4.000000000000000,
+  cast(price as decimal(38,15)) is distinct from 4.000000000000000,
+  cast(price as decimal(38,15)) is not distinct from 4.000000000000000
+from decimal_prices order by price nulls last;
+----
+false true true true false false true false
+false true true true false false true false
+true false false true false true false true
+false true false false true true true false
+NULL NULL NULL NULL NULL NULL true false
+
+query R
+select price from decimal_prices where price in (
+  cast(4.000000000000000 as decimal(38,15)),
+  cast(4.000000000000001 as decimal(38,15)),
+  NULL
+);
+----
+4.00
+
+query TT
+explain select price from decimal_prices where cast(price as decimal(38,15)) in (
+  4.000000000000000,
+  4.000000000000001,
+  NULL
+);
+----
+logical_plan
+01)Filter: CAST(decimal_prices.price AS Decimal128(38, 15)) IN ([Decimal128(4.000000000000000,38,15), Decimal128(4.000000000000001,38,15)])
+02)--TableScan: decimal_prices projection=[price]
+physical_plan
+01)FilterExec: CAST(price@0 AS Decimal128(38, 15)) IN (SET) ([4.000000000000000, 4.000000000000001])
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+explain select price from decimal_prices where cast(price as decimal(38,15)) in (
+  4.000000000000000,
+  5.000000000000000,
+  NULL
+);
+----
+logical_plan
+01)Filter: decimal_prices.price = Decimal128(4.00,38,2) OR decimal_prices.price = Decimal128(5.00,38,2)
+02)--TableScan: decimal_prices projection=[price]
+physical_plan
+01)FilterExec: price@0 = 4.00 OR price@0 = 5.00
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query BB
+select
+  price in (4.000000000000000, 5.000000000000000, NULL),
+  price not in (4.000000000000000, 5.000000000000000, NULL)
+from decimal_prices order by price nulls last;
+----
+NULL NULL
+NULL NULL
+true false
+true false
+NULL NULL
+
+# Scale-up regression for the review's three source shapes. The natural
+# comparisons coerce to a scale-up cast that unwraps to a bare-column
+# comparison at the source type, and the queries return the actual 4.00 value,
+# not only a matching plan snapshot.
+query R
+select price30 from decimal_prices where price30 = 4.00;
+----
+4.00
+
+query TT
+explain select price30 from decimal_prices where price30 = 4.00;
+----
+logical_plan
+01)Filter: decimal_prices.price30 = Decimal128(4.00,30,2)
+02)--TableScan: decimal_prices projection=[price30]
+physical_plan
+01)FilterExec: price30@0 = 4.00
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query R
+select price28 from decimal_prices where price28 = 4.00;
+----
+4
+
+query TT
+explain select price28 from decimal_prices where price28 = 4.00;
+----
+logical_plan
+01)Filter: decimal_prices.price28 = Decimal128(4,28,0)
+02)--TableScan: decimal_prices projection=[price28]
+physical_plan
+01)FilterExec: price28@0 = 4
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query R
+select price36 from decimal_prices where price36 = 4.00;
+----
+4.0000
+
+query TT
+explain select price36 from decimal_prices where price36 = 4.00;
+----
+logical_plan
+01)Filter: decimal_prices.price36 = Decimal128(4.0000,36,4)
+02)--TableScan: decimal_prices projection=[price36]
+physical_plan
+01)FilterExec: price36@0 = 4.0000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table decimal_prices;
+
+# Integer -> decimal scale-up is admitted by the same type-based rule: the
+# rewrite compares the integer column directly, so a source value that Arrow's
+# strict cast rejects (and TRY_CAST renders NULL) simply fails the predicate
+# instead of raising an error.
+statement ok
+create table int_prices(v int) as values (4), (2147483647), (-2000000000), (NULL);
+
+statement error
+select cast(v as decimal(10,2)) from int_prices;
+
+query IR
+select v, try_cast(v as decimal(10,2)) as d from int_prices order by v nulls last;
+----
+-2000000000 NULL
+4 4.00
+2147483647 NULL
+NULL NULL
+
+# Newly admitted overflow policy: the strict comparison compares the integer
+# column directly, so the rows whose cast would overflow are TRUE/FALSE instead
+# of a cast error. The TRY_CAST comparison is rewritten the same way and so no
+# longer NULL for those rows; only the NULL source row stays NULL. A plain
+# TRY_CAST projection above still yields NULL, since it is not a comparison.
+query BBB
+select
+  cast(v as decimal(10,2)) > cast(4 as decimal(10,2)) as strict_gt,
+  try_cast(v as decimal(10,2)) > cast(4 as decimal(10,2)) as try_gt,
+  try_cast(v as decimal(10,2)) is distinct
+    from cast(null as decimal(10,2)) as try_distinct
+from int_prices order by v nulls last;
+----
+false false true
+false false true
+true true true
+NULL NULL false
+
+query I
+select v from int_prices where cast(v as decimal(10,2)) = 4.00;
+----
+4
+
+query TT
+explain select v from int_prices where cast(v as decimal(10,2)) = 4.00;
+----
+logical_plan
+01)Filter: int_prices.v = Int32(4)
+02)--TableScan: int_prices projection=[v]
+physical_plan
+01)FilterExec: v@0 = 4
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table int_prices;
 
 # ------------------------------------------------------------------------
 # Unwrapping Date32 <-> Date64 casts in comparison predicates.
@@ -518,3 +704,253 @@ SELECT
 FROM (VALUES (2, NULL::INT)) AS t(i, n);
 ----
 NULL NULL
+
+# Cast predicate preimage rewrites for timestamp precision casts
+statement ok
+CREATE TABLE cast_preimage_ts AS
+SELECT
+  arrow_cast(0, 'Timestamp(ns)') AS ts_nano,
+  arrow_cast(0, 'Timestamp(ms)') AS ts_milli;
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_nano AS TIMESTAMP(3)) > arrow_cast(1000, 'Timestamp(ms)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_nano >= TimestampNanosecond(1001000000, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_nano@0 >= 1001000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_nano AS TIMESTAMP(3)) IS DISTINCT FROM arrow_cast(0, 'Timestamp(ms)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_nano < TimestampNanosecond(-999999, None) OR cast_preimage_ts.ts_nano >= TimestampNanosecond(1000000, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_nano@0 < -999999 OR ts_nano@0 >= 1000000
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_milli AS TIMESTAMP(9)) >= arrow_cast(123000000, 'Timestamp(ns)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_milli >= TimestampMillisecond(123, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_milli@1 >= 123
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_milli AS TIMESTAMP(9)) >= arrow_cast(123456789, 'Timestamp(ns)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_milli >= TimestampMillisecond(124, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_milli@1 >= 124
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A non-aligned widening literal has no singleton source preimage. Ordered
+# comparisons use the empty preimage interval `[floor + 1, floor + 1)`, so both
+# strict and inclusive bounds move to the first source value at or above the
+# literal: `> 123456789ns` and `>= 123456789ns` become `>= 124ms`, while
+# `< 123456789ns` and `<= 123456789ns` become `< 124ms`. The matched rows are
+# unchanged; only the boundary predicate is expressed in source units.
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_milli AS TIMESTAMP(9)) > arrow_cast(123456789, 'Timestamp(ns)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_milli >= TimestampMillisecond(124, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_milli@1 >= 124
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_milli AS TIMESTAMP(9)) < arrow_cast(123456789, 'Timestamp(ns)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_milli < TimestampMillisecond(124, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_milli@1 < 124
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_milli AS TIMESTAMP(9)) <= arrow_cast(123456789, 'Timestamp(ns)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_milli < TimestampMillisecond(124, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_milli@1 < 124
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Equality-like operators keep the CAST: a non-aligned literal has no
+# equivalent source-domain singleton, so there is nothing to fold.
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_milli AS TIMESTAMP(9)) = arrow_cast(123456789, 'Timestamp(ns)');
+----
+logical_plan
+01)Filter: CAST(cast_preimage_ts.ts_milli AS Timestamp(ns)) = TimestampNanosecond(123456789, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: CAST(ts_milli@1 AS Timestamp(ns)) = 123456789
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query TT
+EXPLAIN SELECT * FROM cast_preimage_ts
+WHERE CAST(ts_nano AS TIMESTAMP(3)) = arrow_cast(-1, 'Timestamp(ms)');
+----
+logical_plan
+01)Filter: cast_preimage_ts.ts_nano >= TimestampNanosecond(-1999999, None) AND cast_preimage_ts.ts_nano < TimestampNanosecond(-999999, None)
+02)--TableScan: cast_preimage_ts projection=[ts_nano, ts_milli]
+physical_plan
+01)FilterExec: ts_nano@0 >= -1999999 AND ts_nano@0 < -999999
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Signed boundary rows, selected by id so the returned rows are explicit.
+statement ok
+CREATE TABLE cast_preimage_ms AS
+SELECT id, arrow_cast(v, 'Timestamp(ms)') AS ts_milli
+FROM (VALUES (1, 123), (2, 124), (3, -124), (4, -123)) AS t(id, v);
+
+statement ok
+CREATE TABLE cast_preimage_nano AS
+SELECT id, arrow_cast(v, 'Timestamp(ns)') AS ts_nano
+FROM (VALUES (1, -1999999), (2, -1999998), (3, -1000000), (4, -1000001),
+             (5, -999999), (6, -999998)) AS t(id, v);
+
+# Negative non-aligned widening: `> -123456789ns` becomes `>= -123ms`, so the
+# negative neighbour -124ms is excluded while -123ms stays (ids 4, 1, 2).
+query I
+SELECT id FROM cast_preimage_ms
+WHERE CAST(ts_milli AS TIMESTAMP(9)) > arrow_cast(-123456789, 'Timestamp(ns)')
+ORDER BY ts_milli;
+----
+4
+1
+2
+
+# Non-aligned equality keeps the CAST and matches nothing: no millisecond value
+# equals a sub-millisecond literal.
+query I
+SELECT count(*) FROM cast_preimage_ms
+WHERE CAST(ts_milli AS TIMESTAMP(9)) = arrow_cast(-123456789, 'Timestamp(ns)');
+----
+0
+
+# The narrowing bucket for -1ms is `[-1999999ns, -999999ns)`: ids 1-4 truncate
+# to -1, while ids 5 and 6 truncate to 0 and are excluded.
+query I
+SELECT id FROM cast_preimage_nano
+WHERE CAST(ts_nano AS TIMESTAMP(3)) = arrow_cast(-1, 'Timestamp(ms)')
+ORDER BY ts_nano;
+----
+1
+2
+4
+3
+
+# A typed NULL literal in a narrowing cast has no truncation bucket, so the CAST
+# is not rewritten and the query still matches no rows (three-valued logic).
+query I
+SELECT count(*) FROM cast_preimage_ts
+WHERE CAST(ts_nano AS TIMESTAMP(3)) = arrow_cast(NULL, 'Timestamp(ms)');
+----
+0
+
+statement ok
+DROP TABLE cast_preimage_nano;
+
+statement ok
+DROP TABLE cast_preimage_ms;
+
+statement ok
+DROP TABLE cast_preimage_ts;
+
+# Naive -> timezone-aware timestamp casts are not preimage-rewritable.
+#
+# Arrow reads a timezone-naive timestamp as local wall-clock time and shifts it
+# to UTC when the target is timezone-aware (`adjust_timestamp_to_timezone`), so
+# `CAST(ts AS Timestamp(unit, Some(tz))) OP literal` is not a pure unit change.
+# The timestamp preimage works on raw source units and does not model that
+# shift, so the CAST must stay on the column for same-unit, widening and
+# narrowing targets alike; a rejected timestamp cast never falls back to a
+# generic cast-family rewrite.
+#
+# `2024-01-01T00:00:00.5` is 1704067200500000000 ns of naive wall-clock time;
+# read in `+07:00` and shifted to UTC it is 1704042000500000000 ns
+# (1704042000500 ms). The rewritten (buggy) predicate would compare the raw
+# source units against those shifted values and drop the row.
+statement ok
+create table cast_preimage_tz(ts timestamp, l timestamp) as values
+  ('2024-01-01T00:00:00.5'::timestamp, '2024-01-01T00:00:00.5'::timestamp);
+
+statement ok
+create table cast_preimage_tz_ms as
+select arrow_cast('2024-01-01T00:00:00'::timestamp, 'Timestamp(Millisecond, None)') as ts_milli;
+
+# Column-vs-column control: there is no literal to fold, so the CAST is kept and
+# the comparison is evaluated as written.
+query I
+select count(*) from cast_preimage_tz
+where arrow_cast(ts, 'Timestamp(Millisecond, Some("+07:00"))')
+    = arrow_cast(l, 'Timestamp(Millisecond, Some("+07:00"))');
+----
+1
+
+# Narrowing (ns -> ms) with a literal: the naive -> aware rejection applies to
+# the bucket path too, so it stays at 1 (without the guard it would return 0).
+query I
+select count(*) from cast_preimage_tz
+where arrow_cast(ts, 'Timestamp(Millisecond, Some("+07:00"))')
+    = arrow_cast('2024-01-01T00:00:00.5'::timestamp, 'Timestamp(Millisecond, Some("+07:00"))');
+----
+1
+
+# Same unit, only the timezone changes: this pair must be rejected. Without the
+# guard the literal folds to a naive nanosecond literal and the comparison drops
+# the row (0).
+query I
+select count(*) from cast_preimage_tz
+where arrow_cast(ts, 'Timestamp(Nanosecond, Some("+07:00"))')
+    = arrow_cast('2024-01-01T00:00:00.5'::timestamp, 'Timestamp(Nanosecond, Some("+07:00"))');
+----
+1
+
+# Widening (ms -> ns) with an aligned literal goes through the same timestamp
+# preimage and must be rejected there too.
+query I
+select count(*) from cast_preimage_tz_ms
+where arrow_cast(ts_milli, 'Timestamp(Nanosecond, Some("+07:00"))')
+    = arrow_cast('2024-01-01T00:00:00'::timestamp, 'Timestamp(Nanosecond, Some("+07:00"))');
+----
+1
+
+# The IN-list rewrite uses `exact_preimage_cast`, which routes timestamp casts
+# through the same helper, and must be rejected as well. Two literal items keep
+# this on the IN-list path rather than folding to a single equality.
+query I
+select count(*) from cast_preimage_tz
+where arrow_cast(ts, 'Timestamp(Nanosecond, Some("+07:00"))')
+   in (arrow_cast('2024-01-01T00:00:00.5'::timestamp, 'Timestamp(Nanosecond, Some("+07:00"))'),
+       arrow_cast('2023-06-01T00:00:00'::timestamp, 'Timestamp(Nanosecond, Some("+07:00"))'));
+----
+1
+
+statement ok
+drop table cast_preimage_tz;
+
+statement ok
+drop table cast_preimage_tz_ms;

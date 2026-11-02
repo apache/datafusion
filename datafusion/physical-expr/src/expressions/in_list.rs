@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Implementation of `InList` expressions: [`InListExpr`]
 
@@ -22,6 +9,7 @@ use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
+use crate::expressions::Literal;
 use crate::physical_expr::physical_exprs_bag_equal;
 
 use arrow::array::*;
@@ -31,6 +19,7 @@ use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq as arrow_eq;
 use arrow::datatypes::*;
 
+use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
 };
@@ -107,7 +96,7 @@ fn evaluate_list(
 /// Try to evaluate a list of expressions as constants.
 ///
 /// Returns:
-/// - `Ok(Some(ArrayRef))` if all expressions are constants (can be evaluated on an empty RecordBatch)
+/// - `Ok(Some(ArrayRef))` if all expressions are constants (built only from literals)
 /// - `Ok(None)` if the list contains non-constant expressions
 /// - `Err(...)` only for actual errors (not for non-constant expressions)
 ///
@@ -117,6 +106,15 @@ fn try_evaluate_constant_list(
     list: &[Arc<dyn PhysicalExpr>],
     schema: &Schema,
 ) -> Result<Option<ArrayRef>> {
+    // An item can read a column yet return a scalar on an empty batch (a CASE whose
+    // WHEN matches all zero rows returns its THEN), so require literal leaves.
+    for expr in list {
+        if expr.exists(|e| {
+            Ok(e.is_volatile_node() || (e.children().is_empty() && !e.is::<Literal>()))
+        })? {
+            return Ok(None);
+        }
+    }
     let batch = RecordBatch::new_empty(Arc::new(schema.clone()));
     match evaluate_list(list, &batch) {
         Ok(array) => Ok(Some(array)),
@@ -445,7 +443,8 @@ impl PhysicalExpr for InListExpr {
     }
 
     fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
-        let mut children = vec![&self.expr];
+        let mut children = Vec::with_capacity(self.list.len() + 1);
+        children.push(&self.expr);
         children.extend(&self.list);
         children
     }
@@ -539,9 +538,10 @@ pub fn in_list(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::expressions::{col, lit, try_cast};
+    use crate::expressions::{binary, case, col, lit, try_cast};
     use arrow::datatypes::{IntervalDayTime, IntervalMonthDayNano, i256};
     use datafusion_common::plan_err;
+    use datafusion_expr::Operator;
     use datafusion_expr::type_coercion::binary::comparison_coercion;
     use datafusion_physical_expr_common::physical_expr::fmt_sql;
     use insta::assert_snapshot;
@@ -3173,6 +3173,33 @@ mod tests {
             ],
         )?;
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_in_list_case_item_reading_a_column() -> Result<()> {
+        // n IN (2, CASE WHEN d > 5 THEN 1 ELSE d END)
+        let schema = Schema::new(vec![
+            Field::new("n", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]);
+        let d = col("d", &schema)?;
+        let when = binary(Arc::clone(&d), Operator::Gt, lit(5i32), &schema)?;
+        let item = case(None, vec![(when, lit(1i32))], Some(d))?;
+        let expr = in_list(col("n", &schema)?, vec![lit(2i32), item], &false, &schema)?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema),
+            vec![
+                Arc::new(Int32Array::from(vec![2, 4, 1])),
+                Arc::new(Int32Array::from(vec![0, 4, 3])),
+            ],
+        )?;
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_boolean_array(&result),
+            &BooleanArray::from(vec![true, true, false])
+        );
         Ok(())
     }
 

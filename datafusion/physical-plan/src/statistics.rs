@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Statistics computation for physical plans.
 //!
@@ -26,14 +13,14 @@ use crate::operator_statistics::{
     ExtendedStatistics, StatisticsRegistry, StatisticsResult,
 };
 use datafusion_common::extensions::Extensions;
+use datafusion_common::stats::Precision;
 use datafusion_common::{
     Result, Statistics, assert_eq_or_internal_err, assert_or_internal_err,
 };
 use log::debug;
-use std::cell::RefCell;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::ptr::from_ref;
-use std::rc::Rc;
 use std::sync::Arc;
 
 type CacheKey = (usize, Option<usize>);
@@ -105,6 +92,40 @@ impl StatisticsArgs {
     }
 }
 
+/// Applies `fetch` to the `input` statistics of an operator that stops *each*
+/// of its `n_partitions` output partitions after `fetch` rows, such as
+/// `LocalLimitExec` or a `SortExec` with a fetch that preserves partitioning.
+///
+/// `input` must cover what `args` asks for: one partition's rows when `args`
+/// names a partition, and the rows of every partition otherwise.
+///
+/// For a single partition this is [`Statistics::with_fetch`]. Overall, though,
+/// every partition can emit up to `fetch` rows, so the output can reach
+/// `fetch * n_partitions` rows, and never more than the input. How the input
+/// rows are spread over the partitions is unknown, so the result is inexact
+/// unless an exact input count shows that `fetch` cannot drop any row.
+pub(crate) fn with_per_partition_fetch(
+    input: Statistics,
+    fetch: Option<usize>,
+    n_partitions: usize,
+    args: &StatisticsArgs,
+) -> Result<Statistics> {
+    let Some(fetch) = fetch else {
+        return Ok(input);
+    };
+    if args.partition().is_some() || n_partitions <= 1 {
+        return input.with_fetch(Some(fetch), 0, 1);
+    }
+    // No partition can hold more than `fetch` rows, so none is dropped. Only
+    // an exact count proves that: an estimate below `fetch` may be wrong.
+    if matches!(input.num_rows, Precision::Exact(num_rows) if num_rows <= fetch) {
+        return Ok(input);
+    }
+    Ok(input
+        .with_fetch(Some(fetch.saturating_mul(n_partitions)), 0, 1)?
+        .to_inexact())
+}
+
 /// Directive returned by [`ExecutionPlan::child_stats_requests`] describing
 /// how the [`StatisticsContext`] should obtain each child's statistics.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -123,7 +144,14 @@ pub enum ChildStats {
 /// plan rewrites. Each entry holds a strong reference to the plan node it was
 /// computed for, so cached nodes (and their per-partition statistics) stay
 /// alive until [`Self::reset_cache`] is called or the context is dropped. Reset
-/// a long-lived context at a lifecycle boundary to bound its memory.
+/// a long-lived context at a lifecycle boundary to bound its memory (see
+/// [`Self::reset_cache`]).
+///
+/// Cached statistics are served for as long as the context lives, so a plan
+/// node must not change its statistics in place (for example through interior
+/// mutability) while a context holds it: the cache would return stale values.
+/// Optimizer rules satisfy this because they replace nodes instead of changing
+/// them.
 ///
 /// An optional [`StatisticsRegistry`] plugs providers into the walk: at each node
 /// they are consulted before the operator's built-in
@@ -138,7 +166,7 @@ pub enum ChildStats {
 /// [`Self::compute_extended`] observes extensions; [`Self::compute`] returns core
 /// [`Statistics`] only.
 pub struct StatisticsContext {
-    cache: Rc<RefCell<StatsCache>>,
+    cache: Mutex<StatsCache>,
     registry: StatisticsRegistry,
 }
 
@@ -157,7 +185,7 @@ impl StatisticsContext {
     /// Creates a context whose walk consults `registry`'s provider chain.
     pub fn new_with_registry(registry: StatisticsRegistry) -> Self {
         Self {
-            cache: Rc::new(RefCell::new(StatsCache::default())),
+            cache: Mutex::new(StatsCache::default()),
             registry,
         }
     }
@@ -165,10 +193,12 @@ impl StatisticsContext {
     /// Clears the memoization cache and releases its retained plan nodes.
     ///
     /// Resetting is optional for correctness: each cache entry retains the plan
-    /// node that supplied its pointer key. Use it to bound memory at a logical
-    /// lifecycle boundary, such as after an optimizer pass.
+    /// node that supplied its pointer key. Use it to bound memory at a
+    /// lifecycle boundary, such as the end of a query's physical optimization.
+    /// Do not reset a context that several optimizer rules share between those
+    /// rules: that discards the statistics that later rules would reuse.
     pub fn reset_cache(&self) {
-        let mut cache = self.cache.borrow_mut();
+        let mut cache = self.cache.lock();
         cache.statistics.clear();
         cache.extensions.clear();
     }
@@ -272,6 +302,74 @@ impl StatisticsContext {
     /// for how extensions propagate up the tree). As with [`Self::compute`],
     /// the root is not memoized and must be a standalone plan node; see
     /// [`Self::compute_extended_arc`].
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use datafusion_common::{ColumnStatistics, Result, Statistics};
+    /// # use datafusion_common::stats::Precision;
+    /// # use datafusion_physical_plan::ExecutionPlan;
+    /// # use datafusion_physical_plan::operator_statistics::{
+    /// #     ExtendedStatistics, StatisticsProvider, StatisticsRegistry, StatisticsResult,
+    /// # };
+    /// # use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+    /// # use datafusion_physical_plan::test::exec::StatisticsExec;
+    ///
+    /// // Pearson correlation between two columns, identified by schema index.
+    /// #[derive(Debug, Clone)]
+    /// struct ColumnCorrelation {
+    ///     columns: (usize, usize),
+    ///     coefficient: f64,
+    /// }
+    ///
+    /// #[derive(Debug)]
+    /// struct CorrelationProvider;
+    ///
+    /// impl StatisticsProvider for CorrelationProvider {
+    ///     fn matches(&self, plan: &dyn ExecutionPlan) -> bool {
+    ///         plan.downcast_ref::<StatisticsExec>().is_some()
+    ///     }
+    ///
+    ///     fn compute_statistics(
+    ///         &self,
+    ///         plan: &dyn ExecutionPlan,
+    ///         _child_stats: &[ExtendedStatistics],
+    ///     ) -> Result<StatisticsResult> {
+    ///         let base = plan.statistics_from_inputs(&[], &StatisticsArgs::new())?;
+    ///         let mut extended = ExtendedStatistics::new_arc(base);
+    ///         extended.set_extension(ColumnCorrelation {
+    ///             columns: (0, 1),
+    ///             coefficient: 0.92,
+    ///         });
+    ///         Ok(StatisticsResult::Computed(extended))
+    ///     }
+    /// }
+    ///
+    /// let schema = Schema::new(vec![
+    ///     Field::new("city", DataType::Utf8, false),
+    ///     Field::new("zip_code", DataType::Utf8, false),
+    /// ]);
+    /// let stats = Statistics {
+    ///     num_rows: Precision::Exact(1000),
+    ///     total_byte_size: Precision::Absent,
+    ///     column_statistics: vec![ColumnStatistics::new_unknown(); 2],
+    /// };
+    /// let plan = StatisticsExec::new(stats, schema);
+    ///
+    /// let mut registry = StatisticsRegistry::new();
+    /// registry.register(Arc::new(CorrelationProvider));
+    /// let context = StatisticsContext::new_with_registry(registry);
+    ///
+    /// let extended = context.compute_extended(&plan, &StatisticsArgs::new())?;
+    /// assert_eq!(extended.base().num_rows, Precision::Exact(1000));
+    ///
+    /// let correlation = extended.get_extension::<ColumnCorrelation>().unwrap();
+    /// assert_eq!(correlation.columns, (0, 1));
+    /// assert_eq!(correlation.coefficient, 0.92);
+    /// # Ok::<(), datafusion_common::DataFusionError>(())
+    /// ```
     pub fn compute_extended(
         &self,
         plan: &dyn ExecutionPlan,
@@ -534,7 +632,7 @@ impl StatisticsContext {
         partition: Option<usize>,
     ) -> Option<Arc<Statistics>> {
         self.cache
-            .borrow()
+            .lock()
             .statistics
             .get(&cache_key(plan, partition))
             .map(|entry| Arc::clone(&entry.value))
@@ -564,7 +662,7 @@ impl StatisticsContext {
         statistics: Arc<Statistics>,
     ) {
         Self::store_cache_entry(
-            &mut self.cache.borrow_mut().statistics,
+            &mut self.cache.lock().statistics,
             owner,
             partition,
             statistics,
@@ -577,7 +675,7 @@ impl StatisticsContext {
         partition: Option<usize>,
     ) -> Option<Extensions> {
         self.cache
-            .borrow()
+            .lock()
             .extensions
             .get(&cache_key(plan, partition))
             .map(|entry| entry.value.clone())
@@ -590,7 +688,7 @@ impl StatisticsContext {
         extensions: Extensions,
     ) {
         Self::store_cache_entry(
-            &mut self.cache.borrow_mut().extensions,
+            &mut self.cache.lock().extensions,
             owner,
             partition,
             extensions,
@@ -738,7 +836,7 @@ mod tests {
         let args = StatisticsArgs::new();
 
         let s1 = ctx.compute_arc(&leaf, &args).unwrap();
-        assert!(!ctx.cache.borrow().statistics.is_empty());
+        assert!(!ctx.cache.lock().statistics.is_empty());
 
         let s2 = ctx.compute_arc(&leaf, &args).unwrap();
         assert!(Arc::ptr_eq(&s1, &s2));
@@ -812,7 +910,7 @@ mod tests {
             .compute(parent.as_ref(), &StatisticsArgs::new())
             .unwrap();
         assert!(
-            !ctx.cache.borrow().statistics.contains_key(&parent_key),
+            !ctx.cache.lock().statistics.contains_key(&parent_key),
             "borrowed roots must not be memoized"
         );
 
@@ -844,7 +942,7 @@ mod tests {
         let _ = ctx
             .compute_extended_arc(&leaf, &StatisticsArgs::new())
             .unwrap();
-        ctx.cache.borrow_mut().statistics.clear();
+        ctx.cache.lock().statistics.clear();
         drop(leaf);
         assert!(weak.upgrade().is_some());
 
@@ -857,9 +955,9 @@ mod tests {
         let leaf = make_stats_leaf(10);
         let ctx = StatisticsContext::new();
         let _ = ctx.compute_arc(&leaf, &StatisticsArgs::new()).unwrap();
-        assert!(!ctx.cache.borrow().statistics.is_empty());
+        assert!(!ctx.cache.lock().statistics.is_empty());
         ctx.reset_cache();
-        assert!(ctx.cache.borrow().statistics.is_empty());
+        assert!(ctx.cache.lock().statistics.is_empty());
     }
 
     #[test]
@@ -934,7 +1032,7 @@ mod tests {
         assert_eq!(extensions.unwrap().get::<Tag>(), Some(&Tag(7)));
         assert!(
             ctx.cache
-                .borrow()
+                .lock()
                 .extensions
                 .contains_key(&cache_key(leaf.as_ref(), None))
         );
@@ -992,5 +1090,82 @@ mod tests {
 
         let overall = ctx.compute(union.as_ref(), &StatisticsArgs::new()).unwrap();
         assert_eq!(overall.num_rows, Precision::Exact(999));
+    }
+
+    /// Only an exact row count can show that a fetch on each of four partitions
+    /// drops no row. An estimate cannot, so the result becomes inexact, column
+    /// statistics included.
+    #[test]
+    fn per_partition_fetch_keeps_exactness_only_for_exact_counts() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let fetch_10_of_4 = |num_rows| {
+            let mut input = Statistics::new_unknown(&schema);
+            input.num_rows = num_rows;
+            input.column_statistics[0].null_count = Precision::Exact(3);
+            with_per_partition_fetch(input, Some(10), 4, &StatisticsArgs::new())
+        };
+
+        let exact = fetch_10_of_4(Precision::Exact(8))?;
+        assert_eq!(exact.num_rows, Precision::Exact(8));
+        assert_eq!(exact.column_statistics[0].null_count, Precision::Exact(3));
+
+        let estimate = fetch_10_of_4(Precision::Inexact(8))?;
+        assert_eq!(estimate.num_rows, Precision::Inexact(8));
+        assert_eq!(
+            estimate.column_statistics[0].null_count,
+            Precision::Inexact(3)
+        );
+        Ok(())
+    }
+
+    /// Row counts under a fetch that applies to each of four partitions.
+    #[test]
+    fn per_partition_fetch_counts_every_partition() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let overall = StatisticsArgs::new();
+        let first_partition = StatisticsArgs::new().with_partition(Some(0));
+        let num_rows = |input_rows, fetch, n_partitions, args: &StatisticsArgs| {
+            let mut input = Statistics::new_unknown(&schema);
+            input.num_rows = input_rows;
+            with_per_partition_fetch(input, fetch, n_partitions, args)
+                .map(|stats| stats.num_rows)
+        };
+
+        // Every partition keeps up to 10 rows. How the 400 rows are spread over
+        // the partitions is unknown, so the count is an estimate.
+        assert_eq!(
+            num_rows(Precision::Exact(400), Some(10), 4, &overall)?,
+            Precision::Inexact(40)
+        );
+        // The output never has more rows than the input.
+        assert_eq!(
+            num_rows(Precision::Exact(25), Some(10), 4, &overall)?,
+            Precision::Inexact(25)
+        );
+        // A fetch that cannot drop any row leaves the input exact.
+        assert_eq!(
+            num_rows(Precision::Exact(8), Some(10), 4, &overall)?,
+            Precision::Exact(8)
+        );
+        // Without an input estimate, the fetch still bounds every partition.
+        assert_eq!(
+            num_rows(Precision::Absent, Some(10), 4, &overall)?,
+            Precision::Inexact(40)
+        );
+        // A single partition, or a single output partition, keeps `fetch` rows.
+        assert_eq!(
+            num_rows(Precision::Exact(100), Some(10), 4, &first_partition)?,
+            Precision::Exact(10)
+        );
+        assert_eq!(
+            num_rows(Precision::Exact(400), Some(10), 1, &overall)?,
+            Precision::Exact(10)
+        );
+        // Without a fetch, nothing changes.
+        assert_eq!(
+            num_rows(Precision::Exact(400), None, 4, &overall)?,
+            Precision::Exact(400)
+        );
+        Ok(())
     }
 }

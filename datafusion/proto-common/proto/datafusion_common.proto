@@ -22,6 +22,7 @@ package datafusion_common;
 
 message ColumnRelation {
   string relation = 1;
+  repeated string parts = 2;
 }
 
 message Column {
@@ -579,6 +580,7 @@ message ParquetOptions {
   bool schema_force_view_types = 28; // default = false
   bool binary_as_string = 29; // default = false
   bool skip_arrow_metadata = 30; // default = false
+  bool write_row_group_number_distinct_values = 41; // default = false
 
   oneof metadata_size_hint_opt {
     uint64 metadata_size_hint = 4;
@@ -625,6 +627,10 @@ message ParquetOptions {
   uint64 max_row_group_size = 15;
 
   uint64 max_in_list_size = 38;
+
+  // "start_offset" or "midpoint". Empty means "start_offset".
+  string row_group_range_assignment = 39;
+  bool enable_rle_to_dictionary = 40;
 
   string created_by = 16;
 

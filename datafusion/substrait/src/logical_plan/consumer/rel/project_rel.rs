@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::utils::NameTracker;
@@ -49,7 +36,7 @@ pub async fn from_project_rel(
         // Substrait Projects it adds an output mapping that excludes all input columns
         // leaving only explicit expressions.
 
-        let mut explicit_exprs: Vec<Expr> = vec![];
+        let mut explicit_exprs: Vec<Expr> = Vec::with_capacity(p.expressions.len());
         // For WindowFunctions, we need to wrap them in a Window relation. If there are duplicates,
         // we can do the window'ing only once, then the project will duplicate the result.
         // Order here doesn't matter since LPB::window_plan sorts the expressions.
@@ -57,9 +44,7 @@ pub async fn from_project_rel(
         // Expr contains Arc with interior mutability but is intentionally used as hash key
         let mut window_exprs: HashSet<Expr> = HashSet::new();
         for expr in &p.expressions {
-            let e = consumer
-                .consume_expression(expr, input.clone().schema())
-                .await?;
+            let e = consumer.consume_expression(expr, input.schema()).await?;
             // The project's builder uses columnize_expr(..) to transform
             // nested window expressions into column references.
             window_exprs.extend(find_window_exprs([&e]));
@@ -103,7 +88,8 @@ pub async fn from_project_rel(
             input
         };
 
-        let mut final_exprs: Vec<Expr> = vec![];
+        let mut final_exprs: Vec<Expr> =
+            Vec::with_capacity(original_schema.fields().len() + explicit_exprs.len());
         for index in 0..original_schema.fields().len() {
             let e = Expr::Column(Column::from(original_schema.qualified_field(index)));
             final_exprs.push(name_tracker.get_uniquely_named_expr(e)?);

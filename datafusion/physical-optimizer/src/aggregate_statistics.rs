@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Utilizing exact statistics from sources to avoid scanning data
 use datafusion_common::Result;
@@ -25,7 +12,7 @@ use datafusion_physical_plan::aggregates::{
 };
 use datafusion_physical_plan::placeholder_row::PlaceholderRowExec;
 use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
-use datafusion_physical_plan::statistics::{StatisticsArgs, StatisticsContext};
+use datafusion_physical_plan::statistics::StatisticsArgs;
 use datafusion_physical_plan::udaf::{
     AggregateFunctionExpr, StatisticsArgs as PlanStatisticsArgs,
 };
@@ -33,6 +20,7 @@ use datafusion_physical_plan::{ExecutionPlan, expressions};
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
+use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 
 /// Optimizer that uses available statistics for aggregate functions
 #[derive(Default, Debug)]
@@ -46,20 +34,26 @@ impl AggregateStatistics {
 }
 
 impl PhysicalOptimizerRule for AggregateStatistics {
-    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
-    #[expect(clippy::allow_attributes)] // See https://github.com/apache/datafusion/issues/18881#issuecomment-3621545670
-    #[allow(clippy::only_used_in_recursion)] // See https://github.com/rust-lang/rust-clippy/issues/14566
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
         config: &ConfigOptions,
     ) -> Result<Arc<dyn ExecutionPlan>> {
+        self.optimize_with_context(plan, &ConfigOnlyContext::new(config))
+    }
+
+    #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+    fn optimize_with_context(
+        &self,
+        plan: Arc<dyn ExecutionPlan>,
+        context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
         if let Some(partial_agg_exec) = take_optimizable(&plan) {
             let partial_agg_exec = partial_agg_exec
                 .downcast_ref::<AggregateExec>()
                 .expect("take_optimizable() ensures that this is a AggregateExec");
-            let stats = StatisticsContext::new()
-                .compute(partial_agg_exec.input().as_ref(), &StatisticsArgs::new())?;
+            let stats = context
+                .compute_statistics(partial_agg_exec.input(), &StatisticsArgs::new())?;
             let mut projections = vec![];
             for expr in partial_agg_exec.aggr_expr() {
                 let field = expr.field();
@@ -75,7 +69,7 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 {
                     projections.push(ProjectionExpr {
                         expr: expressions::lit(optimizable_statistic),
-                        alias: name.to_owned(),
+                        alias: name,
                     });
                 } else {
                     // TODO: we need all aggr_expr to be resolved (cf TODO fullres)
@@ -92,13 +86,17 @@ impl PhysicalOptimizerRule for AggregateStatistics {
                 )?))
             } else {
                 plan.map_children(|child| {
-                    self.optimize(child, config).map(Transformed::yes)
+                    self.optimize_with_context(child, context)
+                        .map(Transformed::yes)
                 })
                 .data()
             }
         } else {
-            plan.map_children(|child| self.optimize(child, config).map(Transformed::yes))
-                .data()
+            plan.map_children(|child| {
+                self.optimize_with_context(child, context)
+                    .map(Transformed::yes)
+            })
+            .data()
         }
     }
 

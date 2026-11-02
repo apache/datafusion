@@ -1,0 +1,111 @@
+---
+source: datafusion/sql/tests/cases/params.rs
+expression: "plans.join(\"\\n\")"
+---
+SELECT 20 AS value LIMIT $1
+** Initial Plan:
+Limit: skip=0, fetch=$1
+  Projection: Int64(20) AS value
+    EmptyRelation: rows=1
+** Final Plan:
+Limit: skip=0, fetch=1
+  Projection: Int64(20) AS value
+    EmptyRelation: rows=1
+SELECT 20 AS value OFFSET $1
+** Initial Plan:
+Limit: skip=$1, fetch=None
+  Projection: Int64(20) AS value
+    EmptyRelation: rows=1
+** Final Plan:
+Limit: skip=1, fetch=None
+  Projection: Int64(20) AS value
+    EmptyRelation: rows=1
+SELECT $1 AS value LIMIT $1
+** Initial Plan:
+Limit: skip=0, fetch=$1
+  Projection: $1 AS value
+    EmptyRelation: rows=1
+** Final Plan:
+Limit: skip=0, fetch=1
+  Projection: Int64(1) AS value
+    EmptyRelation: rows=1
+SELECT $1 AS value FROM (VALUES (0), (0)) AS t(dummy) OFFSET $1
+** Initial Plan:
+Limit: skip=$1, fetch=None
+  Projection: $1 AS value
+    SubqueryAlias: t
+      Projection: column1 AS dummy
+        Values: (Int64(0)), (Int64(0))
+** Final Plan:
+Limit: skip=1, fetch=None
+  Projection: Int64(1) AS value
+    SubqueryAlias: t
+      Projection: column1 AS dummy
+        Values: (Int64(0)), (Int64(0))
+SELECT value FROM (SELECT 20 AS value LIMIT $1) AS t
+** Initial Plan:
+Projection: t.value
+  SubqueryAlias: t
+    Limit: skip=0, fetch=$1
+      Projection: Int64(20) AS value
+        EmptyRelation: rows=1
+** Final Plan:
+Projection: t.value
+  SubqueryAlias: t
+    Limit: skip=0, fetch=1
+      Projection: Int64(20) AS value
+        EmptyRelation: rows=1
+SELECT (SELECT value FROM (VALUES (10), (20)) AS t(value) ORDER BY value LIMIT $1) AS value
+** Initial Plan:
+Projection: (<subquery>) AS value
+  Subquery:
+    Limit: skip=0, fetch=$1
+      Sort: t.value ASC NULLS LAST
+        Projection: t.value
+          SubqueryAlias: t
+            Projection: column1 AS value
+              Values: (Int64(10)), (Int64(20))
+  EmptyRelation: rows=1
+** Final Plan:
+Projection: (<subquery>) AS value
+  Subquery:
+    Limit: skip=0, fetch=1
+      Sort: t.value ASC NULLS LAST
+        Projection: t.value
+          SubqueryAlias: t
+            Projection: column1 AS value
+              Values: (Int64(10)), (Int64(20))
+  EmptyRelation: rows=1
+SELECT 20 AS value WHERE EXISTS (SELECT value FROM (VALUES (10), (20)) AS t(value) OFFSET $1)
+** Initial Plan:
+Projection: Int64(20) AS value
+  Filter: EXISTS (<subquery>)
+    Subquery:
+      Limit: skip=$1, fetch=None
+        Projection: t.value
+          SubqueryAlias: t
+            Projection: column1 AS value
+              Values: (Int64(10)), (Int64(20))
+    EmptyRelation: rows=1
+** Final Plan:
+Projection: Int64(20) AS value
+  Filter: EXISTS (<subquery>)
+    Subquery:
+      Limit: skip=1, fetch=None
+        Projection: t.value
+          SubqueryAlias: t
+            Projection: column1 AS value
+              Values: (Int64(10)), (Int64(20))
+    EmptyRelation: rows=1
+** Initial Plan:
+Limit: skip=0, fetch=$1
+  Projection: $1 + CAST(Int64(1) AS Int32) AS value
+    SubqueryAlias: t
+      Projection: $1
+        EmptyRelation: rows=1
+** Final Plan:
+Limit: skip=0, fetch=Int32(1)
+  Projection: Int32(1) + CAST(Int64(1) AS Int32) AS value
+    SubqueryAlias: t
+      Projection: Int32(1) AS $1
+        EmptyRelation: rows=1

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines physical expressions for APPROX_MEDIAN that can be evaluated MEDIAN at runtime during query execution
 
@@ -34,6 +21,7 @@ use datafusion_expr::{
 use datafusion_macros::user_doc;
 
 use crate::approx_percentile_cont::ApproxPercentileAccumulator;
+use crate::utils::{PercentileParam, PercentileParamState};
 
 make_udaf_expr_and_func!(
     ApproxMedian,
@@ -108,6 +96,7 @@ impl AggregateUDFImpl for ApproxMedian {
                     Field::new_list_field(Float64, true),
                     false,
                 ),
+                Field::new(format_state_name(args.name, "percentile"), Float64, true),
             ]
             .into_iter()
             .map(Arc::new)
@@ -138,7 +127,11 @@ impl AggregateUDFImpl for ApproxMedian {
             Ok(Box::new(NoopAccumulator::default()))
         } else {
             Ok(Box::new(ApproxPercentileAccumulator::new(
-                0.5_f64,
+                PercentileParam {
+                    aggregate_fn_name: "APPROX_MEDIAN".to_string(),
+                    state: PercentileParamState::Resolved(0.5_f64),
+                    is_desc: false,
+                },
                 acc_args.expr_fields[0].data_type().clone(),
             )))
         }

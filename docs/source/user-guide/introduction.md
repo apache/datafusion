@@ -124,8 +124,9 @@ Here are some active projects using DataFusion:
 - [Lance](https://github.com/lancedb/lance) Modern columnar data format for ML
 - [OpenObserve] Distributed cloud native observability platform
 - [ParadeDB](https://github.com/paradedb/paradedb) PostgreSQL for Search & Analytics
-- [Parseable] Log storage and observability platform
+- [Parseable] Open columnar observability data lake platform for logs, metrics, and traces.
 - [Massive.com](https://massive.com/) Stock Market API
+- [Mycorr](https://mycorr.app) Shared, versioned tables with units, links and SQL for humans and agents
 - [qv] Quickly view your data
 - [R2 Query Engine](https://blog.cloudflare.com/r2-sql-deep-dive/) Cloudflare's distributed engine for querying data in Iceberg Catalogs
 - [rerun.io](https://rerun.io/) Visualize and query robotics logs and transform them into training data.
@@ -196,6 +197,7 @@ provide integrations with other systems, some of which are described below:
 
 ### Integrations
 
+- [datafusion-arrowmetal](https://github.com/singhpratech/ArrowMetal/tree/main/datafusion) A physical optimizer rule that runs sorts and measured group-bys on the Apple silicon GPU through Metal
 - [datafusion-bigtable](https://github.com/datafusion-contrib/datafusion-bigtable)
 - [datafusion-catalogprovider-glue](https://github.com/datafusion-contrib/datafusion-catalogprovider-glue)
 - [datafusion-federation](https://github.com/datafusion-contrib/datafusion-federation)

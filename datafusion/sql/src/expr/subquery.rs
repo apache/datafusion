@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, Diagnostic, Result, Span, Spans, plan_err};
@@ -70,12 +57,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let outer_ref_columns = sub_plan.all_out_ref_exprs();
         planner_context.pop_outer_query_schema();
 
-        self.validate_single_column(
-            &sub_plan,
-            &spans,
-            "Too many columns! The subquery should only return one column",
-            "Select only one column in the subquery",
-        )?;
+        // A tuple `(a, b) IN (SELECT x, y ...)` compares one subquery column per
+        // tuple element (the counts are checked once the tuple is planned, see
+        // `in_subquery_tuple_values`); anything else compares a single value,
+        // so the subquery must return exactly one column.
+        if !matches!(expr, SQLExpr::Tuple(_)) {
+            self.validate_single_column(
+                &sub_plan,
+                &spans,
+                "Too many columns! The subquery should only return one column",
+                "Select only one column in the subquery",
+            )?;
+        }
 
         let expr_obj = self.sql_to_expr(expr, input_schema, planner_context)?;
 

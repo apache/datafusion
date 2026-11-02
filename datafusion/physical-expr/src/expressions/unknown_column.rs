@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! UnKnownColumn expression
 
@@ -93,12 +80,11 @@ impl PhysicalExpr for UnKnownColumn {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self { name } = self;
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::UnknownColumn(
-                protobuf::UnknownColumn {
-                    name: self.name.clone(),
-                },
+                protobuf::UnknownColumn { name: name.clone() },
             )),
         }))
     }
@@ -114,12 +100,12 @@ impl UnKnownColumn {
         use datafusion_physical_expr_common::expect_expr_variant;
         use datafusion_proto_models::protobuf;
 
-        let unknown_col = expect_expr_variant!(
+        let protobuf::UnknownColumn { name } = expect_expr_variant!(
             node,
             protobuf::physical_expr_node::ExprType::UnknownColumn,
             "UnKnownColumn",
         );
-        Ok(Arc::new(UnKnownColumn::new(&unknown_col.name)))
+        Ok(Arc::new(UnKnownColumn::new(name)))
     }
 }
 

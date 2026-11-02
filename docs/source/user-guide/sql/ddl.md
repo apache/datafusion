@@ -194,9 +194,8 @@ It is also possible to use compressed files, such as `.csv.gz`:
 ```sql
 CREATE EXTERNAL TABLE test
 STORED AS CSV
-COMPRESSION TYPE GZIP
 LOCATION '/path/to/aggregate_simple.csv.gz'
-OPTIONS ('has_header' 'true');
+OPTIONS ('has_header' 'true', 'format.compression' 'gzip');
 ```
 
 ### Example: Specifying Schema

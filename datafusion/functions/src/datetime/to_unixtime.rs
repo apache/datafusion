@@ -1,24 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::to_timestamp::ToTimestampSecondsFunc;
 use crate::datetime::common::*;
 use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::{Result, exec_err};
+use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
@@ -141,6 +129,42 @@ impl ScalarUDFImpl for ToUnixtimeFunc {
                 exec_err!("Unsupported data type {} for function to_unixtime", other)
             }
         }
+    }
+
+    fn output_ordering(&self, input: &[ExprProperties]) -> Result<SortProperties> {
+        if self.preserves_lex_ordering(input)? {
+            // Conversions preserve epoch order and report overflow instead of adding NULLs.
+            Ok(input[0].sort_properties)
+        } else {
+            Ok(SortProperties::Unordered)
+        }
+    }
+
+    fn preserves_lex_ordering(&self, input: &[ExprProperties]) -> Result<bool> {
+        let [value] = input else {
+            return Ok(false);
+        };
+        let data_type = value.range.data_type();
+        Ok(data_type.is_integer()
+            || matches!(
+                data_type,
+                DataType::Date32 | DataType::Date64 | DataType::Timestamp(_, _)
+            ))
+    }
+
+    fn strictly_order_preserving(&self, input: &[ExprProperties]) -> Result<bool> {
+        let [value] = input else {
+            return Ok(false);
+        };
+        let data_type = value.range.data_type();
+        // Exact or scaled-by-constant conversions are one-to-one; Date64 and
+        // sub-second timestamps truncate to seconds.
+        Ok(value.strictly_order_preserving
+            && (data_type.is_integer()
+                || matches!(
+                    data_type,
+                    DataType::Date32 | DataType::Timestamp(TimeUnit::Second, _)
+                )))
     }
 
     fn documentation(&self) -> Option<&Documentation> {

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Metrics for recording information about execution
 
@@ -248,6 +235,22 @@ impl MetricsSet {
     /// Add the specified metric without changing other snapshots.
     pub fn push(&mut self, metric: Arc<Metric>) {
         self.metrics.push(metric)
+    }
+
+    /// Returns this set with the derived `output_rows_skew` metric appended,
+    /// or unchanged if no partition reported `output_rows` yet.
+    ///
+    /// This is typically used in `ExecutionPlan::metrics` of operators that
+    /// execute in multiple partitions (e.g. repartitions, partitioned joins and
+    /// aggregations), where it shows how evenly their output rows are spread
+    /// across partitions. With a single partition the skew is always `0%`.
+    ///
+    /// See [`BaselineMetrics::output_rows_skew_metric`] for how skew is computed.
+    pub fn with_output_rows_skew(mut self) -> Self {
+        if let Some(output_rows_skew) = BaselineMetrics::output_rows_skew_metric(&self) {
+            self.push(output_rows_skew);
+        }
+        self
     }
 
     /// Return the metrics whose partition ID equals `partition`.

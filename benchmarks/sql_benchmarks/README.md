@@ -39,7 +39,9 @@ in the community:
 | `nlj`                 | Nested‑loop join benchmark                                         |
 | `null_aware_join`     | Null-aware (`NOT IN`) hash join micro-benchmarks. Q01-Q03 are uncorrelated `NOT IN` across NULL fractions and are linear in the table size (`NAJ_LARGE_ROWS`, default `1000000`). Q04-Q08 are correlated, so the correlation predicate stays behind as a join filter that the join applies per candidate (build row × probe row) pair while deciding which outer rows are UNKNOWN; without an equality correlation there are no scope keys to narrow those pairs, so their cost grows with the square of `NAJ_ROWS` (default `10000`). Q08 adds an equality correlation, which turns those pairs into a hash lookup. All tables are built inline from `range()`, so there is no data step. |
 | `push_down_topk`      | `ORDER BY ... LIMIT` over outer joins (TPC-H data); exercises pushing a TopK through a join |
+| `pwmj`                | Piecewise merge join: classic `INNER`/`LEFT`/`RIGHT`/`FULL` joins over `lhs.key < rhs.key`. Subgroups (`--subgroup`) are match regimes: `no_match`, `null_heavy`, `half_match`, `selective`, `all_match`. Generated with `range()`, no data needed. |
 | `smj`                 | Sort‑merge join benchmark                                          |
+| [`sort_pushdown`](sort_pushdown/README.md) | SQL counterparts of the five sort pushdown variants, using existing Parquet data and query files. |
 | `sort tpch`           | Sorting benchmarks against the TPC-H lineitem table                |
 | `taxi`                | NYC taxi dataset benchmark                                         |
 | `tpcds`               | TPC‑DS queries                                                     |
@@ -139,6 +141,31 @@ compatibility with benchmark files and direct Criterion runs. Direct
 `cargo bench --bench sql` invocations cannot accept custom arguments, so they
 still use environment variables.
 
+DataFusion session settings are read through `SessionConfig::from_env()` in both
+CLI and direct Criterion runs. Use the standard `DATAFUSION_*` environment variables:
+
+| Setting                        | Environment variable                                |
+| ------------------------------ | --------------------------------------------------- |
+| Parallel partitions            | `DATAFUSION_EXECUTION_TARGET_PARTITIONS`            |
+| Batch size                     | `DATAFUSION_EXECUTION_BATCH_SIZE`                   |
+| Sort spill reservation (bytes) | `DATAFUSION_EXECUTION_SORT_SPILL_RESERVATION_BYTES` |
+| Prefer hash joins              | `DATAFUSION_OPTIMIZER_PREFER_HASH_JOIN`             |
+| Enable Piecewise Merge Join    | `DATAFUSION_OPTIMIZER_ENABLE_PIECEWISE_MERGE_JOIN`  |
+| Hash join buffering capacity   | `DATAFUSION_EXECUTION_HASH_JOIN_BUFFERING_CAPACITY` |
+| Collect statistics             | `DATAFUSION_EXECUTION_COLLECT_STATISTICS`           |
+
+Explicit CLI settings override environment settings; otherwise DataFusion's defaults
+apply. The old `PARTITIONS`, `BATCH_SIZE`, `SORT_SPILL_RESERVATION_BYTES`,
+`PREFER_HASH_JOIN`, and `HASH_JOIN_BUFFERING_CAPACITY` environment variables are
+no longer used. For example:
+
+```shell
+DATAFUSION_EXECUTION_TARGET_PARTITIONS=2 DATAFUSION_OPTIMIZER_PREFER_HASH_JOIN=false cargo bench --bench sql
+```
+
+Memory limits and pool types configure `RuntimeEnv` separately. `MEMORY_LIMIT`
+(or `--memory-limit`) takes precedence over `DATAFUSION_RUNTIME_MEMORY_LIMIT`.
+
 The SQL benchmarking tool uses the following environment variables:
 
 | Environment Variable  | Description                                                                                                                                                                                       |
@@ -169,8 +196,6 @@ Some benchmarks use custom environment variables as outlined below:
 | H2O_FILE_TYPE                | Used in the h2o benchmark to specify which file type to query against. The valid options are `csv` and `parquet`         | `csv`         |
 | CLICKBENCH_TYPE              | The type of partitioning for the clickbench benchmark. Valid options are `single` and `partitioned`                      | `single`      | 
 | H2O_BENCH_SIZE               | Used in the h2o benchmark. The valid options are `small`, `medium` and `big`                                             | `small`       |                           
-| PREFER_HASH_JOIN             | Control datafusion's config option `datafusion.optimizer.prefer_hash_join`                                               | true          |
-| HASH_JOIN_BUFFERING_CAPACITY | Control datafusion's config option `datafusion.execution.hash_join_buffering_capacity`                                   | 0             |
 | BENCH_SORTED                 | Used in the sort_tpch benchmark to indicate whether the lineitem table should be sorted.                                 | false         |
 | SORTED_BY                    | Used in the clickbench_sorted benchmark to indicate the column to sort by.                                               | `EventTime`   |
 | SORTED_ORDER                 | Used in the clickbench_sorted benchmark to indicate the sort order of the column.                                        | `ASC`         |
@@ -420,7 +445,7 @@ QUERY_NUMBER_PADDED=01
 The echo directive allows for echoing a string to stdout during the execution of the benchmark and may be useful for
 debugging.<br/><br/>Example:<br/>
 <blockquote>
-echo The value for batch size is ${BATCH_SIZE:-8192}
+echo The value for batch size is ${DATAFUSION_EXECUTION_BATCH_SIZE:-8192}
 </blockquote>
 
 </td>

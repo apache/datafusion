@@ -30,7 +30,9 @@ runs:
       # See for more details: https://github.com/rust-lang/rust/issues/119560
       run: |
         echo "RUST_BACKTRACE=1" >> $GITHUB_ENV
-        echo "RUSTFLAGS=-C debuginfo=line-tables-only -C incremental=false" >> $GITHUB_ENV
+        echo "RUSTFLAGS=-C debuginfo=line-tables-only" >> $GITHUB_ENV
+        # rustc's -C incremental takes a directory, not a boolean.
+        echo "CARGO_INCREMENTAL=0" >> $GITHUB_ENV
         # Work around intermittent "[16] Error in the HTTP2 framing layer"
         # failures from curl when cargo fetches crates from crates.io.
         # Disabling HTTP/2 multiplexing forces cargo to serialize requests,

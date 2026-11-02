@@ -223,7 +223,5 @@ Not all table providers support `DELETE` and `UPDATE`. In-memory tables created 
 
 ### Known limitations
 
-- Subqueries in `DELETE` and `UPDATE` conditions can affect unintended rows: [#24654](https://github.com/apache/datafusion/issues/24654).
-- `EXPLAIN DELETE` and `EXPLAIN UPDATE` can modify in-memory tables: [#24656](https://github.com/apache/datafusion/issues/24656).
 - `DELETE` ignores `LIMIT`: [#24998](https://github.com/apache/datafusion/issues/24998).
 - `UPDATE ... FROM` is not supported: [#19950](https://github.com/apache/datafusion/issues/19950).
