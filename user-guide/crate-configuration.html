@@ -517,6 +517,12 @@ dependencies</a> directly to a GitHub branch:</p>
 <div class="highlight-toml notranslate"><div class="highlight"><pre><span></span><span class="n">datafusion</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="p">{</span><span class="w"> </span><span class="n">git</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;https://github.com/apache/datafusion&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">branch</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="s2">&quot;main&quot;</span><span class="p">,</span><span class="w"> </span><span class="n">default-features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="n">features</span><span class="w"> </span><span class="p">=</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;unicode_expressions&quot;</span><span class="p">]</span><span class="w"> </span><span class="p">}</span>
 </pre></div>
 </div>
+<p>The version on <code class="docutils literal notranslate"><span class="pre">main</span></code> is a pre-release of the next major version, such as
+<code class="docutils literal notranslate"><span class="pre">57.0.0-dev</span></code> (see the <code class="docutils literal notranslate"><span class="pre">version</span></code> in the workspace <a class="reference external" href="https://github.com/apache/datafusion/blob/main/Cargo.toml"><code class="docutils literal notranslate"><span class="pre">Cargo.toml</span></code></a>).</p>
+<p>Cargo matches a pre-release version exactly, so if
+you specify a <code class="docutils literal notranslate"><span class="pre">version</span></code>, the requirement must include the <code class="docutils literal notranslate"><span class="pre">-dev</span></code> suffix
+(for example <code class="docutils literal notranslate"><span class="pre">version</span> <span class="pre">=</span> <span class="pre">&quot;57.0.0-dev&quot;</span></code>). A requirement such as <code class="docutils literal notranslate"><span class="pre">version</span> <span class="pre">=</span> <span class="pre">&quot;57&quot;</span></code>
+will not match.</p>
 <p>More on <a class="reference external" href="https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies">Cargo dependencies</a></p>
 </section>
 <section id="optimizing-builds">
