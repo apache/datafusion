@@ -108,15 +108,6 @@ impl CountRollup {
     }
 }
 
-/// Check whether all aggregate exprs are eligible for the single-distinct-to-group-by rewrite.
-///
-/// When `prefer_memory` is true, the rewrite is skipped only for `GROUP BY` queries
-/// on fixed-width primitive types, where it reliably reduces peak memory without
-/// regressing throughput. Variable-length types (strings, binary) and un-grouped
-/// aggregates always continue with the 2-phase rewrite.
-/// Aggregates with [`DistinctHandling::Unsupported`] (e.g. `approx_median`) cannot
-/// run natively with `DISTINCT` and are always rewritten.
-
 /// Returns `true` for fixed-width primitive types where single-phase distinct
 /// accumulation avoids heap allocation churn.
 fn is_fixed_width_type(dt: &DataType) -> bool {
@@ -146,6 +137,14 @@ fn is_fixed_width_type(dt: &DataType) -> bool {
     )
 }
 
+/// Check whether all aggregate exprs are eligible for the single-distinct-to-group-by rewrite.
+///
+/// When `prefer_memory` is true, the rewrite is skipped only for `GROUP BY` queries
+/// on fixed-width primitive types, where it reliably reduces peak memory without
+/// regressing throughput. Variable-length types (strings, binary) and un-grouped
+/// aggregates always continue with the 2-phase rewrite.
+/// Aggregates with [`DistinctHandling::Unsupported`] (e.g. `approx_median`) cannot
+/// run natively with `DISTINCT` and are always rewritten.
 fn is_single_distinct_agg(
     aggr_expr: &[Expr],
     input_schema: &DFSchema,
