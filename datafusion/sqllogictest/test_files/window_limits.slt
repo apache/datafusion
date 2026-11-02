@@ -1019,8 +1019,8 @@ physical_plan
 # below it is independent and still belongs in the sort under the inner window.
 #
 # The next two queries differ only in the outer ORDER BY, which decides what the
-# walk meets after the window it could not grow past. Both left the inner SortExec
-# a full sort before this PR, and the second is the stricter of the two:
+# walk meets after the window it could not grow past. If the stale phase survives,
+# both leave the inner SortExec a full sort; the second is the stricter of the two:
 #   * ORDER BY salary leaves an outer SortExec in place, so either clear can be the
 #     one that forgets the stale phase.
 #   * ORDER BY empno matches the inner ordering, so EnforceSorting elides the outer
@@ -1186,9 +1186,9 @@ physical_plan
 # short and the last row of the result is computed over a truncated frame.
 #
 # The outer `LIMIT 3` here is spent on the SortExec that orders by `salary`, and
-# the walk then starts a new chain at the inner `LIMIT 3`. That makes this shape
-# reachable only once applying a fetch stops ending the walk, which is the first
-# commit in this PR. Three properties are load-bearing: `s2` must read `s1`, or
+# the walk then starts a new chain at the inner `LIMIT 3`, so the shape is only
+# reachable when applying a fetch does not end the walk.
+# Three properties are load-bearing: `s2` must read `s1`, or
 # the max is enough and the case does not fail; the two frames must end at
 # different offsets (1 and 2), or the max and the sum agree; and the outer
 # window's frame must end at the current row so it adds no lookahead of its own.

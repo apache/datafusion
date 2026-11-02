@@ -445,9 +445,9 @@ mod tests {
         "#);
     }
 
-    /// The nested shape from review: the limit is spent on the outer sort, so the
-    /// inner window's `Absolute(200)` has nothing to raise. It must not become a
-    /// fetch on the inner sort, which no `LIMIT` sits above.
+    /// The nested variant: the limit is spent on the outer sort, so the inner
+    /// window's `Absolute(200)` has nothing to raise. It must not become a fetch
+    /// on the inner sort, which no `LIMIT` sits above.
     #[test]
     fn absolute_limit_effect_does_not_invent_a_limit_below_an_applied_sort() {
         let plan = build_nested_absolute_plan().unwrap();
