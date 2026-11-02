@@ -51,18 +51,16 @@ datafusion = { git = "https://github.com/apache/datafusion", branch = "main", de
 ```
 
 The version on `main` is a pre-release of the next major version, such as
-`57.0.0-dev` (see the `version` in the workspace [`Cargo.toml`]). 
+`57.0.0-dev` (see the `version` in the workspace [`Cargo.toml`]).
 
 Cargo matches a pre-release version exactly, so if
 you specify a `version`, the requirement must include the `-dev` suffix
 (for example `version = "57.0.0-dev"`). A requirement such as `version = "57"`
-will not match. 
+will not match.
 
 More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies)
 
 [`cargo.toml`]: https://github.com/apache/datafusion/blob/main/Cargo.toml
-
-[`[patch.crates-io]` section]: https://doc.rust-lang.org/cargo/reference/overriding-dependencies.html#the-patch-section
 
 ## Optimizing Builds
 
