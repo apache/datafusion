@@ -645,6 +645,13 @@ impl FileFormat for ParquetFormat {
             .cloned()
             .ok_or_else(|| internal_datafusion_err!("Expected ParquetSource"))?;
         source = source.with_table_parquet_options(self.options.clone());
+        source = source.with_dictionary_filter_on_read(
+            state
+                .config_options()
+                .execution
+                .parquet
+                .dictionary_filter_on_read,
+        );
 
         // Use the CachedParquetFileReaderFactory
         let metadata_cache = state.runtime_env().cache_manager.get_file_metadata_cache();
@@ -831,6 +838,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
                 parquet_options::EncodingOpt::Encoding(encoding.to_string())
             }),
             bloom_filter_on_read: global_options.global.bloom_filter_on_read,
+            dictionary_filter_on_read: global_options.global.dictionary_filter_on_read,
             bloom_filter_on_write: global_options.global.bloom_filter_on_write,
             bloom_filter_fpp_opt: global_options.global.bloom_filter_fpp.map(|fpp| {
                 parquet_options::BloomFilterFppOpt::BloomFilterFpp(fpp)

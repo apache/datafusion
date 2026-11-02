@@ -13,6 +13,7 @@ use self::early_stop::EarlyStoppingStream;
 use self::encryption::EncryptionContext;
 use crate::access_plan::PreparedAccessPlan;
 use crate::decoder_projection::DecoderProjection;
+use crate::dictionary_filter::{DICTIONARY_READ_CONCURRENCY, eligible_dictionary_page};
 use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
@@ -21,8 +22,9 @@ use crate::push_decoder::{
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
-    BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
-    ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn, RowGroupAccess,
+    BloomFilterStatistics, DictionaryStatistics, Int96Coercer, ParquetAccessPlan,
+    ParquetFileMetrics, ParquetFileReaderFactory, ParquetRowSelection,
+    ParquetVirtualColumn, RowGroupAccess,
     schema_coercion::apply_file_schema_type_coercions_with_rle,
 };
 use arrow::array::RecordBatch;
@@ -64,7 +66,11 @@ use datafusion_pruning::{FilePruner, PruningPredicate, PruningPredicateBuilder};
 use datafusion_common::config::EncryptionFactoryOptions;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
-use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
+use futures::{
+    FutureExt, StreamExt,
+    future::BoxFuture,
+    stream::{self, BoxStream},
+};
 use log::debug;
 use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::arrow::arrow_reader::metrics::ArrowReaderMetrics;
@@ -265,6 +271,9 @@ pub(super) struct ParquetMorselizer {
     /// Should the bloom filter be read from parquet, if present, to skip row
     /// groups
     pub enable_bloom_filter: bool,
+    /// Should fully dictionary-encoded `BYTE_ARRAY` column chunks be used as
+    /// an exact row-group membership index, if present, to skip row groups
+    pub enable_dictionary_filter: bool,
     /// Should row group pruning be applied
     pub enable_row_group_stats_pruning: bool,
     /// Coerce INT96 timestamps to specific TimeUnit
@@ -310,6 +319,7 @@ impl fmt::Debug for ParquetMorselizer {
             .field("preserve_order", &self.preserve_order)
             .field("enable_page_index", &self.enable_page_index)
             .field("enable_bloom_filter", &self.enable_bloom_filter)
+            .field("enable_dictionary_filter", &self.enable_dictionary_filter)
             .finish()
     }
 }
@@ -355,6 +365,9 @@ impl Morselizer for ParquetMorselizer {
 /// PruneWithBloomFilters
 ///        |
 ///        v
+///  LoadDictionaries
+///        |
+///        v
 ///   BuildStream
 ///        |
 ///        v
@@ -389,6 +402,12 @@ enum ParquetOpenState {
     LoadBloomFilters(BoxFuture<'static, Result<BloomFiltersLoadedParquetOpen>>),
     /// Pruning with preloaded Bloom Filters
     PruneWithBloomFilters(Box<BloomFiltersLoadedParquetOpen>),
+    /// Loading Parquet dictionary pages required for row-group pruning.
+    ///
+    /// Each row group is pruned as soon as its dictionary has been read, so
+    /// there is no separate pruning state: the future yields the pruned row
+    /// groups.
+    LoadDictionaries(BoxFuture<'static, Result<RowGroupsPrunedParquetOpen>>),
     /// Builds the final reader stream
     ///
     /// TODO: split state as this currently does both I/O and CPU work.
@@ -412,6 +431,7 @@ impl fmt::Debug for ParquetOpenState {
             ParquetOpenState::PruneWithStatistics(_) => "PruneWithStatistics",
             ParquetOpenState::LoadBloomFilters(_) => "LoadBloomFilters",
             ParquetOpenState::PruneWithBloomFilters(_) => "PruneWithBloomFilters",
+            ParquetOpenState::LoadDictionaries(_) => "LoadDictionaries",
             ParquetOpenState::BuildStream(_) => "BuildStream",
             ParquetOpenState::Ready(_) => "Ready",
             ParquetOpenState::Done => "Done",
@@ -460,6 +480,7 @@ struct PreparedParquetOpen {
     force_filter_selections: bool,
     enable_page_index: bool,
     enable_bloom_filter: bool,
+    enable_dictionary_filter: bool,
     enable_row_group_stats_pruning: bool,
     /// True when substituting the columns `constant_columns_from_stats`
     /// proved constant for this file is on its own enough to collapse the
@@ -687,7 +708,12 @@ impl ParquetOpenState {
                 if pruned.row_groups.is_fully_pruned() {
                     return Ok(ParquetOpenState::Done);
                 }
-                Ok(ParquetOpenState::BuildStream(Box::new(pruned)))
+                Ok(ParquetOpenState::LoadDictionaries(
+                    pruned.load_dictionaries().boxed(),
+                ))
+            }
+            ParquetOpenState::LoadDictionaries(future) => {
+                Ok(ParquetOpenState::LoadDictionaries(future))
             }
             ParquetOpenState::BuildStream(prepared) => {
                 Ok(ParquetOpenState::Ready(prepared.build_stream()?))
@@ -806,6 +832,15 @@ impl MorselPlanner for ParquetMorselPlanner {
                     Ok(ParquetOpenState::PruneWithBloomFilters(Box::new(
                         future.await?,
                     )))
+                })))
+            }
+            ParquetOpenState::LoadDictionaries(future) => {
+                Ok(Some(Self::schedule_io(async move {
+                    let pruned = future.await?;
+                    if pruned.row_groups.is_fully_pruned() {
+                        return Ok(ParquetOpenState::Done);
+                    }
+                    Ok(ParquetOpenState::BuildStream(Box::new(pruned)))
                 })))
             }
             ParquetOpenState::Ready(stream) => {
@@ -1001,6 +1036,7 @@ impl ParquetMorselizer {
             force_filter_selections: self.force_filter_selections,
             enable_page_index: self.enable_page_index,
             enable_bloom_filter: self.enable_bloom_filter,
+            enable_dictionary_filter: self.enable_dictionary_filter,
             enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
             stats_prove_unsatisfiable,
             stats_constant_columns_in_predicate,
@@ -1344,6 +1380,15 @@ impl FiltersPreparedParquetOpen {
                     .row_groups_pruned_statistics
                     .add_matched(row_groups.remaining_row_group_count());
             }
+
+            if !prepared.enable_dictionary_filter || row_groups.is_empty() {
+                // Update metrics: dictionary filter unavailable, so all row
+                // groups are matched (not pruned)
+                prepared
+                    .file_metrics
+                    .row_groups_pruned_dictionary
+                    .add_matched(row_groups.remaining_row_group_count());
+            }
         } else {
             // Update metrics: no predicate, so all row groups are matched (not pruned)
             // by statistics. Bloom pruning did not run, so its metrics are unchanged.
@@ -1351,6 +1396,12 @@ impl FiltersPreparedParquetOpen {
             prepared
                 .file_metrics
                 .row_groups_pruned_statistics
+                .add_matched(remaining);
+            // Dictionary pruning cannot run without a predicate; every row
+            // group is matched (not pruned) by it.
+            prepared
+                .file_metrics
+                .row_groups_pruned_dictionary
                 .add_matched(remaining);
         }
 
@@ -1575,6 +1626,184 @@ impl RowGroupsPrunedParquetOpen {
             row_group_bloom_filters,
         })
     }
+
+    /// Load dictionary pages needed for pruning when enabled and a pruning
+    /// predicate exists, pruning each row group as soon as its dictionary has
+    /// been read.
+    ///
+    /// Only column chunks accepted by [`eligible_dictionary_page`] are read:
+    /// their dictionary is the exact set of the row group's distinct values,
+    /// so partially dictionary-encoded chunks (writers fall back to `PLAIN`
+    /// past a size limit) are skipped rather than risk unsound pruning. Row
+    /// groups that statistics already proved fully matched are skipped too,
+    /// since no dictionary can prune them.
+    ///
+    /// Pruning as reads complete lets the decoded values of a row group be
+    /// released before the next one finishes, instead of holding every row
+    /// group's dictionaries until the last read is done.
+    ///
+    /// The whole stage is best-effort: a failed reader creation, read or
+    /// decode leaves the affected row groups in place.
+    async fn load_dictionaries(mut self) -> Result<RowGroupsPrunedParquetOpen> {
+        if let Some(predicate) =
+            self.prepared.pruning_predicate.as_ref().map(|p| p.as_ref())
+            && self.prepared.loaded.prepared.enable_dictionary_filter
+            && !self.row_groups.is_empty()
+        {
+            let reader_metadata = self.prepared.loaded.reader_metadata.clone();
+            let prepared = &self.prepared.loaded.prepared;
+            let file_metrics = prepared.file_metrics.clone();
+            let metadata = reader_metadata.metadata();
+            let parquet_schema = metadata.file_metadata().schema_descr();
+            let parquet_columns: Vec<(String, usize)> = predicate
+                .literal_columns()
+                .into_iter()
+                .filter_map(|column_name| {
+                    let (column_idx, _) = parquet_column(
+                        parquet_schema,
+                        &prepared.physical_file_schema,
+                        &column_name,
+                    )?;
+                    Some((column_name, column_idx))
+                })
+                .collect();
+            // Check footer metadata before creating optional readers. A file
+            // without an eligible column should make no extra reader at all.
+            let candidates: Vec<_> = self
+                .row_groups
+                .row_group_indexes()
+                .filter(|idx| !self.row_groups.access_plan().is_fully_matched(*idx))
+                .filter_map(|idx| {
+                    let columns: Vec<_> = parquet_columns
+                        .iter()
+                        .filter(|(_, column_idx)| {
+                            eligible_dictionary_page(
+                                metadata.row_group(idx).column(*column_idx),
+                            )
+                        })
+                        .cloned()
+                        .collect();
+                    (!columns.is_empty()).then_some((idx, columns))
+                })
+                .collect();
+
+            // Row groups with nothing to read still pass through this stage
+            // unpruned; the candidates are counted as their dictionaries are
+            // evaluated (or below, if no reader can be created).
+            let candidate_count = candidates.len();
+            file_metrics.row_groups_pruned_dictionary.add_matched(
+                self.row_groups.remaining_row_group_count() - candidate_count,
+            );
+
+            let mut readers = Vec::new();
+            for _ in 0..candidate_count.min(DICTIONARY_READ_CONCURRENCY) {
+                match prepared.parquet_file_reader_factory.create_reader(
+                    prepared.partition_index,
+                    prepared.partitioned_file.clone(),
+                    prepared.metadata_size_hint,
+                    &prepared.metrics,
+                ) {
+                    Ok(reader) => readers.push(reader),
+                    Err(e) => {
+                        debug!("Ignoring error creating dictionary reader: {e}");
+                        file_metrics.predicate_evaluation_errors.add(1);
+                    }
+                }
+            }
+
+            if readers.is_empty() {
+                file_metrics
+                    .row_groups_pruned_dictionary
+                    .add_matched(candidate_count);
+            } else {
+                let mut assignments = vec![Vec::new(); readers.len()];
+                for (position, candidate) in candidates.into_iter().enumerate() {
+                    assignments[position % readers.len()].push(candidate);
+                }
+                let lanes: Vec<_> = readers
+                    .into_iter()
+                    .zip(assignments)
+                    .map(|(reader, groups)| {
+                        dictionary_lane(
+                            reader,
+                            reader_metadata.clone(),
+                            groups,
+                            file_metrics.clone(),
+                        )
+                    })
+                    .collect();
+                let mut completed = stream::select_all(lanes);
+                while let Some((idx, stats)) = completed.next().await {
+                    self.row_groups.prune_one_dictionary(
+                        idx,
+                        predicate,
+                        &file_metrics,
+                        &stats,
+                    );
+                }
+            }
+        }
+
+        Ok(self)
+    }
+}
+
+/// Reads the dictionaries of `groups` (parquet row-group index and the
+/// `(column name, parquet column index)` pairs to read) one row group at a
+/// time over a single reader, yielding each row group as it completes.
+fn dictionary_lane(
+    reader: Box<dyn AsyncFileReader + Send>,
+    reader_metadata: ArrowReaderMetadata,
+    groups: Vec<(usize, Vec<(String, usize)>)>,
+    file_metrics: ParquetFileMetrics,
+) -> BoxStream<'static, (usize, DictionaryStatistics)> {
+    // `Box<dyn AsyncFileReader>` is the reader type arrow-rs implements
+    // `AsyncFileReader` for; the `+ Send` variant returned by the factory is not.
+    let reader: Box<dyn AsyncFileReader> = reader;
+    let builder =
+        ParquetRecordBatchStreamBuilder::new_with_metadata(reader, reader_metadata);
+    stream::unfold(
+        (builder, groups.into_iter(), file_metrics),
+        |(mut builder, mut groups, file_metrics)| async move {
+            let (idx, columns) = groups.next()?;
+            let stats =
+                read_row_group_dictionaries(&mut builder, idx, columns, &file_metrics)
+                    .await;
+            Some(((idx, stats), (builder, groups, file_metrics)))
+        },
+    )
+    .boxed()
+}
+
+/// Reads and decodes the dictionaries of `columns` in row group `idx`.
+///
+/// A column whose dictionary cannot be read or decoded is left out and counted
+/// in `predicate_evaluation_errors`, which leaves its pruning inconclusive.
+async fn read_row_group_dictionaries(
+    builder: &mut ParquetRecordBatchStreamBuilder<Box<dyn AsyncFileReader>>,
+    idx: usize,
+    columns: Vec<(String, usize)>,
+    file_metrics: &ParquetFileMetrics,
+) -> DictionaryStatistics {
+    let metadata = Arc::clone(builder.metadata());
+    let mut stats = DictionaryStatistics::with_capacity(columns.len());
+    for (column_name, column_idx) in columns {
+        match builder.get_column_chunk_dictionary(idx, column_idx).await {
+            Ok(Some(dictionary)) => {
+                let column_metadata = metadata.row_group(idx).column(column_idx);
+                if let Err(e) = stats.insert(column_name, &dictionary, column_metadata) {
+                    debug!("Ignoring error decoding dictionary page: {e}");
+                    file_metrics.predicate_evaluation_errors.add(1);
+                }
+            }
+            Ok(None) => {}
+            Err(e) => {
+                debug!("Ignoring error reading dictionary page: {e}");
+                file_metrics.predicate_evaluation_errors.add(1);
+            }
+        }
+    }
+    stats
 }
 
 impl BloomFiltersLoadedParquetOpen {
@@ -2221,6 +2450,7 @@ mod test {
         force_filter_selections: bool,
         enable_page_index: bool,
         enable_bloom_filter: bool,
+        enable_dictionary_filter: bool,
         enable_row_group_stats_pruning: bool,
         coerce_int96: Option<TimeUnit>,
         max_predicate_cache_size: Option<usize>,
@@ -2441,6 +2671,7 @@ mod test {
                 force_filter_selections: false,
                 enable_page_index: false,
                 enable_bloom_filter: false,
+                enable_dictionary_filter: false,
                 enable_row_group_stats_pruning: false,
                 coerce_int96: None,
                 max_predicate_cache_size: None,
@@ -2529,6 +2760,11 @@ mod test {
 
         fn with_enable_bloom_filter(mut self, enable: bool) -> Self {
             self.enable_bloom_filter = enable;
+            self
+        }
+
+        fn with_dictionary_filter(mut self, enable: bool) -> Self {
+            self.enable_dictionary_filter = enable;
             self
         }
 
@@ -2638,6 +2874,7 @@ mod test {
                 force_filter_selections: self.force_filter_selections,
                 enable_page_index: self.enable_page_index,
                 enable_bloom_filter: self.enable_bloom_filter,
+                enable_dictionary_filter: self.enable_dictionary_filter,
                 enable_row_group_stats_pruning: self.enable_row_group_stats_pruning,
                 coerce_int96: self.coerce_int96,
                 // End-to-end coercion behavior (including timezone) is
@@ -2679,7 +2916,7 @@ mod test {
             }
 
             let Some(planner) = planners.pop_front() else {
-                return Ok(Box::pin(futures::stream::empty()));
+                return Ok(Box::pin(stream::empty()));
             };
 
             if let Some(mut plan) = planner.plan()? {
@@ -4074,6 +4311,228 @@ mod test {
             PartitionedFile::from(store.head(&path).await.unwrap()),
             arrow_schema,
         )
+    }
+
+    /// Reader that cannot fetch any bytes, like a store that fails range
+    /// requests. Metadata is served by `inner` for completeness only: the
+    /// dictionary readers are handed the footer up front.
+    struct FailingBytesReader {
+        inner: Box<dyn AsyncFileReader + Send>,
+    }
+
+    impl AsyncFileReader for FailingBytesReader {
+        fn get_bytes(
+            &mut self,
+            _range: std::ops::Range<u64>,
+        ) -> BoxFuture<'_, parquet::errors::Result<bytes::Bytes>> {
+            async {
+                Err(parquet::errors::ParquetError::General(
+                    "test read failure".into(),
+                ))
+            }
+            .boxed()
+        }
+
+        fn get_metadata<'a>(
+            &'a mut self,
+            options: Option<&'a ArrowReaderOptions>,
+        ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
+            self.inner.get_metadata(options)
+        }
+    }
+
+    /// Hands out one healthy reader for the scan itself, then fails the
+    /// optional dictionary readers as configured. Every `create_reader` call
+    /// is counted, so tests can tell whether a reader was requested at all.
+    #[derive(Debug)]
+    struct CountingDictionaryReaderFactory {
+        inner: DefaultParquetFileReaderFactory,
+        calls: Arc<AtomicUsize>,
+        /// `create_reader` returns an error from this call number onwards.
+        fail_create_from: usize,
+        /// Readers after the first one fail every byte fetch.
+        fail_reads: bool,
+    }
+
+    impl ParquetFileReaderFactory for CountingDictionaryReaderFactory {
+        fn create_reader(
+            &self,
+            partition_index: usize,
+            file: PartitionedFile,
+            metadata_size_hint: Option<usize>,
+            metrics: &ExecutionPlanMetricsSet,
+        ) -> Result<Box<dyn AsyncFileReader + Send>> {
+            let call = self.calls.fetch_add(1, Ordering::SeqCst);
+            if call >= self.fail_create_from {
+                return internal_err!("test reader failure");
+            }
+            let reader = self.inner.create_reader(
+                partition_index,
+                file,
+                metadata_size_hint,
+                metrics,
+            )?;
+            if self.fail_reads && call > 0 {
+                return Ok(Box::new(FailingBytesReader { inner: reader }));
+            }
+            Ok(reader)
+        }
+    }
+
+    fn dictionary_pruning_metrics(metrics: &ExecutionPlanMetricsSet) -> (usize, usize) {
+        match metrics
+            .clone_inner()
+            .sum_by_name("row_groups_pruned_dictionary")
+        {
+            Some(MetricValue::PruningMetrics {
+                pruning_metrics, ..
+            }) => (pruning_metrics.pruned(), pruning_metrics.matched()),
+            _ => (0, 0),
+        }
+    }
+
+    /// Dictionary pruning is best-effort and its metrics must account for every
+    /// row group that reaches the stage: failures to create a reader or to read
+    /// a dictionary retain row groups, never drop them, and a file with nothing
+    /// to read must not request extra readers.
+    #[tokio::test]
+    async fn dictionary_reader_preflight_and_optional_failures() -> Result<()> {
+        use arrow::array::StringArray;
+
+        struct Case {
+            /// Whether the file is written with dictionaries at all.
+            dictionary_enabled: bool,
+            fail_create_from: usize,
+            fail_reads: bool,
+            expected_calls: usize,
+            expected_rows: usize,
+            expected_pruned: usize,
+            expected_matched: usize,
+            expected_errors: usize,
+        }
+        // Four row groups of 16 rows holding only "a" and "z", queried for "m".
+        let cases = [
+            // No dictionary to read: no extra reader, every group retained.
+            Case {
+                dictionary_enabled: false,
+                fail_create_from: 1,
+                fail_reads: false,
+                expected_calls: 1,
+                expected_rows: 64,
+                expected_pruned: 0,
+                expected_matched: 4,
+                expected_errors: 0,
+            },
+            // Every reader creation fails: all groups retained, each failure counted.
+            Case {
+                dictionary_enabled: true,
+                fail_create_from: 1,
+                fail_reads: false,
+                expected_calls: 5,
+                expected_rows: 64,
+                expected_pruned: 0,
+                expected_matched: 4,
+                expected_errors: 4,
+            },
+            // Two lanes still prune everything.
+            Case {
+                dictionary_enabled: true,
+                fail_create_from: 2,
+                fail_reads: false,
+                expected_calls: 5,
+                expected_rows: 0,
+                expected_pruned: 4,
+                expected_matched: 0,
+                expected_errors: 3,
+            },
+            Case {
+                dictionary_enabled: true,
+                fail_create_from: usize::MAX,
+                fail_reads: false,
+                expected_calls: 5,
+                expected_rows: 0,
+                expected_pruned: 4,
+                expected_matched: 0,
+                expected_errors: 0,
+            },
+            // Readers are created but every dictionary read fails: all groups
+            // retained, each failed read counted.
+            Case {
+                dictionary_enabled: true,
+                fail_create_from: usize::MAX,
+                fail_reads: true,
+                expected_calls: 5,
+                expected_rows: 64,
+                expected_pruned: 0,
+                expected_matched: 4,
+                expected_errors: 4,
+            },
+        ];
+
+        let schema = Arc::new(Schema::new(vec![Field::new("s", DataType::Utf8, false)]));
+        for (case_idx, case) in cases.into_iter().enumerate() {
+            let values = (0..64)
+                .map(|i| if i % 2 == 0 { "a" } else { "z" })
+                .collect::<Vec<_>>();
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(StringArray::from(values))],
+            )?;
+            let properties = WriterProperties::builder()
+                .set_max_row_group_row_count(Some(16))
+                .set_dictionary_enabled(case.dictionary_enabled)
+                .set_statistics_enabled(EnabledStatistics::None)
+                .build();
+            let mut out = BytesMut::new().writer();
+            let mut writer =
+                ArrowWriter::try_new(&mut out, Arc::clone(&schema), Some(properties))?;
+            writer.write(&batch)?;
+            writer.close()?;
+            let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+            let path = Path::from("dictionary.parquet");
+            store.put(&path, out.into_inner().freeze().into()).await?;
+            let file = PartitionedFile::from(store.head(&path).await?);
+            let calls = Arc::new(AtomicUsize::new(0));
+            let factory = Arc::new(CountingDictionaryReaderFactory {
+                inner: DefaultParquetFileReaderFactory::new(Arc::clone(&store)),
+                calls: Arc::clone(&calls),
+                fail_create_from: case.fail_create_from,
+                fail_reads: case.fail_reads,
+            });
+            let metrics = ExecutionPlanMetricsSet::new();
+            let predicate = logical2physical(&col("s").eq(lit("m")), &schema);
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(store)
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(predicate)
+                .with_dictionary_filter(true)
+                .with_metrics(metrics.clone())
+                .with_parquet_file_reader_factory(factory)
+                .build();
+            let batches = open_file(&morselizer, file)
+                .await?
+                .try_collect::<Vec<_>>()
+                .await?;
+
+            let rows = batches.iter().map(RecordBatch::num_rows).sum::<usize>();
+            assert_eq!(rows, case.expected_rows, "rows, case {case_idx}");
+            assert_eq!(
+                calls.load(Ordering::SeqCst),
+                case.expected_calls,
+                "reader calls, case {case_idx}"
+            );
+            assert_eq!(
+                dictionary_pruning_metrics(&metrics),
+                (case.expected_pruned, case.expected_matched),
+                "dictionary pruning metrics, case {case_idx}"
+            );
+            assert_eq!(
+                counter_metric_value(&metrics, "predicate_evaluation_errors"),
+                case.expected_errors,
+                "predicate_evaluation_errors, case {case_idx}"
+            );
+        }
+        Ok(())
     }
 
     fn invalid_arrow_hint() -> parquet::file::properties::WriterPropertiesBuilder {

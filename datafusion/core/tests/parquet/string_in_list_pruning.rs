@@ -262,6 +262,94 @@ async fn scan(
     }
 }
 
+#[tokio::test]
+async fn dictionary_pruning_uses_current_session_setting() {
+    let mut file = tempfile::Builder::new()
+        .suffix(".parquet")
+        .tempfile()
+        .unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Utf8,
+        false,
+    )]));
+    let values = (0..64)
+        .map(|i| if i % 2 == 0 { "a" } else { "z" })
+        .collect::<Vec<_>>();
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![Arc::new(StringArray::from(values))],
+    )
+    .unwrap();
+    let properties = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(16))
+        .set_dictionary_enabled(true)
+        .set_statistics_enabled(EnabledStatistics::None)
+        .set_bloom_filter_enabled(false)
+        .build();
+    let mut writer = ArrowWriter::try_new(&mut file, schema, Some(properties)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+
+    let ctx = SessionContext::new();
+    let create = format!(
+        "CREATE EXTERNAL TABLE dictionary_setting STORED AS PARQUET LOCATION '{}' \
+         OPTIONS('format.dictionary_filter_on_read' 'true')",
+        file.path().display()
+    );
+    ctx.sql(&create).await.unwrap().collect().await.unwrap();
+
+    async fn run(ctx: &SessionContext) -> usize {
+        let plan = ctx
+            .sql("SELECT count(*) FROM dictionary_setting WHERE value = 'm'")
+            .await
+            .unwrap()
+            .create_physical_plan()
+            .await
+            .unwrap();
+        let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await.unwrap();
+        assert_batches_eq!(
+            [
+                "+----------+",
+                "| count(*) |",
+                "+----------+",
+                "| 0        |",
+                "+----------+"
+            ],
+            &batches
+        );
+        MetricsFinder::find_metrics(plan.as_ref())
+            .unwrap()
+            .sum_by_name("row_groups_pruned_dictionary")
+            .map(|metric| match metric {
+                MetricValue::PruningMetrics {
+                    pruning_metrics, ..
+                } => pruning_metrics.pruned(),
+                _ => panic!("wrong metric"),
+            })
+            .unwrap_or(0)
+    }
+
+    // The table option is `true`, but a planned scan uses the session's
+    // current value (default `false`), so nothing is pruned until the session
+    // enables it, and disabling it again takes effect without a new table.
+    assert_eq!(run(&ctx).await, 0);
+    ctx.sql("SET datafusion.execution.parquet.dictionary_filter_on_read = true")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(run(&ctx).await, 4);
+    ctx.sql("RESET datafusion.execution.parquet.dictionary_filter_on_read")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_eq!(run(&ctx).await, 0);
+}
+
 fn repeated_ordered_values(scale: i64) -> Vec<i64> {
     [0, 1, 2, 100]
         .into_iter()
