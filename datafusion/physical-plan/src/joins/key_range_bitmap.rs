@@ -22,6 +22,8 @@ pub(crate) enum KeyRangePart<'a> {
     /// The partition's build keys, which must lie within its `[min, max]`.
     Keys(&'a dyn Array),
     /// The partition has no bitmap, so any key in `[min, max]` may be present.
+    // Unused since the global dynamic filter merges keys rather than ranges.
+    #[cfg_attr(not(test), expect(dead_code))]
     Range {
         min: &'a ScalarValue,
         max: &'a ScalarValue,
