@@ -311,7 +311,7 @@ impl TopKDynamicFilters {
         Arc::clone(&self.expr)
     }
 
-    pub(crate) fn mark_topk_emitted(&self) {
+    fn mark_topk_emitted(&self) {
         let previous = self
             .remaining_topk_emitters
             .try_update(

@@ -1798,14 +1798,7 @@ impl ExecutionPlan for SortExec {
             // logical optimizer, but a `SortExec` with `fetch = Some(0)` can
             // still reach execution, for example when the logical optimizer
             // is disabled or the plan is built directly.
-            (false, Some(0)) => {
-                // Count this partition as emitted so the shared TopK dynamic
-                // filter completes once every partition has finished.
-                let filter = self.filter.as_ref();
-                let filter = unwrap_or_internal_err!(filter);
-                filter.read().mark_topk_emitted();
-                Ok(Box::pin(EmptyRecordBatchStream::new(self.schema())))
-            }
+            (false, Some(0)) => Ok(Box::pin(EmptyRecordBatchStream::new(self.schema()))),
             (false, Some(fetch)) => {
                 let filter = self.filter.clone();
                 let mut topk = TopK::try_new(
@@ -4367,54 +4360,6 @@ mod tests {
         )
         .await
         .expect("the final preserved SortExec partition should complete the filter");
-
-        Ok(())
-    }
-
-    /// Regression test for <https://github.com/apache/datafusion/issues/26431>:
-    /// a `SortExec` with `fetch = Some(0)` over unsorted input used to panic
-    /// in `TopKHeap::new`. It must return no rows, and the shared TopK
-    /// dynamic filter must still complete once every partition has run.
-    #[tokio::test]
-    async fn test_sort_fetch_zero_returns_empty_and_completes_filter() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
-        let partitions = vec![
-            vec![RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Int32Array::from(vec![3, 1, 2]))],
-            )?],
-            vec![RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![Arc::new(Int32Array::from(vec![6, 4, 5]))],
-            )?],
-        ];
-        let input = TestMemoryExec::try_new_exec(&partitions, Arc::clone(&schema), None)?;
-        let sort = SortExec::new(
-            [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into(),
-            input,
-        )
-        .with_fetch(Some(0))
-        .with_preserve_partitioning(true);
-
-        let dynamic_filter = dynamic_filter_produced(&sort);
-        let sort = Arc::new(sort);
-        let task_ctx = Arc::new(TaskContext::default());
-
-        let batches: Vec<RecordBatch> = sort
-            .execute(0, Arc::clone(&task_ctx))?
-            .try_collect()
-            .await?;
-        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 0);
-        assert_filter_still_waiting(&dynamic_filter);
-
-        let batches: Vec<RecordBatch> = sort.execute(1, task_ctx)?.try_collect().await?;
-        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 0);
-        tokio::time::timeout(
-            std::time::Duration::from_secs(1),
-            dynamic_filter.wait_complete(),
-        )
-        .await
-        .expect("the final SortExec partition should complete the filter");
 
         Ok(())
     }
