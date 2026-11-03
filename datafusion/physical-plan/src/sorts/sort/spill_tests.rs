@@ -9,10 +9,10 @@ use crate::metrics::ExecutionPlanMetricsSet;
 use crate::spill::get_record_batch_memory_size;
 use crate::spill::spill_manager::GetSlicedSize;
 use arrow::array::{
-    ArrayRef, Decimal128Array, DictionaryArray, Int8Array, Int32Array, Int64Array,
-    StringArray, StringViewArray,
+    ArrayRef, Decimal128Array, DictionaryArray, FixedSizeBinaryArray, Int8Array,
+    Int32Array, Int64Array, StringArray, StringViewArray,
 };
-use arrow::compute::{SortOptions, concat_batches};
+use arrow::compute::{SortOptions, cast, concat_batches};
 use arrow::datatypes::{DataType, Field, Int8Type, Schema};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::{ExecutionOptions, SpillCompression};
@@ -679,29 +679,69 @@ async fn test_sort_preparation_keeps_output_reserved() -> Result<()> {
     Ok(())
 }
 
-/// Two `Int32` keys encode to 18 bytes per row for the merge, more than twice
-/// the 8 bytes per row of the batches. Merging full-size runs would need more
-/// memory than the sort reserves while buffering them.
+/// Merging sorted runs in the row format holds the keys of every run's current
+/// batch. Two `Int32` keys encode to 18 bytes per row against 8 bytes in the
+/// batches, and a single `FixedSizeBinary(16)` key also merges in the row
+/// format, so merging full-size runs needs more memory than the sort reserves
+/// while buffering them. The `Utf8View` and dictionary payloads keep buffers
+/// shared after sorting, which must not be charged once per split batch.
 async fn check_merge_keys_larger_than_batches() -> Result<()> {
     let rows = 8192;
-    let schema = Arc::new(Schema::new(vec![
-        Field::new("a", DataType::Int32, false),
-        Field::new("b", DataType::Int32, false),
-    ]));
-    let batches = (0..64)
-        .map(|batch| {
-            let a =
-                Int32Array::from_iter_values((0..rows).map(|i| (i * 31 + batch) % 1000));
-            let b = Int32Array::from_iter_values((0..rows).rev());
-            RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(a), Arc::new(b)])
+    let int_keys = |batch: i32| -> Vec<ArrayRef> {
+        vec![
+            Arc::new(Int32Array::from_iter_values(
+                (0..rows).map(|i| (i * 31 + batch) % 1000),
+            )),
+            Arc::new(Int32Array::from_iter_values((0..rows).rev())),
+        ]
+    };
+    let int_fields = [("a", DataType::Int32), ("b", DataType::Int32)];
+    check_merge_keys(&int_fields, 2, |batch| Ok(int_keys(batch))).await?;
+    // Longer than 12 bytes, so views keep them in data buffers.
+    let strings = |batch: i32| -> StringArray {
+        (0..rows)
+            .map(|i| Some(format!("{batch}-{i:0>64}")))
+            .collect()
+    };
+    let dictionary =
+        DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+    for payload in [DataType::Utf8View, dictionary] {
+        let fields = [&int_fields[..], &[("c", payload.clone())]].concat();
+        check_merge_keys(&fields, 2, |batch| {
+            let payload = cast(&strings(batch), &payload)?;
+            Ok([int_keys(batch), vec![payload]].concat())
         })
-        .collect::<Result<Vec<_>, _>>()?;
-    let ordering: LexOrdering = [
-        PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0))),
-        PhysicalSortExpr::new_default(Arc::new(Column::new("b", 1))),
-    ]
-    .into();
-    // Spill every 16 batches.
+        .await?;
+    }
+    check_merge_keys(&[("k", DataType::FixedSizeBinary(16))], 1, |batch| {
+        let keys = (0..rows).map(|i| u128::from(((i * 31 + batch) % 1000) as u32));
+        let keys = FixedSizeBinaryArray::try_from_iter(keys.map(u128::to_be_bytes))?;
+        Ok(vec![Arc::new(keys)])
+    })
+    .await
+}
+
+/// Sorts 64 batches of `columns` by the first `keys` fields with room to buffer
+/// 16 of them, then checks the spilled output and that all memory is released.
+async fn check_merge_keys(
+    fields: &[(&str, DataType)],
+    keys: usize,
+    columns: impl Fn(i32) -> Result<Vec<ArrayRef>>,
+) -> Result<()> {
+    let schema = Arc::new(Schema::new(
+        fields
+            .iter()
+            .map(|(name, data_type)| Field::new(*name, data_type.clone(), false))
+            .collect::<Vec<_>>(),
+    ));
+    let batches = (0..64)
+        .map(|batch| Ok(RecordBatch::try_new(Arc::clone(&schema), columns(batch)?)?))
+        .collect::<Result<Vec<_>>>()?;
+    let ordering =
+        LexOrdering::new((0..keys).map(|i| {
+            PhysicalSortExpr::new_default(Arc::new(Column::new(fields[i].0, i)))
+        }))
+        .expect("at least one sort key");
     let capacity = MERGE_BYTES + 16 * get_reserved_bytes_for_record_batch(&batches[0])?;
     let pool = AdjustablePool::new(capacity);
     let runtime = RuntimeEnvBuilder::new()
@@ -711,7 +751,7 @@ async fn check_merge_keys_larger_than_batches() -> Result<()> {
         0,
         Arc::clone(&schema),
         ordering.clone(),
-        rows as usize,
+        batches[0].num_rows(),
         MERGE_BYTES,
         0,
         SpillCompression::Uncompressed,
