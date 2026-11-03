@@ -28,7 +28,7 @@ pub use crate::PhysicalSortExpr;
 /// Module with some convenient methods used in expression building
 pub use crate::aggregate::stats::StatsType;
 
-pub use binary::{BinaryExpr, binary, similar_to};
+pub use binary::{BinaryExpr, binary, is_cheap_and_infallible, similar_to};
 pub use case::{CaseExpr, case};
 pub use cast::{CastExpr, cast};
 pub use column::{Column, col, with_new_schema};
