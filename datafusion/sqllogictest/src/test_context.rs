@@ -27,6 +27,7 @@ use datafusion::common::stats::Precision;
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
+use datafusion::logical_expr::registry::MemoryExtensionTypeRegistry;
 use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
@@ -114,6 +115,12 @@ impl TestContext {
             if let Some(config) = state_builder.config() {
                 config.options_mut().sql_parser.dialect = Dialect::Spark;
             }
+        }
+
+        if file_name == "sql_extension_types.slt" {
+            state_builder = state_builder.with_extension_type_registry(Arc::new(
+                MemoryExtensionTypeRegistry::new_with_canonical_extension_types(),
+            ));
         }
 
         if matches!(
