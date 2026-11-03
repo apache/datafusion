@@ -50,7 +50,8 @@
 # # Pull requests from forks
 #
 # A PR from a fork runs this workflow on the fork, on the contributor's own
-# runners, and `fork_ci_status.yml` mirrors that run as the `Rust (fork)` check
+# runners, except macOS, which runs upstream, including in the merge queue.
+# `fork_ci_status.yml` mirrors that run as the `Rust (fork)` check
 # on the PR. Upstream runs `check-fmt`, `check-workflow-tool-installs`, and
 # `examples-check-datafusion-crates` for such a PR; the other jobs carry an
 # `if:` that skips them. The merge queue runs every job on the merged result,
@@ -762,7 +763,7 @@ jobs:
   # flaky sqllogictest metrics.
   macos-aarch64:
     name: cargo test (macos-aarch64)
-    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') && !(github.repository != 'apache/datafusion') }}
     runs-on: macos-15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
