@@ -629,6 +629,10 @@ impl GroupsAccumulator for HllGroupsAccumulator {
             + self.allocated_bytes
             + self.hashes.capacity() * size_of::<u64>()
     }
+
+    fn shrink_to_fit(&mut self) {
+        self.hashes = Vec::new();
+    }
 }
 
 impl Debug for ApproxDistinct {
@@ -729,6 +733,11 @@ impl AggregateUDFImpl for ApproxDistinct {
         Ok(ScalarValue::UInt64(Some(0)))
     }
 
+    fn return_field(&self, _arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::UInt64, false)))
+    }
+
+    // Keep the deprecated method consistent with `return_field` until it is removed
     fn is_nullable(&self) -> bool {
         false
     }
