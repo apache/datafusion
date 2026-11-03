@@ -3035,52 +3035,6 @@ mod tests {
         abort_count: Arc<AtomicUsize>,
     }
 
-    #[test]
-    fn test_staged_sort_automatic_groups() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("i", DataType::Int32, false),
-            Field::new("s", DataType::Utf8, false),
-        ]));
-        let cheap = col("i", &schema)?;
-        let expensive: Arc<dyn PhysicalExpr> =
-            Arc::new(CastExpr::new(col("s", &schema)?, DataType::Int32, None));
-        let group_sizes = |classes: &[bool]| -> Result<Vec<usize>> {
-            let keys =
-                LexOrdering::new(classes.iter().enumerate().map(|(index, cheap_key)| {
-                    let expr = if *cheap_key {
-                        Arc::new(BinaryExpr::new(
-                            Arc::clone(&cheap),
-                            Operator::Plus,
-                            lit(index as i32),
-                        )) as Arc<dyn PhysicalExpr>
-                    } else {
-                        Arc::new(BinaryExpr::new(
-                            Arc::clone(&expensive),
-                            Operator::Plus,
-                            lit(index as i32),
-                        ))
-                    };
-                    PhysicalSortExpr::new_default(expr)
-                }))
-                .unwrap();
-            Ok(create_sort_stages(&keys, &schema)?
-                .map(|plan| plan.iter().map(|stage| stage.expressions.len()).collect())
-                .unwrap_or_default())
-        };
-        assert_eq!(
-            group_sizes(&[true, true, false, false, true, false])?,
-            vec![2, 1, 2, 1]
-        );
-        assert_eq!(group_sizes(&[false, false, true, false])?, vec![1, 2, 1]);
-        assert_eq!(group_sizes(&[true, false])?, vec![1, 1]);
-        assert_eq!(group_sizes(&[false, false])?, vec![1, 1]);
-        assert_eq!(group_sizes(&[false; 5])?, vec![1, 1, 1, 1, 1]);
-        assert!(group_sizes(&[true; 5])?.is_empty());
-        assert!(group_sizes(&[false])?.is_empty());
-
-        Ok(())
-    }
-
     impl TempFileFactory for PendingWriteTempFileFactory {
         fn create_temp_file(&self, _description: &str) -> Result<Arc<dyn SpillFile>> {
             Ok(Arc::new(PendingWriteSpillFile {
@@ -4545,66 +4499,6 @@ mod tests {
         result
     }
 
-    async fn check_staged_multi_run_path(concurrent: bool) -> Result<()> {
-        use datafusion_expr::Volatility;
-
-        let batch = record_batch!(
-            ("p", Int32, [8, 6, 4, 2, 7, 5, 3, 1]),
-            ("v", Int32, [8, 6, 4, 2, 7, 5, 3, 1])
-        )?;
-        let schema = batch.schema();
-        for enabled in [false, true] {
-            let (suffix, rows) = counting_identity(
-                "count_suffix",
-                col("v", &schema)?,
-                &schema,
-                Volatility::Immutable,
-            )?;
-
-            let ordering = [
-                PhysicalSortExpr::new_default(col("p", &schema)?),
-                PhysicalSortExpr::new_default(suffix),
-            ]
-            .into();
-            let input = TestMemoryExec::try_new_exec(
-                &[vec![batch.slice(0, 4), batch.slice(4, 4)]],
-                Arc::clone(&schema),
-                None,
-            )?;
-            let sort = Arc::new(SortExec::new(ordering, input));
-            let config = SessionConfig::new()
-                .with_batch_size(2)
-                .with_sort_in_place_threshold_bytes(1)
-                .set_bool("datafusion.execution.enable_staged_sort", enabled);
-            let output = collect(
-                Arc::clone(&sort) as Arc<dyn ExecutionPlan>,
-                Arc::new(TaskContext::default().with_session_config(config)),
-            )
-            .await?;
-            assert_eq!(sort.sort_concurrency.get().is_some(), concurrent);
-            assert_eq!(
-                rows.load(AtomicOrdering::Relaxed),
-                if enabled { 8 } else { 16 }
-            );
-            let expected = arrow::compute::take_record_batch(
-                &batch,
-                &UInt32Array::from(vec![7, 3, 6, 2, 5, 1, 4, 0]),
-            )?;
-            assert_eq!(concat_batches(&schema, &output)?, expected);
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_staged_sort_multi_run_inline() -> Result<()> {
-        check_staged_multi_run_path(false).await
-    }
-
-    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn test_staged_sort_multi_run_concurrent() -> Result<()> {
-        check_staged_multi_run_path(true).await
-    }
-
     #[tokio::test]
     async fn test_staged_sort_zero_arg_udf() -> Result<()> {
         use datafusion_expr::{
@@ -4704,9 +4598,9 @@ mod tests {
                 vec![7, 6, 5, 4, 3, 2, 1, 0],
             ),
             (
-                vec![0, 0, 1, 1, 2, 2, 3, 3],
-                vec!["8", "7", "6", "5", "4", "3", "2", "1"],
-                vec![1, 0, 3, 2, 5, 4, 7, 6],
+                vec![0, 0, 1, 1, 2, 3, 3, 4, 4],
+                vec!["8", "7", "6", "5", "invalid", "4", "3", "2", "1"],
+                vec![1, 0, 3, 2, 4, 6, 5, 8, 7],
             ),
         ] {
             let batch = RecordBatch::try_new(
@@ -4722,40 +4616,9 @@ mod tests {
             )?;
             rows.store(0, AtomicOrdering::Relaxed);
             let result = staged_sort_test_output(&batch, &ordering, true, 1, 1).await?;
-            assert_eq!(rows.load(AtomicOrdering::Relaxed), 8);
+            assert_eq!(rows.load(AtomicOrdering::Relaxed), batch.num_rows());
             assert_eq!(concat_batches(&schema, &result)?, expected);
         }
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_staged_sort_fallback_ignores_resolved_rows() -> Result<()> {
-        let batch = record_batch!(
-            ("prefix", Int32, [0, 0, 1, 1, 2, 3, 3, 4, 4]),
-            (
-                "suffix",
-                Utf8,
-                ["8", "7", "6", "5", "invalid", "4", "3", "2", "1"]
-            )
-        )?;
-        let schema = batch.schema();
-        let suffix = Arc::new(CastExpr::new(
-            col("suffix", &schema)?,
-            DataType::Int32,
-            None,
-        ));
-        let ordering = [
-            PhysicalSortExpr::new_default(col("prefix", &schema)?),
-            PhysicalSortExpr::new_default(suffix),
-        ]
-        .into();
-        let expected = arrow::compute::take_record_batch(
-            &batch,
-            &UInt32Array::from(vec![1, 0, 3, 2, 4, 6, 5, 8, 7]),
-        )?;
-
-        let output = staged_sort_test_output(&batch, &ordering, true, 1, 1).await?;
-        assert_eq!(concat_batches(&schema, &output)?, expected);
         Ok(())
     }
 
@@ -4809,97 +4672,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_staged_sort_successive_deferred_groups() -> Result<()> {
-        use datafusion_expr::Volatility;
-
-        let batch = record_batch!(
-            ("prefix", Int32, [0, 0, 0, 1, 1, 1, 2, 3, 4, 5, 6, 7]),
-            ("second", Int32, [1, 1, 2, 1, 1, 2, 0, 0, 0, 0, 0, 0]),
-            ("third", Int32, [2, 1, 0, 2, 1, 0, 0, 0, 0, 0, 0, 0])
-        )?;
-        let schema = batch.schema();
-        let (second, second_rows) = counting_identity(
-            "second_stage",
-            col("second", &schema)?,
-            &schema,
-            Volatility::Immutable,
-        )?;
-        let (third, third_rows) = counting_identity(
-            "third_stage",
-            col("third", &schema)?,
-            &schema,
-            Volatility::Immutable,
-        )?;
-        let ordering = [
-            PhysicalSortExpr::new_default(col("prefix", &schema)?),
-            PhysicalSortExpr::new_default(second),
-            PhysicalSortExpr::new_default(third),
-        ]
-        .into();
-        let expected = arrow::compute::take_record_batch(
-            &batch,
-            &UInt32Array::from(vec![1, 0, 2, 4, 3, 5, 6, 7, 8, 9, 10, 11]),
-        )?;
-        for (input_batches, threshold) in [(1, 1), (2, usize::MAX)] {
-            second_rows.store(0, AtomicOrdering::Relaxed);
-            third_rows.store(0, AtomicOrdering::Relaxed);
-            let output = staged_sort_test_output(
-                &batch,
-                &ordering,
-                true,
-                input_batches,
-                threshold,
-            )
-            .await?;
-            assert_eq!(concat_batches(&schema, &output)?, expected);
-            assert_eq!(second_rows.load(AtomicOrdering::Relaxed), 6);
-            assert_eq!(third_rows.load(AtomicOrdering::Relaxed), 4);
-        }
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_staged_sort_matches_eager() -> Result<()> {
         use datafusion_expr::Volatility;
 
-        // Deferred keys reference source columns 1 and 3, which are remapped
-        // to columns 0 and 1 after projecting away the payload columns.
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("payload", DataType::Utf8, false),
-            Field::new("id", DataType::Int32, false),
-            Field::new("other_payload", DataType::Int32, false),
-            Field::new("suffix", DataType::Utf8, true),
-            Field::new("prefix", DataType::Int32, true),
-        ]));
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(StringArray::from_iter_values(
-                    (0..16).map(|i| format!("payload-{i}")),
-                )),
-                Arc::new(Int32Array::from_iter_values(0..16)),
-                Arc::new(Int32Array::from_iter_values(100..116)),
-                Arc::new(StringArray::from(vec![
+        let batch = record_batch!(
+            ("id", Int32, [7, 6, 5, 4, 3, 2, 1, 0]),
+            (
+                "suffix",
+                Utf8,
+                [
                     Some("3"),
-                    Some("2"),
-                    Some("5"),
-                    None,
-                    Some("3"),
-                    Some("10"),
-                    None,
                     Some("2"),
                     Some("0"),
+                    None,
+                    Some("3"),
                     Some("10"),
                     Some("1"),
-                    Some("1"),
-                    Some("1"),
-                    Some("1"),
-                    Some("1"),
-                    Some("1"),
-                ])),
-                Arc::new(Int32Array::from(vec![
-                    Some(2),
-                    Some(1),
+                    Some("2")
+                ]
+            ),
+            (
+                "prefix",
+                Int32,
+                [
                     None,
                     Some(1),
                     Some(2),
@@ -4907,16 +4702,11 @@ mod tests {
                     None,
                     Some(1),
                     Some(3),
-                    Some(1),
-                    Some(4),
-                    Some(5),
-                    Some(6),
-                    Some(7),
-                    Some(8),
-                    Some(9),
-                ])),
-            ],
+                    Some(1)
+                ]
+            )
         )?;
+        let schema = batch.schema();
         let cast = Arc::new(CastExpr::new(
             col("suffix", &schema)?,
             DataType::Int32,
@@ -4924,6 +4714,12 @@ mod tests {
         ));
         let (suffix, suffix_rows) =
             counting_identity("count_cast_rows", cast, &schema, Volatility::Immutable)?;
+        let (id, id_rows) = counting_identity(
+            "count_id_rows",
+            col("id", &schema)?,
+            &schema,
+            Volatility::Immutable,
+        )?;
         let ordering = [
             PhysicalSortExpr::new(
                 col("prefix", &schema)?,
@@ -4939,39 +4735,29 @@ mod tests {
                     nulls_first: true,
                 },
             ),
-            PhysicalSortExpr::new_default(col("id", &schema)?),
+            PhysicalSortExpr::new_default(id),
         ]
         .into();
-
-        // Nine rows remain tied in three groups; seven rows are already resolved.
-        // The prefix and numeric suffix still tie for some rows, so id breaks ties.
         let expected = arrow::compute::take_record_batch(
             &batch,
-            &UInt32Array::from(vec![
-                3, 5, 9, 1, 7, 0, 4, 8, 10, 11, 12, 13, 14, 15, 6, 2,
-            ]),
+            &UInt32Array::from(vec![3, 5, 7, 1, 2, 6, 4, 0]),
         )?;
 
-        // Single batch, concatenated batches, and separate runs followed by a merge.
-        for (input_batches, threshold) in [(1, 1), (2, usize::MAX), (2, 1)] {
+        for input_batches in [1, 2] {
             for enabled in [false, true] {
                 suffix_rows.store(0, AtomicOrdering::Relaxed);
-                let output = staged_sort_test_output(
-                    &batch,
-                    &ordering,
-                    enabled,
-                    input_batches,
-                    threshold,
-                )
-                .await?;
-
+                id_rows.store(0, AtomicOrdering::Relaxed);
+                let output =
+                    staged_sort_test_output(&batch, &ordering, enabled, input_batches, 1)
+                        .await?;
                 assert_eq!(
                     concat_batches(&schema, &output)?,
                     expected,
-                    "enabled={enabled}, input_batches={input_batches}, threshold={threshold}"
+                    "enabled={enabled}, input_batches={input_batches}"
                 );
-                if enabled && (input_batches == 1 || threshold == usize::MAX) {
-                    assert_eq!(suffix_rows.load(AtomicOrdering::Relaxed), 9);
+                if enabled && input_batches == 1 {
+                    assert_eq!(suffix_rows.load(AtomicOrdering::Relaxed), 6);
+                    assert_eq!(id_rows.load(AtomicOrdering::Relaxed), 4);
                 }
             }
         }
@@ -4980,12 +4766,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_staged_sort_expression_errors() -> Result<()> {
-        use datafusion_physical_expr::expressions::CastExpr;
-
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("prefix", DataType::Int32, false),
-            Field::new("invalid", DataType::Utf8, false),
-        ]));
+        let batch = record_batch!(
+            ("prefix", Int32, [3, 1, 6, 2, 5, 4]),
+            ("invalid", Utf8, vec!["invalid"; 6])
+        )?;
+        let schema = batch.schema();
         let ordering = [
             PhysicalSortExpr::new_default(col("prefix", &schema)?),
             PhysicalSortExpr::new_default(Arc::new(CastExpr::new(
@@ -4995,99 +4780,34 @@ mod tests {
             ))),
         ]
         .into();
-        struct Case<'a> {
-            name: &'a str,
-            prefix: &'a [i32; 6],
-            enabled: bool,
-            input_batches: usize,
-            threshold: usize,
-            expect_error: bool,
-        }
 
-        let distinct = [3, 1, 6, 2, 5, 4];
-        let all_tied = [1; 6];
-        let cases = [
-            Case {
-                name: "disabled evaluates eagerly",
-                prefix: &distinct,
-                enabled: false,
-                input_batches: 1,
-                threshold: 1,
-                expect_error: true,
-            },
-            Case {
-                name: "distinct rows skip suffix",
-                prefix: &distinct,
-                enabled: true,
-                input_batches: 1,
-                threshold: 1,
-                expect_error: false,
-            },
-            Case {
-                name: "ties evaluate suffix",
-                prefix: &all_tied,
-                enabled: true,
-                input_batches: 1,
-                threshold: 1,
-                expect_error: true,
-            },
-            Case {
-                name: "concatenated rows skip suffix",
-                prefix: &distinct,
-                enabled: true,
-                input_batches: 2,
-                threshold: usize::MAX,
-                expect_error: false,
-            },
-            Case {
-                name: "merge reevaluates suffix",
-                prefix: &distinct,
-                enabled: true,
-                input_batches: 2,
-                threshold: 1,
-                expect_error: true,
-            },
-        ];
+        let eager = staged_sort_test_output(&batch, &ordering, false, 1, 1).await;
+        let skipped = staged_sort_test_output(&batch, &ordering, true, 1, 1).await?;
+        assert_eq!(
+            concat_batches(&schema, &skipped)?.column(0).as_ref(),
+            &Int32Array::from_iter_values(1..=6)
+        );
 
-        for Case {
-            name,
-            prefix,
-            enabled,
-            input_batches,
-            threshold,
-            expect_error,
-        } in cases
-        {
-            let batch = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(prefix.to_vec())),
-                    Arc::new(StringArray::from(vec!["invalid"; 6])),
-                ],
-            )?;
-            let result = staged_sort_test_output(
-                &batch,
-                &ordering,
-                enabled,
-                input_batches,
-                threshold,
-            )
-            .await;
+        let all_tied = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1; 6])),
+                Arc::clone(batch.column(1)),
+            ],
+        )?;
+        let tied = staged_sort_test_output(&all_tied, &ordering, true, 1, 1).await;
+        let merged = staged_sort_test_output(&batch, &ordering, true, 2, 1).await;
 
-            if expect_error {
-                let error = result.unwrap_err().strip_backtrace();
-                assert!(
-                    error.contains("Cannot cast string 'invalid'"),
-                    "{name}: {error}"
-                );
-            } else {
-                let output = concat_batches(&schema, &result?)?;
-                assert_eq!(
-                    output.column(0).as_ref(),
-                    &Int32Array::from_iter_values(1..=6),
-                    "{name}"
-                );
-            }
+        for (name, result) in [
+            ("disabled evaluates eagerly", eager),
+            ("ties evaluate suffix", tied),
+            ("merge reevaluates suffix", merged),
+        ] {
+            let error = result.unwrap_err().strip_backtrace();
+            assert!(
+                error.contains("Cannot cast string 'invalid'"),
+                "{name}: {error}"
+            );
         }
         Ok(())
     }
@@ -5096,72 +4816,12 @@ mod tests {
     async fn test_staged_sort_volatile_evaluation() -> Result<()> {
         use datafusion_expr::Volatility;
 
-        let schema = Arc::new(Schema::new(vec![
-            Field::new("prefix", DataType::Int32, false),
-            Field::new("id", DataType::Int32, false),
-        ]));
-        struct Case<'a> {
-            name: &'a str,
-            prefix: &'a [i32; 6],
-            enabled: bool,
-            input_batches: usize,
-            threshold: usize,
-            expected_rows: usize,
-        }
-
-        let distinct = [3, 1, 6, 2, 5, 4];
-        let partly_tied = [2, 1, 1, 3, 4, 4];
-        let cases = [
-            Case {
-                name: "distinct enabled",
-                prefix: &distinct,
-                enabled: true,
-                input_batches: 1,
-                threshold: 1,
-                expected_rows: 6,
-            },
-            Case {
-                name: "partly tied disabled",
-                prefix: &partly_tied,
-                enabled: false,
-                input_batches: 1,
-                threshold: 1,
-                expected_rows: 6,
-            },
-            Case {
-                name: "partly tied enabled",
-                prefix: &partly_tied,
-                enabled: true,
-                input_batches: 1,
-                threshold: 1,
-                expected_rows: 6,
-            },
-            Case {
-                name: "merge reevaluates",
-                prefix: &partly_tied,
-                enabled: true,
-                input_batches: 2,
-                threshold: 1,
-                expected_rows: 12,
-            },
-        ];
-
-        for Case {
-            name,
-            prefix,
-            enabled,
-            input_batches,
-            threshold,
-            expected_rows,
-        } in cases
-        {
-            let batch = RecordBatch::try_new(
-                Arc::clone(&schema),
-                vec![
-                    Arc::new(Int32Array::from(prefix.to_vec())),
-                    Arc::new(Int32Array::from_iter_values(0..6)),
-                ],
-            )?;
+        let batch = record_batch!(
+            ("prefix", Int32, [2, 1, 1, 3, 4, 4]),
+            ("id", Int32, [0, 1, 2, 3, 4, 5])
+        )?;
+        let schema = batch.schema();
+        for enabled in [false, true] {
             let (volatile, rows) = counting_identity(
                 "count_evaluations",
                 col("id", &schema)?,
@@ -5175,9 +4835,8 @@ mod tests {
             ]
             .into();
 
-            staged_sort_test_output(&batch, &ordering, enabled, input_batches, threshold)
-                .await?;
-            assert_eq!(rows.load(AtomicOrdering::Relaxed), expected_rows, "{name}");
+            staged_sort_test_output(&batch, &ordering, enabled, 1, 1).await?;
+            assert_eq!(rows.load(AtomicOrdering::Relaxed), 6, "enabled={enabled}");
         }
         Ok(())
     }
