@@ -525,20 +525,13 @@ fn pushdown_requirement_to_children(
             Ok(None)
         }
     } else if plan.is::<SortPreservingMergeExec>() && plan.fetch().is_some() {
-        // Push down through a fetched merge when:
-        // - requirement is aligned with output ordering
-        // - it preserves ordering during execution
-        // Refining a fetched merge must preserve the ordering that selected its rows.
-        let Some(ordering) = plan.output_ordering() else {
-            return Ok(None);
-        };
-        Ok(plan
-            .equivalence_properties()
-            .requirements_compatible(
-                parent_required.first().clone(),
-                ordering.clone().into(),
-            )
-            .then(|| vec![Some(parent_required)]))
+        // Why we decline pushdown here:
+        // 1. SPM merges using only its own keys, so pushing additional
+        //    parent keys down cannot be preserved anyway.
+        // 2. The subquery did not explicitly request the parent's sort, so forcing
+        //    it on the entire dataset before a fetch is an unnecessary cost.
+        // 3. Decline pushdown so the parent sort is not dropped and orders the fetched rows.
+        Ok(None)
     } else if is_union(plan) {
         // `UnionExec` does not have real sort requirements for its input, we
         // just propagate the sort requirements down:
