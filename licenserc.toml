@@ -38,6 +38,8 @@ includes = [
 ]
 
 excludes = [
+    # CLAUDE.md is a symlink to AGENTS.md, which is checked directly.
+    "/CLAUDE.md",
     # Generated code; the hand-written generated/mod.rs wrappers are checked.
     "datafusion/proto/src/generated/**",
     "datafusion/proto-common/src/generated/pbjson.rs",
