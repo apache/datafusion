@@ -418,13 +418,11 @@ pub fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) 
     // Temporal casts are not generally monotonic: extracting time-of-day wraps
     // at midnight, and timezone transitions can reverse the local date.
     match (source_type, target_type) {
-        (Date32 | Date64, Date32 | Date64)
-        | (Date32 | Date64, Timestamp(_, _))
-        | (Timestamp(_, None), Date32) => true,
-        (Timestamp(_, Some(tz)), Date32) => is_fixed_offset(tz),
-        // Arrow converts timestamps to Date64 by scaling the epoch value,
-        // whereas Date32 extracts the date in the timestamp's timezone.
-        (Timestamp(_, _), Date64) => true,
+        (Date32 | Date64, Date32 | Date64) | (Timestamp(_, None), Date32 | Date64) => {
+            true
+        }
+        // Both date types take the date in the timestamp's timezone.
+        (Timestamp(_, Some(tz)), Date32 | Date64) => is_fixed_offset(tz),
         // Only admit scaling that cannot wrap on overflow. Time64 widening
         // and narrowing to Time32 do not currently check overflow in Arrow.
         (Time32(Second | Millisecond), Time32(Second | Millisecond))
@@ -432,12 +430,18 @@ pub fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) 
         | (Time64(Nanosecond), Time64(Microsecond))
         | (Duration(_), Duration(_)) => true,
         // Changing the timezone only changes metadata on the epoch value.
-        // Adding a timezone to a naive timestamp (or a date) reads it as a
-        // local time, and Arrow rejects local times that a transition skips
-        // or repeats. A transition skips or repeats exactly the local times
-        // its offset change covers, so the local times that remain keep
-        // their order in UTC.
-        (Timestamp(_, _), Timestamp(_, _)) => true,
+        (Timestamp(_, Some(_)), Timestamp(_, _)) => true,
+        // Adding a timezone reads a naive timestamp (or a Date64, which may
+        // hold any time of day) as a local time. Arrow moves a local time that
+        // a transition skips forward by the length of the gap, past the local
+        // times just after the gap, so only a fixed offset keeps the order.
+        (Timestamp(_, None) | Date64, Timestamp(_, tz)) => {
+            tz.as_deref().is_none_or(is_fixed_offset)
+        }
+        // A Date32 reads as local midnight. A skipped midnight moves forward
+        // by the gap, and no gap is longer than a day, so it never passes the
+        // next midnight.
+        (Date32, Timestamp(_, _)) => true,
         _ => false,
     }
 }
@@ -2311,19 +2315,21 @@ mod tests {
             (Date32, Timestamp(Nanosecond, None), true),
             (Date64, Timestamp(Second, None), true),
             (Date32, Timestamp(Second, timezone.clone()), true),
+            (Date64, Timestamp(Second, Some("+08:00".into())), true),
+            (Date64, Timestamp(Second, timezone.clone()), false),
             (Timestamp(Second, None), Date32, true),
+            (Timestamp(Second, None), Date64, true),
             (Timestamp(Second, Some("UTC".into())), Date32, true),
             (Timestamp(Second, Some("+08:00".into())), Date32, true),
+            (Timestamp(Second, Some("+08:00".into())), Date64, true),
             (Timestamp(Second, timezone.clone()), Date32, false),
-            (Timestamp(Second, timezone.clone()), Date64, true),
+            (Timestamp(Second, timezone.clone()), Date64, false),
             (Timestamp(Second, None), Timestamp(Nanosecond, None), true),
             (Timestamp(Nanosecond, None), Timestamp(Second, None), true),
-            // Local times that a transition skips or repeats fail to convert,
-            // and the remaining ones keep their order.
             (
                 Timestamp(Second, None),
                 Timestamp(Second, timezone.clone()),
-                true,
+                false,
             ),
             (
                 Timestamp(Second, None),
@@ -2415,6 +2421,11 @@ mod tests {
                 128,
                 255,
                 256,
+                // As dates, 2011-12-29 to 2011-12-31: Pacific/Apia skipped
+                // all of 2011-12-30.
+                15_337,
+                15_338,
+                15_339,
                 86_399,
                 // America/Goose_Bay fell back from 00:01 to 23:01 the previous
                 // day at this instant, so the local date goes backwards.
@@ -2527,6 +2538,7 @@ mod tests {
     #[test]
     fn test_order_preserving_cast_matches_cast_kernel() {
         use TimeUnit::*;
+        use arrow::array::{AsArray, Date32Array};
 
         let tz = |unit, tz: &str| Timestamp(unit, Some(tz.into()));
         let types = [
@@ -2558,6 +2570,7 @@ mod tests {
             tz(Second, "+05:00"),
             tz(Second, "America/New_York"),
             tz(Second, "America/Goose_Bay"),
+            tz(Second, "Pacific/Apia"),
             Time32(Second),
             Time32(Millisecond),
             Time64(Microsecond),
@@ -2591,6 +2604,8 @@ mod tests {
             (Timestamp(Second, None), Time32(Second)),
             (tz(Second, "+05:00"), Time64(Nanosecond)),
             (tz(Second, "America/Goose_Bay"), Date32),
+            (tz(Second, "America/Goose_Bay"), Date64),
+            (Timestamp(Second, None), tz(Second, "America/New_York")),
         ] {
             assert!(!is_order_preserving_cast(&source, &target));
             let samples = order_samples(&source).unwrap();
@@ -2599,6 +2614,17 @@ mod tests {
                 "{source} -> {target}: no sample exposes the reversed order"
             );
         }
+
+        // The samples reach the edge of the Date32 entry: a skipped day starts
+        // at the same instant as the day after it.
+        let skipped =
+            ColumnarValue::Array(Arc::new(Date32Array::from(vec![15_338, 15_339])))
+                .cast_to(&tz(Second, "Pacific/Apia"), None)
+                .unwrap()
+                .into_array(2)
+                .unwrap();
+        let skipped = skipped.as_primitive::<TimestampSecondType>();
+        assert_eq!(skipped.value(0), skipped.value(1));
     }
 
     #[test]

@@ -5110,6 +5110,17 @@ mod tests {
                 false,
             ),
             (
+                DataType::Timestamp(Nanosecond, new_york.clone()),
+                ScalarValue::Date64(Some(0)),
+                false,
+            ),
+            // a local time that a transition skips moves past later ones
+            (
+                DataType::Timestamp(Nanosecond, None),
+                ScalarValue::TimestampNanosecond(Some(0), new_york.clone()),
+                false,
+            ),
+            (
                 DataType::Int64,
                 ScalarValue::TimestampNanosecond(Some(0), None),
                 true,
@@ -5128,7 +5139,7 @@ mod tests {
             ),
             (
                 DataType::Timestamp(Nanosecond, None),
-                ScalarValue::TimestampNanosecond(Some(0), new_york.clone()),
+                ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("-05:00"))),
                 true,
             ),
             (

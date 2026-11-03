@@ -142,6 +142,19 @@ ORDER BY d;
 562129260 1987-10-24
 562129259 1987-10-25
 
+# Date64 also takes the local date, so it reverses the same way.
+query ID
+SELECT arrow_cast(ts, 'Int64') AS epoch, arrow_cast(ts, 'Date64') AS d
+FROM (
+  SELECT arrow_cast(column1, 'Timestamp(Second, Some("America/Goose_Bay"))') AS ts
+  FROM (VALUES (562129259::bigint), (562129260::bigint))
+  ORDER BY ts LIMIT 2
+)
+ORDER BY d;
+----
+562129260 1987-10-24T00:00:00
+562129259 1987-10-25T00:00:00
+
 # Reducing timestamp precision remains order-preserving, even when values merge.
 statement ok
 SET datafusion.explain.physical_plan_only = true;

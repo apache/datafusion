@@ -1612,11 +1612,11 @@ RESET datafusion.explain.physical_plan_only;
 
 statement ok
 CREATE TABLE cast_order_src(i INT, ts TIMESTAMP) AS VALUES
-  (-1, TIMESTAMP '2024-03-10 23:00:00'),
-  (0, TIMESTAMP '2024-03-11 00:00:00'),
-  (1, TIMESTAMP '2024-03-11 01:00:00'),
-  (255, TIMESTAMP '2024-03-11 02:00:00'),
-  (256, TIMESTAMP '2024-03-11 03:00:00');
+  (-1, TIMESTAMP '2024-03-10 00:00:00'),
+  (0, TIMESTAMP '2024-03-10 01:00:00'),
+  (1, TIMESTAMP '2024-03-10 02:30:00'),
+  (255, TIMESTAMP '2024-03-10 02:45:00'),
+  (256, TIMESTAMP '2024-03-10 03:00:00');
 
 statement ok
 COPY cast_order_src
@@ -1655,26 +1655,53 @@ SELECT i FROM cast_order WHERE CAST(i AS BYTEA) < X'05' ORDER BY i;
 1
 256
 
-# Comparing a timestamp without a timezone to one with a named timezone casts
-# the column to that timezone, reading the values as New York local times
-# (05:30 UTC is 01:30 local). That cast keeps the order, so it still prunes.
+# Comparing a timestamp without a timezone to one with a timezone casts the
+# column to that timezone, reading the values as local times. New York skipped
+# 02:00 to 03:00 on 2024-03-10, and Arrow reads 02:30 as 03:30 (07:30 UTC),
+# after 03:00 (07:00 UTC). The bound 03:00 is no longer the largest value after
+# the cast, so this cast must not prune.
 statement ok
 SET datafusion.execution.time_zone = 'America/New_York';
+
+query I
+SELECT i FROM cast_order_src WHERE ts > TIMESTAMPTZ '2024-03-10 07:15:00+00:00' ORDER BY i;
+----
+1
+255
+
+query I
+SELECT i FROM cast_order WHERE ts > TIMESTAMPTZ '2024-03-10 07:15:00+00:00' ORDER BY i;
+----
+1
+255
+
+# A fixed offset skips no local times, so that cast keeps the order and still
+# prunes.
+statement ok
+SET datafusion.execution.time_zone = '-05:00';
 
 statement ok
 SET datafusion.explain.physical_plan_only = true;
 
 query TT
-EXPLAIN SELECT i FROM cast_order WHERE ts > TIMESTAMPTZ '2024-03-11 05:30:00+00:00';
+EXPLAIN SELECT i FROM cast_order WHERE ts > TIMESTAMPTZ '2024-03-10 07:15:00+00:00';
 ----
 physical_plan
-01)FilterExec: CAST(ts@1 AS Timestamp(ns, "America/New_York")) > 1710135000000000000, projection=[i@0]
+01)FilterExec: CAST(ts@1 AS Timestamp(ns, "-05:00")) > 1710054900000000000, projection=[i@0]
 02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/cast_order/data.parquet]]}, projection=[i, ts], file_type=parquet, predicate=CAST(ts@1 AS Timestamp(ns, "America/New_York")) > 1710135000000000000, pruning_predicate=ts_null_count@1 != row_count@2 AND CAST(ts_max@0 AS Timestamp(ns, "America/New_York");N) > 1710135000000000000, required_guarantees=[]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/cast_order/data.parquet]]}, projection=[i, ts], file_type=parquet, predicate=CAST(ts@1 AS Timestamp(ns, "-05:00")) > 1710054900000000000, pruning_predicate=ts_null_count@1 != row_count@2 AND CAST(ts_max@0 AS Timestamp(ns, "-05:00");N) > 1710054900000000000, required_guarantees=[]
 
 query I
-SELECT i FROM cast_order WHERE ts > TIMESTAMPTZ '2024-03-11 05:30:00+00:00' ORDER BY i;
+SELECT i FROM cast_order_src WHERE ts > TIMESTAMPTZ '2024-03-10 07:15:00+00:00' ORDER BY i;
 ----
+1
+255
+256
+
+query I
+SELECT i FROM cast_order WHERE ts > TIMESTAMPTZ '2024-03-10 07:15:00+00:00' ORDER BY i;
+----
+1
 255
 256
 
