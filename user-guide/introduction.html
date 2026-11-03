@@ -549,13 +549,14 @@ suitable for “streaming” and “transaction” style systems (low
 latency).</p>
 <p>Here are some example systems built using DataFusion:</p>
 <ul class="simple">
-<li><p>Specialized Analytical Database systems such as <a class="reference external" href="https://github.com/apache/incubator-horaedb">HoraeDB</a> and more general Apache Spark like system such as <a class="reference external" href="https://github.com/apache/datafusion-ballista">Ballista</a></p></li>
+<li><p>Specialized Analytical Database systems such as <a class="reference external" href="https://github.com/openobserve/openobserve">OpenObserve</a> and more general Apache Spark like systems such as <a class="reference external" href="https://github.com/apache/datafusion-ballista">Ballista</a></p></li>
+<li><p>Distributed SQL query engines for data in Iceberg catalogs, such as <a class="reference external" href="https://blog.cloudflare.com/r2-sql-deep-dive/">Cloudflare R2 Query Engine</a></p></li>
 <li><p>New query language engines such as <a class="reference external" href="https://github.com/prql/prql-query">prql-query</a> and accelerators such as <a class="reference external" href="https://vegafusion.io/">VegaFusion</a></p></li>
 <li><p>Research platform for new Database Systems, such as <a class="reference external" href="https://github.com/flock-lab/flock">Flock</a></p></li>
 <li><p>SQL support to another library, such as <a class="reference external" href="https://vortex.dev/">Vortex</a></p></li>
 <li><p>Streaming data platforms such as <a class="reference external" href="https://synnada.ai/">Synnada</a></p></li>
 <li><p>Tools for reading / sorting / transcoding Parquet, CSV, AVRO, and JSON files such as <a class="reference external" href="https://github.com/timvw/qv">qv</a></p></li>
-<li><p>Native Spark runtime replacement such as <a class="reference external" href="https://github.com/apache/auron">Auron</a></p></li>
+<li><p>Native Spark runtime replacement such as <a class="reference external" href="https://github.com/apache/auron">Apache Auron</a></p></li>
 <li><p>Distributed data cache to boost GPU utilization of AI workloads with <a class="reference external" href="https://www.kubeflow.org/docs/components/trainer/user-guides/data-cache/">Kubeflow Trainer</a></p></li>
 </ul>
 <p>By using DataFusion, projects are freed to focus on their specific
@@ -565,68 +566,79 @@ parallelized streaming execution plans, file format support, etc.</p>
 </section>
 <section id="known-users">
 <h2>Known Users<a class="headerlink" href="#known-users" title="Link to this heading">#</a></h2>
+<p>Projects with a public GitHub repository must meet <strong>all</strong> of these criteria to
+appear in the active list:</p>
+<ul class="simple">
+<li><p>At least one commit on the default branch in the last 6 months (calendar months).</p></li>
+<li><p>At least 100 stars.</p></li>
+<li><p>At least 5 contributors, as shown in the repository’s GitHub sidebar.</p></li>
+</ul>
+<p>Check these criteria when adding or updating an entry. Projects without a public
+repository must instead link to public evidence of DataFusion use, such as a blog
+post or documentation page. These criteria apply to Known Users, not the
+Integrations and Extensions lists below.</p>
 <p>Here are some active projects using DataFusion:</p>
- <!-- "Active" means github repositories that had at least one commit in the last 6 months -->
 <ul class="simple">
 <li><p><a class="reference external" href="https://github.com/ArroyoSystems/arroyo">Arroyo</a> Distributed stream processing engine in Rust</p></li>
 <li><p><a class="reference external" href="https://github.com/arkflow-rs/arkflow">ArkFlow</a> High-performance Rust stream processing engine</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/auron">Auron</a> The Auron accelerator for big data engine (e.g., Spark, Flink) leverages native vectorized execution to accelerate query processing</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/auron">Apache Auron</a> The Auron accelerator for big data engine (e.g., Spark, Flink) leverages native vectorized execution to accelerate query processing</p></li>
 <li><p><a class="reference external" href="https://github.com/apache/datafusion-ballista">Ballista</a> Distributed SQL Query Engine</p></li>
 <li><p><a class="reference external" href="https://github.com/cnosdb/cnosdb">CnosDB</a> Open Source Distributed Time Series Database</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/datafusion-comet">Comet</a> Apache Spark native query execution plugin</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/datafusion-comet">Apache Comet</a> Apache Spark native query execution plugin</p></li>
 <li><p><a class="reference external" href="https://github.com/cube-js/cube.js/tree/master/rust">Cube Store</a> Cube’s universal semantic layer platform is the next evolution of OLAP technology for AI, BI, spreadsheets, and embedded analytics</p></li>
 <li><p><a class="reference external" href="https://github.com/datafusion-contrib/datafusion-dft">datafusion-dft</a> Batteries included CLI, TUI, and server implementations for DataFusion.</p></li>
-<li><p><a class="reference external" href="https://docs.datap-rs.org">datapress</a> An opinionated small and fast data server on parquet and delta tables.</p></li>
 <li><p><a class="reference external" href="https://github.com/dbt-labs/dbt-fusion">dbt Fusion engine</a> The dbt Fusion engine, written in Rust, designed for speed and correctness with a native SQL understanding across DWH SQL dialects.</p></li>
 <li><p><a class="reference external" href="https://github.com/delta-io/delta-rs">delta-rs</a> Native Rust implementation of Delta Lake</p></li>
-<li><p><a class="reference external" href="https://www.enterprisedb.com/products/analytics">EDB Postgres Lakehouse</a> built with <a class="reference external" href="https://github.com/splitgraph/seafowl">Seafowl</a></p></li>
 <li><p><a class="reference external" href="https://github.com/feldera/feldera">Feldera</a> Fast query engine for incremental computation</p></li>
-<li><p><a class="reference external" href="https://funnel.io/">Funnel</a> Data Platform powering Marketing Intelligence applications.</p></li>
-<li><p><a class="reference external" href="https://github.com/GlareDB/glaredb">GlareDB</a> Fast SQL database for querying and analyzing distributed data.</p></li>
+<li><p><a class="reference external" href="https://funnel.io/">Funnel</a> Data Platform powering Marketing Intelligence applications. (<a class="reference external" href="https://funnel.io/devblog/the-data-that-wont-sit-still-engineering-at-the-edge-of-marketing-data">DataFusion use</a>)</p></li>
 <li><p><a class="reference external" href="https://github.com/GreptimeTeam/greptimedb">GreptimeDB</a> Open Source &amp; Cloud Native Distributed Time Series Database</p></li>
-<li><p><a class="reference external" href="https://hiop.io">hiop</a> Serverless Data Logistic Platform</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/incubator-horaedb">HoraeDB</a> Distributed Time-Series Database</p></li>
-<li><p><a class="reference external" href="https://www.hotdata.dev">Hotdata</a> On-demand databases for AI agents with a unified query engine for vector, OLAP, and full-text search.</p></li>
+<li><p><a class="reference external" href="https://hiop.io">hiop</a> Serverless Data Logistic Platform (<a class="reference external" href="https://github.com/apache/datafusion/pull/18114">DataFusion use</a>)</p></li>
+<li><p><a class="reference external" href="https://www.hotdata.dev">Hotdata</a> On-demand databases for AI agents with a unified query engine for vector, OLAP, and full-text search. (<a class="reference external" href="https://www.hotdata.dev/blog/bringing-ducklake-to-apache-datafusion">DataFusion use</a>)</p></li>
 <li><p><a class="reference external" href="https://github.com/apache/iceberg-rust">Iceberg-rust</a> Rust implementation of Apache Iceberg</p></li>
-<li><p><a class="reference external" href="https://icegate.tech">IceGate</a> Observability data lake engine for metrics, traces, logs, and events, built on Apache Iceberg with OpenTelemetry ingestion</p></li>
 <li><p><a class="reference external" href="https://github.com/influxdata/influxdb">InfluxDB</a> Time Series Database</p></li>
 <li><p><a class="reference external" href="https://github.com/kamu-data/kamu-cli">Kamu</a> Planet-scale streaming data pipeline</p></li>
 <li><p><a class="reference external" href="https://github.com/kubeflow/trainer">Kubeflow Trainer</a> Kubernetes-native project designed for
 scalable LLMs fine-tuning and distributed AI model training.</p></li>
 <li><p><a class="reference external" href="https://github.com/lakesoul-io/LakeSoul">LakeSoul</a> Open source LakeHouse framework with native IO in Rust.</p></li>
-<li><p><a class="reference external" href="https://github.com/lancedb/lance">Lance</a> Modern columnar data format for ML</p></li>
+<li><p><a class="reference external" href="https://github.com/lance-format/lance">Lance</a> Modern columnar data format for ML</p></li>
 <li><p><a class="reference external" href="https://github.com/openobserve/openobserve">OpenObserve</a> Distributed cloud native observability platform</p></li>
 <li><p><a class="reference external" href="https://github.com/paradedb/paradedb">ParadeDB</a> PostgreSQL for Search &amp; Analytics</p></li>
 <li><p><a class="reference external" href="https://github.com/parseablehq/parseable">Parseable</a> Open columnar observability data lake platform for logs, metrics, and traces.</p></li>
-<li><p><a class="reference external" href="https://massive.com/">Massive.com</a> Stock Market API</p></li>
-<li><p><a class="reference external" href="https://mycorr.app">Mycorr</a> Shared, versioned tables with units, links and SQL for humans and agents</p></li>
+<li><p><a class="reference external" href="https://github.com/massive-com">Massive.com</a> Stock Market API</p></li>
+<li><p><a class="reference external" href="https://mycorr.app">Mycorr</a> Shared, versioned tables with units, links and SQL for humans and agents (<a class="reference external" href="https://docs.mycorr.app/developers/mcp-server.html#querying-with-sql">DataFusion use</a>)</p></li>
 <li><p><a class="reference external" href="https://github.com/timvw/qv">qv</a> Quickly view your data</p></li>
-<li><p><a class="reference external" href="https://blog.cloudflare.com/r2-sql-deep-dive/">R2 Query Engine</a> Cloudflare’s distributed engine for querying data in Iceberg Catalogs</p></li>
+<li><p><a class="reference external" href="https://blog.cloudflare.com/r2-sql-deep-dive/">Cloudflare R2 Query Engine</a> Cloudflare’s distributed engine for querying data in Iceberg Catalogs</p></li>
 <li><p><a class="reference external" href="https://rerun.io/">rerun.io</a> Visualize and query robotics logs and transform them into training data.</p></li>
-<li><p><a class="reference external" href="https://github.com/restatedev">Restate</a> Easily build resilient applications using distributed durable async/await</p></li>
-<li><p><a class="reference external" href="https://github.com/roapi/roapi">ROAPI</a> Create full-fledged APIs for slowly moving datasets without writing a single line of code</p></li>
+<li><p><a class="reference external" href="https://github.com/restatedev/restate">Restate</a> Easily build resilient applications using distributed durable async/await</p></li>
 <li><p><a class="reference external" href="https://github.com/lakehq/sail">Sail</a> Unifying stream, batch and AI workloads with Apache Spark compatibility</p></li>
-<li><p><a class="reference external" href="https://github.com/apache/sedona-db">SedonaDB</a> A single-node analytical database engine with geospatial as a first-class citizen</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/sedona-db">Apache SedonaDB</a> A single-node analytical database engine with geospatial as a first-class citizen</p></li>
 <li><p><a class="reference external" href="https://github.com/gchq/sleeper">Sleeper</a> Serverless, cloud-native, log-structured merge tree based, scalable key-value store</p></li>
 <li><p><a class="reference external" href="https://github.com/spiceai/spiceai">Spice.ai</a> Building blocks for data-driven AI applications</p></li>
-<li><p><a class="reference external" href="https://www.streamling.dev/">Streamling</a> Data streaming runtime focused on performance, consistency, and extensibility</p></li>
-<li><p><a class="reference external" href="https://supermetal.io/">Supermetal</a> is a change data capture (CDC) platform that synchronizes data between databases, data warehouses, and lakehouses</p></li>
+<li><p><a class="reference external" href="https://github.com/goldsky-io/streamling">Streamling</a> Data streaming runtime focused on performance, consistency, and extensibility</p></li>
+<li><p><a class="reference external" href="https://supermetal.io/">Supermetal</a> is a change data capture (CDC) platform that synchronizes data between databases, data warehouses, and lakehouses (<a class="reference external" href="https://github.com/apache/datafusion/pull/23790">DataFusion use</a>)</p></li>
 <li><p><a class="reference external" href="https://synnada.ai/">Synnada</a> Streaming-first framework for data products</p></li>
-<li><p><a class="reference external" href="https://vegafusion.io/">VegaFusion</a> Server-side acceleration for the <a class="reference external" href="https://vega.github.io/">Vega</a> visualization grammar</p></li>
 <li><p><a class="reference external" href="https://vortex.dev/">Vortex</a> An extensible, state of the art columnar file format</p></li>
-<li><p><a class="reference external" href="https://telemetry.sh/">Telemetry</a> Structured logging made easy</p></li>
+<li><p><a class="reference external" href="https://telemetry.sh/">Telemetry</a> Structured logging made easy (<a class="reference external" href="https://telemetry.sh/docs/discussion-topics/datafusion-sql-reference">DataFusion use</a>)</p></li>
 <li><p><a class="reference external" href="https://github.com/xorq-labs/xorq/">Xorq</a> Xorq is a multi-engine batch transformation framework built on Ibis, DataFusion and Arrow</p></li>
-<li><p><a class="reference external" href="https://github.com/jamals86/KalamDB">KalamDB</a> SQL-first realtime state database for AI agents, chat products, and multi-tenant SaaS.</p></li>
 <li><p><a class="reference external" href="https://github.com/infino-ai/infino">Infino</a> Fast retrieval engine for SQL, full-text search, and vector search over Parquet on object storage</p></li>
 </ul>
-<p>Here are some less active projects that used DataFusion:</p>
+<p>Here are other projects using or having used DataFusion, including less active
+projects and projects that do not meet the active-list criteria:</p>
 <ul class="simple">
 <li><p><a class="reference external" href="https://github.com/datafusion-contrib/bdt">bdt</a> Boring Data Tool</p></li>
 <li><p><a class="reference external" href="https://github.com/cloudfuse-io/buzz-rust">Cloudfuse Buzz</a></p></li>
 <li><p><a class="reference external" href="https://github.com/dask-contrib/dask-sql">Dask SQL</a> Distributed SQL query engine in Python</p></li>
+<li><p><a class="reference external" href="https://github.com/jeroenflvr/datapress">datapress</a> An opinionated small and fast data server on parquet and delta tables.</p></li>
+<li><p><a class="reference external" href="https://www.enterprisedb.com/products/analytics">EDB Postgres Lakehouse</a> built with <a class="reference external" href="https://github.com/splitgraph/seafowl">Seafowl</a></p></li>
 <li><p><a class="reference external" href="https://github.com/wheretrue/exon">Exon</a> Analysis toolkit for life-science applications</p></li>
 <li><p><a class="reference external" href="https://github.com/flock-lab/flock">Flock</a></p></li>
+<li><p><a class="reference external" href="https://github.com/GlareDB/glaredb">GlareDB</a> Fast SQL database for querying and analyzing distributed data.</p></li>
+<li><p><a class="reference external" href="https://github.com/apache/horaedb">HoraeDB</a> Distributed Time-Series Database (archived)</p></li>
+<li><p><a class="reference external" href="https://github.com/icegatetech/icegate">IceGate</a> Observability data lake engine for metrics, traces, logs, and events, built on Apache Iceberg with OpenTelemetry ingestion</p></li>
+<li><p><a class="reference external" href="https://github.com/jamals86/KalamDB">KalamDB</a> SQL-first realtime state database for AI agents, chat products, and multi-tenant SaaS.</p></li>
+<li><p><a class="reference external" href="https://github.com/roapi/roapi">ROAPI</a> Create full-fledged APIs for slowly moving datasets without writing a single line of code</p></li>
 <li><p><a class="reference external" href="https://github.com/tensorbase/tensorbase">Tensorbase</a></p></li>
+<li><p><a class="reference external" href="https://vegafusion.io/">VegaFusion</a> Server-side acceleration for the <a class="reference external" href="https://vega.github.io/">Vega</a> visualization grammar</p></li>
 </ul>
 <p>If you know of another project, please submit a PR to add a link!</p>
 </section>
