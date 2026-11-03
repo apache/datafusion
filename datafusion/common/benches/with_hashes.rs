@@ -160,7 +160,8 @@ fn criterion_benchmark(c: &mut Criterion) {
                 do_hash_test(b, &arrays);
             });
         }
-
+        // Apply additional null-density cases to all Int32 dictionary
+        // benchmarks, including any added in the future.
         if let Some(dict) = array
             .as_any()
             .downcast_ref::<DictionaryArray<Int32Type>>()
