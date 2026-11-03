@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Filter Pushdown Optimization Process
 //!
@@ -123,11 +110,24 @@ impl PushedDownPredicate {
 }
 
 /// Discriminant for the result of pushing down a filter into a child node.
+///
+/// This tells the parent whether it still has to evaluate the filter. It does
+/// not tell the parent how, or if, the child uses the filter.
+///
+/// For example, a child that replies [`PushedDown::No`] can still keep the
+/// filter and use it in an inexact way, such as to prune files, row groups or
+/// pages with statistics.
 #[derive(Debug, Clone, Copy)]
 pub enum PushedDown {
-    /// The predicate was successfully pushed down into the child node.
+    /// The child guarantees that it applies the predicate exactly: it never
+    /// produces a row for which the predicate is not true. The parent does
+    /// not need to evaluate the predicate again.
     Yes,
-    /// The predicate could not be pushed down into the child node.
+    /// The child does not guarantee that it applies the predicate exactly,
+    /// so the parent must still evaluate it.
+    ///
+    /// The child may ignore the predicate, or it may use it in an inexact
+    /// way, for example for statistics pruning.
     No,
 }
 

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt::Write;
 use std::sync::Arc;
@@ -124,11 +111,12 @@ impl ScalarUDFImpl for FormatStringFunc {
             | ColumnarValue::Scalar(ScalarValue::Utf8View(Some(fmt))) => {
                 let formatter = Formatter::parse(fmt, &data_types)?;
                 let mut result = Vec::with_capacity(len.unwrap_or(1));
+                let mut scalars = Vec::with_capacity(data_types.len());
                 for i in 0..len.unwrap_or(1) {
-                    let scalars = args.args[1..]
-                        .iter()
-                        .map(|arg| try_to_scalar(arg.clone(), i))
-                        .collect::<Result<Vec<_>>>()?;
+                    scalars.clear();
+                    for arg in &args.args[1..] {
+                        scalars.push(try_to_scalar(arg.clone(), i)?);
+                    }
                     let formatted = formatter.format(&scalars)?;
                     result.push(formatted);
                 }
@@ -158,15 +146,16 @@ impl ScalarUDFImpl for FormatStringFunc {
             }
             ColumnarValue::Array(fmts) => {
                 let mut result = Vec::with_capacity(len.unwrap());
+                let mut scalars = Vec::with_capacity(data_types.len());
                 for i in 0..len.unwrap() {
                     let fmt = ScalarValue::try_from_array(fmts, i)?;
                     match fmt.try_as_str() {
                         Some(Some(fmt)) => {
                             let formatter = Formatter::parse(fmt, &data_types)?;
-                            let scalars = args.args[1..]
-                                .iter()
-                                .map(|arg| try_to_scalar(arg.clone(), i))
-                                .collect::<Result<Vec<_>>>()?;
+                            scalars.clear();
+                            for arg in &args.args[1..] {
+                                scalars.push(try_to_scalar(arg.clone(), i)?);
+                            }
                             let formatted = formatter.format(&scalars)?;
                             result.push(Some(formatted));
                         }
@@ -1610,8 +1599,8 @@ impl ConversionSpecifier {
             }
             writer.push_str(suffix);
         } else {
-            while temp.len() < width as usize {
-                temp = " ".to_owned() + &temp;
+            for _ in temp.len()..width as usize {
+                writer.push(' ');
             }
             writer.push_str(&temp);
         }
@@ -1878,11 +1867,11 @@ impl ConversionSpecifier {
                 }
                 prefix + &s
             } else {
-                let mut num_str = prefix + &s;
-                while num_str.len() < width as usize {
-                    num_str = " ".to_owned() + &num_str;
+                let mut num_str = String::new();
+                while num_str.len() + prefix.len() + s.len() < width as usize {
+                    num_str.push(' ');
                 }
-                num_str
+                num_str + &prefix + &s
             }
         } else {
             prefix + &s
@@ -2248,9 +2237,9 @@ impl ConversionSpecifier {
             writer.push_str(number);
             writer.push_str(suffix);
         } else {
-            let mut full_num = prefix + number + suffix;
-            while full_num.len() < width as usize {
-                full_num = " ".to_owned() + &full_num;
+            let full_num = prefix + number + suffix;
+            for _ in full_num.len()..width as usize {
+                writer.push(' ');
             }
             writer.push_str(&full_num);
         }

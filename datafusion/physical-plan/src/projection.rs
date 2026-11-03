@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines the projection execution plan. A projection determines which columns or expressions
 //! are returned from a query. The SQL statement `SELECT a, b, a+b FROM t1` is an example
@@ -26,6 +13,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, SortOrderPushdownResult, Statistics,
 };
+use crate::execution_plan::LimitBehavior;
 use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -54,7 +42,9 @@ use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
-use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
+use datafusion_physical_expr_common::physical_expr::{
+    PhysicalExprRef, fmt_sql, is_volatile,
+};
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, PhysicalSortExpr,
 };
@@ -492,12 +482,20 @@ impl ExecutionPlan for ProjectionExec {
         Ok(Arc::new(
             self.projector
                 .projection()
-                .project_statistics(input_stats, &output_schema)?,
+                .project_statistics_with_input_schema(
+                    input_stats,
+                    self.input.schema().as_ref(),
+                    &output_schema,
+                )?,
         ))
     }
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::MoveToInput
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -528,10 +526,17 @@ impl ExecutionPlan for ProjectionExec {
         for filter in parent_filters {
             // Check that every column is a valid output column of this
             // projection, then replace each one with the expression at that
-            // output position.
+            // output position. A filter that becomes volatile after the
+            // rewrite must stay above the projection: inlining a volatile
+            // expression evaluates it independently, so the filter would test
+            // a different value than the one the projection outputs.
             if let Some(reassigned) = remapper.try_remap(&filter)? {
                 let rewritten = self.projection_expr().unproject_expr(&reassigned)?;
-                child_parent_filters.push(PushedDownPredicate::supported(rewritten));
+                if is_volatile(&rewritten) {
+                    child_parent_filters.push(PushedDownPredicate::unsupported(filter));
+                } else {
+                    child_parent_filters.push(PushedDownPredicate::supported(rewritten));
+                }
             } else {
                 child_parent_filters.push(PushedDownPredicate::unsupported(filter));
             }
@@ -557,7 +562,7 @@ impl ExecutionPlan for ProjectionExec {
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
         let child = self.input();
-        let mut child_order = Vec::new();
+        let mut child_order = Vec::with_capacity(order.len());
 
         // Check and transform sort expressions
         for sort_expr in order {
@@ -618,18 +623,6 @@ impl ExecutionPlan for ProjectionExec {
         }
     }
 
-    fn with_preserve_order(
-        &self,
-        preserve_order: bool,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        self.input
-            .with_preserve_order(preserve_order)
-            .and_then(|new_input| {
-                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
-                    .ok()
-            })
-    }
-
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
@@ -648,13 +641,25 @@ impl ExecutionPlan for ProjectionExec {
             metrics: _,
             // Derived plan properties, recomputed on decode.
             cache: _,
-            // Derived metadata comparison, recomputed with the projector.
-            overrides_metadata: _,
+            overrides_metadata,
         } = self;
         let projection_exprs = projector.projection().as_ref();
         let input = ctx.encode_child(input)?;
         let expr = ctx.encode_expressions(projection_exprs.iter().map(|p| &p.expr))?;
         let expr_name = projection_exprs.iter().map(|p| p.alias.clone()).collect();
+        let output_schema = projector.output_schema();
+        // Preserve explicit overrides and field metadata that cannot be
+        // reconstructed from the child. Inherited schema metadata can be.
+        let schema = if *overrides_metadata
+            || output_schema
+                .fields()
+                .iter()
+                .any(|field| !field.metadata().is_empty())
+        {
+            Some(output_schema.as_ref().try_into()?)
+        } else {
+            None
+        };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Projection(Box::new(
@@ -662,6 +667,7 @@ impl ExecutionPlan for ProjectionExec {
                         input: Some(Box::new(input)),
                         expr,
                         expr_name,
+                        schema,
                     },
                 )),
             ),
@@ -697,6 +703,7 @@ impl ProjectionExec {
             input,
             expr,
             expr_name,
+            schema,
         } = &**projection;
         let input =
             ctx.decode_required_child(input.as_deref(), "ProjectionExec", "input")?;
@@ -711,7 +718,15 @@ impl ProjectionExec {
                 })
             })
             .collect::<Result<Vec<ProjectionExpr>>>()?;
-        Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+        let projection = match schema {
+            Some(schema) => ProjectionExec::try_new_with_schema_metadata(
+                exprs,
+                input,
+                &Schema::try_from(schema)?,
+            )?,
+            None => ProjectionExec::try_new(exprs, input)?,
+        };
+        Ok(Arc::new(projection))
     }
 }
 
@@ -1124,7 +1139,7 @@ pub fn update_ordering(
     ordering: LexOrdering,
     projected_exprs: &[ProjectionExpr],
 ) -> Result<Option<LexOrdering>> {
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = Vec::with_capacity(ordering.len());
     for mut sort_expr in ordering.into_iter() {
         let Some(updated_expr) = update_expr(&sort_expr.expr, projected_exprs, false)?
         else {
@@ -1142,7 +1157,7 @@ pub fn update_ordering_requirement(
     reqs: LexRequirement,
     projected_exprs: &[ProjectionExpr],
 ) -> Result<Option<LexRequirement>> {
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = Vec::with_capacity(reqs.len());
     for mut sort_expr in reqs.into_iter() {
         let Some(updated_expr) = update_expr(&sort_expr.expr, projected_exprs, false)?
         else {
@@ -1568,9 +1583,11 @@ mod tests {
 
     use datafusion_expr::{Operator, ScalarUDF};
     use datafusion_functions::core::arrow_metadata::ArrowMetadataFunc;
+    use datafusion_functions::math::random::RandomFunc;
     use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::expressions::{
-        BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col, is_null, lit,
+        BinaryExpr, CastExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col,
+        is_null, lit,
     };
 
     #[test]
@@ -2149,6 +2166,37 @@ mod tests {
     }
 
     #[test]
+    fn test_projection_statistics_safe_cast_without_extrema() {
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let mut input_statistics = Statistics::new_unknown(&input_schema);
+        input_statistics.column_statistics[0].null_count = Precision::Exact(3);
+        input_statistics.column_statistics[0].distinct_count = Precision::Exact(2);
+        let input = Arc::new(StatisticsExec::new(input_statistics, input_schema));
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr::new(
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    DataType::Int64,
+                    None,
+                )),
+                "a",
+            )],
+            input,
+        )
+        .unwrap();
+
+        let stats = StatisticsContext::new()
+            .compute(&projection, &StatisticsArgs::new())
+            .unwrap();
+
+        assert_eq!(stats.column_statistics[0].null_count, Precision::Exact(3));
+        assert_eq!(
+            stats.column_statistics[0].distinct_count,
+            Precision::Exact(2)
+        );
+    }
+
+    #[test]
     fn test_filter_pushdown_with_alias() -> Result<()> {
         let input_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let input = Arc::new(StatisticsExec::new(
@@ -2194,6 +2242,82 @@ mod tests {
         );
         // Verify the predicate was actually pushed down
         assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_pushdown_volatile_projection_expr() -> Result<()> {
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&input_schema),
+            input_schema.clone(),
+        ));
+
+        // project "a", random() as "r"
+        let random_expr = Arc::new(ScalarFunctionExpr::new(
+            "random",
+            Arc::new(ScalarUDF::new_from_impl(RandomFunc::new())),
+            vec![],
+            Arc::new(Field::new("r", DataType::Float64, false)),
+            Arc::new(ConfigOptions::default()),
+        )) as Arc<dyn PhysicalExpr>;
+        let projection = ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    alias: "a".to_string(),
+                },
+                ProjectionExpr {
+                    expr: random_expr,
+                    alias: "r".to_string(),
+                },
+            ],
+            input,
+        )?;
+
+        // filter "a > 5" is deterministic and is pushed down, rewritten to
+        // reference the input column
+        let deterministic_filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        // filter "r > 0.5" must stay above the projection: unprojecting it
+        // would inline an independent evaluation of random(), so the filter
+        // would test a different value than the one the projection outputs
+        let volatile_filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("r", 1)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Float64(Some(0.5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let description = projection.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![deterministic_filter, Arc::clone(&volatile_filter)],
+            &ConfigOptions::default(),
+        )?;
+
+        let expected_pushed = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let pushed_filters = &description.parent_filters()[0];
+        assert_eq!(pushed_filters.len(), 2);
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
+        assert_eq!(
+            format!("{}", pushed_filters[0].predicate),
+            format!("{}", expected_pushed)
+        );
+        assert!(matches!(pushed_filters[1].discriminant, PushedDown::No));
+        // the unsupported filter is kept unchanged
+        assert_eq!(
+            format!("{}", pushed_filters[1].predicate),
+            format!("{}", volatile_filter)
+        );
 
         Ok(())
     }

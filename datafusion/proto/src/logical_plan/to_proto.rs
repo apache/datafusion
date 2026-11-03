@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Code to convert Arrow schemas and DataFusion logical plans to protocol buffer format, allowing
 //! DataFusion logical plans to be serialized and transmitted between
@@ -401,7 +388,7 @@ pub fn serialize_expr(
             let expr = Box::new(protobuf::CastNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
                 arrow_type: Some(field.data_type().try_into()?),
-                metadata: field.metadata().clone(),
+                metadata: field.metadata().into(),
                 nullable: Some(field.is_nullable()),
             });
             protobuf::LogicalExprNode {
@@ -412,7 +399,7 @@ pub fn serialize_expr(
             let expr = Box::new(protobuf::TryCastNode {
                 expr: Some(Box::new(serialize_expr(expr.as_ref(), codec)?)),
                 arrow_type: Some(field.data_type().try_into()?),
-                metadata: field.metadata().clone(),
+                metadata: field.metadata().into(),
                 nullable: Some(field.is_nullable()),
             });
             protobuf::LogicalExprNode {
@@ -505,7 +492,7 @@ pub fn serialize_expr(
                 nullable: field.as_ref().map(|f| f.is_nullable()),
                 metadata: field
                     .as_ref()
-                    .map(|f| f.metadata().clone())
+                    .map(|f| f.metadata().into())
                     .unwrap_or_default(),
             })),
         },
@@ -590,6 +577,9 @@ pub fn serialize_merge_into_op(
             .iter()
             .map(|c| serialize_merge_into_clause(c, codec))
             .collect::<Result<Vec<_>, Error>>()?,
+        target_qualifier: Some(protobuf::TableReference::from(
+            op.target_qualifier().clone(),
+        )),
     })
 }
 

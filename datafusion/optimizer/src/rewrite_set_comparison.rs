@@ -1,31 +1,19 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Optimizer rule rewriting `SetComparison` subqueries (e.g. `= ANY`,
 //! `> ALL`) into boolean expressions built from `EXISTS` subqueries
 //! that capture SQL three-valued logic.
 
+use crate::utils::{NamePreserver, merge_into_schema};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{Column, DFSchema, ExprSchema, Result, ScalarValue, plan_err};
 use datafusion_expr::expr::{self, Exists, SetComparison, SetQuantifier};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
-use datafusion_expr::{DmlStatement, Expr, LogicalPlan, WriteOp, lit};
+use datafusion_expr::{Expr, LogicalPlan, lit};
 use std::sync::Arc;
 
 use datafusion_expr::utils::merge_schema;
@@ -45,20 +33,22 @@ impl RewriteSetComparison {
 
     fn rewrite_plan(&self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         let mut schema = merge_schema(&plan.inputs());
-        if let LogicalPlan::Dml(DmlStatement {
-            op: WriteOp::MergeInto(_),
-            table_name,
-            target,
-            ..
-        }) = &plan
-        {
-            schema.merge(&DFSchema::try_from_qualified_schema(
-                table_name.clone(),
-                &target.schema(),
-            )?);
+        if let Some(merge_schema) = merge_into_schema(&plan)? {
+            schema = merge_schema;
         }
+        // This rule replaces `x > ALL (…)` with a `CASE WHEN EXISTS …`, whose display
+        // name is not the name of the field it produces. Rewriting an expression
+        // without preserving its name therefore changes the output schema, and the
+        // optimizer's "the schema is invariant under optimization" check fails with an
+        // internal error rather than returning the answer. `simplify_exprs` and
+        // `type_coercion` preserve names around `map_expressions` for the same reason;
+        // doing it here also stops this rule leaving mismatched names in `Aggregate`
+        // and `Window` nodes, which a projection-only fix could not reach.
+        let name_preserver = NamePreserver::new(&plan);
         plan.map_expressions(|expr| {
+            let original_name = name_preserver.save(&expr);
             expr.transform_up(|expr| rewrite_set_comparison(expr, &schema))
+                .map(|t| t.update_data(|expr| original_name.restore(expr)))
         })
     }
 }

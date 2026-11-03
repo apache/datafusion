@@ -1,24 +1,14 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Vectorized [`GroupsAccumulator`]
 
 use arrow::array::{ArrayRef, BooleanArray};
 use datafusion_common::{Result, exec_err, not_impl_err, utils::split_vec_min_alloc};
+use std::sync::Arc;
+
+use crate::accumulator::AggregateMetrics;
 
 /// Describes how many rows should be emitted during grouping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -188,6 +178,13 @@ impl<'a> GroupSelection<'a> {
 /// [`Accumulator`]: crate::accumulator::Accumulator
 /// [Aggregating Millions of Groups Fast blog]: https://arrow.apache.org/blog/2023/08/05/datafusion_fast_grouping/
 pub trait GroupsAccumulator: Send + std::any::Any {
+    /// Supplies optional metrics owned by this aggregate expression.
+    ///
+    /// Call this immediately after construction and before the accumulator is
+    /// used; replacing metrics after use is unsupported. The default preserves
+    /// compatibility for accumulators without internal submetrics.
+    fn set_metrics(&mut self, _metrics: Arc<dyn AggregateMetrics>) {}
+
     /// Updates the accumulator's state from its arguments, encoded as
     /// a vector of [`ArrayRef`]s.
     ///
@@ -371,6 +368,14 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     ///
     /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
+
+    /// Keeps the stored groups but releases capacity they do not need, such as
+    /// per-batch scratch buffers, so that [`Self::size`] reflects the stored
+    /// groups. For example, after [`EmitTo::First`] removes most groups, an
+    /// accumulator may keep a buffer it sized for the last input batch.
+    ///
+    /// The default does nothing.
+    fn shrink_to_fit(&mut self) {}
 }
 
 #[cfg(test)]

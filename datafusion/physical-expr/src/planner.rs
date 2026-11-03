@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -742,7 +729,7 @@ pub fn logical2physical(expr: &Expr, schema: &Schema) -> Arc<dyn PhysicalExpr> {
 #[cfg(test)]
 mod tests {
     use arrow::array::{ArrayRef, BooleanArray, RecordBatch, StringArray};
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Metadata};
     use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
     use datafusion_common::HashMap;
     use datafusion_expr::physical_planning_context::{
@@ -884,15 +871,10 @@ mod tests {
         // With exact target metadata semantics, all target metadata should propagate.
         let target_field = Arc::new(
             Field::new("cast_target", DataType::Int64, true).with_metadata(
-                [
-                    (
-                        EXTENSION_TYPE_NAME_KEY.to_string(),
-                        "arrow.json".to_string(),
-                    ),
-                    (EXTENSION_TYPE_METADATA_KEY.to_string(), "{}".to_string()),
-                    ("custom_target_meta".to_string(), "custom_value".to_string()),
-                ]
-                .into(),
+                Metadata::new()
+                    .with(EXTENSION_TYPE_NAME_KEY, "arrow.json")
+                    .with(EXTENSION_TYPE_METADATA_KEY, "{}")
+                    .with("custom_target_meta", "custom_value"),
             ),
         );
         let cast_expr = Expr::Cast(Cast::new_from_field(
@@ -962,14 +944,9 @@ mod tests {
         // With exact target metadata semantics, all target metadata should propagate.
         let target_field = Arc::new(
             Field::new("same_type_cast", DataType::Int32, true).with_metadata(
-                [
-                    (
-                        EXTENSION_TYPE_NAME_KEY.to_string(),
-                        "arrow.opaque".to_string(),
-                    ),
-                    ("custom_meta".to_string(), "custom_value".to_string()),
-                ]
-                .into(),
+                Metadata::new()
+                    .with(EXTENSION_TYPE_NAME_KEY, "arrow.opaque")
+                    .with("custom_meta", "custom_value"),
             ),
         );
 

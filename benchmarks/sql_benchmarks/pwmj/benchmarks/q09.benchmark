@@ -1,0 +1,11 @@
+# INNER JOIN, half_match: half the streamed rows as no_match, half as selective.
+
+subgroup half_match
+
+template sql_benchmarks/pwmj/pwmj.benchmark.template
+QPAD=09
+JOIN=INNER
+JOIN_KIND=Inner
+RIGHT_ROWS=2000000
+RIGHT_KEY=CASE WHEN value % 2 = 0 THEN -(h % 1000) ELSE 2 + h % 4 END
+EXPECTED_ROWS=3000000

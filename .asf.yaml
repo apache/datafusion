@@ -87,6 +87,7 @@ github:
           - "check Cargo.toml formatting"
           - "check configs.md and ***_functions.md is up-to-date"
           - "check example README is up-to-date"
+          - "Check datafusion crates used in datafusion-examples"
           - "Verify MSRV (Min Supported Rust Version)"
     # needs to be updated as part of the release process
     # .asf.yaml doesn't support wildcard branch protection rules, only exact branch names
@@ -111,12 +112,56 @@ github:
     branch-55:
       required_pull_request_reviews:
         required_approving_review_count: 1
+
+  # GitHub merge queue settings for `main`.
+  #
+  # The merge queue is managed through rulesets
+  # https://github.com/apache/infrastructure-asfyaml#rulesets
+  #
+  # Merge queue rules do not support wildcard ref patterns, so only the default
+  # branch is covered; release branches keep plain branch protection above.
+  rulesets:
+    - name: Merge Queue
+      target: branch
+      enforcement: active
+      conditions:
+        ref_name:
+          include:
+            - "~DEFAULT_BRANCH"
+          exclude: []
+      rules:
+        - type: merge_queue
+          parameters:
+            # Matches enabled_merge_buttons above.
+            merge_method: SQUASH
+            # Every entry's own build must be green, not only the head of the
+            # group.
+            grouping_strategy: ALLGREEN
+            # How many queue entries are built and tested concurrently.
+            max_entries_to_build: 5
+            # How many green entries may land in one merge operation (note this
+            # does not combine CI builds)
+            max_entries_to_merge: 1
+            min_entries_to_merge: 1
+            min_entries_to_merge_wait_minutes: 5
+            # How long the queue waits for a required check to report before
+            # treating it as failed and evicting the entry. Set to 6h to handle
+            # periods of high runner queue times. See
+            # https://github.com/apache/datafusion/issues/26292
+            check_response_timeout_minutes: 360
   pull_requests:
     # enable updating head branches of pull requests
     allow_update_branch: true
     allow_auto_merge: true
     # auto-delete head branches after being merged
     del_branch_on_merge: true
+    # Limit open pull requests per user without write access.
+    #
+    # With coding agents, the number of open PRs now far exceeds our review capacity.
+    # Setting a limit helps reviewers focus on fewer PRs at a time.
+    creation_cap:
+      enabled: true
+      max_open_pull_requests: 3
 
 # publishes the content of the `asf-site` branch to
 # https://datafusion.apache.org/

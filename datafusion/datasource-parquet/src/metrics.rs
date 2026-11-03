@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -143,8 +130,8 @@ pub struct ParquetFileMetrics {
 /// The clamp and the final top-up also absorb two small inexactnesses in
 /// crediting by row group: a file is slightly larger than the sum of its row
 /// groups (the footer, the page index and any padding belong to no row group),
-/// and a row group is assigned to a byte range by the offset of its first page,
-/// so a range's row groups do not add up to precisely its length.
+/// and each row group is credited whole to the one range that reads it, so a
+/// range's row groups do not add up to precisely its length.
 ///
 /// The budget is held as a `usize` because [`Count`] is, so the two cannot
 /// disagree: on a 32-bit target a range longer than `usize::MAX` saturates once,

@@ -1,0 +1,7 @@
+description = "Piecewise merge join (classic INNER/LEFT/RIGHT/FULL) SQL benchmarks"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- pwmj"
+description = "Run all piecewise merge join queries."

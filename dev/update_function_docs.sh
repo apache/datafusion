@@ -26,7 +26,39 @@ cd "${ROOT_DIR}"
 # Load centralized tool versions
 source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
 
-TARGET_FILE="docs/source/user-guide/sql/aggregate_functions.md"
+# `--output-dir DIR` writes the generated pages into DIR instead of
+# docs/source/user-guide/sql. A relative DIR is taken from the repository root.
+OUTPUT_DIR="docs/source/user-guide/sql"
+
+usage() {
+  cat >&2 <<USAGE
+Usage: $0 [--output-dir DIR]
+
+Regenerates the aggregate, scalar, and window function pages under docs/source/user-guide/sql.
+--output-dir DIR  Write the generated pages into DIR instead of docs/source/user-guide/sql (relative to the repository root).
+USAGE
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-dir)
+      [[ $# -ge 2 ]] || usage
+      OUTPUT_DIR="$2"
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    *)
+      usage
+      ;;
+  esac
+  shift
+done
+
+mkdir -p "${OUTPUT_DIR}"
+TARGET_FILE="${OUTPUT_DIR}/aggregate_functions.md"
 PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_functions_docs -- aggregate"
 
 echo "Inserting header"
@@ -120,7 +152,7 @@ npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
 
-TARGET_FILE="docs/source/user-guide/sql/scalar_functions.md"
+TARGET_FILE="${OUTPUT_DIR}/scalar_functions.md"
 PRINT_SCALAR_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_functions_docs -- scalar"
 
 echo "Inserting header"
@@ -164,7 +196,7 @@ npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
 
-TARGET_FILE="docs/source/user-guide/sql/window_functions.md"
+TARGET_FILE="${OUTPUT_DIR}/window_functions.md"
 PRINT_WINDOW_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_functions_docs -- window"
 
 echo "Inserting header"

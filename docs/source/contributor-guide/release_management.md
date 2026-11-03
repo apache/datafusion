@@ -53,6 +53,7 @@ or open a backport PR and link it there.
 To prepare for a new release series, maintainers:
 
 - Create a new branch from `main`, such as `branch-50`, in the Apache repository
+- Bump the version on `main` to the next development version, such as `51.0.0-dev`
 - Continue merging new features to `main`
 - Prepare the release branch for release by updating versions, changelog content,
   and any additional release-specific fixes via the

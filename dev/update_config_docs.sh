@@ -26,7 +26,39 @@ cd "${ROOT_DIR}"
 # Load centralized tool versions
 source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
 
-TARGET_FILE="docs/source/user-guide/configs.md"
+# `--output-dir DIR` writes the generated page into DIR instead of
+# docs/source/user-guide. A relative DIR is taken from the repository root.
+OUTPUT_DIR="docs/source/user-guide"
+
+usage() {
+  cat >&2 <<USAGE
+Usage: $0 [--output-dir DIR]
+
+Regenerates docs/source/user-guide/configs.md.
+--output-dir DIR  Write the generated page into DIR instead of docs/source/user-guide (relative to the repository root).
+USAGE
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-dir)
+      [[ $# -ge 2 ]] || usage
+      OUTPUT_DIR="$2"
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    *)
+      usage
+      ;;
+  esac
+  shift
+done
+
+mkdir -p "${OUTPUT_DIR}"
+TARGET_FILE="${OUTPUT_DIR}/configs.md"
 PRINT_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_config_docs"
 PRINT_RUNTIME_CONFIG_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_runtime_config_docs"
 
@@ -140,12 +172,14 @@ cat <<'EOF' >> "$TARGET_FILE"
 
 # Tuning Guide
 
-## Short Queries
+## Short Queries and Point Lookups
 
 By default DataFusion will attempt to maximize parallelism and use all cores --
 For example, if you have 32 cores, each plan will split the data into 32
-partitions. However, if your data is small, the overhead of splitting the data
-to enable parallelization can dominate the actual computation.
+partitions. However, if your data is small, or the query only reads a few rows
+(for example, a point lookup such as `SELECT * FROM t WHERE id = 42`), the
+overhead of planning, opening files, and splitting the data to enable
+parallelization can dominate the actual computation.
 
 You can find out how many cores are being used via the [`EXPLAIN`] command and look
 at the number of partitions in the plan.
@@ -158,13 +192,48 @@ does not apply to user defined data sources and only works when DataFusion has a
 
 If you know your data is small, you can set the `datafusion.execution.target_partitions`
 option to a smaller number to reduce the overhead of repartitioning. For very small datasets (e.g. less
-than 1MB), we recommend setting `target_partitions` to 1 to avoid repartitioning altogether.
+than 1MB) or point lookups, we recommend setting `target_partitions` to 1 to avoid repartitioning altogether.
 
 ```sql
 SET datafusion.execution.target_partitions = '1';
 ```
 
 [`ListingTable`]: https://docs.rs/datafusion/latest/datafusion/datasource/listing/struct.ListingTable.html
+
+For point lookups, the following techniques also help:
+
+- Sort the data by the lookup key so the data that is fetched is physically nearby (clustered).
+  This makes techniques such as Parquet min/max metadata pruning more effective.
+- Write Parquet files with smaller row groups and data pages than the default
+  so that less data needs to be read and decoded for each lookup.
+- Enable `datafusion.execution.parquet.pushdown_filters` so filters are
+  evaluated while decoding Parquet.
+- Set the Parquet metadata cache size via
+  `datafusion.runtime.metadata_cache_limit` so it is large enough to hold all the metadata for the
+  files you query repeatedly.
+- Reuse physical plans to avoid re-planning each query.
+
+Here is an example of how to write Parquet files with smaller row groups and
+data pages:
+
+```sql
+COPY (SELECT * FROM t) TO 't.parquet'
+OPTIONS (
+  MAX_ROW_GROUP_SIZE 131072,
+  DATA_PAGE_ROW_COUNT_LIMIT 2048
+);
+```
+
+Here is how to enable pushdown filters:
+
+```sql
+SET datafusion.execution.parquet.pushdown_filters = true;
+```
+
+See the [Best Practices for Single Row Lookups (Point Queries)] blog post for
+more details.
+
+[Best Practices for Single Row Lookups (Point Queries)]: https://datafusion.apache.org/blog/2026/10/24/point-queries/
 
 ## Memory-limited Queries
 

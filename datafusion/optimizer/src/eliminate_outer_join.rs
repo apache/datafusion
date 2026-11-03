@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`EliminateOuterJoin`] rewrites outer joins to simpler join types when
 //! filters make the outer rows unnecessary (e.g. `LEFT`/`RIGHT` to `INNER`,
@@ -93,10 +80,6 @@ impl OptimizerRule for EliminateOuterJoin {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         Some(ApplyOrder::TopDown)
-    }
-
-    fn supports_rewrite(&self) -> bool {
-        true
     }
 
     fn rewrite(
@@ -181,6 +164,7 @@ fn try_simplify_join(join: &Join, predicate: &Expr) -> Option<LogicalPlan> {
         schema: Arc::clone(&join.schema),
         null_equality: join.null_equality,
         null_aware: join.null_aware,
+        null_aware_value_keys: join.null_aware_value_keys,
     }))
 }
 
@@ -193,7 +177,7 @@ fn try_simplify_join(join: &Join, predicate: &Expr) -> Option<LogicalPlan> {
 /// purposes). Therefore, function volatility and `MoveTowardsLeafNodes`
 /// placement can be ignored here.
 fn inline_through_projection(predicate: Expr, p: &Projection) -> Result<Expr> {
-    let mut map: HashMap<String, Expr> = HashMap::new();
+    let mut map: HashMap<String, Expr> = HashMap::with_capacity(p.expr.len());
     for ((qualifier, field), expr) in p.schema.iter().zip(p.expr.iter()) {
         map.insert(
             qualified_name(qualifier, field.name()),

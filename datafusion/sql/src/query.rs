@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -27,9 +14,9 @@ use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
 use sqlparser::ast::{
-    Expr as SQLExpr, ExprWithAliasAndOrderBy, LimitClause, Offset, OffsetRows, OrderBy,
-    OrderByExpr, OrderByKind, PipeOperator, Query, SelectInto, SetExpr, SetOperator,
-    SetQuantifier, TableAlias, Value,
+    Expr as SQLExpr, ExprWithAliasAndOrderBy, LimitClause, ObjectName, Offset,
+    OffsetRows, OrderBy, OrderByExpr, OrderByKind, PipeOperator, Query, SelectInto,
+    SetExpr, SetOperator, SetQuantifier, TableAlias, Value,
 };
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
@@ -61,9 +48,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("FETCH clause is not supported yet");
         }
 
-        if let Some(with) = with {
-            self.plan_with_clause(with, planner_context)?;
-        }
+        let materialized_ctes = match with {
+            Some(with) => self.plan_with_clause(with, planner_context)?,
+            None => vec![],
+        };
 
         let set_expr = *body;
         let plan = match set_expr {
@@ -96,7 +84,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }?;
 
-        self.pipe_operators(plan, pipe_operators, planner_context)
+        let plan = self.pipe_operators(plan, pipe_operators, planner_context)?;
+        if !materialized_ctes.is_empty() && matches!(plan, LogicalPlan::Ddl(_)) {
+            return not_impl_err!("MATERIALIZED CTEs are not supported with SELECT INTO");
+        }
+        // A later CTE may read an earlier one, so the first CTE is the outermost.
+        materialized_ctes
+            .into_iter()
+            .rev()
+            .try_fold(plan, |plan, cte| cte.wrap(plan))
     }
 
     /// Apply pipe operators to a plan
@@ -362,17 +358,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         select_into: Option<SelectInto>,
     ) -> Result<LogicalPlan> {
         match select_into {
-            Some(into) => Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
-                CreateMemoryTable {
-                    name: self.object_name_to_table_reference(into.name)?,
-                    constraints: Constraints::default(),
-                    input: Arc::new(plan),
-                    if_not_exists: false,
-                    or_replace: false,
-                    temporary: false,
-                    column_defaults: vec![],
-                },
-            ))),
+            Some(into) => {
+                let name = match into.targets.as_slice() {
+                    [SQLExpr::Identifier(ident)] => ObjectName::from(vec![ident.clone()]),
+                    [SQLExpr::CompoundIdentifier(idents)] => {
+                        ObjectName::from(idents.clone())
+                    }
+                    _ => {
+                        return not_impl_err!(
+                            "SELECT INTO only supports a single table name target"
+                        );
+                    }
+                };
+                Ok(LogicalPlan::Ddl(DdlStatement::CreateMemoryTable(
+                    CreateMemoryTable {
+                        name: self.object_name_to_table_reference(name)?,
+                        constraints: Constraints::default(),
+                        input: Arc::new(plan),
+                        if_not_exists: false,
+                        or_replace: false,
+                        temporary: false,
+                        column_defaults: vec![],
+                    },
+                )))
+            }
             _ => Ok(plan),
         }
     }
@@ -393,7 +402,7 @@ fn to_order_by_exprs(
         OrderByKind::All(options) => Ok((1..=order_by_all_column_count)
             .map(|position| OrderByExpr {
                 expr: SQLExpr::value(Value::Number(position.to_string(), false)),
-                options,
+                options: options.clone(),
                 with_fill: None,
             })
             .collect()),

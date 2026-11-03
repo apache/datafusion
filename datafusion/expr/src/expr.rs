@@ -1,22 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Logical Expressions: [`Expr`]
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt::{self, Display, Formatter, Write};
@@ -32,7 +20,7 @@ use crate::type_coercion::functions::value_fields_with_higher_order_udf;
 use crate::{AggregateUDF, LambdaParametersProgress, ValueOrLambda, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
-use arrow::datatypes::{DataType, Field, FieldRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Metadata};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::metadata::format_type_and_metadata;
@@ -622,7 +610,7 @@ impl<'a> TreeNodeContainer<'a, Self> for Expr {
 /// See the [default_column_values.rs] example implementation.
 ///
 /// [default_column_values.rs]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/custom_data_source/default_column_values.rs
-pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
+pub type SchemaFieldMetadata = Metadata;
 
 /// Intersects multiple metadata instances for UNION operations.
 ///
@@ -645,6 +633,10 @@ pub type SchemaFieldMetadata = std::collections::HashMap<String, String>;
 /// # Returns
 ///
 /// A new `SchemaFieldMetadata` containing only the intersected metadata
+#[deprecated(
+    since = "56.0.0",
+    note = "UNION now merges metadata with `datafusion_common::metadata::merge_metadata_for_union`"
+)]
 pub fn intersect_metadata_for_union<'a>(
     metadatas: impl IntoIterator<Item = &'a SchemaFieldMetadata>,
 ) -> SchemaFieldMetadata {
@@ -1399,6 +1391,54 @@ impl InSubquery {
             negated,
         }
     }
+}
+
+/// The tuple elements of a multi-column `(a, b, ...) IN (SELECT x, y, ...)`,
+/// given the compared expression `expr` and the `subquery` plan, or `None`
+/// for a single-column `IN`.
+///
+/// The tuple is planned as a `struct` call, which `simplify_expressions` folds
+/// into a struct literal when every element is a literal. It is a
+/// multi-column `IN` only when the subquery returns more than one column;
+/// against a single column the struct is one value compared with a
+/// struct-typed column.
+///
+/// Errors when the number of tuple elements does not match the number of
+/// subquery columns.
+pub fn in_subquery_tuple_values<'a>(
+    expr: &'a Expr,
+    subquery: &crate::LogicalPlan,
+) -> Result<Option<Cow<'a, [Expr]>>> {
+    let num_columns = subquery.schema().fields().len();
+    if num_columns <= 1 {
+        return Ok(None);
+    }
+    let values = match expr {
+        Expr::ScalarFunction(func) if func.func.name() == "struct" => {
+            Cow::Borrowed(func.args.as_slice())
+        }
+        Expr::Literal(ScalarValue::Struct(array), _)
+            if arrow::array::Array::is_valid(array.as_ref(), 0) =>
+        {
+            Cow::Owned(
+                array
+                    .columns()
+                    .iter()
+                    .map(|column| {
+                        Ok(Expr::Literal(ScalarValue::try_from_array(column, 0)?, None))
+                    })
+                    .collect::<Result<_>>()?,
+            )
+        }
+        _ => return Ok(None),
+    };
+    if values.len() != num_columns {
+        return plan_err!(
+            "The number of columns in the tuple ({}) must match the number of columns in the subquery ({num_columns})",
+            values.len()
+        );
+    }
+    Ok(Some(values))
 }
 
 /// Placeholder, representing bind parameter values such as `$1` or `$name`.
@@ -2157,7 +2197,19 @@ impl Expr {
     /// - `rand()` returns `true`,
     /// - `a + rand()` returns `false`
     pub fn is_volatile_node(&self) -> bool {
-        matches!(self, Expr::ScalarFunction(func) if func.func.signature().volatility == Volatility::Volatile)
+        let volatility = match self {
+            Expr::ScalarFunction(func) => func.func.signature().volatility,
+            Expr::AggregateFunction(func) => func.func.signature().volatility,
+            Expr::WindowFunction(func) => match &func.fun {
+                WindowFunctionDefinition::AggregateUDF(func) => {
+                    func.signature().volatility
+                }
+                WindowFunctionDefinition::WindowUDF(func) => func.signature().volatility,
+            },
+            Expr::HigherOrderFunction(func) => func.func.signature().volatility,
+            _ => return false,
+        };
+        volatility == Volatility::Volatile
     }
 
     /// Returns true if the expression is volatile, i.e. whether it can return different
@@ -2212,11 +2264,32 @@ impl Expr {
                     subquery,
                     negated: _,
                 }) => {
-                    rewrite_placeholder_from_subquery(
-                        "InSubquery",
-                        expr.as_mut(),
-                        subquery,
-                    )?;
+                    // Multi-column `(a, b) IN (SELECT x, y ...)`: infer each
+                    // tuple element from the subquery column at the same
+                    // position.
+                    let subquery_schema = subquery.subquery.schema();
+                    let is_tuple =
+                        in_subquery_tuple_values(expr.as_ref(), &subquery.subquery)?
+                            .is_some();
+                    match expr.as_mut() {
+                        Expr::ScalarFunction(func) if is_tuple => {
+                            for (i, arg) in func.args.iter_mut().enumerate() {
+                                // Qualified, since two subquery columns can
+                                // share a name under different qualifiers.
+                                let column = Expr::Column(Column::from(
+                                    subquery_schema.qualified_field(i),
+                                ));
+                                rewrite_placeholder(arg, &column, subquery_schema)?;
+                            }
+                        }
+                        // A struct literal holds no placeholder.
+                        _ if is_tuple => {}
+                        expr => rewrite_placeholder_from_subquery(
+                            "InSubquery",
+                            expr,
+                            subquery,
+                        )?,
+                    }
                 }
                 Expr::SetComparison(SetComparison {
                     expr,
@@ -3886,7 +3959,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -3934,7 +4007,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -3988,7 +4061,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -4041,7 +4114,7 @@ mod test {
         let subquery_schema = Arc::new(
             DFSchema::from_unqualified_fields(
                 vec![subquery_field].into(),
-                Default::default(),
+                Metadata::new(),
             )
             .unwrap(),
         );
@@ -4142,9 +4215,8 @@ mod test {
     fn infer_placeholder_with_metadata() {
         // name == $1, where name is a non-nullable string
         let schema = Arc::new(Schema::new(vec![
-            Field::new("name", DataType::Utf8, false).with_metadata(
-                [("some_key".to_string(), "some_value".to_string())].into(),
-            ),
+            Field::new("name", DataType::Utf8, false)
+                .with_metadata(Metadata::new().with("some_key", "some_value")),
         ]));
         let df_schema = DFSchema::try_from(schema).unwrap();
 
@@ -4602,55 +4674,56 @@ mod test {
         }
     }
 
+    #[expect(deprecated)]
     mod intersect_metadata_tests {
         use super::super::intersect_metadata_for_union;
-        use std::collections::HashMap;
+        use arrow::datatypes::Metadata;
 
         #[test]
         fn all_branches_same_metadata() {
-            let m1 = HashMap::from([("key".into(), "val".into())]);
-            let m2 = HashMap::from([("key".into(), "val".into())]);
+            let m1 = Metadata::new().with("key", "val");
+            let m2 = Metadata::new().with("key", "val");
             let result = intersect_metadata_for_union([&m1, &m2]);
-            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+            assert_eq!(result, Metadata::new().with("key", "val"));
         }
 
         #[test]
         fn conflicting_metadata_dropped() {
-            let m1 = HashMap::from([("key".into(), "a".into())]);
-            let m2 = HashMap::from([("key".into(), "b".into())]);
+            let m1 = Metadata::new().with("key", "a");
+            let m2 = Metadata::new().with("key", "b");
             let result = intersect_metadata_for_union([&m1, &m2]);
             assert!(result.is_empty());
         }
 
         #[test]
         fn empty_metadata_branch_skipped() {
-            let m1 = HashMap::from([("key".into(), "val".into())]);
-            let m2 = HashMap::new(); // e.g. NULL literal
+            let m1 = Metadata::new().with("key", "val");
+            let m2 = Metadata::new(); // e.g. NULL literal
             let result = intersect_metadata_for_union([&m1, &m2]);
-            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+            assert_eq!(result, Metadata::new().with("key", "val"));
         }
 
         #[test]
         fn empty_metadata_first_branch_skipped() {
-            let m1 = HashMap::new();
-            let m2 = HashMap::from([("key".into(), "val".into())]);
+            let m1 = Metadata::new();
+            let m2 = Metadata::new().with("key", "val");
             let result = intersect_metadata_for_union([&m1, &m2]);
-            assert_eq!(result, HashMap::from([("key".into(), "val".into())]));
+            assert_eq!(result, Metadata::new().with("key", "val"));
         }
 
         #[test]
         fn all_branches_empty_metadata() {
-            let m1: HashMap<String, String> = HashMap::new();
-            let m2: HashMap<String, String> = HashMap::new();
+            let m1 = Metadata::new();
+            let m2 = Metadata::new();
             let result = intersect_metadata_for_union([&m1, &m2]);
             assert!(result.is_empty());
         }
 
         #[test]
         fn mixed_empty_and_conflicting() {
-            let m1 = HashMap::from([("key".into(), "a".into())]);
-            let m2 = HashMap::new();
-            let m3 = HashMap::from([("key".into(), "b".into())]);
+            let m1 = Metadata::new().with("key", "a");
+            let m2 = Metadata::new();
+            let m3 = Metadata::new().with("key", "b");
             let result = intersect_metadata_for_union([&m1, &m2, &m3]);
             // m2 is skipped; m1 and m3 conflict → dropped
             assert!(result.is_empty());
@@ -4658,9 +4731,7 @@ mod test {
 
         #[test]
         fn no_inputs() {
-            let result = intersect_metadata_for_union(std::iter::empty::<
-                &HashMap<String, String>,
-            >());
+            let result = intersect_metadata_for_union(std::iter::empty::<&Metadata>());
             assert!(result.is_empty());
         }
     }

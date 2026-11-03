@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::mem::size_of;
 
@@ -111,7 +98,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
                     map_contents.slice(n, map_contents.len() - n);
 
                 self.num_groups = 0;
-                let mut group_indexes = vec![];
+                let mut group_indexes = Vec::with_capacity(remaining_group_values.len());
                 self.intern(&[remaining_group_values], &mut group_indexes)?;
 
                 // Verify that the group indexes were assigned in the correct order
@@ -141,6 +128,7 @@ impl<O: OffsetSizeTrait> GroupValues for GroupValuesBytes<O> {
         // release the map's allocations rather than restoring the warm up
         // capacities that `take` keeps for the emit path.
         self.map.clear_and_release();
+        self.num_groups = 0;
     }
 }
 
@@ -199,5 +187,29 @@ mod tests {
         assert!(group_values.size() > released_size);
         group_values.emit(EmitTo::All).unwrap();
         assert!(group_values.size() > empty + INITIAL_BUFFER_CAPACITY);
+    }
+
+    #[test]
+    fn clear_shrink_should_reset_len() {
+        let mut group_values = GroupValuesBytes::<i32>::new(OutputType::Utf8);
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..10).map(|i| format!("group value number {i}")),
+        ));
+        let mut groups = vec![];
+        group_values
+            .intern(&[Arc::clone(&values)], &mut groups)
+            .unwrap();
+        assert_eq!(group_values.len(), 10);
+        group_values.clear_shrink(0);
+        assert_eq!(group_values.len(), 0);
+
+        // The first new distinct value after clearing should get group index 0
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values([
+            "new value",
+            "another value",
+        ]));
+        group_values.intern(&[values], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1]);
+        assert_eq!(group_values.len(), 2);
     }
 }

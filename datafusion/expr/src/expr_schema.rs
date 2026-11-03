@@ -1,26 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::{Between, Expr, Like, predicate_bounds};
 use crate::ValueOrLambda;
 use crate::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, BinaryExpr, Cast, InList,
     InSubquery, Lambda, Placeholder, ScalarFunction, TryCast, Unnest, WindowFunction,
-    WindowFunctionParams,
+    WindowFunctionParams, in_subquery_tuple_values,
 };
 use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::higher_order_function::HigherOrderReturnFieldArgs;
@@ -182,14 +169,9 @@ impl ExprSchemable for Expr {
     #[cfg_attr(feature = "recursive_protection", recursive::recursive)]
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType> {
         match self {
-            Expr::Alias(Alias { expr, name, .. }) => match &**expr {
-                Expr::Placeholder(Placeholder { field, .. }) => match &field {
-                    None => schema.data_type(&Column::from_name(name)).cloned(),
-                    Some(field) => Ok(field.data_type().clone()),
-                },
-                _ => expr.get_type(schema),
-            },
-            Expr::Negative(expr) => expr.get_type(schema),
+            Expr::Alias(Alias { expr, .. }) | Expr::Negative(expr) => {
+                expr.get_type(schema)
+            }
             Expr::Column(c) => Ok(schema.data_type(c)?.clone()),
             Expr::OuterReferenceColumn(field, _) => Ok(field.data_type().clone()),
             Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
@@ -413,6 +395,23 @@ impl ExprSchemable for Expr {
             | Expr::Exists { .. } => Ok(false),
             Expr::SetComparison(_) => Ok(true),
             Expr::InSubquery(InSubquery { expr, subquery, .. }) => {
+                // A multi-column `(a, b) IN (SELECT x, y ...)` is UNKNOWN when
+                // any element or subquery column is NULL. The tuple is a
+                // `struct` call, which itself is never NULL, so its elements
+                // and every subquery column count.
+                if let Some(values) = in_subquery_tuple_values(expr, &subquery.subquery)?
+                {
+                    let mut nullable = subquery
+                        .subquery
+                        .schema()
+                        .fields()
+                        .iter()
+                        .any(|field| field.is_nullable());
+                    for value in values.iter() {
+                        nullable |= value.nullable(input_schema)?;
+                    }
+                    return Ok(nullable);
+                }
                 let expr_nullable = expr.nullable(input_schema)?;
                 let subquery_nullable = subquery.subquery.schema().fields().first().ok_or_else(|| {
                     plan_datafusion_err!("subquery must return exactly one column of data to compare against")
@@ -505,6 +504,7 @@ impl ExprSchemable for Expr {
     /// - **Column references**: Preserve original field metadata from input schema
     /// - **Literals**: Use explicitly provided metadata, otherwise empty
     /// - **Aliases**: Merge underlying expr metadata with alias-specific metadata, preferring the alias metadata
+    /// - **List unnesting**: Preserve the element field metadata
     /// - **Binary expressions**: field metadata is empty
     /// - **Boolean expressions**: field metadata is empty
     /// - **Cast expressions**: Type-only casts pass through source metadata (stripping extension
@@ -537,15 +537,13 @@ impl ExprSchemable for Expr {
                 metadata,
                 ..
             }) => {
-                let mut combined_metadata = expr.metadata(schema)?;
+                let field = expr.to_field(schema)?.1;
+                let mut combined_metadata = FieldMetadata::from(field.metadata());
                 if let Some(metadata) = metadata {
                     combined_metadata.extend(metadata.clone());
                 }
 
-                Ok(expr
-                    .to_field(schema)
-                    .map(|(_, f)| f)?
-                    .with_field_metadata(&combined_metadata))
+                Ok(field.with_field_metadata(&combined_metadata))
             }
             Expr::Negative(expr) => expr.to_field(schema).map(|(_, f)| f),
             Expr::Column(c) => schema.field_from_column(c).map(Arc::clone),
@@ -666,6 +664,27 @@ impl ExprSchemable for Expr {
             Expr::LambdaVariable(LambdaVariable {
                 field: Some(field), ..
             }) => Ok(Arc::clone(field).renamed(&schema_name)),
+            Expr::Unnest(Unnest { expr, .. }) => {
+                let nullable = self.nullable(schema)?;
+                match expr.get_type(schema)? {
+                    DataType::List(field)
+                    | DataType::LargeList(field)
+                    | DataType::FixedSizeList(field, _)
+                    | DataType::ListView(field)
+                    | DataType::LargeListView(field) => Ok(Arc::new(
+                        field
+                            .as_ref()
+                            .clone()
+                            .with_name(&schema_name)
+                            .with_nullable(nullable),
+                    )),
+                    _ => Ok(Arc::new(Field::new(
+                        &schema_name,
+                        self.get_type(schema)?,
+                        nullable,
+                    ))),
+                }
+            }
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
@@ -677,7 +696,6 @@ impl ExprSchemable for Expr {
             | Expr::Wildcard { .. }
             | Expr::GroupingSet(_)
             | Expr::Placeholder(_)
-            | Expr::Unnest(_)
             | Expr::Lambda(_)
             | Expr::LambdaVariable(_) => Ok(Arc::new(Field::new(
                 &schema_name,
@@ -823,27 +841,58 @@ fn scalar_subquery_nullable(subquery: &Subquery) -> bool {
 /// 2. **Non-projection plan**: If the subquery isn't a projection, it adds a projection to the plan
 ///    with the casted first column.
 pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
-    if subquery.subquery.schema().field(0).data_type() == cast_to_type {
+    cast_subquery_columns(subquery, std::slice::from_ref(cast_to_type))
+}
+
+/// Cast the leading columns of a subquery to the given types, one per column,
+/// like [`cast_subquery`] does for its first column. The result keeps only
+/// the `cast_to_types.len()` leading columns.
+///
+/// Used by a multi-column `(a, b) IN (SELECT x, y ...)`, whose tuple elements
+/// are coerced column by column.
+pub fn cast_subquery_columns(
+    subquery: Subquery,
+    cast_to_types: &[DataType],
+) -> Result<Subquery> {
+    let schema = subquery.subquery.schema();
+    if schema
+        .fields()
+        .iter()
+        .zip(cast_to_types)
+        .all(|(field, cast_to_type)| field.data_type() == cast_to_type)
+    {
         return Ok(subquery);
     }
 
     let plan = subquery.subquery.as_ref();
     let new_plan = match plan {
         LogicalPlan::Projection(projection) => {
-            let cast_expr = projection.expr[0]
-                .clone()
-                .cast_to(cast_to_type, projection.input.schema())?;
+            let cast_exprs = projection
+                .expr
+                .iter()
+                .zip(cast_to_types)
+                .map(|(expr, cast_to_type)| {
+                    expr.clone()
+                        .cast_to(cast_to_type, projection.input.schema())
+                })
+                .collect::<Result<Vec<_>>>()?;
             LogicalPlan::Projection(Projection::try_new(
-                vec![cast_expr],
+                cast_exprs,
                 Arc::clone(&projection.input),
             )?)
         }
         _ => {
-            let cast_expr = Expr::Column(Column::from(plan.schema().qualified_field(0)))
-                .cast_to(cast_to_type, subquery.subquery.schema())?;
+            let cast_exprs = cast_to_types
+                .iter()
+                .enumerate()
+                .map(|(i, cast_to_type)| {
+                    Expr::Column(Column::from(plan.schema().qualified_field(i)))
+                        .cast_to(cast_to_type, subquery.subquery.schema())
+                })
+                .collect::<Result<Vec<_>>>()?;
             LogicalPlan::Projection(Projection::try_new(
-                vec![cast_expr],
-                subquery.subquery,
+                cast_exprs,
+                Arc::clone(&subquery.subquery),
             )?)
         }
     };
@@ -1236,6 +1285,62 @@ mod tests {
     }
 
     #[test]
+    fn test_nested_alias_resolves_child_field_once() -> Result<()> {
+        #[derive(Debug)]
+        struct CountingSchema {
+            field: FieldRef,
+            lookups: std::cell::Cell<usize>,
+        }
+
+        impl ExprSchema for CountingSchema {
+            fn nullable(&self, _col: &Column) -> Result<bool> {
+                Ok(self.field.is_nullable())
+            }
+
+            fn field_from_column(&self, _col: &Column) -> Result<&FieldRef> {
+                self.lookups.set(self.lookups.get() + 1);
+                Ok(&self.field)
+            }
+        }
+
+        let schema = CountingSchema {
+            field: Arc::new(Field::new("value", DataType::Int32, false).with_metadata(
+                HashMap::from([
+                    ("override".to_string(), "base".to_string()),
+                    ("keep".to_string(), "base".to_string()),
+                ]),
+            )),
+            lookups: std::cell::Cell::new(0),
+        };
+        let mut expr = col("value");
+        for index in 0..12 {
+            let metadata = Some(FieldMetadata::from(HashMap::from([(
+                "override".to_string(),
+                index.to_string(),
+            )])));
+            expr = if index == 11 {
+                expr.alias_qualified_with_metadata(
+                    Some("outer"),
+                    format!("alias_{index}"),
+                    metadata,
+                )
+            } else {
+                expr.alias_with_metadata(format!("alias_{index}"), metadata)
+            };
+        }
+
+        let (relation, field) = expr.to_field(&schema)?;
+        assert_eq!(schema.lookups.get(), 1);
+        assert_eq!(relation, Some(TableReference::bare("outer")));
+        assert_eq!(field.name(), "alias_11");
+        assert_eq!(field.data_type(), &DataType::Int32);
+        assert!(!field.is_nullable());
+        assert_eq!(field.metadata().get("override"), Some(&"11".to_string()));
+        assert_eq!(field.metadata().get("keep"), Some(&"base".to_string()));
+        Ok(())
+    }
+
+    #[test]
     fn test_expr_placeholder() {
         let schema = MockExprSchema::new();
 
@@ -1283,6 +1388,21 @@ mod tests {
         assert_eq!(
             (expr_alias_field.data_type(), expr_alias_field.is_nullable()),
             (&DataType::Utf8, false)
+        );
+    }
+
+    #[test]
+    fn test_untyped_aliased_placeholder_in_empty_schema() {
+        // A UNION arm computes the type of `$1 AS a` against the input of the
+        // projection, which does not have a column `a`.
+        let schema = DFSchema::empty();
+        let expr = Expr::Placeholder(Placeholder::new_with_field("$1".to_string(), None))
+            .alias("a");
+
+        assert_eq!(expr.get_type(&schema).unwrap(), DataType::Null);
+        assert_eq!(
+            expr.to_field(&schema).unwrap().1.data_type(),
+            &DataType::Null
         );
     }
 

@@ -1,21 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::array::{ArrayRef, PrimitiveArray, PrimitiveBuilder, UInt32Array};
+use arrow::array::{
+    ArrayRef, ArrowNativeTypeOp, PrimitiveArray, PrimitiveBuilder, UInt32Array,
+};
 use arrow::datatypes::DecimalType;
 use rand::Rng;
 use rand::rngs::StdRng;
@@ -44,13 +33,19 @@ impl DecimalArrayGenerator {
     where
         D: DecimalType + RandomNativeData,
     {
+        // Valid decimals have at most `precision` digits, so draw values in
+        // (-10^precision, 10^precision)
+        let modulus = D::MAX_FOR_EACH_PRECISION[self.precision as usize]
+            .add_wrapping(D::Native::ONE);
+
         // table of decimals from which to draw
         let distinct_decimals: PrimitiveArray<D> = {
             let mut decimal_builder =
                 PrimitiveBuilder::<D>::with_capacity(self.num_distinct_decimals);
             for _ in 0..self.num_distinct_decimals {
-                decimal_builder
-                    .append_option(Some(D::generate_random_native_data(&mut self.rng)));
+                let value =
+                    D::generate_random_native_data(&mut self.rng).mod_wrapping(modulus);
+                decimal_builder.append_option(Some(value));
             }
 
             decimal_builder

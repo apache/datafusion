@@ -26,12 +26,14 @@ on:
   push:
     paths:
       - "docs/**"
+      - "ci/scripts/check_docs_html.sh"
     branches:
       - main
       - branch-*
   pull_request:
     paths:
       - "docs/**"
+      - "ci/scripts/check_docs_html.sh"
   # manual trigger
   # https://docs.github.com/en/actions/managing-workflow-runs/manually-running-a-workflow
   workflow_dispatch:
@@ -43,27 +45,13 @@ jobs:
   # Test doc build
   linux-test-doc-build:
     name: Test doc build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-slim
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           submodules: true
           fetch-depth: 1
-      - name: Setup uv
-        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d  # v10.0.1
-      - name: Install doc dependencies
-        run: uv sync --package datafusion-docs
-      - name: Install Graphviz
-        run: |
-          set -x
-          sudo apt-get update
-          sudo apt-get install -y graphviz
-      - name: Install cargo-depgraph
-        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c  # v2.87.6
-        with:
-          tool: cargo-depgraph@1.6
+      - name: Setup docs builder
+        uses: ./.github/actions/setup-docs-builder
       - name: Build docs html and check for warnings
-        run: |
-          set -x
-          cd docs
-          uv run --package datafusion-docs ./build.sh # fails on errors
+        run: ./ci/scripts/check_docs_html.sh # fails on errors

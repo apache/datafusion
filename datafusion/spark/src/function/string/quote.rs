@@ -1,25 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{ArrayRef, GenericStringBuilder, OffsetSizeTrait};
 use arrow::datatypes::DataType;
 use datafusion_common::cast::{as_generic_string_array, as_string_view_array};
 use datafusion_common::types::{NativeType, logical_string};
-use datafusion_common::utils::take_function_args;
+use datafusion_common::utils::{offset_span_len, take_function_args};
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -91,12 +78,7 @@ fn spark_quote_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn quote_array<T: OffsetSizeTrait>(array: &ArrayRef) -> Result<ArrayRef> {
     let str_array = as_generic_string_array::<T>(array)?;
-    // Slicing an array keeps the whole value buffer and narrows only the
-    // offsets, so measure the data through the offsets rather than through
-    // `value_data()`. An offset buffer holds one more entry than the array has
-    // rows, so it is never empty.
-    let offsets = str_array.value_offsets();
-    let data_len = offsets.last().unwrap().as_usize() - offsets[0].as_usize();
+    let data_len = offset_span_len(str_array.offsets());
     Ok(quote_impl::<T, _>(str_array.iter(), data_len))
 }
 

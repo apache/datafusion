@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::{Arc, LazyLock};
 
@@ -70,7 +57,7 @@ use datafusion_physical_plan::{
         ChildrenPropertiesMode, ReplaceChildrenOptions, plan_contains_expression_id,
     },
     filter::{FilterExec, FilterExecBuilder},
-    joins::{HashJoinExec, PartitionMode},
+    joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode},
     projection::ProjectionExec,
     repartition::RepartitionExec,
     sorts::sort::SortExec,
@@ -740,12 +727,12 @@ fn test_pushdown_through_aggregates_on_grouping_columns() {
     OptimizationTest:
       input:
         - FilterExec: b@1 = bar
-        -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([0])
+        -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
         -     FilterExec: a@0 = foo
         -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=Sorted
+          - AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=a@0 = foo AND b@1 = bar
     "
     );
@@ -804,7 +791,7 @@ fn test_pushdown_through_aggregates_preserves_parent_filter_order() {
       output:
         Ok:
           - FilterExec: cnt@2 = 1
-          -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          -   AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
     "
     );
@@ -1165,7 +1152,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 5 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 8 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}, {c0:aa,c1:ba}]) ]
     "
     );
 
@@ -1381,7 +1368,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
     -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) WHEN 1 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
     "
     );
 
@@ -3206,7 +3193,7 @@ fn test_pushdown_filter_on_non_first_grouping_column() {
         -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          - AggregateExec: mode=Final, gby=[a@0 as a, b@1 as b], aggr=[cnt]
           -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
     "
     );
@@ -3542,7 +3529,7 @@ fn test_pushdown_through_aggregate_with_reordered_input_columns() {
         -       DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
       output:
         Ok:
-          - AggregateExec: mode=Final, gby=[a@1 as a, b@2 as b], aggr=[cnt], ordering_mode=PartiallySorted([1])
+          - AggregateExec: mode=Final, gby=[a@1 as a, b@2 as b], aggr=[cnt]
           -   ProjectionExec: expr=[c@2 as c, a@0 as a, b@1 as b]
           -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true, predicate=b@1 = bar
     "
@@ -4163,6 +4150,194 @@ fn test_hashjoin_dynamic_filter_requires_probe_consumer() {
                 "probe subtree should contain the dynamic filter it accepted"
             );
         }
+    }
+}
+
+#[tokio::test]
+async fn test_nlj_dynamic_filter_pushdown_preserves_unmatched_rows() {
+    use datafusion_common::JoinSide;
+    use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+
+    for enabled in [false, true] {
+        let scan = |batch: RecordBatch| {
+            TestScanBuilder::new(batch.schema())
+                .with_support(true)
+                .with_batches(vec![batch])
+                .build()
+        };
+        // The hash join keeps keys 1 and 3. In the NLJ, 1 matches 2 and 3
+        // is unmatched. Pushing the filter to the right input would remove 2
+        // and incorrectly turn the matching row into an unmatched row.
+        let left = scan(record_batch!(("key", Int32, [1, 2, 3])).unwrap());
+        let right = scan(record_batch!(("key", Int32, [2])).unwrap());
+        let filter = JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("left", 0)),
+                Operator::Lt,
+                Arc::new(Column::new("right", 1)),
+            )),
+            vec![
+                ColumnIndex {
+                    index: 0,
+                    side: JoinSide::Left,
+                },
+                ColumnIndex {
+                    index: 0,
+                    side: JoinSide::Right,
+                },
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("left", DataType::Int32, false),
+                Field::new("right", DataType::Int32, false),
+            ])),
+        );
+        let probe = Arc::new(
+            NestedLoopJoinExec::try_new(left, right, Some(filter), &JoinType::Left, None)
+                .unwrap(),
+        );
+        let build = scan(record_batch!(("key", Int32, [1, 3])).unwrap());
+        let plan = Arc::new(
+            HashJoinExec::try_new(
+                build,
+                probe,
+                vec![(
+                    Arc::new(Column::new("key", 0)),
+                    Arc::new(Column::new("key", 0)),
+                )],
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                datafusion_common::NullEquality::NullEqualsNothing,
+                false,
+            )
+            .unwrap(),
+        ) as Arc<dyn ExecutionPlan>;
+        let mut config = ConfigOptions::default();
+        config.execution.parquet.pushdown_filters = true;
+        config.optimizer.enable_join_dynamic_filter_pushdown = enabled;
+        let plan = FilterPushdown::new_post_optimization()
+            .optimize(plan, &config)
+            .unwrap();
+        assert_eq!(
+            plan.dynamic_expressions_produced().len(),
+            usize::from(enabled)
+        );
+        if enabled {
+            let id = plan.dynamic_expressions_produced()[0]
+                .expression_id()
+                .unwrap();
+            let hash_join = plan.downcast_ref::<HashJoinExec>().unwrap();
+            let nlj = hash_join
+                .right()
+                .downcast_ref::<NestedLoopJoinExec>()
+                .unwrap();
+            assert!(plan_contains_expression_id(nlj.left(), id).unwrap());
+            assert!(!plan_contains_expression_id(nlj.right(), id).unwrap());
+        }
+        let ctx = SessionContext::new_with_config(SessionConfig::from(config));
+        ctx.register_object_store(
+            ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+            Arc::new(InMemory::new()),
+        );
+        let batches = collect(plan, ctx.task_ctx()).await.unwrap();
+        assert_batches_eq!(
+            [
+                "+-----+-----+-----+",
+                "| key | key | key |",
+                "+-----+-----+-----+",
+                "| 1   | 1   | 2   |",
+                "| 3   | 3   |     |",
+                "+-----+-----+-----+",
+            ],
+            &batches
+        );
+    }
+}
+
+#[tokio::test]
+async fn test_nlj_dynamic_filter_pushdown_from_hashjoin() {
+    for filtered_side in [0, 1] {
+        let mut results = Vec::new();
+        for enabled in [false, true] {
+            let probe_batch = record_batch!(("key", Int32, [1, 2, 3])).unwrap();
+            let schema = probe_batch.schema();
+            let scan = || {
+                TestScanBuilder::new(Arc::clone(&schema))
+                    .with_support(true)
+                    .with_batches(vec![probe_batch.clone()])
+                    .build()
+            };
+            // The identical names and reversed output order ensure the filter
+            // reaches the intended input by position, not by name.
+            let probe = Arc::new(
+                NestedLoopJoinExec::try_new(
+                    scan(),
+                    scan(),
+                    None,
+                    &JoinType::Inner,
+                    Some(vec![1, 0]),
+                )
+                .unwrap(),
+            );
+            let build = TestScanBuilder::new(schema)
+                .with_support(true)
+                .with_batches(vec![record_batch!(("key", Int32, [2])).unwrap()])
+                .build();
+            let plan = Arc::new(
+                HashJoinExec::try_new(
+                    build,
+                    probe,
+                    vec![(
+                        Arc::new(Column::new("key", 0)),
+                        Arc::new(Column::new("key", 1 - filtered_side)),
+                    )],
+                    None,
+                    &JoinType::Inner,
+                    None,
+                    PartitionMode::CollectLeft,
+                    datafusion_common::NullEquality::NullEqualsNothing,
+                    false,
+                )
+                .unwrap(),
+            ) as Arc<dyn ExecutionPlan>;
+            let mut config = ConfigOptions::default();
+            config.execution.parquet.pushdown_filters = true;
+            config.optimizer.enable_join_dynamic_filter_pushdown = enabled;
+            let plan = FilterPushdown::new_post_optimization()
+                .optimize(plan, &config)
+                .unwrap();
+            assert_eq!(
+                plan.dynamic_expressions_produced().len(),
+                usize::from(enabled)
+            );
+            let join = plan.downcast_ref::<HashJoinExec>().unwrap();
+            let nlj = join.right().downcast_ref::<NestedLoopJoinExec>().unwrap();
+            if enabled {
+                let id = plan.dynamic_expressions_produced()[0]
+                    .expression_id()
+                    .unwrap();
+                for (side, child) in nlj.children().iter().enumerate() {
+                    assert_eq!(
+                        plan_contains_expression_id(child, id).unwrap(),
+                        side == filtered_side
+                    );
+                }
+            }
+            let ctx = SessionContext::new_with_config(SessionConfig::from(config));
+            ctx.register_object_store(
+                ObjectStoreUrl::parse("test://").unwrap().as_ref(),
+                Arc::new(InMemory::new()),
+            );
+            let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await.unwrap();
+            assert_eq!(batches.iter().map(RecordBatch::num_rows).sum::<usize>(), 3);
+            if enabled {
+                let dynamic = plan.dynamic_expressions_produced().remove(0);
+                assert_ne!(dynamic.snapshot().unwrap().unwrap().to_string(), "true");
+            }
+            results.push(pretty_format_batches(&batches).unwrap().to_string());
+        }
+        assert_eq!(results[0], results[1]);
     }
 }
 

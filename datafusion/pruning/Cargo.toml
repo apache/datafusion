@@ -31,6 +31,7 @@ datafusion-expr = { workspace = true }
 datafusion-functions-nested = { workspace = true }
 insta = { workspace = true }
 itertools = { workspace = true }
+rstest = { workspace = true }
 
 [[bench]]
 harness = false

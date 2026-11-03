@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Contains code to filter entire pages
 
@@ -37,7 +24,7 @@ use datafusion_pruning::{MAX_IN_LIST_SIZE, PruningPredicate, PruningPredicateBui
 
 use log::{debug, trace};
 use parquet::arrow::arrow_reader::statistics::StatisticsConverter;
-use parquet::file::metadata::{ParquetColumnIndex, ParquetOffsetIndex};
+use parquet::file::metadata::page_index::PageIndexProvider;
 use parquet::file::page_index::offset_index::PageLocation;
 use parquet::schema::types::SchemaDescriptor;
 use parquet::{
@@ -47,8 +34,8 @@ use parquet::{
 
 /// Filters a [`ParquetAccessPlan`] based on the [Parquet PageIndex], if present
 ///
-/// It does so by evaluating statistics from the [`ParquetColumnIndex`] and
-/// [`ParquetOffsetIndex`] and converting them to [`RowSelection`].
+/// It does so by evaluating statistics from the [`PageIndexProvider`] (column
+/// and offset indexes) and converting them to [`RowSelection`].
 ///
 /// [Parquet PageIndex]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 ///
@@ -243,13 +230,18 @@ impl PagePruningAccessPlanFilter {
             return PagePruningResult::new(access_plan, 0, 0);
         }
 
-        if parquet_metadata.offset_index().is_none()
-            || parquet_metadata.column_index().is_none()
+        if !parquet_metadata
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete())
         {
             debug!(
                 "Can not prune pages due to lack of indexes. Have offset: {}, column index: {}",
-                parquet_metadata.offset_index().is_some(),
-                parquet_metadata.column_index().is_some()
+                parquet_metadata
+                    .page_index()
+                    .is_some_and(|page_index| page_index.has_offset_indexes()),
+                parquet_metadata
+                    .page_index()
+                    .is_some_and(|page_index| page_index.has_column_indexes())
             );
             return PagePruningResult::new(access_plan, 0, 0);
         }
@@ -291,6 +283,9 @@ impl PagePruningAccessPlanFilter {
 
         // for each row group specified in the access plan
         let row_group_indexes = access_plan.row_group_indexes();
+        // Page index sets, reused across row groups
+        let mut matched_pages_in_group: HashSet<usize> = HashSet::new();
+        let mut matched_pages_indexes: HashSet<usize> = HashSet::new();
         for row_group_index in row_group_indexes {
             // Skip page pruning for fully matched row groups: all rows are
             // known to satisfy the predicate, so page-level pruning is wasted work.
@@ -308,15 +303,13 @@ impl PagePruningAccessPlanFilter {
             // The selection for this particular row group
             let mut overall_selection = None;
 
-            let total_pages_in_group =
-                parquet_metadata.offset_index().map_or(0, |offset_index| {
-                    offset_index[row_group_index]
-                        .first()
-                        .map_or(0, |column| column.page_locations.len())
-                });
+            let total_pages_in_group = parquet_metadata
+                .page_index()
+                .and_then(|page_index| page_index.offset_index(row_group_index, 0))
+                .map_or(0, |offset_index| offset_index.page_locations().len());
             // stores the indexes of the matched pages
-            let mut matched_pages_in_group: HashSet<usize> =
-                HashSet::from_iter(0..total_pages_in_group);
+            matched_pages_in_group.clear();
+            matched_pages_in_group.extend(0..total_pages_in_group);
 
             for predicate in page_index_predicates {
                 let selection = prune_pages_for_predicate(
@@ -339,12 +332,9 @@ impl PagePruningAccessPlanFilter {
                     predicate.predicate_expr(),
                 );
 
-                let matched_pages_indexes: HashSet<_> = pages
-                    .into_iter()
-                    .enumerate()
-                    .filter(|x| x.1)
-                    .map(|x| x.0)
-                    .collect();
+                matched_pages_indexes.clear();
+                matched_pages_indexes
+                    .extend(pages.into_iter().enumerate().filter(|x| x.1).map(|x| x.0));
                 matched_pages_in_group.retain(|x| matched_pages_indexes.contains(x));
 
                 overall_selection = update_selection(overall_selection, selection);
@@ -598,11 +588,10 @@ fn fully_matched_page_count(
     row_group_index: usize,
     parquet_metadata: &ParquetMetaData,
 ) -> usize {
-    parquet_metadata.offset_index().map_or(0, |offset_index| {
-        offset_index[row_group_index]
-            .first()
-            .map_or(0, |column| column.page_locations.len())
-    })
+    parquet_metadata
+        .page_index()
+        .and_then(|page_index| page_index.offset_index(row_group_index, 0))
+        .map_or(0, |offset_index| offset_index.page_locations().len())
 }
 
 fn prune_pages_for_predicate(
@@ -708,14 +697,13 @@ fn prune_pages_in_one_row_group(
     Some((RowSelection::from(vec), values))
 }
 
-/// Implement [`PruningStatistics`] for one column's PageIndex (column_index + offset_index)
+/// Implement [`PruningStatistics`] for one column's [`PageIndexProvider`]
 #[derive(Debug)]
 struct PagesPruningStatistics<'a> {
     row_group_index: usize,
     row_group_metadatas: &'a [RowGroupMetaData],
     converter: StatisticsConverter<'a>,
-    column_index: &'a ParquetColumnIndex,
-    offset_index: &'a ParquetOffsetIndex,
+    page_index: &'a dyn PageIndexProvider,
     page_offsets: &'a Vec<PageLocation>,
     trusted_min_max: bool,
 }
@@ -739,16 +727,14 @@ impl<'a> PagesPruningStatistics<'a> {
             return None;
         };
 
-        let column_index = parquet_metadata.column_index()?;
-        let offset_index = parquet_metadata.offset_index()?;
+        let page_index: &dyn PageIndexProvider = parquet_metadata.page_index()?.as_ref();
+        if !page_index.is_complete() {
+            return None;
+        }
         let row_group_metadatas = parquet_metadata.row_groups();
 
-        let Some(row_group_page_offsets) = offset_index.get(row_group_index) else {
-            trace!("No page offsets for row group {row_group_index}, skipping");
-            return None;
-        };
         let Some(offset_index_metadata) =
-            row_group_page_offsets.get(parquet_column_index)
+            page_index.offset_index(row_group_index, parquet_column_index)
         else {
             trace!(
                 "No page offsets for column {:?} in row group {row_group_index}, skipping",
@@ -768,8 +754,7 @@ impl<'a> PagesPruningStatistics<'a> {
             row_group_index,
             row_group_metadatas,
             converter,
-            column_index,
-            offset_index,
+            page_index,
             page_offsets,
             trusted_min_max,
         })
@@ -801,11 +786,10 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
         if !self.trusted_min_max {
             return None;
         }
-        match self.converter.data_page_mins(
-            self.column_index,
-            self.offset_index,
-            [&self.row_group_index],
-        ) {
+        match self
+            .converter
+            .data_page_mins(self.page_index, [&self.row_group_index])
+        {
             Ok(min_values) => Some(min_values),
             Err(e) => {
                 debug!("Error evaluating data page min values {e}");
@@ -818,11 +802,10 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
         if !self.trusted_min_max {
             return None;
         }
-        match self.converter.data_page_maxes(
-            self.column_index,
-            self.offset_index,
-            [&self.row_group_index],
-        ) {
+        match self
+            .converter
+            .data_page_maxes(self.page_index, [&self.row_group_index])
+        {
             Ok(min_values) => Some(min_values),
             Err(e) => {
                 debug!("Error evaluating data page max values {e}");
@@ -836,11 +819,10 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
     }
 
     fn null_counts(&self, _column: &datafusion_common::Column) -> Option<ArrayRef> {
-        match self.converter.data_page_null_counts(
-            self.column_index,
-            self.offset_index,
-            [&self.row_group_index],
-        ) {
+        match self
+            .converter
+            .data_page_null_counts(self.page_index, [&self.row_group_index])
+        {
             Ok(null_counts) => Some(Arc::new(null_counts)),
             Err(e) => {
                 debug!("Error evaluating data page null counts {e}");
@@ -851,7 +833,7 @@ impl PruningStatistics for PagesPruningStatistics<'_> {
 
     fn row_counts(&self) -> Option<ArrayRef> {
         match self.converter.data_page_row_counts(
-            self.offset_index,
+            self.page_index,
             self.row_group_metadatas,
             [&self.row_group_index],
         ) {

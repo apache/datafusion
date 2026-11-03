@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! End-to-end coverage for compact, large IN-list pruning. The string cases
 //! exercise detailed edge conditions; representative ordered types verify the
@@ -59,10 +46,14 @@ fn assert_file_layout(
     rows_per_group: usize,
 ) {
     assert_eq!(metadata.num_row_groups(), total_rows / rows_per_group);
-    let offsets = metadata.offset_index().unwrap();
-    for row_group in offsets {
+    let page_index = metadata.page_index().unwrap();
+    for row_group in 0..metadata.num_row_groups() {
         assert_eq!(
-            row_group[0].page_locations().len(),
+            page_index
+                .offset_index(row_group, 0)
+                .unwrap()
+                .page_locations()
+                .len(),
             rows_per_group / ROWS_PER_UNIT
         );
     }

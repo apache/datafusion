@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::hint::black_box;
 use std::sync::Arc;
@@ -39,6 +26,7 @@ const BATCH_SIZE: usize = 1000;
 const TS_BOUND: i64 = 2_006_463_600;
 const SEC_DAY: i64 = 86_400;
 const DAYS_SINCE_EPOCH: i64 = TS_BOUND / SEC_DAY;
+const NULL_DENSITY: f64 = 0.1;
 
 fn generate_timestamp_ns_array(rng: &mut StdRng) -> TimestampNanosecondArray {
     TimestampNanosecondArray::from(
@@ -162,6 +150,61 @@ fn generate_duration_nanosecond_array(rng: &mut StdRng) -> DurationNanosecondArr
     )
 }
 
+// Durations under `i32::MAX` nanoseconds (about 2.1 seconds)
+fn generate_duration_nanosecond_small_array(rng: &mut StdRng) -> DurationNanosecondArray {
+    DurationNanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| rng.random_range(0..i32::MAX as i64))
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_duration_nanosecond_array_with_nulls(
+    rng: &mut StdRng,
+) -> DurationNanosecondArray {
+    DurationNanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| {
+                if rng.random_bool(NULL_DENSITY) {
+                    None
+                } else {
+                    Some(rng.random_range(0..TS_BOUND * 1_000_000_000))
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_timestamp_ns_array_with_nulls(rng: &mut StdRng) -> TimestampNanosecondArray {
+    TimestampNanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| {
+                if rng.random_bool(NULL_DENSITY) {
+                    None
+                } else {
+                    Some(rng.random_range(0..TS_BOUND * 1_000_000_000))
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn generate_time64_nanosecond_array_with_nulls(
+    rng: &mut StdRng,
+) -> Time64NanosecondArray {
+    Time64NanosecondArray::from(
+        (0..BATCH_SIZE)
+            .map(|_| {
+                if rng.random_bool(NULL_DENSITY) {
+                    None
+                } else {
+                    Some(rng.random_range(0..SEC_DAY * 1_000_000_000))
+                }
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
 fn bench_date_part(
     c: &mut Criterion,
     udf: &Arc<ScalarUDF>,
@@ -213,6 +256,18 @@ fn criterion_benchmark(c: &mut Criterion) {
     let duration_ns = Arc::new(generate_duration_nanosecond_array(&mut rng)) as ArrayRef;
     let date32 = Arc::new(generate_date32_array(&mut rng)) as ArrayRef;
     let date64 = Arc::new(generate_date64_array(&mut rng)) as ArrayRef;
+    let duration_ns_small =
+        Arc::new(generate_duration_nanosecond_small_array(&mut rng)) as ArrayRef;
+    let duration_ns_nulls =
+        Arc::new(generate_duration_nanosecond_array_with_nulls(&mut rng)) as ArrayRef;
+
+    let ts_ns_tz =
+        Arc::new(generate_timestamp_ns_array(&mut rng).with_timezone("America/New_York"))
+            as ArrayRef;
+    let ts_ns_nulls =
+        Arc::new(generate_timestamp_ns_array_with_nulls(&mut rng)) as ArrayRef;
+    let time64_ns_nulls =
+        Arc::new(generate_time64_nanosecond_array_with_nulls(&mut rng)) as ArrayRef;
 
     let udf = date_part();
 
@@ -322,6 +377,8 @@ fn criterion_benchmark(c: &mut Criterion) {
         ("interval_dt", &interval_dt),
         ("interval_mdn", &interval_mdn),
         ("duration_ns", &duration_ns),
+        ("duration_ns_small", &duration_ns_small),
+        ("duration_ns_nulls", &duration_ns_nulls),
     ] {
         bench_date_part(
             c,
@@ -331,6 +388,41 @@ fn criterion_benchmark(c: &mut Criterion) {
             Arc::clone(array),
             DataType::Float64,
         );
+    }
+
+    // Durations past `i32::MAX` milliseconds or microseconds overflow `Int32`, so
+    // only `nanosecond` runs on them
+    for (part, return_type) in [
+        ("millisecond", DataType::Int32),
+        ("microsecond", DataType::Int32),
+        ("nanosecond", DataType::Int64),
+    ] {
+        let mut arrays = vec![
+            ("ns_tz", &ts_ns_tz),
+            ("ns_nulls", &ts_ns_nulls),
+            ("time32_ms", &time32_ms),
+            ("time64_ns", &time64_ns),
+            ("time64_ns_nulls", &time64_ns_nulls),
+            ("interval_dt", &interval_dt),
+            ("interval_mdn", &interval_mdn),
+            ("duration_ns_small", &duration_ns_small),
+        ];
+        if part == "nanosecond" {
+            arrays.extend([
+                ("duration_ns", &duration_ns),
+                ("duration_ns_nulls", &duration_ns_nulls),
+            ]);
+        }
+        for (name, array) in arrays {
+            bench_date_part(
+                c,
+                &udf,
+                &format!("date_part_{part}_{name}_1000"),
+                part,
+                Arc::clone(array),
+                return_type.clone(),
+            );
+        }
     }
 
     for part in ["quarter", "isoyear", "doy", "dow", "isodow"] {

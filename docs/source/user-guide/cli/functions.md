@@ -81,6 +81,70 @@ the meaning of these fields.
 
 [`page index`]: https://github.com/apache/parquet-format/blob/master/PageIndex.md
 
+## `parquet_file_metadata`
+
+The `parquet_file_metadata` table function returns one row with the file level
+metadata stored in the footer of a parquet file, such as the writer and the
+key-value metadata.
+
+```sql
+> SELECT created_by, num_rows, num_row_groups, key_value_metadata, footer_length
+  FROM parquet_file_metadata('int32_with_null_pages.parquet');
++-------------------------------------------------------------------------------------+----------+----------------+------------------------------+---------------+
+| created_by                                                                          | num_rows | num_row_groups | key_value_metadata           | footer_length |
++-------------------------------------------------------------------------------------+----------+----------------+------------------------------+---------------+
+| parquet-mr version 1.13.0-SNAPSHOT (build 433de8df33fcf31927f7b51456be9f53e64d48b9) | 1000     | 1              | {writer.model.name: example} | 273           |
++-------------------------------------------------------------------------------------+----------+----------------+------------------------------+---------------+
+```
+
+The columns of the returned table are:
+
+| column_name        | data_type       | Description                                                                             |
+| ------------------ | --------------- | --------------------------------------------------------------------------------------- |
+| filename           | Utf8            | Name of the file                                                                        |
+| created_by         | Utf8            | Application that wrote the file, if stored                                              |
+| version            | Int64           | Version of the parquet format used to write the file                                    |
+| num_rows           | Int64           | Total number of rows in the file                                                        |
+| num_row_groups     | Int64           | Number of row groups in the file                                                        |
+| key_value_metadata | Map(Utf8, Utf8) | Application defined key-value metadata (e.g. `key_value_metadata['ARROW:schema']`)      |
+| footer_length      | Int64           | Size in bytes of the footer: the encoded file metadata plus the 8 byte length and magic |
+
+## `parquet_page_index`
+
+The `parquet_page_index` table function returns one row for each data page in
+the [`page index`] of a parquet file, combining the page location from the
+offset index with the page statistics from the column index. Files written
+without a page index return no rows.
+
+```sql
+> SELECT page_ordinal, first_row_index, compressed_page_size, min_value, max_value, null_count
+  FROM parquet_page_index('int32_with_null_pages.parquet')
+  LIMIT 4;
++--------------+-----------------+----------------------+-------------+------------+------------+
+| page_ordinal | first_row_index | compressed_page_size | min_value   | max_value  | null_count |
++--------------+-----------------+----------------------+-------------+------------+------------+
+| 0            | 0               | 415                  | -2135807632 | 2144701119 | 8          |
+| 1            | 100             | 220                  | -2104090659 | 1745329571 | 55         |
+| 2            | 200             | 31                   | NULL        | NULL       | 100        |
+| 3            | 300             | 228                  | -2116849709 | 2077105757 | 52         |
++--------------+-----------------+----------------------+-------------+------------+------------+
+```
+
+The columns of the returned table are:
+
+| column_name          | data_type | Description                                                                    |
+| -------------------- | --------- | ------------------------------------------------------------------------------ |
+| filename             | Utf8      | Name of the file                                                               |
+| row_group_id         | Int64     | Row group index the page belongs to                                            |
+| column_id            | Int64     | ID of the column the page belongs to                                           |
+| page_ordinal         | Int64     | Index of the page within its column chunk                                      |
+| first_row_index      | Int64     | Index within the row group of the first row in the page                        |
+| offset               | Int64     | Offset in the file of the page                                                 |
+| compressed_page_size | Int64     | Size in bytes of the page, including its header                                |
+| min_value            | Utf8      | The minimum value of the page, if stored in the column index, cast to a string |
+| max_value            | Utf8      | The maximum value of the page, if stored in the column index, cast to a string |
+| null_count           | Int64     | Number of null values in the page, if stored in the column index               |
+
 ## `metadata_cache`
 
 The `metadata_cache` function shows information about the default File Metadata Cache that is used by the
