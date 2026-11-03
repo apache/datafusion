@@ -180,6 +180,19 @@ physical_plan
 02)--SortExec: TopK(fetch=3), expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 
+query P
+SELECT arrow_cast(i, 'Timestamp(Second, None)') AS ts
+FROM (
+  SELECT column1 AS i
+  FROM (VALUES (3::bigint), (1::bigint), (2::bigint))
+  ORDER BY i LIMIT 3
+)
+ORDER BY ts;
+----
+1970-01-01T00:00:01
+1970-01-01T00:00:02
+1970-01-01T00:00:03
+
 statement ok
 SET datafusion.explain.physical_plan_only = false;
 
