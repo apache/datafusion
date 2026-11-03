@@ -1,4 +1,4 @@
-description = "Conjunctive filter evaluation micro-benchmarks covering predicate cost, selectivity, cardinality, width, scale, correlation, and drift"
+description = "Conjunctive filter evaluation micro-benchmarks covering predicate cost, selectivity, cardinality, width, scale, correlation, drift, and nullable predicates"
 
 query_pattern = "q{QUERY_ID_PADDED}.benchmark"
 

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`TreeNode`] for visiting and rewriting expression and plan trees
 
@@ -2454,9 +2441,9 @@ pub(crate) mod tests {
     #[test]
     fn box_map_elements_reuses_allocation() {
         let boxed = Box::new(TestTreeNode::new_leaf(42i32));
-        let before: *const TestTreeNode<i32> = &*boxed;
+        let before: *const TestTreeNode<i32> = &raw const *boxed;
         let out = boxed.map_elements(|n| Ok(Transformed::no(n))).unwrap();
-        let after: *const TestTreeNode<i32> = &*out.data;
+        let after: *const TestTreeNode<i32> = &raw const *out.data;
         assert_eq!(after, before);
     }
 

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -187,9 +174,8 @@ mod tests {
         ]);
         let args = vec![ColumnarValue::Array(Arc::new(input))];
         let result = spark_ceil(&args).unwrap();
-        let result = match result {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(result) = result else {
+            panic!("Expected array")
         };
         let result = result.as_primitive::<Int64Type>();
         assert_eq!(
@@ -219,9 +205,8 @@ mod tests {
         ]);
         let args = vec![ColumnarValue::Array(Arc::new(input))];
         let result = spark_ceil(&args).unwrap();
-        let result = match result {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(result) = result else {
+            panic!("Expected array")
         };
         let result = result.as_primitive::<Int64Type>();
         assert_eq!(
@@ -243,9 +228,8 @@ mod tests {
         let input = Int64Array::from(vec![Some(1), Some(-1), None]);
         let args = vec![ColumnarValue::Array(Arc::new(input))];
         let result = spark_ceil(&args).unwrap();
-        let result = match result {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(result) = result else {
+            panic!("Expected array")
         };
         let result = result.as_primitive::<Int64Type>();
         assert_eq!(result, &Int64Array::from(vec![Some(1), Some(-1), None]));
@@ -259,9 +243,8 @@ mod tests {
             .with_data_type(DataType::Decimal128(10, 2));
         let args = vec![ColumnarValue::Array(Arc::new(input))];
         let result = spark_ceil(&args).unwrap();
-        let result = match result {
-            ColumnarValue::Array(arr) => arr,
-            _ => panic!("Expected array"),
+        let ColumnarValue::Array(result) = result else {
+            panic!("Expected array")
         };
         let result = result.as_primitive::<Decimal128Type>();
         let expected = Decimal128Array::from(vec![Some(2), Some(-1), Some(1), None])
@@ -273,9 +256,8 @@ mod tests {
     fn test_ceil_float64_scalar() {
         let input = ScalarValue::Float64(Some(-1.1));
         let args = vec![ColumnarValue::Scalar(input)];
-        let result = match spark_ceil(&args).unwrap() {
-            ColumnarValue::Scalar(v) => v,
-            _ => panic!("Expected scalar"),
+        let ColumnarValue::Scalar(result) = spark_ceil(&args).unwrap() else {
+            panic!("Expected scalar")
         };
         assert_eq!(result, ScalarValue::Int64(Some(-1)));
     }
@@ -284,9 +266,8 @@ mod tests {
     fn test_ceil_float32_scalar() {
         let input = ScalarValue::Float32(Some(125.2345f32));
         let args = vec![ColumnarValue::Scalar(input)];
-        let result = match spark_ceil(&args).unwrap() {
-            ColumnarValue::Scalar(v) => v,
-            _ => panic!("Expected scalar"),
+        let ColumnarValue::Scalar(result) = spark_ceil(&args).unwrap() else {
+            panic!("Expected scalar")
         };
         assert_eq!(result, ScalarValue::Int64(Some(126)));
     }
@@ -295,9 +276,8 @@ mod tests {
     fn test_ceil_int64_scalar() {
         let input = ScalarValue::Int64(Some(48));
         let args = vec![ColumnarValue::Scalar(input)];
-        let result = match spark_ceil(&args).unwrap() {
-            ColumnarValue::Scalar(v) => v,
-            _ => panic!("Expected scalar"),
+        let ColumnarValue::Scalar(result) = spark_ceil(&args).unwrap() else {
+            panic!("Expected scalar")
         };
         assert_eq!(result, ScalarValue::Int64(Some(48)));
     }

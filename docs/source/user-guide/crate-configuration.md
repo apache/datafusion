@@ -50,7 +50,17 @@ And with features
 datafusion = { git = "https://github.com/apache/datafusion", branch = "main", default-features = false, features = ["unicode_expressions"] }
 ```
 
+The version on `main` is a pre-release of the next major version, such as
+`57.0.0-dev` (see the `version` in the workspace [`Cargo.toml`]).
+
+Cargo matches a pre-release version exactly, so if
+you specify a `version`, the requirement must include the `-dev` suffix
+(for example `version = "57.0.0-dev"`). A requirement such as `version = "57"`
+will not match.
+
 More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies)
+
+[`cargo.toml`]: https://github.com/apache/datafusion/blob/main/Cargo.toml
 
 ## Optimizing Builds
 
@@ -156,7 +166,7 @@ By default, Datafusion returns errors as a plain text message. You can enable mo
 such as backtraces by enabling the `backtrace` feature to your `Cargo.toml` file like this:
 
 ```toml
-datafusion = { version = "54.1.0", features = ["backtrace"]}
+datafusion = { version = "55.1.0", features = ["backtrace"]}
 ```
 
 Set environment [variables](https://doc.rust-lang.org/std/backtrace/index.html#environment-variables)

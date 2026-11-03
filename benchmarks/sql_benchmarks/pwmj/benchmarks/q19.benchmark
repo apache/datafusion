@@ -1,0 +1,13 @@
+# RIGHT JOIN, all_match: every streamed key is above every buffered key, so each streamed row matches
+# the whole buffered side and the join is bound by the output it builds. The output
+# is lhs * rhs rows, so this subgroup streams only 2000 rows.
+
+subgroup all_match
+
+template sql_benchmarks/pwmj/pwmj.benchmark.template
+QPAD=19
+JOIN=RIGHT
+JOIN_KIND=Right
+RIGHT_ROWS=2000
+RIGHT_KEY=100001 + h % 1000
+EXPECTED_ROWS=200000000

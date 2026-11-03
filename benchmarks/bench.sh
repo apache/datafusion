@@ -42,7 +42,6 @@ DATAFUSION_DIR=${DATAFUSION_DIR:-$SCRIPT_DIR/..}
 DATA_DIR=${DATA_DIR:-$SCRIPT_DIR/data}
 CARGO_COMMAND=${CARGO_COMMAND:-"cargo run --release"}
 SQL_CARGO_COMMAND=${SQL_CARGO_COMMAND:-"cargo bench --bench sql"}
-PREFER_HASH_JOIN=${PREFER_HASH_JOIN:-true}
 SIMULATE_LATENCY=${SIMULATE_LATENCY:-false}
 
 # Build latency arg based on SIMULATE_LATENCY setting
@@ -106,12 +105,23 @@ wide_schema:            Small-projection queries on a wide synthetic dataset (10
                           (runs both 'wide' and 'narrow' subgroups: narrow is an internal baseline; the wide-vs-narrow ratio is the signal)
 predicate_eval:         Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an
                           adaptive predicate-ordering system behaves across them (see https://github.com/apache/datafusion/issues/11262)
-                          (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift)
+                          (subgroups via BENCH_SUBGROUP: costsel, cost, selectivity, cardinality, width, scale, neutral, correlation, drift, nulls)
                           (toggle a system under test with its native DATAFUSION_* env var; size data with PRED_ROWS, string width with PRED_FILL)
 parquet_row_filter_skip: Per-RG fully-matched RowFilter skip on Parquet (apache/datafusion#23696); clustered string key + low-selectivity
                           range filter + pushdown, so most row groups are fully matched and the per-row RowFilter is skipped on them
                           (subgroups via BENCH_SUBGROUP: skip = clustered key so the skip fires, control = scrambled key so it never fires)
                           (data generated inline by the suite's load SQL; knobs: PRED_ROWS, RG_SIZE)
+spill_views:            Sort and GROUP BY queries that spill StringView/BinaryView columns read from Parquet
+                          (https://github.com/apache/datafusion/issues/23564); each query sets its own memory limit
+                          (subgroups via BENCH_SUBGROUP: repeated = low-cardinality payload, distinct = all-distinct strings)
+                          (data generated inline by the suite's load SQL)
+null_aware_join:        Null-aware (NOT IN) hash join micro-benchmarks: uncorrelated, non-equality-correlated and equality-correlated
+                          NOT IN across NULL fractions, to measure the per-pair join-filter work the correlated cases do
+                          (data generated inline by the suite's load SQL from range(); knobs: NAJ_ROWS, NAJ_LARGE_ROWS)
+projection_subquery:    IN / NOT IN / EXISTS subqueries in the SELECT list (see https://github.com/apache/datafusion/issues/25341); each query projects the
+                          boolean subquery result and aggregates it, so the cost is the decorrelation plan and not the output size
+                          (q07 correlates on '<' instead of '=', so it keeps the nested-loop plan and acts as the control)
+                          (data generated inline by the suite's load SQL; knob: PSQ_ROWS)
 
 # ClickBench Benchmarks
 clickbench_1:           ClickBench queries against a single parquet file
@@ -139,6 +149,12 @@ h2o_big_join:                   h2oai benchmark with large dataset (1e9 rows) fo
 h2o_small_window:               Extended h2oai benchmark with small dataset (1e7 rows) for window,  default file format is csv
 h2o_medium_window:              Extended h2oai benchmark with medium dataset (1e8 rows) for window, default file format is csv
 h2o_big_window:                 Extended h2oai benchmark with large dataset (1e9 rows) for window,  default file format is csv
+h2o_small_window_sorted:        Window Top-N over a declared-sorted h2o input, small dataset (1e7 rows),  default file format is csv
+h2o_medium_window_sorted:       Window Top-N over a declared-sorted h2o input, medium dataset (1e8 rows), default file format is csv
+h2o_big_window_sorted:          Window Top-N over a declared-sorted h2o input, large dataset (1e9 rows),  default file format is csv
+h2o_small_window_sorted_parquet:  Window Top-N over a declared-sorted h2o input, small dataset (1e7 rows),  source file format is parquet
+h2o_medium_window_sorted_parquet: Window Top-N over a declared-sorted h2o input, medium dataset (1e8 rows), source file format is parquet
+h2o_big_window_sorted_parquet:    Window Top-N over a declared-sorted h2o input, large dataset (1e9 rows),  source file format is parquet
 h2o_small_parquet:              h2oai benchmark with small dataset (1e7 rows) for groupby,  file format is parquet
 h2o_medium_parquet:             h2oai benchmark with medium dataset (1e8 rows) for groupby, file format is parquet
 h2o_big_parquet:                h2oai benchmark with large dataset (1e9 rows) for groupby,  file format is parquet
@@ -154,10 +170,12 @@ imdb:                   Join Order Benchmark (JOB) using the IMDB dataset conver
 
 # Micro-Benchmarks (specific operators and features)
 cancellation:           How long cancelling a query takes
+asof_join:              ASOF join workloads varying size, ordering, grouping, match direction, and payload width
 nlj:                    Benchmark for simple nested loop joins, testing various join scenarios
 hj:                     Benchmark for simple hash joins, testing various join scenarios
 smj:                    Benchmark for simple sort merge joins, testing various join scenarios
 dict:                   Benchmark for dictionary-encoded group-by scenarios
+array_agg_distinct:     1000K-group, two-row-per-group array_agg(DISTINCT) benchmark
 compile_profile:        Compile and execute TPC-H across selected Cargo profiles, reporting timing and binary size
 
 
@@ -168,8 +186,8 @@ DATA_DIR            directory to store datasets
 CARGO_COMMAND       command that runs the benchmark binary
 DATAFUSION_DIR      directory to use (default $DATAFUSION_DIR)
 RESULTS_NAME        folder where the benchmark files are stored
-PREFER_HASH_JOIN    Prefer hash join algorithm (default true)
-SIMULATE_LATENCY    Simulate object store latency to mimic S3 (default false)
+SIMULATE_LATENCY    Serve local files as if they were remote object storage: per-request
+                    latency, per-connection bandwidth and paginated LIST (default false)
 DATAFUSION_*        Set the given datafusion configuration
 "
     exit 1
@@ -217,7 +235,6 @@ main() {
             echo "BENCHMARK: ${BENCHMARK}"
             echo "DATA_DIR: ${DATA_DIR}"
             echo "CARGO_COMMAND: ${CARGO_COMMAND}"
-            echo "PREFER_HASH_JOIN: ${PREFER_HASH_JOIN}"
             echo "***************************"
             case "$BENCHMARK" in
                 all)
@@ -232,6 +249,7 @@ main() {
                     data_clickbench_1
                     data_clickbench_partitioned
                     data_imdb
+                    data_asof_join
                     # nlj uses range() function, no data generation needed
                     ;;
                 tpch)
@@ -262,6 +280,21 @@ main() {
                 parquet_row_filter_skip)
                     # Data is generated inline by the suite's load SQL (COPY).
                     echo "parquet_row_filter_skip: no external data to generate"
+                    ;;
+                spill_views)
+                    # Data is generated inline by the suite's load SQL (COPY).
+                    echo "spill_views: no external data to generate"
+                    ;;
+                null_aware_join)
+                    # Data is generated inline by the suite's load SQL from range().
+                    echo "null_aware_join: no external data to generate"
+                    ;;
+                projection_subquery)
+                    # Data is generated inline by the suite's load SQL.
+                    echo "projection_subquery: no external data to generate"
+                    ;;
+                asof_join)
+                    data_asof_join
                     ;;
                 tpcds)
                     data_tpcds
@@ -308,6 +341,26 @@ main() {
                     ;;
                 h2o_big_window)
                     data_h2o_join "BIG" "CSV"
+                    ;;
+                # the sorted window subgroup derives its data from the same
+                # source, then sorts it inside its load SQL
+                h2o_small_window_sorted)
+                    data_h2o_join "SMALL" "CSV"
+                    ;;
+                h2o_medium_window_sorted)
+                    data_h2o_join "MEDIUM" "CSV"
+                    ;;
+                h2o_big_window_sorted)
+                    data_h2o_join "BIG" "CSV"
+                    ;;
+                h2o_small_window_sorted_parquet)
+                    data_h2o_join "SMALL" "PARQUET"
+                    ;;
+                h2o_medium_window_sorted_parquet)
+                    data_h2o_join "MEDIUM" "PARQUET"
+                    ;;
+                h2o_big_window_sorted_parquet)
+                    data_h2o_join "BIG" "PARQUET"
                     ;;
                 h2o_small_parquet)
                     data_h2o "SMALL" "PARQUET"
@@ -424,7 +477,6 @@ main() {
             echo "DATA_DIR: ${DATA_DIR}"
             echo "RESULTS_DIR: ${RESULTS_DIR}"
             echo "CARGO_COMMAND: ${CARGO_COMMAND}"
-            echo "PREFER_HASH_JOIN: ${PREFER_HASH_JOIN}"
             echo "SIMULATE_LATENCY: ${SIMULATE_LATENCY}"
             echo "***************************"
 
@@ -453,11 +505,13 @@ main() {
                     run_h2o_join "BIG" "PARQUET" "join"
                     run_imdb
                     run_external_aggr
+                    run_asof_join
                     run_nlj
                     run_hj
                     run_tpcds
                     run_smj
                     run_dict 
+                    run_null_aware_join
                     ;;
                 tpch)
                     run_tpch "1" "parquet"
@@ -485,6 +539,18 @@ main() {
                     ;;
                 parquet_row_filter_skip)
                     run_parquet_row_filter_skip
+                    ;;
+                spill_views)
+                    run_spill_views
+                    ;;
+                null_aware_join)
+                    run_null_aware_join
+                    ;;
+                projection_subquery)
+                    run_projection_subquery
+                    ;;
+                asof_join)
+                    run_asof_join
                     ;;
                 tpcds)
                     run_tpcds
@@ -533,6 +599,24 @@ main() {
                     ;;
                 h2o_big_window)
                     run_h2o_window "BIG" "CSV" "window"
+                    ;;
+                h2o_small_window_sorted)
+                    run_h2o_window_sorted "small" "csv"
+                    ;;
+                h2o_medium_window_sorted)
+                    run_h2o_window_sorted "medium" "csv"
+                    ;;
+                h2o_big_window_sorted)
+                    run_h2o_window_sorted "big" "csv"
+                    ;;
+                h2o_small_window_sorted_parquet)
+                    run_h2o_window_sorted "small" "parquet"
+                    ;;
+                h2o_medium_window_sorted_parquet)
+                    run_h2o_window_sorted "medium" "parquet"
+                    ;;
+                h2o_big_window_sorted_parquet)
+                    run_h2o_window_sorted "big" "parquet"
                     ;;
                 h2o_small_parquet)
                     run_h2o "SMALL" "PARQUET"
@@ -606,6 +690,9 @@ main() {
                     ;;
                 dict)
                     run_dict
+                    ;;
+                array_agg_distinct)
+                    run_array_agg_distinct
                     ;;
                 compile_profile)
                     run_compile_profile "${PROFILE_ARGS[@]}"
@@ -730,6 +817,17 @@ data_tpcds() {
     echo "Done."
 }
 
+# Path of the results JSON the Criterion SQL harness ($SQL_CARGO_COMMAND)
+# writes, passed to it as BENCH_RESULTS_FILE. It has the same format as the
+# dfbench results files and holds each query's peak memory pool reservation
+# (recorded only under a memory limit). It has no timings: Criterion keeps
+# those under target/criterion. It goes in a subdirectory so that `compare`,
+# which reads ${RESULTS_DIR}/*.json as timing results, does not read it.
+sql_results_file() {
+    mkdir -p "${RESULTS_DIR}/criterion"
+    echo "${RESULTS_DIR}/criterion/$1.json"
+}
+
 # Runs the tpch benchmark
 run_tpch() {
     SCALE_FACTOR=$1
@@ -741,9 +839,9 @@ run_tpch() {
     echo "Running tpch benchmark..."
 
     debug_run env BENCH_NAME=tpch \
+      BENCH_RESULTS_FILE="$(sql_results_file tpch_sf${SCALE_FACTOR}_${FORMAT})" \
       BENCH_SIZE="${SCALE_FACTOR}" \
       DATA_DIR="${DATA_DIR}" \
-      PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
       TPCH_FILE_TYPE="${FORMAT}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
@@ -801,6 +899,7 @@ data_wide_schema() {
 run_wide_schema() {
     echo "Running wide_schema benchmark (wide subgroup)..."
     debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=wide \
+      BENCH_RESULTS_FILE="$(sql_results_file wide_schema_wide)" \
       DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
@@ -808,6 +907,7 @@ run_wide_schema() {
 
     echo "Running wide_schema benchmark (narrow baseline subgroup)..."
     debug_run env BENCH_NAME=wide_schema BENCH_SUBGROUP=narrow \
+      BENCH_RESULTS_FILE="$(sql_results_file wide_schema_narrow)" \
       DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
@@ -821,6 +921,7 @@ run_push_down_topk() {
     echo "Running push_down_topk benchmark..."
 
     debug_run env BENCH_NAME=push_down_topk \
+      BENCH_RESULTS_FILE="$(sql_results_file push_down_topk)" \
       BENCH_SIZE="1" \
       DATA_DIR="${DATA_DIR}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
@@ -832,7 +933,11 @@ run_push_down_topk() {
 # micro-benchmarks where each subgroup is a different predicate pattern, used to
 # test how an adaptive predicate-ordering system behaves across them (see
 # https://github.com/apache/datafusion/issues/11262). Data is generated inline
-# by the suite's load SQL, so there is no data step.
+# by the suite's load SQL, so there is no data step (drift q82 and q83 share 16
+# small Parquet files written into sql_benchmarks/predicate_eval/scratch/, which
+# is gitignored; q82 reads them with target_partitions=1, so the selectivity flip
+# lands halfway through one stream, and q83 with 16, so each stream gets one whole
+# file and a fixed profile).
 #
 # By default the suite measures DataFusion's built-in left-deep AND short-circuit
 # and sets no engine config of its own. To evaluate a system under test, export
@@ -841,13 +946,14 @@ run_push_down_topk() {
 #   DATAFUSION_EXECUTION_ADAPTIVE_FILTER_REORDERING=true ./bench.sh run predicate_eval
 # Suite-specific knobs (string-substituted into the load SQL, not engine config):
 #   BENCH_SUBGROUP   run one subgroup (costsel, cost, selectivity, cardinality,
-#                    width, scale, neutral, correlation, drift)
+#                    width, scale, neutral, correlation, drift, nulls)
 #   PRED_ROWS        synthetic row count (default 1_000_000; the scale subgroup
 #                    overrides this per query)
 #   PRED_FILL        filler chars per marker = string-column width knob
 run_predicate_eval() {
     echo "Running predicate_eval benchmark (subgroup=${BENCH_SUBGROUP:-all}, rows=${PRED_ROWS:-1000000})..."
     debug_run env BENCH_NAME=predicate_eval \
+      BENCH_RESULTS_FILE="$(sql_results_file predicate_eval)" \
       ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
       PRED_ROWS="${PRED_ROWS:-1000000}" \
       ${PRED_FILL:+PRED_FILL="${PRED_FILL}"} \
@@ -869,9 +975,66 @@ run_predicate_eval() {
 run_parquet_row_filter_skip() {
     echo "Running parquet_row_filter_skip benchmark (subgroup=${BENCH_SUBGROUP:-all}, rows=${PRED_ROWS:-10000000}, rg_size=${RG_SIZE:-1000000})..."
     debug_run env BENCH_NAME=parquet_row_filter_skip \
+      BENCH_RESULTS_FILE="$(sql_results_file parquet_row_filter_skip)" \
       ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
       PRED_ROWS="${PRED_ROWS:-10000000}" \
       RG_SIZE="${RG_SIZE:-1000000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the null_aware_join suite: NOT IN (null-aware) hash joins. The load SQL
+# builds every table inline from range(), so there is no data step.
+#
+# Q01-Q03 are uncorrelated NOT IN and are linear in the table size; they are the
+# regression guard for the plain null-aware path. Q04-Q08 are correlated, where
+# the correlation predicate stays behind as a join filter that the join applies
+# per candidate (build row x probe row) pair while deciding which rows are
+# UNKNOWN; with no equality correlation there are no scope keys to narrow those
+# pairs, so Q05-Q07 scale with the NULL count times the opposite table's size.
+#
+#   NAJ_ROWS         rows per table for the correlated queries (default 10_000)
+#   NAJ_LARGE_ROWS   rows per table for the uncorrelated queries (default 1_000_000)
+run_null_aware_join() {
+    echo "Running null_aware_join benchmark (rows=${NAJ_ROWS:-10000}, large_rows=${NAJ_LARGE_ROWS:-1000000})..."
+    debug_run env BENCH_NAME=null_aware_join \
+      BENCH_RESULTS_FILE="$(sql_results_file null_aware_join)" \
+      NAJ_ROWS="${NAJ_ROWS:-10000}" \
+      NAJ_LARGE_ROWS="${NAJ_LARGE_ROWS:-1000000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the projection_subquery suite: IN / NOT IN / EXISTS subqueries that sit
+# in the SELECT list instead of a filter (see
+# https://github.com/apache/datafusion/issues/25341). The load SQL builds the
+# two tables inline, so there is no data step. Each query projects the boolean
+# subquery result and aggregates it, so the measured cost is the decorrelation
+# plan and not the size of the output. Query 07 correlates on '<' instead of
+# '=', so it keeps the nested-loop plan and acts as the control.
+# Knob (string-substituted into the load SQL, not engine config):
+#   PSQ_ROWS  rows in each of the two tables (default 30_000; the checked-in
+#             result files hold the counts for that value)
+run_projection_subquery() {
+    echo "Running projection_subquery benchmark (rows=${PSQ_ROWS:-30000})..."
+    debug_run env BENCH_NAME=projection_subquery \
+      BENCH_RESULTS_FILE="$(sql_results_file projection_subquery)" \
+      PSQ_ROWS="${PSQ_ROWS:-30000}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Runs the spill_views suite: sort and GROUP BY queries that spill StringView
+# and BinaryView columns read from Parquet
+# (https://github.com/apache/datafusion/issues/23564). The load SQL COPYs 1M-row
+# Parquet files inline, so there is no data step. Each query sets its own memory
+# limit and target_partitions, so it spills regardless of the environment.
+#   BENCH_SUBGROUP  run one subgroup (repeated, distinct)
+run_spill_views() {
+    echo "Running spill_views benchmark (subgroup=${BENCH_SUBGROUP:-all})..."
+    debug_run env BENCH_NAME=spill_views \
+      BENCH_RESULTS_FILE="$(sql_results_file spill_views)" \
+      ${BENCH_SUBGROUP:+BENCH_SUBGROUP="${BENCH_SUBGROUP}"} \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
 }
@@ -886,10 +1049,10 @@ run_tpch_mem() {
     echo "Running tpch_mem benchmark..."
 
     debug_run env BENCH_NAME=tpch \
+      BENCH_RESULTS_FILE="$(sql_results_file tpch_mem_sf${SCALE_FACTOR})" \
       BENCH_SIZE="${SCALE_FACTOR}" \
       DATA_DIR="${DATA_DIR}" \
       TPCH_FILE_TYPE="mem" \
-      PREFER_HASH_JOIN="${PREFER_HASH_JOIN}" \
       SIMULATE_LATENCY="${SIMULATE_LATENCY}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
       bash -c "$SQL_CARGO_COMMAND"
@@ -912,7 +1075,7 @@ run_tpcds() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running tpcds benchmark..."
 
-    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" --prefer_hash_join "${PREFER_HASH_JOIN}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run $CARGO_COMMAND --bin dfbench -- tpcds --iterations 5 --path "${TPCDS_DIR}" --query_path "../datafusion/core/tests/tpc-ds" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 # Runs the compile profile benchmark helper
@@ -1129,7 +1292,7 @@ run_imdb() {
     RESULTS_FILE="${RESULTS_DIR}/imdb.json"
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running imdb benchmark..."
-    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --prefer_hash_join "${PREFER_HASH_JOIN}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+    debug_run $CARGO_COMMAND --bin imdb -- benchmark datafusion --iterations 5 --path "${IMDB_DIR}" --format parquet -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
 }
 
 data_h2o() {
@@ -1264,6 +1427,39 @@ run_h2o_join() {
 # Runners for h2o join benchmark
 run_h2o_window() {
     h2o_runner "$1" "$2" "window"
+}
+
+# Runs the h2o window_sorted subgroup: window Top-N over an input that declares
+# the ordering the window requires.
+#
+# The `window` subgroup registers `x` with no declared ordering, so
+# `output_ordering()` is None and any plan that depends on a declared ordering is
+# unreachable from it, however the data happens to sit on disk. This subgroup's
+# load SQL writes a sorted copy and registers it `WITH ORDER`, then asserts a
+# per-partition top-K operator is actually in the plan so a silent fallback to
+# window-plus-filter cannot masquerade as a result.
+#
+# The sort happens in the untimed `load` step, so it stays out of the
+# measurement. Data comes from the same source as the window subgroup, so the
+# data step is data_h2o_join.
+#
+# H2O_FILE_TYPE selects the *source* format and so only affects that untimed
+# load: the measured query always reads the sorted Parquet copy, whatever the
+# source was. A Parquet source still makes the load markedly cheaper than
+# re-parsing a multi-GB CSV, which is why the `_parquet` entries exist; they are
+# expected to produce the same measured numbers as their CSV counterparts, not
+# different ones. Each entry pairs with the data step that generates its format.
+run_h2o_window_sorted() {
+    SIZE=${1:-"small"}
+    FILE_TYPE=${2:-"csv"}
+    echo "Running h2o window_sorted benchmark (size=${SIZE}, source format=${FILE_TYPE})..."
+    debug_run env BENCH_NAME=h2o \
+      BENCH_RESULTS_FILE="$(sql_results_file h2o_window_sorted_${SIZE}_${FILE_TYPE})" \
+      BENCH_SUBGROUP=window_sorted \
+      H2O_BENCH_SIZE="${SIZE}" \
+      H2O_FILE_TYPE="${FILE_TYPE}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 # Runs the external aggregation benchmark
@@ -1552,6 +1748,51 @@ run_topk_sorted_tpch() {
     $CARGO_COMMAND --bin dfbench -- sort-tpch --iterations 5 --path "${TPCH_DIR}" -o "${RESULTS_FILE}" --sorted --limit 100 ${QUERY_ARG} ${LATENCY_ARG}
 }
 
+# Generates the pre-sorted Parquet inputs for the ASOF join benchmark.
+data_asof_join() {
+    ASOF_DIR="${DATA_DIR}/asof_join"
+    LEFT_FILE="${ASOF_DIR}/q07_left.parquet"
+    RIGHT_FILE="${ASOF_DIR}/q07_right.parquet"
+
+    if [ -f "${LEFT_FILE}" ] && [ -f "${RIGHT_FILE}" ]; then
+        echo "ASOF join benchmark data already exists at ${ASOF_DIR}"
+        return
+    fi
+
+    mkdir -p "${ASOF_DIR}"
+    echo "Generating ASOF join benchmark data at ${ASOF_DIR}..."
+    (
+        cd "${DATAFUSION_DIR}"
+        debug_run $CARGO_COMMAND -p datafusion-cli -- -c "
+            COPY (
+                SELECT value / 10 AS group_key,
+                       value % 10 + 1 AS ts,
+                       value AS payload
+                FROM range(100000)
+                ORDER BY group_key, ts
+            )
+            TO '${LEFT_FILE}' STORED AS PARQUET;
+
+            COPY (
+                SELECT value / 10 AS group_key,
+                       value % 10 AS ts,
+                       value AS payload
+                FROM range(100000)
+                ORDER BY group_key, ts
+            )
+            TO '${RIGHT_FILE}' STORED AS PARQUET;
+        "
+    )
+}
+
+# Runs the ASOF join benchmark
+run_asof_join() {
+    RESULTS_FILE="${RESULTS_DIR}/asof_join.json"
+    echo "RESULTS_FILE: ${RESULTS_FILE}"
+    echo "Running ASOF join benchmark..."
+    debug_run $CARGO_COMMAND --bin benchmark_runner -- asof_join --iterations 5 --path "${DATA_DIR}" -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
 # Runs the nlj benchmark
 run_nlj() {
     RESULTS_FILE="${RESULTS_DIR}/nlj.json"
@@ -1583,6 +1824,15 @@ run_dict() {
     echo "RESULTS_FILE: ${RESULTS_FILE}"
     echo "Running dict benchmark..."
     debug_run $CARGO_COMMAND --bin dfbench -- dict --iterations 5 -o "${RESULTS_FILE}" ${QUERY_ARG} ${LATENCY_ARG}
+}
+
+# Runs the data-free high-cardinality array_agg(DISTINCT) SQL benchmark.
+run_array_agg_distinct() {
+    echo "Running array_agg_distinct benchmark..."
+    debug_run env BENCH_NAME=array_agg_distinct \
+      BENCH_RESULTS_FILE="$(sql_results_file array_agg_distinct)" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
+      bash -c "$SQL_CARGO_COMMAND"
 }
 
 

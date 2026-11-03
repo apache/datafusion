@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -157,13 +144,13 @@ pub(crate) mod tests {
 
         let returned_ok_result = df_result!(ok_r_result);
         assert!(returned_ok_result.is_ok());
-        assert!(*returned_ok_result.unwrap() == *VALID_VALUE);
+        assert_eq!(*returned_ok_result.unwrap(), *VALID_VALUE);
 
         let returned_err_result = df_result!(err_r_result);
         assert!(returned_err_result.is_err());
-        assert!(
-            returned_err_result.unwrap_err().strip_backtrace()
-                == format!("FFI error: {ERROR_VALUE}")
+        assert_eq!(
+            returned_err_result.unwrap_err().strip_backtrace(),
+            format!("FFI error: {ERROR_VALUE}")
         );
 
         let ok_result: Result<String, DataFusionError> = Ok(VALID_VALUE.to_string());
@@ -172,7 +159,7 @@ pub(crate) mod tests {
 
         let returned_ok_r_result = wrap_result(ok_result);
         let std_result: Result<String, SString> = returned_ok_r_result.into();
-        assert!(std_result == Ok(VALID_VALUE.into()));
+        assert_eq!(std_result, Ok(VALID_VALUE.into()));
 
         let returned_err_r_result = wrap_result(err_result);
         let std_result: Result<String, SString> = returned_err_r_result.into();

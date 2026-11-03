@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::ffi::c_void;
 use std::sync::Arc;
@@ -118,7 +105,7 @@ unsafe extern "C" fn release_fn_wrapper(props: &mut FFI_PlanProperties) {
     unsafe {
         debug_assert!(!props.private_data.is_null());
         let private_data =
-            Box::from_raw(props.private_data as *mut PlanPropertiesPrivateData);
+            Box::from_raw(props.private_data.cast::<PlanPropertiesPrivateData>());
         drop(private_data);
         props.private_data = std::ptr::null_mut();
     }
@@ -143,7 +130,7 @@ impl From<&PlanProperties> for FFI_PlanProperties {
             output_ordering: output_ordering_fn_wrapper,
             schema: schema_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -290,11 +277,14 @@ mod tests {
         let col = datafusion::physical_plan::expressions::col("a", &schema)?;
         let ordering = LexOrdering::new([PhysicalSortExpr::new_default(col)])
             .expect("non-empty ordering");
-        let split_points = vec![
+        let samples = vec![
             SplitPoint::new(vec![ScalarValue::Int64(Some(10))]),
             SplitPoint::new(vec![ScalarValue::Int64(Some(20))]),
+            SplitPoint::new(vec![ScalarValue::Int64(Some(30))]),
+            SplitPoint::new(vec![ScalarValue::Int64(Some(40))]),
+            SplitPoint::new(vec![ScalarValue::Int64(Some(50))]),
         ];
-        let range = RangePartitioning::try_new(ordering, split_points)?;
+        let range = RangePartitioning::try_new_with_samples(ordering, samples, 3)?;
 
         Ok(PlanProperties::new(
             EquivalenceProperties::new(schema),
@@ -314,7 +304,6 @@ mod tests {
         let foreign_props: PlanProperties = local_props_ptr.try_into()?;
 
         assert_eq!(format!("{foreign_props:?}"), format!("{original_props:?}"));
-
         Ok(())
     }
 
@@ -351,6 +340,10 @@ mod tests {
             format!("{:?}", original_props.output_partitioning())
         );
         assert_eq!(format!("{foreign_props:?}"), format!("{original_props:?}"));
+        let Partitioning::Range(range) = foreign_props.output_partitioning() else {
+            panic!("expected range partitioning");
+        };
+        assert_eq!(range.max_partition_count(), 6);
 
         Ok(())
     }

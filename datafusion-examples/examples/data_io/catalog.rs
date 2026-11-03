@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! See `main.rs` for how to run it.
 //!
@@ -277,6 +264,21 @@ impl CatalogProviderList for CustomCatalogProviderList {
         let mut cats = self.catalogs.write().unwrap();
         cats.insert(name, catalog.clone());
         Some(catalog)
+    }
+
+    fn deregister_catalog(
+        &self,
+        name: &str,
+        cascade: bool,
+    ) -> Result<Option<Arc<dyn CatalogProvider>>> {
+        let mut cats = self.catalogs.write().unwrap();
+        let Some(cat) = cats.get_mut(name) else {
+            return Ok(None);
+        };
+
+        cat.prepare_deregister_catalog(cascade)?;
+
+        Ok(cats.remove(name))
     }
 
     /// Retrieves the list of available catalog names

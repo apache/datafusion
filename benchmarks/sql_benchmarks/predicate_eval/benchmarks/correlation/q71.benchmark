@@ -1,7 +1,6 @@
 subgroup correlation
 
 template sql_benchmarks/predicate_eval/predicate_eval.benchmark.template
-SUBGROUP=correlation
-QPAD=71
+QUERY=correlation/q71
 DATASET=corr
 NAME=correlation_q71_positive

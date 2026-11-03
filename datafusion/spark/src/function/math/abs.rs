@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::*;
 use arrow::datatypes::{DataType, Field, FieldRef};
@@ -24,10 +11,15 @@ use datafusion_expr::{
     Volatility,
 };
 use datafusion_functions::{
-    downcast_named_arg, make_abs_function, make_try_abs_function,
-    make_wrapping_abs_function,
+    downcast_named_arg, make_abs_function, make_wrapping_abs_function,
 };
 use std::sync::Arc;
+
+const ARITHMETIC_OVERFLOW_ERROR: &str = r#"[ARITHMETIC_OVERFLOW] overflow. If necessary set "spark.sql.ansi.enabled" to "false" to bypass this error. SQLSTATE: 22003"#;
+
+fn arithmetic_overflow_error() -> ArrowError {
+    ArrowError::ComputeError(ARITHMETIC_OVERFLOW_ERROR.to_string())
+}
 
 /// Spark-compatible `abs` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#abs>
@@ -91,13 +83,7 @@ impl ScalarUDFImpl for SparkAbs {
 macro_rules! scalar_compute_op {
     ($ENABLE_ANSI_MODE:expr, $INPUT:ident, $SCALAR_TYPE:ident) => {{
         let result = if $ENABLE_ANSI_MODE {
-            $INPUT.checked_abs().ok_or_else(|| {
-                ArrowError::ComputeError(format!(
-                    "{} overflow on abs({:?})",
-                    stringify!($SCALAR_TYPE),
-                    $INPUT
-                ))
-            })?
+            $INPUT.checked_abs().ok_or_else(arithmetic_overflow_error)?
         } else {
             $INPUT.wrapping_abs()
         };
@@ -107,13 +93,7 @@ macro_rules! scalar_compute_op {
     }};
     ($ENABLE_ANSI_MODE:expr, $INPUT:ident, $PRECISION:expr, $SCALE:expr, $SCALAR_TYPE:ident) => {{
         let result = if $ENABLE_ANSI_MODE {
-            $INPUT.checked_abs().ok_or_else(|| {
-                ArrowError::ComputeError(format!(
-                    "{} overflow on abs({:?})",
-                    stringify!($SCALAR_TYPE),
-                    $INPUT
-                ))
-            })?
+            $INPUT.checked_abs().ok_or_else(arithmetic_overflow_error)?
         } else {
             $INPUT.wrapping_abs()
         };
@@ -122,6 +102,18 @@ macro_rules! scalar_compute_op {
             $PRECISION,
             $SCALE,
         )))
+    }};
+}
+
+macro_rules! make_try_spark_abs_function {
+    ($ARRAY_TYPE:ident) => {{
+        |input: &ArrayRef| {
+            let array = downcast_named_arg!(&input, "abs arg", $ARRAY_TYPE);
+            let res: $ARRAY_TYPE = array
+                .try_unary(|x| x.checked_abs().ok_or_else(arithmetic_overflow_error))
+                .map(|v| v.with_data_type(input.data_type().clone()))?;
+            Ok(Arc::new(res) as ArrayRef)
+        }
     }};
 }
 
@@ -142,7 +134,7 @@ pub fn spark_abs(
             | DataType::UInt64 => Ok(args[0].clone()),
             DataType::Int8 => {
                 let abs_fun = if enable_ansi_mode {
-                    make_try_abs_function!(Int8Array)
+                    make_try_spark_abs_function!(Int8Array)
                 } else {
                     make_wrapping_abs_function!(Int8Array)
                 };
@@ -150,7 +142,7 @@ pub fn spark_abs(
             }
             DataType::Int16 => {
                 let abs_fun = if enable_ansi_mode {
-                    make_try_abs_function!(Int16Array)
+                    make_try_spark_abs_function!(Int16Array)
                 } else {
                     make_wrapping_abs_function!(Int16Array)
                 };
@@ -158,7 +150,7 @@ pub fn spark_abs(
             }
             DataType::Int32 => {
                 let abs_fun = if enable_ansi_mode {
-                    make_try_abs_function!(Int32Array)
+                    make_try_spark_abs_function!(Int32Array)
                 } else {
                     make_wrapping_abs_function!(Int32Array)
                 };
@@ -166,7 +158,7 @@ pub fn spark_abs(
             }
             DataType::Int64 => {
                 let abs_fun = if enable_ansi_mode {
-                    make_try_abs_function!(Int64Array)
+                    make_try_spark_abs_function!(Int64Array)
                 } else {
                     make_wrapping_abs_function!(Int64Array)
                 };
@@ -182,7 +174,7 @@ pub fn spark_abs(
             }
             DataType::Decimal128(_, _) => {
                 let abs_fun = if enable_ansi_mode {
-                    make_try_abs_function!(Decimal128Array)
+                    make_try_spark_abs_function!(Decimal128Array)
                 } else {
                     make_wrapping_abs_function!(Decimal128Array)
                 };
@@ -190,7 +182,7 @@ pub fn spark_abs(
             }
             DataType::Decimal256(_, _) => {
                 let abs_fun = if enable_ansi_mode {
-                    make_try_abs_function!(Decimal256Array)
+                    make_try_spark_abs_function!(Decimal256Array)
                 } else {
                     make_wrapping_abs_function!(Decimal256Array)
                 };
@@ -361,9 +353,11 @@ mod tests {
             let args = ColumnarValue::Array(Arc::new(input));
             match spark_abs(&[args], true) {
                 Err(e) => {
-                    assert!(
-                        e.to_string().contains("overflow on abs"),
-                        "Error message did not match. Actual message: {e}"
+                    assert_eq!(
+                        e.strip_backtrace(),
+                        format!(
+                            "Arrow error: Compute error: {ARITHMETIC_OVERFLOW_ERROR}"
+                        )
                     );
                 }
                 _ => unreachable!(),

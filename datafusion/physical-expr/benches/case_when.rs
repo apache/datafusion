@@ -1,24 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{Array, ArrayRef, Int32Array, Int32Builder, StringArray};
 use arrow::datatypes::{ArrowNativeTypeOp, Field, Schema};
 use arrow::record_batch::RecordBatch;
-use arrow::util::test_util::seedable_rng;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
@@ -28,7 +14,13 @@ use itertools::Itertools;
 use rand::distr::Alphanumeric;
 use rand::distr::uniform::SampleUniform;
 use rand::rngs::StdRng;
-use rand::{Rng, RngCore};
+use rand::{Rng, RngCore, SeedableRng};
+
+/// Returns a fixed-seed RNG using this crate's `rand` version (arrow's
+/// `test_util::seedable_rng` returns its own `rand` version's `StdRng`)
+fn seedable_rng() -> StdRng {
+    StdRng::seed_from_u64(42)
+}
 use std::fmt::{Display, Formatter};
 use std::hint::black_box;
 use std::ops::Range;
@@ -543,8 +535,8 @@ fn benchmark_divide_by_zero_protection(c: &mut Criterion, batch_size: usize) {
             })
             .collect();
 
-        let divisor: Int32Array = divisor_values.iter().cloned().collect();
-        let divisor_copy: Int32Array = divisor_values.iter().cloned().collect();
+        let divisor: Int32Array = divisor_values.iter().copied().collect();
+        let divisor_copy: Int32Array = divisor_values.iter().copied().collect();
 
         let schema = Arc::new(Schema::new(vec![
             Field::new("numerator", numerator.data_type().clone(), true),

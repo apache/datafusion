@@ -1,39 +1,26 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Module containing helper methods/traits related to enabling
 //! write support for the various file formats
 
-use std::io::Write;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Context, Poll};
-
 use crate::file_compression_type::FileCompressionType;
 use crate::file_sink_config::FileSinkConfig;
-use datafusion_common::error::Result;
-
+use crate::write::demux::FileSize;
 use arrow::array::RecordBatch;
 use arrow::datatypes::Schema;
 use bytes::Bytes;
+use datafusion_common::error::Result;
 use object_store::ObjectStore;
 use object_store::buffered::BufWriter;
 use object_store::path::Path;
+use pin_project_lite::pin_project;
+use std::io::{IoSlice, Write};
+use std::pin::Pin;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::{Context, Poll, ready};
 use tokio::io::AsyncWrite;
 
 pub mod demux;
@@ -67,62 +54,6 @@ impl Write for SharedBuffer {
     fn flush(&mut self) -> std::io::Result<()> {
         let mut buffer = self.buffer.try_lock().unwrap();
         Write::flush(&mut *buffer)
-    }
-}
-
-/// An async writer that counts the number of bytes written to its inner writer.
-#[derive(Debug)]
-struct CountingWriter<W> {
-    inner: W,
-    bytes_written: Arc<AtomicUsize>,
-}
-
-impl<W> CountingWriter<W> {
-    fn new(inner: W) -> (Self, Arc<AtomicUsize>) {
-        let bytes_written = Arc::new(AtomicUsize::new(0));
-
-        (
-            Self {
-                inner,
-                bytes_written: Arc::clone(&bytes_written),
-            },
-            bytes_written,
-        )
-    }
-}
-
-impl<W> AsyncWrite for CountingWriter<W>
-where
-    W: AsyncWrite + Unpin,
-{
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<std::io::Result<usize>> {
-        let this = self.get_mut();
-
-        match Pin::new(&mut this.inner).poll_write(cx, buf) {
-            Poll::Ready(Ok(written)) => {
-                this.bytes_written.fetch_add(written, Ordering::Relaxed);
-                Poll::Ready(Ok(written))
-            }
-            result => result,
-        }
-    }
-
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-    ) -> Poll<std::io::Result<()>> {
-        Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
     }
 }
 
@@ -176,6 +107,8 @@ pub struct ObjectWriterBuilder {
     buffer_size: Option<usize>,
     /// The compression level for the object writer.
     compression_level: Option<u32>,
+    /// Counts the number of bytes actually written.
+    bytes_written_counter: Option<Arc<AtomicU64>>,
 }
 
 impl ObjectWriterBuilder {
@@ -191,6 +124,7 @@ impl ObjectWriterBuilder {
             object_store,
             buffer_size: None,
             compression_level: None,
+            bytes_written_counter: None,
         }
     }
 
@@ -264,6 +198,11 @@ impl ObjectWriterBuilder {
         self.compression_level
     }
 
+    pub fn with_bytes_written_counter(mut self, counter: FileSize) -> Self {
+        self.bytes_written_counter = Some(counter);
+        self
+    }
+
     /// Return a writer object that writes to the object store location.
     ///
     /// If a buffer size has not been set, the default buffer buffer size will
@@ -278,78 +217,77 @@ impl ObjectWriterBuilder {
             object_store,
             buffer_size,
             compression_level,
+            bytes_written_counter,
         } = self;
 
         let buf_writer = match buffer_size {
             Some(size) => BufWriter::with_capacity(object_store, location, size),
             None => BufWriter::new(object_store, location),
         };
-
-        file_compression_type
-            .convert_async_writer_with_level(buf_writer, compression_level)
-    }
-
-    /// Build a compressed object writer and return a shared counter containing
-    /// the number of compressed bytes written to the object store writer.
-    pub(crate) fn build_with_byte_counter(
-        self,
-    ) -> Result<(Box<dyn AsyncWrite + Send + Unpin>, Arc<AtomicUsize>)> {
-        let Self {
-            file_compression_type,
-            location,
-            object_store,
-            buffer_size,
-            compression_level,
-        } = self;
-
-        let buf_writer = match buffer_size {
-            Some(size) => BufWriter::with_capacity(object_store, location, size),
-            None => BufWriter::new(object_store, location),
-        };
-
-        let (counting_writer, bytes_written) = CountingWriter::new(buf_writer);
-        let writer = file_compression_type
-            .convert_async_writer_with_level(counting_writer, compression_level)?;
-
-        Ok((writer, bytes_written))
+        if let Some(counter) = bytes_written_counter {
+            file_compression_type.convert_async_writer_with_level(
+                CountingWriter {
+                    inner: buf_writer,
+                    counter,
+                },
+                compression_level,
+            )
+        } else {
+            file_compression_type
+                .convert_async_writer_with_level(buf_writer, compression_level)
+        }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pin_project! {
+    /// [`AsyncWrite`] wrapper that counts the number of effectively written bytes
+    struct CountingWriter<W> {
+        #[pin]
+        inner: W,
+        counter: Arc<AtomicU64>,
+    }
+}
 
-    use object_store::ObjectStoreExt;
-    use object_store::memory::InMemory;
-    use tokio::io::AsyncWriteExt;
+impl<W: AsyncWrite> AsyncWrite for CountingWriter<W> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.project();
+        Poll::Ready(ready!(this.inner.poll_write(cx, buf)).inspect(|count| {
+            this.counter.fetch_add((*count) as u64, Ordering::Relaxed);
+        }))
+    }
 
-    #[tokio::test]
-    async fn compressed_byte_counter_matches_object_size() {
-        let object_store = Arc::new(InMemory::new());
-        let location = Path::from("compressed.csv.gz");
-        let input = vec![b'a'; 16 * 1024];
+    fn poll_flush(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.project().inner.poll_flush(cx)
+    }
 
-        let (mut writer, bytes_written) = ObjectWriterBuilder::new(
-            FileCompressionType::GZIP,
-            &location,
-            object_store.clone(),
+    fn poll_shutdown(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        self.project().inner.poll_shutdown(cx)
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[IoSlice<'_>],
+    ) -> Poll<std::io::Result<usize>> {
+        let this = self.project();
+        Poll::Ready(
+            ready!(this.inner.poll_write_vectored(cx, bufs)).inspect(|count| {
+                this.counter.fetch_add((*count) as u64, Ordering::Relaxed);
+            }),
         )
-        .build_with_byte_counter()
-        .unwrap();
+    }
 
-        writer.write_all(&input).await.unwrap();
-        writer.shutdown().await.unwrap();
-
-        let actual_size = object_store
-            .get(&location)
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap()
-            .len();
-
-        assert_eq!(bytes_written.load(Ordering::Relaxed), actual_size);
-        assert!(actual_size < input.len());
+    fn is_write_vectored(&self) -> bool {
+        self.inner.is_write_vectored()
     }
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Round trip tests for the physical plan protobuf representation.
 //!
@@ -36,9 +23,12 @@ use std::sync::Arc;
 mod aggregates;
 mod dispatch;
 mod dynamic_filters;
+mod expr_registry;
 mod exprs;
+mod extensions;
 mod filters;
 mod joins;
+mod lazy_memory;
 mod leaves;
 mod limits;
 mod misc;
@@ -85,6 +75,23 @@ fn roundtrip_test_and_return(
         proto_converter,
     )?;
 
+    pretty_assertions::assert_eq!(
+        format!("{exec_plan:?}"),
+        format!("{result_exec_plan:?}")
+    );
+    Ok(result_exec_plan)
+}
+
+/// Round-trip through the public JSON APIs and return the decoded plan for field assertions.
+#[cfg(feature = "json")]
+fn roundtrip_test_json_and_return(
+    exec_plan: Arc<dyn ExecutionPlan>,
+    ctx: &SessionContext,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    use datafusion_proto::bytes::{physical_plan_from_json, physical_plan_to_json};
+
+    let json = physical_plan_to_json(Arc::clone(&exec_plan))?;
+    let result_exec_plan = physical_plan_from_json(&json, ctx.task_ctx().as_ref())?;
     pretty_assertions::assert_eq!(
         format!("{exec_plan:?}"),
         format!("{result_exec_plan:?}")

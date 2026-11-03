@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! An optimizer rule that checks ordering requirements of aggregate expressions
 //! and modifies the expressions to work more efficiently if possible.
@@ -89,20 +76,35 @@ impl PhysicalOptimizerRule for OptimizeAggregateOrder {
                 let input = aggr_exec.input();
                 let mut aggr_exprs = aggr_exec.aggr_expr().to_vec();
 
-                let groupby_exprs = aggr_exec.group_expr().input_exprs();
                 // If the existing ordering satisfies a prefix of the GROUP BY
                 // expressions, prefix requirements with this section. In this
                 // case, aggregation will work more efficiently.
-                let indices = get_ordered_partition_by_indices(&groupby_exprs, input)?;
-                let requirement = indices
-                    .iter()
-                    .map(|&idx| {
-                        PhysicalSortRequirement::new(
-                            Arc::clone(&groupby_exprs[idx]),
-                            None,
-                        )
-                    })
-                    .collect::<Vec<_>>();
+                //
+                // Only do this for a single grouping set. With grouping sets
+                // (e.g. ROLLUP), the stream feeds the same rows once per
+                // grouping set, and within a coarser set's group the rows are
+                // ordered by the *full* group-by prefix, not by the
+                // aggregate's own ORDER BY. Proving the prefixed requirement
+                // there would mark first/last aggregates as pre-ordered when
+                // their groups are not, producing wrong results in positional
+                // paths. Without the prefix, a globally satisfied ORDER BY
+                // still holds within every group of every grouping set.
+                let requirement = if aggr_exec.group_expr().is_single() {
+                    let groupby_exprs = aggr_exec.group_expr().input_exprs();
+                    let indices =
+                        get_ordered_partition_by_indices(&groupby_exprs, input)?;
+                    indices
+                        .iter()
+                        .map(|&idx| {
+                            PhysicalSortRequirement::new(
+                                Arc::clone(&groupby_exprs[idx]),
+                                None,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                } else {
+                    vec![]
+                };
 
                 aggr_exprs = try_convert_aggregate_if_better(
                     aggr_exprs,

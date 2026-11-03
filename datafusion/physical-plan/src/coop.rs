@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Utilities for improved cooperative scheduling.
 //!
@@ -80,6 +67,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use crate::execution_plan::CardinalityEffect::{self, Equal};
+use crate::execution_plan::LimitBehavior;
 use crate::filter_pushdown::{
     ChildPushdownResult, FilterDescription, FilterPushdownPhase,
     FilterPushdownPropagation,
@@ -338,6 +326,10 @@ impl ExecutionPlan for CooperativeExec {
         true
     }
 
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::MoveToInput
+    }
+
     fn cardinality_effect(&self) -> CardinalityEffect {
         Equal
     }
@@ -402,7 +394,15 @@ impl ExecutionPlan for CooperativeExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `CooperativeExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            input,
+            // Derived from the input's properties at construction time.
+            properties: _,
+        } = self;
+        let input = ctx.encode_child(input)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Cooperative(Box::new(
@@ -432,11 +432,12 @@ impl CooperativeExec {
             protobuf::physical_plan_node::PhysicalPlanType::Cooperative,
             "CooperativeExec",
         );
-        let input = ctx.decode_required_child(
-            cooperative.input.as_deref(),
-            "CooperativeExec",
-            "input",
-        )?;
+        // Destructure exhaustively so that a new field on
+        // `CooperativeExecNode` is a compile error here rather than a silently
+        // dropped field.
+        let protobuf::CooperativeExecNode { input } = &**cooperative;
+        let input =
+            ctx.decode_required_child(input.as_deref(), "CooperativeExec", "input")?;
         Ok(Arc::new(CooperativeExec::new(input)))
     }
 }

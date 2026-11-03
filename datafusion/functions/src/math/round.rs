@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::utils::{calculate_binary_decimal_math_cast, calculate_binary_math};
 
@@ -162,11 +149,11 @@ fn decimal_places_from_scalar(scalar: &ScalarValue) -> Result<i32> {
     ),
     sql_example = r#"```sql
 > SELECT round(3.14159);
-+--------------+
-| round(3.14159)|
-+--------------+
-| 3.0          |
-+--------------+
++----------------+
+| round(3.14159) |
++----------------+
+| 3.0            |
++----------------+
 ```"#
 )]
 #[derive(Debug, PartialEq, Eq, Hash)]
@@ -241,9 +228,6 @@ impl ScalarUDFImpl for RoundFunc {
 
         // If decimal_places is a scalar literal, we can incorporate it into the output type
         // (scale reduction). Otherwise, keep the input scale as we can't pick a per-row scale.
-        //
-        // Note: `scalar_arguments` contains the original literal values (pre-coercion), so
-        // integer literals may appear as Int64 even though the signature coerces them to Int32.
         let decimal_places: Option<i32> = match args.scalar_arguments.get(1) {
             None => Some(0),    // No dp argument means default to 0
             Some(None) => None, // dp is not a literal (e.g. column)

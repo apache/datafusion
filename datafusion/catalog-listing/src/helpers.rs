@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Helper functions for the table implementation
 
@@ -30,7 +17,7 @@ use datafusion_expr::{BinaryExpr, Operator, lit, utils};
 
 use arrow::{
     array::AsArray,
-    datatypes::{DataType, Field},
+    datatypes::{DataType, Field, Metadata},
     record_batch::RecordBatch,
 };
 use datafusion_expr::execution_props::ExecutionProps;
@@ -272,7 +259,7 @@ pub fn evaluate_partition_prefix<'a>(
         return None;
     }
 
-    let mut parts = vec![];
+    let mut parts = Vec::with_capacity(partition_cols.len());
     for (p, _) in partition_cols {
         match partition_values.get(p.as_str()) {
             Some(PartitionValue::Single(val)) => {
@@ -413,7 +400,7 @@ pub async fn pruned_partition_list<'a>(
             .try_filter_map(|object_meta| {
                 futures::future::ready(object_meta_to_partitioned_file(
                     object_meta,
-                    table_path.get_table_ref(),
+                    table_path.get_table_ref().as_ref(),
                 ))
             })
             .boxed())
@@ -423,7 +410,7 @@ pub async fn pruned_partition_list<'a>(
                 .iter()
                 .map(|(n, d)| Field::new(n, d.clone(), true))
                 .collect(),
-            Default::default(),
+            Metadata::new(),
         )?;
 
         Ok(objects
@@ -443,7 +430,7 @@ pub async fn pruned_partition_list<'a>(
 
 fn object_meta_to_partitioned_file(
     object_meta: ObjectMeta,
-    table_ref: &Option<TableReference>,
+    table_ref: Option<&TableReference>,
 ) -> Result<Option<PartitionedFile>> {
     Ok(Some(PartitionedFile {
         object_meta,
@@ -454,7 +441,7 @@ fn object_meta_to_partitioned_file(
         ordering: None,
         extensions: FileExtensions::new(),
         metadata_size_hint: None,
-        table_reference: table_ref.clone(),
+        table_reference: table_ref.cloned(),
     }))
 }
 

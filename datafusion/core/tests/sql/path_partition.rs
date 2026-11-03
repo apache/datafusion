@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Test queries on partitioned datasets
 
@@ -514,7 +501,11 @@ async fn parquet_statistics() -> Result<()> {
 async fn parquet_overlapping_columns() -> Result<()> {
     let ctx = SessionContext::new();
 
-    // `id` is both a column of the file and a partitioning col
+    // `id` is both a column of the file (Int32, values 0..8) and a partition
+    // column (Int64). Files written with `keep_partition_by_columns = true`
+    // look exactly like this. The partition column wins: it appears once in
+    // the schema, with the partition type, and its values come from the path.
+    // See https://github.com/apache/datafusion/issues/17420
     register_partitioned_alltypes_parquet(
         &ctx,
         &[
@@ -528,12 +519,30 @@ async fn parquet_overlapping_columns() -> Result<()> {
     )
     .await;
 
-    let result = ctx.sql("SELECT id FROM t WHERE id=1 ORDER BY id").await;
+    let schema = ctx.table_provider("t").await?.schema();
+    let id_fields = schema
+        .fields()
+        .iter()
+        .filter(|f| f.name() == "id")
+        .collect::<Vec<_>>();
+    assert_eq!(id_fields.len(), 1, "partition column must appear only once");
+    assert_eq!(id_fields[0].data_type(), &DataType::Int64);
 
-    assert!(
-        result.is_err(),
-        "Duplicate qualified name should raise error"
-    );
+    // All 8 rows of the `id=2` file report the path value, not the file value
+    let result = ctx
+        .sql("SELECT id, count(*) AS n FROM t WHERE id = 2 GROUP BY id")
+        .await?
+        .collect()
+        .await?;
+
+    assert_snapshot!(batches_to_sort_string(&result), @r"
+    +----+---+
+    | id | n |
+    +----+---+
+    | 2  | 8 |
+    +----+---+
+    ");
+
     Ok(())
 }
 
@@ -718,6 +727,7 @@ impl ObjectStore for MirroringObjectStore {
             payload,
             meta,
             attributes: Attributes::default(),
+            extensions: Default::default(),
         })
     }
 
@@ -761,16 +771,13 @@ impl ObjectStore for MirroringObjectStore {
         let mut objects = vec![];
 
         for k in &self.files {
-            let mut parts = match k.prefix_match(prefix) {
-                Some(parts) => parts,
-                None => continue,
+            let Some(mut parts) = k.prefix_match(prefix) else {
+                continue;
             };
 
             // Pop first element
-            let common_prefix = match parts.next() {
-                Some(p) => p,
-                // Should only return children of the prefix
-                None => continue,
+            let Some(common_prefix) = parts.next() else {
+                continue;
             };
 
             if parts.next().is_some() {
@@ -789,6 +796,7 @@ impl ObjectStore for MirroringObjectStore {
         Ok(ListResult {
             common_prefixes: common_prefixes.into_iter().collect(),
             objects,
+            extensions: Default::default(),
         })
     }
 

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -26,6 +13,7 @@ use arrow::array::{Array, ArrayRef, AsArray, StringArrayType};
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
 use datafusion_common::types::logical_string;
+use datafusion_common::utils::offset_span_len;
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
     ScalarUDFImpl, Signature, TypeSignatureClass, Volatility,
@@ -102,14 +90,26 @@ fn reverse(args: &[ArrayRef]) -> Result<ArrayRef> {
     let len = args[0].len();
 
     match args[0].data_type() {
-        LargeUtf8 => reverse_impl(
-            &args[0].as_string::<i64>(),
-            GenericStringArrayBuilder::<i64>::with_capacity(len, 1024),
-        ),
-        Utf8 => reverse_impl(
-            &args[0].as_string::<i32>(),
-            GenericStringArrayBuilder::<i32>::with_capacity(len, 1024),
-        ),
+        LargeUtf8 => {
+            let string_array = args[0].as_string::<i64>();
+            reverse_impl(
+                &string_array,
+                GenericStringArrayBuilder::<i64>::with_capacity(
+                    len,
+                    offset_span_len(string_array.offsets()),
+                ),
+            )
+        }
+        Utf8 => {
+            let string_array = args[0].as_string::<i32>();
+            reverse_impl(
+                &string_array,
+                GenericStringArrayBuilder::<i32>::with_capacity(
+                    len,
+                    offset_span_len(string_array.offsets()),
+                ),
+            )
+        }
         Utf8View => reverse_impl(
             &args[0].as_string_view(),
             StringViewArrayBuilder::with_capacity(len),
@@ -227,8 +227,10 @@ mod tests {
     #[test]
     fn test_functions() -> Result<()> {
         test_reverse!(Some("abcde".into()), Ok(Some("edcba")));
-        test_reverse!(Some("loẅks".into()), Ok(Some("sk̈wol")));
-        test_reverse!(Some("loẅks".into()), Ok(Some("sk̈wol")));
+        // `reverse` works per `char`, so a decomposed grapheme is split from its base char ...
+        test_reverse!(Some("low\u{308}ks".into()), Ok(Some("sk\u{308}wol")));
+        // ... while the composed form is a single `char` and stays intact.
+        test_reverse!(Some("lo\u{1e85}ks".into()), Ok(Some("sk\u{1e85}ol")));
         test_reverse!(None, Ok(None));
         #[cfg(not(feature = "unicode_expressions"))]
         test_reverse!(

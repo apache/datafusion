@@ -1,22 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{
     ArrayRef, Int64Array, RecordBatch, StringArray, StructArray,
+    TimestampNanosecondArray,
     builder::{ListBuilder, StringBuilder},
 };
 use arrow::datatypes::{DataType, Field};
@@ -361,6 +349,43 @@ async fn test_create_physical_expr_coercion() {
     create_simplified_expr_test(
         lit("202410").eq(col("i")),
         "i@1 = CAST(202410 AS Int64)",
+    );
+}
+
+#[test]
+fn test_create_physical_expr_timestamp_subtraction_uses_session_timezone() {
+    const NANOS_PER_SECOND: i64 = 1_000_000_000;
+    // 2024-11-01 00:00:00 in America/New_York (04:00 UTC).
+    let timestamp_tz: ArrayRef = Arc::new(
+        TimestampNanosecondArray::from(vec![1_730_433_600 * NANOS_PER_SECOND])
+            .with_timezone("America/New_York"),
+    );
+    // The same wall-clock time without a timezone.
+    let timestamp: ArrayRef = Arc::new(TimestampNanosecondArray::from(vec![
+        1_730_419_200 * NANOS_PER_SECOND,
+    ]));
+    let batch = RecordBatch::try_from_iter(vec![
+        ("timestamp_tz", timestamp_tz),
+        ("timestamp", timestamp),
+    ])
+    .unwrap();
+    let df_schema = DFSchema::try_from(batch.schema()).unwrap();
+    let mut config = SessionConfig::new();
+    config.options_mut().execution.time_zone = Some("+08:00".parse().unwrap());
+    let ctx = SessionContext::new_with_config(config);
+
+    let physical_expr = ctx
+        .create_physical_expr(col("timestamp_tz") - col("timestamp"), &df_schema)
+        .unwrap();
+    let result = physical_expr
+        .evaluate(&batch)
+        .unwrap()
+        .into_array(batch.num_rows())
+        .unwrap();
+
+    assert_eq!(
+        ScalarValue::try_from_array(&result, 0).unwrap(),
+        ScalarValue::DurationNanosecond(Some(12 * 60 * 60 * NANOS_PER_SECOND)),
     );
 }
 

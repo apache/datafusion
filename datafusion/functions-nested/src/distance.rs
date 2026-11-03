@@ -1,23 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [ScalarUDFImpl] definitions for array_distance function.
 
-use crate::utils::make_scalar_function;
+use crate::utils::{make_scalar_function, needs_norm_scale, norm_scale};
 use arrow::array::{Array, ArrayRef, Float64Array, OffsetSizeTrait};
 use arrow::datatypes::{
     DataType,
@@ -174,14 +161,8 @@ fn compute_array_distance(
     arr1: Option<ArrayRef>,
     arr2: Option<ArrayRef>,
 ) -> Result<Option<f64>> {
-    let value1 = match arr1 {
-        Some(arr) => arr,
-        None => return Ok(None),
-    };
-    let value2 = match arr2 {
-        Some(arr) => arr,
-        None => return Ok(None),
-    };
+    let Some(value1) = arr1 else { return Ok(None) };
+    let Some(value2) = arr2 else { return Ok(None) };
 
     // Check for NULL values inside the arrays
     if value1.null_count() != 0 || value2.null_count() != 0 {
@@ -195,16 +176,33 @@ fn compute_array_distance(
         return exec_err!("Both arrays must have the same length");
     }
 
-    let sum_squares: f64 = values1
-        .iter()
-        .zip(values2.iter())
-        .map(|(v1, v2)| {
-            let diff = v1.unwrap_or(0.0) - v2.unwrap_or(0.0);
-            diff * diff
-        })
-        .sum();
+    let diffs = || {
+        values1
+            .values()
+            .iter()
+            .zip(values2.values().iter())
+            .map(|(v1, v2)| v1 - v2)
+    };
 
-    Ok(Some(sum_squares.sqrt()))
+    let sum_squares: f64 = diffs().map(|diff| diff * diff).sum();
+    if !needs_norm_scale(sum_squares, values1.len()) {
+        return Ok(Some(sum_squares.sqrt()));
+    }
+
+    let distance = match norm_scale(diffs()) {
+        Some(scale) => {
+            let scaled_sum_squares: f64 = diffs()
+                .map(|diff| {
+                    let scaled = diff * scale;
+                    scaled * scaled
+                })
+                .sum();
+            scaled_sum_squares.sqrt() / scale
+        }
+        None => sum_squares.sqrt(),
+    };
+
+    Ok(Some(distance))
 }
 
 /// Converts an array of any numeric type to a Float64Array.

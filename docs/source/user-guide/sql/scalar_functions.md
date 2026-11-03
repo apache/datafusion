@@ -785,11 +785,11 @@ round(numeric_expression[, decimal_places])
 
 ```sql
 > SELECT round(3.14159);
-+--------------+
-| round(3.14159)|
-+--------------+
-| 3.0          |
-+--------------+
++----------------+
+| round(3.14159) |
++----------------+
+| 3.0            |
++----------------+
 ```
 
 ### `signum`
@@ -1085,7 +1085,7 @@ nvl(expression1, expression2)
 | nvl(NULL,Utf8("a")) |
 +---------------------+
 | a                   |
-+---------------------+\
++---------------------+
 > select nvl('b', 'a');
 +--------------------------+
 | nvl(Utf8("b"),Utf8("a")) |
@@ -1663,7 +1663,7 @@ trim(LEADING trim_str FROM str)
 
 ### `octet_length`
 
-Returns the length of a string in bytes.
+Returns the length of a string or binary in bytes.
 
 ```sql
 octet_length(str)
@@ -1671,7 +1671,7 @@ octet_length(str)
 
 #### Arguments
 
-- **str**: String expression to operate on. Can be a constant, column, or function, and any combination of operators.
+- **str**: String or binary expression to operate on. Can be a constant, column, or function, and any combination of operators.
 
 #### Example
 
@@ -2384,6 +2384,7 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 - [make_date](#make_date)
 - [make_time](#make_time)
 - [now](#now)
+- [timezone](#timezone)
 - [to_char](#to_char)
 - [to_date](#to_date)
 - [to_local_time](#to_local_time)
@@ -2472,13 +2473,15 @@ Calculates time intervals and returns the start of the interval nearest to the s
 
 For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
 
+For timestamp inputs, binning beyond the supported numeric or calendar range returns an error. A NULL source or interval still produces NULL.
+
 ```sql
 date_bin(interval, expression[, origin_timestamp])
 ```
 
 #### Arguments
 
-- **interval**: Bin interval.
+- **interval**: Bin interval. Must be greater than zero.
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 - **origin_timestamp**: Optional. Starting point used to determine bin boundaries. If not specified defaults 1970-01-01T00:00:00Z (the UNIX epoch in UTC). The following intervals are supported:
 
@@ -2563,6 +2566,11 @@ date_part(part, expression)
   - doy (day of the year)
   - epoch (seconds since Unix epoch for timestamps/dates, total seconds for intervals)
   - isodow (ISO 8601 day of the week where Monday is 1 and Sunday is 7)
+  - timezone (UTC offset in seconds)
+  - timezone_hour (whole hours of the UTC offset)
+  - timezone_minute (whole minutes of the UTC offset, excluding the hours)
+
+  The `timezone`, `timezone_hour` and `timezone_minute` parts are only defined for timestamps that carry a timezone; extracting them from a timezone-naive timestamp, a date, a time or an interval is an error. They report the offset that applies at that instant, so they follow daylight saving time: `Europe/Brussels` yields `3600` in January and `7200` in July. For a negative offset each non-zero part carries the sign, so `America/St_Johns` in January yields `-3` hours and `-30` minutes. An offset smaller than one hour has a zero hour part, which cannot show a sign: `Africa/Monrovia` before 1972 yields `0` hours and `-43` minutes.
 
 - **expression**: Time expression to operate on. Can be a constant, column, or function.
 
@@ -2581,6 +2589,12 @@ date_part(part, expression)
 +----------------------------------------------------+
 | 1                                                  |
 +----------------------------------------------------+
+> SELECT date_part('timezone', TIMESTAMP '2024-07-01T12:00:00' AT TIME ZONE 'Europe/Brussels') AS utc_offset_seconds;
++--------------------+
+| utc_offset_seconds |
++--------------------+
+| 7200               |
++--------------------+
 ```
 
 #### Alternative Syntax
@@ -2632,17 +2646,17 @@ date_trunc(precision, expression)
 
 ```sql
 > SELECT date_trunc('month', '2024-05-15T10:30:00');
-+-----------------------------------------------+
++-------------------------------------------------------+
 | date_trunc(Utf8("month"),Utf8("2024-05-15T10:30:00")) |
-+-----------------------------------------------+
-| 2024-05-01T00:00:00                           |
-+-----------------------------------------------+
++-------------------------------------------------------+
+| 2024-05-01T00:00:00                                   |
++-------------------------------------------------------+
 > SELECT date_trunc('hour', '2024-05-15T10:30:00');
-+----------------------------------------------+
++------------------------------------------------------+
 | date_trunc(Utf8("hour"),Utf8("2024-05-15T10:30:00")) |
-+----------------------------------------------+
-| 2024-05-15T10:00:00                          |
-+----------------------------------------------+
++------------------------------------------------------+
+| 2024-05-15T10:00:00                                  |
++------------------------------------------------------+
 ```
 
 #### Aliases
@@ -2659,7 +2673,13 @@ _Alias of [date_trunc](#date_trunc)._
 
 ### `from_unixtime`
 
-Converts an integer to RFC3339 timestamp format (`YYYY-MM-DDT00:00:00.000000000Z`). Integers and unsigned integers are interpreted as seconds since the unix epoch (`1970-01-01T00:00:00Z`) return the corresponding timestamp.
+Converts an integer to a timestamp with second precision (`Timestamp(Second)`).
+The integer is interpreted as the number of seconds since the unix epoch
+(`1970-01-01T00:00:00Z`).
+
+If the optional `timezone` argument is omitted, the timestamp is returned in the
+session time zone (`datafusion.execution.time_zone`), which is unset (i.e.
+timezone-naive) by default.
 
 ```sql
 from_unixtime(expression[, timezone])
@@ -2668,7 +2688,7 @@ from_unixtime(expression[, timezone])
 #### Arguments
 
 - **expression**: The expression to operate on. Can be a constant, column, or function, and any combination of operators.
-- **timezone**: Optional timezone to use when converting the integer to a timestamp. If not provided, the default timezone is UTC.
+- **timezone**: Optional timezone to use when converting the integer to a timestamp. If not provided, the session time zone (`datafusion.execution.time_zone`) is used, which is unset (timezone-naive) by default.
 
 #### Example
 
@@ -2679,6 +2699,15 @@ from_unixtime(expression[, timezone])
 +-----------------------------------------------------------+
 | 2020-09-08T09:42:29-04:00                                 |
 +-----------------------------------------------------------+
+
+-- Without an explicit timezone the session time zone is used
+> SET datafusion.execution.time_zone = 'America/New_York';
+> select from_unixtime(1599572549);
++----------------------------------+
+| from_unixtime(Int64(1599572549)) |
++----------------------------------+
+| 2020-09-08T09:42:29-04:00        |
++----------------------------------+
 ```
 
 ### `make_date`
@@ -2781,6 +2810,44 @@ now()
 
 - current_timestamp
 
+### `timezone`
+
+Converts a timestamp to another timezone. This is the function form of `expression AT TIME ZONE zone`, and it follows PostgreSQL and DuckDB:
+
+- A timestamp **with** a timezone is an instant. The result is the wall-clock time of that instant in `zone`, as a timestamp **without** a timezone.
+- A timestamp **without** a timezone is a wall-clock time. The result is the instant at which that wall-clock time occurs in `zone`, as a timestamp **with** the timezone `zone`.
+- Any other type (for example a string) is converted as for a timestamp without a timezone.
+
+The result keeps the time unit of a timestamp input.
+
+```sql
+timezone(zone, expression)
+```
+
+#### Arguments
+
+- **zone**: Target timezone, as a constant string. An IANA timezone name such as `'America/Denver'`, or a fixed offset such as `'+05:30'`.
+- **expression**: Timestamp expression to convert. Can be a constant, column, or function.
+
+#### Example
+
+```sql
+> SET datafusion.execution.time_zone = 'UTC';
+> SELECT timezone('America/Denver', '2024-01-01T12:00:00Z'::timestamptz) AS denver_wall_clock;
++---------------------+
+| denver_wall_clock   |
++---------------------+
+| 2024-01-01T05:00:00 |
++---------------------+
+
+> SELECT timezone('America/Denver', '2024-01-01T12:00:00'::timestamp) AS denver_instant;
++---------------------------+
+| denver_instant            |
++---------------------------+
+| 2024-01-01T12:00:00-07:00 |
++---------------------------+
+```
+
 ### `to_char`
 
 Returns a string representation of a date, time, timestamp or duration based on a [Chrono format](https://docs.rs/chrono/latest/chrono/format/strftime/index.html). Unlike the PostgreSQL equivalent of this function numerical formatting is not supported.
@@ -2836,17 +2903,17 @@ to_date(expression[, format1, ..., format_n])
 
 ```sql
 > select to_date('2023-01-31');
-+-------------------------------+
++-----------------------------+
 | to_date(Utf8("2023-01-31")) |
-+-------------------------------+
-| 2023-01-31                    |
-+-------------------------------+
++-----------------------------+
+| 2023-01-31                  |
++-----------------------------+
 > select to_date('2023/01/31', '%Y-%m-%d', '%Y/%m/%d');
-+---------------------------------------------------------------------+
++---------------------------------------------------------------+
 | to_date(Utf8("2023/01/31"),Utf8("%Y-%m-%d"),Utf8("%Y/%m/%d")) |
-+---------------------------------------------------------------------+
-| 2023-01-31                                                          |
-+---------------------------------------------------------------------+
++---------------------------------------------------------------+
+| 2023-01-31                                                    |
++---------------------------------------------------------------+
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
@@ -2854,6 +2921,10 @@ Additional examples can be found [here](https://github.com/apache/datafusion/blo
 ### `to_local_time`
 
 Converts a timestamp with a timezone to a timestamp without a timezone (with no offset or timezone information). This function handles daylight saving time changes.
+
+A timestamp that already has no timezone is returned unchanged.
+
+`to_local_time` uses the timezone that the value already has. To get the wall-clock time in a timezone that you name in the query, use [`timezone(zone, expression)`](#timezone) or `expression AT TIME ZONE zone`: for a timestamp with a timezone, both return the wall-clock time in `zone`, without a timezone.
 
 ```sql
 to_local_time(expression)
@@ -3137,7 +3208,7 @@ to_timestamp_nanos(expression[, ..., format_n])
 | to_timestamp_nanos(Utf8("03:59:00.123456789 05-17-2023"),Utf8("%c"),Utf8("%+"),Utf8("%H:%M:%S%.f %m-%d-%Y")) |
 +--------------------------------------------------------------------------------------------------------------+
 | 2023-05-17T03:59:00.123456789                                                                                |
-+---------------------------------------------------------------------------------------------------------------+
++--------------------------------------------------------------------------------------------------------------+
 ```
 
 Additional examples can be found [here](https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/builtin_functions/date_time.rs)
@@ -3428,7 +3499,7 @@ array_any_value(array)
 
 ```sql
 > select array_any_value([NULL, 1, 2, 3]);
-+-------------------------------+
++-------------------------------------+
 | array_any_value(List([NULL,1,2,3])) |
 +-------------------------------------+
 | 1                                   |
@@ -3485,11 +3556,11 @@ array_avg(array)
 
 ```sql
 > select array_avg([1.0, 2.0, 3.0]);
-+----------------------------+
++--------------------------------+
 | array_avg(List([1.0,2.0,3.0])) |
-+----------------------------+
-| 2.0                        |
-+----------------------------+
++--------------------------------+
+| 2.0                            |
++--------------------------------+
 ```
 
 #### Aliases
@@ -3618,7 +3689,7 @@ array_distance(array1, array2)
 
 ### `array_distinct`
 
-Returns distinct values from the array after removing duplicates.
+Returns distinct values from the array after removing duplicates, in the order they first appear.
 
 ```sql
 array_distinct(array)
@@ -3632,11 +3703,11 @@ array_distinct(array)
 
 ```sql
 > select array_distinct([1, 3, 2, 3, 1, 2, 4]);
-+---------------------------------+
-| array_distinct(List([1,2,3,4])) |
-+---------------------------------+
-| [1, 2, 3, 4]                    |
-+---------------------------------+
++---------------------------------------+
+| array_distinct(List([1,3,2,3,1,2,4])) |
++---------------------------------------+
+| [1, 3, 2, 4]                          |
++---------------------------------------+
 ```
 
 #### Aliases
@@ -3694,17 +3765,17 @@ array_except(array1, array2)
 
 ```sql
 > select array_except([1, 2, 3, 4], [5, 6, 3, 4]);
-+----------------------------------------------------+
-| array_except([1, 2, 3, 4], [5, 6, 3, 4]);           |
-+----------------------------------------------------+
-| [1, 2]                                              |
-+----------------------------------------------------+
++-------------------------------------------+
+| array_except([1, 2, 3, 4], [5, 6, 3, 4]); |
++-------------------------------------------+
+| [1, 2]                                    |
++-------------------------------------------+
 > select array_except([1, 2, 3, 4], [3, 4, 5, 6]);
-+----------------------------------------------------+
-| array_except([1, 2, 3, 4], [3, 4, 5, 6]);           |
-+----------------------------------------------------+
-| [1, 2]                                              |
-+----------------------------------------------------+
++-------------------------------------------+
+| array_except([1, 2, 3, 4], [3, 4, 5, 6]); |
++-------------------------------------------+
+| [1, 2]                                    |
++-------------------------------------------+
 ```
 
 #### Aliases
@@ -3732,11 +3803,11 @@ array_filter(array, x -> x > 2)
 
 ```sql
 > select array_filter([1, 2, 3, 4, 5], x -> x > 2);
-+--------------------------------------------+
++-------------------------------------------+
 | array_filter([1, 2, 3, 4, 5], x -> x > 2) |
-+--------------------------------------------+
-| [3, 4, 5]                                  |
-+--------------------------------------------+
++-------------------------------------------+
+| [3, 4, 5]                                 |
++-------------------------------------------+
 ```
 
 #### Aliases
@@ -3846,11 +3917,11 @@ array_has_any(array1, array2)
 
 ```sql
 > select array_has_any([1, 2, 3], [3, 4]);
-+------------------------------------------+
++-------------------------------------------+
 | array_has_any(List([1,2,3]), List([3,4])) |
-+------------------------------------------+
-| true                                     |
-+------------------------------------------+
++-------------------------------------------+
+| true                                      |
++-------------------------------------------+
 ```
 
 #### Aliases
@@ -4021,11 +4092,11 @@ array_normalize(array)
 
 ```sql
 > select array_normalize([3.0, 4.0]);
-+-----------------------------+
++----------------------------------+
 | array_normalize(List([3.0,4.0])) |
-+-----------------------------+
-| [0.6, 0.8]                  |
-+-----------------------------+
++----------------------------------+
+| [0.6, 0.8]                       |
++----------------------------------+
 ```
 
 #### Aliases
@@ -4075,11 +4146,11 @@ array_pop_front(array)
 
 ```sql
 > select array_pop_front([1, 2, 3]);
-+-------------------------------+
++--------------------------------+
 | array_pop_front(List([1,2,3])) |
-+-------------------------------+
-| [2, 3]                        |
-+-------------------------------+
++--------------------------------+
+| [2, 3]                         |
++--------------------------------+
 ```
 
 #### Aliases
@@ -4110,11 +4181,11 @@ array_position(array, element[, index])
 | 2                                            |
 +----------------------------------------------+
 > select array_position([1, 2, 2, 3, 1, 4], 2, 3);
-+----------------------------------------------------+
++--------------------------------------------------------+
 | array_position(List([1,2,2,3,1,4]),Int64(2), Int64(3)) |
-+----------------------------------------------------+
-| 3                                                  |
-+----------------------------------------------------+
++--------------------------------------------------------+
+| 3                                                      |
++--------------------------------------------------------+
 ```
 
 #### Aliases
@@ -4240,11 +4311,11 @@ array_remove(array, element)
 +----------------------------------------------+
 
 > select array_remove([1, 2, NULL, 2, 4], 2);
-+---------------------------------------------------+
++---------------------------------------------+
 | array_remove(List([1,2,NULL,2,4]),Int64(2)) |
-+---------------------------------------------------+
-| [1, NULL, 2, 4]                              |
-+---------------------------------------------------+
++---------------------------------------------+
+| [1, NULL, 2, 4]                             |
++---------------------------------------------+
 ```
 
 #### Aliases
@@ -4275,11 +4346,11 @@ array_remove_all(array, element)
 +--------------------------------------------------+
 
 > select array_remove_all([1, 2, NULL, 2, 4], 2);
-+-----------------------------------------------------+
++-------------------------------------------------+
 | array_remove_all(List([1,2,NULL,2,4]),Int64(2)) |
-+-----------------------------------------------------+
-| [1, NULL, 4]                                     |
-+-----------------------------------------------------+
++-------------------------------------------------+
+| [1, NULL, 4]                                    |
++-------------------------------------------------+
 ```
 
 #### Aliases
@@ -4311,11 +4382,11 @@ array_remove_n(array, element, max)
 +---------------------------------------------------------+
 
 > select array_remove_n([1, 2, NULL, 2, 4], 2, 2);
-+----------------------------------------------------------+
++--------------------------------------------------------+
 | array_remove_n(List([1,2,NULL,2,4]),Int64(2),Int64(2)) |
-+----------------------------------------------------------+
-| [1, NULL, 4]                                            |
-+----------------------------------------------------------+
++--------------------------------------------------------+
+| [1, NULL, 4]                                           |
++--------------------------------------------------------+
 ```
 
 #### Aliases
@@ -4517,11 +4588,11 @@ array_scale(array, scalar)
 
 ```sql
 > select array_scale([1.0, 2.0, 3.0], 2.0);
-+----------------------------------+
++-----------------------------------------------+
 | array_scale(List([1.0,2.0,3.0]),Float64(2.0)) |
-+----------------------------------+
-| [2.0, 4.0, 6.0]                  |
-+----------------------------------+
++-----------------------------------------------+
+| [2.0, 4.0, 6.0]                               |
++-----------------------------------------------+
 ```
 
 #### Aliases
@@ -4637,11 +4708,11 @@ array_sum(array)
 
 ```sql
 > select array_sum([1.0, 2.0, 3.0]);
-+----------------------------+
++--------------------------------+
 | array_sum(List([1.0,2.0,3.0])) |
-+----------------------------+
-| 6.0                        |
-+----------------------------+
++--------------------------------+
+| 6.0                            |
++--------------------------------+
 ```
 
 #### Aliases
@@ -4696,11 +4767,11 @@ array_transform(array, lambda)
 
 ```sql
 > select array_transform([1, 2, 3, 4, 5], x -> x*2);
-+-------------------------------------------+
-| array_transform([1, 2, 3, 4, 5], x -> x*2)       |
-+-------------------------------------------+
-| [2, 4, 6, 8, 10]                          |
-+-------------------------------------------+
++--------------------------------------------+
+| array_transform([1, 2, 3, 4, 5], x -> x*2) |
++--------------------------------------------+
+| [2, 4, 6, 8, 10]                           |
++--------------------------------------------+
 ```
 
 #### Aliases
@@ -4819,11 +4890,11 @@ cosine_distance(array1, array2)
 
 ```sql
 > select cosine_distance([1.0, 0.0], [0.0, 1.0]);
-+-----------------------------------------------+
++--------------------------------------------------+
 | cosine_distance(List([1.0,0.0]),List([0.0,1.0])) |
-+-----------------------------------------------+
-| 1.0                                           |
-+-----------------------------------------------+
++--------------------------------------------------+
+| 1.0                                              |
++--------------------------------------------------+
 ```
 
 ### `dot_product`
@@ -4832,7 +4903,7 @@ _Alias of [inner_product](#inner_product)._
 
 ### `empty`
 
-Returns 1 for an empty array or 0 for a non-empty array.
+Returns true for an empty array or false for a non-empty array.
 
 ```sql
 empty(array)
@@ -4849,7 +4920,7 @@ empty(array)
 +------------------+
 | empty(List([1])) |
 +------------------+
-| 0                |
+| false            |
 +------------------+
 ```
 
@@ -4929,11 +5000,11 @@ inner_product(array1, array2)
 
 ```sql
 > select inner_product([1.0, 2.0, 3.0], [4.0, 5.0, 6.0]);
-+-------------------------------------------------------+
++--------------------------------------------------------+
 | inner_product(List([1.0,2.0,3.0]),List([4.0,5.0,6.0])) |
-+-------------------------------------------------------+
-| 32.0                                                  |
-+-------------------------------------------------------+
++--------------------------------------------------------+
+| 32.0                                                   |
++--------------------------------------------------------+
 ```
 
 #### Aliases
@@ -5206,11 +5277,11 @@ range(start, stop[, step])
 
 ```sql
 > select range(2, 10, 3);
-+-----------------------------------+
-| range(Int64(2),Int64(10),Int64(3))|
-+-----------------------------------+
-| [2, 5, 8]                         |
-+-----------------------------------+
++------------------------------------+
+| range(Int64(2),Int64(10),Int64(3)) |
++------------------------------------+
+| [2, 5, 8]                          |
++------------------------------------+
 
 > select range(DATE '1992-09-01', DATE '1993-03-01', INTERVAL '1' MONTH);
 +--------------------------------------------------------------------------+
@@ -5239,16 +5310,16 @@ string_to_array(str, delimiter[, null_str])
 ```sql
 > select string_to_array('abc##def', '##');
 +-----------------------------------+
-| string_to_array(Utf8('abc##def'))  |
+| string_to_array(Utf8('abc##def')) |
 +-----------------------------------+
 | ['abc', 'def']                    |
 +-----------------------------------+
 > select string_to_array('abc def', ' ', 'def');
-+---------------------------------------------+
++----------------------------------------------------------+
 | string_to_array(Utf8('abc def'), Utf8(' '), Utf8('def')) |
-+---------------------------------------------+
-| ['abc', NULL]                               |
-+---------------------------------------------+
++----------------------------------------------------------+
+| ['abc', NULL]                                            |
++----------------------------------------------------------+
 ```
 
 #### Aliases
@@ -5818,11 +5889,11 @@ arrow_field(expression)
 
 ```sql
 > select arrow_field(1);
-+-------------------------------------------------------------+
-| arrow_field(Int64(1))                                       |
-+-------------------------------------------------------------+
++--------------------------------------------------------------+
+| arrow_field(Int64(1))                                        |
++--------------------------------------------------------------+
 | {name: lit, data_type: Int64, nullable: false, metadata: {}} |
-+-------------------------------------------------------------+
++--------------------------------------------------------------+
 
 > select arrow_field(1)['data_type'];
 +-----------------------------------+
@@ -5855,11 +5926,11 @@ arrow_metadata(expression[, key])
 | {k: v}                     |
 +----------------------------+
 > select arrow_metadata(col, 'k') from table;
-+-------------------------------+
-| arrow_metadata(table.col, 'k')|
-+-------------------------------+
-| v                             |
-+-------------------------------+
++--------------------------------+
+| arrow_metadata(table.col, 'k') |
++--------------------------------+
+| v                              |
++--------------------------------+
 ```
 
 ### `arrow_try_cast`
@@ -5960,7 +6031,16 @@ file_row_index()
 #### Example
 
 ```sql
-SELECT file_row_index() FROM t;
+> COPY (SELECT * from values (100), (200), (300)) to '/tmp/foo.parquet';
+
+> select *, input_file_name(), file_row_index() from '/tmp/foo.parquet';
++---------+-------------------+------------------+
+| column1 | input_file_name() | file_row_index() |
++---------+-------------------+------------------+
+| 100     | tmp/foo.parquet   | 0                |
+| 200     | tmp/foo.parquet   | 1                |
+| 300     | tmp/foo.parquet   | 2                |
++---------+-------------------+------------------+
 ```
 
 ### `get_field`
@@ -6032,7 +6112,16 @@ input_file_name()
 #### Example
 
 ```sql
-SELECT input_file_name() FROM t;
+> COPY (SELECT * from values (100), (200), (300)) to '/tmp/foo.parquet';
+
+> select *, input_file_name(), file_row_index() from '/tmp/foo.parquet';
++---------+-------------------+------------------+
+| column1 | input_file_name() | file_row_index() |
++---------+-------------------+------------------+
+| 100     | tmp/foo.parquet   | 0                |
+| 200     | tmp/foo.parquet   | 1                |
+| 300     | tmp/foo.parquet   | 2                |
++---------+-------------------+------------------+
 ```
 
 ### `try_cast_to_type`
@@ -6098,13 +6187,13 @@ with_metadata(expression, key1, value1[, key2, value2, ...])
 
 ```sql
 > select arrow_metadata(with_metadata(column1, 'unit', 'ms'), 'unit') from (values (1));
-+---------------------------------------------------------------+
++-----------------------------------------------------------------------------+
 | arrow_metadata(with_metadata(column1,Utf8("unit"),Utf8("ms")),Utf8("unit")) |
-+---------------------------------------------------------------+
-| ms                                                            |
-+---------------------------------------------------------------+
++-----------------------------------------------------------------------------+
+| ms                                                                          |
++-----------------------------------------------------------------------------+
 > select arrow_metadata(with_metadata(column1, 'unit', 'ms', 'source', 'sensor')) from (values (1));
-+--------------------------+
++----------------------------+
 | {source: sensor, unit: ms} |
-+--------------------------+
++----------------------------+
 ```

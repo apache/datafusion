@@ -1,21 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Input distribution requirements for physical execution plans.
+
+use std::sync::Arc;
 
 use datafusion_common::{Result, internal_err};
 use datafusion_physical_expr::{Distribution, Partitioning, PartitioningSatisfaction};
@@ -136,6 +125,11 @@ impl InputDistributionRequirements {
         self.children.iter().map(|child| &child.distribution)
     }
 
+    /// Whether these requirements include a co-partitioning relationship between children.
+    pub fn is_co_partitioned(&self) -> bool {
+        self.co_partitioned.is_some()
+    }
+
     /// Return the distribution requirement for a child.
     pub fn child_distribution(&self, child_idx: usize) -> Option<&Distribution> {
         self.children
@@ -181,6 +175,12 @@ impl InputDistributionRequirements {
     /// Independent per-child requirements are intentionally ignored here, use
     /// [`Self::child_satisfaction`] for those checks. An empty result means all
     /// co-partitioning requirements are satisfied.
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn unsatisfied_co_partitioned_children(
         &self,
@@ -200,25 +200,46 @@ impl InputDistributionRequirements {
     }
 
     /// Validate the requirements against a plan's children.
-    pub(crate) fn check_invariants<P: ExecutionPlan + ?Sized>(
+    #[inline]
+    pub(crate) fn check_invariants(
         &self,
-        plan: &P,
+        plan_name: &str,
+        children: Vec<&Arc<dyn ExecutionPlan>>,
         check: InvariantLevel,
     ) -> Result<()> {
-        let children = plan.children();
-        self.validate_shape(plan.name(), children.len())?;
+        let children_len = children.len();
+        if self.children.len() != children_len {
+            return self.validate_shape(plan_name, children_len);
+        }
 
+        if let Some(co_partitioned) = &self.co_partitioned {
+            self.validate_shape(plan_name, children_len)?;
+            if matches!(check, InvariantLevel::Executable) {
+                return self.check_co_partitioning_invariant(
+                    plan_name,
+                    co_partitioned,
+                    children,
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    fn check_co_partitioning_invariant(
+        &self,
+        plan_name: &str,
+        co_partitioned: &[usize],
+        children: Vec<&Arc<dyn ExecutionPlan>>,
+    ) -> Result<()> {
         let children = children
             .into_iter()
             .map(|child| child.as_ref())
             .collect::<Vec<_>>();
-        if matches!(check, InvariantLevel::Executable)
-            && let Some(co_partitioned) = &self.co_partitioned
-            && !self.co_partitioning_satisfied(co_partitioned, &children)
-        {
+        if !self.co_partitioning_satisfied(co_partitioned, &children) {
             return internal_err!(
                 "{} requires children {:?} to be co-partitioned",
-                plan.name(),
+                plan_name,
                 co_partitioned
             );
         }

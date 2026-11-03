@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::mem::size_of;
 use std::sync::Arc;
@@ -24,7 +11,9 @@ use arrow::compute;
 use arrow::datatypes::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 use datafusion_common::{DataFusionError, Result, internal_datafusion_err};
-use datafusion_expr_common::groups_accumulator::{EmitTo, GroupsAccumulator};
+use datafusion_expr_common::groups_accumulator::{
+    EmitTo, GroupSelection, GroupsAccumulator,
+};
 
 use super::accumulate::NullState;
 
@@ -123,8 +112,33 @@ where
         Ok(Arc::new(values))
     }
 
+    fn evaluate_preserving(&mut self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.values.len())?;
+        let values: Vec<T::Native> =
+            selection.iter().map(|index| self.values[index]).collect();
+        let nulls = self.null_state.build_preserving(selection)?;
+        let values = PrimitiveArray::<T>::new(values.into(), nulls)
+            .with_data_type(self.data_type.clone());
+        Ok(Arc::new(values))
+    }
+
+    fn supports_evaluate_preserving(&self) -> bool {
+        true
+    }
+
     fn state(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
         self.evaluate(emit_to).map(|arr| vec![arr])
+    }
+
+    fn state_preserving(
+        &mut self,
+        selection: GroupSelection<'_>,
+    ) -> Result<Vec<ArrayRef>> {
+        self.evaluate_preserving(selection).map(|arr| vec![arr])
+    }
+
+    fn supports_state_preserving(&self) -> bool {
+        true
     }
 
     fn merge_batch(
@@ -191,5 +205,45 @@ where
     }
     fn size(&self) -> usize {
         self.values.capacity() * size_of::<T::Native>() + self.null_state.size()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::Int64Array;
+    use arrow::datatypes::Int64Type;
+
+    #[test]
+    fn preserving_reads_do_not_change_accumulator_state() -> Result<()> {
+        let mut accumulator = PrimitiveGroupsAccumulator::<Int64Type, _>::new(
+            &DataType::Int64,
+            |current, value| *current += value,
+        );
+        let values = Arc::new(Int64Array::from(vec![Some(1), None, Some(3)]));
+        accumulator.update_batch(&[values], &[0, 1, 2], None, 4)?;
+
+        let selection = GroupSelection::try_from_indices(&[3, 0, 1, 1], 4)?;
+        let expected = Int64Array::from(vec![None, Some(1), None, None]);
+        for _ in 0..2 {
+            let actual = accumulator.evaluate_preserving(selection)?;
+            assert_eq!(actual.as_primitive::<Int64Type>(), &expected);
+            let state = accumulator.state_preserving(selection)?;
+            assert_eq!(state[0].as_primitive::<Int64Type>(), &expected);
+        }
+
+        // Group indices and unselected state remain valid after repeated reads.
+        let values = Arc::new(Int64Array::from(vec![5, 7]));
+        accumulator.update_batch(&[values], &[1, 3], None, 4)?;
+        let expected = Int64Array::from(vec![Some(1), Some(5), Some(3), Some(7)]);
+        let actual = accumulator.evaluate_preserving(GroupSelection::all(4))?;
+        assert_eq!(actual.as_primitive::<Int64Type>(), &expected);
+
+        // A destructive read still sees all state after preserving reads.
+        let actual = accumulator.evaluate(EmitTo::All)?;
+        assert_eq!(actual.as_primitive::<Int64Type>(), &expected);
+        assert!(accumulator.supports_evaluate_preserving());
+        assert!(accumulator.supports_state_preserving());
+        Ok(())
     }
 }

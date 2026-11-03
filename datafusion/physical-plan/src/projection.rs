@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines the projection execution plan. A projection determines which columns or expressions
 //! are returned from a query. The SQL statement `SELECT a, b, a+b FROM t1` is an example
@@ -26,7 +13,7 @@ use super::{
     DisplayAs, ExecutionPlanProperties, PlanProperties, RecordBatchStream,
     SendableRecordBatchStream, SortOrderPushdownResult, Statistics,
 };
-use crate::column_rewriter::PhysicalColumnRewriter;
+use crate::execution_plan::LimitBehavior;
 use crate::execution_plan::{CardinalityEffect, replace_children_if_necessary};
 use crate::filter_pushdown::{
     ChildFilterDescription, ChildPushdownResult, FilterDescription, FilterPushdownPhase,
@@ -49,12 +36,15 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{DataFusionError, JoinSide, Result, internal_err, plan_err};
+use datafusion_common::{JoinSide, Result, internal_err, plan_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::ExpressionPlacement;
+use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::equivalence::ProjectionMapping;
 use datafusion_physical_expr::projection::Projector;
-use datafusion_physical_expr_common::physical_expr::{PhysicalExprRef, fmt_sql};
+use datafusion_physical_expr_common::physical_expr::{
+    PhysicalExprRef, fmt_sql, is_volatile,
+};
 use datafusion_physical_expr_common::sort_expr::{
     LexOrdering, LexRequirement, PhysicalSortExpr,
 };
@@ -82,6 +72,9 @@ pub struct ProjectionExec {
     metrics: ExecutionPlanMetricsSet,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
+    /// Whether the output metadata differs from the metadata derived from the
+    /// projection expressions and input schema.
+    overrides_metadata: bool,
 }
 
 impl ProjectionExec {
@@ -143,7 +136,7 @@ impl ProjectionExec {
         let expr_arc = expr.into_iter().map(Into::into).collect::<Arc<_>>();
         let projection = ProjectionExprs::from_expressions(expr_arc);
         let projector = projection.make_projector(&input_schema)?;
-        Self::try_from_projector(projector, input)
+        Self::try_from_projector(projector, input, false)
     }
 
     /// Create a projection using field and schema metadata from
@@ -171,12 +164,42 @@ impl ProjectionExec {
         let projection = ProjectionExprs::from_expressions(expr_arc);
         let projector = projection
             .make_projector_with_schema_metadata(&input_schema, projected_schema)?;
-        Self::try_from_projector(projector, input)
+        let overrides_metadata =
+            Self::compute_overrides_metadata(&projector, &input_schema)?;
+        Self::try_from_projector(projector, input, overrides_metadata)
     }
 
     fn try_from_projector(
         projector: Projector,
         input: Arc<dyn ExecutionPlan>,
+        overrides_metadata: bool,
+    ) -> Result<Self> {
+        Self::try_from_projector_with_eq_group(projector, input, None, overrides_metadata)
+    }
+
+    /// As [`Self::try_from_projector`], but `reuse_from` may carry the previous
+    /// child's equivalence properties together with the projection they produced,
+    /// letting [`EquivalenceProperties::project_reusing`] skip reprojecting a
+    /// group that has not changed.
+    ///
+    /// Projecting an equivalence group is a pure function of the group and the
+    /// mapping, so reuse is sound exactly when both are unchanged.
+    ///
+    /// The caller establishes the first by comparing the old and new child
+    /// groups. The second holds because the mapping comes from
+    /// `projector.projection()`, carried over untouched, and from the child's
+    /// schema, which `ProjectionMapping::try_new` consults only for field names
+    /// and indices -- never for types or nullability. So a child differing only
+    /// in nullability keeps the same mapping. A child that renamed or reordered
+    /// those fields would change the group too, since its members are `Column`s
+    /// carrying those names, and the comparison above would reject it; were one
+    /// to slip through anyway, `try_new`'s name assertion errors out rather than
+    /// letting a stale group into the plan.
+    fn try_from_projector_with_eq_group(
+        projector: Projector,
+        input: Arc<dyn ExecutionPlan>,
+        reuse_from: Option<(&EquivalenceProperties, &EquivalenceProperties)>,
+        overrides_metadata: bool,
     ) -> Result<Self> {
         // Construct a map from the input expressions to the output expression of the Projection
         let projection_mapping =
@@ -185,12 +208,14 @@ impl ProjectionExec {
             &input,
             &projection_mapping,
             Arc::clone(projector.output_schema()),
+            reuse_from,
         )?;
         Ok(Self {
             projector,
             input,
             metrics: ExecutionPlanMetricsSet::new(),
             cache: Arc::new(cache),
+            overrides_metadata,
         })
     }
 
@@ -214,10 +239,21 @@ impl ProjectionExec {
         input: &Arc<dyn ExecutionPlan>,
         projection_mapping: &ProjectionMapping,
         schema: SchemaRef,
+        reuse_from: Option<(&EquivalenceProperties, &EquivalenceProperties)>,
     ) -> Result<PlanProperties> {
-        // Calculate equivalence properties:
+        // Calculate equivalence properties. Whether the group is reprojected or
+        // handed back is the only thing reuse changes; everything below is
+        // common, so the two paths cannot drift apart.
         let input_eq_properties = input.equivalence_properties();
-        let eq_properties = input_eq_properties.project(projection_mapping, schema);
+        let eq_properties = match reuse_from {
+            Some((previous, cached)) => input_eq_properties.project_reusing(
+                projection_mapping,
+                schema,
+                previous,
+                cached,
+            ),
+            None => input_eq_properties.project(projection_mapping, schema),
+        };
         // Calculate output partitioning, which needs to respect aliases:
         let output_partitioning = input
             .output_partitioning()
@@ -231,27 +267,31 @@ impl ProjectionExec {
         ))
     }
 
-    /// Collect reverse alias mapping from projection expressions.
-    /// The result hash map is a map from aliased Column in parent to original expr.
-    fn collect_reverse_alias(
-        &self,
-    ) -> Result<datafusion_common::HashMap<Column, Arc<dyn PhysicalExpr>>> {
-        let mut alias_map = datafusion_common::HashMap::new();
-        for projection in self.projection_expr().iter() {
-            let (aliased_index, _output_field) = self
-                .projector
-                .output_schema()
-                .column_with_name(&projection.alias)
-                .ok_or_else(|| {
-                    DataFusionError::Internal(format!(
-                        "Expr {} with alias {} not found in output schema",
-                        projection.expr, projection.alias
-                    ))
-                })?;
-            let aliased_col = Column::new(&projection.alias, aliased_index);
-            alias_map.insert(aliased_col, Arc::clone(&projection.expr));
+    /// Returns whether `projector`'s output metadata differs from the metadata
+    /// derived from its expressions and `input_schema`.
+    fn compute_overrides_metadata(
+        projector: &Projector,
+        input_schema: &Schema,
+    ) -> Result<bool> {
+        let output_schema = projector.output_schema();
+        if input_schema.metadata() != output_schema.metadata() {
+            return Ok(true);
         }
-        Ok(alias_map)
+        for (projection, output_field) in
+            projector.projection().iter().zip(output_schema.fields())
+        {
+            let derived_field = projection.expr.return_field(input_schema)?;
+            if derived_field.metadata() != output_field.metadata() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Returns whether this projection's output metadata differs from the
+    /// metadata derived when the projection was constructed.
+    fn overrides_metadata(&self) -> bool {
+        self.overrides_metadata
     }
 }
 
@@ -352,11 +392,35 @@ impl ExecutionPlan for ProjectionExec {
                 metrics: ExecutionPlanMetricsSet::new(),
                 ..Self::clone(&*self)
             })),
-            ChildrenPropertiesMode::Recompute => ProjectionExec::try_from_projector(
-                self.projector.clone(),
-                children.swap_remove(0),
-            )
-            .map(|p| Arc::new(p) as _),
+            ChildrenPropertiesMode::Recompute => {
+                // `Keep` above requires the child's properties to be unchanged
+                // outright. A rule that introduces a sort below this projection
+                // does not qualify, yet the child's *equivalence group* is still
+                // identical: sorting changes which orderings hold, not which
+                // expressions are equal to one another. Projecting that group
+                // again would reproduce the group already cached here, so reuse
+                // it and derive only the orderings.
+                // Hand over what this projection was built from and what that
+                // produced; `project_reusing` decides whether the group can be
+                // carried over and falls back to a full projection otherwise.
+                let reuse_from = Some((
+                    self.input.equivalence_properties(),
+                    self.cache.equivalence_properties(),
+                ));
+                let input = children.swap_remove(0);
+                let projector = self.projector.clone();
+                let overrides_metadata = ProjectionExec::compute_overrides_metadata(
+                    &projector,
+                    input.schema().as_ref(),
+                )?;
+                ProjectionExec::try_from_projector_with_eq_group(
+                    projector,
+                    input,
+                    reuse_from,
+                    overrides_metadata,
+                )
+                .map(|p| Arc::new(p) as _)
+            }
         }
     }
 
@@ -418,12 +482,20 @@ impl ExecutionPlan for ProjectionExec {
         Ok(Arc::new(
             self.projector
                 .projection()
-                .project_statistics(input_stats, &output_schema)?,
+                .project_statistics_with_input_schema(
+                    input_stats,
+                    self.input.schema().as_ref(),
+                    &output_schema,
+                )?,
         ))
     }
 
     fn supports_limit_pushdown(&self) -> bool {
         true
+    }
+
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::MoveToInput
     }
 
     fn cardinality_effect(&self) -> CardinalityEffect {
@@ -447,18 +519,24 @@ impl ExecutionPlan for ProjectionExec {
         _config: &ConfigOptions,
     ) -> Result<FilterDescription> {
         // expand alias column to original expr in parent filters
-        let invert_alias_map = self.collect_reverse_alias()?;
         let output_schema = self.schema();
         let remapper = FilterRemapper::new(output_schema);
         let mut child_parent_filters = Vec::with_capacity(parent_filters.len());
 
         for filter in parent_filters {
-            // Check that column exists in child, then reassign column indices to match child schema
+            // Check that every column is a valid output column of this
+            // projection, then replace each one with the expression at that
+            // output position. A filter that becomes volatile after the
+            // rewrite must stay above the projection: inlining a volatile
+            // expression evaluates it independently, so the filter would test
+            // a different value than the one the projection outputs.
             if let Some(reassigned) = remapper.try_remap(&filter)? {
-                // rewrite filter expression using invert alias map
-                let mut rewriter = PhysicalColumnRewriter::new(&invert_alias_map);
-                let rewritten = reassigned.rewrite(&mut rewriter)?.data;
-                child_parent_filters.push(PushedDownPredicate::supported(rewritten));
+                let rewritten = self.projection_expr().unproject_expr(&reassigned)?;
+                if is_volatile(&rewritten) {
+                    child_parent_filters.push(PushedDownPredicate::unsupported(filter));
+                } else {
+                    child_parent_filters.push(PushedDownPredicate::supported(rewritten));
+                }
             } else {
                 child_parent_filters.push(PushedDownPredicate::unsupported(filter));
             }
@@ -484,7 +562,7 @@ impl ExecutionPlan for ProjectionExec {
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn ExecutionPlan>>> {
         let child = self.input();
-        let mut child_order = Vec::new();
+        let mut child_order = Vec::with_capacity(order.len());
 
         // Check and transform sort expressions
         for sort_expr in order {
@@ -545,27 +623,43 @@ impl ExecutionPlan for ProjectionExec {
         }
     }
 
-    fn with_preserve_order(
-        &self,
-        preserve_order: bool,
-    ) -> Option<Arc<dyn ExecutionPlan>> {
-        self.input
-            .with_preserve_order(preserve_order)
-            .and_then(|new_input| {
-                replace_children_if_necessary(Arc::new(self.clone()), vec![new_input])
-                    .ok()
-            })
-    }
-
     #[cfg(feature = "proto")]
     fn try_to_proto(
         &self,
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let input = ctx.encode_child(self.input())?;
-        let expr = ctx.encode_expressions(self.expr().iter().map(|p| &p.expr))?;
-        let expr_name = self.expr().iter().map(|p| p.alias.clone()).collect();
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `ProjectionExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            // The projector is rebuilt from the projection expressions and the
+            // input schema on decode; the expressions themselves are serialized.
+            projector,
+            input,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+            overrides_metadata,
+        } = self;
+        let projection_exprs = projector.projection().as_ref();
+        let input = ctx.encode_child(input)?;
+        let expr = ctx.encode_expressions(projection_exprs.iter().map(|p| &p.expr))?;
+        let expr_name = projection_exprs.iter().map(|p| p.alias.clone()).collect();
+        let output_schema = projector.output_schema();
+        // Preserve explicit overrides and field metadata that cannot be
+        // reconstructed from the child. Inherited schema metadata can be.
+        let schema = if *overrides_metadata
+            || output_schema
+                .fields()
+                .iter()
+                .any(|field| !field.metadata().is_empty())
+        {
+            Some(output_schema.as_ref().try_into()?)
+        } else {
+            None
+        };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Projection(Box::new(
@@ -573,6 +667,7 @@ impl ExecutionPlan for ProjectionExec {
                         input: Some(Box::new(input)),
                         expr,
                         expr_name,
+                        schema,
                     },
                 )),
             ),
@@ -602,16 +697,20 @@ impl ProjectionExec {
             protobuf::physical_plan_node::PhysicalPlanType::Projection,
             "ProjectionExec",
         );
-        let input = ctx.decode_required_child(
-            projection.input.as_deref(),
-            "ProjectionExec",
-            "input",
-        )?;
+        // Destructure exhaustively so that a new field on `ProjectionExecNode`
+        // is a compile error here rather than a silently dropped field.
+        let protobuf::ProjectionExecNode {
+            input,
+            expr,
+            expr_name,
+            schema,
+        } = &**projection;
+        let input =
+            ctx.decode_required_child(input.as_deref(), "ProjectionExec", "input")?;
         let input_schema = input.schema();
-        let exprs = projection
-            .expr
+        let exprs = expr
             .iter()
-            .zip(projection.expr_name.iter())
+            .zip(expr_name.iter())
             .map(|(expr, name)| {
                 Ok(ProjectionExpr {
                     expr: ctx.decode_expr(expr, input_schema.as_ref())?,
@@ -619,7 +718,15 @@ impl ProjectionExec {
                 })
             })
             .collect::<Result<Vec<ProjectionExpr>>>()?;
-        Ok(Arc::new(ProjectionExec::try_new(exprs, input)?))
+        let projection = match schema {
+            Some(schema) => ProjectionExec::try_new_with_schema_metadata(
+                exprs,
+                input,
+                &Schema::try_from(schema)?,
+            )?,
+            None => ProjectionExec::try_new(exprs, input)?,
+        };
+        Ok(Arc::new(projection))
     }
 }
 
@@ -712,7 +819,7 @@ pub fn try_embed_projection<Exec: EmbeddedProjection + 'static>(
 
     if projection_index.is_empty() {
         return Ok(None);
-    };
+    }
 
     let columns_reduced = projection_index.len() < execution_plan.schema().fields().len();
 
@@ -946,7 +1053,12 @@ pub fn remove_unnecessary_projections(
         if is_projection_removable(projection) {
             return Ok(Transformed::yes(Arc::clone(projection.input())));
         }
-        // If it does, check if we can push it under its child(ren):
+        // Swapping a projection with observable metadata can change query results
+        // by changing the metadata visible to its child expressions.
+        if projection.overrides_metadata() {
+            return Ok(Transformed::no(plan));
+        }
+        // Otherwise, check if we can push it under its child(ren):
         projection
             .input()
             .try_swapping_with_projection(projection)?
@@ -958,6 +1070,7 @@ pub fn remove_unnecessary_projections(
 
 /// Compare the inputs and outputs of the projection. All expressions must be
 /// columns without alias, and projection does not change the order of fields.
+/// The input and output schemas must also match exactly to preserve metadata.
 /// For example, if the input schema is `a, b`, `SELECT a, b` is removable,
 /// but `SELECT b, a` and `SELECT a+1, b` and `SELECT a AS c, b` are not.
 fn is_projection_removable(projection: &ProjectionExec) -> bool {
@@ -968,6 +1081,7 @@ fn is_projection_removable(projection: &ProjectionExec) -> bool {
         };
         col.name() == proj_expr.alias && col.index() == idx
     }) && exprs.len() == projection.input().schema().fields().len()
+        && projection.schema() == projection.input().schema()
 }
 
 /// Given the expression set of a projection, checks if the projection causes
@@ -1001,13 +1115,17 @@ pub fn new_projections_for_columns(
 }
 
 /// Creates a new [`ProjectionExec`] instance with the given child plan and
-/// projected expressions.
+/// projected expressions, preserving the original output metadata.
 pub fn make_with_child(
     projection: &ProjectionExec,
     child: &Arc<dyn ExecutionPlan>,
 ) -> Result<Arc<dyn ExecutionPlan>> {
-    ProjectionExec::try_new(projection.expr().to_vec(), Arc::clone(child))
-        .map(|e| Arc::new(e) as _)
+    ProjectionExec::try_new_with_schema_metadata(
+        projection.expr().to_vec(),
+        Arc::clone(child),
+        projection.schema().as_ref(),
+    )
+    .map(|e| Arc::new(e) as _)
 }
 
 /// Returns `true` if all the expressions in the argument are `Column`s.
@@ -1021,7 +1139,7 @@ pub fn update_ordering(
     ordering: LexOrdering,
     projected_exprs: &[ProjectionExpr],
 ) -> Result<Option<LexOrdering>> {
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = Vec::with_capacity(ordering.len());
     for mut sort_expr in ordering.into_iter() {
         let Some(updated_expr) = update_expr(&sort_expr.expr, projected_exprs, false)?
         else {
@@ -1039,7 +1157,7 @@ pub fn update_ordering_requirement(
     reqs: LexRequirement,
     projected_exprs: &[ProjectionExpr],
 ) -> Result<Option<LexRequirement>> {
-    let mut updated_exprs = vec![];
+    let mut updated_exprs = Vec::with_capacity(reqs.len());
     for mut sort_expr in reqs.into_iter() {
         let Some(updated_expr) = update_expr(&sort_expr.expr, projected_exprs, false)?
         else {
@@ -1255,6 +1373,11 @@ pub fn update_join_filter(
 
 /// Collapse a chain of consecutive [`ProjectionExec`]s into one. Returns
 /// `None` if nothing could be merged.
+///
+/// The projection-removal optimizer checks `outer.overrides_metadata()` before
+/// reaching this helper. The unified projection also keeps `outer`'s schema, so
+/// collapsing cannot lose its output metadata. Inner projections still need the
+/// check below because outer expressions may observe their metadata.
 fn try_collapse_projection_chain(
     outer: &ProjectionExec,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
@@ -1264,6 +1387,10 @@ fn try_collapse_projection_chain(
     let mut collapsed_any = false;
 
     'outer: while let Some(inner_proj) = current_input.downcast_ref::<ProjectionExec>() {
+        if inner_proj.overrides_metadata() {
+            break;
+        }
+
         // Collect the column references usage in the outer projection.
         column_ref_map.clear();
         for proj_expr in &current_exprs {
@@ -1313,8 +1440,13 @@ fn try_collapse_projection_chain(
     }
 
     // To unify 3 or more sequential projections:
+    // Preserve the outer projection's output metadata.
     let unified: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(current_exprs, current_input)?);
+        Arc::new(ProjectionExec::try_new_with_schema_metadata(
+            current_exprs,
+            current_input,
+            outer.schema().as_ref(),
+        )?);
     remove_unnecessary_projections(unified).data().map(Some)
 }
 
@@ -1436,19 +1568,26 @@ mod tests {
 
     use crate::common::collect;
     use crate::empty::EmptyExec;
+    use crate::filter::FilterExec;
+    use crate::sorts::sort::SortExec;
 
     use crate::filter_pushdown::PushedDown;
     use crate::statistics::{StatisticsArgs, StatisticsContext};
     use crate::test;
     use crate::test::exec::StatisticsExec;
 
+    use arrow::array::StringArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
     use datafusion_common::stats::{ColumnStatistics, Precision, Statistics};
 
-    use datafusion_expr::Operator;
+    use datafusion_expr::{Operator, ScalarUDF};
+    use datafusion_functions::core::arrow_metadata::ArrowMetadataFunc;
+    use datafusion_functions::math::random::RandomFunc;
+    use datafusion_physical_expr::ScalarFunctionExpr;
     use datafusion_physical_expr::expressions::{
-        BinaryExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col, lit,
+        BinaryExpr, CastExpr, Column, DynamicFilterPhysicalExpr, Literal, binary, col,
+        is_null, lit,
     };
 
     #[test]
@@ -1488,6 +1627,243 @@ mod tests {
             schema_metadata,
         ));
         assert_eq!(projection.schema(), expected_schema);
+        Ok(())
+    }
+
+    fn identity_projection_with_metadata(
+        input: Arc<dyn ExecutionPlan>,
+        field_metadata: HashMap<String, String>,
+        schema_metadata: HashMap<String, String>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let metadata_schema = Schema::new_with_metadata(
+            vec![Field::new("i", DataType::Int32, true).with_metadata(field_metadata)],
+            schema_metadata,
+        );
+        Ok(Arc::new(ProjectionExec::try_new_with_schema_metadata(
+            [ProjectionExpr {
+                expr: Arc::new(Column::new("i", 0)),
+                alias: "i".to_string(),
+            }],
+            input,
+            &metadata_schema,
+        )?))
+    }
+
+    #[test]
+    fn test_field_metadata_projection_is_not_removable() -> Result<()> {
+        let projection = identity_projection_with_metadata(
+            test::scan_partitioned(1),
+            HashMap::from([("event_field".to_string(), "true".to_string())]),
+            HashMap::new(),
+        )?;
+        let expected_schema = projection.schema();
+
+        let optimized = remove_unnecessary_projections(projection)?.data;
+
+        assert!(optimized.downcast_ref::<ProjectionExec>().is_some());
+        assert_eq!(optimized.schema(), expected_schema);
+        Ok(())
+    }
+
+    #[test]
+    fn test_schema_metadata_projection_is_not_removable() -> Result<()> {
+        let projection = identity_projection_with_metadata(
+            test::scan_partitioned(1),
+            HashMap::new(),
+            HashMap::from([("schema-key".to_string(), "schema-value".to_string())]),
+        )?;
+        let expected_schema = projection.schema();
+
+        let optimized = remove_unnecessary_projections(projection)?.data;
+
+        assert!(optimized.downcast_ref::<ProjectionExec>().is_some());
+        assert_eq!(optimized.schema(), expected_schema);
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_children_recomputes_metadata_override() -> Result<()> {
+        let field_metadata =
+            HashMap::from([("event_field".to_string(), "true".to_string())]);
+        let projection = identity_projection_with_metadata(
+            test::scan_partitioned(1),
+            field_metadata.clone(),
+            HashMap::new(),
+        )?;
+        assert!(
+            projection
+                .downcast_ref::<ProjectionExec>()
+                .expect("test plan should be a ProjectionExec")
+                .overrides_metadata()
+        );
+
+        let replacement_schema = Arc::new(Schema::new(vec![
+            Field::new("i", DataType::Int32, true).with_metadata(field_metadata),
+        ]));
+        let replacement: Arc<dyn ExecutionPlan> =
+            Arc::new(EmptyExec::new(replacement_schema));
+        let replaced = projection.replace_children(
+            vec![replacement],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+
+        assert!(
+            !replaced
+                .downcast_ref::<ProjectionExec>()
+                .expect("replaced plan should be a ProjectionExec")
+                .overrides_metadata()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_make_with_child_preserves_output_metadata() -> Result<()> {
+        let projection = identity_projection_with_metadata(
+            test::scan_partitioned(1),
+            HashMap::from([("event_field".to_string(), "true".to_string())]),
+            HashMap::from([("schema-key".to_string(), "schema-value".to_string())]),
+        )?;
+        let projection = projection
+            .downcast_ref::<ProjectionExec>()
+            .expect("test plan should be a ProjectionExec");
+
+        let rebuilt = make_with_child(projection, &test::scan_partitioned(1))?;
+
+        assert_eq!(rebuilt.schema(), projection.schema());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_metadata_observing_parent_blocks_projection_collapse() -> Result<()> {
+        let inner = identity_projection_with_metadata(
+            test::scan_partitioned(1),
+            HashMap::from([("event_field".to_string(), "true".to_string())]),
+            HashMap::new(),
+        )?;
+        let arrow_metadata = ScalarFunctionExpr::new(
+            "arrow_metadata",
+            Arc::new(ScalarUDF::new_from_impl(ArrowMetadataFunc::new())),
+            vec![
+                Arc::new(Column::new("i", 0)),
+                Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                    "event_field".to_string(),
+                )))),
+            ],
+            Arc::new(Field::new("arrow_metadata", DataType::Utf8, true)),
+            Arc::new(ConfigOptions::default()),
+        );
+        let outer: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [ProjectionExpr {
+                expr: Arc::new(arrow_metadata),
+                alias: "metadata".to_string(),
+            }],
+            inner,
+        )?);
+
+        let outer_projection = outer
+            .downcast_ref::<ProjectionExec>()
+            .expect("test plan should be a ProjectionExec");
+        assert!(try_collapse_projection_chain(outer_projection)?.is_none());
+
+        let optimized = remove_unnecessary_projections(outer)?.data;
+        let batches =
+            collect(optimized.execute(0, Arc::new(TaskContext::default()))?).await?;
+        let values = batches[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .expect("metadata expression should return Utf8");
+        assert_eq!(values.value(0), "true");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_metadata_observing_filter_blocks_projection_pushdown() -> Result<()> {
+        let widened: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+            [
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("i", 0)),
+                    alias: "i".to_string(),
+                },
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("i", 0)),
+                    alias: "j".to_string(),
+                },
+            ],
+            test::scan_partitioned(1),
+        )?);
+        let arrow_metadata = Arc::new(ScalarFunctionExpr::new(
+            "arrow_metadata",
+            Arc::new(ScalarUDF::new_from_impl(ArrowMetadataFunc::new())),
+            vec![
+                Arc::new(Column::new("i", 0)),
+                Arc::new(Literal::new(ScalarValue::Utf8(Some(
+                    "event_field".to_string(),
+                )))),
+            ],
+            Arc::new(Field::new("arrow_metadata", DataType::Utf8, true)),
+            Arc::new(ConfigOptions::default()),
+        ));
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(is_null(arrow_metadata)?, widened)?);
+        let projection = identity_projection_with_metadata(
+            filter,
+            HashMap::from([("event_field".to_string(), "true".to_string())]),
+            HashMap::new(),
+        )?;
+        let expected_schema = projection.schema();
+
+        let optimized = remove_unnecessary_projections(projection)?.data;
+        assert_eq!(optimized.schema(), expected_schema);
+        let batches =
+            collect(optimized.execute(0, Arc::new(TaskContext::default()))?).await?;
+
+        assert_eq!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            100
+        );
+        Ok(())
+    }
+
+    // A schema-only metadata override must block projection embedding. The filter
+    // rebuilds the schema from expressions and would otherwise drop this metadata.
+    #[tokio::test]
+    async fn test_schema_level_metadata_blocks_projection_embedding() -> Result<()> {
+        let scan = test::scan_partitioned(1);
+        let predicate = binary(
+            col("i", &scan.schema())?,
+            Operator::Gt,
+            lit(ScalarValue::Int32(Some(-1))),
+            &scan.schema(),
+        )?;
+        let filter: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, scan)?);
+        let projection = identity_projection_with_metadata(
+            filter,
+            HashMap::new(),
+            HashMap::from([("schema-key".to_string(), "schema-value".to_string())]),
+        )?;
+        // Field metadata matches, so this checks the schema-level comparison.
+        let projection_exec = projection
+            .downcast_ref::<ProjectionExec>()
+            .expect("test plan should be a ProjectionExec");
+        assert!(projection_exec.overrides_metadata());
+        let expected_schema = projection.schema();
+
+        let optimized = remove_unnecessary_projections(projection)?.data;
+
+        assert_eq!(optimized.schema(), expected_schema);
+        assert_eq!(
+            optimized.schema().metadata(),
+            &HashMap::from([("schema-key".to_string(), "schema-value".to_string())])
+        );
+
+        let batches =
+            collect(optimized.execute(0, Arc::new(TaskContext::default()))?).await?;
+        assert_eq!(
+            batches.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+            100
+        );
         Ok(())
     }
 
@@ -1790,6 +2166,37 @@ mod tests {
     }
 
     #[test]
+    fn test_projection_statistics_safe_cast_without_extrema() {
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let mut input_statistics = Statistics::new_unknown(&input_schema);
+        input_statistics.column_statistics[0].null_count = Precision::Exact(3);
+        input_statistics.column_statistics[0].distinct_count = Precision::Exact(2);
+        let input = Arc::new(StatisticsExec::new(input_statistics, input_schema));
+        let projection = ProjectionExec::try_new(
+            vec![ProjectionExpr::new(
+                Arc::new(CastExpr::new(
+                    Arc::new(Column::new("a", 0)),
+                    DataType::Int64,
+                    None,
+                )),
+                "a",
+            )],
+            input,
+        )
+        .unwrap();
+
+        let stats = StatisticsContext::new()
+            .compute(&projection, &StatisticsArgs::new())
+            .unwrap();
+
+        assert_eq!(stats.column_statistics[0].null_count, Precision::Exact(3));
+        assert_eq!(
+            stats.column_statistics[0].distinct_count,
+            Precision::Exact(2)
+        );
+    }
+
+    #[test]
     fn test_filter_pushdown_with_alias() -> Result<()> {
         let input_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let input = Arc::new(StatisticsExec::new(
@@ -1835,6 +2242,82 @@ mod tests {
         );
         // Verify the predicate was actually pushed down
         assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_filter_pushdown_volatile_projection_expr() -> Result<()> {
+        let input_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let input = Arc::new(StatisticsExec::new(
+            Statistics::new_unknown(&input_schema),
+            input_schema.clone(),
+        ));
+
+        // project "a", random() as "r"
+        let random_expr = Arc::new(ScalarFunctionExpr::new(
+            "random",
+            Arc::new(ScalarUDF::new_from_impl(RandomFunc::new())),
+            vec![],
+            Arc::new(Field::new("r", DataType::Float64, false)),
+            Arc::new(ConfigOptions::default()),
+        )) as Arc<dyn PhysicalExpr>;
+        let projection = ProjectionExec::try_new(
+            vec![
+                ProjectionExpr {
+                    expr: Arc::new(Column::new("a", 0)),
+                    alias: "a".to_string(),
+                },
+                ProjectionExpr {
+                    expr: random_expr,
+                    alias: "r".to_string(),
+                },
+            ],
+            input,
+        )?;
+
+        // filter "a > 5" is deterministic and is pushed down, rewritten to
+        // reference the input column
+        let deterministic_filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        // filter "r > 0.5" must stay above the projection: unprojecting it
+        // would inline an independent evaluation of random(), so the filter
+        // would test a different value than the one the projection outputs
+        let volatile_filter = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("r", 1)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Float64(Some(0.5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let description = projection.gather_filters_for_pushdown(
+            FilterPushdownPhase::Post,
+            vec![deterministic_filter, Arc::clone(&volatile_filter)],
+            &ConfigOptions::default(),
+        )?;
+
+        let expected_pushed = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("a", 0)),
+            Operator::Gt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(5)))),
+        )) as Arc<dyn PhysicalExpr>;
+
+        let pushed_filters = &description.parent_filters()[0];
+        assert_eq!(pushed_filters.len(), 2);
+        assert!(matches!(pushed_filters[0].discriminant, PushedDown::Yes));
+        assert_eq!(
+            format!("{}", pushed_filters[0].predicate),
+            format!("{}", expected_pushed)
+        );
+        assert!(matches!(pushed_filters[1].discriminant, PushedDown::No));
+        // the unsupported filter is kept unchanged
+        assert_eq!(
+            format!("{}", pushed_filters[1].predicate),
+            format!("{}", volatile_filter)
+        );
 
         Ok(())
     }
@@ -2212,6 +2695,284 @@ mod tests {
             format!("{}", pushed_filters.predicate),
             "DynamicFilter [ b@0 - 1 > 5 ]"
         );
+
+        Ok(())
+    }
+
+    /// `EmptyExec(a, b, c)` under a filter that equates `lhs` and `rhs`, so the
+    /// child carries a non-trivial equivalence group.
+    fn filtered_source(lhs: &str, rhs: &str) -> Result<Arc<dyn ExecutionPlan>> {
+        filtered_source_with_nullability(lhs, rhs, false)
+    }
+
+    /// As [`filtered_source`], but `nullable` varies the schema's nullability
+    /// while leaving field names and order alone.
+    fn filtered_source_with_nullability(
+        lhs: &str,
+        rhs: &str,
+        nullable: bool,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, nullable),
+            Field::new("b", DataType::Int32, nullable),
+            Field::new("c", DataType::Int32, nullable),
+        ]));
+        let input: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&schema)));
+        let predicate = binary(
+            col(lhs, &schema)?,
+            Operator::Eq,
+            col(rhs, &schema)?,
+            &schema,
+        )?;
+        Ok(Arc::new(FilterExec::try_new(predicate, input)?))
+    }
+
+    /// `[a AS x, b AS y, c AS z]` against `filtered_source`'s schema.
+    fn renaming_exprs(schema: &SchemaRef) -> Result<Vec<ProjectionExpr>> {
+        [("a", "x"), ("b", "y"), ("c", "z")]
+            .into_iter()
+            .map(|(source, alias)| {
+                Ok(ProjectionExpr {
+                    expr: col(source, schema)?,
+                    alias: alias.to_string(),
+                })
+            })
+            .collect()
+    }
+
+    fn assert_same_properties(actual: &dyn ExecutionPlan, expected: &ProjectionExec) {
+        let actual_props = actual.properties().equivalence_properties();
+        let expected_props = expected.properties().equivalence_properties();
+        assert!(
+            actual_props
+                .eq_group()
+                .has_same_classes(expected_props.eq_group()),
+            "equivalence group: {:?} vs {:?}",
+            actual_props.eq_group(),
+            expected_props.eq_group()
+        );
+        assert_eq!(
+            actual_props.oeq_class(),
+            expected_props.oeq_class(),
+            "orderings"
+        );
+        assert_eq!(
+            actual_props.constraints(),
+            expected_props.constraints(),
+            "constraints"
+        );
+        assert_eq!(actual_props.schema(), expected_props.schema(), "schema");
+        // `Partitioning` has no `PartialEq`, so compare the partition count and
+        // the explicit `Display` form. Derived `Debug` would change with any
+        // field addition, making this brittle for no gain.
+        let actual_partitioning = actual.properties().output_partitioning();
+        let expected_partitioning = expected.properties().output_partitioning();
+        assert_eq!(
+            actual_partitioning.partition_count(),
+            expected_partitioning.partition_count(),
+            "partition count"
+        );
+        assert_eq!(
+            actual_partitioning.to_string(),
+            expected_partitioning.to_string(),
+            "partitioning"
+        );
+    }
+
+    #[test]
+    fn test_sort_below_changes_orderings_but_not_the_equivalence_group() -> Result<()> {
+        // The premise the fast path rests on. If a sort ever starts altering
+        // the equivalence group, reusing the cached group becomes unsound and
+        // this test is the one that should fail first.
+        let child = filtered_source("a", "b")?;
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "c",
+            &child.schema(),
+        )?)])
+        .expect("non-empty ordering");
+        let sorted = SortExec::new(ordering, Arc::clone(&child));
+
+        let child_props = child.properties().equivalence_properties();
+        let sorted_props = sorted.properties().equivalence_properties();
+
+        assert!(
+            !child_props.eq_group().is_empty(),
+            "the filter did not produce an equivalence class"
+        );
+        assert!(
+            child_props
+                .eq_group()
+                .has_same_classes(sorted_props.eq_group()),
+            "sorting altered the equivalence group"
+        );
+        assert_ne!(
+            child_props.oeq_class(),
+            sorted_props.oeq_class(),
+            "sorting did not alter the orderings"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_children_reuses_eq_group_when_only_orderings_change() -> Result<()> {
+        let child = filtered_source("a", "b")?;
+        let exprs = renaming_exprs(&child.schema())?;
+        let projection =
+            Arc::new(ProjectionExec::try_new(exprs.clone(), Arc::clone(&child))?);
+
+        // Sorting below the projection changes which orderings hold but leaves
+        // the equivalence group untouched -- the case the fast path targets.
+        let ordering = LexOrdering::new(vec![PhysicalSortExpr::new_default(col(
+            "c",
+            &child.schema(),
+        )?)])
+        .expect("non-empty ordering");
+        let sorted: Arc<dyn ExecutionPlan> =
+            Arc::new(SortExec::new(ordering, Arc::clone(&child)));
+
+        let replaced = Arc::clone(&projection).replace_children(
+            vec![Arc::clone(&sorted)],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+
+        // Guard against vacuity: the group must be worth reusing, and the sort
+        // must genuinely have added an ordering the original did not have.
+        assert!(
+            !projection
+                .properties()
+                .equivalence_properties()
+                .eq_group()
+                .is_empty(),
+            "the projection carries no equivalence class, nothing is being reused"
+        );
+        assert!(
+            projection
+                .properties()
+                .equivalence_properties()
+                .oeq_class()
+                .is_empty(),
+            "the unsorted projection was already ordered"
+        );
+        assert!(
+            !replaced
+                .properties()
+                .equivalence_properties()
+                .oeq_class()
+                .is_empty(),
+            "the sort did not introduce an ordering"
+        );
+
+        // The fast path must agree with building the projection from scratch.
+        let expected = ProjectionExec::try_new(exprs, sorted)?;
+        assert_same_properties(replaced.as_ref(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_children_reuses_eq_group_across_a_nullability_change() -> Result<()> {
+        // Reuse is sound only if the projection mapping is unchanged as well.
+        // `ProjectionMapping::try_new` reads the child schema for field names
+        // and indices alone, so a child differing only in nullability keeps the
+        // same mapping and must still take the fast path.
+        //
+        // The swap tightens nullability rather than loosening it, matching what
+        // `is_allowed_field_change` permits of a physical optimizer rule.
+        //
+        // The comparison is against `try_from_projector`, the path this one
+        // replaces, rather than a freshly built projection: `replace_children`
+        // carries the existing `Projector` over, so the output schema stays as
+        // it was, while `try_new` would derive a new one from the new child.
+        // That difference is inherent to `replace_children` and not something
+        // this fast path introduces, so the meaningful contract is that the two
+        // `replace_children` paths agree.
+        let child = filtered_source_with_nullability("a", "b", true)?;
+        let exprs = renaming_exprs(&child.schema())?;
+        let projection = Arc::new(ProjectionExec::try_new(exprs, Arc::clone(&child))?);
+
+        let tightened_child = filtered_source_with_nullability("a", "b", false)?;
+        assert_ne!(
+            child.schema(),
+            tightened_child.schema(),
+            "the two children were meant to differ in nullability"
+        );
+        assert!(
+            child
+                .properties()
+                .equivalence_properties()
+                .eq_group()
+                .has_same_classes(
+                    tightened_child
+                        .properties()
+                        .equivalence_properties()
+                        .eq_group()
+                ),
+            "nullability moved the equivalence group, so the fast path is no longer under test"
+        );
+
+        let replaced = Arc::clone(&projection).replace_children(
+            vec![Arc::clone(&tightened_child)],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+        let recomputed = ProjectionExec::try_from_projector(
+            projection.projector.clone(),
+            tightened_child,
+            projection.overrides_metadata(),
+        )?;
+
+        assert_same_properties(replaced.as_ref(), &recomputed);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_children_recomputes_when_eq_group_changes() -> Result<()> {
+        let child = filtered_source("a", "b")?;
+        let exprs = renaming_exprs(&child.schema())?;
+        let projection =
+            Arc::new(ProjectionExec::try_new(exprs.clone(), Arc::clone(&child))?);
+
+        // This child equates a different pair, so the cached group is stale and
+        // reusing it would be unsound: the guard has to fall through.
+        let other = filtered_source("a", "c")?;
+        let replaced = Arc::clone(&projection).replace_children(
+            vec![Arc::clone(&other)],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+
+        assert!(
+            !replaced
+                .properties()
+                .equivalence_properties()
+                .eq_group()
+                .has_same_classes(
+                    projection.properties().equivalence_properties().eq_group()
+                ),
+            "the projection kept the previous child's equivalence group"
+        );
+
+        let expected = ProjectionExec::try_new(exprs, other)?;
+        assert_same_properties(replaced.as_ref(), &expected);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_replace_children_keep_mode_carries_properties_over() -> Result<()> {
+        // `Keep` is the caller's promise that the new child's properties match
+        // the old one's, so the cached properties must survive verbatim rather
+        // than being derived again.
+        let child = filtered_source("a", "b")?;
+        let exprs = renaming_exprs(&child.schema())?;
+        let projection = Arc::new(ProjectionExec::try_new(exprs, Arc::clone(&child))?);
+
+        let replaced = Arc::clone(&projection).replace_children(
+            vec![filtered_source("a", "b")?],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Keep),
+        )?;
+
+        assert_same_properties(replaced.as_ref(), &projection);
 
         Ok(())
     }

@@ -1,41 +1,27 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Module containing helper methods/traits related to
 //! orchestrating file serialization, streaming to object store,
 //! parallelization, and abort handling
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 
-use super::demux::DemuxedStreamReceiver;
+use super::demux::{DemuxedStreamReceiver, FileSize};
 use super::{BatchSerializer, ObjectWriterBuilder};
 use crate::file_compression_type::FileCompressionType;
 use crate::file_sink_config::FileSinkMetrics;
 use datafusion_common::error::Result;
-use datafusion_physical_plan::metrics::Time;
-
-use arrow::array::RecordBatch;
 use datafusion_common::{
     DataFusionError, exec_datafusion_err, internal_datafusion_err, internal_err,
 };
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_execution::TaskContext;
+use datafusion_physical_plan::metrics::Time;
 
+use arrow::array::RecordBatch;
 use bytes::Bytes;
 use futures::join;
 use object_store::ObjectStore;
@@ -53,9 +39,6 @@ pub(crate) enum SerializedRecordBatchResult {
 
         /// the number of rows successfully written
         row_count: usize,
-
-        /// Counter for the compressed bytes written to the object store writer.
-        bytes_written: Arc<AtomicUsize>,
     },
     Failure {
         /// As explained in [`serialize_rb_stream_to_object_store`]:
@@ -70,16 +53,8 @@ pub(crate) enum SerializedRecordBatchResult {
 
 impl SerializedRecordBatchResult {
     /// Create the success variant
-    pub fn success(
-        writer: WriterType,
-        row_count: usize,
-        bytes_written: Arc<AtomicUsize>,
-    ) -> Self {
-        Self::Success {
-            writer,
-            row_count,
-            bytes_written,
-        }
+    pub fn success(writer: WriterType, row_count: usize) -> Self {
+        Self::Success { writer, row_count }
     }
 
     pub fn failure(writer: Option<WriterType>, err: DataFusionError) -> Self {
@@ -96,11 +71,13 @@ impl SerializedRecordBatchResult {
 ///
 /// In the event of an IO error involving the ObjectStore writer,
 /// the writer is dropped to avoid calling further methods on it which might panic.
+///
+/// If `elapsed_compute` is provided, only the time spent serializing batches is
+/// recorded in it (waiting on channels and object store IO is excluded).
 pub(crate) async fn serialize_rb_stream_to_object_store(
     mut data_rx: Receiver<RecordBatch>,
     serializer: Arc<dyn BatchSerializer>,
     mut writer: WriterType,
-    bytes_written: Arc<AtomicUsize>,
     elapsed_compute: Option<Time>,
 ) -> SerializedRecordBatchResult {
     let (tx, mut rx) =
@@ -112,16 +89,10 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
         while let Some(batch) = data_rx.recv().await {
             let serializer_clone = Arc::clone(&serializer);
             let elapsed_compute = elapsed_compute.clone();
-
             let task = SpawnedTask::spawn(async move {
                 let num_rows = batch.num_rows();
-
-                let bytes = {
-                    let _timer = elapsed_compute.as_ref().map(|metric| metric.timer());
-
-                    serializer_clone.serialize(batch, initial)?
-                };
-
+                let _timer = elapsed_compute.as_ref().map(Time::timer);
+                let bytes = serializer_clone.serialize(batch, initial)?;
                 Ok((num_rows, bytes))
             });
             if initial {
@@ -146,7 +117,7 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
                             exec_datafusion_err!("Error writing to object store: {e}"),
                         );
                     }
-                };
+                }
                 row_count += cnt;
             }
             Ok(Err(e)) => {
@@ -175,46 +146,10 @@ pub(crate) async fn serialize_rb_stream_to_object_store(
             );
         }
     }
-    SerializedRecordBatchResult::success(writer, row_count, bytes_written)
+    SerializedRecordBatchResult::success(writer, row_count)
 }
 
-type FileWriteBundle = (
-    Receiver<RecordBatch>,
-    SerializerType,
-    WriterType,
-    Arc<AtomicUsize>,
-);
-
-/// Options for stateless file writer tasks.
-pub struct StatelessWriterOptions<'a> {
-    compression: FileCompressionType,
-    compression_level: Option<u32>,
-    metrics: Option<&'a FileSinkMetrics>,
-}
-
-impl<'a> StatelessWriterOptions<'a> {
-    /// Create options for the specified compression type.
-    pub fn new(compression: FileCompressionType) -> Self {
-        Self {
-            compression,
-            compression_level: None,
-            metrics: None,
-        }
-    }
-
-    /// Set the compression level.
-    pub fn with_compression_level(mut self, compression_level: Option<u32>) -> Self {
-        self.compression_level = compression_level;
-        self
-    }
-
-    /// Record common file sink metrics while writing.
-    pub fn with_metrics(mut self, metrics: &'a FileSinkMetrics) -> Self {
-        self.metrics = Some(metrics);
-        self
-    }
-}
-
+type FileWriteBundle = (Receiver<RecordBatch>, SerializerType, WriterType);
 /// Contains the common logic for serializing RecordBatches and
 /// writing the resulting bytes to an ObjectStore.
 /// Serialization is assumed to be stateless, i.e.
@@ -222,11 +157,10 @@ impl<'a> StatelessWriterOptions<'a> {
 /// dependency on the RecordBatches before or after.
 pub(crate) async fn stateless_serialize_and_write_files(
     mut rx: Receiver<FileWriteBundle>,
-    tx: tokio::sync::oneshot::Sender<(u64, usize)>,
+    tx: tokio::sync::oneshot::Sender<u64>,
     elapsed_compute: Option<Time>,
 ) -> Result<()> {
     let mut row_count = 0;
-    let mut bytes_written = 0;
     // tracks if any writers encountered an error triggering the need to abort
     let mut any_errors = false;
     // tracks the specific error triggering abort
@@ -235,32 +169,27 @@ pub(crate) async fn stateless_serialize_and_write_files(
     // if true, we may not have a guarantee that all written data was cleaned up.
     let mut any_abort_errors = false;
     let mut join_set = JoinSet::new();
-    while let Some((data_rx, serializer, writer, byte_counter)) = rx.recv().await {
+    while let Some((data_rx, serializer, writer)) = rx.recv().await {
         let elapsed_compute = elapsed_compute.clone();
-
         join_set.spawn(async move {
             serialize_rb_stream_to_object_store(
                 data_rx,
                 serializer,
                 writer,
-                byte_counter,
                 elapsed_compute,
             )
             .await
         });
     }
-    let mut finished_writers = Vec::new();
-    let mut byte_counters = Vec::new();
+    let mut finished_writers = Vec::with_capacity(join_set.len());
     while let Some(result) = join_set.join_next().await {
         match result {
             Ok(res) => match res {
                 SerializedRecordBatchResult::Success {
                     writer,
                     row_count: cnt,
-                    bytes_written: bytes,
                 } => {
                     finished_writers.push(writer);
-                    byte_counters.push(bytes);
                     row_count += cnt;
                 }
                 SerializedRecordBatchResult::Failure { writer, err } => {
@@ -289,10 +218,6 @@ pub(crate) async fn stateless_serialize_and_write_files(
                     .map_err(|_| internal_datafusion_err!("Error encountered while finalizing writes! Partial results may have been written to ObjectStore!"))?;
     }
 
-    for counter in byte_counters {
-        bytes_written += counter.load(Ordering::Relaxed);
-    }
-
     if any_errors {
         match any_abort_errors {
             true => {
@@ -311,7 +236,7 @@ pub(crate) async fn stateless_serialize_and_write_files(
         }
     }
 
-    tx.send((row_count as u64, bytes_written)).map_err(|_| {
+    tx.send(row_count as u64).map_err(|_| {
         internal_datafusion_err!(
             "Error encountered while sending row count back to file sink!"
         )
@@ -331,7 +256,7 @@ pub async fn spawn_writer_tasks_and_join(
     demux_task: SpawnedTask<Result<()>>,
     file_stream_rx: DemuxedStreamReceiver,
 ) -> Result<u64> {
-    spawn_writer_tasks_and_join_with_metrics(
+    spawn_writer_tasks_and_join_with_options(
         context,
         serializer,
         StatelessWriterOptions::new(compression)
@@ -343,18 +268,56 @@ pub async fn spawn_writer_tasks_and_join(
     .await
 }
 
-/// Like [`spawn_writer_tasks_and_join`], and also records common file sink metrics.
-pub async fn spawn_writer_tasks_and_join_with_metrics(
+/// Options for [`spawn_writer_tasks_and_join_with_options`].
+#[derive(Debug, Clone)]
+pub struct StatelessWriterOptions {
+    compression: FileCompressionType,
+    compression_level: Option<u32>,
+    metrics: Option<FileSinkMetrics>,
+}
+
+impl StatelessWriterOptions {
+    /// Create options for the specified file compression type.
+    pub fn new(compression: FileCompressionType) -> Self {
+        Self {
+            compression,
+            compression_level: None,
+            metrics: None,
+        }
+    }
+
+    /// Set the compression level. `None` uses the default level.
+    pub fn with_compression_level(mut self, compression_level: Option<u32>) -> Self {
+        self.compression_level = compression_level;
+        self
+    }
+
+    /// Record rows written, bytes written and serialization time in `metrics`.
+    pub fn with_metrics(mut self, metrics: FileSinkMetrics) -> Self {
+        self.metrics = Some(metrics);
+        self
+    }
+}
+
+/// Like [`spawn_writer_tasks_and_join`], but configured with
+/// [`StatelessWriterOptions`], which can optionally record [`FileSinkMetrics`].
+pub async fn spawn_writer_tasks_and_join_with_options(
     context: &Arc<TaskContext>,
     serializer: Arc<dyn BatchSerializer>,
-    options: StatelessWriterOptions<'_>,
+    options: StatelessWriterOptions,
     object_store: Arc<dyn ObjectStore>,
     demux_task: SpawnedTask<Result<()>>,
     mut file_stream_rx: DemuxedStreamReceiver,
 ) -> Result<u64> {
-    let elapsed_compute = options
-        .metrics
-        .map(|metrics| metrics.elapsed_compute().clone());
+    let StatelessWriterOptions {
+        compression,
+        compression_level,
+        metrics,
+    } = options;
+    let elapsed_compute = metrics.as_ref().map(|m| m.elapsed_compute.clone());
+    // Bytes written to each output file, after compression
+    let mut file_sizes: Vec<FileSize> = Vec::new();
+
     let rb_buffer_size = &context
         .session_config()
         .options()
@@ -367,10 +330,13 @@ pub async fn spawn_writer_tasks_and_join_with_metrics(
         stateless_serialize_and_write_files(rx_file_bundle, tx_row_cnt, elapsed_compute)
             .await
     });
-    while let Some((location, rb_stream)) = file_stream_rx.recv().await {
-        let (writer, bytes_written) = ObjectWriterBuilder::new(
-            options.compression,
-            &location,
+    while let Some((file_metadata, rb_stream)) = file_stream_rx.recv().await {
+        if metrics.is_some() {
+            file_sizes.push(Arc::clone(&file_metadata.size));
+        }
+        let writer = ObjectWriterBuilder::new(
+            compression,
+            &file_metadata.path,
             Arc::clone(&object_store),
         )
         .with_buffer_size(Some(
@@ -380,11 +346,12 @@ pub async fn spawn_writer_tasks_and_join_with_metrics(
                 .execution
                 .objectstore_writer_buffer_size,
         ))
-        .with_compression_level(options.compression_level)
-        .build_with_byte_counter()?;
+        .with_compression_level(compression_level)
+        .with_bytes_written_counter(file_metadata.size)
+        .build()?;
 
         if tx_file_bundle
-            .send((rb_stream, Arc::clone(&serializer), writer, bytes_written))
+            .send((rb_stream, Arc::clone(&serializer), writer))
             .await
             .is_err()
         {
@@ -404,13 +371,19 @@ pub async fn spawn_writer_tasks_and_join_with_metrics(
     r1.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
     r2.map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
 
-    // Return total row count and update optional metrics:
-    let (rows_written, bytes_written) = rx_row_cnt.await.map_err(|_| {
+    let row_count = rx_row_cnt.await.map_err(|_| {
         internal_datafusion_err!("Did not receive row count from write coordinator")
     })?;
-    if let Some(metrics) = options.metrics {
-        metrics.rows_written().add(rows_written as usize);
-        metrics.bytes_written().add(bytes_written);
+
+    if let Some(metrics) = metrics {
+        metrics.rows_written.add(row_count as usize);
+        let bytes_written: u64 = file_sizes
+            .iter()
+            .map(|size| size.load(Ordering::Relaxed))
+            .sum();
+        metrics.bytes_written.add(bytes_written as usize);
     }
-    Ok(rows_written)
+
+    // Return total row count:
+    Ok(row_count)
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -29,7 +16,7 @@ use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_plan::metrics::{
-    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, MetricsSet, Time,
+    Count, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory, Time,
 };
 
 use async_trait::async_trait;
@@ -38,48 +25,37 @@ use object_store::ObjectStore;
 #[cfg(feature = "proto")]
 mod proto;
 
-/// Common metrics exposed by file sinks.
-#[derive(Debug)]
+/// Common metrics recorded by a [`FileSink`] during one execution.
+///
+/// A new instance should be created for every call to
+/// [`FileSink::spawn_writer_tasks_and_join`], so that each execution
+/// registers its own metrics in the sink's [`ExecutionPlanMetricsSet`].
+#[derive(Debug, Clone)]
 pub struct FileSinkMetrics {
-    metrics: ExecutionPlanMetricsSet,
+    /// Total number of rows written
+    pub rows_written: Count,
+    /// Total number of bytes written to the object store, i.e. after
+    /// any file-level compression has been applied
+    pub bytes_written: Count,
+    /// Time spent encoding / serializing data
+    pub elapsed_compute: Time,
 }
 
 impl FileSinkMetrics {
-    /// Create a new set of file sink metrics.
-    pub fn new() -> Self {
-        Self {
-            metrics: ExecutionPlanMetricsSet::new(),
-        }
-    }
-
-    /// Create a counter for rows written by one sink execution.
-    pub fn rows_written(&self) -> Count {
-        MetricBuilder::new(&self.metrics)
+    /// Register a new set of file sink metrics in `metrics`.
+    pub fn new(metrics: &ExecutionPlanMetricsSet) -> Self {
+        let rows_written = MetricBuilder::new(metrics)
             .with_category(MetricCategory::Rows)
-            .global_counter("rows_written")
-    }
+            .global_counter("rows_written");
+        let bytes_written =
+            MetricBuilder::new(metrics).global_bytes_counter("bytes_written");
+        let elapsed_compute = MetricBuilder::new(metrics).elapsed_compute(0);
 
-    /// Create a counter for bytes written by one sink execution.
-    pub fn bytes_written(&self) -> Count {
-        MetricBuilder::new(&self.metrics)
-            .with_category(MetricCategory::Bytes)
-            .global_counter("bytes_written")
-    }
-
-    /// Create an elapsed-compute metric for one sink execution.
-    pub fn elapsed_compute(&self) -> Time {
-        MetricBuilder::new(&self.metrics).elapsed_compute(0)
-    }
-
-    /// Return a snapshot of the metrics.
-    pub fn snapshot(&self) -> MetricsSet {
-        self.metrics.clone_inner()
-    }
-}
-
-impl Default for FileSinkMetrics {
-    fn default() -> Self {
-        Self::new()
+        Self {
+            rows_written,
+            bytes_written,
+            elapsed_compute,
+        }
     }
 }
 
@@ -226,14 +202,14 @@ mod tests {
 
     #[test]
     fn metrics_are_created_per_sink_execution() {
-        let metrics = FileSinkMetrics::new();
+        let metrics = ExecutionPlanMetricsSet::new();
 
-        let first_rows = metrics.rows_written();
-        first_rows.add(3);
+        let first = FileSinkMetrics::new(&metrics);
+        first.rows_written.add(3);
 
-        let second_rows = metrics.rows_written();
+        let second = FileSinkMetrics::new(&metrics);
 
-        assert_eq!(first_rows.value(), 3);
-        assert_eq!(second_rows.value(), 0);
+        assert_eq!(first.rows_written.value(), 3);
+        assert_eq!(second.rows_written.value(), 0);
     }
 }

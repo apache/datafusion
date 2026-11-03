@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod aggregate_function;
 mod cast;
@@ -193,7 +180,7 @@ pub async fn from_substrait_rex_vec(
     exprs: &Vec<Expression>,
     input_schema: &DFSchema,
 ) -> datafusion::common::Result<Vec<Expr>> {
-    let mut expressions: Vec<Expr> = vec![];
+    let mut expressions: Vec<Expr> = Vec::with_capacity(exprs.len());
     for expr in exprs {
         let expression = consumer.consume_expression(expr, input_schema).await?;
         expressions.push(expression);
@@ -206,7 +193,7 @@ mod tests {
     use crate::extensions::Extensions;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
     use crate::logical_plan::consumer::*;
-    use datafusion::common::DFSchema;
+    use datafusion::common::{DFSchema, assert_contains};
     use datafusion::logical_expr::Expr;
     use substrait::proto::Expression;
     use substrait::proto::expression::RexType;
@@ -239,7 +226,7 @@ mod tests {
                 assert_eq!(window_function.params.order_by.len(), 1)
             }
             _ => panic!("expr was not a WindowFunction"),
-        };
+        }
 
         Ok(())
     }
@@ -266,8 +253,31 @@ mod tests {
                 assert_eq!(window_function.params.args.len(), 1)
             }
             _ => panic!("expr was not a WindowFunction"),
-        };
+        }
 
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn window_function_with_invalid_invocation() {
+        let substrait = Expression {
+            rex_type: Some(RexType::WindowFunction(
+                substrait::proto::expression::WindowFunction {
+                    function_reference: 0,
+                    invocation: 3,
+                    ..Default::default()
+                },
+            )),
+        };
+
+        let mut consumer = test_consumer();
+        let mut extensions = Extensions::default();
+        extensions.register_function("count");
+        consumer.extensions = &extensions;
+
+        let err = from_substrait_rex(&consumer, &substrait, &DFSchema::empty())
+            .await
+            .unwrap_err();
+        assert_contains!(err.to_string(), "Invalid window aggregation invocation 3");
     }
 }

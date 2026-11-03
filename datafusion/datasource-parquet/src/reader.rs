@@ -1,25 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ParquetFileReaderFactory`] and [`DefaultParquetFileReaderFactory`] for
 //! low level control of parquet file readers
 
 use crate::ParquetFileMetrics;
 use crate::metadata::DFParquetMetadata;
+use arrow::datatypes::SchemaRef;
 use bytes::Bytes;
 use datafusion_common::HashMap;
 use datafusion_datasource::PartitionedFile;
@@ -34,10 +22,31 @@ use parquet::arrow::arrow_reader::ArrowReaderOptions;
 use parquet::arrow::async_reader::AsyncFileReader;
 use parquet::errors::ParquetError;
 use parquet::file::metadata::ParquetMetaData;
+use parquet::schema::types::SchemaDescriptor;
 use std::any::Any;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
+
+/// Derives a file's Arrow schema from its physical Parquet schema during opening.
+///
+/// Install with [`ParquetSource::with_schema_provider`](crate::source::ParquetSource::with_schema_provider).
+/// This runs after the footer is loaded, before Arrow schema inference or filter
+/// preparation, so files may have different nested layouts without loading their
+/// footers during planning. The original Parquet metadata is retained.
+pub trait ParquetFileSchemaProvider: Debug + Send + Sync + 'static {
+    /// Return the complete Arrow schema for the physical file, excluding partition
+    /// and virtual columns. It must be compatible with the Parquet schema under
+    /// [`ArrowReaderOptions::with_schema`], which also ignores advisory `ARROW:schema`
+    /// metadata. Errors fail the file open.
+    ///
+    /// An explicit [`PartitionedFile::arrow_schema`] takes precedence and skips
+    /// this call. Existing table-schema and INT96 coercions are applied afterwards.
+    fn schema(
+        &self,
+        parquet_schema: &SchemaDescriptor,
+    ) -> datafusion_common::Result<SchemaRef>;
+}
 
 /// Interface for reading Apache Parquet files.
 ///
@@ -337,8 +346,10 @@ impl FileMetadata for CachedParquetMetaData {
     }
 
     fn extra_info(&self) -> HashMap<String, String> {
-        let page_index =
-            self.0.column_index().is_some() && self.0.offset_index().is_some();
+        let page_index = self
+            .0
+            .page_index()
+            .is_some_and(|page_index| page_index.is_complete());
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
     }
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`CsvFormat`], Comma Separated Value (CSV) [`FileFormat`] abstractions
 
@@ -30,8 +17,8 @@ use arrow::error::ArrowError;
 use datafusion_common::config::{ConfigField, ConfigFileType, CsvOptions};
 use datafusion_common::file_options::csv_writer::CsvWriterOptions;
 use datafusion_common::{
-    DEFAULT_CSV_EXTENSION, DataFusionError, GetExt, Result, Statistics, exec_err,
-    not_impl_err,
+    DEFAULT_CSV_EXTENSION, DataFusionError, GetExt, Result, Statistics,
+    exec_datafusion_err, exec_err, not_impl_err,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_datasource::TableSchema;
@@ -41,6 +28,7 @@ use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_format::{
     DEFAULT_SCHEMA_INFER_MAX_RECORD, FileFormat, FileFormatFactory,
+    ensure_unique_field_names,
 };
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::file_sink_config::{
@@ -50,12 +38,12 @@ use datafusion_datasource::sink::{DataSink, DataSinkExec};
 use datafusion_datasource::write::BatchSerializer;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::{
-    StatelessWriterOptions, spawn_writer_tasks_and_join_with_metrics,
+    StatelessWriterOptions, spawn_writer_tasks_and_join_with_options,
 };
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
@@ -402,12 +390,24 @@ impl FileFormat for CsvFormat {
                     )
                 })?;
             records_to_read -= records_read;
-            schemas.push(schema);
+            schemas.push((&object.location, schema));
             if records_to_read == 0 {
                 break;
             }
         }
 
+        let mut seen = HashSet::new();
+        for (location, schema) in &schemas {
+            ensure_unique_field_names(schema, &mut seen).map_err(|err| {
+                DataFusionError::Context(
+                    format!("Error when processing CSV file {location}"),
+                    Box::new(err),
+                )
+            })?;
+        }
+        drop(seen);
+
+        let schemas = schemas.into_iter().map(|(_, schema)| schema);
         let merged_schema = Schema::try_merge(schemas)?;
         Ok(Arc::new(merged_schema))
     }
@@ -532,6 +532,21 @@ impl CsvFormat {
         let mut record_number = -1;
         let initial_records_to_read = records_to_read;
 
+        // Compile once rather than per chunk, and report a malformed pattern
+        // instead of panicking on it.
+        let null_regex = self
+            .options
+            .null_regex
+            .as_ref()
+            .map(|null_regex| {
+                Regex::new(null_regex).map_err(|e| {
+                    exec_datafusion_err!(
+                        "Unable to parse CSV null regex '{null_regex}': {e}"
+                    )
+                })
+            })
+            .transpose()?;
+
         pin_mut!(stream);
 
         while let Some(chunk) = stream.next().await.transpose()? {
@@ -549,10 +564,8 @@ impl CsvFormat {
                 .with_quote(self.options.quote)
                 .with_truncated_rows(self.options.truncated_rows.unwrap_or(false));
 
-            if let Some(null_regex) = &self.options.null_regex {
-                let regex = Regex::new(null_regex.as_str())
-                    .expect("Unable to parse CSV null regex.");
-                format = format.with_null_regex(regex);
+            if let Some(regex) = &null_regex {
+                format = format.with_null_regex(regex.clone());
             }
 
             if let Some(escape) = self.options.escape {
@@ -746,7 +759,7 @@ pub struct CsvSink {
     config: FileSinkConfig,
     writer_options: CsvWriterOptions,
     /// Metrics for tracking write operations
-    metrics: FileSinkMetrics,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl Debug for CsvSink {
@@ -759,7 +772,7 @@ impl DisplayAs for CsvSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "CsvSink(file_groups=",)?;
+                write!(f, "CsvSink(file_groups=")?;
                 FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
@@ -777,7 +790,7 @@ impl CsvSink {
         Self {
             config,
             writer_options,
-            metrics: FileSinkMetrics::new(),
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -807,12 +820,12 @@ impl FileSink for CsvSink {
                 .with_builder(builder)
                 .with_header(header),
         ) as _;
-        spawn_writer_tasks_and_join_with_metrics(
+        spawn_writer_tasks_and_join_with_options(
             context,
             serializer,
             StatelessWriterOptions::new(self.writer_options.compression.into())
                 .with_compression_level(self.writer_options.compression_level)
-                .with_metrics(&self.metrics),
+                .with_metrics(FileSinkMetrics::new(&self.metrics)),
             object_store,
             demux_task,
             file_stream_rx,
@@ -824,7 +837,7 @@ impl FileSink for CsvSink {
 #[async_trait]
 impl DataSink for CsvSink {
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.snapshot())
+        Some(self.metrics.clone_inner())
     }
 
     fn schema(&self) -> &SchemaRef {
@@ -848,6 +861,14 @@ impl DataSink for CsvSink {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
+        // Keep an exhaustive guard in the active hook while centralizing the
+        // field mapping in the exhaustive `TryFrom<&CsvSink>` below.
+        let Self {
+            config: _,
+            writer_options: _,
+            metrics: _,
+        } = self;
+
         let input = ctx.encode_child(exec.input())?;
         let sort_order = exec.encode_sort_order(ctx)?;
         let sink = protobuf::CsvSink::try_from(self)?;
@@ -868,9 +889,15 @@ impl TryFrom<&CsvSink> for datafusion_proto_models::protobuf::CsvSink {
     type Error = DataFusionError;
 
     fn try_from(value: &CsvSink) -> Result<Self> {
+        let CsvSink {
+            config,
+            writer_options,
+            // Runtime metrics are recreated on decode.
+            metrics: _,
+        } = value;
         Ok(Self {
-            config: Some(value.config().try_into()?),
-            writer_options: Some(value.writer_options().try_into()?),
+            config: Some(config.try_into()?),
+            writer_options: Some(writer_options.try_into()?),
         })
     }
 }
@@ -880,14 +907,16 @@ impl TryFrom<&datafusion_proto_models::protobuf::CsvSink> for CsvSink {
     type Error = DataFusionError;
 
     fn try_from(value: &datafusion_proto_models::protobuf::CsvSink) -> Result<Self> {
-        let config =
-            FileSinkConfig::try_from(value.config.as_ref().ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!(
-                    "CsvSink is missing required field 'config'"
-                )
-            })?)?;
-        let writer_options = value
-            .writer_options
+        let datafusion_proto_models::protobuf::CsvSink {
+            config,
+            writer_options,
+        } = value;
+        let config = FileSinkConfig::try_from(config.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "CsvSink is missing required field 'config'"
+            )
+        })?)?;
+        let writer_options = writer_options
             .as_ref()
             .ok_or_else(|| {
                 datafusion_common::internal_datafusion_err!(
@@ -914,19 +943,24 @@ impl CsvSink {
             protobuf::physical_plan_node::PhysicalPlanType::CsvSink,
             "CsvSink",
         );
-        let input = ctx.decode_required_child(
-            sink_node.input.as_deref(),
-            "CsvSinkExecNode",
-            "input",
-        )?;
-        let proto_sink = sink_node.sink.as_ref().ok_or_else(|| {
+        let protobuf::CsvSinkExecNode {
+            input,
+            sink,
+            // The output schema is recomputed by `DataSinkExec::new`.
+            sink_schema: _,
+            sort_order,
+        } = sink_node.as_ref();
+
+        let input =
+            ctx.decode_required_child(input.as_deref(), "CsvSinkExecNode", "input")?;
+        let proto_sink = sink.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "CsvSinkExecNode is missing required field 'sink'"
             )
         })?;
         let data_sink = CsvSink::try_from(proto_sink)?;
         let sort_order = DataSinkExec::decode_sort_order(
-            sink_node.sort_order.as_ref(),
+            sort_order.as_ref(),
             ctx,
             input.schema().as_ref(),
         )?;
@@ -941,7 +975,7 @@ impl CsvSink {
 
 /// Encode a [`CsvFormatFactory`]'s options as their protobuf form.
 ///
-/// The reverse direction is `From<&protobuf::CsvOptions> for CsvOptions` in
+/// The reverse direction is `TryFrom<&protobuf::CsvOptions> for CsvOptions` in
 /// `datafusion-proto-models`: `CsvOptions` is a `datafusion-common` type, so
 /// that half cannot live here.
 #[cfg(feature = "proto")]

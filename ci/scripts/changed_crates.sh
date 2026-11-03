@@ -21,8 +21,12 @@
 # Subcommands:
 #   changed-crates <base_ref>
 #       Print space-separated list of crate names whose files changed vs base_ref.
-#       Only published workspace members (those without `publish = false`) are
-#       considered.
+#       Only published workspace members (those without `publish = false`)
+#       are considered. We also omit datafusion-sqllogictest. It is published
+#       so that other projects can write tests with DataFusion's sqllogictest
+#       driver, but it is test tooling rather than part of DataFusion's
+#       library API. It also depends on nearly every other DataFusion crate,
+#       so checking it usually takes most of the job's time.
 #
 #   semver-check <base_ref> <packages...>
 #       Run cargo-semver-checks for the given packages against base_ref.
@@ -42,12 +46,13 @@ cmd_changed_crates() {
   # 2. Every publishable workspace member, one per line as
   #    "<crate-name> <crate-dir>". `publish = false` in Cargo.toml shows
   #    up as `"publish": []` in cargo metadata, so filtering on that
-  #    excludes internal crates without a manual exclusion list.
+  #    excludes unpublished crates. datafusion-sqllogictest is excluded by
+  #    name; see the comment at the top of this file.
   local crates
   crates=$(cargo metadata --no-deps --format-version 1 | jq -r '
     (.workspace_root + "/") as $root
     | .packages[]
-    | select(.publish != [])
+    | select(.publish != [] and .name != "datafusion-sqllogictest")
     | "\(.name) \(.manifest_path | ltrimstr($root) | rtrimstr("/Cargo.toml"))"
   ')
 
@@ -69,7 +74,15 @@ cmd_semver_check() {
     args+=(--package "$pkg")
   done
 
-  cargo semver-checks --baseline-rev "$base_ref" "${args[@]}"
+  # cargo-semver-checks builds the rustdoc for each crate, current and
+  # baseline, in a separate placeholder project. Each project has its own
+  # target directory unless CARGO_TARGET_DIR is set, so a shared directory
+  # lets those builds reuse the compiled dependencies.
+  local target_dir
+  target_dir=$(cargo metadata --no-deps --format-version 1 | jq -r .target_directory)
+
+  CARGO_TARGET_DIR="${target_dir}/semver-checks-shared" \
+    cargo semver-checks --baseline-rev "$base_ref" "${args[@]}"
 }
 
 # ── main ────────────────────────────────────────────────────────────

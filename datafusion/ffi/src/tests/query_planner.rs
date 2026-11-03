@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::sync::Arc;
@@ -21,7 +8,7 @@ use std::sync::Arc;
 use arrow::datatypes::{DataType, Field, Schema};
 use async_trait::async_trait;
 use datafusion_catalog::default_table_source::source_as_provider;
-use datafusion_common::{Result, exec_err};
+use datafusion_common::{DataFusionError, Result, exec_err};
 use datafusion_expr::LogicalPlan;
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
@@ -115,14 +102,25 @@ impl QueryPlanner for SwappedQueryPlanner {
         }
 
         // After the swap, the planner installed on library A's session is this
-        // planner, so `session.query_planner()` and `session.create_physical_plan()`
-        // are both self-references. Assert the hazard instead of triggering it:
-        // calling either would recurse until the stack is exhausted.
+        // planner, so `session.query_planner()` is a self-reference.
         let installed = session.query_planner();
         let installed: &dyn Any = installed.as_ref();
         if installed.downcast_ref::<Self>().is_none() {
             return exec_err!(
                 "expected the swapped session to report library C's own planner"
+            );
+        }
+
+        // Direct session delegation used to re-enter this planner recursively.
+        // A foreign session must reject it before dispatching to the installed
+        // planner, while the captured planner path below remains usable.
+        let direct_error = session
+            .create_physical_plan(logical_plan)
+            .await
+            .expect_err("direct foreign-session planning should be unsupported");
+        if !matches!(direct_error, DataFusionError::NotImplemented(_)) {
+            return exec_err!(
+                "expected direct foreign-session planning to return NotImplemented; got {direct_error}"
             );
         }
 

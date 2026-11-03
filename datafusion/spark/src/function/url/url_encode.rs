@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -24,6 +11,7 @@ use arrow::datatypes::DataType;
 use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{Result, exec_err, plan_err};
 use datafusion_expr::{
     ColumnarValue, ScalarFunctionArgs, ScalarUDFImpl, Signature, Volatility,
@@ -117,14 +105,18 @@ fn spark_url_encode(args: &[ArrayRef]) -> Result<ArrayRef> {
     match &args[0].data_type() {
         DataType::Utf8 => {
             let array = as_string_array(&args[0])?;
-            let builder =
-                StringBuilder::with_capacity(array.len(), array.value_data().len());
+            let builder = StringBuilder::with_capacity(
+                array.len(),
+                offset_span_len(array.offsets()),
+            );
             encode_all!(array, builder)
         }
         DataType::LargeUtf8 => {
             let array = as_large_string_array(&args[0])?;
-            let builder =
-                LargeStringBuilder::with_capacity(array.len(), array.value_data().len());
+            let builder = LargeStringBuilder::with_capacity(
+                array.len(),
+                offset_span_len(array.offsets()),
+            );
             encode_all!(array, builder)
         }
         DataType::Utf8View => {
@@ -139,6 +131,7 @@ fn spark_url_encode(args: &[ArrayRef]) -> Result<ArrayRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::function::utils::test::check_sliced_string_capacity;
     use arrow::array::{LargeStringArray, StringArray, StringViewArray};
 
     const INPUT: [Option<&str>; 5] = [
@@ -182,5 +175,10 @@ mod tests {
         let result = as_string_view_array(&result)?;
         assert_eq!(&StringViewArray::from(EXPECTED.to_vec()), result);
         Ok(())
+    }
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        check_sliced_string_capacity("ab", |input| spark_url_encode(&[input]))
     }
 }

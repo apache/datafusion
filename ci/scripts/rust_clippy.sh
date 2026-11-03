@@ -22,7 +22,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 CLIPPY_FEATURES="avro,integration-tests,extended_tests"
-CLIPPY_ARGS=(--all-targets --workspace --features "$CLIPPY_FEATURES")
+CLIPPY_ARGS=(--all-targets --workspace)
 CLIPPY_LINT_ARGS=(-- -D warnings)
 
 source "${SCRIPT_DIR}/utils/git.sh"
@@ -34,7 +34,7 @@ usage() {
   cat >&2 <<EOF
 Usage: $SCRIPT_NAME [--write] [--allow-dirty]
 
-Runs \`cargo clippy\` to lint.
+Runs \`cargo clippy\` with the standard feature set and with all features.
 --write         Run \`cargo clippy --fix\` to apply fixes for clippy lints (requires a clean git worktree, no uncommitted changes).
 --allow-dirty   Allow \`--write\` to run even when the git worktree has uncommitted or staged changes.
 EOF
@@ -65,12 +65,14 @@ fi
 
 CLIPPY_CMD=(cargo clippy)
 if [[ "$MODE" == "write" ]]; then
-  CLIPPY_CMD+=(--fix)
-  if [[ $ALLOW_DIRTY -eq 1 ]]; then
-    CLIPPY_CMD+=(--allow-dirty --allow-staged)
-  fi
+  CLIPPY_CMD+=(--fix --allow-dirty --allow-staged)
 fi
-CLIPPY_CMD+=("${CLIPPY_ARGS[@]}" "${CLIPPY_LINT_ARGS[@]}")
 
-echo "[${SCRIPT_NAME}] \`${CLIPPY_CMD[*]}\`"
-"${CLIPPY_CMD[@]}"
+run_clippy() {
+  local clippy_cmd=("${CLIPPY_CMD[@]}" "${CLIPPY_ARGS[@]}" "$@" "${CLIPPY_LINT_ARGS[@]}")
+  echo "[${SCRIPT_NAME}] \`${clippy_cmd[*]}\`"
+  "${clippy_cmd[@]}"
+}
+
+run_clippy --features "$CLIPPY_FEATURES"
+run_clippy --all-features

@@ -87,3 +87,11 @@ harness = false
 [[bench]]
 name = "unions_to_filter"
 harness = false
+
+[[bench]]
+name = "simplify_function_over_case"
+harness = false
+
+[[bench]]
+name = "eliminate_cross_join"
+harness = false

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! EmptyRelation with produce_one_row=false execution plan
 
@@ -213,17 +200,25 @@ impl ExecutionPlan for EmptyExec {
         &self,
         _ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        use datafusion_common::utils::usize_to_wire;
         use datafusion_proto_models::protobuf;
-        let schema = self.schema().as_ref().try_into()?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `EmptyExec` is a compile error here until it is either serialized or
+        // explicitly documented as not needing to be.
+        let Self {
+            schema,
+            partitions,
+            // Derived from `schema` and `partitions`, recomputed on decode.
+            cache: _,
+        } = self;
+        let schema = schema.as_ref().try_into()?;
+        let partitions = usize_to_wire(*partitions, "EmptyExec", "partitions")?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Empty(
                     protobuf::EmptyExecNode {
                         schema: Some(schema),
-                        partitions: self
-                            .properties()
-                            .output_partitioning()
-                            .partition_count() as u32,
+                        partitions,
                     },
                 ),
             ),
@@ -244,7 +239,10 @@ impl EmptyExec {
             protobuf::physical_plan_node::PhysicalPlanType::Empty,
             "EmptyExec",
         );
-        let schema = empty.schema.as_ref().ok_or_else(|| {
+        // Destructure exhaustively so that a new field on `EmptyExecNode` is a
+        // compile error here rather than a silently dropped field.
+        let protobuf::EmptyExecNode { schema, partitions } = empty;
+        let schema = schema.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "EmptyExec is missing required field 'schema'"
             )
@@ -252,7 +250,7 @@ impl EmptyExec {
         let schema = Arc::new(arrow::datatypes::Schema::try_from(schema)?);
         // A zero (absent) partition count comes from a plan encoded before the
         // field existed, which always meant a single partition.
-        let partitions = empty.partitions.max(1) as usize;
+        let partitions = (*partitions).max(1) as usize;
         Ok(Arc::new(EmptyExec::new(schema).with_partitions(partitions)))
     }
 }

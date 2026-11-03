@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module contains an end to end demonstration of creating
 //! a user defined operator in DataFusion.
@@ -428,10 +415,6 @@ impl OptimizerRule for OptimizerMakeExtensionNodeInvalid {
         Some(ApplyOrder::TopDown)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     // Example rewrite pass which impacts validity of the extension node.
     fn rewrite(
         &self,
@@ -453,7 +436,7 @@ impl OptimizerRule for OptimizerMakeExtensionNodeInvalid {
                     }),
                 }),
             })));
-        };
+        }
 
         Ok(Transformed::no(plan))
     }
@@ -500,19 +483,36 @@ impl OptimizerRule for TopKOptimizerRule {
         Some(ApplyOrder::TopDown)
     }
 
-    fn supports_rewrite(&self) -> bool {
-        true
-    }
-
     // Example rewrite pass to insert a user defined LogicalPlanNode
     fn rewrite(
         &self,
         plan: LogicalPlan,
         _config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>, DataFusionError> {
-        // Note: this code simply looks for the pattern of a Limit followed by a
-        // Sort and replaces it by a TopK node. It does not handle many
-        // edge cases (e.g multiple sort columns, sort ASC / DESC), etc.
+        // Note: this code simply looks for a Sort with a fetch, or a Limit
+        // followed by a Sort, and replaces it by a TopK node. It does not
+        // handle many edge cases (e.g multiple sort columns, sort ASC / DESC),
+        // etc.
+        //
+        // `PushDownLimit` gives a Sort below a Limit the Limit's fetch and
+        // removes the Limit, so a Sort with a fetch is the usual shape.
+        if let LogicalPlan::Sort(Sort {
+            expr,
+            input,
+            fetch: Some(fetch),
+        }) = &plan
+            && expr.len() == 1
+        {
+            return Ok(Transformed::yes(LogicalPlan::Extension(Extension {
+                node: Arc::new(TopKPlanNode {
+                    k: *fetch,
+                    input: input.as_ref().clone(),
+                    expr: expr[0].clone(),
+                    invariant_mock: self.invariant_mock.clone(),
+                }),
+            })));
+        }
+
         let LogicalPlan::Limit(ref limit) = plan else {
             return Ok(Transformed::no(plan));
         };

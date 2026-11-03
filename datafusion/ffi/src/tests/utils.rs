@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::path::{Path, PathBuf};
 
@@ -36,7 +23,7 @@ fn find_cdylib(deps_dir: &Path) -> Result<PathBuf> {
         "so"
     };
 
-    let pattern = format!("{lib_prefix}datafusion_ffi.{lib_ext}");
+    let pattern = format!("{lib_prefix}datafusion_ffi_integration_tests.{lib_ext}");
     let lib_path = deps_dir.join(&pattern);
 
     if lib_path.exists() {
@@ -89,6 +76,35 @@ fn load_module(lib_path: &Path) -> Result<ForeignLibraryModule> {
 
 pub fn get_module() -> Result<ForeignLibraryModule> {
     load_module(&find_library()?)
+}
+
+/// Load [`crate::execution_plan::FFI_ExecutionPlan`] from a fresh call to
+/// `datafusion_ffi_test_create_exec_with_byte_metrics`, exported as its own
+/// top-level symbol rather than a [`ForeignLibraryModule`] field precisely so
+/// that adding this test factory never touches that struct's `#[repr(C)]`
+/// layout - see the doc comment on the exported function for the rationale.
+pub fn get_byte_metrics_exec() -> Result<crate::execution_plan::FFI_ExecutionPlan> {
+    let lib_path = find_library()?;
+
+    let lib = unsafe {
+        libloading::Library::new(&lib_path)
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+
+    let create_exec: libloading::Symbol<
+        extern "C" fn() -> crate::execution_plan::FFI_ExecutionPlan,
+    > = unsafe {
+        lib.get(b"datafusion_ffi_test_create_exec_with_byte_metrics")
+            .map_err(|e| DataFusionError::External(Box::new(e)))?
+    };
+
+    let plan = create_exec();
+
+    // Leak the library to keep it loaded for the duration of the test
+    #[expect(clippy::mem_forget)]
+    std::mem::forget(lib);
+
+    Ok(plan)
 }
 
 /// Load an independent copy of the integration-test cdylib.

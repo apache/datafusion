@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt::Debug;
 use std::hash::Hash;
@@ -26,6 +13,7 @@ use arrow::{array::ArrayRef, datatypes::DataType};
 use datafusion_common::ScalarValue;
 use datafusion_common::types::{NativeType, logical_float64};
 use datafusion_common::{Result, not_impl_err, plan_err};
+use datafusion_expr::DistinctHandling;
 use datafusion_expr::expr::{AggregateFunction, Sort};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::{
@@ -90,11 +78,11 @@ An alternative syntax is also supported:
 
 ```sql
 > SELECT approx_percentile_cont_with_weight(column_name, weight_column, 0.90) FROM table_name;
-+--------------------------------------------------+
++----------------------------------------------------------------------+
 | approx_percentile_cont_with_weight(column_name, weight_column, 0.90) |
-+--------------------------------------------------+
-| 78.5                                             |
-+--------------------------------------------------+
++----------------------------------------------------------------------+
+| 78.5                                                                 |
++----------------------------------------------------------------------+
 ```"#,
     standard_argument(name = "expression", prefix = "The"),
     argument(
@@ -281,6 +269,11 @@ impl AggregateUDFImpl for ApproxPercentileContWithWeight {
     fn documentation(&self) -> Option<&Documentation> {
         self.doc()
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        // The accumulator rejects `DISTINCT` with `not_impl_err!`.
+        DistinctHandling::Unsupported
+    }
 }
 
 #[derive(Debug)]
@@ -302,6 +295,9 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
     }
 
     fn update_batch(&mut self, values: &[ArrayRef]) -> Result<()> {
+        self.approx_percentile_cont_accumulator
+            .resolve_percentile(&values[2])?;
+
         let mut means = Arc::clone(&values[0]);
         let mut weights = Arc::clone(&values[1]);
         // If nulls are present in either array, need to filter those rows out in both arrays
@@ -333,7 +329,7 @@ impl Accumulator for ApproxPercentileWithWeightAccumulator {
         );
         let means_f64 = ApproxPercentileAccumulator::convert_to_float(&means)?;
         let weights_f64 = ApproxPercentileAccumulator::convert_to_float(&weights)?;
-        let mut digests: Vec<TDigest> = vec![];
+        let mut digests: Vec<TDigest> = Vec::with_capacity(means_f64.len());
         for (mean, weight) in means_f64.iter().zip(weights_f64.iter()) {
             digests.push(TDigest::new_with_centroid(
                 self.approx_percentile_cont_accumulator.max_size(),

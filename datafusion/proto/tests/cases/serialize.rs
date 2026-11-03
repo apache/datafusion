@@ -1,24 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Field, Metadata};
 
 use datafusion::execution::FunctionRegistry;
 use datafusion::prelude::SessionContext;
@@ -109,7 +96,7 @@ fn plan_to_json() {
         schema: Arc::new(DFSchema::empty()),
     });
     let actual = logical_plan_to_json(&plan).unwrap();
-    let expected = r#"{"emptyRelation":{}}"#.to_string();
+    let expected = r#"{"emptyRelation":{"schema":{}}}"#.to_string();
     assert_eq!(actual, expected);
 }
 
@@ -203,9 +190,7 @@ fn roundtrip_placeholder_with_metadata() {
         "placeholder_id".to_string(),
         Some(
             Field::new("", DataType::Utf8, false)
-                .with_metadata(
-                    [("some_key".to_string(), "some_value".to_string())].into(),
-                )
+                .with_metadata(Metadata::new().with("some_key", "some_value"))
                 .into(),
         ),
     ));
@@ -285,13 +270,10 @@ fn roundtrip_deeply_nested() {
                 let expr = (0..n).fold(expr_base.clone(), |expr, n| if n % 2 == 0 { expr.and(expr_base.clone()) } else { expr.or(expr_base.clone()) });
 
                 // Convert it to an opaque form
-                let bytes = match expr.to_bytes() {
-                    Ok(bytes) => bytes,
-                    Err(_) => {
+                let Ok(bytes) = expr.to_bytes() else {
                         // found expression that is too deeply nested
                         return;
-                    }
-                };
+                    };
 
                 // Decode bytes from somewhere (over network, etc.
                 let decoded_expr = Expr::from_bytes(&bytes).expect("serialization worked, so deserialization should work as well");

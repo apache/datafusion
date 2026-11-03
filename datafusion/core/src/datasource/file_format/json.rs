@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Re-exports the [`datafusion_datasource_json::file_format`] module, and contains tests for it.
 pub use datafusion_datasource_json::file_format::*;
@@ -641,5 +628,24 @@ mod tests {
         assert_eq!(1, batches.len());
         assert_eq!(2, batches[0].num_rows());
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn json_sink_metrics() -> Result<()> {
+        crate::datasource::file_format::test_util::assert_copy_sink_metrics(
+            "metrics.json",
+            "STORED AS JSON",
+        )
+        .await
+    }
+
+    #[cfg(feature = "compression")]
+    #[tokio::test]
+    async fn json_sink_metrics_report_compressed_bytes() -> Result<()> {
+        crate::datasource::file_format::test_util::assert_copy_sink_metrics(
+            "metrics.json.zst",
+            "STORED AS JSON OPTIONS ('format.compression' 'zstd')",
+        )
+        .await
     }
 }

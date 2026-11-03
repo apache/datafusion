@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -69,13 +56,26 @@ pub fn parse_write_op(
                         .to_string(),
                 )
             })?;
-            WriteOp::MergeInto(Box::new(parse_merge_into_op(merge_into, ctx, codec)?))
+            let target_qualifier = super::from_table_reference(
+                merge_into
+                    .target_qualifier
+                    .as_ref()
+                    .or(node.table_name.as_ref()),
+                "MERGE INTO ",
+            )?;
+            WriteOp::MergeInto(Box::new(parse_merge_into_op(
+                merge_into,
+                target_qualifier,
+                ctx,
+                codec,
+            )?))
         }
     })
 }
 
 fn parse_merge_into_op(
     op: &protobuf::MergeIntoOpNode,
+    target_qualifier: TableReference,
     ctx: &TaskContext,
     codec: &dyn LogicalExtensionCodec,
 ) -> Result<MergeIntoOp, Error> {
@@ -88,7 +88,7 @@ fn parse_merge_into_op(
         .iter()
         .map(|c| parse_merge_into_clause(c, ctx, codec))
         .collect::<Result<Vec<_>, Error>>()?;
-    Ok(MergeIntoOp { on, clauses })
+    Ok(MergeIntoOp::new(target_qualifier, on, clauses))
 }
 
 fn parse_merge_into_clause(
@@ -255,7 +255,7 @@ pub fn parse_expr(
 
             if expr.distinct {
                 builder = builder.distinct();
-            };
+            }
 
             if let Some(filter) = parse_optional_expr(expr.filter.as_deref(), ctx, codec)?
             {
@@ -429,7 +429,8 @@ pub fn parse_expr(
             let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
             let field = data_type
                 .into_nullable_field()
-                .with_nullable(cast.nullable.unwrap_or(true));
+                .with_nullable(cast.nullable.unwrap_or(true))
+                .with_metadata(cast.metadata.clone());
             Ok(Expr::Cast(Cast::new_from_field(expr, Arc::new(field))))
         }
         ExprType::TryCast(cast) => {
@@ -442,7 +443,8 @@ pub fn parse_expr(
             let data_type: DataType = cast.arrow_type.as_ref().required("arrow_type")?;
             let field = data_type
                 .into_nullable_field()
-                .with_nullable(cast.nullable.unwrap_or(true));
+                .with_nullable(cast.nullable.unwrap_or(true))
+                .with_metadata(cast.metadata.clone());
             Ok(Expr::TryCast(TryCast::new_from_field(
                 expr,
                 Arc::new(field),

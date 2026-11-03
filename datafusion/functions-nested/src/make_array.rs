@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarUDFImpl`] definitions for `make_array` function.
 
@@ -37,6 +24,7 @@ use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     Volatility,
 };
+use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
 use itertools::Itertools as _;
 
@@ -113,6 +101,11 @@ impl ScalarUDFImpl for MakeArray {
         &self.aliases
     }
 
+    fn strictly_order_preserving(&self, _inputs: &[ExprProperties]) -> Result<bool> {
+        // Not strictly order preserving since null input does not correspond to null output
+        Ok(false)
+    }
+
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
         if arg_types.is_empty() {
             Ok(vec![])
@@ -136,20 +129,13 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
     });
 
     let data_type = data_type.unwrap_or(&Null);
-    if data_type.is_null() {
-        // Either an empty array or all nulls:
-        let length = arrays.iter().map(|a| a.len()).sum();
-        let array = new_null_array(&Null, length);
-        Ok(Arc::new(
-            SingleRowListArrayBuilder::new(array).build_list_array(),
-        ))
-    } else {
-        array_array::<i32>(arrays, data_type.clone(), Field::LIST_FIELD_DEFAULT_NAME)
-    }
+    array_array::<i32>(arrays, data_type.clone(), Field::LIST_FIELD_DEFAULT_NAME)
 }
 
-/// Convert one or more [`ArrayRef`] of the same type into a
+/// Convert zero or more [`ArrayRef`] of the same type into a
 /// `ListArray` or 'LargeListArray' depending on the offset size.
+///
+/// Returns empty `ListArray` if input has zero array.
 ///
 /// # Example (non nested)
 ///
@@ -188,17 +174,25 @@ pub(crate) fn make_array_inner(arrays: &[ArrayRef]) -> Result<ArrayRef> {
 /// └──────────────┘   └──────────────┘        └─────────────────────────────┘
 ///      col1               col2                         output
 /// ```
+///
+/// # Public Only for Internal Use:
+/// `datafusion-spark` uses this helper to construct arrays with its element field
+/// name. This implementation detail is not part of the supported public API.
+#[doc(hidden)]
 pub fn array_array<O: OffsetSizeTrait>(
     args: &[ArrayRef],
     data_type: DataType,
     field_name: &str,
 ) -> Result<ArrayRef> {
-    // do not accept 0 arguments.
     if args.is_empty() {
-        return plan_err!("Array requires at least one argument");
+        // If input is empty, combined output is an empty array with `Null` data type
+        let array = new_null_array(&Null, 0);
+        return Ok(Arc::new(
+            SingleRowListArrayBuilder::new(array).build_list_array(),
+        ));
     }
 
-    let mut data = vec![];
+    let mut data = Vec::with_capacity(args.len());
     let mut total_len = 0;
     for arg in args {
         let arg_data = if arg.as_any().is::<NullArray>() {

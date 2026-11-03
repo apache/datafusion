@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`JsonFormat`]: Line delimited and array JSON [`FileFormat`] abstractions
 
@@ -54,12 +41,12 @@ use datafusion_datasource::source::DataSourceExec;
 use datafusion_datasource::write::BatchSerializer;
 use datafusion_datasource::write::demux::DemuxedStreamReceiver;
 use datafusion_datasource::write::orchestration::{
-    StatelessWriterOptions, spawn_writer_tasks_and_join_with_metrics,
+    StatelessWriterOptions, spawn_writer_tasks_and_join_with_options,
 };
 use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 use datafusion_expr::dml::InsertOp;
 use datafusion_physical_expr_common::sort_expr::LexRequirement;
-use datafusion_physical_plan::metrics::MetricsSet;
+use datafusion_physical_plan::metrics::{ExecutionPlanMetricsSet, MetricsSet};
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType, ExecutionPlan};
 use datafusion_session::Session;
 
@@ -417,7 +404,7 @@ pub struct JsonSink {
     /// Writer options for underlying Json writer
     writer_options: JsonWriterOptions,
     /// Metrics for tracking write operations
-    metrics: FileSinkMetrics,
+    metrics: ExecutionPlanMetricsSet,
 }
 
 impl Debug for JsonSink {
@@ -430,7 +417,7 @@ impl DisplayAs for JsonSink {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "JsonSink(file_groups=",)?;
+                write!(f, "JsonSink(file_groups=")?;
                 FileGroupDisplay(&self.config.file_group).fmt_as(t, f)?;
                 write!(f, ")")
             }
@@ -448,7 +435,7 @@ impl JsonSink {
         Self {
             config,
             writer_options,
-            metrics: FileSinkMetrics::new(),
+            metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 
@@ -472,12 +459,12 @@ impl FileSink for JsonSink {
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
         let serializer = Arc::new(JsonSerializer::new()) as _;
-        spawn_writer_tasks_and_join_with_metrics(
+        spawn_writer_tasks_and_join_with_options(
             context,
             serializer,
             StatelessWriterOptions::new(self.writer_options.compression.into())
                 .with_compression_level(self.writer_options.compression_level)
-                .with_metrics(&self.metrics),
+                .with_metrics(FileSinkMetrics::new(&self.metrics)),
             object_store,
             demux_task,
             file_stream_rx,
@@ -489,7 +476,7 @@ impl FileSink for JsonSink {
 #[async_trait]
 impl DataSink for JsonSink {
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.snapshot())
+        Some(self.metrics.clone_inner())
     }
 
     fn schema(&self) -> &SchemaRef {
@@ -513,6 +500,14 @@ impl DataSink for JsonSink {
         use datafusion_proto_models::protobuf;
         use protobuf::physical_plan_node::PhysicalPlanType;
 
+        // Keep an exhaustive guard in the active hook while centralizing the
+        // field mapping in the exhaustive `TryFrom<&JsonSink>` below.
+        let Self {
+            config: _,
+            writer_options: _,
+            metrics: _,
+        } = self;
+
         let input = ctx.encode_child(exec.input())?;
         let sort_order = exec.encode_sort_order(ctx)?;
         let sink = protobuf::JsonSink::try_from(self)?;
@@ -533,9 +528,16 @@ impl TryFrom<&JsonSink> for datafusion_proto_models::protobuf::JsonSink {
     type Error = datafusion_common::DataFusionError;
 
     fn try_from(value: &JsonSink) -> Result<Self> {
+        // Keep this public conversion exhaustive like the active serde hook.
+        let JsonSink {
+            config,
+            writer_options,
+            // Runtime metrics are recreated on decode.
+            metrics: _,
+        } = value;
         Ok(Self {
-            config: Some(value.config().try_into()?),
-            writer_options: Some(value.writer_options().try_into()?),
+            config: Some(config.try_into()?),
+            writer_options: Some(writer_options.try_into()?),
         })
     }
 }
@@ -545,14 +547,17 @@ impl TryFrom<&datafusion_proto_models::protobuf::JsonSink> for JsonSink {
     type Error = datafusion_common::DataFusionError;
 
     fn try_from(value: &datafusion_proto_models::protobuf::JsonSink) -> Result<Self> {
-        let config =
-            FileSinkConfig::try_from(value.config.as_ref().ok_or_else(|| {
-                datafusion_common::internal_datafusion_err!(
-                    "JsonSink is missing required field 'config'"
-                )
-            })?)?;
-        let writer_options = value
-            .writer_options
+        // Exhaustive destructure: new wire fields must be explicitly restored.
+        let datafusion_proto_models::protobuf::JsonSink {
+            config,
+            writer_options,
+        } = value;
+        let config = FileSinkConfig::try_from(config.as_ref().ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "JsonSink is missing required field 'config'"
+            )
+        })?)?;
+        let writer_options = writer_options
             .as_ref()
             .ok_or_else(|| {
                 datafusion_common::internal_datafusion_err!(
@@ -579,19 +584,26 @@ impl JsonSink {
             protobuf::physical_plan_node::PhysicalPlanType::JsonSink,
             "JsonSink",
         );
-        let input = ctx.decode_required_child(
-            sink_node.input.as_deref(),
-            "JsonSinkExecNode",
-            "input",
-        )?;
-        let proto_sink = sink_node.sink.as_ref().ok_or_else(|| {
+        // Exhaustive destructure: a new field on `JsonSinkExecNode` is a
+        // compile error here rather than a silently ignored wire field.
+        let protobuf::JsonSinkExecNode {
+            input,
+            sink,
+            // The output schema is recomputed by `DataSinkExec::new`.
+            sink_schema: _,
+            sort_order,
+        } = sink_node.as_ref();
+
+        let input =
+            ctx.decode_required_child(input.as_deref(), "JsonSinkExecNode", "input")?;
+        let proto_sink = sink.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "JsonSinkExecNode is missing required field 'sink'"
             )
         })?;
         let data_sink = JsonSink::try_from(proto_sink)?;
         let sort_order = DataSinkExec::decode_sort_order(
-            sink_node.sort_order.as_ref(),
+            sort_order.as_ref(),
             ctx,
             input.schema().as_ref(),
         )?;
@@ -631,7 +643,7 @@ impl Decoder for JsonDecoder {
 
 /// Encode a [`JsonFormatFactory`]'s options as their protobuf form.
 ///
-/// The reverse direction is `From<&protobuf::JsonOptions> for JsonOptions` in
+/// The reverse direction is `TryFrom<&protobuf::JsonOptions> for JsonOptions` in
 /// `datafusion-proto-models`: `JsonOptions` is a `datafusion-common` type, so
 /// that half cannot live here.
 #[cfg(feature = "proto")]

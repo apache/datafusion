@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ContextProvider`] and [`ExprPlanner`] APIs to customize SQL query planning
 
@@ -218,6 +205,21 @@ pub trait ExprPlanner: Debug + Send + Sync {
         Ok(PlannerResult::Original(args))
     }
 
+    /// Plan `<expr> AT TIME ZONE '<tz>'`.
+    ///
+    /// `args` is `[Utf8 literal tz, expr]`, the argument order of the
+    /// PostgreSQL function form `timezone(zone, expr)`.
+    ///
+    /// The result type depends on whether the type of `expr` *after type
+    /// coercion* has a timezone, and the SQL planner runs before type
+    /// coercion. So an implementation must return an expression that decides
+    /// later, such as the `timezone` function of `datafusion-functions`.
+    ///
+    /// Returns original expression arguments if not possible
+    fn plan_at_time_zone(&self, args: Vec<Expr>) -> Result<PlannerResult<Vec<Expr>>> {
+        Ok(PlannerResult::Original(args))
+    }
+
     /// Plans a struct literal, such as  `{'field1' : expr1, 'field2' : expr2, ...}`
     ///
     /// This function takes a vector of expressions and a boolean flag
@@ -261,6 +263,17 @@ pub trait ExprPlanner: Debug + Send + Sync {
         not_impl_err!(
             "Default planner compound identifier hasn't been implemented for ExprPlanner"
         )
+    }
+
+    /// Plans scalar functions, such as `ABS(<expr>)`
+    ///
+    /// Returns the original scalar function if not possible
+    fn plan_scalar(
+        &self,
+        expr: RawScalarExpr,
+        _schema: &DFSchema,
+    ) -> Result<PlannerResult<RawScalarExpr>> {
+        Ok(PlannerResult::Original(expr))
     }
 
     /// Plans aggregate functions, such as `COUNT(<expr>)`
@@ -316,6 +329,13 @@ pub struct RawFieldAccessExpr {
 pub struct RawDictionaryExpr {
     pub keys: Vec<Expr>,
     pub values: Vec<Expr>,
+}
+
+/// A scalar function to plan with [`ExprPlanner`].
+#[derive(Debug, Clone)]
+pub struct RawScalarExpr {
+    pub func: Arc<ScalarUDF>,
+    pub args: Vec<Expr>,
 }
 
 /// This structure is used by `AggregateFunctionPlanner` to plan operators with
@@ -415,6 +435,27 @@ pub trait RelationPlannerContext {
     /// Plans the specified relation through the full planner pipeline, starting
     /// from the first registered relation planner.
     fn plan(&mut self, relation: TableFactor) -> Result<LogicalPlan>;
+
+    /// Returns the common table expression (CTE) visible for the specified
+    /// table reference in the current query scope, if any.
+    ///
+    /// Relation planners run before DataFusion's built-in relation planning. A
+    /// planner that recognizes ordinary tables by name can use this method to
+    /// pass a same-named relation to the remaining planners. When every
+    /// ordinary name-based planner does so, built-in CTE resolution is
+    /// preserved. Use [`Self::object_name_to_table_reference`] to normalize an
+    /// [`ObjectName`] before looking it up.
+    ///
+    /// The lookup follows the same string-key matching as DataFusion's built-in
+    /// relation planning, including for qualified table references. Different
+    /// [`TableReference`] variants with the same string representation therefore
+    /// use the same CTE lookup key.
+    ///
+    /// The default implementation returns `None` for compatibility with custom
+    /// implementations of this context.
+    fn get_cte(&self, _name: &TableReference) -> Option<&LogicalPlan> {
+        None
+    }
 
     /// Converts a SQL expression into a logical expression using the current
     /// planner context.

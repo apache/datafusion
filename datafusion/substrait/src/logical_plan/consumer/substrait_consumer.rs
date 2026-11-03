@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::{
     from_aggregate_rel, from_cast, from_cross_rel, from_exchange_rel, from_fetch_rel,
@@ -36,7 +23,7 @@ use datafusion::common::{
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::expr::LambdaVariable;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, RwLock};
 use substrait::proto::expression as substrait_expression;
 use substrait::proto::expression::{
@@ -498,6 +485,28 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
             "Missing handler for user-defined type: {}",
             user_defined_type.type_reference
         )
+    }
+
+    /// Optional Arrow field metadata for a Substrait type.
+    ///
+    /// Arrow cannot represent some Substrait types natively. A user-defined
+    /// "json" type, for example, becomes a plain `DataType::Utf8`, which loses
+    /// the fact that the values are JSON. A consumer can return metadata here
+    /// to keep the original type recoverable from the Arrow schema.
+    ///
+    /// The consumer sees the whole [`Type`], so it can key the metadata off a
+    /// user-defined type, a type variation, or anything else it recognizes.
+    /// The metadata is attached to the Arrow [`Field`] built for this type,
+    /// including a type nested inside a list, map, or struct.
+    ///
+    /// The default attaches nothing.
+    ///
+    /// [`Field`]: datafusion::arrow::datatypes::Field
+    fn consume_type_metadata(
+        &self,
+        _typ: &Type,
+    ) -> datafusion::common::Result<Option<HashMap<String, String>>> {
+        Ok(None)
     }
 
     fn consume_user_defined_literal(
