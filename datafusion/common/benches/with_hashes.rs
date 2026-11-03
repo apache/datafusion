@@ -162,13 +162,9 @@ fn criterion_benchmark(c: &mut Criterion) {
         }
         // Apply additional null-density cases to all Int32 dictionary
         // benchmarks, including any added in the future.
-        if let Some(dict) = array
-            .as_any()
-            .downcast_ref::<DictionaryArray<Int32Type>>()
-        {
+        if let Some(dict) = array.as_any().downcast_ref::<DictionaryArray<Int32Type>>() {
             for null_percent in [50, 97] {
-                let nullable_array =
-                    with_null_keys(dict, null_percent as f32 / 100.0);
+                let nullable_array = with_null_keys(dict, null_percent as f32 / 100.0);
 
                 c.bench_function(
                     &format!("{name}: single, {null_percent}% null keys"),
