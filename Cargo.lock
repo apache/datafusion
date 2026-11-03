@@ -2413,6 +2413,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "datafusion-fuzz"
+version = "0.1.0"
+dependencies = [
+ "datafusion-common",
+ "datafusion-physical-plan",
+ "test-utils",
+ "tokio",
+]
+
+[[package]]
 name = "datafusion-macros"
 version = "55.1.0"
 dependencies = [

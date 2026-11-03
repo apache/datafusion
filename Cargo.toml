@@ -33,6 +33,7 @@ members = [
     "datafusion/execution",
     "datafusion/ffi",
     "datafusion/ffi/integration-tests",
+    "datafusion/fuzz",
     "datafusion/functions",
     "datafusion/functions-aggregate",
     "datafusion/functions-aggregate-common",

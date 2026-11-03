@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+//! One integration entrypoint for DataFusion's registered fuzz suites.
+
+use std::future::Future;
+use std::pin::Pin;
+
+use datafusion_common::Result;
+use test_utils::fuzz::{FuzzTest, RunConfig, run};
+
+mod suites;
+
+/// The single registration point for project-wide fuzz campaigns.
+#[tokio::test(flavor = "multi_thread")]
+async fn fuzz_tests() -> Result<()> {
+    let spill_pool = suites::spill_pool::SpillPoolFuzzer;
+    let suites = [Suite::new(
+        &spill_pool,
+        RunConfig {
+            run_seed: Some(0),
+            max_cases: Some(1000),
+            time_limit: None,
+            cases_per_dataset: 1000,
+        },
+    )];
+    run_suites(suites).await
+}
+
+async fn run_suites<'a>(suites: impl IntoIterator<Item = Suite<'a>>) -> Result<()> {
+    for suite in suites {
+        eprintln!("Running fuzz suite: {}", suite.name);
+        suite.campaign.await?;
+    }
+    Ok(())
+}
+
+/// Erase only a campaign's future, retaining each adapter's concrete dataset
+/// type. Borrowed fixtures and futures that are not `Send` remain supported.
+struct Suite<'a> {
+    name: &'a str,
+    campaign: Pin<Box<dyn Future<Output = Result<()>> + 'a>>,
+}
+
+impl<'a> Suite<'a> {
+    fn new<T: FuzzTest>(test: &'a T, config: RunConfig) -> Self {
+        Self {
+            name: test.name(),
+            campaign: Box::pin(async move {
+                let stats = run(test, config).await?;
+                eprintln!(
+                    "Fuzz suite {}: {} cases, {} datasets, {:?}",
+                    test.name(),
+                    stats.cases_passed,
+                    stats.datasets_prepared,
+                    stats.elapsed
+                );
+                Ok(())
+            }),
+        }
+    }
+}

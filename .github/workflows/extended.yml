@@ -82,10 +82,10 @@ jobs:
       - name: Show available disk space
         run: |
           df -h
-      - name: Run tests (excluding doctests)
+      - name: Run extended tests
         run: cargo xtask ci step test extended
-      - name: Run spill pool fuzzer with more iterations
-        run: cargo xtask ci step test spill-pool-fuzz
+      - name: Run fuzz tests
+        run: cargo xtask ci step test fuzz
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code

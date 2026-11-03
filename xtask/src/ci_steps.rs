@@ -15,8 +15,6 @@ type StepRunner = fn(&StepContext, &[String]) -> StepResult<CommandSpec>;
 const CI_COMMAND: &str = "cargo xtask ci step";
 const CI_SHORTCUT: &str = "cargo ci-step";
 const TPCH_DATA_DIR: &str = "datafusion/sqllogictest/test_files/tpch/data";
-/// The `datafusion-physical-plan` unit test that the `spill-pool-fuzz` step runs.
-const SPILL_POOL_FUZZ_TEST: &str = "spill::spill_pool::tests::spill_pool_scenario_fuzz";
 
 /// Metadata and implementation for one CI step.
 ///
@@ -40,7 +38,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]",
+        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         runner: StepContext::run_test,
@@ -438,10 +436,7 @@ impl StepContext {
                 }
             }
             "extended" => {
-                cmd_builder.doc(
-                    "Run tests behind the `extended_tests` feature. The `workspace`\n\
-                     step runs the remaining tests.",
-                );
+                cmd_builder.doc("Run the core extended tests.");
                 cmd_builder
                     .program("cargo")
                     .args([
@@ -450,6 +445,8 @@ impl StepContext {
                         "ci",
                         "-p",
                         "datafusion",
+                        "-p",
+                        "datafusion-fuzz",
                         "--test",
                         "extended_tests",
                         "--features",
@@ -457,11 +454,9 @@ impl StepContext {
                     ])
                     .env("RUST_BACKTRACE", "1");
             }
-            "spill-pool-fuzz" => {
-                cmd_builder.doc(
-                    "Run more random spill pool fuzzer scenarios than the `workspace`\n\
-                     step. This takes about a minute.",
-                );
+            "fuzz" => {
+                cmd_builder.doc("Run the centralized fuzz tests.");
+                // Match extended's packages and features to reuse compiled dependencies.
                 cmd_builder
                     .program("cargo")
                     .args([
@@ -469,14 +464,15 @@ impl StepContext {
                         "--profile",
                         "ci",
                         "-p",
-                        "datafusion-physical-plan",
-                        "--lib",
-                        "--",
-                        "--exact",
-                        SPILL_POOL_FUZZ_TEST,
+                        "datafusion",
+                        "-p",
+                        "datafusion-fuzz",
+                        "--test",
+                        "fuzz",
+                        "--features",
+                        "avro,backtrace,extended_tests,parquet_encryption",
                     ])
-                    .env("RUST_BACKTRACE", "1")
-                    .env("DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS", "1000");
+                    .env("RUST_BACKTRACE", "1");
             }
             "hash-collisions" => {
                 cmd_builder.doc(
@@ -557,7 +553,7 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
-    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|spill-pool-fuzz|hash-collisions|sqlite> [--explain]";
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|hash-collisions|sqlite> [--explain]";
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
@@ -606,28 +602,9 @@ mod tests {
         assert_eq!(error, TEST_USAGE);
     }
 
-    /// A filter that matches no test passes without running anything, so a
-    /// renamed or moved spill pool fuzzer would silently stop running in CI.
-    #[test]
-    fn spill_pool_fuzz_test_exists() {
-        let (module, test) = SPILL_POOL_FUZZ_TEST
-            .rsplit_once("::tests::")
-            .expect("test path has a `tests` module");
-        let file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../datafusion/physical-plan/src")
-            .join(format!("{}.rs", module.replace("::", "/")));
-        let source = std::fs::read_to_string(&file)
-            .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
-        assert!(
-            source.contains("mod tests {") && source.contains(&format!("fn {test}(")),
-            "{} has no test `{test}` in `mod tests`; update SPILL_POOL_FUZZ_TEST",
-            file.display()
-        );
-    }
-
-    /// The `extended` step runs only the `extended_tests` test target, which
-    /// requires the `extended_tests` feature. A test gated on the feature with a
-    /// `cfg` in any other target would never run in CI.
+    /// Extended workflows explicitly select targets gated by Cargo's
+    /// `required-features`. A test hidden behind a `cfg` in another target
+    /// would never run in those workflows.
     #[test]
     fn extended_tests_feature_only_gates_whole_targets() {
         fn visit(dir: &Path, found: &mut Vec<PathBuf>) {
@@ -651,8 +628,9 @@ mod tests {
         );
         assert!(
             found.is_empty(),
-            "put tests behind `extended_tests` in the `extended_tests` test target \
-             (see datafusion/core/Cargo.toml), not behind a `cfg` in {found:?}"
+            "gate complete test targets with `required-features = [\"extended_tests\"]` \
+             (see datafusion/core/Cargo.toml and datafusion/fuzz/Cargo.toml), \
+             not with a `cfg` in {found:?}"
         );
     }
 
@@ -926,34 +904,33 @@ cargo test \
                 command: &["test", "extended"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
-# Run tests behind the `extended_tests` feature. The `workspace`
-# step runs the remaining tests.
+# Run the core extended tests.
 
 cd /workspace && \
 RUST_BACKTRACE=1 \
 cargo test \
 --profile ci \
 -p datafusion \
+-p datafusion-fuzz \
 --test extended_tests \
 --features avro,backtrace,extended_tests,parquet_encryption
 ")
                 },
             },
             Cmd {
-                command: &["test", "spill-pool-fuzz"],
+                command: &["test", "fuzz"],
                 expected: |actual| {
                     insta::assert_snapshot!(actual, @r"
-# Run more random spill pool fuzzer scenarios than the `workspace`
-# step. This takes about a minute.
+# Run the centralized fuzz tests.
 
 cd /workspace && \
-DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS=1000 \
 RUST_BACKTRACE=1 \
 cargo test \
 --profile ci \
--p datafusion-physical-plan \
---lib \
--- --exact spill::spill_pool::tests::spill_pool_scenario_fuzz
+-p datafusion \
+-p datafusion-fuzz \
+--test fuzz \
+--features avro,backtrace,extended_tests,parquet_encryption
 ")
                 },
             },

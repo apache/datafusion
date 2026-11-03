@@ -814,24 +814,40 @@ impl RecordBatchStream for SpillPoolReader {
     }
 }
 
-#[cfg(test)]
+/// Internal fuzz entrypoint for the centralized test driver.
+///
+/// This is not a public API; see [API policy] for details.
+///
+/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
+#[cfg(any(test, feature = "test_utils"))]
+#[doc(hidden)]
+pub use tests::run_spill_pool_scenario;
+
+#[cfg(any(test, feature = "test_utils"))]
 mod tests {
     use super::*;
     use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::DataFusionError;
+    #[cfg(test)]
+    use datafusion_common::exec_datafusion_err;
     use datafusion_common::instant::Instant;
-    use datafusion_common::{DataFusionError, exec_datafusion_err};
+    #[cfg(test)]
     use datafusion_common_runtime::{JoinSet, SpawnedTask};
     use datafusion_execution::disk_manager::{
         DiskManager, DiskManagerBuilder, DiskManagerMode,
     };
+    #[cfg(test)]
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::{SpillFile, SpillWriter, TempFileFactory};
     use std::pin::Pin;
+    #[cfg(test)]
     use std::sync::Barrier;
+    #[cfg(test)]
     use std::sync::atomic::{AtomicBool, Ordering};
+    #[cfg(test)]
     use std::sync::mpsc::{self, Sender};
     use std::time::Duration;
 
@@ -839,6 +855,7 @@ mod tests {
         Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]))
     }
 
+    #[cfg(test)]
     fn create_test_batch(start: i32, count: usize) -> RecordBatch {
         let schema = create_test_schema();
         let a: ArrayRef = Arc::new(Int32Array::from(
@@ -847,6 +864,7 @@ mod tests {
         RecordBatch::try_new(schema, vec![a]).unwrap()
     }
 
+    #[cfg(test)]
     fn create_spill_channel(
         max_file_size: usize,
     ) -> (SpillPoolSink, SendableRecordBatchStream) {
@@ -858,6 +876,7 @@ mod tests {
         spsc_channel(max_file_size, spill_manager)
     }
 
+    #[cfg(test)]
     fn create_shared_spill_channel(
         max_file_size: usize,
     ) -> (SpillPoolWriter, SendableRecordBatchStream) {
@@ -869,6 +888,7 @@ mod tests {
         mpsc_channel(max_file_size, spill_manager)
     }
 
+    #[cfg(test)]
     fn create_spill_channel_with_metrics(
         max_file_size: usize,
     ) -> (SpillPoolSink, SendableRecordBatchStream, SpillMetrics) {
@@ -1300,6 +1320,7 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(test)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_concurrent_writers() -> Result<()> {
         let (writer, mut reader) = create_shared_spill_channel(1024 * 1024);
@@ -1690,6 +1711,10 @@ mod tests {
     /// different error paths of [`SpillPoolFile::poll_file`]: one fails while it
     /// builds the stream, the other fails while it polls a stream that is
     /// already built.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "Read failures are injected by unit tests")
+    )]
     enum ReadBehavior {
         /// Read the real bytes, after this delay.
         Delay(Duration),
@@ -1813,6 +1838,7 @@ mod tests {
     /// Holds the first disk write on the pool until the test releases it, and
     /// reports every other write so a test can wait for a second writer to
     /// reach a file of its own instead of sleeping.
+    #[cfg(test)]
     struct WriteGate {
         taken: AtomicBool,
         entered: Barrier,
@@ -1820,6 +1846,7 @@ mod tests {
         other_writes: Sender<()>,
     }
 
+    #[cfg(test)]
     impl WriteGate {
         fn hold_if_first(&self) {
             if self.taken.swap(true, Ordering::SeqCst) {
@@ -2049,8 +2076,10 @@ mod tests {
             .value(0)
     }
 
-    /// One randomly generated scenario, see [`spill_pool_scenario_fuzz`].
-    async fn run_spill_pool_scenario(seed: u64) -> Result<()> {
+    /// Run one seeded scenario checking concurrent writes, reader progress,
+    /// ordering, and spill-file cleanup. Seeds reproduce the logical workload
+    /// and delay policy; thread scheduling may still vary.
+    pub async fn run_spill_pool_scenario(seed: u64) -> Result<()> {
         use rand::rngs::StdRng;
         use rand::{Rng, SeedableRng};
 
@@ -2227,33 +2256,6 @@ mod tests {
             0,
             "{context}: spill files not released"
         );
-        Ok(())
-    }
-
-    /// Randomized scenarios against the pool's contract: after any set of
-    /// overlapping pushes the reader can drain everything without further
-    /// writer activity (no lost wakeups, no parking on one file while another
-    /// has data), it never signals EOF while a writer is alive, it returns
-    /// exactly the pushed batches (in order for a single writer), and the
-    /// files are released when it is dropped.
-    ///
-    /// `DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS` and
-    /// `DATAFUSION_SPILL_POOL_FUZZ_SEED` select how many scenarios run and
-    /// from which seed; a failure names its seed so it can be replayed.
-    #[tokio::test]
-    async fn spill_pool_scenario_fuzz() -> Result<()> {
-        let env_u64 = |name: &str, default: u64| {
-            std::env::var(name)
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(default)
-        };
-        let first_seed = env_u64("DATAFUSION_SPILL_POOL_FUZZ_SEED", 0);
-        let iterations = env_u64("DATAFUSION_SPILL_POOL_FUZZ_ITERATIONS", 50);
-        // `saturating_add` so a replay seed near `u64::MAX` cannot overflow.
-        for seed in first_seed..first_seed.saturating_add(iterations) {
-            run_spill_pool_scenario(seed).await?;
-        }
         Ok(())
     }
 }
