@@ -1013,6 +1013,66 @@ fn criterion_benchmark(c: &mut Criterion) {
         })
     });
 
+    // --- CTE materialization (unmarked, MATERIALIZED, NOT MATERIALIZED) ---
+    // A materialized CTE body is optimized on its own before the rest of the
+    // plan, so these measure that extra planning against inlined CTEs.
+    {
+        // sqlparser only parses `[NOT] MATERIALIZED` for the PostgreSQL dialect.
+        let cte_ctx = create_context();
+        rt.block_on(cte_ctx.sql("SET datafusion.sql_parser.dialect = 'PostgreSQL'"))
+            .unwrap();
+
+        let body = "SELECT a0, a1, SUM(a2) AS s FROM t1 WHERE a3 > 0 GROUP BY a0, a1";
+        let two_refs = "SELECT x.a0, x.s, y.s FROM c x JOIN c y ON x.a0 = y.a1";
+        for (name, marker) in [
+            ("unmarked", ""),
+            ("materialized", "MATERIALIZED "),
+            ("not_materialized", "NOT MATERIALIZED "),
+        ] {
+            let query = format!("WITH c AS {marker}({body}) SELECT * FROM c");
+            c.bench_function(&format!("physical_cte_{name}_one_ref"), |b| {
+                b.iter(|| physical_plan(&cte_ctx, &rt, &query))
+            });
+
+            let query = format!("WITH c AS {marker}({body}) {two_refs}");
+            c.bench_function(&format!("physical_cte_{name}_two_refs"), |b| {
+                b.iter(|| physical_plan(&cte_ctx, &rt, &query))
+            });
+
+            // Each CTE reads the previous one twice.
+            let mut query = format!("WITH c0 AS {marker}({body})");
+            for i in 1..6 {
+                let prev = i - 1;
+                write!(
+                    query,
+                    ", c{i} AS {marker}(SELECT x.a0, x.a1, x.s + y.s AS s \
+                     FROM c{prev} x JOIN c{prev} y ON x.a0 = y.a1)"
+                )
+                .unwrap();
+            }
+            query.push_str(" SELECT * FROM c5");
+            c.bench_function(&format!("physical_cte_{name}_chain_6"), |b| {
+                b.iter(|| physical_plan(&cte_ctx, &rt, &query))
+            });
+        }
+
+        // One CTE of each kind, each read twice.
+        let query = format!(
+            "WITH m AS MATERIALIZED ({body}), \
+               n AS NOT MATERIALIZED ({body}), \
+               u AS ({body}) \
+             SELECT m.a0, m.s, n.s, u.s FROM m \
+             JOIN m m2 ON m.a0 = m2.a1 \
+             JOIN n ON m.a0 = n.a0 \
+             JOIN n n2 ON n.a0 = n2.a1 \
+             JOIN u ON m.a0 = u.a0 \
+             JOIN u u2 ON u.a0 = u2.a1"
+        );
+        c.bench_function("physical_cte_mixed", |b| {
+            b.iter(|| physical_plan(&cte_ctx, &rt, &query))
+        });
+    }
+
     // --- TPC-H logical plans (uncommented from existing code) ---
     // These test real-world query patterns with moderate plan complexity.
 

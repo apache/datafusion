@@ -27,9 +27,10 @@
 //! disk is written in pieces, so that the move does not raise the memory that
 //! each reader needs.
 //!
-//! A scan is a leaf, and the body is not its child, so a scan cannot compute
-//! the statistics of the body. The planner copies them to the scan with
-//! [`MaterializedCteScanExec::with_body_statistics`].
+//! A scan is a leaf, and the body is not its child, so the planner copies the
+//! properties of the body to the scan. See
+//! [`MaterializedCteScanExec::with_body_statistics`] and
+//! [`MaterializedCteScanExec::with_body_properties`].
 
 use std::fmt;
 use std::pin::Pin;
@@ -44,6 +45,7 @@ use datafusion_common::{Result, Statistics, internal_err};
 use datafusion_common_runtime::JoinSet;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{SendableRecordBatchStream, SpillFile, TaskContext};
+use datafusion_physical_expr::equivalence::AcrossPartitions;
 use datafusion_physical_expr::{EquivalenceProperties, Partitioning, PhysicalExpr};
 use futures::stream::BoxStream;
 use futures::{Stream, StreamExt, TryStreamExt};
@@ -291,8 +293,17 @@ impl MaterializedCteBuffer {
         self.id
     }
 
+    /// The name of the CTE.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
     fn set_body(&self, body: Arc<dyn ExecutionPlan>) {
         *self.body.lock() = Some(body);
+    }
+
+    fn body(&self) -> Option<Arc<dyn ExecutionPlan>> {
+        self.body.lock().clone()
     }
 
     fn reset(&self) {
@@ -509,6 +520,18 @@ impl MaterializedCteExec {
     pub fn body(&self) -> &Arc<dyn ExecutionPlan> {
         &self.body
     }
+
+    /// Make this node the owner of its buffer: the buffer runs the body of
+    /// this node, for scans with the partition counts `scan_partitions`.
+    ///
+    /// [`MaterializedCteScanExec::bind`] adds the partition count of one scan
+    /// to the buffer, and each new `MaterializedCteExec` sets the body. Call
+    /// this function on the final plan when the planner made more than one
+    /// plan with the same buffer.
+    pub fn register(&self, scan_partitions: Vec<usize>) {
+        self.buffer.set_body(Arc::clone(&self.body));
+        *self.buffer.scan_partitions.lock() = scan_partitions;
+    }
 }
 
 impl DisplayAs for MaterializedCteExec {
@@ -653,19 +676,45 @@ impl ExecutionPlan for MaterializedCteExec {
     }
 }
 
+/// The statistics of a CTE body, copied to its scans.
+#[derive(Debug, Clone)]
+struct BodyStatistics {
+    /// The statistics of all partitions.
+    total: Arc<Statistics>,
+    /// The statistics of each partition, or empty when they are not known.
+    partitions: Arc<[Arc<Statistics>]>,
+}
+
 /// Reads the buffered output of a [`MaterializedCteExec`] body.
+///
+/// Partition `p` of a scan with `n` partitions replays the body partitions
+/// `p, p + n, ...` one after the other, and keeps the row order of each.
+///
+/// The scan is a leaf, so it cannot ask the body for its properties. The
+/// planner copies them to the scan:
+///
+/// - [`Self::with_body_statistics`] sets the statistics.
+/// - [`Self::with_body_properties`] sets the output ordering and the hash
+///   partitioning. These are a promise about the body of the final plan, and
+///   a wrong promise gives wrong results. The planner optimizes the body
+///   before it calls this, and does not change the body after.
 #[derive(Debug)]
 pub struct MaterializedCteScanExec {
     id: u64,
     name: String,
     schema: SchemaRef,
-    /// The statistics of all partitions of the body.
+    /// The partition count of a scan that does not mirror the body.
+    partitions: usize,
+    /// True when the scan has the partition count, the output ordering and
+    /// the hash partitioning of the body. See [`Self::with_body_properties`].
+    mirrors_body: bool,
+    /// The statistics of the body.
     ///
     /// These are valid only because the scan always returns every row of
     /// the body. If an operator that changes the rows (for example a limit
     /// or a filter) is ever pushed down into this scan, these statistics
     /// must be updated to match.
-    statistics: Option<Arc<Statistics>>,
+    statistics: Option<BodyStatistics>,
     buffer: Option<Arc<MaterializedCteBuffer>>,
     metrics: ExecutionPlanMetricsSet,
     cache: Arc<PlanProperties>,
@@ -679,17 +728,17 @@ impl MaterializedCteScanExec {
         schema: SchemaRef,
         partitions: usize,
     ) -> Self {
-        let cache = PlanProperties::new(
+        let partitions = partitions.max(1);
+        let cache = Self::compute_properties(
             EquivalenceProperties::new(Arc::clone(&schema)),
-            Partitioning::UnknownPartitioning(partitions.max(1)),
-            EmissionType::Final,
-            Boundedness::Bounded,
-        )
-        .with_scheduling_type(SchedulingType::Cooperative);
+            Partitioning::UnknownPartitioning(partitions),
+        );
         Self {
             id,
             name: name.into(),
             schema,
+            partitions,
+            mirrors_body: false,
             statistics: None,
             buffer: None,
             metrics: ExecutionPlanMetricsSet::new(),
@@ -697,38 +746,179 @@ impl MaterializedCteScanExec {
         }
     }
 
+    fn compute_properties(
+        eq_properties: EquivalenceProperties,
+        partitioning: Partitioning,
+    ) -> PlanProperties {
+        PlanProperties::new(
+            eq_properties,
+            partitioning,
+            EmissionType::Final,
+            Boundedness::Bounded,
+        )
+        .with_scheduling_type(SchedulingType::Cooperative)
+    }
+
     /// Bind this scan to the buffer of its [`MaterializedCteExec`].
+    ///
+    /// The new scan does not have the statistics or the properties of the
+    /// body.
     pub fn bind(&self, buffer: Arc<MaterializedCteBuffer>) -> Self {
-        buffer
-            .scan_partitions
-            .lock()
-            .push(self.cache.partitioning.partition_count());
+        let scan = Self::new(
+            self.id,
+            self.name.clone(),
+            Arc::clone(&self.schema),
+            self.partitions,
+        );
+        buffer.scan_partitions.lock().push(scan.partitions);
+        Self {
+            buffer: Some(buffer),
+            ..scan
+        }
+    }
+
+    /// Copy this scan, with the statistics of all partitions of the CTE
+    /// body (`statistics`) and the statistics of each partition of the body
+    /// (`partition_statistics`, empty when they are not known).
+    ///
+    /// The scan returns every row of the body, so the statistics stay
+    /// correct when the body is rewritten to a plan that gives the same rows
+    /// in the same partitions.
+    pub fn with_body_statistics(
+        &self,
+        statistics: Arc<Statistics>,
+        partition_statistics: Vec<Arc<Statistics>>,
+    ) -> Self {
         Self {
             id: self.id,
             name: self.name.clone(),
             schema: Arc::clone(&self.schema),
-            statistics: self.statistics.clone(),
-            buffer: Some(buffer),
+            partitions: self.partitions,
+            mirrors_body: self.mirrors_body,
+            statistics: Some(BodyStatistics {
+                total: statistics,
+                partitions: partition_statistics.into(),
+            }),
+            buffer: self.buffer.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
             cache: Arc::clone(&self.cache),
         }
     }
 
-    /// Copy this scan, with the statistics of all partitions of the CTE
-    /// body.
+    /// Give the scan the partition count of `body`, its hash partitioning and
+    /// its equivalence properties (orderings, equivalences and constants).
+    /// Partition `p` of the scan then replays partition `p` of the body.
     ///
-    /// The scan returns every row of the body, so the statistics stay
-    /// correct when the body is rewritten to a plan that gives the same rows.
-    pub fn with_body_statistics(&self, statistics: Arc<Statistics>) -> Self {
-        Self {
+    /// Returns `None` when `body` has no output ordering and no hash
+    /// partitioning, or when its schema is not the schema of the scan.
+    ///
+    /// The caller must make sure that the body of the plan that is executed
+    /// is `body`, or has the same properties. Otherwise the scan returns an
+    /// internal error when it executes.
+    pub fn with_body_properties(&self, body: &dyn ExecutionPlan) -> Option<Self> {
+        let body_schema = body.schema();
+        let same_columns = self.schema.fields().len() == body_schema.fields().len()
+            && self
+                .schema
+                .fields()
+                .iter()
+                .zip(body_schema.fields())
+                .all(|(a, b)| a.name() == b.name() && a.data_type() == b.data_type());
+        if !same_columns {
+            return None;
+        }
+        let ordering = body.output_ordering();
+        let partitioning = match body.output_partitioning() {
+            hash @ Partitioning::Hash(_, _) => Some(hash.clone()),
+            _ => None,
+        };
+        if ordering.is_none() && partitioning.is_none() {
+            return None;
+        }
+        let partitions = body.output_partitioning().partition_count();
+        // The schemas have the same columns, so the orderings, equivalences
+        // and constants of the body are valid for the scan.
+        let eq_properties = body
+            .equivalence_properties()
+            .clone()
+            .with_new_schema(Arc::clone(&self.schema))
+            .ok()?;
+        let cache = Self::compute_properties(
+            eq_properties,
+            partitioning.unwrap_or(Partitioning::UnknownPartitioning(partitions)),
+        );
+        Some(Self {
             id: self.id,
             name: self.name.clone(),
             schema: Arc::clone(&self.schema),
-            statistics: Some(statistics),
+            partitions: self.partitions,
+            mirrors_body: true,
+            statistics: self.statistics.clone(),
             buffer: self.buffer.clone(),
             metrics: ExecutionPlanMetricsSet::new(),
-            cache: Arc::clone(&self.cache),
+            cache: Arc::new(cache),
+        })
+    }
+
+    /// Check that `body` has the properties that this scan copied from the
+    /// body in [`Self::with_body_properties`].
+    ///
+    /// The planner does not change the body after the copy, but a rewrite of
+    /// the plan after planning (for example in a distributed engine) could,
+    /// and a scan that reports properties that its rows do not have gives
+    /// wrong results.
+    fn check_body_properties(&self, body: &dyn ExecutionPlan) -> Result<()> {
+        let claimed = &self.cache.eq_properties;
+        let actual = body.equivalence_properties();
+        let same_partitioning = match &self.cache.partitioning {
+            hash @ Partitioning::Hash(_, _) => body.output_partitioning() == hash,
+            _ => true,
+        };
+        let mut satisfied = same_partitioning
+            && claimed
+                .constraints()
+                .iter()
+                .all(|c| actual.constraints().contains(c))
+            && claimed.eq_group().iter().all(|class| {
+                let mut exprs = class.iter();
+                exprs.next().is_none_or(|first| {
+                    exprs.all(|expr| actual.eq_group().exprs_equal(first, expr))
+                })
+            })
+            && claimed.constants().iter().all(|constant| {
+                match (
+                    &constant.across_partitions,
+                    actual.is_expr_constant(&constant.expr),
+                ) {
+                    (_, None) => false,
+                    (AcrossPartitions::Heterogeneous, Some(_)) => true,
+                    (
+                        AcrossPartitions::Uniform(None),
+                        Some(AcrossPartitions::Uniform(_)),
+                    ) => true,
+                    (AcrossPartitions::Uniform(claimed), Some(actual)) => {
+                        actual == AcrossPartitions::Uniform(claimed.clone())
+                    }
+                }
+            });
+        for ordering in claimed.oeq_class().iter() {
+            if !satisfied {
+                break;
+            }
+            satisfied = actual.ordering_satisfy(ordering.clone())?;
         }
+        if !satisfied {
+            return internal_err!(
+                "MaterializedCteScanExec {} reports properties that the CTE body does not have",
+                self.name
+            );
+        }
+        Ok(())
+    }
+
+    /// The partition count of this scan.
+    fn partition_count(&self) -> usize {
+        self.cache.partitioning.partition_count()
     }
 
     /// The id of the [`MaterializedCteBuffer`] this scan reads.
@@ -746,7 +936,17 @@ impl DisplayAs for MaterializedCteScanExec {
     fn fmt_as(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, "MaterializedCteScanExec: name={}", self.name)
+                write!(f, "MaterializedCteScanExec: name={}", self.name)?;
+                if !self.mirrors_body {
+                    return Ok(());
+                }
+                if let Partitioning::Hash(_, _) = &self.cache.partitioning {
+                    write!(f, ", partitioning={}", self.cache.partitioning)?;
+                }
+                if let Some(ordering) = self.cache.output_ordering() {
+                    write!(f, ", output_ordering=[{ordering}]")?;
+                }
+                Ok(())
             }
             DisplayFormatType::TreeRender => write!(f, "name={}", self.name),
         }
@@ -802,11 +1002,26 @@ impl ExecutionPlan for MaterializedCteScanExec {
                 self.name
             );
         };
+        if self.mirrors_body
+            && let Some(body) = buffer.body()
+        {
+            self.check_body_properties(body.as_ref())?;
+        }
         let mut output = buffer.materialize(context)?;
-        let output_partitions = self.cache.partitioning.partition_count();
+        let output_partitions = self.partition_count();
+        let mirrors_body = self.mirrors_body;
+        let name = self.name.clone();
         let baseline = BaselineMetrics::new(&self.metrics, partition);
         let stream = futures::stream::once(async move {
             let output = std::future::poll_fn(|cx| output.get_shared(cx)).await?;
+            // The ordering and the hash partitioning of the scan are only
+            // correct when one scan partition replays one body partition.
+            if mirrors_body && output.partitions.len() != output_partitions {
+                return internal_err!(
+                    "MaterializedCteScanExec {name} has {output_partitions} partitions, but the CTE body has {}",
+                    output.partitions.len()
+                );
+            }
             replay(output, partition, output_partitions)
         })
         .try_flatten()
@@ -826,24 +1041,40 @@ impl ExecutionPlan for MaterializedCteScanExec {
     /// Returns the statistics that the planner copied from the CTE body.
     /// See [`Self::with_body_statistics`].
     ///
-    /// The statistics of one partition are known only when the scan has one
-    /// partition.
-    ///
-    /// TODO: support multiple partitions, see
-    /// <https://github.com/apache/datafusion/issues/26424>.
+    /// Partition `p` of a scan with `n` partitions replays the body
+    /// partitions `p, p + n, ...`, so its statistics are those of these body
+    /// partitions, merged.
     fn statistics_from_inputs(
         &self,
         _input_stats: &[Arc<Statistics>],
         args: &StatisticsArgs,
     ) -> Result<Arc<Statistics>> {
-        match &self.statistics {
-            Some(statistics)
-                if args.partition().is_none()
-                    || self.cache.partitioning.partition_count() == 1 =>
-            {
-                Ok(Arc::clone(statistics))
+        let unknown = || Ok(Arc::new(Statistics::new_unknown(&self.schema)));
+        let Some(statistics) = &self.statistics else {
+            return unknown();
+        };
+        let output_partitions = self.partition_count();
+        let partition = match args.partition() {
+            None => return Ok(Arc::clone(&statistics.total)),
+            Some(_) if output_partitions == 1 => {
+                return Ok(Arc::clone(&statistics.total));
             }
-            _ => Ok(Arc::new(Statistics::new_unknown(&self.schema))),
+            Some(partition) => partition,
+        };
+        let replayed = statistics
+            .partitions
+            .iter()
+            .skip(partition)
+            .step_by(output_partitions)
+            .map(|statistics| statistics.as_ref())
+            .collect::<Vec<_>>();
+        match replayed.as_slice() {
+            [] => unknown(),
+            [one] => Ok(Arc::new((*one).clone())),
+            many => Ok(Arc::new(Statistics::try_merge_iter(
+                many.iter().copied(),
+                &self.schema,
+            )?)),
         }
     }
 }
@@ -853,7 +1084,11 @@ mod tests {
     use super::*;
     use crate::common::collect;
     use crate::empty::EmptyExec;
+    use crate::filter::FilterExec;
     use crate::filter_pushdown::PushedDown;
+    use crate::projection::ProjectionExec;
+    use crate::repartition::RepartitionExec;
+    use crate::sorts::sort::SortExec;
     use crate::statistics::StatisticsContext;
     use crate::test::TestMemoryExec;
     use arrow::array::{Array, Int32Array};
@@ -861,36 +1096,122 @@ mod tests {
     use datafusion_common::stats::Precision;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_physical_expr::expressions::{col, lit};
+    use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 
-    #[test]
-    fn scan_reports_body_statistics() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    fn int_schema() -> SchemaRef {
+        Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]))
+    }
+
+    /// A body with `partitions` partitions that each hold the values 3, 1, 2.
+    fn unsorted_body(partitions: usize) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = int_schema();
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![Arc::new(Int32Array::from(vec![3, 1, 2]))],
         )?;
-        let body = TestMemoryExec::try_new_exec(
-            &[vec![batch.clone()], vec![batch]],
-            Arc::clone(&schema),
-            None,
-        )?;
+        let body: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&vec![vec![batch]; partitions], schema, None)?;
+        Ok(body)
+    }
+
+    fn sorted(input: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        let ordering =
+            LexOrdering::new([PhysicalSortExpr::new_default(col("a", &input.schema())?)])
+                .unwrap();
+        Ok(Arc::new(
+            SortExec::new(ordering, input).with_preserve_partitioning(true),
+        ))
+    }
+
+    fn hash_partitioned(
+        input: Arc<dyn ExecutionPlan>,
+        partitions: usize,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let partitioning =
+            Partitioning::Hash(vec![col("a", &input.schema())?], partitions);
+        Ok(Arc::new(RepartitionExec::try_new(input, partitioning)?))
+    }
+
+    /// A scan of a new CTE with the body `body`, with 4 partitions.
+    fn bound_scan(
+        body: Arc<dyn ExecutionPlan>,
+    ) -> (MaterializedCteExec, MaterializedCteScanExec) {
+        let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
+        let schema = body.schema();
+        let exec = MaterializedCteExec::new(
+            body,
+            Arc::new(EmptyExec::new(Arc::clone(&schema))),
+            Arc::clone(&buffer),
+        );
+        let scan = MaterializedCteScanExec::new(0, "c", schema, 4).bind(buffer);
+        (exec, scan)
+    }
+
+    #[test]
+    fn scan_reports_body_statistics() -> Result<()> {
+        let body = unsorted_body(2)?;
         let context = StatisticsContext::new();
         let body_statistics = context.compute(body.as_ref(), &StatisticsArgs::new())?;
         assert_eq!(body_statistics.num_rows, Precision::Exact(6));
 
-        let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
-        let scan = MaterializedCteScanExec::new(0, "c", schema, 4).bind(buffer);
+        let (_exec, scan) = bound_scan(body);
         let statistics = context.compute(&scan, &StatisticsArgs::new())?;
         assert_eq!(statistics.num_rows, Precision::Absent);
 
-        let scan = scan.with_body_statistics(body_statistics);
-        assert!(scan.is_bound());
+        let scan = scan.with_body_statistics(body_statistics, vec![]);
         let statistics = context.compute(&scan, &StatisticsArgs::new())?;
         assert_eq!(statistics.num_rows, Precision::Exact(6));
-        // The 4 scan partitions do not map to the 2 body partitions.
+        // Without the statistics of each body partition, the statistics of
+        // one scan partition are not known.
         let args = StatisticsArgs::new().with_partition(Some(0));
         let statistics = context.compute(&scan, &args)?;
         assert_eq!(statistics.num_rows, Precision::Absent);
+        Ok(())
+    }
+
+    /// The number of rows of each partition of `scan`.
+    fn partition_rows(scan: &MaterializedCteScanExec) -> Result<Vec<Precision<usize>>> {
+        let context = StatisticsContext::new();
+        (0..scan.partition_count())
+            .map(|partition| {
+                let args = StatisticsArgs::new().with_partition(Some(partition));
+                Ok(context.compute(scan, &args)?.num_rows)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn scan_reports_body_partition_statistics() -> Result<()> {
+        // A body with 3 partitions of 3 rows.
+        let schema = int_schema();
+        let rows = |rows| {
+            Arc::new(
+                Statistics::new_unknown(&schema).with_num_rows(Precision::Exact(rows)),
+            )
+        };
+        let statistics = rows(9);
+        let partition_statistics = vec![rows(3); 3];
+        let scan = |partitions: usize| {
+            let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
+            MaterializedCteScanExec::new(0, "c", Arc::clone(&schema), partitions)
+                .bind(buffer)
+                .with_body_statistics(
+                    Arc::clone(&statistics),
+                    partition_statistics.clone(),
+                )
+        };
+        let exact = Precision::Exact;
+        // One scan partition for each body partition.
+        assert_eq!(partition_rows(&scan(3))?, vec![exact(3); 3]);
+        // Scan partition 0 replays the body partitions 0 and 2.
+        assert_eq!(partition_rows(&scan(2))?, vec![exact(6), exact(3)]);
+        // One scan partition replays all body partitions.
+        assert_eq!(partition_rows(&scan(1))?, vec![exact(9)]);
+        // Scan partition 3 replays no body partition.
+        assert_eq!(
+            partition_rows(&scan(4))?,
+            vec![exact(3), exact(3), exact(3), Precision::Absent]
+        );
         Ok(())
     }
 
@@ -924,7 +1245,7 @@ mod tests {
         let buffer = Arc::new(MaterializedCteBuffer::new(0, "c"));
         let scan = MaterializedCteScanExec::new(0, "c", Arc::new(schema.clone()), 1)
             .bind(buffer)
-            .with_body_statistics(computed);
+            .with_body_statistics(computed, vec![]);
         // Every column keeps its min, max, null count, distinct count and
         // byte size, in the order of the scan schema.
         let statistics = context.compute(&scan, &StatisticsArgs::new())?;
@@ -934,6 +1255,207 @@ mod tests {
         let args = StatisticsArgs::new().with_partition(Some(0));
         let statistics = context.compute(&scan, &args)?;
         assert_eq!(*statistics, body_statistics);
+        Ok(())
+    }
+
+    #[test]
+    fn scan_mirrors_body_ordering_and_partitioning() -> Result<()> {
+        // No ordering and no hash partitioning: nothing to mirror.
+        let (_exec, scan) = bound_scan(unsorted_body(2)?);
+        assert!(
+            scan.with_body_properties(unsorted_body(2)?.as_ref())
+                .is_none()
+        );
+        assert!(scan.properties().output_ordering().is_none());
+        assert_eq!(scan.partition_count(), 4);
+
+        // Ordering.
+        let body = sorted(unsorted_body(2)?)?;
+        let mirror = scan.with_body_properties(body.as_ref()).unwrap();
+        assert_eq!(
+            mirror.properties().output_ordering(),
+            body.output_ordering()
+        );
+        assert_eq!(mirror.partition_count(), 2);
+        assert!(mirror.is_bound());
+
+        // Hash partitioning.
+        let body = hash_partitioned(unsorted_body(2)?, 3)?;
+        let mirror = scan.with_body_properties(body.as_ref()).unwrap();
+        assert_eq!(
+            &mirror.properties().partitioning,
+            body.output_partitioning()
+        );
+        assert!(mirror.properties().output_ordering().is_none());
+
+        // `bind` removes the properties of the body.
+        let (_exec, rebound) = bound_scan(body);
+        let rebound = mirror.bind(Arc::clone(rebound.buffer.as_ref().unwrap()));
+        assert_eq!(rebound.partition_count(), 4);
+        assert!(matches!(
+            &rebound.properties().partitioning,
+            Partitioning::UnknownPartitioning(4)
+        ));
+        Ok(())
+    }
+
+    /// A scan with the properties of the body replays one body partition per
+    /// partition, in order.
+    #[tokio::test]
+    async fn mirror_scan_replays_each_body_partition() -> Result<()> {
+        let body = sorted(unsorted_body(2)?)?;
+        let (_exec, scan) = bound_scan(Arc::clone(&body));
+        let scan = scan.with_body_properties(body.as_ref()).unwrap();
+        let context = Arc::new(TaskContext::default());
+        for partition in 0..2 {
+            let batches = collect(scan.execute(partition, Arc::clone(&context))?).await?;
+            let values: Vec<i32> = batches
+                .iter()
+                .flat_map(|b| {
+                    let array = b.column(0).as_any().downcast_ref::<Int32Array>();
+                    array.unwrap().values().to_vec()
+                })
+                .collect();
+            assert_eq!(values, vec![1, 2, 3]);
+        }
+        Ok(())
+    }
+
+    /// If the body changes after the scan got its properties, and the planner
+    /// did not check the scan, the scan fails. It must not interleave body
+    /// partitions and report them as sorted.
+    #[tokio::test]
+    async fn mirror_scan_rejects_other_body_partition_count() -> Result<()> {
+        let body = sorted(unsorted_body(2)?)?;
+        let (exec, scan) = bound_scan(Arc::clone(&body));
+        let scan = scan.with_body_properties(body.as_ref()).unwrap();
+        let _exec = MaterializedCteExec::new(
+            sorted(unsorted_body(3)?)?,
+            Arc::new(EmptyExec::new(int_schema())),
+            Arc::clone(exec.buffer()),
+        );
+        let context = Arc::new(TaskContext::default());
+        let error = collect(scan.execute(0, context)?).await.unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("has 2 partitions, but the CTE body has 3"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    /// Execute partition 0 of a scan with the properties of `body`, after the
+    /// body of its CTE is replaced with `final_body`, and return the error.
+    async fn mirror_scan_error(
+        body: Arc<dyn ExecutionPlan>,
+        final_body: Arc<dyn ExecutionPlan>,
+    ) -> Result<String> {
+        let (exec, scan) = bound_scan(Arc::clone(&body));
+        let scan = scan.with_body_properties(body.as_ref()).unwrap();
+        let _exec = MaterializedCteExec::new(
+            final_body,
+            Arc::new(EmptyExec::new(body.schema())),
+            Arc::clone(exec.buffer()),
+        );
+        let context = Arc::new(TaskContext::default());
+        let result = match scan.execute(0, context) {
+            Ok(stream) => collect(stream).await,
+            Err(e) => Err(e),
+        };
+        Ok(result.unwrap_err().to_string())
+    }
+
+    #[tokio::test]
+    async fn mirror_scan_rejects_unsorted_body() -> Result<()> {
+        let error =
+            mirror_scan_error(sorted(unsorted_body(2)?)?, unsorted_body(2)?).await?;
+        assert!(
+            error.contains("reports properties that the CTE body does not have"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mirror_scan_rejects_other_hash_keys() -> Result<()> {
+        let body = hash_partitioned(unsorted_body(1)?, 2)?;
+        let schema = body.schema();
+        let a_plus_one = Arc::new(datafusion_physical_expr::expressions::BinaryExpr::new(
+            col("a", &schema)?,
+            datafusion_expr::Operator::Plus,
+            lit(1i32),
+        )) as Arc<dyn PhysicalExpr>;
+        let final_body = Arc::new(RepartitionExec::try_new(
+            unsorted_body(1)?,
+            Partitioning::Hash(vec![a_plus_one], 2),
+        )?);
+        let error = mirror_scan_error(body, final_body).await?;
+        assert!(
+            error.contains("reports properties that the CTE body does not have"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn mirror_scan_rejects_body_without_constant() -> Result<()> {
+        let only_ones =
+            |input: Arc<dyn ExecutionPlan>| -> Result<Arc<dyn ExecutionPlan>> {
+                let predicate =
+                    Arc::new(datafusion_physical_expr::expressions::BinaryExpr::new(
+                        col("a", &input.schema())?,
+                        datafusion_expr::Operator::Eq,
+                        lit(1i32),
+                    ));
+                Ok(Arc::new(FilterExec::try_new(predicate, input)?))
+            };
+        let body = only_ones(hash_partitioned(unsorted_body(1)?, 2)?)?;
+        let final_body = hash_partitioned(unsorted_body(1)?, 2)?;
+        let error = mirror_scan_error(body, final_body).await?;
+        assert!(
+            error.contains("reports properties that the CTE body does not have"),
+            "{error}"
+        );
+        Ok(())
+    }
+
+    /// The scan reports the constants and the equivalences of the body, not
+    /// only its first ordering.
+    #[test]
+    fn mirror_scan_reports_body_equivalences() -> Result<()> {
+        let input = hash_partitioned(unsorted_body(1)?, 2)?;
+        let predicate = Arc::new(datafusion_physical_expr::expressions::BinaryExpr::new(
+            col("a", &input.schema())?,
+            datafusion_expr::Operator::Eq,
+            lit(1i32),
+        ));
+        let body: Arc<dyn ExecutionPlan> =
+            Arc::new(FilterExec::try_new(predicate, input)?);
+        let (_exec, scan) = bound_scan(Arc::clone(&body));
+        let scan = scan.with_body_properties(body.as_ref()).unwrap();
+        let a = col("a", &scan.schema())?;
+        assert!(
+            scan.properties()
+                .eq_properties
+                .is_expr_constant(&a)
+                .is_some()
+        );
+
+        let a = col("a", &int_schema())?;
+        let projection = ProjectionExec::try_new(
+            vec![(Arc::clone(&a), "a".to_string()), (a, "b".to_string())],
+            unsorted_body(2)?,
+        )?;
+        let body = sorted(Arc::new(projection))?;
+        let (_exec, scan) = bound_scan(Arc::clone(&body));
+        let scan = scan.with_body_properties(body.as_ref()).unwrap();
+        let b = col("b", &scan.schema())?;
+        assert!(
+            scan.properties()
+                .eq_properties
+                .ordering_satisfy([PhysicalSortExpr::new_default(b)])?
+        );
         Ok(())
     }
 
