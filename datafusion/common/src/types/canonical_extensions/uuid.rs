@@ -9,6 +9,7 @@ use arrow::array::{Array, FixedSizeBinaryArray};
 use arrow::datatypes::DataType;
 use arrow::util::display::{ArrayFormatter, DisplayIndex, FormatOptions, FormatResult};
 use arrow_schema::extension::{ExtensionType, Uuid};
+use std::borrow::Cow;
 use std::fmt::Write;
 use uuid::Bytes;
 
@@ -43,8 +44,8 @@ impl DFExtensionType for DFUuid {
         self.0.serialize_metadata()
     }
 
-    fn display_name(&self) -> Option<String> {
-        Some("UUID".to_owned())
+    fn display_name(&self) -> Option<Cow<'_, str>> {
+        Some(Cow::Borrowed("UUID"))
     }
 
     fn create_array_formatter<'fmt>(

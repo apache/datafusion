@@ -6,7 +6,7 @@
 //! tables and `SHOW` statements.
 
 use crate::TableType;
-use crate::extension_types::field_type_display_name;
+use crate::extension_types::append_field_type_display_name;
 use crate::registry::ExtensionTypeRegistryRef;
 use arrow::array::ArrayRef;
 use arrow::array::builder::{BooleanBuilder, StringBuilder, UInt8Builder, UInt64Builder};
@@ -327,11 +327,11 @@ impl InformationSchemaColumnsBuilder {
 
         // "System supplied type" --> Use the display name of the extension type or the
         // display format of the datatype
-        let data_type = match &self.extension_types {
-            Some(registry) => field_type_display_name(registry.as_ref(), field),
-            None => field.data_type().to_string(),
-        };
-        self.data_types.append_value(data_type);
+        append_field_type_display_name(
+            self.extension_types.as_deref(),
+            field,
+            &mut self.data_types,
+        );
 
         // "If data_type identifies a character or bit string type, the
         // declared maximum length; null for all other data types or

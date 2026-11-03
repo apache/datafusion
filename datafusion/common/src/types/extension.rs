@@ -6,6 +6,7 @@ use crate::error::Result;
 use arrow::array::Array;
 use arrow::util::display::{ArrayFormatter, FormatOptions};
 use arrow_schema::DataType;
+use std::borrow::Cow;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -64,13 +65,13 @@ pub trait DFExtensionType: Debug + Send + Sync {
     /// Returns the serialized metadata.
     fn serialize_metadata(&self) -> Option<String>;
 
-    /// Returns the name of this type shown by schema introspection, such as `DESCRIBE`,
-    /// `SHOW COLUMNS` and `information_schema.columns`.
+    /// Returns the type's presentation label for schema introspection, such as
+    /// `DESCRIBE`, `SHOW COLUMNS` and `information_schema.columns`.
     ///
-    /// The name may depend on the metadata of the type, for example `VARCHAR(10)`.
-    ///
+    /// Names may borrow from this instance or be computed from its metadata.
+    /// The label is not a unique type identifier or SQL syntax guaranteed to round-trip.
     /// If `None` is returned, the storage type is shown.
-    fn display_name(&self) -> Option<String> {
+    fn display_name(&self) -> Option<Cow<'_, str>> {
         None
     }
 

@@ -6,6 +6,7 @@ use crate::Result;
 use crate::types::extension::DFExtensionType;
 use arrow::datatypes::DataType;
 use arrow_schema::extension::{ExtensionType, Json};
+use std::borrow::Cow;
 
 /// Defines the extension type logic for the canonical `arrow.json` extension type. This extension
 /// type defines that a particular string field stores JSON values.
@@ -43,7 +44,7 @@ impl DFExtensionType for DFJson {
         self.inner.serialize_metadata()
     }
 
-    fn display_name(&self) -> Option<String> {
-        Some("JSON".to_owned())
+    fn display_name(&self) -> Option<Cow<'_, str>> {
+        Some(Cow::Borrowed("JSON"))
     }
 }
