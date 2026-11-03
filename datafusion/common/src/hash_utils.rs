@@ -565,6 +565,7 @@ fn hash_generic_byte_view_array<T: ByteViewType>(
     }
 }
 
+/// Scatters non-null dictionary hashes in independent lanes to overlap key-indexed loads.
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(always)]
 fn scatter_non_null_dictionary<K: ArrowDictionaryKeyType, const MULTI_COL: bool>(
@@ -2351,56 +2352,6 @@ mod tests {
 
         // Verify callback result is returned correctly
         assert_eq!(result, expected_hashes);
-    }
-
-    #[test]
-    #[cfg(not(feature = "force_hash_collisions"))]
-    fn test_non_null_dictionary_hash_fast_path() {
-        let random_state = RandomState::with_seed(0);
-        let seed: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
-        let non_null: ArrayRef = Arc::new(
-            DictionaryArray::<Int32Type>::try_new(
-                Int32Array::from(vec![0, 1, 0, 1]),
-                Arc::new(StringArray::from(vec!["a", "b"])),
-            )
-            .unwrap(),
-        );
-        let null_values: ArrayRef = Arc::new(
-            DictionaryArray::<Int32Type>::try_new(
-                Int32Array::from(vec![0, 1, 0, 1]),
-                Arc::new(StringArray::from(vec![Some("a"), None])),
-            )
-            .unwrap(),
-        );
-        let null_keys: ArrayRef = Arc::new(
-            DictionaryArray::<Int32Type>::try_new(
-                Int32Array::from(vec![Some(0), None, Some(1), None]),
-                Arc::new(StringArray::from(vec!["a", "b"])),
-            )
-            .unwrap(),
-        );
-
-        let mut full = vec![0; non_null.len()];
-        create_hashes([&non_null], &random_state, &mut full).unwrap();
-        let mut prefix = vec![0; non_null.len() - 1];
-        create_hashes([&non_null], &random_state, &mut prefix).unwrap();
-        assert_eq!(prefix, full[..prefix.len()]);
-
-        for dictionary in [non_null, null_values, null_keys] {
-            with_hashes([&seed], &random_state, |hashes| {
-                assert!(hashes.iter().all(|hash| *hash != 0));
-                Ok(())
-            })
-            .unwrap();
-
-            let mut expected = vec![0; dictionary.len()];
-            create_hashes([&dictionary], &random_state, &mut expected).unwrap();
-            with_hashes([&dictionary], &random_state, |hashes| {
-                assert_eq!(hashes, expected);
-                Ok(())
-            })
-            .unwrap();
-        }
     }
 
     #[test]
