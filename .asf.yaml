@@ -99,6 +99,9 @@ github:
     branch-55:
       required_pull_request_reviews:
         required_approving_review_count: 1
+    branch-56:
+      required_pull_request_reviews:
+        required_approving_review_count: 1
 
   # GitHub merge queue settings for `main`.
   #
