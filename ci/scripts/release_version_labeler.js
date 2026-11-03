@@ -41,12 +41,23 @@ module.exports = async ({ github, context }) => {
     }
 
     // A squash merge or a merge queue commit maps to the merged pull request.
-    const { data: pulls } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        commit_sha: context.sha
-    });
-    for (const pull of pulls.filter((pull) => pull.merged_at && pull.base.ref === 'main')) {
+    // The pull request can lag the push by a few seconds, so retry.
+    let pulls = [];
+    for (let attempt = 0; attempt < 3 && pulls.length === 0; attempt++) {
+        if (attempt > 0) {
+            await new Promise((resolve) => setTimeout(resolve, 5000));
+        }
+        const { data } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            commit_sha: context.sha
+        });
+        pulls = data.filter((pull) => pull.merged_at && pull.base.ref === 'main');
+    }
+    if (pulls.length === 0) {
+        throw new Error(`No merged pull request found for ${context.sha}`);
+    }
+    for (const pull of pulls) {
         await github.rest.issues.addLabels({
             owner: context.repo.owner,
             repo: context.repo.repo,
