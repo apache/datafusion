@@ -520,8 +520,10 @@ impl RangePartitioning {
         }
     }
 
-    /// Adapts this range partitioning to the given expressions, preserving split points, bounds, and sort options.
-    /// The new expressions must describe the same keys for the bounds to remain valid.
+    /// Adapts this range partitioning to the given expressions, preserving split
+    /// points, retained samples, and sort options. Outer bounds are discarded
+    /// because the other input may contain keys outside this input's range.
+    ///
     /// Returns `None` if `exprs` count doesn't match ordering length or expression types don't match split points.
     pub fn adapt(
         &self,
@@ -546,6 +548,8 @@ impl RangePartitioning {
         }
         Some(Self {
             ordering: new_ordering,
+            start_bound: None,
+            end_bound: None,
             ..self.clone()
         })
     }
@@ -855,13 +859,9 @@ impl Partitioning {
         };
 
         match self {
-            Partitioning::Range(ref_range) => {
-                ref_range.adapt(exprs, child_schema).map(|mut range| {
-                    range.start_bound = None;
-                    range.end_bound = None;
-                    Partitioning::Range(range)
-                })
-            }
+            Partitioning::Range(ref_range) => ref_range
+                .adapt(exprs, child_schema)
+                .map(Partitioning::Range),
             Partitioning::Hash(_, ref_count) => {
                 Some(Partitioning::Hash(exprs.to_vec(), *ref_count))
             }
@@ -1981,8 +1981,8 @@ mod tests {
         assert!(adapted.ordering()[0].expr.eq(&fixture.col(2)));
         assert_eq!(adapted.partition_count(), 3);
         assert_eq!(adapted.max_partition_count(), 5);
-        assert_eq!(adapted.start_bound(), range.start_bound());
-        assert_eq!(adapted.end_bound(), range.end_bound());
+        assert_eq!(adapted.start_bound(), None);
+        assert_eq!(adapted.end_bound(), None);
         assert_eq!(adapted.scale(5).unwrap().partition_count(), 5);
 
         // Adapting to col_b (different type Int64) fails
