@@ -1016,6 +1016,11 @@ fn criterion_benchmark(c: &mut Criterion) {
     // --- CTE materialization (unmarked, MATERIALIZED, NOT MATERIALIZED) ---
     // A materialized CTE body is optimized on its own before the rest of the
     // plan, so these measure that extra planning against inlined CTEs.
+    //
+    // The planner inlines unmarked and `NOT MATERIALIZED` CTEs alike, so their
+    // cases match. They are separate because the unmarked default can change:
+    // PostgreSQL materializes an unmarked CTE that the query reads more than
+    // once. `NOT MATERIALIZED` always inlines, so it stays the inlined baseline.
     {
         // sqlparser only parses `[NOT] MATERIALIZED` for the PostgreSQL dialect.
         let cte_ctx = create_context();
