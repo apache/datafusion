@@ -1,0 +1,280 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+statement ok
+CREATE TABLE a (k VARCHAR, value INT);
+
+statement ok
+CREATE TABLE b (k VARCHAR, value INT);
+
+statement ok
+INSERT INTO a VALUES ('k1', 1), ('k2', 2), (NULL, 3);
+
+statement ok
+INSERT INTO b VALUES ('k1', 10), ('k1', 11), ('k2', 20), (NULL, 30);
+
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+# A predicate inside a derived table must reach the other join input.
+query TT
+EXPLAIN SELECT * FROM (SELECT * FROM a WHERE k = 'k1') a
+JOIN b ON a.k = b.k;
+----
+logical_plan
+01)Inner Join: a.k = b.k
+02)--SubqueryAlias: a
+03)----Filter: a.k = Utf8View("k1")
+04)------TableScan: a projection=[k, value]
+05)--Filter: b.k = Utf8View("k1")
+06)----TableScan: b projection=[k, value]
+
+query TITI rowsort
+SELECT * FROM (SELECT * FROM a WHERE k = 'k1') a
+JOIN b ON a.k = b.k;
+----
+k1 1 k1 10
+k1 1 k1 11
+
+# Infer from the right input as well.
+query TT
+EXPLAIN SELECT * FROM a JOIN (SELECT * FROM b WHERE k = 'k1') b ON a.k = b.k;
+----
+logical_plan
+01)Inner Join: a.k = b.k
+02)--Filter: a.k = Utf8View("k1")
+03)----TableScan: a projection=[k, value]
+04)--SubqueryAlias: b
+05)----Filter: b.k = Utf8View("k1")
+06)------TableScan: b projection=[k, value]
+
+query TITI rowsort
+SELECT * FROM a JOIN (SELECT * FROM b WHERE k = 'k1') b ON a.k = b.k;
+----
+k1 1 k1 10
+k1 1 k1 11
+
+# Map a renamed column through a projection and a CTE alias.
+query TT
+EXPLAIN WITH selected AS (SELECT k AS id, value FROM a WHERE k = 'k1')
+SELECT * FROM selected s JOIN b ON s.id = b.k;
+----
+logical_plan
+01)Inner Join: s.id = b.k
+02)--SubqueryAlias: s
+03)----SubqueryAlias: selected
+04)------Projection: a.k AS id, a.value
+05)--------Filter: a.k = Utf8View("k1")
+06)----------TableScan: a projection=[k, value]
+07)--Filter: b.k = Utf8View("k1")
+08)----TableScan: b projection=[k, value]
+
+query TITI rowsort
+WITH selected AS (SELECT k AS id, value FROM a WHERE k = 'k1')
+SELECT * FROM selected s JOIN b ON s.id = b.k;
+----
+k1 1 k1 10
+k1 1 k1 11
+
+# Copy the key conjunct, but not a predicate on another column.
+query TT
+EXPLAIN SELECT * FROM (SELECT * FROM a WHERE k = 'k1' AND value = 1) a
+JOIN b ON a.k = b.k;
+----
+logical_plan
+01)Inner Join: a.k = b.k
+02)--SubqueryAlias: a
+03)----Filter: a.k = Utf8View("k1") AND a.value = Int32(1)
+04)------TableScan: a projection=[k, value]
+05)--Filter: b.k = Utf8View("k1")
+06)----TableScan: b projection=[k, value]
+
+query TITI rowsort
+SELECT * FROM (SELECT * FROM a WHERE k = 'k1' AND value = 1) a
+JOIN b ON a.k = b.k;
+----
+k1 1 k1 10
+k1 1 k1 11
+
+# Ranges can be inferred too.
+query TT
+EXPLAIN SELECT * FROM (SELECT * FROM a WHERE k >= 'k2') a JOIN b ON a.k = b.k;
+----
+logical_plan
+01)Inner Join: a.k = b.k
+02)--SubqueryAlias: a
+03)----Filter: a.k >= Utf8View("k2")
+04)------TableScan: a projection=[k, value]
+05)--Filter: b.k >= Utf8View("k2")
+06)----TableScan: b projection=[k, value]
+
+query TITI rowsort
+SELECT * FROM (SELECT * FROM a WHERE k >= 'k2') a JOIN b ON a.k = b.k;
+----
+k2 2 k2 20
+
+# A mixed predicate is not a restriction on the key alone.
+query TT
+EXPLAIN SELECT * FROM (SELECT * FROM a WHERE k = 'k1' OR value = 2) a
+JOIN b ON a.k = b.k;
+----
+logical_plan
+01)Inner Join: a.k = b.k
+02)--SubqueryAlias: a
+03)----Filter: a.k = Utf8View("k1") OR a.value = Int32(2)
+04)------TableScan: a projection=[k, value]
+05)--TableScan: b projection=[k, value]
+
+query TITI rowsort
+SELECT * FROM (SELECT * FROM a WHERE k = 'k1' OR value = 2) a
+JOIN b ON a.k = b.k;
+----
+k1 1 k1 10
+k1 1 k1 11
+k2 2 k2 20
+
+# Do not translate a predicate through a computed key.
+query TT
+EXPLAIN SELECT * FROM (SELECT k || 'x' AS k, value FROM a WHERE k = 'k1') a
+JOIN b ON a.k = b.k;
+----
+logical_plan
+01)Inner Join: a.k = b.k
+02)--SubqueryAlias: a
+03)----Projection: a.k || Utf8View("x") AS k, a.value
+04)------Filter: a.k = Utf8View("k1")
+05)--------TableScan: a projection=[k, value]
+06)--TableScan: b projection=[k, value]
+
+query TITI rowsort
+SELECT * FROM (SELECT k || 'x' AS k, value FROM a WHERE k = 'k1') a
+JOIN b ON a.k = b.k;
+----
+
+
+# Do not filter preserved rows using the nullable input of a left join.
+query TT
+EXPLAIN SELECT * FROM a LEFT JOIN (SELECT * FROM b WHERE k = 'k1') b ON a.k = b.k;
+----
+logical_plan
+01)Left Join: a.k = b.k
+02)--TableScan: a projection=[k, value]
+03)--SubqueryAlias: b
+04)----Filter: b.k = Utf8View("k1")
+05)------TableScan: b projection=[k, value]
+
+query TITI rowsort
+SELECT * FROM a LEFT JOIN (SELECT * FROM b WHERE k = 'k1') b ON a.k = b.k;
+----
+NULL 3 NULL NULL
+k1 1 k1 10
+k1 1 k1 11
+k2 2 NULL NULL
+
+# Do not treat a predicate below an aggregate as a predicate on its output.
+query TT
+EXPLAIN SELECT * FROM (SELECT count(*) AS value FROM a WHERE value = 1) a
+JOIN b ON a.value = b.value;
+----
+logical_plan
+01)Inner Join: a.value = CAST(b.value AS Int64)
+02)--SubqueryAlias: a
+03)----Projection: count(Int64(1)) AS count(*) AS value
+04)------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+05)--------Projection:
+06)----------Filter: a.value = Int32(1)
+07)------------TableScan: a projection=[value]
+08)--TableScan: b projection=[k, value]
+
+query ITI rowsort
+SELECT * FROM (SELECT count(*) AS value FROM a WHERE value = 1) a
+JOIN b ON a.value = b.value;
+----
+
+
+# Volatile predicates must not be evaluated independently on both inputs.
+query TT
+EXPLAIN SELECT * FROM (SELECT * FROM a WHERE k = CAST(random() AS VARCHAR)) a
+JOIN b ON a.k = b.k;
+----
+logical_plan
+01)Inner Join: a.k = b.k
+02)--SubqueryAlias: a
+03)----Filter: a.k = CAST(random() AS Utf8View)
+04)------TableScan: a projection=[k, value]
+05)--TableScan: b projection=[k, value]
+
+# Preserve LIMIT semantics when pushing the inferred predicate into its input.
+query TT
+EXPLAIN SELECT * FROM (SELECT * FROM a WHERE k = 'k1') a
+JOIN (SELECT * FROM b ORDER BY k DESC NULLS LAST LIMIT 1) b ON a.k = b.k;
+----
+logical_plan
+01)Inner Join: a.k = b.k
+02)--SubqueryAlias: a
+03)----Filter: a.k = Utf8View("k1")
+04)------TableScan: a projection=[k, value]
+05)--SubqueryAlias: b
+06)----Filter: b.k = Utf8View("k1")
+07)------Sort: b.k DESC NULLS LAST, fetch=1
+08)--------TableScan: b projection=[k, value]
+
+query TITI
+SELECT * FROM (SELECT * FROM a WHERE k = 'k1') a
+JOIN (SELECT * FROM b ORDER BY k DESC NULLS LAST LIMIT 1) b ON a.k = b.k;
+----
+
+# Infer both join-key restrictions independently.
+query TT
+EXPLAIN SELECT * FROM (SELECT * FROM a WHERE k = 'k1' AND value = 1) a
+JOIN b ON a.k = b.k AND a.value = b.value;
+----
+logical_plan
+01)Inner Join: a.k = b.k, a.value = b.value
+02)--SubqueryAlias: a
+03)----Filter: a.k = Utf8View("k1") AND a.value = Int32(1)
+04)------TableScan: a projection=[k, value]
+05)--Filter: b.k = Utf8View("k1") AND b.value = Int32(1)
+06)----TableScan: b projection=[k, value]
+
+# Null-safe equality can match NULL keys; preserve those results.
+query TT
+EXPLAIN SELECT * FROM (SELECT * FROM a WHERE k IS NULL) a
+JOIN b ON a.k IS NOT DISTINCT FROM b.k;
+----
+logical_plan
+01)Inner Join: a.k = b.k
+02)--SubqueryAlias: a
+03)----Filter: a.k IS NULL
+04)------TableScan: a projection=[k, value]
+05)--Filter: b.k IS NULL
+06)----TableScan: b projection=[k, value]
+
+query TITI
+SELECT * FROM (SELECT * FROM a WHERE k IS NULL) a
+JOIN b ON a.k IS NOT DISTINCT FROM b.k;
+----
+NULL 3 NULL 30
+
+# Applying the rule repeatedly must not accumulate inferred filters.
+statement ok
+SET datafusion.optimizer.max_passes = 10;
+
+query TT
+EXPLAIN SELECT * FROM (SELECT * FROM a WHERE k = 'k1') a
+JOIN b ON a.k = b.k;
+----
+logical_plan
+01)Inner Join: a.k = b.k
+02)--SubqueryAlias: a
+03)----Filter: a.k = Utf8View("k1")
+04)------TableScan: a projection=[k, value]
+05)--Filter: b.k = Utf8View("k1")
+06)----TableScan: b projection=[k, value]
+
+statement ok
+SET datafusion.optimizer.max_passes = 3;
+
+statement ok
+SET datafusion.explain.logical_plan_only = false;
