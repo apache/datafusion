@@ -2481,36 +2481,26 @@ mod tests {
         Some(take(&sorted, &distinct, None).unwrap())
     }
 
-    /// Casts the sorted `samples` to `target` and returns the first pair of
-    /// converted values whose order the cast reverses. Each value is cast on
-    /// its own, and values that fail to convert are skipped:
-    /// `is_order_preserving_cast` does not cover them.
-    ///
-    /// Returns `None` when the cast keeps the order, and `Some(Err(_))` when
-    /// the cast kernel panics.
-    fn order_violation(
-        samples: &ArrayRef,
-        target: &DataType,
-    ) -> Option<std::result::Result<String, String>> {
+    /// Casts the sorted `samples` to `target` with the strict cast that
+    /// `CastExpr` runs by default, and returns the first pair of converted
+    /// values whose order the cast reverses. Each value is cast on its own,
+    /// and values that fail to convert are skipped: `is_order_preserving_cast`
+    /// does not cover them.
+    fn order_violation(samples: &ArrayRef, target: &DataType) -> Option<String> {
         use arrow::array::make_comparator;
         use arrow::compute::SortOptions;
 
-        let mut converted: Vec<(usize, ArrayRef)> = vec![];
-        for i in 0..samples.len() {
-            let value = samples.slice(i, 1);
-            let output = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                arrow::compute::cast_with_options(
-                    &value,
-                    target,
-                    &DEFAULT_SAFE_CAST_OPTIONS,
-                )
-            }));
-            match output {
-                Ok(Ok(output)) if output.is_valid(0) => converted.push((i, output)),
-                Ok(_) => {}
-                Err(_) => return Some(Err("cast kernel panicked".to_string())),
-            }
-        }
+        let converted = (0..samples.len())
+            .filter_map(|i| {
+                let value = ColumnarValue::Array(samples.slice(i, 1));
+                match value.cast_to(target, None) {
+                    Ok(ColumnarValue::Array(output)) if output.is_valid(0) => {
+                        Some((i, output))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
         converted.windows(2).find_map(|w| {
             let ((i, left), (j, right)) = (&w[0], &w[1]);
             let cmp = make_comparator(left, right, SortOptions::default()).unwrap();
@@ -2518,19 +2508,20 @@ mod tests {
                 let value = |array: &ArrayRef, i| {
                     ScalarValue::try_from_array(array, i).unwrap().to_string()
                 };
-                Ok(format!(
+                format!(
                     "{} -> {}, but {} -> {}",
                     value(samples, *i),
                     value(left, 0),
                     value(samples, *j),
                     value(right, 0),
-                ))
+                )
             })
         })
     }
 
-    /// Checks `is_order_preserving_cast` against the Arrow cast kernel: every
-    /// pair it accepts must keep the order of the sample values that convert.
+    /// Checks `is_order_preserving_cast` against the strict cast that
+    /// `CastExpr` runs: every pair it accepts must keep the order of the sample
+    /// values that convert.
     /// Pruning and sort elimination both rely on this rule, so a wrong entry
     /// drops matching rows or returns unsorted output.
     #[test]
@@ -2585,13 +2576,8 @@ mod tests {
                 {
                     continue;
                 }
-                match order_violation(&samples, target) {
-                    None => {}
-                    // A panic is an unchecked overflow in a debug build, which
-                    // wraps in a release build, so it is not evidence of order
-                    // either. These pairs are listed separately in the output.
-                    Some(Err(e)) => println!("{source} -> {target}: {e}"),
-                    Some(Ok(e)) => violations.push(format!("{source} -> {target}: {e}")),
+                if let Some(e) = order_violation(&samples, target) {
+                    violations.push(format!("{source} -> {target}: {e}"));
                 }
             }
         }
@@ -2609,7 +2595,7 @@ mod tests {
             assert!(!is_order_preserving_cast(&source, &target));
             let samples = order_samples(&source).unwrap();
             assert!(
-                matches!(order_violation(&samples, &target), Some(Ok(_))),
+                order_violation(&samples, &target).is_some(),
                 "{source} -> {target}: no sample exposes the reversed order"
             );
         }
