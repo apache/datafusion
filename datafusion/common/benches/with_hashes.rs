@@ -161,18 +161,19 @@ fn criterion_benchmark(c: &mut Criterion) {
             });
         }
 
-        if name == "dictionary_utf8_int32" {
-            let dict = array
-                .as_any()
-                .downcast_ref::<DictionaryArray<Int32Type>>()
-                .expect("Expected Int32 dictionary");
-
+        if let Some(dict) = array
+            .as_any()
+            .downcast_ref::<DictionaryArray<Int32Type>>()
+        {
             for null_percent in [50, 97] {
-                let nullable_array = with_null_keys(dict, null_percent as f32 / 100.0);
+                let nullable_array =
+                    with_null_keys(dict, null_percent as f32 / 100.0);
 
                 c.bench_function(
                     &format!("{name}: single, {null_percent}% null keys"),
-                    |b| do_hash_test(b, std::slice::from_ref(&nullable_array)),
+                    |b| {
+                        do_hash_test(b, std::slice::from_ref(&nullable_array));
+                    },
                 );
                 c.bench_function(
                     &format!("{name}: multiple, {null_percent}% null keys"),
