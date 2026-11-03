@@ -41,14 +41,31 @@ use crate::nested_schema_pruning::{
 /// This is the shared output of the column resolution pipeline used by both
 /// the row filter to build `ArrowPredicate`s and the opener to build `ProjectionMask`s
 #[derive(Debug, Clone)]
-pub(crate) struct ParquetReadPlan {
+pub struct ParquetReadPlan {
     /// Projection mask built from leaf column indices in the Parquet schema.
     /// Using a `ProjectionMask` directly (rather than raw indices) prevents
     /// bugs from accidentally mixing up root vs leaf indices.
-    pub projection_mask: ProjectionMask,
+    projection_mask: ProjectionMask,
     /// The projected Arrow schema containing only the columns/fields required
     /// Struct types are pruned to include only the accessed sub-fields
-    pub projected_schema: SchemaRef,
+    projected_schema: SchemaRef,
+}
+
+impl ParquetReadPlan {
+    /// The leaf-level mask to install on the Parquet decoder.
+    pub fn projection_mask(&self) -> &ProjectionMask {
+        &self.projection_mask
+    }
+
+    /// The Arrow schema the decoder emits under [`Self::projection_mask`].
+    pub fn projected_schema(&self) -> &SchemaRef {
+        &self.projected_schema
+    }
+
+    /// Returns the projection mask and the projected schema.
+    pub fn into_parts(self) -> (ProjectionMask, SchemaRef) {
+        (self.projection_mask, self.projected_schema)
+    }
 }
 
 /// Records a struct field access via `get_field(struct_col, 'field1', 'field2', ...)`.
@@ -525,14 +542,63 @@ pub(crate) struct PushdownColumns {
 
 /// Builds a unified [`ParquetReadPlan`] for a set of projection expressions
 ///
-/// Unlike [`crate::row_filter::build_parquet_read_plan`] (which is used for
-/// filter pushdown and returns `None` when an expression references
+/// Unlike the read plan [`build_row_filter`](crate::build_row_filter) builds
+/// for each pushed-down filter (which is `None` when an expression references
 /// unsupported nested types or missing columns), this function always
 /// succeeds. It collects every column that *can* be resolved in the file and
 /// produces a leaf-level projection mask. Columns missing from the file are
 /// silently skipped since the projection layer handles those by inserting
 /// nulls.
-pub(crate) fn build_projection_read_plan(
+///
+/// This is the plan the Parquet opener installs on the decoder. The `exprs`
+/// are the scan's projection after it has been adapted to the file's physical
+/// schema by a [`PhysicalExprAdapter`], so they reference `file_schema`
+/// columns. A narrowing nested cast inserted by the adapter, such as
+/// `CAST(col AS List<Struct<subset>>)`, selects only the leaves the cast
+/// target names. Callers that plan I/O ahead of the scan can use the
+/// resulting [`ParquetReadPlan::projection_mask`] to fetch exactly the column
+/// chunks the decoder will read.
+///
+/// # Example
+///
+/// ```
+/// # use std::sync::Arc;
+/// # use arrow::datatypes::{DataType, Field, Fields, Schema};
+/// # use datafusion_datasource_parquet::build_projection_read_plan;
+/// # use datafusion_physical_expr::PhysicalExpr;
+/// # use datafusion_physical_expr::expressions::{CastExpr, Column};
+/// # use parquet::arrow::ArrowSchemaConverter;
+/// // `id: Int32, s: Struct<a: Int32, b: Utf8>` has three Parquet leaves.
+/// let s_fields = Fields::from(vec![
+///     Field::new("a", DataType::Int32, true),
+///     Field::new("b", DataType::Utf8, true),
+/// ]);
+/// let file_schema = Schema::new(vec![
+///     Field::new("id", DataType::Int32, false),
+///     Field::new("s", DataType::Struct(s_fields), true),
+/// ]);
+/// let parquet_schema = ArrowSchemaConverter::new().convert(&file_schema).unwrap();
+///
+/// // `CAST(s AS Struct<a: Int32>)` consumes only the leaf `s.a`.
+/// let narrowed = DataType::Struct(Fields::from(vec![Field::new(
+///     "a",
+///     DataType::Int32,
+///     true,
+/// )]));
+/// let exprs: Vec<Arc<dyn PhysicalExpr>> = vec![
+///     Arc::new(Column::new("id", 0)),
+///     Arc::new(CastExpr::new(Arc::new(Column::new("s", 1)), narrowed, None)),
+/// ];
+/// let plan = build_projection_read_plan(exprs, &file_schema, &parquet_schema);
+///
+/// let mask = plan.projection_mask();
+/// assert!(mask.leaf_included(0)); // id
+/// assert!(mask.leaf_included(1)); // s.a
+/// assert!(!mask.leaf_included(2)); // s.b
+/// ```
+///
+/// [`PhysicalExprAdapter`]: datafusion_physical_expr_adapter::PhysicalExprAdapter
+pub fn build_projection_read_plan(
     exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
     file_schema: &Schema,
     schema_descr: &SchemaDescriptor,

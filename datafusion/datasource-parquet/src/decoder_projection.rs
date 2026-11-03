@@ -90,14 +90,14 @@ impl DecoderProjection {
             parquet_schema,
         );
 
+        let (projection_mask, projected_schema) = read_plan.into_parts();
+
         // The reader produces projected file columns followed by any virtual
         // columns (`ArrowReaderOptions::with_virtual_columns` appends them to
         // each decoded batch).
         let stream_schema = match virtual_state {
-            Some(state) => {
-                append_fields(&read_plan.projected_schema, state.virtual_columns())
-            }
-            None => Arc::clone(&read_plan.projected_schema),
+            Some(state) => append_fields(&projected_schema, state.virtual_columns()),
+            None => projected_schema,
         };
 
         // Rebase the projection onto the decoder's stream schema (column
@@ -113,7 +113,7 @@ impl DecoderProjection {
         let replace_schema = projector.output_schema() != output_schema;
 
         Ok(Self {
-            projection_mask: read_plan.projection_mask,
+            projection_mask,
             projector,
             output_schema: Arc::clone(output_schema),
             replace_schema,
