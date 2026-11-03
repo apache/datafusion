@@ -3699,6 +3699,61 @@ mod tests {
         Ok(())
     }
 
+    /// Dense keys build an `ArrayMap`, which is charged to the map's own
+    /// reservation in `array_map_key_range` rather than the build's.
+    #[rstest]
+    #[tokio::test]
+    async fn array_map_stays_reserved_with_dynamic_filter(
+        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
+        mode: PartitionMode,
+    ) -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
+        let batch = |keys: Vec<i64>| {
+            let column = Arc::new(Int64Array::from(keys)) as ArrayRef;
+            let batch = RecordBatch::try_new(Arc::clone(&schema), vec![column])?;
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)
+        };
+        let on = vec![(
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+            Arc::new(Column::new_with_schema("k", &schema)?) as _,
+        )];
+        let (join, filter) = hash_join_with_dynamic_filter_and_mode(
+            batch((0..20_000).collect())?,
+            batch(vec![0, 5, 15])?,
+            on,
+            JoinType::Inner,
+            mode,
+        )?;
+        let join: Arc<dyn ExecutionPlan> = Arc::new(join);
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 22));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .build_arc()?;
+        let mut config = SessionConfig::new();
+        config
+            .options_mut()
+            .optimizer
+            .hash_join_inlist_pushdown_max_size = 0;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(config),
+        );
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        assert_phj_used(&join.metrics().unwrap(), true);
+
+        drop(join);
+        assert_eq!(
+            pool.reserved(),
+            ArrayMap::estimate_memory_size(0, 19_999, 20_000)
+        );
+        drop(filter);
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
     #[derive(Debug)]
     struct PartitionedTestExec {
         cache: Arc<PlanProperties>,
