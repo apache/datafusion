@@ -1792,12 +1792,14 @@ mod tests {
 
         // Field and schema metadata are merged in input order, so the last
         // input wins regardless of which field supplies the nullability.
-        for nullability in [
-            [false, false, false],
-            [true, false, false],
-            [false, true, false],
-            [false, false, true],
-            [true, true, true],
+        for (nullability, vary_fields) in [
+            ([false, false, false], true),
+            ([true, false, false], true),
+            ([false, true, false], true),
+            ([false, false, true], true),
+            ([true, true, true], true),
+            // Identical fields use plain Column expressions during schema coercion.
+            ([false, false, false], false),
         ] {
             let inputs = nullability
                 .iter()
@@ -1807,9 +1809,12 @@ mod tests {
                         ("shared".to_owned(), format!("input{i}")),
                         (format!("only{i}"), "kept".to_owned()),
                     ]);
-                    let field =
+                    let field = if vary_fields {
                         Field::new(format!("value{i}"), DataType::Int32, nullable)
-                            .with_metadata(metadata.clone());
+                            .with_metadata(metadata.clone())
+                    } else {
+                        Field::new("value0", DataType::Int32, nullable)
+                    };
                     let schema =
                         Arc::new(Schema::new_with_metadata(vec![field], metadata));
                     let batch = RecordBatch::try_new(
@@ -1831,13 +1836,21 @@ mod tests {
             let expected_schema = Arc::new(Schema::new_with_metadata(
                 vec![
                     Field::new("value0", DataType::Int32, nullability.contains(&true))
-                        .with_metadata(expected_metadata.clone()),
+                        .with_metadata(if vary_fields {
+                            expected_metadata.clone()
+                        } else {
+                            Metadata::default()
+                        }),
                 ],
                 expected_metadata,
             ));
 
             let union = UnionExec::try_new(inputs)?;
-            assert_eq!(union.schema(), expected_schema, "{nullability:?}");
+            assert_eq!(
+                union.schema(),
+                expected_schema,
+                "{nullability:?}, vary_fields={vary_fields}"
+            );
             let batches = collect(union, Arc::new(TaskContext::default())).await?;
             datafusion_common::assert_batches_sorted_eq!(
                 [
@@ -1855,7 +1868,7 @@ mod tests {
                 assert_eq!(
                     batch.schema(),
                     expected_schema,
-                    "output batch schema for {nullability:?}"
+                    "output batch schema for {nullability:?}, vary_fields={vary_fields}"
                 );
             }
         }
