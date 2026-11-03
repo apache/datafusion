@@ -30,10 +30,12 @@ use crate::metrics::{
 };
 use crate::projection::{ProjectionExec, make_with_child, update_ordering};
 use crate::sorts::IncrementalSortIterator;
-use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::get_record_batch_memory_size;
+use crate::sorts::streaming_merge::{
+    SortedSpillFile, StreamingMergeBuilder, merges_in_row_format,
+};
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
+use crate::spill::{gc_view_arrays, get_record_batch_memory_size};
 use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
@@ -1036,6 +1038,8 @@ impl ExternalSorter {
         let expressions = self.expr.clone();
         let merge_pool = Arc::clone(&self.merge_pool);
         let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        // Set when `merge_run_batch_size` split this run
+        let split = batch_size < self.batch_size;
 
         Ok(async move {
             // Held until `batch` is sorted, when this block ends. The last run to
@@ -1046,7 +1050,16 @@ impl ExternalSorter {
             let schema = batch.schema();
 
             // Sort the batch immediately and get all output batches
-            let sorted_batches = sort_batch_chunked(&batch, &expressions, batch_size)?;
+            let mut sorted_batches =
+                sort_batch_chunked(&batch, &expressions, batch_size)?;
+            // `take` keeps the data buffers of view arrays, so splitting would
+            // charge every batch for all of them.
+            if split && sorted_batches.len() > 1 {
+                sorted_batches = sorted_batches
+                    .iter()
+                    .map(gc_view_arrays)
+                    .collect::<Result<_>>()?;
+            }
 
             // Chunked output can retain shared buffers in every batch and
             // exceed the input estimate. Borrow only already-reserved spill
@@ -1077,17 +1090,25 @@ impl ExternalSorter {
         })
     }
 
-    /// Batch size of the sorted runs that feed a merge. A multi-column merge holds
-    /// the row-format keys of every run's current batch at once, and these keys can
-    /// be larger than the batches. With a memory limit, runs therefore use an eighth
+    /// Batch size of the sorted runs that feed a merge. A merge in the row format
+    /// holds the keys of every run's current batch at once, and these keys can be
+    /// larger than the batches. With a memory limit, runs therefore use an eighth
     /// of `batch_size`, but at least 1024 rows to keep the per-batch merge cost
-    /// small. The merge output still uses `batch_size`.
+    /// small. The merge output still uses `batch_size`. Runs keep `batch_size`
+    /// when their batches would share buffers other than the data of top-level
+    /// view columns, such as dictionary values, since every batch is charged for
+    /// them.
     fn merge_run_batch_size(&self) -> usize {
         let limited = !matches!(
             self.runtime.memory_pool.memory_limit(),
             MemoryLimit::Infinite
         );
-        if limited && self.expr.len() > 1 {
+        let shares_buffers = self.schema.fields().iter().any(|field| {
+            let data_type = field.data_type();
+            sorted_copy_keeps_buffers(data_type)
+                && !matches!(data_type, DataType::Utf8View | DataType::BinaryView)
+        });
+        if limited && !shares_buffers && merges_in_row_format(&self.expr, &self.schema) {
             (self.batch_size / 8).max(1024).min(self.batch_size)
         } else {
             self.batch_size
