@@ -478,12 +478,20 @@ fn roundtrip_sort_merge_join_null_aware() -> Result<()> {
     Ok(())
 }
 
+/// Null-aware SortMergeJoinExec currently supports only LeftAnti joins.
+/// Checks that decoding rejects an unsupported Inner join whose protobuf flag
+/// enables null-aware semantics.
+/// The flag is changed after serialization to simulate invalid input from a
+/// producer. This guards against bypassing builder validation during decoding
+/// now that `try_new` no longer takes the `null_aware` argument.
 #[test]
 fn sort_merge_join_decode_validates_null_aware() -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
     let proto_converter = DefaultPhysicalProtoConverter {};
     let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, true)]));
+
+    // join with no null_aware
     let plan = Arc::new(SortMergeJoinExec::try_new(
         Arc::new(EmptyExec::new(Arc::clone(&schema))),
         Arc::new(EmptyExec::new(schema)),
@@ -496,15 +504,23 @@ fn sort_merge_join_decode_validates_null_aware() -> Result<()> {
         vec![SortOptions::new(false, true)],
         NullEquality::NullEqualsNothing,
     )?);
+
+    // serialize
     let bytes =
         physical_plan_to_bytes_with_proto_converter(plan, &codec, &proto_converter)?;
+
+    // unserialize should be able to decode back to PhysicalPlanNode
     let mut node = protobuf::PhysicalPlanNode::decode(bytes.as_ref())
         .expect("encoded physical plan must decode");
     let Some(PhysicalPlanType::SortMergeJoin(join)) = node.physical_plan_type.as_mut()
     else {
         panic!("expected a SortMergeJoin node");
     };
-    // The ordinary Inner join is valid, but enabling null awareness is not.
+    // This makes the protobuf describe an JoinType::Inner join with null_aware = true,
+    // which is invalid because null-aware SortMergeJoinExec currently supports
+    // only JoinType::LeftAnti joins.
+    // With the other settings used here, LeftAnti + null_aware = true would be
+    // valid; keeping JoinType::Inner + null_aware = false would also be valid.
     join.null_aware = true;
     let err = physical_plan_from_bytes_with_proto_converter(
         &node.encode_to_vec(),
