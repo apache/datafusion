@@ -424,9 +424,9 @@ mod tests {
     use crate::aggregates::GroupClusteringMode;
     use crate::aggregates::PhysicalGroupBy;
     use crate::aggregates::clustered_test_util::{
-        aggregate_expr_over_sorted_input, aggregate_over_sorted_input,
-        assert_completed_groups_emitted_under_limit, assert_output_unchanged_under_limit,
-        collect_under_limit, distinct_key_batches, full_batches, sum_over_sorted_input,
+        aggregate_over_sorted_input, assert_completed_groups_emitted_under_limit,
+        assert_output_unchanged_under_limit, collect_under_limit, distinct_key_batches,
+        full_batches, sum_over_sorted_input,
     };
     use crate::test::TestMemoryExec;
     use arrow::array::{ArrayRef, Float64Array, Int64Array, ListArray};
@@ -438,7 +438,6 @@ mod tests {
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::any_value::any_value_udaf;
     use datafusion_functions_aggregate::approx_distinct::approx_distinct_udaf;
-    use datafusion_functions_aggregate::first_last::first_value_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::PhysicalSortExpr;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
@@ -610,8 +609,15 @@ mod tests {
     /// `FIRST_VALUE(v ORDER BY v)` accumulator. It keeps a bitmap of the
     /// groups each batch updated, which grows to one bit per group (16 KB for
     /// 131072 groups), so it must release that bitmap too.
+    ///
+    /// Skipped under `force_hash_collisions`, where the 131,072 colliding group
+    /// keys make the aggregate quadratic and the test take many minutes.
+    #[cfg(not(feature = "force_hash_collisions"))]
     #[tokio::test]
     async fn completed_groups_release_first_value_bitmap() -> Result<()> {
+        use crate::aggregates::clustered_test_util::aggregate_expr_over_sorted_input;
+        use datafusion_functions_aggregate::first_last::first_value_udaf;
+
         let plan = aggregate_expr_over_sorted_input(
             AggregateMode::Partial,
             &["k"],

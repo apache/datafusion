@@ -1338,7 +1338,9 @@ config_namespace! {
 
         /// (reading) If true, the parquet reader skip the optional embedded metadata that may be in
         /// the file Schema. This setting can help avoid schema conflicts when querying
-        /// multiple parquet files with schemas containing compatible types but different metadata
+        /// multiple parquet files with schemas containing compatible types but different metadata.
+        /// Arrow extension types (the `ARROW:extension:name` and `ARROW:extension:metadata`
+        /// field metadata) are kept, because they are part of the type of a column
         pub skip_metadata: bool, default = true
 
         /// (reading) If specified, the parquet reader will try and fetch the last `size_hint`
@@ -1523,7 +1525,7 @@ config_namespace! {
         /// (writing)  Sets default encoding for any column.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
-        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         pub encoding: Option<DFParquetEncoding>, default = None
@@ -3532,7 +3534,7 @@ config_namespace_with_hashmap! {
         /// Sets encoding for the column path.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
-        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
         pub encoding: Option<String>, default = None
