@@ -129,10 +129,10 @@ async function execute({
         getWorkflow: async () => ({ data: { state: workflowState } }),
       },
       pulls: {
-        list: async ({ per_page, head }) => {
+        list: async ({ per_page, head, base }) => {
           if (head) {
             assert.equal(head, "contributor:feature");
-            return { data: openPrs };
+            return { data: openPrs.filter((p) => p.base.ref === base) };
           }
           if (per_page === 1) return { data: [pr], headers: {} };
           assert.equal(per_page, 25);
@@ -173,6 +173,18 @@ test("notification selects a newer manual run instead of a push run", async () =
   const writes = await execute({
     event: "workflow_run",
     runs: [latest, run(1)],
+  });
+  assert.equal(writes.length, 1);
+  assertRun(writes[0], "create", latest);
+});
+
+test("notification mirrors the pull request to main when a newer one targets a release branch", async () => {
+  const release = { ...pr, number: 2, base: { ref: "branch-55" } };
+  const latest = run(2, "workflow_dispatch");
+  const writes = await execute({
+    event: "workflow_run",
+    openPrs: [release, pr],
+    runs: [latest],
   });
   assert.equal(writes.length, 1);
   assertRun(writes[0], "create", latest);

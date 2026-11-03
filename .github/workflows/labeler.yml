@@ -44,9 +44,10 @@ jobs:
       pull-requests: write
     steps:
       # `workflow_run.pull_requests` is empty for pull requests from forks, so
-      # find the pull request by its head branch and commit. An outdated commit
-      # matches nothing, since a newer run labels the new head.
-      - name: Find the pull request
+      # find the pull requests by their head branch and commit. The same branch
+      # can target `main` and a release branch, so label every match. An
+      # outdated commit matches nothing, since a newer run labels the new head.
+      - name: Find the pull requests
         id: pr
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
@@ -58,16 +59,18 @@ jobs:
               state: 'open',
               head: `${run.head_repository.owner.login}:${run.head_branch}`,
             });
-            const pr = data.find((pr) => pr.head.sha === run.head_sha);
-            if (pr) core.setOutput('number', String(pr.number));
+            const numbers = data
+              .filter((pr) => pr.head.sha === run.head_sha)
+              .map((pr) => String(pr.number));
+            if (numbers.length) core.setOutput('numbers', numbers.join('\n'));
             else core.info(`No open pull request for ${run.head_sha}`);
 
       - name: Assign GitHub labels
-        if: steps.pr.outputs.number != ''
+        if: steps.pr.outputs.numbers != ''
         uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13  # v7.0.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-          pr-number: ${{ steps.pr.outputs.number }}
+          pr-number: ${{ steps.pr.outputs.numbers }}
           configuration-path: .github/workflows/labeler/labeler-config.yml
           sync-labels: true
 
