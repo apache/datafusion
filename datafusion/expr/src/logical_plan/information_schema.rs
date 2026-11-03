@@ -6,14 +6,14 @@
 //! tables and `SHOW` statements.
 
 use crate::TableType;
-use crate::extension_types::append_field_type_display_name;
-use crate::registry::ExtensionTypeRegistryRef;
+use crate::registry::{ExtensionTypeRegistry, ExtensionTypeRegistryRef};
 use arrow::array::ArrayRef;
 use arrow::array::builder::{BooleanBuilder, StringBuilder, UInt8Builder, UInt64Builder};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::Result;
 use datafusion_common::config::ConfigEntry;
+use std::fmt::Write;
 use std::sync::Arc;
 
 /// Returns the Arrow schema of `information_schema.tables` rows.
@@ -455,6 +455,35 @@ impl InformationSchemaColumnsBuilder {
     }
 }
 
+/// Appends the name of the type of `field` shown in `data_type` to `builder`.
+///
+/// If the field has an extension type registered in `registry`, appends
+/// [`display_name`] if possible. appended. Otherwise, the storage type (raw
+/// Arrow physical type name) is appended.
+///
+/// [`display_name`]: datafusion_common::types::DFExtensionType::display_name
+fn append_field_type_display_name(
+    registry: Option<&dyn ExtensionTypeRegistry>,
+    field: &Field,
+    builder: &mut StringBuilder,
+) {
+    let extension_type = registry
+        .and_then(|registry| registry.create_extension_type_for_field(field).ok())
+        .flatten();
+    match extension_type
+        .as_ref()
+        .and_then(|extension_type| extension_type.display_name())
+    {
+        Some(name) => builder.append_value(name),
+        None => {
+            // Write the storage type straight into the builder, then finish the row.
+            // Writing to a `StringBuilder` does not fail.
+            let _ = write!(builder, "{}", field.data_type());
+            builder.append_value("");
+        }
+    }
+}
+
 /// Returns the Arrow schema of `information_schema.schemata` rows.
 ///
 /// Columns and nullability match
@@ -846,4 +875,57 @@ pub fn show_functions_schema() -> Schema {
         Field::new("description", DataType::Utf8, true),
         Field::new("syntax_example", DataType::Utf8, true),
     ])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry::MemoryExtensionTypeRegistry;
+    use arrow::array::Array;
+    use arrow_schema::extension::{EXTENSION_TYPE_NAME_KEY, Uuid};
+    use std::collections::HashMap;
+
+    fn display_names(
+        registry: Option<&dyn ExtensionTypeRegistry>,
+        fields: &[Field],
+    ) -> Vec<String> {
+        let mut builder = StringBuilder::new();
+        for field in fields {
+            append_field_type_display_name(registry, field, &mut builder);
+        }
+        let array = builder.finish();
+        (0..array.len())
+            .map(|i| array.value(i).to_owned())
+            .collect()
+    }
+
+    /// Fields whose extension type cannot be resolved show their storage type. The
+    /// resolvable cases are covered by `sql_extension_types.slt`.
+    #[test]
+    fn test_append_field_type_display_name_fallbacks() {
+        let registry = MemoryExtensionTypeRegistry::new_with_canonical_extension_types();
+
+        let unregistered = Field::new("x", DataType::Int32, true).with_metadata(
+            HashMap::from([(EXTENSION_TYPE_NAME_KEY.to_owned(), "example.x".to_owned())]),
+        );
+        // `arrow.uuid` with a storage type that the extension type does not support
+        let invalid =
+            Field::new("i", DataType::Int32, true).with_metadata(HashMap::from([(
+                EXTENSION_TYPE_NAME_KEY.to_owned(),
+                "arrow.uuid".to_owned(),
+            )]));
+        assert_eq!(
+            display_names(Some(&registry), &[unregistered, invalid]),
+            ["Int32", "Int32"]
+        );
+
+        let uuid = Field::new("u", DataType::FixedSizeBinary(16), true)
+            .with_extension_type(Uuid);
+        let empty_registry = MemoryExtensionTypeRegistry::new_empty();
+        assert_eq!(
+            display_names(Some(&empty_registry), std::slice::from_ref(&uuid)),
+            ["FixedSizeBinary(16)"]
+        );
+        assert_eq!(display_names(None, &[uuid]), ["FixedSizeBinary(16)"]);
+    }
 }
