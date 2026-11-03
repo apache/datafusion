@@ -34,25 +34,5 @@
     "name": "50.0.0",
     "url": "/versions/50.0.0/",
     "version": "50.0.0"
-  },
-  {
-    "name": "49.0.0",
-    "url": "/versions/49.0.0/",
-    "version": "49.0.0"
-  },
-  {
-    "name": "48.0.1",
-    "url": "/versions/48.0.1/",
-    "version": "48.0.1"
-  },
-  {
-    "name": "47.0.0",
-    "url": "/versions/47.0.0/",
-    "version": "47.0.0"
-  },
-  {
-    "name": "46.0.0",
-    "url": "/versions/46.0.0/",
-    "version": "46.0.0"
   }
 ]

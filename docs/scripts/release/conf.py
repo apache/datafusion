@@ -63,14 +63,6 @@ html_theme_options = {
 if "library-user-guide/upgrading" in globals().get("redirects", {}):
     redirects = {**redirects, "library-user-guide/upgrading": "upgrading/index.html"}
 
-# The released docs can no longer be fixed, so do not fail the build on content
-# warnings in them (e.g. 46.0.0 has skipped header levels and broken links).
-suppress_warnings = [
-    *globals().get("suppress_warnings", []),
-    "myst.header",
-    "myst.xref_missing",
-]
-
 
 # Releases before 51.0.0 have a sidebar template that calls
 # ``generate_nav_html``, which pydata-sphinx-theme renamed to
