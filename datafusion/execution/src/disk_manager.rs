@@ -14,18 +14,12 @@ use log::debug;
 use parking_lot::Mutex;
 use rand::{Rng, rng};
 use std::fmt::Debug;
-use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use tempfile::{Builder, NamedTempFile, TempDir};
 pub const DEFAULT_MAX_TEMP_DIRECTORY_SIZE: u64 = 100 * 1024 * 1024 * 1024; // 100GB
 pub const DEFAULT_MAX_SPILL_MERGE_FAN_IN: usize = 0;
-
-/// Capacity of the buffer in front of a spill file. The IPC writer writes every
-/// buffer and padding of a batch separately, which would otherwise take one
-/// system call each.
-const SPILL_WRITE_BUFFER_SIZE: usize = 256 * 1024;
 
 /// Builder pattern for the [DiskManager] structure
 #[derive(Clone)]
@@ -475,12 +469,12 @@ fn create_local_dirs(local_dirs: &[PathBuf]) -> Result<Vec<Arc<TempDir>>> {
 }
 
 pub struct FileSpillWriter {
-    file: BufWriter<std::fs::File>,
+    file: std::fs::File,
     disk_manager: Arc<DiskManager>,
     current_file_disk_usage: Arc<AtomicU64>,
 }
 
-impl Write for FileSpillWriter {
+impl std::io::Write for FileSpillWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         let len = buf.len() as u64;
         if len == 0 {
@@ -522,7 +516,7 @@ impl Write for FileSpillWriter {
 
 impl SpillWriter for FileSpillWriter {
     fn finish(&mut self) -> Result<()> {
-        self.file.flush()?;
+        // flush() is handled by Arrow, nothing left to do here
         Ok(())
     }
 }
@@ -584,7 +578,7 @@ impl SpillFile for RefCountedTempFile {
             .try_clone()
             .map_err(DataFusionError::IoError)?;
         Ok(Box::new(FileSpillWriter {
-            file: BufWriter::with_capacity(SPILL_WRITE_BUFFER_SIZE, file),
+            file,
             disk_manager: Arc::clone(&self.disk_manager),
             current_file_disk_usage: Arc::clone(&self.current_file_disk_usage),
         }))

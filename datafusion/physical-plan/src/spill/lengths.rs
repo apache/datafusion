@@ -21,7 +21,9 @@
 //! ```
 //!
 //! Both are valid arrays, so the IPC reader decodes them as usual before
-//! [`decode`] rebuilds the offsets with a running sum.
+//! [`decode`] rebuilds the offsets with a running sum. Files whose first batch
+//! has fewer than [`MIN_LENGTHS_ROWS`](super::MIN_LENGTHS_ROWS) rows keep their
+//! offsets.
 
 use std::sync::Arc;
 
@@ -276,6 +278,30 @@ mod tests {
             "spilled {spilled} bytes, against {} bytes of IPC",
             ipc.len()
         );
+        Ok(())
+    }
+
+    /// Files whose first batch is too small for the lengths to pay off keep
+    /// their offsets
+    #[test]
+    fn test_spill_lengths_skipped_for_small_batches() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, false)]));
+        for (rows, encoded) in [(127, false), (128, true)] {
+            let values = (0..rows).map(|i| format!("item-{}", i / 64));
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(StringArray::from_iter_values(values))],
+            )?;
+            let spill_manager =
+                spill_manager(Arc::clone(&schema), SpillCompression::Zstd);
+            let spill_file = spill_manager
+                .spill_record_batch_and_finish(std::slice::from_ref(&batch), "Test")?
+                .unwrap();
+            let file = std::fs::File::open(spill_file.path().unwrap())?;
+            let reader = arrow_ipc::reader::StreamReader::try_new(file, None)?;
+            let spilled_type = reader.schema().field(0).data_type().clone();
+            assert_eq!(spilled_type != DataType::Utf8, encoded, "{rows} rows");
+        }
         Ok(())
     }
 }

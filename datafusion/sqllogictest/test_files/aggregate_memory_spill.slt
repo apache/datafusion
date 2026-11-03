@@ -249,7 +249,11 @@ FROM (
 
 # --- Case I: byte array keys in compressed spill files ---
 # Compressed spill files store `Utf8`, `LargeUtf8`, `Binary` and `LargeBinary`
-# columns as lengths. The keys are cast because `varchar` maps to `Utf8View`.
+# columns as lengths, unless their batches are too small to benefit. The keys
+# are cast because `varchar` maps to `Utf8View`.
+statement ok
+SET datafusion.execution.batch_size = 8192
+
 statement ok
 CREATE VIEW byte_keys AS
 SELECT
