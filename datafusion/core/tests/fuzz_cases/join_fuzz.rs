@@ -8,9 +8,10 @@ use std::time::SystemTime;
 use crate::fuzz_cases::join_fuzz::JoinTestType::{HjSmj, NljHj};
 
 use arrow::array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, Float64Array, Int32Array, UInt32Array,
+    Array, ArrayRef, AsArray, BinaryArray, BooleanArray, Float64Array, Int32Array,
+    StringArray, StringViewArray, UInt32Array,
 };
-use arrow::compute::{SortOptions, take_record_batch};
+use arrow::compute::{SortOptions, cast, take_record_batch};
 use arrow::datatypes::{DataType, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::util::pretty::pretty_format_batches;
@@ -1667,17 +1668,46 @@ impl PwmjFuzzKey for f64 {
     }
 }
 
-fn pwmj_kv_schema<K: PwmjFuzzKey>() -> Arc<Schema> {
+/// The payload of row `id`, of `payload` type (`Utf8` or `Utf8View`), so the collectors can
+/// check every output row carries its own row's payload. Even ids get a short string, which a
+/// view stores inline, odd ids one over 12 bytes, which it stores in a data buffer.
+fn pwmj_payload(id: i32) -> String {
+    if id % 2 == 0 {
+        format!("p{id}")
+    } else {
+        format!("payload of row {id:08}")
+    }
+}
+
+fn pwmj_payload_array(ids: &[i32], payload: &DataType) -> ArrayRef {
+    let values = ids.iter().map(|&id| pwmj_payload(id));
+    match payload {
+        DataType::Utf8 => Arc::new(StringArray::from_iter_values(values)),
+        DataType::Utf8View => Arc::new(StringViewArray::from_iter_values(values)),
+        other => panic!("not a string payload type: {other}"),
+    }
+}
+
+fn pwmj_kv_schema<K: PwmjFuzzKey>(payload: &DataType) -> Arc<Schema> {
     Arc::new(Schema::new(vec![
         arrow::datatypes::Field::new("id", DataType::Int32, false),
         arrow::datatypes::Field::new("k", K::data_type(), true),
+        arrow::datatypes::Field::new("p", payload.clone(), false),
     ]))
 }
 
-fn pwmj_kv_batch<K: PwmjFuzzKey>(ids: &[i32], keys: &[Option<K>]) -> RecordBatch {
+fn pwmj_kv_batch<K: PwmjFuzzKey>(
+    ids: &[i32],
+    keys: &[Option<K>],
+    payload: &DataType,
+) -> RecordBatch {
     RecordBatch::try_new(
-        pwmj_kv_schema::<K>(),
-        vec![Arc::new(Int32Array::from(ids.to_vec())), K::to_array(keys)],
+        pwmj_kv_schema::<K>(payload),
+        vec![
+            Arc::new(Int32Array::from(ids.to_vec())),
+            K::to_array(keys),
+            pwmj_payload_array(ids, payload),
+        ],
     )
     .unwrap()
 }
@@ -1686,10 +1716,11 @@ fn pwmj_kv_batch<K: PwmjFuzzKey>(ids: &[i32], keys: &[Option<K>]) -> RecordBatch
 fn pwmj_single_exec<K: PwmjFuzzKey>(
     ids: &[i32],
     keys: &[Option<K>],
+    payload: &DataType,
 ) -> Arc<dyn ExecutionPlan> {
     MemorySourceConfig::try_new_exec(
-        &[vec![pwmj_kv_batch(ids, keys)]],
-        pwmj_kv_schema::<K>(),
+        &[vec![pwmj_kv_batch(ids, keys, payload)]],
+        pwmj_kv_schema::<K>(payload),
         None,
     )
     .unwrap()
@@ -1705,6 +1736,7 @@ fn pwmj_parts_exec<K: PwmjFuzzKey>(
     keys: &[Option<K>],
     nparts: usize,
     stagger_seed: Option<u64>,
+    payload: &DataType,
 ) -> Arc<dyn ExecutionPlan> {
     let nparts = nparts.max(1);
     let mut part_rows: Vec<(Vec<i32>, Vec<Option<K>>)> = vec![Default::default(); nparts];
@@ -1717,18 +1749,20 @@ fn pwmj_parts_exec<K: PwmjFuzzKey>(
         .enumerate()
         .map(|(part, (ids, keys))| match stagger_seed {
             // `stagger_batch_with_seed` panics on a batch with no rows.
-            _ if ids.is_empty() => vec![pwmj_kv_batch::<K>(&[], &[])],
-            Some(seed) => {
-                stagger_batch_with_seed(pwmj_kv_batch(ids, keys), seed + part as u64)
-            }
+            _ if ids.is_empty() => vec![pwmj_kv_batch::<K>(&[], &[], payload)],
+            Some(seed) => stagger_batch_with_seed(
+                pwmj_kv_batch(ids, keys, payload),
+                seed + part as u64,
+            ),
             None => ids
                 .iter()
                 .zip(keys)
-                .map(|(&id, key)| pwmj_kv_batch(&[id], &[*key]))
+                .map(|(&id, key)| pwmj_kv_batch(&[id], &[*key], payload))
                 .collect(),
         })
         .collect();
-    MemorySourceConfig::try_new_exec(&partitions, pwmj_kv_schema::<K>(), None).unwrap()
+    MemorySourceConfig::try_new_exec(&partitions, pwmj_kv_schema::<K>(payload), None)
+        .unwrap()
 }
 
 fn pwmj_plan(
@@ -1807,9 +1841,14 @@ fn pwmj_nlj_oracle_plan<K: PwmjFuzzKey>(
 ///
 /// Concurrent rather than one partition at a time: the partitions share the watermark and race
 /// to be the one that runs the final pass, which is the part a sequential drain cannot reach.
+///
+/// Every side present in the output also has its payload checked against its `id` (see
+/// [`pwmj_check_payload`]), so a row paired with another row's payload fails here even though
+/// the id pairs agree.
 async fn pwmj_collect_id_pairs(
     plan: Arc<dyn ExecutionPlan>,
     task_ctx: Arc<TaskContext>,
+    payload: &DataType,
 ) -> Vec<(Option<i32>, Option<i32>)> {
     let streams = (0..plan.output_partitioning().partition_count())
         .map(|partition| plan.execute(partition, Arc::clone(&task_ctx)).unwrap())
@@ -1833,8 +1872,12 @@ async fn pwmj_collect_id_pairs(
     for batches in per_partition {
         for batch in batches.unwrap().unwrap() {
             let left = id_column(&batch, 0);
-            // Left is (id, k), so the right side's `id` follows it -- when there is one.
-            let right = (batch.num_columns() > 2).then(|| id_column(&batch, 2));
+            pwmj_check_payload(&batch, 0, 2, payload);
+            // Left is (id, k, p), so the right side's `id` follows it -- when there is one.
+            let right = (batch.num_columns() > 3).then(|| {
+                pwmj_check_payload(&batch, 3, 5, payload);
+                id_column(&batch, 3)
+            });
             for row in 0..batch.num_rows() {
                 pairs.push((
                     left.is_valid(row).then(|| left.value(row)),
@@ -1857,6 +1900,7 @@ async fn pwmj_collect_id_pairs(
 async fn pwmj_collect_mark_pairs(
     plan: Arc<dyn ExecutionPlan>,
     task_ctx: Arc<TaskContext>,
+    payload: &DataType,
 ) -> Vec<(i32, bool)> {
     let streams = (0..plan.output_partitioning().partition_count())
         .map(|partition| plan.execute(partition, Arc::clone(&task_ctx)).unwrap())
@@ -1875,6 +1919,7 @@ async fn pwmj_collect_mark_pairs(
                 .as_any()
                 .downcast_ref::<Int32Array>()
                 .unwrap();
+            pwmj_check_payload(&batch, 0, 2, payload);
             // `mark` is always the last column: it is appended after either side's own
             // columns (see `build_join_schema`).
             let mark = batch
@@ -1891,9 +1936,39 @@ async fn pwmj_collect_mark_pairs(
     pairs
 }
 
+/// Asserts the payload column `payload_col` is of `payload` type and, row by row, holds the
+/// payload of the `id` in `id_col`, or is NULL where that `id` is: a side the join filled with
+/// NULLs.
+fn pwmj_check_payload(
+    batch: &RecordBatch,
+    id_col: usize,
+    payload_col: usize,
+    payload: &DataType,
+) {
+    let ids = batch
+        .column(id_col)
+        .as_primitive::<arrow::datatypes::Int32Type>();
+    let column = batch.column(payload_col);
+    assert_eq!(column.data_type(), payload);
+    let values = cast(column, &DataType::Utf8).unwrap();
+    let values = values.as_string::<i32>();
+    for row in 0..batch.num_rows() {
+        if ids.is_valid(row) {
+            assert!(
+                values.is_valid(row),
+                "NULL payload for id {}",
+                ids.value(row)
+            );
+            assert_eq!(values.value(row), pwmj_payload(ids.value(row)));
+        } else {
+            assert!(values.is_null(row), "payload on a NULL-filled row");
+        }
+    }
+}
+
 /// Differential test for every join type `PiecewiseMergeJoin` supports, against a
-/// `NestedLoopJoin` oracle, run once over `i32` keys and once over `f64` keys via
-/// [`run_pwmj_fuzz`].
+/// `NestedLoopJoin` oracle, run over `i32` and `f64` keys, each with a `Utf8` and a `Utf8View`
+/// payload, via [`run_pwmj_fuzz`].
 ///
 /// `Left`/`Full` are the ones with teeth: their unmatched buffered rows are derived from the
 /// shared `min_marked` watermark rather than materialized per row, and that encoding is only
@@ -1902,7 +1977,8 @@ async fn pwmj_collect_mark_pairs(
 /// both run the streamed side at a single partition and the default batch size, so neither
 /// covers several partitions racing to run the final pass, nor the mid-scan resume path a
 /// small batch size forces. The `f64` pass adds `-0.0` and `NaN`, which `pwmj.slt` only
-/// exercises via a handful of fixed rows.
+/// exercises via a handful of fixed rows. The payloads check every output row carries its own
+/// rows' strings, through the copy and gather paths that differ from fixed width.
 #[tokio::test(flavor = "multi_thread")]
 async fn fuzz_pwmj_matches_nested_loop() {
     // A small batch size splits output across several coalesced batches even for these tiny
@@ -1913,11 +1989,16 @@ async fn fuzz_pwmj_matches_nested_loop() {
     );
     // `f64` keys run every dimension below a second time with `-0.0` and `NaN` mixed in, on
     // top of what `i32` already covers with plain duplicates and NULLs.
-    run_pwmj_fuzz::<i32>(&task_ctx).await;
-    run_pwmj_fuzz::<f64>(&task_ctx).await;
+    for payload in [DataType::Utf8, DataType::Utf8View] {
+        run_pwmj_fuzz::<i32>(&task_ctx, &payload).await;
+        run_pwmj_fuzz::<f64>(&task_ctx, &payload).await;
+    }
 }
 
-async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(task_ctx: &Arc<TaskContext>) {
+async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(
+    task_ctx: &Arc<TaskContext>,
+    payload: &DataType,
+) {
     let ops = [Operator::Lt, Operator::LtEq, Operator::Gt, Operator::GtEq];
     let join_types = [
         JoinType::Inner,
@@ -1965,9 +2046,15 @@ async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(task_ctx: &Arc<TaskCont
                 // single-partition shape below never reaches.
                 let buffered = match join_type {
                     JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
-                        pwmj_parts_exec(&left_ids, &left_keys, buffered_nparts, None)
+                        pwmj_parts_exec(
+                            &left_ids,
+                            &left_keys,
+                            buffered_nparts,
+                            None,
+                            payload,
+                        )
                     }
-                    _ => pwmj_single_exec(&left_ids, &left_keys),
+                    _ => pwmj_single_exec(&left_ids, &left_keys, payload),
                 };
 
                 // Mark joins output every row of their side with a `mark` column rather than
@@ -1982,28 +2069,31 @@ async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(task_ctx: &Arc<TaskCont
                                 &right_keys,
                                 nparts,
                                 stagger_seed,
+                                payload,
                             ),
                             op,
                             join_type,
                         ),
                         Arc::clone(task_ctx),
+                        payload,
                     )
                     .await;
                     let want = pwmj_collect_mark_pairs(
                         pwmj_nlj_oracle_plan::<K>(
-                            pwmj_single_exec(&left_ids, &left_keys),
-                            pwmj_single_exec(&right_ids, &right_keys),
+                            pwmj_single_exec(&left_ids, &left_keys, payload),
+                            pwmj_single_exec(&right_ids, &right_keys, payload),
                             op,
                             join_type,
                         ),
                         Arc::clone(task_ctx),
+                        payload,
                     )
                     .await;
 
                     assert_eq!(
                         got,
                         want,
-                        "mismatch key_type={} seed={seed} op={op:?} join_type={join_type:?} \
+                        "mismatch key_type={} payload={payload} seed={seed} op={op:?} join_type={join_type:?} \
                          nparts={nparts} buffered_nparts={buffered_nparts} \
                          left_keys={left_keys:?} right_keys={right_keys:?}",
                         std::any::type_name::<K>(),
@@ -2014,28 +2104,36 @@ async fn run_pwmj_fuzz<K: PwmjFuzzKey + std::fmt::Debug>(task_ctx: &Arc<TaskCont
                 let got = pwmj_collect_id_pairs(
                     pwmj_plan(
                         buffered,
-                        pwmj_parts_exec(&right_ids, &right_keys, nparts, stagger_seed),
+                        pwmj_parts_exec(
+                            &right_ids,
+                            &right_keys,
+                            nparts,
+                            stagger_seed,
+                            payload,
+                        ),
                         op,
                         join_type,
                     ),
                     Arc::clone(task_ctx),
+                    payload,
                 )
                 .await;
                 let want = pwmj_collect_id_pairs(
                     pwmj_nlj_oracle_plan::<K>(
-                        pwmj_single_exec(&left_ids, &left_keys),
-                        pwmj_single_exec(&right_ids, &right_keys),
+                        pwmj_single_exec(&left_ids, &left_keys, payload),
+                        pwmj_single_exec(&right_ids, &right_keys, payload),
                         op,
                         join_type,
                     ),
                     Arc::clone(task_ctx),
+                    payload,
                 )
                 .await;
 
                 assert_eq!(
                     got,
                     want,
-                    "mismatch key_type={} seed={seed} op={op:?} join_type={join_type:?} \
+                    "mismatch key_type={} payload={payload} seed={seed} op={op:?} join_type={join_type:?} \
                      nparts={nparts} buffered_nparts={buffered_nparts} \
                      left_keys={left_keys:?} right_keys={right_keys:?}",
                     std::any::type_name::<K>(),
@@ -2141,17 +2239,19 @@ async fn pwmj_watermark_nulls_duplicates_multi_partition() {
 
             let got = pwmj_collect_id_pairs(
                 pwmj_plan(
-                    pwmj_single_exec(&left_ids, &left_keys),
+                    pwmj_single_exec(&left_ids, &left_keys, &DataType::Utf8View),
                     pwmj_parts_exec(
                         &case.streamed_ids,
                         &case.streamed_keys,
                         nparts,
                         None,
+                        &DataType::Utf8View,
                     ),
                     Operator::Lt,
                     join_type,
                 ),
                 Arc::clone(&task_ctx),
+                &DataType::Utf8View,
             )
             .await;
 

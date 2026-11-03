@@ -1325,7 +1325,9 @@ config_namespace! {
 
         /// (reading) If true, the parquet reader skip the optional embedded metadata that may be in
         /// the file Schema. This setting can help avoid schema conflicts when querying
-        /// multiple parquet files with schemas containing compatible types but different metadata
+        /// multiple parquet files with schemas containing compatible types but different metadata.
+        /// Arrow extension types (the `ARROW:extension:name` and `ARROW:extension:metadata`
+        /// field metadata) are kept, because they are part of the type of a column
         pub skip_metadata: bool, default = true
 
         /// (reading) If specified, the parquet reader will try and fetch the last `size_hint`
