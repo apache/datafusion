@@ -37,7 +37,7 @@ use crate::{
 
 use arrow::array::{PrimitiveArray, RecordBatch, RecordBatchOptions, UInt64Array};
 use arrow::compute::take_arrays;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, UInt32Type};
+use arrow::datatypes::{DataType, Schema, SchemaRef, UInt32Type};
 use arrow_schema::SortOptions;
 use datafusion_common::ScalarValue;
 use datafusion_common::config::ConfigOptions;
@@ -646,7 +646,7 @@ enum BatchPartitionerState {
         partition_reducer: StrengthReducedU64,
         hash_buffer: Vec<u64>,
         indices: Vec<Vec<u32>>,
-        hasher: Option<CachingArrayHasher>,
+        hasher: CachingArrayHasher,
     },
     RoundRobin {
         num_partitions: usize,
@@ -1034,13 +1034,17 @@ impl BatchPartitioner {
             return internal_err!("Hash repartition requires at least one partition");
         }
 
+        let hasher = CachingArrayHasher::new(
+            exprs.len(),
+            REPARTITION_RANDOM_STATE.random_state().clone(),
+        );
         Ok(Self {
             state: BatchPartitionerState::Hash {
                 exprs,
                 partition_reducer: StrengthReducedU64::new(num_partitions as u64),
                 hash_buffer: vec![],
                 indices: vec![vec![]; num_partitions],
-                hasher: None,
+                hasher,
             },
             timer,
         })
@@ -1266,23 +1270,6 @@ impl BatchPartitioner {
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
 
-                    let hasher = hasher.get_or_insert_with(|| {
-                        let fields = arrays
-                            .iter()
-                            .enumerate()
-                            .map(|(index, array)| {
-                                Field::new(
-                                    format!("hash_{index}"),
-                                    array.data_type().clone(),
-                                    true,
-                                )
-                            })
-                            .collect::<Vec<_>>();
-                        CachingArrayHasher::new(
-                            &Schema::new(fields),
-                            REPARTITION_RANDOM_STATE.random_state().clone(),
-                        )
-                    });
                     hasher.create_hashes(&arrays, hash_buffer)?;
 
                     for v in indices.iter_mut() {

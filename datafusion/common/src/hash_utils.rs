@@ -44,7 +44,7 @@ pub struct CachingArrayHasher {
 }
 
 impl CachingArrayHasher {
-    /// Creates one cache slot per column in `schema`.
+    /// Creates one cache slot per column.
     ///
     /// For each dictionary column, the cache tracks the values array with a
     /// weak pointer, so it does not keep the values alive, and owns a reusable
@@ -52,10 +52,10 @@ impl CachingArrayHasher {
     /// values `Arc` is unchanged, recomputes them when it changes, and scatters
     /// them through the dictionary keys into the row hashes. Non-dictionary
     /// columns use the regular array hashing path.
-    pub fn new(schema: &Schema, random_state: RandomState) -> Self {
+    pub fn new(num_columns: usize, random_state: RandomState) -> Self {
         Self {
             random_state,
-            dictionaries: schema.fields().iter().map(|_| None).collect(),
+            dictionaries: vec![None; num_columns],
         }
     }
 
@@ -1502,14 +1502,7 @@ mod tests {
         columns: &[ArrayRef],
         random_state: &RandomState,
     ) -> CachingArrayHasher {
-        let fields = columns
-            .iter()
-            .enumerate()
-            .map(|(index, column)| {
-                Field::new(format!("column_{index}"), column.data_type().clone(), true)
-            })
-            .collect::<Vec<_>>();
-        CachingArrayHasher::new(&Schema::new(fields), random_state.clone())
+        CachingArrayHasher::new(columns.len(), random_state.clone())
     }
 
     #[cfg(not(feature = "force_hash_collisions"))]
