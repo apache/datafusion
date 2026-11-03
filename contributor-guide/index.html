@@ -711,6 +711,8 @@ your own GitHub Actions runners. The main repository runs only the fast lint job
 such a pull request and adds a <code class="docutils literal notranslate"><span class="pre">Rust</span> <span class="pre">(fork)</span></code> check that links to the run on
 your fork. The merge queue runs the full workflow on the merged result before
 a pull request merges, so a green fork run does not replace it.</p>
+<p>macOS tests skip fork runs to avoid runner timeouts. They remain required in the
+merge queue, and other upstream coverage is unchanged.</p>
 <p>To make this work:</p>
 <ol class="arabic simple">
 <li><p>Before you push your branch, open the <strong>Actions</strong> tab on your fork.

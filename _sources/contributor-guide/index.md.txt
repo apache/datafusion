@@ -275,6 +275,9 @@ such a pull request and adds a `Rust (fork)` check that links to the run on
 your fork. The merge queue runs the full workflow on the merged result before
 a pull request merges, so a green fork run does not replace it.
 
+macOS tests skip fork runs to avoid runner timeouts. They remain required in the
+merge queue, and other upstream coverage is unchanged.
+
 To make this work:
 
 1. Before you push your branch, open the **Actions** tab on your fork.
