@@ -26,6 +26,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{
     Result, exec_datafusion_err, internal_datafusion_err, not_impl_err,
 };
@@ -283,6 +284,8 @@ struct RecursiveQueryStream {
     buffer: Vec<RecordBatch>,
     /// Tracks the memory used by the buffer
     reservation: MemoryReservation,
+    /// Counts the buffers and array objects retained in this iteration once each.
+    buffer_memory: RecordBatchMemoryCounter,
     /// If the distinct flag is set, then we use this hash table to remove duplicates from result and work tables
     distinct_deduplicator: Option<DistinctDeduplicator>,
     /// Metrics.
@@ -314,6 +317,7 @@ impl RecursiveQueryStream {
             schema,
             buffer: vec![],
             reservation,
+            buffer_memory: RecordBatchMemoryCounter::new(),
             distinct_deduplicator,
             baseline_metrics,
         })
@@ -332,7 +336,8 @@ impl RecursiveQueryStream {
             batch = deduplicator.deduplicate(&batch)?;
         }
 
-        if let Err(e) = self.reservation.try_grow(batch.get_array_memory_size()) {
+        let batch_memory = self.buffer_memory.count_batch_with_array_overhead(&batch);
+        if let Err(e) = self.reservation.try_grow(batch_memory) {
             return Poll::Ready(Some(Err(e)));
         }
         self.buffer.push(batch.clone());
@@ -361,6 +366,7 @@ impl RecursiveQueryStream {
             std::mem::take(&mut self.buffer),
             self.reservation.take(),
         );
+        self.buffer_memory = RecordBatchMemoryCounter::new();
         self.work_table.update(reserved_batches);
 
         // We always execute (and re-execute iteratively) the first partition.
@@ -507,10 +513,21 @@ fn new_groups_mask(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::collect;
     use crate::empty::EmptyExec;
+    use crate::filter::FilterExec;
     use crate::projection::ProjectionExec;
+    use crate::test::TestMemoryExec;
+    use crate::work_table::WorkTableExec;
 
+    use arrow::array::{ArrayRef, Int64Array, NullArray, StringViewArray};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryPool, PeakRecordingPool,
+    };
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{binary, col, lit};
 
     fn empty_exec(fields: Vec<Field>) -> Arc<dyn ExecutionPlan> {
         Arc::new(EmptyExec::new(Arc::new(Schema::new(fields))))
@@ -563,6 +580,114 @@ mod tests {
         assert!(exec.schema().field(0).is_nullable());
         assert!(exec.static_term().schema().field(0).is_nullable());
         assert!(exec.recursive_term().schema().field(0).is_nullable());
+        Ok(())
+    }
+
+    /// Returns the output row count and peak reservation of a recursive query
+    /// with `batches` as the static term and `recursive_term` over `t`.
+    async fn run_recursive_query(
+        schema: &SchemaRef,
+        batches: Vec<RecordBatch>,
+        recursive_term: impl FnOnce(Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>>,
+    ) -> Result<(usize, usize)> {
+        let static_term =
+            TestMemoryExec::try_new_exec(&[batches], Arc::clone(schema), None)?;
+        let work_table = Arc::new(WorkTableExec::new(
+            "t".to_string(),
+            Arc::clone(schema),
+            None,
+        )?);
+        let exec = Arc::new(RecursiveQueryExec::try_new(
+            "t".to_string(),
+            Arc::clone(schema),
+            static_term,
+            recursive_term(work_table)?,
+            false,
+        )?);
+        let pool = Arc::new(PeakRecordingPool::new(Arc::new(GreedyMemoryPool::new(
+            usize::MAX / 2,
+        ))));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let rows = collect(exec, context)
+            .await?
+            .iter()
+            .map(|b| b.num_rows())
+            .sum();
+        assert_eq!(pool.reserved(), 0);
+        Ok((rows, pool.peak_reserved()))
+    }
+
+    #[tokio::test]
+    async fn recursive_query_reserves_shared_buffers_once_per_iteration() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", DataType::Utf8View, true),
+            Field::new("n", DataType::Int64, false),
+        ]));
+        let strings: StringViewArray = (0..256)
+            .map(|i| Some(format!("{i:05} {}", "a long string ".repeat(16))))
+            .collect();
+        let string_data: usize =
+            strings.data_buffers().iter().map(|b| b.capacity()).sum();
+        let strings: ArrayRef = Arc::new(strings);
+        let n: ArrayRef = Arc::new(Int64Array::from(vec![0; 256]));
+        // 16 batches that share the same string buffers
+        let batches: Vec<RecordBatch> = (0..16)
+            .map(|i| {
+                let columns = vec![strings.slice(i * 16, 16), n.slice(i * 16, 16)];
+                RecordBatch::try_new(Arc::clone(&schema), columns).unwrap()
+            })
+            .collect();
+        let sum_of_batches: usize =
+            batches.iter().map(|b| b.get_array_memory_size()).sum();
+
+        // SELECT s, n + 1 FROM t WHERE n < 1: one more iteration over the same strings
+        let (rows, peak) = run_recursive_query(&schema, batches, |work_table| {
+            let n = col("n", &schema)?;
+            let filter = FilterExec::try_new(
+                binary(Arc::clone(&n), Operator::Lt, lit(1i64), &schema)?,
+                work_table,
+            )?
+            .with_batch_size(16)?;
+            let next_n = binary(n, Operator::Plus, lit(1i64), &schema)?;
+            let projection = ProjectionExec::try_new(
+                vec![
+                    (col("s", &schema)?, "s".to_string()),
+                    (next_n, "n".to_string()),
+                ],
+                Arc::new(filter),
+            )?;
+            Ok(Arc::new(projection))
+        })
+        .await?;
+
+        assert_eq!(rows, 512);
+        // the work table and the next iteration each hold the strings
+        assert!(peak >= 2 * string_data, "{peak} < 2 * {string_data}");
+        assert!(peak < sum_of_batches, "{peak} >= {sum_of_batches}");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn recursive_query_reserves_array_objects() -> Result<()> {
+        // a NullArray has no buffers, only the array object
+        let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Null, true)]));
+        let batches: Vec<RecordBatch> = (0..16)
+            .map(|_| {
+                let column: ArrayRef = Arc::new(NullArray::new(1));
+                RecordBatch::try_new(Arc::clone(&schema), vec![column]).unwrap()
+            })
+            .collect();
+
+        let (rows, peak) = run_recursive_query(&schema, batches, |work_table| {
+            Ok(Arc::new(FilterExec::try_new(lit(false), work_table)?))
+        })
+        .await?;
+
+        assert_eq!(rows, 16);
+        assert!(peak > 0);
         Ok(())
     }
 }
