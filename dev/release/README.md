@@ -331,7 +331,15 @@ git push apache 55.2.0
 
 Open a PR against `main` that adds the release to
 `docs/source/_static/versions.json` immediately after the `Development (main)`
-entry mark it with `"preferred": true`.
+entry and marks it with `"preferred": true` (remove `"preferred"` from the
+previous release).
+
+The version picker only lists the most recent release of each major version.
+If the new release is a minor or patch release (e.g. `55.2.0`), move the
+previous release of the same major version (e.g. `55.1.0`) from `versions.json`
+to `docs/source/_static/old_versions.json`. Releases in `old_versions.json`
+are still built and published under `/versions/<version>/`, so existing links
+keep working, but they are not shown in the version picker.
 
 Once the PR is merged, the
 [Deploy DataFusion versioned docs](../../.github/workflows/docs_versions.yaml)
