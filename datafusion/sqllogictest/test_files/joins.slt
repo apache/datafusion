@@ -2061,6 +2061,61 @@ set datafusion.explain.logical_plan_only = false;
 statement ok
 set datafusion.execution.target_partitions = 4;
 
+# A join key spanning two cross-joined inputs must survive join reordering.
+query II
+SELECT k.k, b.id
+FROM (VALUES (1, 17, 18)) AS a(t, x, y)
+CROSS JOIN (VALUES (0), (1)) AS k(k)
+JOIN (VALUES (1, 17), (1, 18), (1, 19)) AS b(t, id)
+  ON a.t = b.t AND b.id = CASE k.k WHEN 0 THEN a.x ELSE a.y END
+ORDER BY k.k, b.id;
+----
+0 17
+1 18
+
+# A null-safe child join must keep its NULL matches under an ordinary join.
+query I
+SELECT a.id
+FROM (VALUES (1, CAST(NULL AS INT)), (2, 5)) AS a(id, x)
+JOIN (VALUES (CAST(NULL AS INT)), (5)) AS k(x)
+  ON a.x IS NOT DISTINCT FROM k.x
+JOIN (VALUES (1), (2)) AS b(id) ON a.id = b.id
+ORDER BY a.id;
+----
+1
+2
+
+# An ordinary child join must not gain NULL matches under a null-safe join.
+query I
+SELECT a.id
+FROM (VALUES (1, CAST(NULL AS INT)), (2, 5)) AS a(id, x)
+JOIN (VALUES (CAST(NULL AS INT)), (5)) AS k(x) ON a.x = k.x
+JOIN (VALUES (1), (2)) AS b(id) ON a.id IS NOT DISTINCT FROM b.id
+ORDER BY a.id;
+----
+2
+
+# A residual join key must retain its null-safe comparison when used as a filter.
+query I
+SELECT b.x
+FROM (VALUES (1, CAST(NULL AS INT))) AS a(id, x)
+CROSS JOIN (VALUES (0)) AS k(x)
+JOIN (VALUES (1, CAST(NULL AS INT)), (1, 7)) AS b(id, x)
+  ON a.id IS NOT DISTINCT FROM b.id
+ AND a.x + k.x IS NOT DISTINCT FROM b.x;
+----
+NULL
+
+# Using a null-safe key does not enforce an ordinary equality on the same columns.
+query I
+SELECT a.x
+FROM (VALUES (CAST(NULL AS INT)), (1)) AS a(x)
+JOIN (VALUES (CAST(NULL AS INT)), (1)) AS b(x)
+  ON a.x IS NOT DISTINCT FROM b.x
+WHERE a.x = b.x;
+----
+1
+
 # Planning inner nested loop join
 # inputs are swapped due to inexact statistics + join reordering caused additional projection
 
