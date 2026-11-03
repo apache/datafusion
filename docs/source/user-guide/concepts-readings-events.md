@@ -37,6 +37,8 @@
 
 This is a list of DataFusion related blog posts, articles, and other resources. Please open a PR to add any new resources you create or find
 
+- **2026-10-24** [Blog: Best Practices for Single Row Lookups (Point Queries)](https://datafusion.apache.org/blog/2026/10/24/point-queries/)
+
 - **2026-10-01** [Blog: How we extended Apache DataFusion to execute one query across many machines](https://www.datadoghq.com/blog/engineering/distributed-datafusion/)
 
 - **2026-07-29** [Blog: Bringing DuckLake to DataFusion](https://ducklake.select/2026/07/29/bringing-ducklake-to-datafusion/)

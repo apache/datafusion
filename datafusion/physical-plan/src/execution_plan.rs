@@ -764,11 +764,35 @@ pub trait ExecutionPlan: Any + Debug + DisplayAs + Send + Sync {
     /// Returns `true` if a limit can be safely pushed down through this
     /// `ExecutionPlan` node.
     ///
-    /// If this method returns `true`, and the query plan contains a limit at
-    /// the output of this node, DataFusion will push the limit to the input
-    /// of this node.
+    /// DataFusion's own operators still return the same values as before, so
+    /// a wrapper that forwards this to its input keeps working.
+    #[deprecated(
+        since = "56.0.0",
+        note = "implement `limit_behavior` instead; the default `limit_behavior` reads this"
+    )]
     fn supports_limit_pushdown(&self) -> bool {
         false
+    }
+
+    /// What a row limit (`LIMIT` / `OFFSET`) on this node's output means for
+    /// its input. The optimizer rules that move limits read only this; see
+    /// [`LimitBehavior`].
+    ///
+    /// The default keeps the behavior of nodes that still implement the
+    /// deprecated [`Self::supports_limit_pushdown`]: [`LimitBehavior::Stops`]
+    /// if it returns `false`, otherwise [`LimitBehavior::MoveToInput`] when
+    /// [`Self::cardinality_effect`] is [`CardinalityEffect::Equal`] and
+    /// [`LimitBehavior::CopyToChildren`] when it is not.
+    fn limit_behavior(&self) -> LimitBehavior {
+        #[expect(deprecated)]
+        let supports_limit_pushdown = self.supports_limit_pushdown();
+        if !supports_limit_pushdown {
+            return LimitBehavior::Stops;
+        }
+        match self.cardinality_effect() {
+            CardinalityEffect::Equal => LimitBehavior::MoveToInput,
+            _ => LimitBehavior::CopyToChildren,
+        }
     }
 
     /// Returns a fetching variant of this `ExecutionPlan` node, if it supports
@@ -2062,6 +2086,53 @@ pub fn get_plan_string(plan: &Arc<dyn ExecutionPlan>) -> Vec<String> {
     let formatted = displayable(plan.as_ref()).indent(true).to_string();
     let actual: Vec<&str> = formatted.trim().lines().collect();
     actual.iter().map(|elem| (*elem).to_string()).collect()
+}
+
+/// What a row limit on an operator's output means for the operator's input.
+/// Returned by [`ExecutionPlan::limit_behavior`].
+///
+/// A limit can be *copied* below a node as an early-stop hint while it also
+/// stays above the node, or *moved* below a node, leaving nothing above it.
+/// Copying is safe whenever the first `n` output rows need at most the first
+/// `n` rows of each child. Moving also needs the node to output exactly the
+/// rows of its input.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LimitBehavior {
+    /// A limit above this node must stay above it. The default.
+    Stops,
+    /// This node applies `OFFSET skip LIMIT fetch` to its single input
+    /// (`GlobalLimitExec`, `LocalLimitExec`).
+    Limit { skip: usize, fetch: Option<usize> },
+    /// A limit may be copied to each child, but may not move: this node can
+    /// output more rows than any one child (`UnionExec`).
+    CopyToChildren,
+    /// This node outputs exactly the rows of its input: a limit may move to
+    /// its input (`ProjectionExec`).
+    MoveToInput,
+    /// This node merges its input partitions, so it sees every row and can
+    /// enforce a limit with its own fetch (`CoalescePartitionsExec`,
+    /// `SortPreservingMergeExec`). Without a fetch of its own
+    /// ([`ExecutionPlan::fetch`]) it outputs exactly the rows of its input,
+    /// like [`Self::MoveToInput`]. With one, it already selects rows, so a
+    /// limit above it may not move below it.
+    Merge,
+    /// A window function node, with how far it reads ahead of each output
+    /// row; `None` if that is not known before execution. Only
+    /// `LimitPushPastWindows` copies a limit below a window.
+    Window(Option<WindowLookahead>),
+}
+
+/// How many input rows a window needs for its first `n` output rows. See
+/// [`LimitBehavior::Window`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct WindowLookahead {
+    /// At least this many input rows, whatever `n` is.
+    pub min_rows: Option<usize>,
+    /// Output row `i` reads input rows up to `i + frame_end` (`ROWS` frames).
+    pub frame_end: usize,
+    /// The window functions read this many rows past the frame
+    /// (e.g. `LEAD(x, 2)`).
+    pub relative: usize,
 }
 
 /// Indicates the effect an execution plan operator will have on the cardinality

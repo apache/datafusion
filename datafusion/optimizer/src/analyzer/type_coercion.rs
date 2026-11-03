@@ -15,6 +15,7 @@ use crate::utils::{NamePreserver, merge_into_schema};
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::metadata::merge_metadata_for_union;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -314,7 +315,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     }
 
     fn coerce_dml(&self, mut dml: DmlStatement) -> Result<LogicalPlan> {
-        let WriteOp::MergeInto(merge_op) = &dml.op else {
+        let WriteOp::MergeInto(merge_op) = &mut dml.op else {
             return Ok(LogicalPlan::Dml(dml));
         };
 
@@ -322,8 +323,8 @@ impl<'a> TypeCoercionRewriter<'a> {
             dml.table_name.clone(),
             &dml.target.schema(),
         )?;
-        let mut merge_op = (**merge_op).clone();
-        merge_op.on = self.coerce_predicate(merge_op.on, "MERGE ON condition")?;
+        merge_op.on = self
+            .coerce_predicate(std::mem::take(&mut merge_op.on), "MERGE ON condition")?;
         for clause in &mut merge_op.clauses {
             clause.predicate = clause
                 .predicate
@@ -335,7 +336,8 @@ impl<'a> TypeCoercionRewriter<'a> {
                 datafusion_expr::dml::MergeIntoAction::Update(assignments) => {
                     for (column, value) in assignments {
                         let field = target_schema.field_with_unqualified_name(column)?;
-                        *value = value.clone().cast_to(field.data_type(), self.schema)?;
+                        *value = std::mem::take(value)
+                            .cast_to(field.data_type(), self.schema)?;
                     }
                 }
                 datafusion_expr::dml::MergeIntoAction::Insert { columns, values } => {
@@ -343,22 +345,21 @@ impl<'a> TypeCoercionRewriter<'a> {
                         for (value, field) in
                             values.iter_mut().zip(target_schema.fields())
                         {
-                            *value =
-                                value.clone().cast_to(field.data_type(), self.schema)?;
+                            *value = std::mem::take(value)
+                                .cast_to(field.data_type(), self.schema)?;
                         }
                     } else {
                         for (column, value) in columns.iter().zip(values) {
                             let field =
                                 target_schema.field_with_unqualified_name(column)?;
-                            *value =
-                                value.clone().cast_to(field.data_type(), self.schema)?;
+                            *value = std::mem::take(value)
+                                .cast_to(field.data_type(), self.schema)?;
                         }
                     }
                 }
                 datafusion_expr::dml::MergeIntoAction::Delete => {}
             }
         }
-        dml.op = WriteOp::MergeInto(Box::new(merge_op));
         Ok(LogicalPlan::Dml(dml))
     }
 
@@ -1690,17 +1691,9 @@ fn coerce_union_schema_with_schema(
         .iter()
         .map(|f| f.is_nullable())
         .collect::<Vec<_>>();
-    let mut union_field_meta = base_schema
-        .fields()
-        .iter()
-        .map(|f| f.metadata().clone())
-        .collect::<Vec<_>>();
-
-    let mut metadata = base_schema.metadata().clone();
 
     for (i, plan) in inputs.iter().enumerate() {
         let plan_schema = plan.schema();
-        metadata.extend(plan_schema.metadata().clone());
 
         if plan_schema.fields().len() != base_schema.fields().len() {
             return plan_err!(
@@ -1713,10 +1706,9 @@ fn coerce_union_schema_with_schema(
         }
 
         // coerce data type and nullability for each field
-        for (union_datatype, union_nullable, union_field_map, plan_field) in izip!(
+        for (union_datatype, union_nullable, plan_field) in izip!(
             union_datatypes.iter_mut(),
             union_nullabilities.iter_mut(),
-            union_field_meta.iter_mut(),
             plan_schema.fields().iter()
         ) {
             let coerced_type =
@@ -1734,22 +1726,29 @@ fn coerce_union_schema_with_schema(
 
             *union_datatype = coerced_type;
             *union_nullable = *union_nullable || plan_field.is_nullable();
-            union_field_map.extend(plan_field.metadata().clone());
         }
     }
+
+    let all_schemas = std::iter::once(base_schema)
+        .chain(inputs.iter().map(|p| p.schema()))
+        .collect::<Vec<_>>();
+
     let union_qualified_fields = izip!(
-        base_schema.fields(),
+        base_schema.fields().iter().enumerate(),
         union_datatypes.into_iter(),
-        union_nullabilities,
-        union_field_meta.into_iter()
+        union_nullabilities
     )
-    .map(|(field, datatype, nullable, metadata)| {
+    .map(|((i, field), datatype, nullable)| {
         let mut field = Field::new(field.name().clone(), datatype, nullable);
-        field.set_metadata(metadata);
+        field.set_metadata(merge_metadata_for_union(
+            all_schemas.iter().map(|schema| schema.field(i).metadata()),
+        ));
         (None, field.into())
     })
     .collect::<Vec<_>>();
 
+    let metadata =
+        merge_metadata_for_union(all_schemas.iter().map(|schema| schema.metadata()));
     DFSchema::new_with_metadata(union_qualified_fields, metadata)
 }
 
