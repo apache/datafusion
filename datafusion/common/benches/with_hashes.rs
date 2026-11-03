@@ -160,6 +160,33 @@ fn criterion_benchmark(c: &mut Criterion) {
                 do_hash_test(b, &arrays);
             });
         }
+
+        if name == "dictionary_utf8_int32" {
+            let dict = array
+                .as_any()
+                .downcast_ref::<DictionaryArray<Int32Type>>()
+                .expect("Expected Int32 dictionary");
+
+            for null_percent in [50, 97] {
+                let nullable_array = with_null_keys(dict, null_percent as f32 / 100.0);
+
+                c.bench_function(
+                    &format!("{name}: single, {null_percent}% null keys"),
+                    |b| do_hash_test(b, std::slice::from_ref(&nullable_array)),
+                );
+                c.bench_function(
+                    &format!("{name}: multiple, {null_percent}% null keys"),
+                    |b| {
+                        let arrays = vec![
+                            nullable_array.clone(),
+                            nullable_array.clone(),
+                            nullable_array.clone(),
+                        ];
+                        do_hash_test(b, &arrays);
+                    },
+                );
+            }
+        }
     }
 }
 
@@ -309,15 +336,9 @@ impl StringPool {
         &self,
         array_length: usize,
     ) -> ArrayRef {
-        Arc::new(self.typed_dictionary_array::<T>(array_length))
-    }
-
-    /// Like [`Self::dictionary_array`], but returns the concrete `DictionaryArray`
-    fn typed_dictionary_array<T: ArrowDictionaryKeyType>(
-        &self,
-        array_length: usize,
-    ) -> DictionaryArray<T> {
-        DictionaryArray::<T>::from_iter(self.iter_strings(array_length))
+        Arc::new(DictionaryArray::<T>::from_iter(
+            self.iter_strings(array_length),
+        ))
     }
 }
 
@@ -670,33 +691,10 @@ fn mixed_columns_benchmark(c: &mut Criterion) {
     });
 }
 
-/// Int32 dictionaries with 50% and 97% null keys. 0% and 3% are covered by
-/// the existing `dictionary_utf8_int32` "no nulls" and "nulls" cases in
-/// `criterion_benchmark`
-fn dictionary_benchmark(c: &mut Criterion) {
-    let pool = StringPool::new(100, 64);
-    let dict = pool.typed_dictionary_array::<Int32Type>(BATCH_SIZE);
-    let name = "dictionary_utf8_int32";
-    for null_percent in [50, 97] {
-        let array = with_null_keys(&dict, null_percent as f32 / 100.0);
-        c.bench_function(&format!("{name}: single, {null_percent}% null keys"), |b| {
-            do_hash_test(b, std::slice::from_ref(&array));
-        });
-        c.bench_function(
-            &format!("{name}: multiple, {null_percent}% null keys"),
-            |b| {
-                let arrays = vec![array.clone(), array.clone(), array.clone()];
-                do_hash_test(b, &arrays);
-            },
-        );
-    }
-}
-
 criterion_group!(
     benches,
     criterion_benchmark,
     sliced_array_benchmark,
-    mixed_columns_benchmark,
-    dictionary_benchmark
+    mixed_columns_benchmark
 );
 criterion_main!(benches);
