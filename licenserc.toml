@@ -30,15 +30,59 @@ includes = [
     "*.py",
     "*.ts",
     "*.slt",
+    "*.slt.part",
+    "*.md",
+    "*.rst",
+    "*.sh",
+    "*.bat",
+    "*.toml",
+    "*.yaml",
+    "*.yml",
+    "*.js",
+    "*.cjs",
+    "*.css",
+    "*.proto",
+    "*.rdf",
+    ".gitignore",
+    ".dockerignore",
+    ".editorconfig",
+    "Dockerfile",
+    "Makefile",
 ]
 
 excludes = [
-    # generated code
+    # Generated code; the hand-written generated/mod.rs wrappers are checked.
     "datafusion/proto/src/generated/**",
-    "datafusion/proto-common/src/generated/**",
-    "datafusion/proto-models/src/generated/**",
+    "datafusion/proto-common/src/generated/pbjson.rs",
+    "datafusion/proto-common/src/generated/prost.rs",
+    "datafusion/proto-models/src/generated/datafusion_proto_common.rs",
+    "datafusion/proto-models/src/generated/pbjson.rs",
+    "datafusion/proto-models/src/generated/prost.rs",
+    # HawkEye inserts headers before the YAML front matter required by skills.
+    ".ai/skills/**",
+    # GitHub contribution templates and temporary generated documentation.
+    ".github/ISSUE_TEMPLATE/**",
+    ".github/pull_request_template.md",
+    "**/.examples-docs-check.*/**",
 ]
 
+[styles.rst]
+kind = "line"
+prefix = ".. "
+
 [[rules]]
-extensions = ["slt"]
+extensions = ["slt", "slt.part"]
+filenames = [".gitignore", ".dockerignore"]
 style_out = "script"
+
+[[rules]]
+extensions = ["md", "rdf"]
+style_out = "xml"
+
+[[rules]]
+extensions = ["rst"]
+style_out = "rst"
+
+[[rules]]
+extensions = ["js", "cjs", "proto"]
+style_out = "doubleslash"
