@@ -783,6 +783,20 @@ impl RangeExpr {
     pub fn sort_options(&self) -> &[SortOptions] {
         self.router.sort_options()
     }
+
+    /// Appends the partition of each row of `arrays`, the evaluated
+    /// `on_columns`, to `partition_ids`.
+    pub(crate) fn route_partition_ids(
+        &self,
+        arrays: &[arrow::array::ArrayRef],
+        partition_ids: &mut Vec<u64>,
+    ) -> Result<()> {
+        if self.router.split_points().is_empty() {
+            partition_ids.resize(partition_ids.len() + arrays[0].len(), 0);
+            return Ok(());
+        }
+        self.router.route_partition_ids(arrays, partition_ids)
+    }
 }
 
 impl Display for RangeExpr {
@@ -2187,15 +2201,14 @@ impl RepartitionExec {
         input: &Arc<dyn ExecutionPlan>,
         preserve_order: bool,
     ) -> EquivalenceProperties {
-        // Equivalence Properties
         let mut eq_properties = input.equivalence_properties().clone();
-        // If the ordering is lost, reset the ordering equivalence class:
-        if !Self::maintains_input_order_helper(input, preserve_order)[0] {
-            eq_properties.clear_orderings();
-        }
-        // When there are more than one input partitions, they will be fused at the output.
-        // Therefore, remove per partition constants.
+        // Fusing several input partitions keeps only the merge key ordering,
+        // and per-partition constants no longer hold.
         if input.output_partitioning().partition_count() > 1 {
+            eq_properties.clear_orderings();
+            if preserve_order && let Some(ordering) = input.output_ordering() {
+                eq_properties.add_ordering(ordering.clone());
+            }
             eq_properties.clear_per_partition_constants();
         }
         eq_properties
