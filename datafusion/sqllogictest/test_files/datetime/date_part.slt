@@ -1069,12 +1069,14 @@ FROM (SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("Africa/Monrovia"))
 28 28500 28500000 28500000000
 NULL NULL NULL NULL
 
-# timestamps outside the range arrow represents are NULL, like the other parts
+# The second is computed directly from the stored value (i64::MAX % 60 = 7). The
+# sub-second parts of a timestamp outside the range arrow represents are NULL,
+# like the other parts.
 query IIII
 SELECT extract(second from ts), extract(millisecond from ts), extract(microsecond from ts), extract(nanosecond from ts)
 FROM (VALUES (arrow_cast(9223372036854775807, 'Timestamp(Second, None)')), (NULL)) AS t(ts)
 ----
-NULL NULL NULL NULL
+7 NULL NULL NULL
 NULL NULL NULL NULL
 
 # test_extract_interval
@@ -1603,7 +1605,7 @@ NULL
 # Non-null inputs can give NULL results, so the result is nullable.
 # Reproducers from https://github.com/apache/datafusion/issues/26685
 query I
-SELECT extract(second from ts) FROM (VALUES (arrow_cast(9223372036854775807, 'Timestamp(Second, None)'))) AS t(ts)
+SELECT extract(millisecond from ts) FROM (VALUES (arrow_cast(9223372036854775807, 'Timestamp(Second, None)'))) AS t(ts)
 ----
 NULL
 
