@@ -35,14 +35,17 @@
 //!   pending until that partition receives another row.
 //! - `linear dense rank N partitions`: the dense layout with an evaluator
 //!   that compares ORDER BY values row by row.
+//! - `linear dense count view-payload N partitions`: the dense layout with a
+//!   `Utf8View` column, whose data buffers each partition keeps once it is
+//!   extended.
 //! - `sorted count N partitions`: control; input sorted by partition key,
 //!   as `Sorted` mode requires, so finished partitions are pruned eagerly
 //!   and the state maps stay small.
 
 use std::sync::Arc;
 
-use arrow::array::UInt64Array;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::array::{AsArray, StringViewArray, UInt64Array};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, UInt64Type};
 use arrow::record_batch::RecordBatch;
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
@@ -96,6 +99,28 @@ fn make_batches(pk_of_row: impl Fn(usize) -> u64) -> Vec<RecordBatch> {
 /// batch (when `n_partitions <= BATCH_SIZE`).
 fn dense_batches(n_partitions: usize) -> Vec<RecordBatch> {
     make_batches(move |i| (i % n_partitions) as u64)
+}
+
+/// `batches` with a `Utf8View` payload column of 24-byte strings, which do
+/// not fit in the views and so live in the data buffers.
+fn with_view_payload(batches: Vec<RecordBatch>) -> Vec<RecordBatch> {
+    let mut fields = schema().fields().to_vec();
+    fields.push(Arc::new(Field::new("payload", DataType::Utf8View, false)));
+    let schema = Arc::new(Schema::new(fields));
+    batches
+        .into_iter()
+        .map(|batch| {
+            let ts = batch.column(1).as_primitive::<UInt64Type>();
+            let payload = StringViewArray::from_iter_values(
+                ts.values()
+                    .iter()
+                    .map(|ts| format!("payload for row {ts:08}")),
+            );
+            let mut columns = batch.columns().to_vec();
+            columns.push(Arc::new(payload));
+            RecordBatch::try_new(Arc::clone(&schema), columns).unwrap()
+        })
+        .collect()
 }
 
 /// Keys clustered in time: batch `b` only contains keys in
@@ -162,7 +187,7 @@ fn window_exec(
     window_frame: &WindowFrame,
     functions: &[BenchWindowFn],
 ) -> Arc<dyn ExecutionPlan> {
-    let schema = schema();
+    let schema = batches[0].schema();
     let source = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)
         .expect("memory exec")
         .try_with_sort_information(LexOrdering::new(input_ordering).into_iter().collect())
@@ -357,6 +382,17 @@ fn bounded_window_benchmark(c: &mut Criterion) {
             vec![sort_expr("ts")],
             &default_frame(),
             &[rank()],
+        ),
+    );
+
+    run_case(
+        "linear dense count view-payload 10000 partitions".to_string(),
+        window_exec(
+            with_view_payload(dense_batches(10_000)),
+            InputOrderMode::Linear,
+            vec![sort_expr("ts")],
+            &range_frame(),
+            &[count()],
         ),
     );
 

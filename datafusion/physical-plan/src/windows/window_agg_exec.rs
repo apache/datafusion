@@ -33,9 +33,11 @@ use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::utils::{evaluate_partition_ranges, transpose};
 use datafusion_common::{Result, assert_eq_or_internal_err};
 use datafusion_execution::TaskContext;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_physical_expr_common::sort_expr::{
     OrderingRequirements, PhysicalSortExpr,
 };
@@ -294,6 +296,8 @@ impl ExecutionPlan for WindowAggExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
+        let reservation = MemoryConsumer::new(format!("WindowAggStream[{partition}]"))
+            .register(context.memory_pool());
         let input = self.input.execute(partition, context)?;
         let stream = Box::pin(WindowAggStream::new(
             Arc::clone(&self.schema),
@@ -302,6 +306,7 @@ impl ExecutionPlan for WindowAggExec {
             BaselineMetrics::new(&self.metrics, partition),
             self.partition_by_sort_keys()?,
             self.ordered_partition_by_indices.clone(),
+            reservation,
         )?);
         Ok(stream)
     }
@@ -495,6 +500,12 @@ pub struct WindowAggStream {
     partition_by_sort_keys: Vec<PhysicalSortExpr>,
     baseline_metrics: BaselineMetrics,
     ordered_partition_by_indices: Vec<usize>,
+    /// Counts each buffer the stream holds once, since the buffered batches,
+    /// their concatenation and the window results can share buffers
+    batch_memory: RecordBatchMemoryCounter,
+    /// Reserves the buffered input and, while computing, its concatenation
+    /// and the window results
+    reservation: MemoryReservation,
 }
 
 impl WindowAggStream {
@@ -506,6 +517,7 @@ impl WindowAggStream {
         baseline_metrics: BaselineMetrics,
         partition_by_sort_keys: Vec<PhysicalSortExpr>,
         ordered_partition_by_indices: Vec<usize>,
+        reservation: MemoryReservation,
     ) -> Result<Self> {
         // In WindowAggExec all partition by columns should be ordered.
         assert_eq_or_internal_err!(
@@ -522,14 +534,18 @@ impl WindowAggStream {
             baseline_metrics,
             partition_by_sort_keys,
             ordered_partition_by_indices,
+            batch_memory: RecordBatchMemoryCounter::new(),
+            reservation,
         })
     }
 
-    fn compute_aggregates(&self) -> Result<Option<RecordBatch>> {
+    fn compute_aggregates(&mut self) -> Result<Option<RecordBatch>> {
         // record compute time on drop
         let _timer = self.baseline_metrics.elapsed_compute().timer();
 
         let batch = concat_batches(&self.input.schema(), &self.batches)?;
+        self.reservation
+            .try_grow(self.batch_memory.count_batch(&batch))?;
         if batch.num_rows() == 0 {
             return Ok(None);
         }
@@ -555,6 +571,10 @@ impl WindowAggStream {
             .iter()
             .map(|elems| concat(&elems.iter().map(|x| x.as_ref()).collect::<Vec<_>>()))
             .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
+        for column in &columns {
+            self.reservation
+                .try_grow(self.batch_memory.count_array(column.as_ref()))?;
+        }
 
         // combine with the original cols
         // note the setup of window aggregates is that they newly calculated window
@@ -594,8 +614,14 @@ impl WindowAggStream {
         loop {
             return Poll::Ready(Some(match ready!(self.input.poll_next_unpin(cx)) {
                 Some(Ok(batch)) => {
-                    self.batches.push(batch);
-                    continue;
+                    let size = self.batch_memory.count_batch(&batch);
+                    match self.reservation.try_grow(size) {
+                        Ok(()) => {
+                            self.batches.push(batch);
+                            continue;
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
                 Some(Err(e)) => Err(e),
                 None => {
@@ -603,7 +629,13 @@ impl WindowAggStream {
                     // the final aggregates.
                     let input_schema = self.input.schema();
                     self.input = Box::pin(EmptyRecordBatchStream::new(input_schema));
-                    let Some(result) = self.compute_aggregates()? else {
+                    let result = self.compute_aggregates();
+                    // Like other operators, the emitted output is not
+                    // reserved, so release the buffered input with its
+                    // reservation
+                    self.batches.clear();
+                    self.reservation.free();
+                    let Some(result) = result? else {
                         return Poll::Ready(None);
                     };
                     self.finished = true;
@@ -629,20 +661,20 @@ mod tests {
     use super::*;
     use crate::test::TestMemoryExec;
     use crate::windows::create_window_expr;
+    use arrow::array::Int64Array;
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ScalarValue;
+    use datafusion_execution::memory_pool::{MemoryPool, UnboundedMemoryPool};
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_expr::{
         WindowFrame, WindowFrameBound, WindowFrameUnits, WindowFunctionDefinition,
     };
     use datafusion_functions_aggregate::count::count_udaf;
 
-    #[test]
-    fn test_window_agg_cardinality_effect() -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
-        let input: Arc<dyn ExecutionPlan> =
-            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
-        let args = vec![crate::expressions::col("a", &schema)?];
-        let window_expr = create_window_expr(
+    /// `count(a) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)`
+    fn count_window_expr(schema: &SchemaRef) -> Result<Arc<dyn WindowExpr>> {
+        let args = vec![crate::expressions::col("a", schema)?];
+        create_window_expr(
             &WindowFunctionDefinition::AggregateUDF(count_udaf()),
             "count(a)".to_string(),
             &args,
@@ -653,17 +685,54 @@ mod tests {
                 WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
                 WindowFrameBound::CurrentRow,
             )),
-            Arc::clone(&schema),
+            Arc::clone(schema),
             false,
             false,
             None,
-        )?;
+        )
+    }
+
+    #[test]
+    fn test_window_agg_cardinality_effect() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let window_expr = count_window_expr(&schema)?;
 
         let window = WindowAggExec::try_new(vec![window_expr], input, true)?;
         assert!(matches!(
             window.cardinality_effect(),
             CardinalityEffect::Equal
         ));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_window_agg_releases_reservation_after_output() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int64Array::from_iter_values(0..1000))],
+        )?;
+        let input = TestMemoryExec::try_new_exec(
+            &[vec![batch.clone(), batch]],
+            Arc::clone(&schema),
+            None,
+        )?;
+        let window =
+            WindowAggExec::try_new(vec![count_window_expr(&schema)?], input, true)?;
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .build_arc()?;
+        let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+        let mut stream = window.execute(0, task_ctx)?;
+
+        let output = stream.next().await.unwrap()?;
+        assert_eq!(output.num_rows(), 2000);
+        assert_eq!(pool.reserved(), 0);
+        assert!(stream.next().await.is_none());
         Ok(())
     }
 }
