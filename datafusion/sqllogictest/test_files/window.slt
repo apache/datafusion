@@ -7812,6 +7812,7 @@ CREATE TABLE bwag_peers(k INT, v INT) AS VALUES
 statement ok
 set datafusion.explain.analyze_categories = 'rows';
 
+# Metrics `output_rows` and `output_batches` satisfy the test goal above.
 query TT
 EXPLAIN ANALYZE SELECT k, v, sum(v) OVER (ORDER BY k) FROM bwag_peers;
 ----
