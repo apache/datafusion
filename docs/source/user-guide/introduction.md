@@ -81,7 +81,7 @@ Here are some example systems built using DataFusion:
 - SQL support to another library, such as [Vortex](https://vortex.dev/)
 - Streaming data platforms such as [Synnada](https://synnada.ai/)
 - Tools for reading / sorting / transcoding Parquet, CSV, AVRO, and JSON files such as [qv](https://github.com/timvw/qv)
-- Native Spark runtime replacement such as [Auron](https://github.com/apache/auron)
+- Native Spark runtime replacement such as [Apache Auron](https://github.com/apache/auron)
 - Distributed data cache to boost GPU utilization of AI workloads with [Kubeflow Trainer](https://www.kubeflow.org/docs/components/trainer/user-guides/data-cache/)
 
 By using DataFusion, projects are freed to focus on their specific
@@ -107,10 +107,10 @@ Here are some active projects using DataFusion:
 
 - [Arroyo](https://github.com/ArroyoSystems/arroyo) Distributed stream processing engine in Rust
 - [ArkFlow](https://github.com/arkflow-rs/arkflow) High-performance Rust stream processing engine
-- [Auron](https://github.com/apache/auron) The Auron accelerator for big data engine (e.g., Spark, Flink) leverages native vectorized execution to accelerate query processing
+- [Apache Auron](https://github.com/apache/auron) The Auron accelerator for big data engine (e.g., Spark, Flink) leverages native vectorized execution to accelerate query processing
 - [Ballista](https://github.com/apache/datafusion-ballista) Distributed SQL Query Engine
 - [CnosDB](https://github.com/cnosdb/cnosdb) Open Source Distributed Time Series Database
-- [Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
+- [Apache Comet](https://github.com/apache/datafusion-comet) Apache Spark native query execution plugin
 - [Cube Store](https://github.com/cube-js/cube.js/tree/master/rust) Cube’s universal semantic layer platform is the next evolution of OLAP technology for AI, BI, spreadsheets, and embedded analytics
 - [datafusion-dft](https://github.com/datafusion-contrib/datafusion-dft) Batteries included CLI, TUI, and server implementations for DataFusion.
 - [dbt Fusion engine](https://github.com/dbt-labs/dbt-fusion) The dbt Fusion engine, written in Rust, designed for speed and correctness with a native SQL understanding across DWH SQL dialects.
@@ -133,11 +133,11 @@ Here are some active projects using DataFusion:
 - [Massive.com](https://github.com/massive-com) Stock Market API
 - [Mycorr](https://mycorr.app) Shared, versioned tables with units, links and SQL for humans and agents ([DataFusion use](https://docs.mycorr.app/developers/mcp-server.html#querying-with-sql))
 - [qv](https://github.com/timvw/qv) Quickly view your data
-- [R2 Query Engine](https://blog.cloudflare.com/r2-sql-deep-dive/) Cloudflare's distributed engine for querying data in Iceberg Catalogs
+- [Cloudflare R2 Query Engine](https://blog.cloudflare.com/r2-sql-deep-dive/) Cloudflare's distributed engine for querying data in Iceberg Catalogs
 - [rerun.io](https://rerun.io/) Visualize and query robotics logs and transform them into training data.
 - [Restate](https://github.com/restatedev/restate) Easily build resilient applications using distributed durable async/await
 - [Sail](https://github.com/lakehq/sail) Unifying stream, batch and AI workloads with Apache Spark compatibility
-- [SedonaDB](https://github.com/apache/sedona-db) A single-node analytical database engine with geospatial as a first-class citizen
+- [Apache SedonaDB](https://github.com/apache/sedona-db) A single-node analytical database engine with geospatial as a first-class citizen
 - [Sleeper](https://github.com/gchq/sleeper) Serverless, cloud-native, log-structured merge tree based, scalable key-value store
 - [Spice.ai](https://github.com/spiceai/spiceai) Building blocks for data-driven AI applications
 - [Streamling](https://github.com/goldsky-io/streamling) Data streaming runtime focused on performance, consistency, and extensibility
