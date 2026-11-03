@@ -18,7 +18,7 @@
 // Used by the release_version_labeler workflow
 
 module.exports = async ({ github, context }) => {
-    const target_version = 'v56.0.0';
+    const target_version = 'v57.0.0';
 
     // create label first if not exists
     try {

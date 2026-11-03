@@ -296,10 +296,10 @@ explain select price from decimal_prices where cast(price as decimal(38,15)) in 
 );
 ----
 logical_plan
-01)Filter: CAST(decimal_prices.price AS Decimal128(38, 15)) IN ([Decimal128(4.000000000000000,38,15), Decimal128(4.000000000000001,38,15), Decimal128(NULL,38,15)])
+01)Filter: CAST(decimal_prices.price AS Decimal128(38, 15)) IN ([Decimal128(4.000000000000000,38,15), Decimal128(4.000000000000001,38,15)])
 02)--TableScan: decimal_prices projection=[price]
 physical_plan
-01)FilterExec: CAST(price@0 AS Decimal128(38, 15)) IN (SET) ([4.000000000000000, 4.000000000000001, NULL])
+01)FilterExec: CAST(price@0 AS Decimal128(38, 15)) IN (SET) ([4.000000000000000, 4.000000000000001])
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 query TT
@@ -380,6 +380,85 @@ physical_plan
 statement ok
 drop table decimal_prices;
 
+# Decimal scale narrowing rounds (many-to-one), so the CAST must stay on the
+# column. See https://github.com/apache/datafusion/issues/23095
+statement ok
+create table decimal_scale_narrowing(d decimal(20,4)) as values (1.2345), (1.2399), (1.2500);
+
+query RR
+select d, arrow_cast(d, 'Decimal128(20, 2)') as d2 from decimal_scale_narrowing order by d;
+----
+1.2345 1.23
+1.2399 1.24
+1.2500 1.25
+
+query R
+select d from decimal_scale_narrowing
+where arrow_cast(d, 'Decimal128(20, 2)') = arrow_cast(1.23, 'Decimal128(20, 2)');
+----
+1.2345
+
+query TT
+explain select d from decimal_scale_narrowing
+where arrow_cast(d, 'Decimal128(20, 2)') = arrow_cast(1.23, 'Decimal128(20, 2)');
+----
+logical_plan
+01)Filter: CAST(decimal_scale_narrowing.d AS Decimal128(20, 2)) = Decimal128(1.23,20,2)
+02)--TableScan: decimal_scale_narrowing projection=[d]
+physical_plan
+01)FilterExec: CAST(d@0 AS Decimal128(20, 2)) = 1.23
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Ordered and IN comparisons (1.2399 rounds to 1.24)
+query R
+select d from decimal_scale_narrowing where cast(d as decimal(20,2)) < cast(1.24 as decimal(20,2));
+----
+1.2345
+
+query R
+select d from decimal_scale_narrowing
+where cast(d as decimal(20,2)) in (cast(1.23 as decimal(20,2)), cast(1.25 as decimal(20,2)))
+order by d;
+----
+1.2345
+1.2500
+
+statement ok
+drop table decimal_scale_narrowing;
+
+# A negative decimal scale must not panic in the cast rewrite.
+# See https://github.com/apache/datafusion/issues/24896
+query B
+select arrow_cast(1, 'Decimal128(10, -2)') = 100;
+----
+false
+
+query B
+select arrow_cast(100, 'Decimal128(10, -2)') = 100;
+----
+true
+
+statement ok
+create table decimal_negative_scale(v bigint) as values (1), (100), (200);
+
+query I
+select v from decimal_negative_scale where arrow_cast(v, 'Decimal128(10, -2)') = 100;
+----
+100
+
+query TT
+explain select v from decimal_negative_scale where arrow_cast(v, 'Decimal128(10, -2)') = 100;
+----
+logical_plan
+01)Filter: CAST(CAST(decimal_negative_scale.v AS Decimal128(10, -2)) AS Decimal128(20, 0)) = Decimal128(100,20,0)
+02)--TableScan: decimal_negative_scale projection=[v]
+physical_plan
+01)FilterExec: CAST(CAST(v@0 AS Decimal128(10, -2)) AS Decimal128(20, 0)) = 100
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table decimal_negative_scale;
+
 # Integer -> decimal scale-up is admitted by the same type-based rule: the
 # rewrite compares the integer column directly, so a source value that Arrow's
 # strict cast rejects (and TRY_CAST renders NULL) simply fails the predicate
@@ -433,6 +512,72 @@ physical_plan
 
 statement ok
 drop table int_prices;
+
+# A narrowing TRY_CAST yields NULL on overflow, so it must not be unwrapped.
+# (A TRY_CAST to an overflowing decimal still is, by design; see above.)
+# See https://github.com/apache/datafusion/issues/24702
+statement ok
+create table try_cast_narrowing as values (5::bigint), (9999999999::bigint);
+
+query IIB
+select column1, try_cast(column1 as int) as c, try_cast(column1 as int) > 1 as p
+from try_cast_narrowing order by column1;
+----
+5 5 true
+9999999999 NULL NULL
+
+query I
+select column1 from try_cast_narrowing where try_cast(column1 as int) > 1;
+----
+5
+
+query TT
+explain select column1 from try_cast_narrowing where try_cast(column1 as int) > 1;
+----
+logical_plan
+01)Filter: TRY_CAST(try_cast_narrowing.column1 AS Int32) > Int32(1)
+02)--TableScan: try_cast_narrowing projection=[column1]
+physical_plan
+01)FilterExec: TRY_CAST(column1@0 AS Int32) > 1
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table try_cast_narrowing;
+
+# 4294967301 (2^32 + 5) overflows Int32, so IN and NOT IN are both NULL
+statement ok
+create table try_cast_narrowing_in as values (5::bigint), (4294967301::bigint);
+
+query IIBB
+select column1, try_cast(column1 as int) as c,
+  try_cast(column1 as int) in (5) as p_in,
+  try_cast(column1 as int) not in (5) as p_not_in
+from try_cast_narrowing_in order by column1;
+----
+5 5 true false
+4294967301 NULL NULL NULL
+
+query I
+select column1 from try_cast_narrowing_in where try_cast(column1 as int) in (5);
+----
+5
+
+query I
+select column1 from try_cast_narrowing_in where try_cast(column1 as int) not in (5);
+----
+
+query TT
+explain select column1 from try_cast_narrowing_in where try_cast(column1 as int) in (5);
+----
+logical_plan
+01)Filter: TRY_CAST(try_cast_narrowing_in.column1 AS Int32) = Int32(5)
+02)--TableScan: try_cast_narrowing_in projection=[column1]
+physical_plan
+01)FilterExec: TRY_CAST(column1@0 AS Int32) = 5
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+drop table try_cast_narrowing_in;
 
 # ------------------------------------------------------------------------
 # Unwrapping Date32 <-> Date64 casts in comparison predicates.

@@ -1222,6 +1222,19 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         true
     }
 
+    fn shrink_to_fit(&mut self) {
+        self.map.shrink_to_fit(|(hash, _)| *hash);
+        self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
+        // Scratch for one `intern` call.
+        self.hashes_buffer.clear();
+        self.hashes_buffer.shrink_to_fit();
+        if !STREAMING {
+            self.emit_group_index_list_buffer.clear();
+            self.emit_group_index_list_buffer.shrink_to_fit();
+            self.vectorized_operation_buffers.clear_shrink(0);
+        }
+    }
+
     fn clear_shrink(&mut self, num_rows: usize) {
         // Reset to a fresh column-builder vector. The schema was validated
         // in `try_new`, so rebuilding cannot fail unless something else
