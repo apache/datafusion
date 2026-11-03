@@ -210,6 +210,22 @@ SELECT k FROM t WHERE v IN (
 3
 4
 
+# A LIMIT at the root of the continuation does not change whether it is empty.
+query I rowsort
+SELECT k FROM t WHERE EXISTS (
+  WITH r AS MATERIALIZED (SELECT k AS rk FROM t)
+  SELECT 1 FROM r WHERE r.rk = t.k + 1 LIMIT 1)
+----
+1
+2
+3
+
+# A filter above the LIMIT reads the row the LIMIT kept, so it stays correlated.
+query error Physical plan does not support logical expression Exists
+SELECT k FROM t WHERE EXISTS (
+  WITH r AS MATERIALIZED (SELECT k AS rk, v AS rv FROM t)
+  SELECT 1 FROM (SELECT * FROM r WHERE r.rk = t.k LIMIT 1) s WHERE s.rv > 0)
+
 # A body that refers to the outer query would have to run once per outer row.
 # Such a CTE is inlined, as if MATERIALIZED was not given.
 query I rowsort

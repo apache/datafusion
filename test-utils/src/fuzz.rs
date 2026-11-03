@@ -19,6 +19,7 @@ use datafusion_common::{Result, exec_err};
 /// 1. Generate one dataset with `prepare_dataset()`.
 /// 2. Run several cases on that dataset with `run_case()`.
 /// 3. Repeat steps 1 and 2 until the time budget is reached.
+///
 /// (All configuration, such as the total time budget, lives in [`RunConfig`].)
 #[expect(async_fn_in_trait)] // Serial execution deliberately does not require Send futures.
 pub trait FuzzTest {

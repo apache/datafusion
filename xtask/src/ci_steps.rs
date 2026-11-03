@@ -15,6 +15,11 @@ type StepRunner = fn(&StepContext, &[String]) -> StepResult<CommandSpec>;
 const CI_COMMAND: &str = "cargo xtask ci step";
 const CI_SHORTCUT: &str = "cargo ci-step";
 const TPCH_DATA_DIR: &str = "datafusion/sqllogictest/test_files/tpch/data";
+/// Physical-plan fuzzers awaiting migration to the centralized driver.
+const LEGACY_FUZZ_TESTS: &[&str] = &[
+    "joins::hash_join::partitioned_hash_eval::tests::routed_lookup_fuzz",
+    "joins::key_range_bitmap::tests::union_fuzz",
+];
 
 /// Metadata and implementation for one CI step.
 ///
@@ -38,7 +43,7 @@ static CI_STEPS: &[StepInfo] = &[
     },
     StepInfo {
         command: "test",
-        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|hash-collisions|sqlite> [--explain]",
+        help_usage: "test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]",
         help_examples: &["test cli", "test workspace"],
         help_description: "Run a CI test suite",
         runner: StepContext::run_test,
@@ -327,6 +332,8 @@ impl StepContext {
                      The SQL benchmark harness needs separately generated datasets and\n\
                      is covered by the benchmark result verification job.",
                 );
+                // Keep the i64 key payload above 1 MiB in the smoke run.
+                cmd_builder.env("SORT_AXIS_ROWS", "200000");
                 cmd_builder.env(
                     "CLICKBENCH_DATA_PATH",
                     self.root
@@ -474,6 +481,26 @@ impl StepContext {
                     ])
                     .env("RUST_BACKTRACE", "1");
             }
+            "fuzz-legacy" => {
+                cmd_builder
+                    .doc("Run unmigrated physical-plan fuzz tests with more iterations.");
+                cmd_builder
+                    .program("cargo")
+                    .args([
+                        "test",
+                        "--profile",
+                        "ci",
+                        "-p",
+                        "datafusion-physical-plan",
+                        "--lib",
+                        "--",
+                        "--exact",
+                    ])
+                    .args(LEGACY_FUZZ_TESTS)
+                    .env("RUST_BACKTRACE", "1")
+                    .env("DATAFUSION_ROUTED_LOOKUP_FUZZ_ITERATIONS", "10000")
+                    .env("DATAFUSION_KEY_RANGE_UNION_FUZZ_ITERATIONS", "10000");
+            }
             "hash-collisions" => {
                 cmd_builder.doc(
                     "Check that results stay correct when hash values collide.\n\
@@ -553,7 +580,7 @@ mod tests {
     use super::*;
     use std::ffi::OsStr;
 
-    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|hash-collisions|sqlite> [--explain]";
+    const TEST_USAGE: &str = "usage: cargo xtask ci step test <workspace|slt-coverage|cli|doctest|ffi|microbenchmarks|benchmark-plan|benchmark-sqllogic|postgres|substrait|substrait-optimized|extended|fuzz|fuzz-legacy|hash-collisions|sqlite> [--explain]";
 
     fn args(args: &[&str]) -> Vec<String> {
         args.iter().map(|arg| (*arg).to_string()).collect()
@@ -600,6 +627,27 @@ mod tests {
             .unwrap();
 
         assert_eq!(error, TEST_USAGE);
+    }
+
+    /// A filter that matches no test passes without running anything, so a
+    /// renamed or moved fuzzer would silently stop running in CI.
+    #[test]
+    fn legacy_fuzz_tests_exist() {
+        for path in LEGACY_FUZZ_TESTS {
+            let (module, test) = path
+                .rsplit_once("::tests::")
+                .expect("test path has a `tests` module");
+            let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../datafusion/physical-plan/src")
+                .join(format!("{}.rs", module.replace("::", "/")));
+            let source = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
+            assert!(
+                source.contains("mod tests {") && source.contains(&format!("fn {test}(")),
+                "{} has no test `{test}` in `mod tests`; update LEGACY_FUZZ_TESTS",
+                file.display()
+            );
+        }
     }
 
     /// Extended workflows explicitly select targets gated by Cargo's
@@ -811,6 +859,7 @@ cargo test \
 
 cd /workspace && \
 CLICKBENCH_DATA_PATH=/workspace/datafusion/core/tests/data/clickbench_hits_10.parquet \
+SORT_AXIS_ROWS=200000 \
 cargo test \
 --profile ci-bench \
 --no-fail-fast \
@@ -931,6 +980,24 @@ cargo test \
 -p datafusion-fuzz \
 --test fuzz \
 --features avro,backtrace,extended_tests,parquet_encryption
+")
+                },
+            },
+            Cmd {
+                command: &["test", "fuzz-legacy"],
+                expected: |actual| {
+                    insta::assert_snapshot!(actual, @r"
+# Run unmigrated physical-plan fuzz tests with more iterations.
+
+cd /workspace && \
+DATAFUSION_KEY_RANGE_UNION_FUZZ_ITERATIONS=10000 \
+DATAFUSION_ROUTED_LOOKUP_FUZZ_ITERATIONS=10000 \
+RUST_BACKTRACE=1 \
+cargo test \
+--profile ci \
+-p datafusion-physical-plan \
+--lib \
+-- --exact joins::hash_join::partitioned_hash_eval::tests::routed_lookup_fuzz joins::key_range_bitmap::tests::union_fuzz
 ")
                 },
             },

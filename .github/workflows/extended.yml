@@ -86,6 +86,9 @@ jobs:
         run: cargo xtask ci step test extended
       - name: Run fuzz tests
         run: cargo xtask ci step test fuzz
+      # Migrate it to the above unified fuzz runner over time
+      - name: Run unmigrated fuzzers with more iterations
+        run: cargo xtask ci step test fuzz-legacy
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code
