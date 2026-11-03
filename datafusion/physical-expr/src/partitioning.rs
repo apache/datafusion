@@ -333,6 +333,40 @@ impl RangePartitioning {
     ///
     /// This changes metadata only. The caller must ensure that every row falls
     /// within the declared bounds and in the partition described by the split points.
+    ///
+    /// # Example
+    ///
+    /// Split `[10, 20, 30]` across two tasks without losing the boundary at `20`:
+    ///
+    /// ```
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use datafusion_common::{Result, ScalarValue};
+    /// # use datafusion_physical_expr::expressions::col;
+    /// # use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr, RangePartitioning, SplitPoint};
+    /// # fn main() -> Result<()> {
+    /// let schema = Schema::new(vec![Field::new("x", DataType::Int64, false)]);
+    /// let ordering: LexOrdering =
+    ///     [PhysicalSortExpr::new_default(col("x", &schema)?)].into();
+    /// let point = |v| SplitPoint::new(vec![ScalarValue::Int64(Some(v))]);
+    ///
+    /// // x < 10 and 10 <= x < 20
+    /// let first = RangePartitioning::try_new(ordering.clone(), vec![point(10)])?
+    ///     .try_with_bounds(None, Some(point(20)))?;
+    /// // 20 <= x < 30 and 30 <= x
+    /// let second = RangePartitioning::try_new(ordering.clone(), vec![point(30)])?
+    ///     .try_with_bounds(Some(point(20)), None)?;
+    /// assert_eq!(first.end_bound(), Some(&point(20)));
+    /// assert_eq!(first.end_bound(), second.start_bound());
+    /// assert_eq!(first.start_bound(), None);
+    /// assert_eq!(second.end_bound(), None);
+    ///
+    /// // A bound must not exclude any retained samples.
+    /// assert!(RangePartitioning::try_new(ordering, vec![point(30)])?
+    ///     .try_with_bounds(Some(point(35)), None)
+    ///     .is_err());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn try_with_bounds(
         mut self,
         start_bound: Option<SplitPoint>,
