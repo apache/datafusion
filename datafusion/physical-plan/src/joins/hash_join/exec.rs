@@ -3755,6 +3755,55 @@ mod tests {
         Ok(())
     }
 
+    /// With rows in more than one build partition, the filter is a routed lookup
+    /// that holds every partition's map, so the maps stay reserved until it is
+    /// dropped.
+    #[cfg(not(feature = "force_hash_collisions"))]
+    #[tokio::test]
+    async fn routed_maps_stay_reserved_with_dynamic_filter() -> Result<()> {
+        let SparseKeyJoinInputs { build, probe, on } = sparse_key_join_inputs()?;
+        let repartition = |input: Arc<dyn ExecutionPlan>, key: &PhysicalExprRef| {
+            let partitioning = Partitioning::Hash(vec![Arc::clone(key)], 2);
+            RepartitionExec::try_new(input, partitioning)
+        };
+        let (join, filter) = hash_join_with_dynamic_filter_and_mode(
+            Arc::new(repartition(build, &on[0].0)?),
+            Arc::new(repartition(probe, &on[0].1)?),
+            on,
+            JoinType::Inner,
+            PartitionMode::Partitioned,
+        )?;
+        let join: Arc<dyn ExecutionPlan> = Arc::new(join);
+
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1 << 20));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&pool))
+            .build_arc()?;
+        let mut config = SessionConfig::new();
+        config
+            .options_mut()
+            .optimizer
+            .hash_join_inlist_pushdown_max_size = 0;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(config),
+        );
+        let batches = crate::execution_plan::collect(Arc::clone(&join), task_ctx).await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        assert!(format!("{:?}", filter.current()?).contains("routed by"));
+
+        // Every stream is gone; only the maps and their bitmaps are still held.
+        let reserved = pool.reserved();
+        assert!(reserved > 0);
+        // The filter is the last holder.
+        drop(join);
+        assert_eq!(pool.reserved(), reserved);
+        drop(filter);
+        assert_eq!(pool.reserved(), 0);
+        Ok(())
+    }
+
     #[derive(Debug)]
     struct PartitionedTestExec {
         cache: Arc<PlanProperties>,
