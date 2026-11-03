@@ -75,7 +75,8 @@ latency).
 
 Here are some example systems built using DataFusion:
 
-- Specialized Analytical Database systems such as [HoraeDB](https://github.com/apache/horaedb) and more general Apache Spark like system such as [Ballista](https://github.com/apache/datafusion-ballista)
+- Specialized Analytical Database systems such as [OpenObserve](https://github.com/openobserve/openobserve) and more general Apache Spark like systems such as [Ballista](https://github.com/apache/datafusion-ballista)
+- Distributed SQL query engines for data in Iceberg catalogs, such as [Cloudflare R2 Query Engine](https://blog.cloudflare.com/r2-sql-deep-dive/)
 - New query language engines such as [prql-query](https://github.com/prql/prql-query) and accelerators such as [VegaFusion](https://vegafusion.io/)
 - Research platform for new Database Systems, such as [Flock](https://github.com/flock-lab/flock)
 - SQL support to another library, such as [Vortex](https://vortex.dev/)
