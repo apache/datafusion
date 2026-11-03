@@ -106,10 +106,6 @@ fn dictionary_nulls<K: ArrowDictionaryKeyType>(
     )
 }
 
-fn dictionary_overwrites_hash_buffer(array: &dyn Array) -> bool {
-    matches!(array.data_type(), DataType::Dictionary(_, _)) && !array.is_nullable()
-}
-
 thread_local! {
     /// Thread-local buffer for hash computations to avoid repeated allocations.
     /// The buffer is reused across calls and truncated if it exceeds MAX_BUFFER_SIZE.
@@ -172,14 +168,8 @@ where
         let mut buffer = cell.try_borrow_mut()
             .map_err(|_| _internal_datafusion_err!("with_hashes cannot be called reentrantly on the same thread"))?;
 
-        // A dictionary with non-null keys and values overwrites every output
-        // slot, so retain the initialized storage instead of zeroing it first.
-        let reuse_buffer = iter
-            .peek()
-            .is_some_and(|array| dictionary_overwrites_hash_buffer(array.as_dyn_array()));
-        if !reuse_buffer {
-            buffer.clear();
-        }
+        // Ensure buffer has sufficient length, clearing old values
+        buffer.clear();
         buffer.resize(required_size, 0);
 
         // Create hashes in the buffer - this consumes the iterator
