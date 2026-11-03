@@ -106,17 +106,8 @@ fn dictionary_nulls<K: ArrowDictionaryKeyType>(
     )
 }
 
-#[cfg(not(feature = "force_hash_collisions"))]
 fn dictionary_overwrites_hash_buffer(array: &dyn Array) -> bool {
-    downcast_dictionary_array! {
-        array => dictionary_nulls(array) == (false, false),
-        _ => false
-    }
-}
-
-#[cfg(feature = "force_hash_collisions")]
-fn dictionary_overwrites_hash_buffer(_array: &dyn Array) -> bool {
-    false
+    matches!(array.data_type(), DataType::Dictionary(_, _)) && !array.is_nullable()
 }
 
 thread_local! {
@@ -582,10 +573,17 @@ fn scatter_non_null_dictionary<K: ArrowDictionaryKeyType, const MULTI_COL: bool>
     hashes: &mut [u64],
 ) {
     const LANES: usize = 8;
-    assert_eq!(dict_hashes.len(), array.values().len());
-    assert_eq!(array.keys().null_count(), 0);
+    debug_assert_eq!(dict_hashes.len(), array.values().len());
+    debug_assert_eq!(dictionary_nulls(array), (false, false));
     let keys = array.keys().values();
     let len = keys.len().min(hashes.len());
+    debug_assert_eq!(
+        len,
+        hashes.len(),
+        "dictionary scatter must overwrite every hash slot"
+    );
+    // `values()` accounts for key-array slices, and all key widths share the
+    // same `as_usize` lookup below.
     let keys = &keys[..len];
     let hashes = &mut hashes[..len];
 
