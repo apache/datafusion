@@ -673,14 +673,12 @@ impl SharedBuildAccumulator {
                 )?;
                 let bounds_expr = create_bounds_predicate(&self.on_right, &bounds);
 
-                if let Some(filter_expr) =
+                // An empty build has neither a membership predicate nor bounds.
+                let filter_expr =
                     combine_membership_and_bounds(membership_expr, bounds_expr)
-                {
-                    self.dynamic_filter.update(
-                        self.preserve_probe_nulls(filter_expr, keys_have_null)?,
-                    )?;
-                }
-                Ok(())
+                        .unwrap_or_else(|| lit(false));
+                self.dynamic_filter
+                    .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?)
             }
             PartitionStatus::Pending => datafusion_common::internal_err!(
                 "attempted to finalize collect-left dynamic filter without reported build data"
@@ -1321,7 +1319,7 @@ mod tests {
     }
 
     #[test]
-    fn collect_left_empty_build_data_does_not_update_filter() {
+    fn collect_left_empty_build_data_updates_filter_to_false() {
         let acc = make_collect_left_accumulator_for_test();
         let initial_generation = acc.dynamic_filter.snapshot_generation();
 
@@ -1333,11 +1331,10 @@ mod tests {
 
         assert_eq!(
             acc.dynamic_filter.snapshot_generation(),
-            initial_generation,
-            "empty CollectLeft input must not update with a no-op filter"
+            initial_generation + 1,
         );
         let expr = current_expr(&acc);
-        assert_literal_bool(&expr, true);
+        assert_literal_bool(&expr, false);
     }
 
     fn hash_map() -> PushdownStrategy {

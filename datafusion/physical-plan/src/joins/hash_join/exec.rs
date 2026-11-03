@@ -8509,9 +8509,25 @@ mod tests {
         Ok(())
     }
 
-    /// This test verifies that the dynamic filter is marked as complete even when the build side is empty.
+    /// An empty collect-left build publishes a completed false filter only for
+    /// join types that can safely discard every probe row.
+    #[rstest]
+    #[case(JoinType::Inner, false, 0)]
+    #[case(JoinType::Left, false, 0)]
+    #[case(JoinType::LeftSemi, false, 0)]
+    #[case(JoinType::LeftAnti, false, 0)]
+    #[case(JoinType::LeftMark, false, 0)]
+    #[case(JoinType::RightSemi, false, 0)]
+    #[case(JoinType::Right, true, 3)]
+    #[case(JoinType::Full, true, 3)]
+    #[case(JoinType::RightAnti, true, 3)]
+    #[case(JoinType::RightMark, true, 3)]
     #[tokio::test]
-    async fn test_hash_join_marks_filter_complete_empty_build_side() -> Result<()> {
+    async fn test_hash_join_empty_build_dynamic_filter(
+        #[case] join_type: JoinType,
+        #[case] expected_filter: bool,
+        #[case] expected_rows: usize,
+    ) -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
         // Empty left side (build side)
         let left = build_table(("a1", &vec![]), ("b1", &vec![]), ("c1", &vec![]));
@@ -8520,6 +8536,10 @@ mod tests {
             ("b1", &vec![4, 5, 6]),
             ("c2", &vec![70, 80, 90]),
         );
+        let right = Arc::new(RepartitionExec::try_new(
+            right,
+            Partitioning::RoundRobinBatch(2),
+        )?);
 
         let on = vec![(
             Arc::new(Column::new_with_schema("b1", &left.schema())?) as _,
@@ -8527,15 +8547,21 @@ mod tests {
         )];
 
         let (join, dynamic_filter) =
-            hash_join_with_dynamic_filter(left, right, on, JoinType::Inner)?;
+            hash_join_with_dynamic_filter(left, right, on, join_type)?;
 
-        // Execute the join
-        let stream = join.execute(0, task_ctx)?;
-        let _batches = common::collect(stream).await?;
-
-        // Even with empty build side, the dynamic filter should be marked as complete
-        // wait_complete() should return immediately
-        dynamic_filter.wait_complete().await;
+        // Collect both probe partitions so every stream reports the shared build.
+        let batches = crate::execution_plan::collect(Arc::new(join), task_ctx).await?;
+        assert_eq!(
+            batches.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            expected_rows,
+        );
+        assert_eq!(
+            dynamic_filter.current()?.to_string(),
+            expected_filter.to_string(),
+        );
+        if !expected_filter {
+            assert!(dynamic_filter.is_complete());
+        }
 
         Ok(())
     }
