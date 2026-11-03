@@ -1385,9 +1385,17 @@ expressions, which can cause resolution failure or incorrect rebinding.</p></li>
 <section id="null-aware-joins-record-their-not-in-value-key-count">
 <h3>Null-aware joins record their <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> value key count<a class="headerlink" href="#null-aware-joins-record-their-not-in-value-key-count" title="Link to this heading">#</a></h3>
 <p>Multi-column <code class="docutils literal notranslate"><span class="pre">(a,</span> <span class="pre">b)</span> <span class="pre">NOT</span> <span class="pre">IN</span> <span class="pre">(SELECT</span> <span class="pre">x,</span> <span class="pre">y</span> <span class="pre">...)</span></code> is now planned as a null-aware
-join. Its first equi-join keys are the tuple elements, followed by any
-correlation keys, so a null-aware join now records how many of its leading keys
-are <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> value keys:</p>
+join. Its first equi-join keys are the tuple elements that can be NULL. A
+nullable element cannot be NULL here when a correlated filter of the subquery
+rejects NULL for it, such as <code class="docutils literal notranslate"><span class="pre">y</span> <span class="pre">&gt;</span> <span class="pre">o.c</span></code> for <code class="docutils literal notranslate"><span class="pre">y</span></code>. The elements that cannot be
+NULL and any equality correlations follow as further equi-join keys when their
+types can be hashed, and otherwise stay in the join filter. <code class="docutils literal notranslate"><span class="pre">Null</span></code>,
+dictionary, run-end encoded and union elements, and elements that read a
+column of these types, count as elements that can be NULL, because they can
+hold a NULL that their field’s nullability does not show. Like any element
+that can be NULL, such an element must be a hashable equi-join key, so the
+planner rejects a run-end encoded one. A null-aware join therefore records how
+many of its leading keys are <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> value keys:</p>
 <ul class="simple">
 <li><p><code class="docutils literal notranslate"><span class="pre">datafusion_expr::logical_plan::Join</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_aware_value_keys:</span> <span class="pre">usize</span></code>
 field.</p></li>
