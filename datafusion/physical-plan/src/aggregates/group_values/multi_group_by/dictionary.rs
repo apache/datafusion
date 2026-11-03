@@ -5,40 +5,41 @@
 use crate::aggregates::group_values::multi_group_by::GroupColumn;
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, DictionaryArray, Int64Array,
-    PrimitiveArray,
+    NullBufferBuilder, PrimitiveArray,
 };
+use arrow::buffer::ScalarBuffer;
 use arrow::compute::take;
-use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType, Field};
+use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType};
 use arrow::error::ArrowError;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::{DataFusionError, Result, exec_err};
 use datafusion_execution::memory_pool::proxy::HashTableAllocExt;
 use datafusion_expr::GroupSelection;
 use hashbrown::{HashMap, hash_table::HashTable};
-use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::{Arc, Weak};
 
 use crate::aggregates::AGGREGATION_HASH_SEED;
 
+// `usize::MAX` is already the unresolved marker in `val_to_inner`.
+const NULL_INNER_SLOT: usize = usize::MAX - 1;
+
 /// [`GroupColumn`] for dictionary-encoded columns with key type `K`.
 ///
 /// `inner` holds one slot per distinct value seen across all batches.
-/// `group_to_inner[group_idx]` maps each group to its slot in `inner`,
-/// so groups with the same value share a slot rather than duplicating data.
+/// Each group stores the dictionary key for its slot in `inner`, so groups
+/// with the same value share a slot rather than duplicating data.
 pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> {
     /// Deduplicated store of distinct values.
     inner: Box<dyn GroupColumn>,
-    /// Unary null array (length 1) reused for every null appended to `inner`.
-    null_array: ArrayRef,
-    /// Maps each group index to its slot in `inner`.
-    group_to_inner: Vec<usize>,
+    /// Dictionary key for each group.
+    group_to_inner: Vec<K::Native>,
+    /// Validity of `group_to_inner`.
+    group_nulls: NullBufferBuilder,
     /// Lookup table mapping `(value_hash, inner_slot)` for each non-null distinct value.
     value_dedup: HashTable<(u64, usize)>,
     /// Tracked allocation size of `value_dedup` for memory accounting via `size()`.
     value_dedup_size: usize,
-    /// Slot in `inner` for the null group; `None` until the first null is seen.
-    null_inner_slot: Option<usize>,
     /// Hash seed — must match `create_hashes` so hashes are consistent across calls.
     random_state: RandomState,
     /// Maps `val_idx → inner_slot` for the values array in `cached_values`.
@@ -54,83 +55,25 @@ pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> 
     /// were built for. A matching live array reuses both caches without
     /// retaining an input dictionary after its batch is released.
     cached_values: Option<Weak<dyn Array>>,
-    _phantom: PhantomData<K>,
 }
 
 impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
-    pub fn new(inner: Box<dyn GroupColumn>, field: &Field) -> Self {
-        let null_array = arrow::array::new_null_array(field.data_type(), 1);
+    pub fn new(inner: Box<dyn GroupColumn>) -> Self {
         Self {
             inner,
-            null_array,
             group_to_inner: Vec::new(),
+            group_nulls: NullBufferBuilder::new(0),
             value_dedup: HashTable::new(),
             value_dedup_size: 0,
-            null_inner_slot: None,
             random_state: AGGREGATION_HASH_SEED,
             val_to_inner: Vec::default(),
             val_hashes: Vec::default(),
             cached_values: None,
-            _phantom: PhantomData,
         }
     }
 
-    /// Build a `DictionaryArray` from `values` (all inner slots) and the
-    /// per-group slot mapping.  The null inner slot, if any, is excluded from
-    /// the values array and its groups emit a null key — so it never consumes
-    /// a key index regardless of where it sits in `inner`.
-    fn into_dict(
-        values: ArrayRef,
-        group_to_inner: &[usize],
-        null_inner_slot: Option<usize>,
-    ) -> ArrayRef {
-        let Some(null_slot) = null_inner_slot else {
-            // Fast path: no null group — raw slot indices are valid keys.
-            let keys: PrimitiveArray<K> = group_to_inner
-                .iter()
-                .map(|&slot| Some(K::Native::usize_as(slot)))
-                .collect();
-            return Arc::new(DictionaryArray::<K>::new(keys, values));
-        };
-
-        // Build a compact remap: each non-null slot gets a contiguous key
-        // starting from 0; the null slot is skipped entirely.
-        let n = values.len();
-        let mut remap = vec![0usize; n];
-        let mut next = 0usize;
-        for (i, mapped) in remap.iter_mut().enumerate() {
-            if i != null_slot {
-                *mapped = next;
-                next += 1;
-            }
-        }
-
-        let keys: PrimitiveArray<K> = group_to_inner
-            .iter()
-            .map(|&slot| {
-                if slot == null_slot {
-                    None
-                } else {
-                    Some(K::Native::usize_as(remap[slot]))
-                }
-            })
-            .collect();
-
-        // Compact values array: drop the null slot so key indices stay tight.
-        let compact_indices: Int64Array = (0..n)
-            .filter(|&i| i != null_slot)
-            .map(|i| i as i64)
-            .collect();
-        let compact =
-            take(&*values, &compact_indices, None).expect("compact values in into_dict");
-        Arc::new(DictionaryArray::<K>::new(keys, compact))
-    }
-
-    // https://github.com/apache/datafusion/issues/23127
-    // Null groups emit a null key (None), not a slot index, so the null inner
-    // slot never consumes a key index regardless of its position in inner.
     fn check_key_overflow(&self) -> Result<()> {
-        let non_null_count = self.inner.len() - self.null_inner_slot.is_some() as usize;
+        let non_null_count = self.inner.len();
         if !Self::key_type_fits(non_null_count) {
             return exec_err!(
                 "Dictionary key type {:?} cannot represent {} distinct values",
@@ -154,6 +97,91 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
             _ => return false,
         };
         num_values == 0 || num_values - 1 <= max
+    }
+
+    #[inline]
+    fn inner_slot_at(
+        group_to_inner: &[K::Native],
+        group_nulls: &NullBufferBuilder,
+        group_idx: usize,
+    ) -> usize {
+        let key = group_to_inner[group_idx];
+        // Null groups use the all-ones key. Narrow unsigned keys need the
+        // bitmap to distinguish a null from their maximum valid key.
+        if key == Self::null_key()
+            && (!Self::null_key_needs_validity() || !group_nulls.is_valid(group_idx))
+        {
+            NULL_INNER_SLOT
+        } else {
+            key.as_usize()
+        }
+    }
+
+    #[inline]
+    fn null_key() -> K::Native {
+        K::Native::usize_as(usize::MAX)
+    }
+
+    #[inline]
+    fn null_key_needs_validity() -> bool {
+        Self::null_key().as_usize() != usize::MAX
+    }
+
+    #[inline]
+    fn inner_slot(&self, group_idx: usize) -> usize {
+        Self::inner_slot_at(&self.group_to_inner, &self.group_nulls, group_idx)
+    }
+
+    #[inline]
+    fn inner_slot_eq(
+        group_to_inner: &[K::Native],
+        group_nulls: &NullBufferBuilder,
+        group_idx: usize,
+        inner_slot: usize,
+    ) -> bool {
+        if inner_slot == NULL_INNER_SLOT {
+            group_to_inner[group_idx] == Self::null_key()
+                && (!Self::null_key_needs_validity() || !group_nulls.is_valid(group_idx))
+        } else {
+            Self::non_null_inner_slot_eq(
+                group_to_inner,
+                group_nulls,
+                group_idx,
+                inner_slot,
+            )
+        }
+    }
+
+    #[inline]
+    fn non_null_inner_slot_eq(
+        group_to_inner: &[K::Native],
+        group_nulls: &NullBufferBuilder,
+        group_idx: usize,
+        inner_slot: usize,
+    ) -> bool {
+        debug_assert_ne!(inner_slot, NULL_INNER_SLOT);
+        let key = K::Native::usize_as(inner_slot);
+        group_to_inner[group_idx] == key
+            && (!Self::null_key_needs_validity()
+                || key != Self::null_key()
+                || group_nulls.is_valid(group_idx))
+    }
+
+    #[inline]
+    fn push_inner_slot(&mut self, inner_slot: usize) -> Result<()> {
+        if inner_slot == NULL_INNER_SLOT {
+            self.group_to_inner.push(Self::null_key());
+            self.group_nulls.append_null();
+            return Ok(());
+        }
+
+        let Some(key) = K::Native::from_usize(inner_slot) else {
+            self.check_key_overflow()?;
+            unreachable!("representable dictionary key rejected")
+        };
+        self.group_to_inner.push(key);
+        self.group_nulls.append_non_null();
+        Ok(())
     }
 
     fn hash_values(&mut self, values: &ArrayRef) {
@@ -240,13 +268,15 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     fn equal_to_uncached(
         val_to_inner: &mut [usize],
         inner: &dyn GroupColumn,
-        null_array: &ArrayRef,
         dict_values: &ArrayRef,
         val_idx: usize,
         lhs_slot: usize,
     ) -> bool {
-        let equal = if dict_values.is_null(val_idx) {
-            inner.equal_to(lhs_slot, null_array, 0)
+        let rhs_null = dict_values.is_null(val_idx);
+        let equal = if lhs_slot == NULL_INNER_SLOT {
+            rhs_null
+        } else if rhs_null {
+            false
         } else {
             inner.equal_to(lhs_slot, dict_values, val_idx)
         };
@@ -255,16 +285,6 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
             val_to_inner[val_idx] = lhs_slot;
         }
         equal
-    }
-
-    fn find_or_insert_null(&mut self) -> Result<usize> {
-        if let Some(slot) = self.null_inner_slot {
-            return Ok(slot);
-        }
-        let slot = self.inner.len();
-        self.inner.append_val(&self.null_array, 0)?;
-        self.null_inner_slot = Some(slot);
-        Ok(slot)
     }
 
     /// Per-row fallback for `vectorized_equal_to` used when the values array is
@@ -291,13 +311,15 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
             if !equal_to_results.get_bit(idx) {
                 continue;
             }
-            let lhs_slot = group_to_inner[lhs_row];
+            let lhs_slot =
+                Self::inner_slot_at(group_to_inner, &self.group_nulls, lhs_row);
+            let lhs_null = lhs_slot == NULL_INNER_SLOT;
             let equal = match dict.key(rhs_row) {
-                None => self.inner.equal_to(lhs_slot, &self.null_array, 0),
-                Some(val_idx) if dict_values.is_null(val_idx) => {
-                    self.inner.equal_to(lhs_slot, &self.null_array, 0)
+                None => lhs_null,
+                Some(val_idx) if dict_values.is_null(val_idx) => lhs_null,
+                Some(val_idx) => {
+                    !lhs_null && self.inner.equal_to(lhs_slot, dict_values, val_idx)
                 }
-                Some(val_idx) => self.inner.equal_to(lhs_slot, dict_values, val_idx),
             };
             if !equal {
                 equal_to_results.set_bit(idx, false);
@@ -310,32 +332,30 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
     for DictionaryGroupValuesColumn<K>
 {
     fn equal_to(&self, lhs_row: usize, array: &ArrayRef, rhs_row: usize) -> bool {
-        let lhs_slot = self.group_to_inner[lhs_row];
+        let lhs_slot = self.inner_slot(lhs_row);
+        let lhs_null = lhs_slot == NULL_INNER_SLOT;
         let dict = array.as_dictionary::<K>();
         match dict.key(rhs_row) {
-            None => self.inner.equal_to(lhs_slot, &self.null_array, 0),
-            Some(val_idx) if dict.values().is_null(val_idx) => {
-                self.inner.equal_to(lhs_slot, &self.null_array, 0)
+            None => lhs_null,
+            Some(val_idx) if dict.values().is_null(val_idx) => lhs_null,
+            Some(val_idx) => {
+                !lhs_null && self.inner.equal_to(lhs_slot, dict.values(), val_idx)
             }
-            Some(val_idx) => self.inner.equal_to(lhs_slot, dict.values(), val_idx),
         }
     }
 
     fn append_val(&mut self, array: &ArrayRef, row: usize) -> Result<()> {
         let dict = array.as_dictionary::<K>();
         let inner_slot = match dict.key(row) {
-            None => self.find_or_insert_null()?,
-            Some(val_idx) if dict.values().is_null(val_idx) => {
-                self.find_or_insert_null()?
-            }
+            None => NULL_INNER_SLOT,
+            Some(val_idx) if dict.values().is_null(val_idx) => NULL_INNER_SLOT,
             Some(val_idx) => {
                 let dict_values = dict.values();
                 self.sync_value_cache(dict_values);
                 self.find_or_insert_value(dict_values, val_idx, self.val_hashes[val_idx])?
             }
         };
-        self.group_to_inner.push(inner_slot);
-        self.check_key_overflow()
+        self.push_inner_slot(inner_slot)
     }
 
     fn vectorized_equal_to(
@@ -364,31 +384,99 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
 
         let raw_keys = dict_keys.values();
         let group_to_inner = self.group_to_inner.as_slice();
+        let group_nulls = &self.group_nulls;
         let val_to_inner = self.val_to_inner.as_mut_slice();
         let inner = &*self.inner;
-        let null_array = &self.null_array;
-        let null_inner_slot = self.null_inner_slot;
-        if dict_keys.null_count() == 0 {
+        if dict_keys.null_count() == 0
+            && dict_values.null_count() == 0
+            && group_nulls.as_slice().is_none()
+        {
+            for (idx, (&lhs_row, &rhs_row)) in
+                lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+            {
+                let val_idx = raw_keys[rhs_row].as_usize();
+                let equal = match val_to_inner[val_idx] {
+                    usize::MAX => Self::equal_to_uncached(
+                        val_to_inner,
+                        inner,
+                        dict_values,
+                        val_idx,
+                        group_to_inner[lhs_row].as_usize(),
+                    ),
+                    slot => group_to_inner[lhs_row] == K::Native::usize_as(slot),
+                };
+                if !equal {
+                    equal_to_results.set_bit(idx, false);
+                }
+            }
+        } else if dict_keys.null_count() == 0 {
             // No null keys : skip the get_bit guard: we only ever write false,
             // so overwriting an already-false bit is a no-op.
             for (idx, (&lhs_row, &rhs_row)) in
                 lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
             {
                 let val_idx = raw_keys[rhs_row].as_usize();
-                let lhs_slot = group_to_inner[lhs_row];
                 let equal = match val_to_inner[val_idx] {
-                    usize::MAX => Self::equal_to_uncached(
-                        val_to_inner,
-                        inner,
-                        null_array,
-                        dict_values,
-                        val_idx,
-                        lhs_slot,
-                    ),
-                    slot => slot == lhs_slot,
+                    usize::MAX => {
+                        let lhs_slot =
+                            Self::inner_slot_at(group_to_inner, group_nulls, lhs_row);
+                        Self::equal_to_uncached(
+                            val_to_inner,
+                            inner,
+                            dict_values,
+                            val_idx,
+                            lhs_slot,
+                        )
+                    }
+                    slot => {
+                        Self::inner_slot_eq(group_to_inner, group_nulls, lhs_row, slot)
+                    }
                 };
                 if !equal {
                     equal_to_results.set_bit(idx, false);
+                }
+            }
+        } else if dict_values.null_count() == 0 {
+            let null_buf = dict_keys.nulls().unwrap();
+            for (idx, (&lhs_row, &rhs_row)) in
+                lhs_rows.iter().zip(rhs_rows.iter()).enumerate()
+            {
+                if equal_to_results.get_bit(idx) {
+                    let equal = if null_buf.is_null(rhs_row) {
+                        Self::inner_slot_eq(
+                            group_to_inner,
+                            group_nulls,
+                            lhs_row,
+                            NULL_INNER_SLOT,
+                        )
+                    } else {
+                        let val_idx = raw_keys[rhs_row].as_usize();
+                        match val_to_inner[val_idx] {
+                            usize::MAX => {
+                                let lhs_slot = Self::inner_slot_at(
+                                    group_to_inner,
+                                    group_nulls,
+                                    lhs_row,
+                                );
+                                Self::equal_to_uncached(
+                                    val_to_inner,
+                                    inner,
+                                    dict_values,
+                                    val_idx,
+                                    lhs_slot,
+                                )
+                            }
+                            slot => Self::non_null_inner_slot_eq(
+                                group_to_inner,
+                                group_nulls,
+                                lhs_row,
+                                slot,
+                            ),
+                        }
+                    };
+                    if !equal {
+                        equal_to_results.set_bit(idx, false);
+                    }
                 }
             }
         } else {
@@ -400,21 +488,36 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                     // A null key is not a position in the values array, so it
                     // resolves straight to the null slot instead of going
                     // through `val_to_inner`.
-                    let lhs_slot = group_to_inner[lhs_row];
                     let equal = if null_buf.is_null(rhs_row) {
-                        null_inner_slot == Some(lhs_slot)
+                        Self::inner_slot_eq(
+                            group_to_inner,
+                            group_nulls,
+                            lhs_row,
+                            NULL_INNER_SLOT,
+                        )
                     } else {
                         let val_idx = raw_keys[rhs_row].as_usize();
                         match val_to_inner[val_idx] {
-                            usize::MAX => Self::equal_to_uncached(
-                                val_to_inner,
-                                inner,
-                                null_array,
-                                dict_values,
-                                val_idx,
-                                lhs_slot,
+                            usize::MAX => {
+                                let lhs_slot = Self::inner_slot_at(
+                                    group_to_inner,
+                                    group_nulls,
+                                    lhs_row,
+                                );
+                                Self::equal_to_uncached(
+                                    val_to_inner,
+                                    inner,
+                                    dict_values,
+                                    val_idx,
+                                    lhs_slot,
+                                )
+                            }
+                            slot => Self::inner_slot_eq(
+                                group_to_inner,
+                                group_nulls,
+                                lhs_row,
+                                slot,
                             ),
-                            slot => slot == lhs_slot,
                         }
                     };
                     if !equal {
@@ -442,7 +545,6 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                 None,
             )
         })?;
-
         let raw_keys = dict_keys.values();
         if dict_keys.null_count() == 0 {
             for &row in rows {
@@ -450,7 +552,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                 if self.val_to_inner[val_idx] == usize::MAX {
                     // A non-null key can still point to a null value in the values array.
                     self.val_to_inner[val_idx] = if dict_values.is_null(val_idx) {
-                        self.find_or_insert_null()?
+                        NULL_INNER_SLOT
                     } else {
                         self.find_or_insert_value(
                             dict_values,
@@ -459,18 +561,19 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                         )?
                     };
                 }
-                self.group_to_inner.push(self.val_to_inner[val_idx]);
+                let slot = self.val_to_inner[val_idx];
+                self.push_inner_slot(slot)?;
             }
         } else {
             let null_buf = dict_keys.nulls().unwrap();
             for &row in rows {
                 let slot = if null_buf.is_null(row) {
-                    self.find_or_insert_null()?
+                    NULL_INNER_SLOT
                 } else {
                     let val_idx = raw_keys[row].as_usize();
                     if self.val_to_inner[val_idx] == usize::MAX {
                         self.val_to_inner[val_idx] = if dict_values.is_null(val_idx) {
-                            self.find_or_insert_null()?
+                            NULL_INNER_SLOT
                         } else {
                             self.find_or_insert_value(
                                 dict_values,
@@ -481,11 +584,11 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                     }
                     self.val_to_inner[val_idx]
                 };
-                self.group_to_inner.push(slot);
+                self.push_inner_slot(slot)?;
             }
         }
 
-        self.check_key_overflow()
+        Ok(())
     }
 
     fn len(&self) -> usize {
@@ -495,17 +598,22 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
     fn size(&self) -> usize {
         self.inner.size()
             + self.value_dedup_size
-            + self.group_to_inner.capacity() * size_of::<usize>()
+            + self.group_to_inner.capacity() * size_of::<K::Native>()
+            + self.group_nulls.allocated_size()
             + self.val_to_inner.capacity() * size_of::<usize>()
             + self.val_hashes.capacity() * size_of::<u64>()
-            + self.null_array.get_array_memory_size()
             + size_of::<Self>()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
-        let null_inner_slot = self.null_inner_slot;
-        let values = self.inner.build();
-        Self::into_dict(values, &self.group_to_inner, null_inner_slot)
+        let this = *self;
+        let values = this.inner.build();
+        let keys = PrimitiveArray::<K>::new(
+            ScalarBuffer::from(this.group_to_inner),
+            this.group_nulls.build(),
+        );
+        // SAFETY: non-null group keys are created from slots in `inner`.
+        Arc::new(unsafe { DictionaryArray::<K>::new_unchecked(keys, values) })
     }
 
     fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
@@ -515,7 +623,11 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         let mut selected_inner = Vec::with_capacity(selection.len());
         let mut selected_groups = Vec::with_capacity(selection.len());
         for group_index in selection.iter() {
-            let old_slot = self.group_to_inner[group_index];
+            let old_slot = self.inner_slot(group_index);
+            if old_slot == NULL_INNER_SLOT {
+                selected_groups.push(None);
+                continue;
+            }
             let new_slot = if let Some(&new_slot) = old_to_new.get(&old_slot) {
                 new_slot
             } else {
@@ -524,16 +636,17 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                 old_to_new.insert(old_slot, new_slot);
                 new_slot
             };
-            selected_groups.push(new_slot);
+            selected_groups.push(Some(K::Native::usize_as(new_slot)));
         }
 
         let inner_selection =
             GroupSelection::try_from_indices(&selected_inner, self.inner.len())?;
         let values = self.inner.values_preserving(inner_selection)?;
-        let null_inner_slot = self
-            .null_inner_slot
-            .and_then(|slot| old_to_new.get(&slot).copied());
-        Ok(Self::into_dict(values, &selected_groups, null_inner_slot))
+        let keys: PrimitiveArray<K> = selected_groups.into_iter().collect();
+        // SAFETY: every non-null key was assigned from `selected_inner` above.
+        Ok(Arc::new(unsafe {
+            DictionaryArray::<K>::new_unchecked(keys, values)
+        }))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
@@ -542,11 +655,9 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
 
         let mut emit_old_to_new = vec![usize::MAX; old_inner_len];
         let mut emit_new_to_old: Vec<usize> = Vec::new();
-        for &old in &self.group_to_inner[..n] {
-            // Null groups emit a null key (None) and need no slot in the
-            // values array, so excluding them keeps key indices tight and
-            // prevents overflow at key-type capacity.
-            if all_inner_values.is_null(old) {
+        for group_idx in 0..n {
+            let old = self.inner_slot(group_idx);
+            if old == NULL_INNER_SLOT {
                 continue;
             }
             if emit_old_to_new[old] == usize::MAX {
@@ -558,30 +669,29 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             Int64Array::from_iter(emit_new_to_old.iter().map(|&i| i as i64));
         let compact_emit_values =
             take(&*all_inner_values, &emit_indices, None).expect("take emit values");
-        let emitted_keys: PrimitiveArray<K> = self.group_to_inner[..n]
-            .iter()
-            .map(|&old| {
-                if all_inner_values.is_null(old) {
+        let emitted_keys: PrimitiveArray<K> = (0..n)
+            .map(|group_idx| {
+                let old = self.inner_slot(group_idx);
+                if old == NULL_INNER_SLOT {
                     None
                 } else {
                     Some(K::Native::usize_as(emit_old_to_new[old]))
                 }
             })
             .collect();
-        let emitted: ArrayRef =
-            Arc::new(DictionaryArray::<K>::new(emitted_keys, compact_emit_values));
+        // SAFETY: `emit_old_to_new` maps every non-null emitted key to
+        // `compact_emit_values`; null keys are ignored.
+        let emitted: ArrayRef = Arc::new(unsafe {
+            DictionaryArray::<K>::new_unchecked(emitted_keys, compact_emit_values)
+        });
 
-        // Null deferred to last so null_inner_slot is always the highest index
-        // and check_key_overflow can subtract it without a false overflow.
-        let remaining = self.group_to_inner[n..].to_vec();
+        let remaining: Vec<usize> = (n..self.group_to_inner.len())
+            .map(|group_idx| self.inner_slot(group_idx))
+            .collect();
         let mut old_to_new = vec![usize::MAX; old_inner_len];
         let mut new_to_old: Vec<usize> = Vec::new();
-        let mut null_old_slot: Option<usize> = None;
         for &old in &remaining {
-            if all_inner_values.is_null(old) {
-                if null_old_slot.is_none() {
-                    null_old_slot = Some(old);
-                }
+            if old == NULL_INNER_SLOT {
                 continue;
             }
             if old_to_new[old] == usize::MAX {
@@ -589,36 +699,31 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                 new_to_old.push(old);
             }
         }
-        if let Some(old) = null_old_slot {
-            old_to_new[old] = new_to_old.len();
-            new_to_old.push(old);
-        }
-
         self.value_dedup = HashTable::new();
         self.value_dedup_size = 0;
-        self.null_inner_slot = None;
-
         self.hash_values(&all_inner_values);
 
         for (new_slot, &old_slot) in new_to_old.iter().enumerate() {
-            if all_inner_values.is_null(old_slot) {
-                self.inner
-                    .append_val(&self.null_array, 0)
-                    .expect("append null failed in take_n");
-                self.null_inner_slot = Some(new_slot);
-            } else {
-                self.inner
-                    .append_val(&all_inner_values, old_slot)
-                    .expect("append value failed in take_n");
-                self.value_dedup.insert_accounted(
-                    (self.val_hashes[old_slot], new_slot),
-                    |&(entry_hash, _)| entry_hash,
-                    &mut self.value_dedup_size,
-                );
-            }
+            self.inner
+                .append_val(&all_inner_values, old_slot)
+                .expect("append value failed in take_n");
+            self.value_dedup.insert_accounted(
+                (self.val_hashes[old_slot], new_slot),
+                |&(entry_hash, _)| entry_hash,
+                &mut self.value_dedup_size,
+            );
         }
 
-        self.group_to_inner = remaining.iter().map(|&old| old_to_new[old]).collect();
+        self.group_to_inner = Vec::with_capacity(remaining.len());
+        self.group_nulls = NullBufferBuilder::new(remaining.len());
+        for old in remaining {
+            let slot = if old == NULL_INNER_SLOT {
+                NULL_INNER_SLOT
+            } else {
+                old_to_new[old]
+            };
+            self.push_inner_slot(slot).expect("key overflow in take_n");
+        }
         self.check_key_overflow().expect("key overflow in take_n");
 
         emitted
@@ -639,27 +744,21 @@ mod tests {
     use std::sync::Arc;
 
     fn utf8_col() -> DictionaryGroupValuesColumn<Int32Type> {
-        let f = Field::new("", DataType::Utf8, true);
-        DictionaryGroupValuesColumn::new(
-            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
-            &f,
-        )
+        DictionaryGroupValuesColumn::new(Box::new(ByteGroupValueBuilder::<i32>::new(
+            OutputType::Utf8,
+        )))
     }
 
     fn int8_col() -> DictionaryGroupValuesColumn<Int8Type> {
-        let f = Field::new("", DataType::Utf8, true);
-        DictionaryGroupValuesColumn::new(
-            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
-            &f,
-        )
+        DictionaryGroupValuesColumn::new(Box::new(ByteGroupValueBuilder::<i32>::new(
+            OutputType::Utf8,
+        )))
     }
 
     fn uint8_col() -> DictionaryGroupValuesColumn<UInt8Type> {
-        let f = Field::new("", DataType::Utf8, true);
-        DictionaryGroupValuesColumn::new(
-            Box::new(ByteGroupValueBuilder::<i32>::new(OutputType::Utf8)),
-            &f,
-        )
+        DictionaryGroupValuesColumn::new(Box::new(ByteGroupValueBuilder::<i32>::new(
+            OutputType::Utf8,
+        )))
     }
 
     fn i32_dict(keys: &[Option<i32>], values: &[Option<&str>]) -> ArrayRef {
@@ -767,6 +866,20 @@ mod tests {
                 Some("b".into()),
                 Some("a".into()),
             ]
+        );
+    }
+
+    #[test]
+    fn build_reuses_group_key_buffer() {
+        let mut col = utf8_col();
+        let input = i32_dict(&[Some(0), Some(1)], &[Some("a"), Some("b")]);
+        col.vectorized_append(&input, &[0, 1]).unwrap();
+        let keys_ptr = col.group_to_inner.as_ptr();
+
+        let output = Box::new(col).build();
+        assert_eq!(
+            output.as_dictionary::<Int32Type>().keys().values().as_ptr(),
+            keys_ptr
         );
     }
 
@@ -1102,8 +1215,8 @@ mod tests {
         )
         .unwrap();
         let (group_a, group_b) = (0, 1);
-        let slot_a = col.group_to_inner[group_a];
-        let slot_b = col.group_to_inner[group_b];
+        let slot_a = col.inner_slot(group_a);
+        let slot_b = col.inner_slot(group_b);
 
         // A new values array in the opposite order, so `val_idx` != slot.
         // Two rows for two values keeps the per-row fallback out of the way.
@@ -1140,8 +1253,6 @@ mod tests {
         col.vectorized_append(&i32_dict(&[None, Some(0)], &[Some("a")]), &[0, 1])
             .unwrap();
         let (null_group, group_a) = (0, 1);
-        let null_slot = col.null_inner_slot.unwrap();
-
         let idx_null = 0;
         let values: ArrayRef = Arc::new(StringArray::from(vec![None, Some("a")]));
         let batch = dict_with_values(
@@ -1158,7 +1269,7 @@ mod tests {
             &mut buf,
         );
         assert_eq!(bool_vec(&buf), vec![true, false, true]);
-        assert_eq!(col.val_to_inner[idx_null], null_slot);
+        assert_eq!(col.val_to_inner[idx_null], NULL_INNER_SLOT);
     }
 
     /// Fewer rows than values in an uncached values array takes the per-row
