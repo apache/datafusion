@@ -327,9 +327,8 @@ impl<T: CursorArray> PartitionedStream for FieldCursorStream<T> {
 /// spill when there is not enough memory for an eager sort (which requires ~2x
 /// peak memory to hold both the unsorted and sorted copies simultaneously).
 ///
-/// Unless supplied via [`Self::with_sorted_indices`], a sorted index array
-/// (`UInt32Array`) is computed via `lexsort_to_indices` on the first call to
-/// `next()`. The iterator yields chunks of
+/// On the first call to `next()`, a sorted index array (`UInt32Array`) is
+/// computed via `lexsort_to_indices`. Subsequent calls yield chunks of
 /// `batch_size` rows by `take`-ing from the original batch using slices of
 /// this index array. Each `take` copies data for the chunk (not zero-copy),
 /// but only one chunk is live at a time since the caller consumes it before
