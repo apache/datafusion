@@ -16,9 +16,10 @@
 //! build the string array itself. It only validates UTF-8 for columns carrying
 //! the `UTF8` logical annotation, which such a column by definition does not,
 //! so invalid bytes surface as an invalid string array rather than an error.
-//! That is long-standing behaviour for top-level and struct fields; it is not
-//! extended to map children, whose positional matching is newer, so binary map
-//! values keep going through the validating cast instead.
+//! This coercion therefore only applies to top-level fields, where it is
+//! long-standing behaviour. Nested binary fields (struct fields, list elements
+//! and map keys and values) are never read as strings: they keep going through
+//! the validating cast instead. The view coercions still apply at every level.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -177,30 +178,28 @@ fn coerce_data_type(
         }
         (Utf8View, Utf8 | LargeUtf8) => Some(Utf8View),
         (BinaryView, Binary | LargeBinary) => Some(BinaryView),
-        // Struct children match by name
+        // Struct children match by name. Nested binary fields are never read as
+        // strings, see the module docs.
         (Struct(table_fields), Struct(file_fields)) => {
-            coerce_fields_by_name(table_fields, file_fields, binary_to_string, enable_rle)
+            coerce_fields_by_name(table_fields, file_fields, false, enable_rle)
                 .map(Struct)
         }
         // List-like children match by position, regardless of their names.
         // The container kind and FixedSizeList width always come from the file.
         (List(table_child), List(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle).map(List)
+            coerce_child(table_child, file_child, enable_rle).map(List)
         }
         (LargeList(table_child), LargeList(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(LargeList)
+            coerce_child(table_child, file_child, enable_rle).map(LargeList)
         }
         (ListView(table_child), ListView(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(ListView)
+            coerce_child(table_child, file_child, enable_rle).map(ListView)
         }
         (LargeListView(table_child), LargeListView(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(LargeListView)
+            coerce_child(table_child, file_child, enable_rle).map(LargeListView)
         }
         (FixedSizeList(table_child, _), FixedSizeList(file_child, size)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
+            coerce_child(table_child, file_child, enable_rle)
                 .map(|child| FixedSizeList(child, *size))
         }
         // Map keys and values match by position: Parquet always names them
@@ -220,17 +219,17 @@ fn coerce_data_type(
 }
 
 /// Coerce a single nested child field, keeping everything but its data type
-/// from `file_child`.
+/// from `file_child`. A nested binary child is never read as a string, see the
+/// module docs.
 fn coerce_child(
     table_child: &FieldRef,
     file_child: &FieldRef,
-    binary_to_string: bool,
     enable_rle: bool,
 ) -> Option<FieldRef> {
     coerce_data_type(
         table_child.data_type(),
         file_child.data_type(),
-        binary_to_string,
+        false,
         enable_rle,
     )
     .map(|new_type| field_with_new_type(file_child, new_type))
@@ -257,7 +256,7 @@ fn coerce_map_entries(
     }
 
     let fields = coerce_fields(file_fields, |idx, file_child| {
-        coerce_child(&table_fields[idx], file_child, false, false)
+        coerce_child(&table_fields[idx], file_child, false)
     })?;
 
     Some(field_with_new_type(file_entries, DataType::Struct(fields)))
@@ -1142,6 +1141,98 @@ mod tests {
     }
 
     #[test]
+    fn nested_coercion_leaves_binary_list_and_struct_children_to_the_validating_cast() {
+        use arrow::array::{
+            Array, ArrayRef, AsArray, BinaryArray, ListArray, StructArray,
+        };
+        use arrow::buffer::OffsetBuffer;
+        use arrow::record_batch::RecordBatch;
+        use bytes::Bytes;
+        use parquet::arrow::ArrowWriter;
+        use parquet::arrow::arrow_reader::{
+            ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
+        };
+
+        // Binary list elements and struct fields holding bytes that are not
+        // valid UTF-8. Reading them as strings would produce invalid arrays,
+        // since the Parquet reader only validates columns annotated `UTF8`, so
+        // they must be left binary for the (validating) cast to reject.
+        let values: ArrayRef =
+            Arc::new(BinaryArray::from(vec![b"one".as_slice(), &[0xff]]));
+        let list = ListArray::new(
+            Arc::new(Field::new("element", DataType::Binary, true)),
+            OffsetBuffer::new(vec![0, 2].into()),
+            Arc::clone(&values),
+            None,
+        );
+        let strukt = StructArray::from(vec![(
+            Arc::new(Field::new("value", DataType::Binary, true)),
+            Arc::new(BinaryArray::from(vec![&[0xff_u8][..]])) as ArrayRef,
+        )]);
+        let batch = RecordBatch::try_from_iter([
+            ("l", Arc::new(list) as ArrayRef),
+            ("s", Arc::new(strukt) as ArrayRef),
+        ])
+        .unwrap();
+
+        let mut bytes = Vec::new();
+        let mut writer = ArrowWriter::try_new(&mut bytes, batch.schema(), None).unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let bytes = Bytes::from(bytes);
+
+        let file_schema = ParquetRecordBatchReaderBuilder::try_new(bytes.clone())
+            .unwrap()
+            .schema()
+            .clone();
+        let table_schema = Schema::new(vec![
+            Field::new(
+                "l",
+                DataType::List(Arc::new(Field::new("element", DataType::Utf8, true))),
+                true,
+            ),
+            Field::new_struct("s", vec![Field::new("value", DataType::Utf8, true)], true),
+        ]);
+
+        // Neither nested binary field is coerced
+        assert_eq!(
+            apply_file_schema_type_coercions(&table_schema, &file_schema),
+            None
+        );
+
+        // So the reader keeps them binary and the decoded batch is valid
+        let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
+            bytes,
+            ArrowReaderOptions::new().with_schema(file_schema),
+        )
+        .unwrap()
+        .build()
+        .unwrap();
+        let decoded = reader.next().unwrap().unwrap();
+        for column in decoded.columns() {
+            column.to_data().validate_full().unwrap();
+        }
+        assert_eq!(
+            decoded
+                .column(0)
+                .as_list::<i32>()
+                .values()
+                .as_binary::<i32>()
+                .value(1),
+            [0xff]
+        );
+        assert_eq!(
+            decoded
+                .column(1)
+                .as_struct()
+                .column(0)
+                .as_binary::<i32>()
+                .value(0),
+            [0xff]
+        );
+    }
+
+    #[test]
     fn nested_coercion_list_inside_struct() {
         let file_schema = Schema::new(vec![Field::new_struct(
             "s",
@@ -1281,30 +1372,8 @@ mod tests {
         };
         for (table_type, file_types) in [
             (
-                DataType::Utf8,
-                vec![
-                    DataType::Binary,
-                    DataType::LargeBinary,
-                    DataType::BinaryView,
-                ],
-            ),
-            (
-                DataType::LargeUtf8,
-                vec![
-                    DataType::Binary,
-                    DataType::LargeBinary,
-                    DataType::BinaryView,
-                ],
-            ),
-            (
                 DataType::Utf8View,
-                vec![
-                    DataType::Binary,
-                    DataType::LargeBinary,
-                    DataType::BinaryView,
-                    DataType::Utf8,
-                    DataType::LargeUtf8,
-                ],
+                vec![DataType::Utf8, DataType::LargeUtf8],
             ),
             (
                 DataType::BinaryView,
@@ -1317,6 +1386,21 @@ mod tests {
                 assert_eq!(
                     apply_file_schema_type_coercions(&table_schema, &file_schema),
                     Some(table_schema)
+                );
+            }
+        }
+        // A nested binary field is never read as a string, see the module docs
+        for table_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            for file_type in [
+                DataType::Binary,
+                DataType::LargeBinary,
+                DataType::BinaryView,
+            ] {
+                let file_schema = nested_schema(file_type);
+                let table_schema = nested_schema(table_type.clone());
+                assert_eq!(
+                    apply_file_schema_type_coercions(&table_schema, &file_schema),
+                    None
                 );
             }
         }
