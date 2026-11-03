@@ -315,7 +315,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     }
 
     fn coerce_dml(&self, mut dml: DmlStatement) -> Result<LogicalPlan> {
-        let WriteOp::MergeInto(merge_op) = &dml.op else {
+        let WriteOp::MergeInto(merge_op) = &mut dml.op else {
             return Ok(LogicalPlan::Dml(dml));
         };
 
@@ -323,8 +323,8 @@ impl<'a> TypeCoercionRewriter<'a> {
             dml.table_name.clone(),
             &dml.target.schema(),
         )?;
-        let mut merge_op = (**merge_op).clone();
-        merge_op.on = self.coerce_predicate(merge_op.on, "MERGE ON condition")?;
+        merge_op.on = self
+            .coerce_predicate(std::mem::take(&mut merge_op.on), "MERGE ON condition")?;
         for clause in &mut merge_op.clauses {
             clause.predicate = clause
                 .predicate
@@ -336,7 +336,8 @@ impl<'a> TypeCoercionRewriter<'a> {
                 datafusion_expr::dml::MergeIntoAction::Update(assignments) => {
                     for (column, value) in assignments {
                         let field = target_schema.field_with_unqualified_name(column)?;
-                        *value = value.clone().cast_to(field.data_type(), self.schema)?;
+                        *value = std::mem::take(value)
+                            .cast_to(field.data_type(), self.schema)?;
                     }
                 }
                 datafusion_expr::dml::MergeIntoAction::Insert { columns, values } => {
@@ -344,22 +345,21 @@ impl<'a> TypeCoercionRewriter<'a> {
                         for (value, field) in
                             values.iter_mut().zip(target_schema.fields())
                         {
-                            *value =
-                                value.clone().cast_to(field.data_type(), self.schema)?;
+                            *value = std::mem::take(value)
+                                .cast_to(field.data_type(), self.schema)?;
                         }
                     } else {
                         for (column, value) in columns.iter().zip(values) {
                             let field =
                                 target_schema.field_with_unqualified_name(column)?;
-                            *value =
-                                value.clone().cast_to(field.data_type(), self.schema)?;
+                            *value = std::mem::take(value)
+                                .cast_to(field.data_type(), self.schema)?;
                         }
                     }
                 }
                 datafusion_expr::dml::MergeIntoAction::Delete => {}
             }
         }
-        dml.op = WriteOp::MergeInto(Box::new(merge_op));
         Ok(LogicalPlan::Dml(dml))
     }
 
