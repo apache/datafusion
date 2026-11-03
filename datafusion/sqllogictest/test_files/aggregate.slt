@@ -10458,6 +10458,152 @@ GROUP BY id ORDER BY id;
 statement ok
 DROP TABLE first_last_value_str_tests;
 
+#################
+# first_value / last_value ordered by a time zone aware timestamp
+#################
+
+# The grouped accumulator keeps the ordering values without the time zone
+# and puts it back on its intermediate state. The rows are split over two
+# inputs so that partial states from different partitions are merged.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+CREATE TABLE first_last_tz_a AS
+SELECT column1 AS g, column2 AS v, arrow_cast(column3, 'Timestamp(Microsecond, Some("+05:00"))') AS ts
+FROM (VALUES
+  (1, 1, '2024-01-01T00:00:00Z'),
+  (1, 2, '2024-01-01T02:00:00Z'),
+  (2, 3, NULL),
+  (2, 4, '2024-01-01T03:00:00Z'),
+  (3, 5, '2024-01-01T01:00:00Z'));
+
+statement ok
+CREATE TABLE first_last_tz_b AS
+SELECT column1 AS g, column2 AS v, arrow_cast(column3, 'Timestamp(Microsecond, Some("+05:00"))') AS ts
+FROM (VALUES
+  (1, 6, '2023-12-31T23:00:00Z'),
+  (2, 7, '2024-01-01T04:00:00Z'),
+  (3, 8, '2024-01-01T01:00:00Z'),
+  (4, 9, NULL));
+
+statement ok
+CREATE VIEW first_last_tz AS
+SELECT * FROM first_last_tz_a UNION ALL SELECT * FROM first_last_tz_b;
+
+query IIIPP
+SELECT g,
+  first_value(v ORDER BY ts, v), last_value(v ORDER BY ts, v),
+  first_value(ts ORDER BY ts), last_value(ts ORDER BY ts)
+FROM first_last_tz GROUP BY g ORDER BY g;
+----
+1 6 2 2024-01-01T04:00:00+05:00 2024-01-01T07:00:00+05:00
+2 4 3 2024-01-01T08:00:00+05:00 NULL
+3 5 8 2024-01-01T06:00:00+05:00 2024-01-01T06:00:00+05:00
+4 9 9 NULL NULL
+
+# The time zone aware column is not the first ordering column
+query III
+SELECT g, first_value(v ORDER BY v % 2, ts), last_value(v ORDER BY v % 2, ts)
+FROM first_last_tz GROUP BY g ORDER BY g;
+----
+1 6 1
+2 4 3
+3 8 5
+4 9 9
+
+query IIP
+SELECT g, first_value(v ORDER BY ts DESC NULLS FIRST, v DESC), last_value(ts ORDER BY ts DESC NULLS FIRST, v DESC)
+FROM first_last_tz GROUP BY g ORDER BY g;
+----
+1 2 2024-01-01T04:00:00+05:00
+2 3 2024-01-01T08:00:00+05:00
+3 8 2024-01-01T06:00:00+05:00
+4 9 NULL
+
+query TT
+SELECT arrow_typeof(first_value(ts ORDER BY ts)), arrow_typeof(last_value(v ORDER BY ts))
+FROM first_last_tz GROUP BY g ORDER BY g LIMIT 1;
+----
+Timestamp(µs, "+05:00") Int64
+
+# DISTINCT ON is planned as first_value per column
+query IIP
+SELECT DISTINCT ON (g) g, v, ts FROM first_last_tz ORDER BY g, ts DESC, v;
+----
+1 2 2024-01-01T07:00:00+05:00
+2 3 NULL
+3 5 2024-01-01T06:00:00+05:00
+4 9 NULL
+
+statement ok
+DROP VIEW first_last_tz;
+
+statement ok
+DROP TABLE first_last_tz_a;
+
+statement ok
+DROP TABLE first_last_tz_b;
+
+# Other time units, several ordering columns with different time zones, and
+# IGNORE NULLS
+statement ok
+CREATE TABLE first_last_tz_u_a AS
+SELECT column1 AS g, column2 AS v,
+  arrow_cast(column3, 'Timestamp(Second, Some("UTC"))') AS ts_s,
+  arrow_cast(column4, 'Timestamp(Millisecond, Some("Europe/Berlin"))') AS ts_ms,
+  arrow_cast(column4, 'Timestamp(Nanosecond, Some("-03:00"))') AS ts_ns
+FROM (VALUES
+  (1, 1, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00.300Z'),
+  (1, NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00.100Z'),
+  (2, 3, '2024-01-02T00:00:00Z', NULL),
+  (2, NULL, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00.500Z'));
+
+statement ok
+CREATE TABLE first_last_tz_u_b AS
+SELECT column1 AS g, column2 AS v,
+  arrow_cast(column3, 'Timestamp(Second, Some("UTC"))') AS ts_s,
+  arrow_cast(column4, 'Timestamp(Millisecond, Some("Europe/Berlin"))') AS ts_ms,
+  arrow_cast(column4, 'Timestamp(Nanosecond, Some("-03:00"))') AS ts_ns
+FROM (VALUES
+  (1, 5, '2024-01-01T00:00:00Z', '2024-01-01T00:00:00.200Z'),
+  (2, 6, '2024-01-03T00:00:00Z', '2024-01-01T00:00:00.400Z'));
+
+statement ok
+CREATE VIEW first_last_tz_u AS
+SELECT * FROM first_last_tz_u_a UNION ALL SELECT * FROM first_last_tz_u_b;
+
+query IIIIP
+SELECT g, first_value(v ORDER BY ts_s, ts_ms DESC), last_value(v ORDER BY ts_s, ts_ms DESC),
+  first_value(v ORDER BY ts_ns), last_value(ts_ns ORDER BY ts_s, ts_ns)
+FROM first_last_tz_u GROUP BY g ORDER BY g;
+----
+1 1 NULL NULL 2023-12-31T21:00:00.300-03:00
+2 NULL 6 6 2023-12-31T21:00:00.400-03:00
+
+query IIIII
+SELECT g, first_value(v ORDER BY ts_ms) IGNORE NULLS, last_value(v ORDER BY ts_ms) IGNORE NULLS,
+  first_value(v ORDER BY ts_ms), last_value(v ORDER BY ts_ms)
+FROM first_last_tz_u GROUP BY g ORDER BY g;
+----
+1 5 1 NULL 1
+2 6 3 6 3
+
+query TT
+SELECT arrow_typeof(last_value(ts_ns ORDER BY ts_s, ts_ns)), arrow_typeof(first_value(ts_ms ORDER BY ts_ns))
+FROM first_last_tz_u GROUP BY g ORDER BY g LIMIT 1;
+----
+Timestamp(ns, "-03:00") Timestamp(ms, "Europe/Berlin")
+
+statement ok
+DROP VIEW first_last_tz_u;
+
+statement ok
+DROP TABLE first_last_tz_u_a;
+
+statement ok
+DROP TABLE first_last_tz_u_b;
+
 # MIN/MAX over a CAST projection folds from parquet statistics via the
 # aggregate-statistics optimizer. Non-CAST projections (multi-column or
 # self-referenced expressions) must keep returning correct results — guard
