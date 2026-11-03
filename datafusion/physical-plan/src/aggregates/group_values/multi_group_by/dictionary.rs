@@ -546,7 +546,29 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             )
         })?;
         let raw_keys = dict_keys.values();
-        if dict_keys.null_count() == 0 {
+        if dict_keys.null_count() == 0 && dict_values.null_count() == 0 {
+            let start_len = self.group_to_inner.len();
+            let result: Result<()> = rows.iter().try_for_each(|&row| {
+                let val_idx = raw_keys[row].as_usize();
+                if self.val_to_inner[val_idx] == usize::MAX {
+                    self.val_to_inner[val_idx] = self.find_or_insert_value(
+                        dict_values,
+                        val_idx,
+                        self.val_hashes[val_idx],
+                    )?;
+                }
+                let slot = self.val_to_inner[val_idx];
+                let Some(key) = K::Native::from_usize(slot) else {
+                    self.check_key_overflow()?;
+                    unreachable!("representable dictionary key rejected")
+                };
+                self.group_to_inner.push(key);
+                Ok(())
+            });
+            self.group_nulls
+                .append_n_non_nulls(self.group_to_inner.len() - start_len);
+            result?;
+        } else if dict_keys.null_count() == 0 {
             for &row in rows {
                 let val_idx = raw_keys[row].as_usize();
                 if self.val_to_inner[val_idx] == usize::MAX {
