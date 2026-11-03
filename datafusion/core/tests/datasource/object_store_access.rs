@@ -9,6 +9,9 @@
 //! various operations (table creation, queries with and without predicates)
 //! to verify the expected object store access patterns.
 //!
+//! File-level Parquet access tests live in
+//! [`datafusion/core/tests/parquet/io`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/parquet/io/mod.rs).
+//!
 //! [`ListingTable`]: datafusion::datasource::listing::ListingTable
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
