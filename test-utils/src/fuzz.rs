@@ -10,10 +10,10 @@ use std::time::Duration;
 use datafusion_common::instant::Instant;
 use datafusion_common::{Result, exec_err};
 
-/// A component's fuzz experiment, run by the [centralized driver].
+/// Implement this trait to add a fuzzing unit test to DataFusion.
 ///
-/// The component prepares fixtures and checks one case; the driver handles
-/// repetition, budgets, and seed reporting. Each case can be replayed alone.
+/// The fuzz implementation prepares the data and checks one case. The [centralized driver]
+/// repeats cases, manages the time budget, and reports failures.
 ///
 /// See the [centralized driver] for how to use it. At a high level:
 /// 1. Generate one dataset with `prepare_dataset()`.
