@@ -1,21 +1,8 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use std::{cmp::Ordering, str::FromStr, sync::Arc, vec};
+use std::{cmp::Ordering, collections::HashSet, str::FromStr, sync::Arc, vec};
 
 use super::{
     Unparser, dialect::CharacterLengthStyle, dialect::DateFieldExtractStyle,
@@ -27,8 +14,8 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode},
 };
 use datafusion_expr::{
-    Aggregate, Expr, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr, Unnest,
-    Window, expr, utils::grouping_set_to_exprlist,
+    Aggregate, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr,
+    Unnest, Window, expr, utils::grouping_set_to_exprlist,
 };
 
 use arrow::compute::DatePart;
@@ -608,4 +595,28 @@ pub(crate) fn sqlite_date_trunc_to_sql(
     }
 
     Ok(None)
+}
+
+/// Returns true if any column used by a `Filter` depends on aliased expressions by its input. This
+/// should only happen when we have a Filter + Projection plan.
+pub(crate) fn filter_depends_on_input_alias(filter: &Filter) -> bool {
+    match filter.input.as_ref() {
+        LogicalPlan::Projection(projection) => {
+            let alias = projection
+                .expr
+                .iter()
+                .filter_map(|e| match e {
+                    Expr::Alias(a) => Some((&a.relation, &a.name)),
+                    _ => None,
+                })
+                .collect::<HashSet<_>>();
+
+            filter
+                .predicate
+                .column_refs()
+                .iter()
+                .any(|c| alias.contains(&(&c.relation, &c.name)))
+        }
+        _ => false,
+    }
 }

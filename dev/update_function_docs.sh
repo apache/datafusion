@@ -1,22 +1,7 @@
 #!/usr/bin/env bash
-#
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
-#
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 set -e
 
@@ -26,28 +11,47 @@ cd "${ROOT_DIR}"
 # Load centralized tool versions
 source "${ROOT_DIR}/ci/scripts/utils/tool_versions.sh"
 
-TARGET_FILE="docs/source/user-guide/sql/aggregate_functions.md"
+# `--output-dir DIR` writes the generated pages into DIR instead of
+# docs/source/user-guide/sql. A relative DIR is taken from the repository root.
+OUTPUT_DIR="docs/source/user-guide/sql"
+
+usage() {
+  cat >&2 <<USAGE
+Usage: $0 [--output-dir DIR]
+
+Regenerates the aggregate, scalar, and window function pages under docs/source/user-guide/sql.
+--output-dir DIR  Write the generated pages into DIR instead of docs/source/user-guide/sql (relative to the repository root).
+USAGE
+  exit 1
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --output-dir)
+      [[ $# -ge 2 ]] || usage
+      OUTPUT_DIR="$2"
+      shift
+      ;;
+    -h|--help)
+      usage
+      ;;
+    *)
+      usage
+      ;;
+  esac
+  shift
+done
+
+mkdir -p "${OUTPUT_DIR}"
+TARGET_FILE="${OUTPUT_DIR}/aggregate_functions.md"
 PRINT_AGGREGATE_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_functions_docs -- aggregate"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 <!---
@@ -120,28 +124,15 @@ npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
 
-TARGET_FILE="docs/source/user-guide/sql/scalar_functions.md"
+TARGET_FILE="${OUTPUT_DIR}/scalar_functions.md"
 PRINT_SCALAR_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_functions_docs -- scalar"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 <!---
@@ -164,28 +155,15 @@ npx "prettier@${PRETTIER_VERSION}" --write "$TARGET_FILE"
 
 echo "'$TARGET_FILE' successfully updated!"
 
-TARGET_FILE="docs/source/user-guide/sql/window_functions.md"
+TARGET_FILE="${OUTPUT_DIR}/window_functions.md"
 PRINT_WINDOW_FUNCTION_DOCS_COMMAND="cargo run --manifest-path datafusion/core/Cargo.toml --features docs_generation --bin print_functions_docs -- window"
 
 echo "Inserting header"
 cat <<'EOF' > "$TARGET_FILE"
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 <!---

@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Reviewing Pull Requests
@@ -133,7 +120,8 @@ Guidelines for evaluating tests:
 
 1. Prefer `sqllogictest` (`.slt`) tests or DataFrame API tests where
    possible, as they exercise **user-visible behavior** and are less coupled
-   to internal implementation details than unit tests.
+   to internal implementation details than unit tests (see
+   [Choosing What Kind of Test to Write](testing.md#choosing-what-kind-of-test-to-write)).
 2. Verify tests cover edge cases and common failure scenarios, not just the
    common successful path. However, it is NOT necessary to test every possible
    error path, especially if it is difficult to trigger or unlikely to occur in
@@ -232,6 +220,12 @@ than reviewing it as-is.
 Rather than a bare "LGTM", say what you actually checked ("traced the state
 transitions by hand", "confirmed the hasher change cannot affect ordering")
 so it is clear what was verified and what was not.
+
+### Use AI Review Tools Thoughtfully
+
+AI tools can help you review, but please read and edit their output before
+posting it so each comment is a clear, specific request in your own words. See
+[AI-assisted reviews](ai-policy.md#ai-assisted-reviews) in the contributor guide.
 
 ### Invite Additional Committers on Core Changes
 

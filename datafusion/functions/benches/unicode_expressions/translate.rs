@@ -1,23 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{GenericStringArray, OffsetSizeTrait};
-use arrow::datatypes::{DataType, Field};
-use arrow::util::bench_util::create_string_array_with_len;
+use arrow::datatypes::Field;
+use arrow::util::bench_util::{
+    create_string_array_with_len, create_string_view_array_with_len,
+};
 use criterion::{Criterion, SamplingMode, criterion_group};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::{DataFusionError, ScalarValue};
@@ -101,10 +90,26 @@ fn create_args_scalar_from_to<O: OffsetSizeTrait>(
     ]
 }
 
+/// Like [`create_args_scalar_from_to`], with the strings as a `StringViewArray`.
+fn create_args_scalar_from_to_utf8view(
+    size: usize,
+    str_len: usize,
+) -> Vec<ColumnarValue> {
+    let string_array =
+        Arc::new(create_string_view_array_with_len(size, 0.1, str_len, false));
+
+    vec![
+        ColumnarValue::Array(string_array),
+        ColumnarValue::Scalar(ScalarValue::from("aeiou")),
+        ColumnarValue::Scalar(ScalarValue::from("AEIOU")),
+    ]
+}
+
 fn invoke_translate_with_args(
     args: Vec<ColumnarValue>,
     number_rows: usize,
 ) -> Result<ColumnarValue, DataFusionError> {
+    let return_type = args[0].data_type();
     let arg_fields = args
         .iter()
         .enumerate()
@@ -116,7 +121,7 @@ fn invoke_translate_with_args(
         args,
         arg_fields,
         number_rows,
-        return_field: Field::new("f", DataType::Utf8, true).into(),
+        return_field: Field::new("f", return_type, true).into(),
         config_options: Arc::clone(&config_options),
     })
 }
@@ -155,6 +160,17 @@ fn criterion_benchmark(c: &mut Criterion) {
                     black_box(invoke_translate_with_args(args_cloned, size))
                 })
             });
+
+            let args = create_args_scalar_from_to_utf8view(size, str_len);
+            group.bench_function(
+                format!("scalar_from_to_utf8view [str_len={str_len}]"),
+                |b| {
+                    b.iter(|| {
+                        let args_cloned = args.clone();
+                        black_box(invoke_translate_with_args(args_cloned, size))
+                    })
+                },
+            );
         }
 
         group.finish();

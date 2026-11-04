@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarUDFImpl`] definitions for array_reverse function.
 
@@ -24,14 +11,15 @@ use arrow::array::{
 };
 use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::take;
+use arrow::datatypes::DataType;
 use arrow::datatypes::DataType::{
     FixedSizeList, LargeList, LargeListView, List, ListView, Null,
 };
-use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::cast::{
     as_fixed_size_list_array, as_large_list_array, as_large_list_view_array,
     as_list_array, as_list_view_array,
 };
+use datafusion_common::utils::offset_span_len;
 use datafusion_common::{Result, exec_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
@@ -118,26 +106,26 @@ pub fn array_reverse_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     let [input_array] = take_function_args("array_reverse", arg)?;
 
     match &input_array.data_type() {
-        List(field) => {
+        List(_) => {
             let array = as_list_array(input_array)?;
-            general_array_reverse::<i32>(array, field)
+            general_array_reverse::<i32>(array)
         }
-        LargeList(field) => {
+        LargeList(_) => {
             let array = as_large_list_array(input_array)?;
-            general_array_reverse::<i64>(array, field)
+            general_array_reverse::<i64>(array)
         }
-        FixedSizeList(field, _) => {
+        FixedSizeList(_, _) => {
             let array = as_fixed_size_list_array(input_array)?;
-            fixed_size_array_reverse(array, field)
+            fixed_size_array_reverse(array)
         }
         Null => Ok(Arc::clone(input_array)),
-        ListView(field) => {
+        ListView(_) => {
             let array = as_list_view_array(input_array)?;
-            list_view_reverse::<i32>(array, field)
+            list_view_reverse::<i32>(array)
         }
-        LargeListView(field) => {
+        LargeListView(_) => {
             let array = as_large_list_view_array(input_array)?;
-            list_view_reverse::<i64>(array, field)
+            list_view_reverse::<i64>(array)
         }
         array_type => exec_err!("array_reverse does not support type '{array_type}'."),
     }
@@ -145,11 +133,11 @@ pub fn array_reverse_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
 
 fn general_array_reverse<O: OffsetSizeTrait>(
     array: &GenericListArray<O>,
-    field: &FieldRef,
 ) -> Result<ArrayRef> {
     let values = array.values();
-    let mut offsets = vec![O::usize_as(0)];
-    let mut indices: Vec<O> = Vec::with_capacity(values.len());
+    let mut offsets = Vec::with_capacity(array.len() + 1);
+    offsets.push(O::usize_as(0));
+    let mut indices: Vec<O> = Vec::with_capacity(offset_span_len(array.offsets()));
 
     for (row_index, (&start, &end)) in array.offsets().iter().tuple_windows().enumerate()
     {
@@ -186,7 +174,7 @@ fn general_array_reverse<O: OffsetSizeTrait>(
     };
     let values = take(&values, &indices_array, None)?;
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::clone(field),
+        Arc::clone(array.value_field()),
         OffsetBuffer::<O>::new(offsets.into()),
         values,
         array.nulls().cloned(),
@@ -201,7 +189,6 @@ fn general_array_reverse<O: OffsetSizeTrait>(
 /// even if the original array had elements out of order.
 fn list_view_reverse<O: OffsetSizeTrait>(
     array: &GenericListViewArray<O>,
-    field: &FieldRef,
 ) -> Result<ArrayRef> {
     let offsets = array.offsets();
     let values = array.values();
@@ -253,7 +240,7 @@ fn list_view_reverse<O: OffsetSizeTrait>(
     };
     let values = take(&values, &indices_array, None)?;
     Ok(Arc::new(GenericListViewArray::<O>::try_new(
-        Arc::clone(field),
+        Arc::clone(array.value_field()),
         ScalarBuffer::from(new_offsets),
         ScalarBuffer::from(new_sizes),
         values,
@@ -261,10 +248,7 @@ fn list_view_reverse<O: OffsetSizeTrait>(
     )?))
 }
 
-fn fixed_size_array_reverse(
-    array: &FixedSizeListArray,
-    field: &FieldRef,
-) -> Result<ArrayRef> {
+fn fixed_size_array_reverse(array: &FixedSizeListArray) -> Result<ArrayRef> {
     let values: &Arc<dyn Array> = array.values();
 
     // Since each fixed size list in the physical array is the same size and we keep the order
@@ -279,7 +263,7 @@ fn fixed_size_array_reverse(
     let values = take(&values, &indices_array, None)?;
 
     Ok(Arc::new(FixedSizeListArray::try_new(
-        Arc::clone(field),
+        Arc::clone(array.value_field()),
         array.value_length(),
         values,
         array.nulls().cloned(),
@@ -324,10 +308,7 @@ mod tests {
         let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]));
         let nulls = Some(NullBuffer::from(vec![true, true, false, true]));
         let list_view = ListViewArray::new(field, offsets, sizes, values, nulls);
-        let result = list_view_reverse(
-            &list_view,
-            &Arc::new(Field::new("test", DataType::Int32, true)),
-        )?;
+        let result = list_view_reverse(&list_view)?;
         let reversed = list_view_values(result.as_list_view::<i32>());
         let expected = vec![
             Some(vec![1]),
@@ -347,10 +328,7 @@ mod tests {
         let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]));
         let nulls = Some(NullBuffer::from(vec![true, true, false, true]));
         let list_view = LargeListViewArray::new(field, offsets, sizes, values, nulls);
-        let result = list_view_reverse(
-            &list_view,
-            &Arc::new(Field::new("test", DataType::Int32, true)),
-        )?;
+        let result = list_view_reverse(&list_view)?;
         let reversed = list_view_values(result.as_list_view::<i64>());
         let expected = vec![
             Some(vec![1]),
@@ -375,10 +353,7 @@ mod tests {
         ]));
         let nulls = Some(NullBuffer::from(vec![true, true, false, true]));
         let list_view = ListViewArray::new(field, offsets, sizes, values, nulls);
-        let result = list_view_reverse(
-            &list_view,
-            &Arc::new(Field::new("test", DataType::Int32, true)),
-        )?;
+        let result = list_view_reverse(&list_view)?;
         let reversed = list_view_values(result.as_list_view::<i32>());
         let expected = vec![
             Some(vec![9, 8, 7]),
@@ -403,10 +378,7 @@ mod tests {
         ]));
         let nulls = Some(NullBuffer::from(vec![true, true, false, true]));
         let list_view = ListViewArray::new(field, offsets, sizes, values, nulls);
-        let result = list_view_reverse(
-            &list_view,
-            &Arc::new(Field::new("test", DataType::Int32, true)),
-        )?;
+        let result = list_view_reverse(&list_view)?;
         let reversed = list_view_values(result.as_list_view::<i32>());
         let expected = vec![
             Some(vec![9, 8, 7]),
@@ -427,10 +399,7 @@ mod tests {
         let values = Arc::new(Int32Array::from(empty_array));
         let nulls = None;
         let list_view = ListViewArray::new(field, offsets, sizes, values, nulls);
-        let result = list_view_reverse(
-            &list_view,
-            &Arc::new(Field::new("test", DataType::Int32, true)),
-        )?;
+        let result = list_view_reverse(&list_view)?;
         let reversed = list_view_values(result.as_list_view::<i32>());
         let expected: Vec<Option<Vec<i32>>> = vec![];
         assert_eq!(expected, reversed);
@@ -445,10 +414,7 @@ mod tests {
         let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
         let nulls = Some(NullBuffer::from(vec![false, false, false, false]));
         let list_view = ListViewArray::new(field, offsets, sizes, values, nulls);
-        let result = list_view_reverse(
-            &list_view,
-            &Arc::new(Field::new("test", DataType::Int32, true)),
-        )?;
+        let result = list_view_reverse(&list_view)?;
         let reversed = list_view_values(result.as_list_view::<i32>());
         let expected: Vec<Option<Vec<i32>>> = vec![None, None, None, None];
         assert_eq!(expected, reversed);
@@ -459,15 +425,12 @@ mod tests {
     fn test_reverse_fixed_size_list() -> Result<()> {
         let field = Arc::new(Field::new("a", DataType::Int32, false));
         let values = Arc::new(Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9]));
-        let result = fixed_size_array_reverse(
-            &FixedSizeListArray::new(
-                field,
-                3,
-                values,
-                Some(NullBuffer::from(vec![true, false, true])),
-            ),
-            &Arc::new(Field::new("test", DataType::Int32, true)),
-        )?;
+        let result = fixed_size_array_reverse(&FixedSizeListArray::new(
+            field,
+            3,
+            values,
+            Some(NullBuffer::from(vec![true, false, true])),
+        ))?;
         let reversed = fixed_size_list_values(result.as_fixed_size_list());
         let expected = vec![Some(vec![3, 2, 1]), None, Some(vec![9, 8, 7])];
         assert_eq!(expected, reversed);
@@ -481,10 +444,7 @@ mod tests {
         let values = Arc::new(Int32Array::from(empty_array));
         let nulls = None;
         let fixed_size_list = FixedSizeListArray::new(field, 3, values, nulls);
-        let result = fixed_size_array_reverse(
-            &fixed_size_list,
-            &Arc::new(Field::new("test", DataType::Int32, true)),
-        )?;
+        let result = fixed_size_array_reverse(&fixed_size_list)?;
         let reversed = fixed_size_list_values(result.as_fixed_size_list());
         let expected: Vec<Option<Vec<i32>>> = vec![];
         assert_eq!(expected, reversed);

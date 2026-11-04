@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! ParquetSource implementation for reading parquet files
 use std::fmt::Debug;
@@ -37,9 +24,7 @@ use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::morsel::Morselizer;
 
-use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
-use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 #[cfg(feature = "proto")]
@@ -50,6 +35,7 @@ use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
+use datafusion_physical_expr::utils::split_conjunction;
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
@@ -400,12 +386,6 @@ impl ParquetSource {
         &self.table_parquet_options
     }
 
-    /// Optional predicate.
-    #[deprecated(since = "50.2.0", note = "use `filter` instead")]
-    pub fn predicate(&self) -> Option<&Arc<dyn PhysicalExpr>> {
-        self.predicate.as_ref()
-    }
-
     /// return the optional file reader factory
     pub fn parquet_file_reader_factory(
         &self,
@@ -542,37 +522,6 @@ impl ParquetSource {
     }
 }
 
-/// Parses datafusion.common.config.ParquetOptions.coerce_int96 String to a arrow_schema.datatype.TimeUnit
-pub(crate) fn parse_coerce_int96_string(
-    str_setting: &str,
-) -> datafusion_common::Result<TimeUnit> {
-    let str_setting_lower: &str = &str_setting.to_lowercase();
-
-    match str_setting_lower {
-        "ns" => Ok(TimeUnit::Nanosecond),
-        "us" => Ok(TimeUnit::Microsecond),
-        "ms" => Ok(TimeUnit::Millisecond),
-        "s" => Ok(TimeUnit::Second),
-        _ => Err(DataFusionError::Configuration(format!(
-            "Unknown or unsupported parquet coerce_int96: \
-        {str_setting}. Valid values are: ns, us, ms, and s."
-        ))),
-    }
-}
-
-/// Validates that `tz` is a parseable IANA timezone and returns it as an
-/// `Arc<str>` for use in `Timestamp(_, Some(tz))` types.
-pub(crate) fn parse_coerce_int96_tz_string(
-    tz: &str,
-) -> datafusion_common::Result<Arc<str>> {
-    tz.parse::<Tz>().map_err(|e| {
-        DataFusionError::Configuration(format!(
-            "Invalid parquet coerce_int96_tz {tz:?}: {e}"
-        ))
-    })?;
-    Ok(Arc::<str>::from(tz))
-}
-
 /// Allows easy conversion from ParquetSource to Arc&lt;dyn FileSource&gt;
 impl From<ParquetSource> for Arc<dyn FileSource> {
     fn from(source: ParquetSource) -> Self {
@@ -622,15 +571,13 @@ impl FileSource for ParquetSource {
             .table_parquet_options
             .global
             .coerce_int96
-            .as_ref()
-            .map(|time_unit| parse_coerce_int96_string(time_unit.as_str()).unwrap());
+            .map(TimeUnit::from);
         let coerce_int96_tz = self
             .table_parquet_options
             .global
             .coerce_int96_tz
             .as_ref()
-            .map(|tz| parse_coerce_int96_tz_string(tz))
-            .transpose()?;
+            .map(|tz| Arc::<str>::from(tz.as_str()));
         if coerce_int96_tz.is_some() && coerce_int96.is_none() {
             warn!(
                 "coerce_int96_tz is set but coerce_int96 is not; the timezone will be ignored"
@@ -660,7 +607,7 @@ impl FileSource for ParquetSource {
                 .batch_size
                 .expect("Batch size must set before creating ParquetMorselizer"),
             limit: base_config.limit,
-            preserve_order: base_config.preserve_order,
+            preserve_order: base_config.preserves_file_order(),
             predicate: self.predicate.clone(),
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,
@@ -682,6 +629,14 @@ impl FileSource for ParquetSource {
             encryption_factory: self.get_encryption_factory_with_config(),
             max_predicate_cache_size: self.max_predicate_cache_size(),
             max_in_list_size: self.max_in_list_size(),
+            enable_rle_to_dictionary: self
+                .table_parquet_options
+                .global
+                .enable_rle_to_dictionary,
+            row_group_range_assignment: self
+                .table_parquet_options
+                .global
+                .row_group_range_assignment,
             reverse_row_groups: self.reverse_row_groups,
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
@@ -706,6 +661,23 @@ impl FileSource for ParquetSource {
 
     fn filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
         self.predicate.clone()
+    }
+
+    /// The predicate is applied to every row only when filter pushdown is
+    /// enabled, and then only the conjuncts that can become a `RowFilter`.
+    /// Otherwise the predicate is used only for pruning.
+    fn exact_filter(&self) -> Option<Arc<dyn PhysicalExpr>> {
+        if !self.pushdown_filters() {
+            return None;
+        }
+        let predicate = self.predicate.as_ref()?;
+        let pushable_schema = self.table_schema.schema_without_virtual_columns();
+        let exact = split_conjunction(predicate)
+            .into_iter()
+            .filter(|expr| can_expr_be_pushed_down_with_schemas(expr, pushable_schema))
+            .cloned()
+            .collect::<Vec<_>>();
+        (!exact.is_empty()).then(|| conjunction(exact))
     }
 
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource> {
@@ -780,7 +752,7 @@ impl FileSource for ParquetSource {
                 // the parquet opener will pause the single decoder at row
                 // group boundaries and consult `RowGroupPruner` to drop
                 // RGs the current threshold proves unwinnable, rebuilding
-                // the decoder via `into_builder().with_row_groups(...)` to
+                // the decoder via `into_builder().with_row_group_selections(...)` to
                 // skip them. The actual pruning count appears as
                 // `row_groups_pruned_dynamic_filter` in EXPLAIN ANALYZE.
                 // We use `contains_dynamic_filter()` (matches both `Watching`
@@ -832,15 +804,14 @@ impl FileSource for ParquetSource {
                         )?;
                     }
                 }
-                Ok(())
             }
             DisplayFormatType::TreeRender => {
                 if let Some(predicate) = self.filter() {
                     writeln!(f, "predicate={}", fmt_sql(predicate.as_ref()))?;
                 }
-                Ok(())
             }
         }
+        Ok(())
     }
 
     fn try_pushdown_filters(
@@ -984,8 +955,7 @@ impl FileSource for ParquetSource {
         // is already in prefix order the stats-based reorder is mostly
         // a no-op anyway, so the trade-off is plainly bad.
         for prefix_len in 1..order.len() {
-            let prefix = order[..prefix_len].to_vec();
-            if eq_properties.ordering_satisfy(prefix.iter().cloned())? {
+            if eq_properties.ordering_satisfy(order[..prefix_len].iter().cloned())? {
                 return Ok(SortOrderPushdownResult::Unsupported);
             }
         }
@@ -1365,14 +1335,39 @@ mod tests {
     use datafusion_physical_expr::expressions::lit;
 
     #[test]
-    #[expect(deprecated)]
-    fn test_parquet_source_predicate_same_as_filter() {
-        let predicate = lit(true);
+    fn partition_metrics_exclude_derived_plan_metrics() {
+        use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
+        use datafusion_datasource::source::DataSourceExec;
+        use datafusion_execution::object_store::ObjectStoreUrl;
+        use datafusion_physical_plan::ExecutionPlan;
+        use datafusion_physical_plan::metrics::MetricBuilder;
 
-        let parquet_source =
-            ParquetSource::new(Arc::new(Schema::empty())).with_predicate(predicate);
-        // same value. but filter() call Arc::clone internally
-        assert_eq!(parquet_source.predicate(), parquet_source.filter().as_ref());
+        let source = Arc::new(ParquetSource::new(Arc::new(Schema::empty())));
+        let metrics = source.metrics().clone();
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), source)
+                .build();
+        let plan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        assert_eq!(plan.metrics().unwrap().for_partition(0).iter().count(), 0);
+        MetricBuilder::new(&metrics).output_rows(0).add(10);
+        MetricBuilder::new(&metrics).output_rows(1).add(20);
+        MetricBuilder::new(&metrics).global_counter("global").add(1);
+        let selected = plan.metrics().unwrap().for_partition(0);
+        assert_eq!(selected.output_rows(), Some(10));
+        assert!(selected.iter().all(|m| m.partition() == Some(0)));
+        let full = plan.metrics().unwrap();
+        assert_eq!(full.output_rows(), Some(30));
+        assert!(
+            full.iter().any(
+                |m| m.value().name() == "output_rows_skew" && m.partition().is_none()
+            )
+        );
+        MetricBuilder::new(&metrics).output_rows(0).add(5);
+        assert_eq!(selected.output_rows(), Some(10));
+        assert_eq!(
+            plan.metrics().unwrap().for_partition(0).output_rows(),
+            Some(15)
+        );
     }
 
     #[test]

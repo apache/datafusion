@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Utility functions leveraged by the query optimizer rules
 
@@ -31,7 +18,7 @@ use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
-    ColumnarValue, DistinctHandling, Expr, Volatility, WriteOp, logical_plan::LogicalPlan,
+    ColumnarValue, DistinctHandling, Expr, WriteOp, logical_plan::LogicalPlan,
 };
 use datafusion_physical_expr::create_physical_expr;
 use log::{debug, trace};
@@ -41,7 +28,7 @@ use std::sync::Arc;
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
 
-/// Whether an expression is free of volatile scalar functions and subqueries.
+/// Whether an expression is free of volatile functions and subqueries.
 /// Subqueries are conservative barriers because their plans may contain
 /// volatile expressions that [`Expr::is_volatile`] does not visit.
 pub(crate) fn is_repeatable(expr: &Expr) -> bool {
@@ -79,11 +66,7 @@ pub(crate) fn is_duplicate_insensitive_aggregate(mut expr: &Expr) -> bool {
         // Variants added in the future are treated the same way.
         _ => false,
     };
-    // Expr::is_volatile checks scalar functions only; check the aggregate
-    // function's own volatility separately.
-    ignores_duplicates
-        && aggregate.func.signature().volatility != Volatility::Volatile
-        && is_repeatable(expr)
+    ignores_duplicates && is_repeatable(expr)
 }
 
 /// Return the expression schema for a MERGE DML node.
@@ -301,8 +284,13 @@ fn evaluate_expr_with_null_column<'a>(
     .evaluate(&input_batch)
 }
 
+/// No session timezone is threaded in here on purpose. This runs over a plan the
+/// `TypeCoercion` analyzer has already coerced, so every binary operand pair
+/// already shares a type; the only type this helper introduces is the `Null` of
+/// the dummy column in `evaluate_expr_with_null_column`, and `Null` against a
+/// timestamp is short-circuited by `null_coercion` before the aware/naive rule.
 fn coerce(expr: Expr, schema: &DFSchema) -> Result<Expr> {
-    let mut expr_rewrite = TypeCoercionRewriter { schema };
+    let mut expr_rewrite = TypeCoercionRewriter::new(schema);
     expr.rewrite(&mut expr_rewrite).data()
 }
 

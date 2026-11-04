@@ -15,5 +15,11 @@ exit_code: 0
 +----------+
 | 1        |
 +----------+
++------+
+| deep |
++------+
+| 1    |
++------+
 
 ----- stderr -----
+SQL error: RecursionLimitExceeded (current limit: 5)

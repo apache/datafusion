@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Regression tests for interpreting Parquet byte-array statistics orders.
 
@@ -273,18 +260,20 @@ impl TestFile {
         physical: &Arc<dyn PhysicalExpr>,
         plan: ParquetAccessPlan,
     ) -> usize {
-        let mut builder = ParquetRecordBatchReaderBuilder::try_new(self.bytes.clone())
+        plan.prepare(self.metadata.row_groups())
             .unwrap()
-            .with_row_groups(plan.row_group_indexes());
-        if let Some(selection) = plan
-            .into_overall_row_selection(self.metadata.row_groups())
-            .unwrap()
-        {
-            builder = builder.with_row_selection(selection);
-        }
-        builder
-            .build()
-            .unwrap()
+            .row_groups
+            .into_iter()
+            .flat_map(|rg| {
+                let mut builder =
+                    ParquetRecordBatchReaderBuilder::try_new(self.bytes.clone())
+                        .unwrap()
+                        .with_row_groups(vec![rg.selection.row_group_index()]);
+                if let Some(selection) = rg.selection.selection() {
+                    builder = builder.with_row_selection(selection.clone());
+                }
+                builder.build().unwrap()
+            })
             .map(|batch| {
                 let batch = batch.unwrap();
                 let matches = physical

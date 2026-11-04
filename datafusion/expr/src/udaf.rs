@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
@@ -41,8 +28,7 @@ use crate::function::{
 };
 use crate::groups_accumulator::GroupsAccumulator;
 use crate::udf_eq::UdfEq;
-use crate::utils::AggregateOrderSensitivity;
-use crate::utils::format_state_name;
+use crate::utils::{AggregateOrderSensitivity, format_state_name, ordering_state_fields};
 use crate::{Accumulator, Expr, expr_vec_fmt};
 use crate::{Documentation, Signature};
 
@@ -209,7 +195,9 @@ impl AggregateUDF {
         self.inner.window_function_display_name(params)
     }
 
+    #[deprecated(since = "56.0.0", note = "Use `AggregateUDF::return_field` instead.")]
     pub fn is_nullable(&self) -> bool {
+        #[expect(deprecated)]
         self.inner.is_nullable()
     }
 
@@ -571,6 +559,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// For example, aggregate functions like `COUNT` always return a non null value
     /// but others like `MIN` will return `NULL` if there is nullable input.
     /// Note that if the function is declared as *not* nullable, make sure the [`AggregateUDFImpl::default_value`] is `non-null`
+    #[deprecated(since = "56.0.0", note = "Use `return_field` instead.")]
     fn is_nullable(&self) -> bool {
         true
     }
@@ -614,7 +603,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         Ok(fields
             .into_iter()
             .map(Arc::new)
-            .chain(args.ordering_fields.to_vec())
+            .chain(ordering_state_fields(args.name, args.ordering_fields))
             .collect())
     }
 
@@ -1515,6 +1504,7 @@ pub fn udaf_default_return_field<F: AggregateUDFImpl + ?Sized>(
     Ok(Arc::new(Field::new(
         func.name(),
         data_type,
+        #[expect(deprecated)]
         func.is_nullable(),
     )))
 }
@@ -1627,7 +1617,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
         &self,
         args: AccumulatorArgs,
     ) -> Result<Box<dyn Accumulator>> {
-        self.inner.accumulator(args)
+        self.inner.create_sliding_accumulator(args)
     }
 
     fn with_beneficial_ordering(
@@ -1679,6 +1669,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
     }
 
     fn is_nullable(&self) -> bool {
+        #[expect(deprecated)]
         self.inner.is_nullable()
     }
 
@@ -1762,8 +1753,9 @@ pub enum DistinctHandling {
 #[cfg(test)]
 mod test {
     use crate::{AggregateUDF, AggregateUDFImpl};
-    use arrow::datatypes::{DataType, FieldRef};
-    use datafusion_common::Result;
+    use arrow::array::ArrayRef;
+    use arrow::datatypes::{DataType, Field, FieldRef, Schema};
+    use datafusion_common::{Result, ScalarValue, not_impl_err};
     use datafusion_expr_common::accumulator::Accumulator;
     use datafusion_expr_common::signature::{Signature, Volatility};
     use datafusion_functions_aggregate_common::accumulator::{
@@ -1771,6 +1763,7 @@ mod test {
     };
     use std::cmp::Ordering;
     use std::hash::{DefaultHasher, Hash, Hasher};
+    use std::sync::Arc;
 
     #[derive(Debug, Clone, PartialEq, Eq, Hash)]
     struct AMeanUdf {
@@ -1847,6 +1840,141 @@ mod test {
         }
     }
 
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct DefaultStateFieldsUdf {
+        signature: Signature,
+    }
+
+    impl DefaultStateFieldsUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Float64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for DefaultStateFieldsUdf {
+        fn name(&self) -> &str {
+            "default_state_fields"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            unimplemented!()
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!()
+        }
+    }
+
+    /// Panics if driven: the test only checks which inner method is forwarded to.
+    #[derive(Debug)]
+    struct PanicAccumulator;
+
+    impl Accumulator for PanicAccumulator {
+        fn update_batch(&mut self, _values: &[ArrayRef]) -> Result<()> {
+            unimplemented!()
+        }
+        fn evaluate(&mut self) -> Result<ScalarValue> {
+            unimplemented!()
+        }
+        fn size(&self) -> usize {
+            size_of::<Self>()
+        }
+        fn state(&mut self) -> Result<Vec<ScalarValue>> {
+            unimplemented!()
+        }
+        fn merge_batch(&mut self, _states: &[ArrayRef]) -> Result<()> {
+            unimplemented!()
+        }
+    }
+
+    /// Distinguishable accumulators: the plain one fails, the sliding one succeeds.
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct SlidingOnlyUdf {
+        signature: Signature,
+    }
+
+    impl SlidingOnlyUdf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::uniform(
+                    1,
+                    vec![DataType::Float64],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for SlidingOnlyUdf {
+        fn name(&self) -> &str {
+            "sliding_only"
+        }
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+        fn return_type(&self, _args: &[DataType]) -> Result<DataType> {
+            Ok(DataType::Int64)
+        }
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            not_impl_err!("no plain accumulator")
+        }
+        fn create_sliding_accumulator(
+            &self,
+            _args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            Ok(Box::new(PanicAccumulator))
+        }
+        fn state_fields(&self, _args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
+            unimplemented!()
+        }
+    }
+
+    #[test]
+    fn test_aliased_udaf_forwards_create_sliding_accumulator() {
+        let udaf = AggregateUDF::from(SlidingOnlyUdf::new()).with_aliases(["some_alias"]);
+
+        let schema = Schema::empty();
+        let args = || AccumulatorArgs {
+            return_field: Arc::new(Field::new("f", DataType::Int64, true)),
+            schema: &schema,
+            expr_fields: &[],
+            ignore_nulls: false,
+            order_bys: &[],
+            is_reversed: false,
+            name: "sliding_only",
+            is_distinct: false,
+            exprs: &[],
+        };
+
+        // Asserting both directions proves the wrapper distinguishes the two
+        // methods rather than routing both to the same one.
+        let sliding = udaf.create_sliding_accumulator(args());
+        assert!(
+            sliding.is_ok(),
+            "aliased UDAF must forward create_sliding_accumulator to the inner UDAF, got: {:?}",
+            sliding.err()
+        );
+        assert!(udaf.accumulator(args()).is_err());
+
+        assert!(udaf.aliases().iter().any(|a| a == "some_alias"));
+    }
+
     #[test]
     fn test_partial_eq() {
         let a1 = AggregateUDF::from(AMeanUdf::new());
@@ -1874,5 +2002,38 @@ mod test {
         let hasher = &mut DefaultHasher::new();
         value.hash(hasher);
         hasher.finish()
+    }
+
+    #[test]
+    fn test_default_state_fields_namespaces_ordering_fields() -> Result<()> {
+        let udf = DefaultStateFieldsUdf::new();
+
+        let input_fields = vec![Arc::new(Field::new("value", DataType::Float64, true))];
+
+        let ordering_fields = vec![
+            Arc::new(Field::new("timestamp@0", DataType::Int64, true)),
+            Arc::new(Field::new("timestamp@0", DataType::Int64, true)),
+        ];
+
+        let fields = udf.state_fields(StateFieldsArgs {
+            name: "my_agg(value)",
+            input_fields: &input_fields,
+            return_field: Arc::new(Field::new("result", DataType::Float64, true)),
+            ordering_fields: &ordering_fields,
+            is_distinct: false,
+        })?;
+
+        let names: Vec<_> = fields.iter().map(|f| f.name().as_str()).collect();
+
+        assert_eq!(
+            names,
+            vec![
+                "my_agg(value)[value]",
+                "my_agg(value)[ordering_0]",
+                "my_agg(value)[ordering_1]",
+            ]
+        );
+
+        Ok(())
     }
 }

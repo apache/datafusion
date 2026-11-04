@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! See `main.rs` for how to run it.
 //!
@@ -50,11 +37,11 @@ use datafusion::execution::context::SessionContext;
 use datafusion::execution::object_store::ObjectStoreUrl;
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::PhysicalExpr;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::prelude::SessionConfig;
-use datafusion_physical_expr_adapter::{
+use datafusion::physical_expr_adapter::{
     DefaultPhysicalExprAdapterFactory, PhysicalExprAdapter, PhysicalExprAdapterFactory,
 };
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::SessionConfig;
 use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_proto_converter,
     physical_plan_to_bytes_with_proto_converter,
@@ -364,6 +351,11 @@ impl PhysicalProtoConverterExtension for AdapterPreservingCodec {
                     PhysicalExtensionNode {
                         node: payload_bytes,
                         inputs: vec![inner_proto],
+                        // This converter recognizes its own nodes by the marker
+                        // inside the payload, so it needs no `plan_name`
+                        // discriminator. Plans that decode through the session
+                        // registry set it to their `PLAN_NAME` instead.
+                        plan_name: None,
                     },
                 )),
             });

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -170,7 +157,7 @@ fn initcap<T: OffsetSizeTrait>(args: &[ArrayRef]) -> Result<ArrayRef> {
     let len = string_array.len();
     let mut builder = GenericStringArrayBuilder::<T>::with_capacity(
         len,
-        string_array.value_data().len(),
+        offset_span_len(string_array.offsets()),
     );
 
     let mut container = String::new();
@@ -306,7 +293,7 @@ fn initcap_string(input: &str, container: &mut String) {
 #[cfg(test)]
 mod tests {
     use crate::unicode::initcap::InitcapFunc;
-    use crate::utils::test::test_function;
+    use crate::utils::test::{sliced_byte_array, test_function};
     use arrow::array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray};
     use arrow::datatypes::DataType::{Utf8, Utf8View};
     use datafusion_common::{Result, ScalarValue};
@@ -517,6 +504,19 @@ mod tests {
         // The output values buffer should be compact
         assert_eq!(result.offsets().first(), 0);
         assert_eq!(result.value_data().len(), result.offsets().last() as usize);
+        Ok(())
+    }
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        for data_type in [Utf8, arrow::datatypes::DataType::LargeUtf8] {
+            let input = sliced_byte_array(&[Some("aé,b"), None], &data_type)?;
+            for len in [0, 2] {
+                let result = super::initcap_array(&input.slice(0, len))?;
+                assert_eq!(result.len(), len);
+                assert!(result.get_buffer_memory_size() < 1024);
+            }
+        }
         Ok(())
     }
 }

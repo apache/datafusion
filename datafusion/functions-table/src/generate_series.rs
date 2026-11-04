@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::timezone::Tz;
 use arrow::array::types::TimestampNanosecondType;
@@ -39,6 +26,9 @@ use std::fmt;
 use std::str::FromStr;
 use std::sync::Arc;
 
+#[cfg(feature = "proto")]
+pub mod proto;
+
 /// Empty generator that produces no rows - used when series arguments contain null values
 #[derive(Debug, Clone)]
 pub struct Empty {
@@ -62,6 +52,23 @@ impl LazyBatchGenerator for Empty {
 
     fn reset_state(&self) -> Arc<RwLock<dyn LazyBatchGenerator>> {
         Arc::new(RwLock::new(Empty { name: self.name }))
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+    ) -> Result<Option<datafusion_proto_models::protobuf::GenerateSeriesNode>> {
+        use datafusion_proto_models::protobuf;
+        Ok(Some(protobuf::GenerateSeriesNode {
+            schema: None,
+            // Preserve the batch size used by the legacy empty generator codec.
+            target_batch_size: 8192,
+            args: Some(protobuf::generate_series_node::Args::ContainsNull(
+                protobuf::GenerateSeriesArgsContainsNull {
+                    name: proto::encode_name(self.name)? as i32,
+                },
+            )),
+        }))
     }
 }
 
@@ -99,6 +106,22 @@ pub trait SeriesValue: fmt::Debug + Clone + Send + Sync + 'static {
 
     /// Display the value for debugging
     fn display_value(&self) -> String;
+
+    /// Encode the arguments of a series with this value type.
+    ///
+    /// Implementations without a built-in wire representation return `None`,
+    /// allowing the owning plan to use an extension codec instead.
+    #[cfg(feature = "proto")]
+    fn try_to_proto_args(
+        &self,
+        _end: &Self,
+        _step: &Self::StepType,
+        _include_end: bool,
+        _name: &str,
+    ) -> Result<Option<datafusion_proto_models::protobuf::generate_series_node::Args>>
+    {
+        Ok(None)
+    }
 }
 
 impl SeriesValue for i64 {
@@ -140,6 +163,27 @@ impl SeriesValue for i64 {
 
     fn display_value(&self) -> String {
         self.to_string()
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto_args(
+        &self,
+        end: &Self,
+        step: &Self::StepType,
+        include_end: bool,
+        name: &str,
+    ) -> Result<Option<datafusion_proto_models::protobuf::generate_series_node::Args>>
+    {
+        use datafusion_proto_models::protobuf;
+        Ok(Some(protobuf::generate_series_node::Args::Int64Args(
+            protobuf::GenerateSeriesArgsInt64 {
+                start: *self,
+                end: *end,
+                step: *step,
+                include_end,
+                name: proto::encode_name(name)? as i32,
+            },
+        )))
     }
 }
 
@@ -236,6 +280,46 @@ impl SeriesValue for TimestampValue {
 
     fn display_value(&self) -> String {
         self.value.to_string()
+    }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto_args(
+        &self,
+        end: &Self,
+        step: &Self::StepType,
+        include_end: bool,
+        name: &str,
+    ) -> Result<Option<datafusion_proto_models::protobuf::generate_series_node::Args>>
+    {
+        use datafusion_proto_models::protobuf;
+        let step = Some(datafusion_proto_common::IntervalMonthDayNanoValue {
+            months: step.months,
+            days: step.days,
+            nanos: step.nanoseconds,
+        });
+        let name = proto::encode_name(name)? as i32;
+        let args = match &self.tz_str {
+            Some(tz) => protobuf::generate_series_node::Args::TimestampArgs(
+                protobuf::GenerateSeriesArgsTimestamp {
+                    start: self.value,
+                    end: end.value,
+                    step,
+                    include_end,
+                    name,
+                    tz: Some(tz.to_string()),
+                },
+            ),
+            None => protobuf::generate_series_node::Args::DateArgs(
+                protobuf::GenerateSeriesArgsDate {
+                    start: self.value,
+                    end: end.value,
+                    step,
+                    include_end,
+                    name,
+                },
+            ),
+        };
+        Ok(Some(args))
     }
 }
 
@@ -509,6 +593,33 @@ impl<T: SeriesValue> LazyBatchGenerator for GenericSeriesState<T> {
         new.finished = false;
         Arc::new(RwLock::new(new))
     }
+
+    #[cfg(feature = "proto")]
+    fn try_to_proto(
+        &self,
+    ) -> Result<Option<datafusion_proto_models::protobuf::GenerateSeriesNode>> {
+        use datafusion_common::utils::usize_to_wire;
+        use datafusion_proto_models::protobuf;
+
+        let Some(args) = self.start.try_to_proto_args(
+            &self.end,
+            &self.step,
+            self.include_end,
+            self.name,
+        )?
+        else {
+            return Ok(None);
+        };
+        Ok(Some(protobuf::GenerateSeriesNode {
+            schema: None,
+            target_batch_size: usize_to_wire(
+                self.batch_size,
+                "GenerateSeriesNode",
+                "target_batch_size",
+            )?,
+            args: Some(args),
+        }))
+    }
 }
 
 impl<T: SeriesValue> fmt::Display for GenericSeriesState<T> {
@@ -583,8 +694,14 @@ fn timestamp_arg_to_nanos(
 }
 
 fn validate_interval_step(step: IntervalMonthDayNano) -> Result<()> {
-    if step.months == 0 && step.days == 0 && step.nanoseconds == 0 {
+    let has_positive_component = step.months > 0 || step.days > 0 || step.nanoseconds > 0;
+    let has_negative_component = step.months < 0 || step.days < 0 || step.nanoseconds < 0;
+
+    if !has_positive_component && !has_negative_component {
         return plan_err!("Step interval cannot be zero");
+    }
+    if has_positive_component && has_negative_component {
+        return plan_err!("Step interval cannot have mixed signs");
     }
 
     Ok(())
@@ -659,7 +776,7 @@ impl TableFunctionImpl for GenerateSeriesFuncImpl {
 
 impl GenerateSeriesFuncImpl {
     fn call_int64(&self, exprs: &[Expr]) -> Result<Arc<dyn TableProvider>> {
-        let mut normalize_args = Vec::new();
+        let mut normalize_args = Vec::with_capacity(exprs.len());
         for (expr_index, expr) in exprs.iter().enumerate() {
             match expr {
                 Expr::Literal(ScalarValue::Null, _) => {}
@@ -939,13 +1056,24 @@ impl TableFunctionImpl for RangeFunc {
 mod generate_series_tests {
     use std::sync::Arc;
 
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::datatypes::{DataType, Field, IntervalMonthDayNano, Schema};
     use datafusion_common::Result;
     use datafusion_physical_plan::memory::LazyBatchGenerator;
 
     use crate::generate_series::{
-        GenSeriesArgs, GenerateSeriesTable, GenericSeriesState,
+        GenSeriesArgs, GenerateSeriesTable, GenericSeriesState, validate_interval_step,
     };
+
+    #[test]
+    fn rejects_mixed_sign_interval_steps() {
+        assert!(validate_interval_step(IntervalMonthDayNano::new(1, -29, 0)).is_err());
+        assert!(validate_interval_step(IntervalMonthDayNano::new(-1, 29, 0)).is_err());
+
+        validate_interval_step(IntervalMonthDayNano::new(1, 29, 1))
+            .expect("positive interval should be valid");
+        validate_interval_step(IntervalMonthDayNano::new(-1, -29, -1))
+            .expect("negative interval should be valid");
+    }
 
     #[test]
     fn generate_series_rejects_zero_batch_size() {

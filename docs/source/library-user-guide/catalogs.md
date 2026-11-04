@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Catalogs, Schemas, and Tables
@@ -304,6 +291,74 @@ impl CatalogProviderList for MemoryCatalogProviderList {
 ```
 
 Like other traits, it also maintains the mapping of the Catalog's name to the CatalogProvider.
+
+## Catalog Provider Factories
+
+The catalogs above are all registered programmatically, ahead of time,
+before a query ever runs. Sometimes it is useful to let users attach a
+catalog dynamically from SQL instead — for example, a catalog backed by a
+remote catalog service such as an Iceberg REST catalog. This is exactly
+analogous to how [`TableProviderFactory`] lets `CREATE EXTERNAL TABLE`
+create a `TableProvider` "on the fly": `CatalogProviderFactory` lets
+`CREATE EXTERNAL CATALOG ... STORED AS <catalog_type> ...` create a
+`CatalogProvider` on the fly.
+
+To support `CREATE EXTERNAL CATALOG`, implement `CatalogProviderFactory`:
+
+```rust
+use std::sync::Arc;
+use async_trait::async_trait;
+use datafusion::catalog::{CatalogProvider, CatalogProviderFactory, MemoryCatalogProvider, Session};
+use datafusion::common::Result;
+use datafusion::logical_expr::CreateExternalCatalog;
+
+#[derive(Debug)]
+struct MyCatalogProviderFactory {}
+
+#[async_trait]
+impl CatalogProviderFactory for MyCatalogProviderFactory {
+    async fn create(
+        &self,
+        _state: &dyn Session,
+        cmd: &CreateExternalCatalog,
+    ) -> Result<Arc<dyn CatalogProvider>> {
+        // `cmd.location` and `cmd.options` carry whatever was supplied in the
+        // `LOCATION` and `OPTIONS` clauses of the SQL statement; a real
+        // implementation would use them to connect to the remote catalog
+        // service. This example just returns an empty in-memory catalog.
+        Ok(Arc::new(MemoryCatalogProvider::new()))
+    }
+}
+```
+
+Then register it on the `SessionState`, keyed by the `STORED AS` value that
+should resolve to it:
+
+```rust,ignore
+use datafusion::execution::session_state::SessionStateBuilder;
+
+let state = SessionStateBuilder::new()
+    .with_default_features()
+    .with_catalog_factory("MY_CATALOG_TYPE".to_string(), Arc::new(MyCatalogProviderFactory {}))
+    .build();
+```
+
+With the factory registered, users can attach and detach the catalog from
+SQL:
+
+```sql
+CREATE EXTERNAL CATALOG my_catalog
+STORED AS MY_CATALOG_TYPE
+LOCATION 's3://bucket/warehouse'
+OPTIONS ('warehouse' 'my_catalog');
+
+DROP CATALOG my_catalog;
+```
+
+See [DDL: `CREATE EXTERNAL CATALOG`](../user-guide/sql/ddl.md#create-external-catalog)
+for the full SQL syntax.
+
+[`tableproviderfactory`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.TableProviderFactory.html
 
 ## Recap
 

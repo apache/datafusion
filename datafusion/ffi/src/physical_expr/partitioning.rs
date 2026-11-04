@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -33,8 +20,9 @@ use crate::physical_expr::sort::FFI_PhysicalSortExpr;
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_RangePartitioning {
-    split_points: SVec<SVec<WrappedArray>>,
+    samples: SVec<SVec<WrappedArray>>,
     ordering: SVec<FFI_PhysicalSortExpr>,
+    partition_count: usize,
 }
 
 /// A stable struct for sharing [`Partitioning`] across FFI boundaries.
@@ -62,8 +50,8 @@ impl From<&Partitioning> for FFI_Partitioning {
             }
             Partitioning::Range(range) => {
                 // Producer-side conversion should be infallible at ABI boundary
-                let split_points = range
-                    .split_points()
+                let samples = range
+                    .samples()
                     .iter()
                     .map(|split_point| {
                         split_point
@@ -83,8 +71,9 @@ impl From<&Partitioning> for FFI_Partitioning {
                     .map(FFI_PhysicalSortExpr::from)
                     .collect();
                 Self::Range(FFI_RangePartitioning {
-                    split_points,
+                    samples,
                     ordering,
+                    partition_count: range.partition_count(),
                 })
             }
             Partitioning::UnknownPartitioning(size) => Self::UnknownPartitioning(*size),
@@ -105,8 +94,8 @@ impl TryFrom<FFI_Partitioning> for Partitioning {
                 Self::Hash(exprs, size)
             }
             FFI_Partitioning::Range(range) => {
-                let split_points = range
-                    .split_points
+                let samples = range
+                    .samples
                     .into_iter()
                     .map(|split_point| {
                         split_point
@@ -126,7 +115,11 @@ impl TryFrom<FFI_Partitioning> for Partitioning {
                         )
                     })?;
 
-                Self::Range(RangePartitioning::try_new(ordering, split_points)?)
+                Self::Range(RangePartitioning::try_new_with_samples(
+                    ordering,
+                    samples,
+                    range.partition_count,
+                )?)
             }
             FFI_Partitioning::UnknownPartitioning(size) => {
                 Self::UnknownPartitioning(size)
@@ -211,10 +204,42 @@ mod tests {
     }
 
     #[test]
+    fn round_trip_ffi_sampled_range_partitioning() -> Result<()> {
+        let ordering = LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(
+            Column::new("a", 0),
+        ))])
+        .expect("non-empty ordering");
+        let samples = [10, 20, 30, 40, 50]
+            .into_iter()
+            .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+            .collect();
+        let partitioning = Partitioning::Range(RangePartitioning::try_new_with_samples(
+            ordering, samples, 3,
+        )?);
+
+        let ffi_partitioning: FFI_Partitioning = (&partitioning).into();
+        let returned: Partitioning = ffi_partitioning.try_into()?;
+        let Partitioning::Range(returned) = returned else {
+            panic!("expected range partitioning");
+        };
+        let Partitioning::Range(original) = partitioning else {
+            panic!("expected range partitioning");
+        };
+
+        assert_eq!(returned, original);
+        assert_eq!(returned.samples(), original.samples());
+        assert_eq!(returned.max_partition_count(), 6);
+        assert_eq!(returned.partition_count(), 3);
+
+        Ok(())
+    }
+
+    #[test]
     fn ffi_range_partitioning_rejects_empty_ordering() {
         let ffi_partitioning = FFI_Partitioning::Range(FFI_RangePartitioning {
-            split_points: SVec::new(),
+            samples: SVec::new(),
             ordering: SVec::new(),
+            partition_count: 1,
         });
 
         let err = Partitioning::try_from(ffi_partitioning).unwrap_err();

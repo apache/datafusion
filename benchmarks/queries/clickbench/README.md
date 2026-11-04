@@ -1,3 +1,9 @@
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+-->
+
 # ClickBench queries
 
 This directory contains queries for the ClickBench benchmark https://benchmark.clickhouse.com/
@@ -260,7 +266,6 @@ FROM hits
 WHERE "URL" < 'zzzz';
 ```
 
-
 ### Q14: Grouped `COUNT(DISTINCT <string>)` beside a non-distinct `COUNT(*)`
 
 **Question**: "For the top 10 search phrases by hit count, how many distinct
@@ -300,6 +305,34 @@ LIMIT 10;
 ```
 
 
+
+### Q15: Correlation of ad slot dimensions per user
+
+**Question**: "How correlated are the width and height of the screens each user browses from?"
+
+**Important Query Properties**: `covar_samp` over a very high cardinality `GROUP BY` (about 17.6M distinct `UserID`s). Q16 is the low cardinality version of this query.
+
+```sql
+SELECT MAX(c) FROM (
+    SELECT covar_samp("ResolutionWidth", "ResolutionHeight") as c
+    FROM hits
+    GROUP BY "UserID"
+);
+```
+
+### Q16: Correlation of ad slot dimensions per region
+
+**Question**: "How correlated are the width and height of the screens browsed from in each region?"
+
+**Important Query Properties**: the same `covar_samp` aggregate as Q15, but over about 9,000 distinct `RegionID`s instead of 17.6M. It is the low cardinality version of Q15.
+
+```sql
+SELECT MAX(c) FROM (
+    SELECT covar_samp("ResolutionWidth", "ResolutionHeight") as c
+    FROM hits
+    GROUP BY "RegionID"
+);
+```
 
 ## Data Notes
 

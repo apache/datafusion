@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::borrow::Cow;
 use std::collections::HashMap;
@@ -194,7 +181,9 @@ fn map_deduplicate_keys(
     // in `flat_values` to materialize for each output slot (updated in place
     // on overwrite).
     let mut keys_mask_builder = BooleanBuilder::new();
-    let mut value_indices: Vec<i32> = Vec::new();
+    let mut value_indices: Vec<i32> = Vec::with_capacity(
+        keys_offsets.last().map_or(0, |offset| *offset as usize) - first_keys_offset,
+    );
     let mut key_to_output_idx: HashMap<ScalarValue, usize> = HashMap::new();
     for (row_idx, (next_keys_offset, next_values_offset)) in keys_offsets
         .iter()

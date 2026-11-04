@@ -1,21 +1,7 @@
 #!/usr/bin/env bash
-
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # This script runs all the Rust lints locally the same way the
 # DataFusion CI does
@@ -88,10 +74,10 @@ done
 SCRIPT_NAME="$(basename "${BASH_SOURCE[0]}")"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# `ci/scripts/check_asf_yaml_status_checks.py` runs with `python3` from PATH
-# and imports PyYAML. Report a missing prerequisite before any tool is
-# installed or any formatter runs, and point at `uv run`, which sets up the
-# Python dependencies from the uv workspace.
+# `ci/scripts/check_asf_yaml_status_checks.py` and `check_rust_workflow_skips.py`
+# run with `python3` from PATH and import PyYAML. Report a missing prerequisite
+# before any tool is installed or any formatter runs, and point at `uv run`,
+# which sets up the Python dependencies from the uv workspace.
 ensure_python_with_yaml() {
   if ! command -v python3 &> /dev/null; then
     echo "[${SCRIPT_NAME}] python3 was not found on PATH. Please run the suite through uv, which provides Python and its packages: uv run ./dev/rust_lint.sh" >&2
@@ -130,17 +116,23 @@ declare -a WRITE_STEPS=(
   "ci/scripts/typos_check.sh|true"
   "ci/scripts/doc_prettier_check.sh|true"
   "ci/scripts/check_examples_docs.sh|true"
+  "ci/scripts/check_generated_docs.sh|true"
 )
 
 declare -a READONLY_STEPS=(
   "ci/scripts/check_no_cargo_install_in_workflows.sh|false"
   "ci/scripts/check_asf_yaml_status_checks.py|false"
+  "ci/scripts/check_rust_workflow_skips.py|false"
+  "ci/scripts/test_rust_workflow_skips.py|false"
+  "ci/scripts/test_fork_ci_status.cjs|false"
+  "ci/scripts/test_cancel_merge_queue_runs.cjs|false"
   "ci/scripts/check_large_files.sh|false"
   "ci/scripts/markdown_link_check.sh|false"
   "ci/scripts/security_audit.sh|false"
   "ci/scripts/check_circular_dependencies.sh|false"
   "ci/scripts/check_unused_dependencies.sh|false"
   "ci/scripts/rust_docs.sh|false"
+  "ci/scripts/check_docs_html.sh|false"
 )
 
 for entry in "${WRITE_STEPS[@]}" "${READONLY_STEPS[@]}"; do

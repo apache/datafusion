@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Development instructions
@@ -35,7 +22,7 @@ cargo test --all-targets
 
 ## Running Storage Integration Tests
 
-By default, storage integration tests are not run. These tests use the `testcontainers` crate to start up a local MinIO server using Docker on port 9000.
+By default, storage integration tests are not run. These tests use the `testcontainers` crate to start up a local RustFS server using Docker with a dynamically assigned host port.
 
 To run them you will need to set `TEST_STORAGE_INTEGRATION`:
 
@@ -47,8 +34,8 @@ For some of the tests, [snapshots](https://datafusion.apache.org/contributor-gui
 
 ### AWS
 
-S3 integration is tested against [Minio](https://github.com/minio/minio) with [TestContainers](https://github.com/testcontainers/testcontainers-rs)
-This requires Docker to be running on your machine and port 9000 to be free.
+S3 integration is tested against [RustFS](https://github.com/rustfs/rustfs) with [TestContainers](https://github.com/testcontainers/testcontainers-rs)
+This requires Docker to be running on your machine.
 
 If you see an error mentioning "failed to load IMDS session token" such as
 

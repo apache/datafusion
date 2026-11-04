@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashMap;
 use std::fmt::Write as _;
@@ -24,6 +11,7 @@ use super::{DFSqlLogicTestError, error::Result, normalize};
 use crate::engines::currently_executed_sql::CurrentlyExecutingSqlTracker;
 use crate::engines::output::{DFColumnType, DFOutput};
 use crate::is_spark_path;
+use crate::memory_drift::rewrap_replaced_pool;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::physical_plan::common::collect;
@@ -156,6 +144,7 @@ impl sqllogictest::AsyncDB for DataFusion {
         let start = Instant::now();
         let result = run_query(&self.ctx, is_spark_path(&self.relative_path), sql).await;
         let duration = start.elapsed();
+        rewrap_replaced_pool(&self.ctx, &self.relative_path.display().to_string());
 
         self.currently_executing_sql_tracker.remove_sql(tracked_sql);
 

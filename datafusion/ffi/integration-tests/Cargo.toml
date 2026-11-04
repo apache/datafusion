@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+[package]
+name = "datafusion-ffi-integration-tests"
+description = "Cross-library integration tests for datafusion-ffi"
+version = "0.1.0"
+edition = { workspace = true }
+license = { workspace = true }
+publish = false
+
+[lints]
+workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+integration-tests = ["datafusion-ffi/integration-tests"]
+
+[dependencies]
+datafusion-ffi = { workspace = true }
+
+[dev-dependencies]
+arrow = { workspace = true }
+arrow-schema = { workspace = true }
+datafusion = { workspace = true, default-features = false, features = ["sql"] }
+datafusion-catalog = { workspace = true }
+datafusion-common = { workspace = true }
+datafusion-execution = { workspace = true }
+datafusion-expr = { workspace = true }
+datafusion-physical-expr-common = { workspace = true }
+datafusion-physical-optimizer = { workspace = true }
+datafusion-physical-plan = { workspace = true }
+datafusion-proto = { workspace = true, default-features = false }
+datafusion-session = { workspace = true }
+tokio = { workspace = true }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests for object store access patterns with [`ListingTable`]\
 //!
@@ -22,18 +9,24 @@
 //! various operations (table creation, queries with and without predicates)
 //! to verify the expected object store access patterns.
 //!
+//! File-level Parquet access tests live in
+//! [`datafusion/core/tests/parquet/io`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/parquet/io/mod.rs).
+//!
 //! [`ListingTable`]: datafusion::datasource::listing::ListingTable
 
 use arrow::array::{ArrayRef, Int32Array, RecordBatch};
+use arrow::datatypes::{DataType, Field, Schema};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::prelude::{
     CsvReadOptions, JsonReadOptions, ParquetReadOptions, SessionContext,
 };
 use datafusion_catalog_listing::{ListingOptions, ListingTable, ListingTableConfig};
+use datafusion_common::assert_batches_eq;
 use datafusion_datasource::ListingTableUrl;
 use datafusion_datasource_csv::CsvFormat;
 use datafusion_datasource_json::JsonFormat;
+use datafusion_execution::cache::TableScopedPath;
 use futures::stream::BoxStream;
 use insta::assert_snapshot;
 use object_store::memory::InMemory;
@@ -201,6 +194,102 @@ async fn multi_query_multi_file_csv_file() {
     - GET  (opts) path=data/file_1.csv
     - GET  (opts) path=data/file_2.csv
     "
+    );
+}
+
+#[tokio::test]
+async fn insert_invalidates_overlapping_unscoped_listings() {
+    let store = Arc::new(InMemory::new());
+    for (path, data) in [
+        ("table/region=US/q1/data.csv", "1\n"),
+        ("table/region=EU/data.csv", "2\n"),
+    ] {
+        store.put(&Path::from(path), data.into()).await.unwrap();
+    }
+    let ctx = SessionContext::new();
+    ctx.runtime_env()
+        .register_object_store(&Url::parse("mem://").unwrap(), store);
+    ctx.sql("SET datafusion.execution.listing_table_ignore_subdirectory = false")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "value",
+        DataType::Int32,
+        false,
+    )]));
+    let cache = ctx
+        .runtime_env()
+        .cache_manager
+        .get_list_files_cache()
+        .unwrap();
+    let tables = [
+        ("root_table", "table"),
+        ("child_table", "table/region=US"),
+        ("descendant_table", "table/region=US/q1"),
+        ("sibling_table", "table/region=EU"),
+    ];
+
+    for (name, path) in tables {
+        // Keep the URLs unscoped so overlapping tables share path-based cache entries.
+        let url = ListingTableUrl::parse(format!("mem:///{path}/")).unwrap();
+        let options =
+            ListingOptions::new(Arc::new(CsvFormat::default().with_has_header(false)))
+                .with_file_extension(".csv");
+        let config = ListingTableConfig::new(url)
+            .with_listing_options(options)
+            .with_schema(Arc::clone(&schema));
+        ctx.register_table(name, Arc::new(ListingTable::try_new(config).unwrap()))
+            .unwrap();
+        ctx.sql(&format!("SELECT * FROM {name}"))
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap();
+        let key = TableScopedPath {
+            table: None,
+            path: Path::from(path),
+        };
+        assert!(cache.get(&key).is_some());
+    }
+
+    ctx.sql("INSERT INTO child_table VALUES (3)")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+
+    for (name, path) in tables {
+        let key = TableScopedPath {
+            table: None,
+            path: Path::from(path),
+        };
+        let cached = cache.get(&key);
+        assert_eq!(cached.is_some(), name == "sibling_table", "{name}");
+    }
+
+    let batches = ctx
+        .sql("SELECT * FROM root_table ORDER BY value")
+        .await
+        .unwrap()
+        .collect()
+        .await
+        .unwrap();
+    assert_batches_eq!(
+        [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 1     |",
+            "| 2     |",
+            "| 3     |",
+            "+-------+"
+        ],
+        &batches
     );
 }
 
@@ -873,6 +962,92 @@ async fn query_single_parquet_file() {
 }
 
 #[tokio::test]
+async fn projected_parquet_ranges_across_files() -> datafusion_common::Result<()> {
+    // Keep both files in one scan partition, and read just the footer when
+    // looking up metadata so those requests are distinct from column chunks.
+    let mut test = Test::new().with_parquet_metadata_size_hint(Some(8));
+    test.query("SET datafusion.execution.target_partitions = 1")
+        .await;
+    // Let the scan enforce LIMIT. Exact row counts would let the planner
+    // discard the second file before the scan starts.
+    test.query("SET datafusion.execution.collect_statistics = false")
+        .await;
+    let mut selected_chunks = vec![];
+    for (path, value) in [("data/a.parquet", 1), ("data/b.parquet", 3)] {
+        let unused: ArrayRef = Arc::new(Int32Array::from(vec![0, 0]));
+        let selected: ArrayRef = Arc::new(Int32Array::from(vec![value, value + 1]));
+        let batch =
+            RecordBatch::try_from_iter([("unused", unused), ("selected", selected)])?;
+        let mut bytes = vec![];
+        // A single data page gives the projected column a single payload range.
+        let props = parquet::file::properties::WriterProperties::builder()
+            .set_dictionary_enabled(false)
+            .build();
+        let mut writer = parquet::arrow::ArrowWriter::try_new(
+            &mut bytes,
+            batch.schema(),
+            Some(props),
+        )?;
+        writer.write(&batch)?;
+        let metadata = writer.close()?;
+        let (start, len) = metadata.row_group(0).column(1).byte_range();
+        selected_chunks.push((Path::from(path), bytes.len() as u64, start..start + len));
+        test = test.with_bytes(path, bytes).await;
+    }
+    let test = test.register_parquet("t", "/data/").await;
+
+    for (query, files_to_read) in [
+        ("SELECT selected FROM t", 2),
+        ("SELECT selected FROM t LIMIT 1", 1),
+    ] {
+        test.object_store.clear_requests();
+        let batches = test.session_context.sql(query).await?.collect().await?;
+        let mut values = vec![];
+        for batch in &batches {
+            values.extend_from_slice(
+                datafusion_common::cast::as_int32_array(batch.column(0))?.values(),
+            );
+        }
+        values.sort_unstable();
+        if files_to_read == 2 {
+            assert_eq!(values, [1, 2, 3, 4]);
+        } else {
+            assert!(matches!(values.as_slice(), [1] | [3]));
+        }
+
+        let requests = test.object_store.recorded_requests();
+        let mut files_read = 0;
+        for (file, size, selected) in &selected_chunks {
+            let mut data_ranges = vec![];
+            for request in &requests {
+                match request {
+                    RequestDetails::GetRanges { path, ranges } if path == file => {
+                        data_ranges.extend_from_slice(ranges);
+                    }
+                    RequestDetails::GetOpts { path, get_options }
+                        if path == file && !get_options.head =>
+                    {
+                        data_ranges.push(match &get_options.range {
+                            Some(range) => range.as_range(*size).unwrap(),
+                            None => 0..*size,
+                        });
+                    }
+                    _ => {}
+                }
+            }
+            // Ignore footer reads. The selected column is the last data chunk.
+            data_ranges.retain(|range| range.start < selected.end);
+            if !data_ranges.is_empty() {
+                assert_eq!(data_ranges, std::slice::from_ref(selected), "{file}");
+                files_read += 1;
+            }
+        }
+        assert_eq!(files_read, files_to_read);
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn query_single_parquet_file_with_single_predicate() {
     let test = Test::new().with_single_file_parquet().await;
     // Note that evaluating predicates requires additional object store requests
@@ -1296,7 +1471,6 @@ impl Display for RequestDetails {
                 if get_options.head {
                     write!(f, " head=true")?;
                 }
-                Ok(())
             }
             RequestDetails::GetRanges { path, ranges } => {
                 write!(f, "GET  (ranges) path={path}")?;
@@ -1309,30 +1483,27 @@ impl Display for RequestDetails {
                         write!(f, "{}", display_range(range))?;
                     }
                 }
-                Ok(())
             }
             RequestDetails::List { prefix } => {
                 write!(f, "LIST")?;
                 if let Some(prefix) = prefix {
                     write!(f, " prefix={prefix}")?;
                 }
-                Ok(())
             }
             RequestDetails::ListWithDelimiter { prefix } => {
                 write!(f, "LIST (with delimiter)")?;
                 if let Some(prefix) = prefix {
                     write!(f, " prefix={prefix}")?;
                 }
-                Ok(())
             }
             RequestDetails::ListWithOffset { prefix, offset } => {
                 write!(f, "LIST (with offset) offset={offset}")?;
                 if let Some(prefix) = prefix {
                     write!(f, " prefix={prefix}")?;
                 }
-                Ok(())
             }
         }
+        Ok(())
     }
 }
 

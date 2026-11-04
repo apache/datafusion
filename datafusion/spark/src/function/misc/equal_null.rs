@@ -1,0 +1,86 @@
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::utils::take_function_args;
+use datafusion_common::{Result, plan_err};
+use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::type_coercion::binary::comparison_coercion;
+use datafusion_expr::{
+    ColumnarValue, Expr, Operator, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility, binary_expr,
+};
+use datafusion_physical_expr_common::datum::apply_cmp;
+use std::sync::Arc;
+
+#[derive(Debug, PartialEq, Eq, Hash)]
+pub struct SparkEqualNull {
+    signature: Signature,
+}
+
+impl Default for SparkEqualNull {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SparkEqualNull {
+    pub fn new() -> Self {
+        Self {
+            signature: Signature::user_defined(Volatility::Immutable),
+        }
+    }
+}
+
+impl ScalarUDFImpl for SparkEqualNull {
+    fn name(&self) -> &str {
+        "equal_null"
+    }
+
+    fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
+    fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
+        let [lhs, rhs] = arg_types else {
+            return plan_err!(
+                "Function 'equal_null' expects 2 arguments but received {}",
+                arg_types.len()
+            );
+        };
+        // simplify() emits a comparison, and the type coercion pass has already run by then
+        let Some(common) = comparison_coercion(lhs, rhs) else {
+            return plan_err!(
+                "For function 'equal_null' {lhs} and {rhs} are not comparable"
+            );
+        };
+        Ok(vec![common.clone(), common])
+    }
+
+    fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+        Ok(DataType::Boolean)
+    }
+
+    fn return_field_from_args(&self, _args: ReturnFieldArgs) -> Result<FieldRef> {
+        Ok(Arc::new(Field::new(self.name(), DataType::Boolean, false)))
+    }
+
+    fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
+        let [lhs, rhs] = take_function_args(self.name(), args.args)?;
+        apply_cmp(Operator::IsNotDistinctFrom, &lhs, &rhs)
+    }
+
+    fn simplify(
+        &self,
+        args: Vec<Expr>,
+        _info: &SimplifyContext,
+    ) -> Result<ExprSimplifyResult> {
+        let [lhs, rhs] = take_function_args(self.name(), args)?;
+        Ok(ExprSimplifyResult::Simplified(binary_expr(
+            lhs,
+            Operator::IsNotDistinctFrom,
+            rhs,
+        )))
+    }
+}

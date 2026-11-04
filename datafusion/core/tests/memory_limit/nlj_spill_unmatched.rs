@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Memory-limited `NestedLoopJoinExec` must not drop unmatched rows.
 //!
@@ -27,6 +14,7 @@ use std::sync::Arc;
 
 use arrow::array::{Int32Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
+use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::*;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 
@@ -57,7 +45,19 @@ fn table(rows: usize, value_column: &str, seed: u64) -> RecordBatch {
     .unwrap()
 }
 
+/// Total `spill_count` of `plan` and everything below it.
+fn spill_count(plan: &Arc<dyn ExecutionPlan>) -> usize {
+    let own = plan
+        .metrics()
+        .and_then(|metrics| metrics.spill_count())
+        .unwrap_or(0);
+    own + plan.children().into_iter().map(spill_count).sum::<usize>()
+}
+
 /// Run `sql`, optionally under a memory limit, returning the sorted rows.
+///
+/// The limit is there to make the join spill, so a run under it that does not
+/// spill would compare the in-memory path with itself.
 async fn run(sql: &str, memory_limit: Option<usize>) -> Vec<String> {
     let config = SessionConfig::new()
         .with_target_partitions(1)
@@ -73,7 +73,20 @@ async fn run(sql: &str, memory_limit: Option<usize>) -> Vec<String> {
     ctx.register_batch("l", table(200, "v", 11)).unwrap();
     ctx.register_batch("r", table(90, "w", 16)).unwrap();
 
-    let batches = ctx.sql(sql).await.unwrap().collect().await.unwrap();
+    let plan = ctx
+        .sql(sql)
+        .await
+        .unwrap()
+        .create_physical_plan()
+        .await
+        .unwrap();
+    let batches = collect(Arc::clone(&plan), ctx.task_ctx()).await.unwrap();
+    assert_eq!(
+        spill_count(&plan) > 0,
+        memory_limit.is_some(),
+        "unexpected spilling with memory limit {memory_limit:?}"
+    );
+
     let mut rows = vec![];
     for batch in &batches {
         for row in 0..batch.num_rows() {
