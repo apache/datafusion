@@ -1139,96 +1139,6 @@ mod tests {
     }
 
     #[test]
-    fn nested_coercion_leaves_binary_list_and_struct_children_to_the_validating_cast() {
-        use arrow::array::{
-            Array, ArrayRef, AsArray, BinaryArray, ListArray, StructArray,
-        };
-        use arrow::buffer::OffsetBuffer;
-        use arrow::record_batch::RecordBatch;
-        use bytes::Bytes;
-        use parquet::arrow::ArrowWriter;
-        use parquet::arrow::arrow_reader::{
-            ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
-        };
-
-        // Invalid UTF-8 in a binary list element and struct field must stay
-        // binary, for the validating cast to reject.
-        let values: ArrayRef =
-            Arc::new(BinaryArray::from(vec![b"one".as_slice(), &[0xff]]));
-        let list = ListArray::new(
-            Arc::new(Field::new("element", DataType::Binary, true)),
-            OffsetBuffer::new(vec![0, 2].into()),
-            Arc::clone(&values),
-            None,
-        );
-        let strukt = StructArray::from(vec![(
-            Arc::new(Field::new("value", DataType::Binary, true)),
-            Arc::new(BinaryArray::from(vec![&[0xff_u8][..]])) as ArrayRef,
-        )]);
-        let batch = RecordBatch::try_from_iter([
-            ("l", Arc::new(list) as ArrayRef),
-            ("s", Arc::new(strukt) as ArrayRef),
-        ])
-        .unwrap();
-
-        let mut bytes = Vec::new();
-        let mut writer = ArrowWriter::try_new(&mut bytes, batch.schema(), None).unwrap();
-        writer.write(&batch).unwrap();
-        writer.close().unwrap();
-        let bytes = Bytes::from(bytes);
-
-        let file_schema = ParquetRecordBatchReaderBuilder::try_new(bytes.clone())
-            .unwrap()
-            .schema()
-            .clone();
-        let table_schema = Schema::new(vec![
-            Field::new(
-                "l",
-                DataType::List(Arc::new(Field::new("element", DataType::Utf8, true))),
-                true,
-            ),
-            Field::new_struct("s", vec![Field::new("value", DataType::Utf8, true)], true),
-        ]);
-
-        // Neither nested binary field is coerced
-        assert_eq!(
-            apply_file_schema_type_coercions(&table_schema, &file_schema),
-            None
-        );
-
-        // So the decoded batch is valid
-        let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
-            bytes,
-            ArrowReaderOptions::new().with_schema(file_schema),
-        )
-        .unwrap()
-        .build()
-        .unwrap();
-        let decoded = reader.next().unwrap().unwrap();
-        for column in decoded.columns() {
-            column.to_data().validate_full().unwrap();
-        }
-        assert_eq!(
-            decoded
-                .column(0)
-                .as_list::<i32>()
-                .values()
-                .as_binary::<i32>()
-                .value(1),
-            [0xff]
-        );
-        assert_eq!(
-            decoded
-                .column(1)
-                .as_struct()
-                .column(0)
-                .as_binary::<i32>()
-                .value(0),
-            [0xff]
-        );
-    }
-
-    #[test]
     fn nested_coercion_list_inside_struct() {
         let file_schema = Schema::new(vec![Field::new_struct(
             "s",
@@ -1386,18 +1296,28 @@ mod tests {
             }
         }
         // Nested binary fields are never read as strings
+        let list_schema = |data_type| {
+            Schema::new(vec![Field::new_list(
+                "list",
+                Field::new_list_field(data_type, true),
+                true,
+            )])
+        };
         for table_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
             for file_type in [
                 DataType::Binary,
                 DataType::LargeBinary,
                 DataType::BinaryView,
             ] {
-                let file_schema = nested_schema(file_type);
-                let table_schema = nested_schema(table_type.clone());
-                assert_eq!(
-                    apply_file_schema_type_coercions(&table_schema, &file_schema),
-                    None
-                );
+                for schema in [nested_schema, list_schema] {
+                    assert_eq!(
+                        apply_file_schema_type_coercions(
+                            &schema(table_type.clone()),
+                            &schema(file_type.clone())
+                        ),
+                        None
+                    );
+                }
             }
         }
         let file_schema = nested_schema(DataType::Int32);
