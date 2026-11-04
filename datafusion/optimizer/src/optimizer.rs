@@ -240,7 +240,7 @@ impl OptimizerConfig for OptimizerContext {
 ///
 /// # Built-in Optimizer Rules
 ///
-/// The rules are applied in this order. Note: the list may change between
+/// The rules are applied in the following order. Note: the list may change between
 /// releases.
 ///
 /// | rule (name in EXPLAIN plan)               | struct name                      | summary                                                                                                                          |
@@ -258,7 +258,7 @@ impl OptimizerConfig for OptimizerContext {
 /// | `eliminate_duplicated_expr`               | [`EliminateDuplicatedExpr`]      | Removes duplicate expressions from projections, aggregates, and similar operators.                                               |
 /// | `eliminate_filter`                        | [`EliminateFilter`]              | Drops always-true filters and replaces always-false or NULL filters with an empty relation.                                      |
 /// | `eliminate_cross_join`                    | [`EliminateCrossJoin`]           | Replaces cross joins with inner joins when a filter supplies join keys.                                                          |
-/// | `eliminate_limit`                         | [`EliminateLimit`]               | Removes no-op limits.                                                                                                            |
+/// | `eliminate_limit`                         | [`EliminateLimit`]               | Replaces `LIMIT 0` with an empty relation and removes no-op limits and offsets.                                                  |
 /// | `propagate_empty_relation`                | [`PropagateEmptyRelation`]       | Collapses operators whose inputs produce no rows.                                                                                |
 /// | `filter_null_join_keys`                   | [`FilterNullJoinKeys`]           | Adds `IS NOT NULL` filters on nullable equijoin keys.                                                                            |
 /// | `eliminate_outer_join`                    | [`EliminateOuterJoin`]           | Rewrites outer joins to inner joins when a later filter rejects the NULL-extended rows.                                          |

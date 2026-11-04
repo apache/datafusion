@@ -48,7 +48,7 @@ pub trait AnalyzerRule: Debug {
     fn name(&self) -> &str;
 }
 
-/// Rule-based Analyzer for [`LogicalPlan`]s
+/// Rule-based Analyzer for [`LogicalPlan`]s.
 ///
 /// Applies [`FunctionRewrite`]s and [`AnalyzerRule`]s to transform a
 /// [`LogicalPlan`] in preparation for execution.
@@ -61,7 +61,7 @@ pub trait AnalyzerRule: Debug {
 /// The Analyzer first applies any [`FunctionRewrite`]s added with
 /// [`Self::add_function_rewrite`].
 ///
-/// Then it applies the following rules in this order. Note: the list may change
+/// The rules are applied in the following order. Note: the list may change
 /// between releases.
 ///
 /// | rule                        | summary                                                                   |

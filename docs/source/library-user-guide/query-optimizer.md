@@ -16,7 +16,7 @@ contains an extensive set of [`OptimizerRule`]s and [`PhysicalOptimizerRule`]s t
 they execute more quickly while still computing the same result.
 
 For a reference list of the built-in analyzer, logical optimizer, and physical optimizer rules,
-see the documentation of [`Analyzer`], [`Optimizer`], and [`PhysicalOptimizer::new`].
+see the documentation of [`Analyzer`], [`Optimizer`], and [`PhysicalOptimizer`].
 
 For a deeper background on optimizer architecture and rule types and predicates, see
 [Optimizing SQL (and DataFrames) in DataFusion, Part 1], [Part 2],
@@ -31,7 +31,7 @@ For a deeper background on optimizer architecture and rule types and predicates,
 [dynamic filters: passing information between operators during execution for 25x faster queries]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
 [`analyzer`]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Analyzer.html#built-in-analyzer-rules
 [`optimizer`]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Optimizer.html#built-in-optimizer-rules
-[`physicaloptimizer::new`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/optimizer/struct.PhysicalOptimizer.html#method.new
+[`physicaloptimizer`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/optimizer/struct.PhysicalOptimizer.html#built-in-physical-optimizer-rules
 [`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
 
 ## Running the Optimizer

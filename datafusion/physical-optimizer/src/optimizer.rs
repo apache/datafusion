@@ -163,6 +163,44 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 ///   maintain. Instead, add a custom rule that rewrites your plan into the
 ///   canonical shape recognized by the built-in rules. If extending a built-in
 ///   rule still seems necessary, please open a DataFusion issue to discuss it.
+/// 
+/// # Built-in Physical Optimizer Rules
+///
+/// The rules are applied in the following order. Note: the list may change between
+/// releases. Some rules run twice, in different phases. See the
+/// [contract](#physical-optimizer-contract) before reordering or extending the
+/// list.
+///
+/// After the last rule, the physical planner checks the plan and returns an
+/// error if it is not valid.
+///
+/// Note: The rules up to and including [`EnsureRequirements`] make the plan
+/// executable rather than optimize it. This may be improved in the future.
+/// See <https://github.com/apache/datafusion/issues/26481>.
+///
+/// | rule (name in EXPLAIN plan)    | struct name                      | summary                                                                                       |
+/// | ------------------------------ | -------------------------------- | --------------------------------------------------------------------------------------------- |
+/// | `OutputRequirements`           | [`OutputRequirements`]           | Adds helper nodes so output requirements survive later rewrites (add mode).                   |
+/// | `aggregate_statistics`         | [`AggregateStatistics`]          | Answers some aggregates from exact statistics without scanning data.                          |
+/// | `EliminateConstantJoin`        | [`EliminateConstantJoin`]        | Replaces inner joins against a single row of literals with a filter.                          |
+/// | `join_selection`               | [`JoinSelection`]                | Chooses the join implementation, build side, and partition mode.                              |
+/// | `LimitedDistinctAggregation`   | [`LimitedDistinctAggregation`]   | Pushes limit hints into grouped distinct-style aggregations.                                  |
+/// | `FilterPushdown`               | [`FilterPushdown`]               | Pushes static filters toward data sources (pre-optimization phase).                           |
+/// | `WindowTopN`                   | [`WindowTopN`]                   | Replaces row-number window and filter patterns with per-partition TopK.                       |
+/// | `EnsureRequirements`           | [`EnsureRequirements`]           | Inserts the repartitioning and sorting needed to meet distribution and ordering requirements. |
+/// | `CombinePartialFinalAggregate` | [`CombinePartialFinalAggregate`] | Merges adjacent partial and final aggregates.                                                 |
+/// | `OptimizeAggregateOrder`       | [`OptimizeAggregateOrder`]       | Rewrites aggregate expressions to use the input ordering.                                     |
+/// | `ProjectionPushdown`           | [`ProjectionPushdown`]           | Pushes projections toward inputs (early pass).                                                |
+/// | `OutputRequirements`           | [`OutputRequirements`]           | Removes the helper nodes added by the first pass (remove mode).                               |
+/// | `LimitAggregation`             | [`TopKAggregation`]              | Passes a limit hint into aggregations so they keep fewer groups.                              |
+/// | `LimitPushPastWindows`         | [`LimitPushPastWindows`]         | Pushes limits through bounded window operators.                                               |
+/// | `HashJoinBuffering`            | [`HashJoinBuffering`]            | Buffers the probe side of hash joins so it is polled before the build side finishes.          |
+/// | `LimitPushdown`                | [`LimitPushdown`]                | Pushes limits into child operators or fetch-enabled variants.                                 |
+/// | `TopKRepartition`              | [`TopKRepartition`]              | Pushes TopK below hash repartition when the partition key is a prefix of the sort key.        |
+/// | `ProjectionPushdown`           | [`ProjectionPushdown`]           | Pushes projections again after limit and TopK rewrites (late pass).                           |
+/// | `PushdownSort`                 | [`PushdownSort`]                 | Pushes sort requirements into data sources that can return sorted output.                     |
+/// | `EnsureCooperative`            | [`EnsureCooperative`]            | Wraps non-cooperative operators so long-running tasks yield.                                  |
+/// | `FilterPushdown(Post)`         | [`FilterPushdown`]               | Pushes dynamic filters once plan references stop moving (post-optimization phase).            |
 #[derive(Clone, Debug)]
 pub struct PhysicalOptimizer {
     /// All rules to apply
@@ -176,44 +214,7 @@ impl Default for PhysicalOptimizer {
 }
 
 impl PhysicalOptimizer {
-    /// Create a new optimizer using the recommended list of rules
-    ///
-    /// # Built-in Physical Optimizer Rules
-    ///
-    /// Rules run in the order listed. Order matters, and the list may change
-    /// between releases; see [`PhysicalOptimizer`](Self) for the rules on
-    /// reordering or extending it. Some rules run twice, in different phases.
-    ///
-    /// After the last rule, including any added by the user, the physical
-    /// planner checks the plan produces an error if it is not valid.
-    ///
-    /// Note: The rules up to and including [`EnsureRequirements`] make the plan
-    /// executable rather than optimize it. This may be improved in the future.
-    /// See <https://github.com/apache/datafusion/issues/26481>.
-    ///
-    /// | rule (name in EXPLAIN plan)    | struct name                      | summary                                                                                       |
-    /// | ------------------------------ | -------------------------------- | --------------------------------------------------------------------------------------------- |
-    /// | `OutputRequirements`           | [`OutputRequirements`]           | Adds helper nodes so output requirements survive later rewrites (add mode).                   |
-    /// | `aggregate_statistics`         | [`AggregateStatistics`]          | Answers some aggregates from exact statistics without scanning data.                          |
-    /// | `EliminateConstantJoin`        | [`EliminateConstantJoin`]        | Replaces inner joins against a single row of literals with a filter.                          |
-    /// | `join_selection`               | [`JoinSelection`]                | Chooses the join implementation, build side, and partition mode.                              |
-    /// | `LimitedDistinctAggregation`   | [`LimitedDistinctAggregation`]   | Pushes limit hints into grouped distinct-style aggregations.                                  |
-    /// | `FilterPushdown`               | [`FilterPushdown`]               | Pushes static filters toward data sources (pre-optimization phase).                           |
-    /// | `WindowTopN`                   | [`WindowTopN`]                   | Replaces row-number window and filter patterns with per-partition TopK.                       |
-    /// | `EnsureRequirements`           | [`EnsureRequirements`]           | Inserts the repartitioning and sorting needed to meet distribution and ordering requirements. |
-    /// | `CombinePartialFinalAggregate` | [`CombinePartialFinalAggregate`] | Merges adjacent partial and final aggregates.                                                 |
-    /// | `OptimizeAggregateOrder`       | [`OptimizeAggregateOrder`]       | Rewrites aggregate expressions to use the input ordering.                                     |
-    /// | `ProjectionPushdown`           | [`ProjectionPushdown`]           | Pushes projections toward inputs (early pass).                                                |
-    /// | `OutputRequirements`           | [`OutputRequirements`]           | Removes the helper nodes added by the first pass (remove mode).                               |
-    /// | `LimitAggregation`             | [`TopKAggregation`]              | Passes a limit hint into aggregations so they keep fewer groups.                              |
-    /// | `LimitPushPastWindows`         | [`LimitPushPastWindows`]         | Pushes limits through bounded window operators.                                               |
-    /// | `HashJoinBuffering`            | [`HashJoinBuffering`]            | Buffers the probe side of hash joins so it is polled before the build side finishes.          |
-    /// | `LimitPushdown`                | [`LimitPushdown`]                | Pushes limits into child operators or fetch-enabled variants.                                 |
-    /// | `TopKRepartition`              | [`TopKRepartition`]              | Pushes TopK below hash repartition when the partition key is a prefix of the sort key.        |
-    /// | `ProjectionPushdown`           | [`ProjectionPushdown`]           | Pushes projections again after limit and TopK rewrites (late pass).                           |
-    /// | `PushdownSort`                 | [`PushdownSort`]                 | Pushes sort requirements into data sources that can return sorted output.                     |
-    /// | `EnsureCooperative`            | [`EnsureCooperative`]            | Wraps non-cooperative operators so long-running tasks yield.                                  |
-    /// | `FilterPushdown(Post)`         | [`FilterPushdown`]               | Pushes dynamic filters once plan references stop moving (post-optimization phase).            |
+    /// Create a new optimizer using the [built-in rules](Self#built-in-physical-optimizer-rules)
     pub fn new() -> Self {
         // NOTEs:
         // - The order of rules in this list is important, as it determines the
