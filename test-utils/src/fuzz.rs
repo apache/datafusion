@@ -10,17 +10,19 @@ use std::time::Duration;
 use datafusion_common::instant::Instant;
 use datafusion_common::{Result, exec_err};
 
-/// A component's fuzz experiment, run by the centralized driver.
+/// A component's fuzz experiment, run by the [centralized driver].
 ///
 /// The component prepares fixtures and checks one case; the driver handles
 /// repetition, budgets, and seed reporting. Each case can be replayed alone.
 ///
-/// See the driver in `datafusion-fuzz` for how to use it. At a high level:
+/// See the [centralized driver] for how to use it. At a high level:
 /// 1. Generate one dataset with `prepare_dataset()`.
 /// 2. Run several cases on that dataset with `run_case()`.
 /// 3. Repeat steps 1 and 2 until the time budget is reached.
 ///
 /// (All configuration, such as the total time budget, lives in [`RunConfig`].)
+///
+/// [centralized driver]: https://github.com/apache/datafusion/blob/main/datafusion/fuzz/tests/fuzz.rs
 #[expect(async_fn_in_trait)] // Serial execution deliberately does not require Send futures.
 pub trait FuzzTest {
     /// Reusable fixtures; `()` is valid when no preparation can be shared.

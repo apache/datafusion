@@ -13,6 +13,10 @@ use test_utils::fuzz::{FuzzTest, RunConfig, run};
 mod suites;
 
 /// The single registration point for project-wide fuzz campaigns.
+///
+/// Migration of the remaining fuzz tests is tracked in [#27082].
+///
+/// [#27082]: https://github.com/apache/datafusion/issues/27082
 #[tokio::test(flavor = "multi_thread")]
 async fn fuzz_tests() -> Result<()> {
     let spill_pool = suites::spill_pool::SpillPoolFuzzer;
