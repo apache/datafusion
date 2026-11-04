@@ -426,58 +426,6 @@ fn roundtrip_like() -> Result<()> {
     roundtrip_test(plan)
 }
 
-/// Test that HashTableLookupExpr serializes to lit(true)
-///
-/// HashTableLookupExpr contains a runtime hash table that cannot be serialized.
-/// The serialization code replaces it with lit(true) which is safe because
-/// it's a performance optimization filter, not a correctness requirement.
-#[test]
-fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
-    use datafusion::physical_plan::joins::join_hash_map::JoinHashMapU32;
-    use datafusion::physical_plan::joins::{HashTableLookupExpr, Map};
-
-    // Create a simple schema and input plan
-    let schema = Arc::new(Schema::new(vec![Field::new("col", DataType::Int64, false)]));
-    let input = Arc::new(EmptyExec::new(schema.clone()));
-
-    // Create a HashTableLookupExpr - it will be replaced with lit(true) during serialization
-    let hash_map = Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(0))));
-    let on_columns = vec![col("col", &schema)?];
-    let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
-        on_columns,
-        datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
-        None,
-        vec![Some(hash_map)],
-        "test_lookup".to_string(),
-        None,
-    )?);
-
-    // Create a filter with the lookup expression
-    let filter = Arc::new(FilterExec::try_new(lookup_expr, input)?);
-
-    // Serialize
-    let ctx = SessionContext::new();
-    let codec = DefaultPhysicalExtensionCodec {};
-
-    let proto: PhysicalPlanNode =
-        PhysicalPlanNode::try_from_physical_plan(filter.clone(), &codec)
-            .expect("serialization should succeed");
-
-    // Deserialize
-    let result: Arc<dyn ExecutionPlan> = proto
-        .try_into_physical_plan(&ctx.task_ctx(), &codec)
-        .expect("deserialization should succeed");
-
-    // The deserialized plan should have lit(true) instead of HashTableLookupExpr
-    // Verify the filter predicate is a Literal(true)
-    let result_filter = result.downcast_ref::<FilterExec>().unwrap();
-    let predicate = result_filter.predicate();
-    let literal = predicate.downcast_ref::<Literal>().unwrap();
-    assert_eq!(*literal.value(), ScalarValue::Boolean(Some(true)));
-
-    Ok(())
-}
-
 #[test]
 fn roundtrip_hash_expr() -> Result<()> {
     use datafusion::physical_plan::joins::{HashExpr, SeededRandomState};

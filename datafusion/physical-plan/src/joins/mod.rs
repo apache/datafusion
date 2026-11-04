@@ -12,7 +12,7 @@ use std::sync::Arc;
 use arrow::array::BooleanBufferBuilder;
 pub use asof_join::{AsOfJoinExec, AsOfMatchExpr};
 pub use cross_join::CrossJoinExec;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::Result;
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::PhysicalExprRef;
 /// # Public Only for Internal Use:
@@ -21,7 +21,7 @@ use datafusion_physical_expr::PhysicalExprRef;
 ///
 /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
 #[doc(hidden)]
-pub use hash_join::{BloomFilterExpr, HashTableLookupExpr};
+pub use hash_join::BloomFilterExpr;
 pub use hash_join::{
     HashExpr, HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild, SeededRandomState,
 };
@@ -98,16 +98,13 @@ impl Map {
     }
 }
 
-/// A [`Map`] and the reservation for its memory, which the dynamic filter
-/// shares for as long as the plan lives. Held together, the memory stays
-/// reserved until the last holder drops the map.
+/// A [`Map`] and the reservation for its memory. Held together, the memory
+/// stays reserved until the last holder drops the map.
 pub(crate) struct ReservedMap {
-    /// Shared, as [`HashTableLookupExpr::new`] takes one and compares by it.
     map: Arc<Map>,
     /// Also charged for data kept with the map, such as the pruning bitmap.
-    /// `None` for a map built outside a join; see [`HashTableLookupExpr::new`].
     // Keep the reservation after the map it accounts for.
-    reservation: Option<MemoryReservation>,
+    reservation: MemoryReservation,
 }
 
 impl ReservedMap {
@@ -115,28 +112,17 @@ impl ReservedMap {
     pub(crate) fn new(map: Map, reservation: MemoryReservation) -> Self {
         Self {
             map: Arc::new(map),
-            reservation: Some(reservation),
-        }
-    }
-
-    /// Wraps a map that was not charged to a pool.
-    pub(crate) fn unreserved(map: Arc<Map>) -> Self {
-        Self {
-            map,
-            reservation: None,
+            reservation,
         }
     }
 
     /// Charges `bytes` for data kept with the map.
     pub(crate) fn try_grow(&self, bytes: usize) -> Result<()> {
-        match &self.reservation {
-            Some(reservation) => reservation.try_grow(bytes),
-            None => internal_err!("ReservedMap has no reservation to grow"),
-        }
+        self.reservation.try_grow(bytes)
     }
 
     pub(crate) fn reserved_bytes(&self) -> usize {
-        self.reservation.as_ref().map_or(0, MemoryReservation::size)
+        self.reservation.size()
     }
 }
 
