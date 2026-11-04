@@ -42,7 +42,6 @@ use crate::projection::{
     EmbeddedProjection, JoinData, ProjectionExec, try_embed_projection,
     try_pushdown_through_join_with_column_indices,
 };
-use crate::repartition::REPARTITION_RANDOM_STATE;
 use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
 use crate::{
     ChildrenPropertiesMode, ExecutionPlanProperties, ReplaceChildrenOptions,
@@ -1736,8 +1735,6 @@ impl ExecutionPlan for HashJoinExec {
             .counter(ARRAY_MAP_CREATED_COUNT_METRIC_NAME, partition);
 
         // Initialize build_accumulator lazily with runtime partition counts (only if enabled)
-        // Use RepartitionExec's random state (seeds: 0,0,0,0) for partition routing
-        let repartition_random_state = REPARTITION_RANDOM_STATE;
         let build_accumulator = enable_dynamic_filter_pushdown
             .then(|| {
                 self.dynamic_filter.as_ref().map(|df| {
@@ -1754,7 +1751,6 @@ impl ExecutionPlan for HashJoinExec {
                             self.right.as_ref(),
                             filter,
                             on_right,
-                            repartition_random_state,
                             self.null_equality,
                             not_in,
                             GlobalFilterOptions::new(context.session_config().options())
@@ -3416,7 +3412,6 @@ fn build_in_memory(
         PushdownStrategy::Empty
     } else {
         // If the build side is small enough we can use IN list pushdown.
-        // If it's too big we fall back to pushing down a reference to the hash table.
         // See `PushdownStrategy` for more details.
         let estimated_size = left_values
             .iter()
@@ -3460,7 +3455,7 @@ fn build_in_memory(
                 }
                 ok
             });
-            PushdownStrategy::Map(Arc::clone(&map), pruning_bitmap)
+            PushdownStrategy::Large(pruning_bitmap)
         }
     };
 
@@ -9315,7 +9310,7 @@ mod tests {
                 &child_right_schema,
             )?) as _,
         )];
-        let (child_join, _child_dynamic_filter) = hash_join_with_dynamic_filter_and_mode(
+        let (child_join, child_dynamic_filter) = hash_join_with_dynamic_filter_and_mode(
             child_left,
             child_right,
             child_on,
@@ -9358,6 +9353,8 @@ mod tests {
             ],
             &batches
         );
+        // The parent drops child partitions 1 and 3, so their keys are unknown.
+        assert_eq!(child_dynamic_filter.current()?.to_string(), "true");
 
         Ok(())
     }
@@ -10541,7 +10538,7 @@ mod tests {
 
         // The FilterExec sits above the repartition so each probe partition is only
         // read after the join has waited for every partition's build report, which
-        // makes the finalized (routed and widened) filter the one actually applied.
+        // makes the finalized (widened) filter the one actually applied.
         let dynamic_filter = HashJoinExec::create_dynamic_filter(&on);
         let consumer: Arc<dyn PhysicalExpr> = Arc::clone(&dynamic_filter) as _;
         let right_filtered: Arc<dyn ExecutionPlan> =

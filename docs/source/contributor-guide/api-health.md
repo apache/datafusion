@@ -54,7 +54,7 @@ For APIs intended only for internal use, add `#[doc(hidden)]` and use the
 following doc comment format, including the API policy link:
 
 ```txt
-impl HashTableLookupExpr {
+impl MyInternalExpr {
     /// ...
     ///
     /// # Public Only for Internal Use:
