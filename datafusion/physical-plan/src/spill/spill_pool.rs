@@ -814,40 +814,23 @@ impl RecordBatchStream for SpillPoolReader {
     }
 }
 
-/// Internal fuzz entrypoint for the centralized test driver.
-///
-/// This is not a public API; see [API policy] for details.
-///
-/// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
-#[cfg(any(test, feature = "test_utils"))]
-#[doc(hidden)]
-pub use tests::run_spill_pool_scenario;
-
-#[cfg(any(test, feature = "test_utils"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::metrics::{ExecutionPlanMetricsSet, SpillMetrics};
     use arrow::array::{ArrayRef, Int32Array};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::DataFusionError;
-    #[cfg(test)]
-    use datafusion_common::exec_datafusion_err;
-    use datafusion_common::instant::Instant;
-    #[cfg(test)]
+    use datafusion_common::{DataFusionError, exec_datafusion_err};
     use datafusion_common_runtime::{JoinSet, SpawnedTask};
     use datafusion_execution::disk_manager::{
         DiskManager, DiskManagerBuilder, DiskManagerMode,
     };
-    #[cfg(test)]
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_execution::{SpillFile, SpillWriter, TempFileFactory};
     use std::pin::Pin;
-    #[cfg(test)]
     use std::sync::Barrier;
-    #[cfg(test)]
     use std::sync::atomic::{AtomicBool, Ordering};
-    #[cfg(test)]
     use std::sync::mpsc::{self, Sender};
     use std::time::Duration;
 
@@ -855,7 +838,6 @@ mod tests {
         Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]))
     }
 
-    #[cfg(test)]
     fn create_test_batch(start: i32, count: usize) -> RecordBatch {
         let schema = create_test_schema();
         let a: ArrayRef = Arc::new(Int32Array::from(
@@ -864,7 +846,6 @@ mod tests {
         RecordBatch::try_new(schema, vec![a]).unwrap()
     }
 
-    #[cfg(test)]
     fn create_spill_channel(
         max_file_size: usize,
     ) -> (SpillPoolSink, SendableRecordBatchStream) {
@@ -876,7 +857,6 @@ mod tests {
         spsc_channel(max_file_size, spill_manager)
     }
 
-    #[cfg(test)]
     fn create_shared_spill_channel(
         max_file_size: usize,
     ) -> (SpillPoolWriter, SendableRecordBatchStream) {
@@ -888,7 +868,6 @@ mod tests {
         mpsc_channel(max_file_size, spill_manager)
     }
 
-    #[cfg(test)]
     fn create_spill_channel_with_metrics(
         max_file_size: usize,
     ) -> (SpillPoolSink, SendableRecordBatchStream, SpillMetrics) {
@@ -1320,7 +1299,6 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(test)]
     #[tokio::test(flavor = "multi_thread", worker_threads = 10)]
     async fn test_concurrent_writers() -> Result<()> {
         let (writer, mut reader) = create_shared_spill_channel(1024 * 1024);
@@ -1711,10 +1689,6 @@ mod tests {
     /// different error paths of [`SpillPoolFile::poll_file`]: one fails while it
     /// builds the stream, the other fails while it polls a stream that is
     /// already built.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "Read failures are injected by unit tests")
-    )]
     enum ReadBehavior {
         /// Read the real bytes, after this delay.
         Delay(Duration),
@@ -1838,7 +1812,6 @@ mod tests {
     /// Holds the first disk write on the pool until the test releases it, and
     /// reports every other write so a test can wait for a second writer to
     /// reach a file of its own instead of sleeping.
-    #[cfg(test)]
     struct WriteGate {
         taken: AtomicBool,
         entered: Barrier,
@@ -1846,7 +1819,6 @@ mod tests {
         other_writes: Sender<()>,
     }
 
-    #[cfg(test)]
     impl WriteGate {
         fn hold_if_first(&self) {
             if self.taken.swap(true, Ordering::SeqCst) {
@@ -1997,76 +1969,6 @@ mod tests {
         Ok(())
     }
 
-    /// Pauses every writer of a "phase" inside its first disk write, so that
-    /// several `push_batch` calls overlap at the point where each holds a file
-    /// checked out for writing. A writer that blocks earlier (for example on
-    /// another writer's file lock) never arrives; `release_phase` stops waiting
-    /// for it after a short while.
-    #[derive(Default)]
-    struct PhasePauser {
-        state: Mutex<PhaseState>,
-        changed: parking_lot::Condvar,
-    }
-
-    #[derive(Default)]
-    struct PhaseState {
-        phase: u64,
-        expected: usize,
-        held: usize,
-        released: bool,
-    }
-
-    thread_local! {
-        /// The phase in which the current writer thread has already been held.
-        static HELD_IN_PHASE: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-    }
-
-    impl PhasePauser {
-        fn begin_phase(&self, expected: usize) {
-            let mut state = self.state.lock();
-            state.phase += 1;
-            state.expected = expected;
-            state.held = 0;
-            state.released = false;
-        }
-
-        /// Called by writer threads before every disk write.
-        fn on_io(&self) {
-            let mut state = self.state.lock();
-            if state.released
-                || state.held >= state.expected
-                || HELD_IN_PHASE.get() == state.phase
-            {
-                return;
-            }
-            HELD_IN_PHASE.set(state.phase);
-            state.held += 1;
-            self.changed.notify_all();
-            while !state.released {
-                self.changed.wait(&mut state);
-            }
-        }
-
-        /// Waits until every writer of the phase is held (or 300 ms have
-        /// passed), then releases them all at once.
-        fn release_phase(&self) {
-            let mut state = self.state.lock();
-            let deadline = Instant::now() + Duration::from_millis(300);
-            while state.held < state.expected {
-                if self.changed.wait_until(&mut state, deadline).timed_out() {
-                    break;
-                }
-            }
-            state.released = true;
-            self.changed.notify_all();
-        }
-    }
-
-    fn batch_with_id(id: i32, rows: usize) -> RecordBatch {
-        let a: ArrayRef = Arc::new(Int32Array::from(vec![id; rows]));
-        RecordBatch::try_new(create_test_schema(), vec![a]).unwrap()
-    }
-
     fn id_of(batch: &RecordBatch) -> i32 {
         batch
             .column(0)
@@ -2074,188 +1976,5 @@ mod tests {
             .downcast_ref::<Int32Array>()
             .unwrap()
             .value(0)
-    }
-
-    /// Run one seeded scenario checking concurrent writes, reader progress,
-    /// ordering, and spill-file cleanup. Seeds reproduce the logical workload
-    /// and delay policy; thread scheduling may still vary.
-    pub async fn run_spill_pool_scenario(seed: u64) -> Result<()> {
-        use rand::rngs::StdRng;
-        use rand::{Rng, SeedableRng};
-
-        const READ_TIMEOUT: Duration = Duration::from_secs(5);
-
-        let mut rng = StdRng::seed_from_u64(seed);
-        let n_writers = rng.random_range(1..=4);
-        let batch_bytes = batch_with_id(0, 10).get_array_memory_size();
-        // Rotate after every batch, after a few batches, or never.
-        let max_file_size = match rng.random_range(0..3) {
-            0 => batch_bytes / 2,
-            1 => batch_bytes * 3,
-            _ => usize::MAX / 2,
-        };
-        let n_phases = rng.random_range(1..=6);
-        let context = format!(
-            "seed {seed}: {n_writers} writers, max_file_size {max_file_size}, {n_phases} phases"
-        );
-
-        let pauser = Arc::new(PhasePauser::default());
-        let write_hook: WriteHook = {
-            let pauser = Arc::clone(&pauser);
-            Arc::new(move || pauser.on_io())
-        };
-        // Some files are slow to read back, so an older file's bytes can arrive
-        // after a newer file's. Batches must still come back in file order for a
-        // single writer.
-        let read_hook: ReadHook = {
-            let rng = Mutex::new(StdRng::seed_from_u64(seed ^ 0x5EED_4EAD));
-            Arc::new(move || {
-                let mut rng = rng.lock();
-                if rng.random_bool(0.5) {
-                    ReadBehavior::Delay(Duration::ZERO)
-                } else {
-                    ReadBehavior::Delay(Duration::from_millis(rng.random_range(1..=20)))
-                }
-            })
-        };
-        let (spill_manager, disk_manager) =
-            spill_manager_with_io_hooks(write_hook, read_hook)?;
-        let (writer, mut reader) = mpsc_channel(max_file_size, spill_manager);
-        let mut sinks: Vec<Option<SpillPoolSink>> =
-            (0..n_writers).map(|_| Some(writer.new_sink())).collect();
-        drop(writer);
-
-        let mut pushed: Vec<i32> = vec![];
-        let mut read: Vec<i32> = vec![];
-
-        for phase in 0..n_phases {
-            let alive: Vec<usize> =
-                (0..n_writers).filter(|w| sinks[*w].is_some()).collect();
-            if alive.is_empty() {
-                break;
-            }
-
-            // A random non-empty subset of the live writers each pushes a few
-            // batches, concurrently, held so that their pushes overlap.
-            let mut pushing: Vec<usize> = alive
-                .iter()
-                .copied()
-                .filter(|_| rng.random_bool(0.6))
-                .collect();
-            if pushing.is_empty() {
-                pushing.push(alive[rng.random_range(0..alive.len())]);
-            }
-            pauser.begin_phase(pushing.len());
-            let mut threads = Vec::with_capacity(pushing.len());
-            for w in pushing {
-                let sink = sinks[w].take().unwrap();
-                let batches: Vec<RecordBatch> = (0..rng.random_range(1..=3))
-                    .map(|_| {
-                        let id = pushed.len() as i32 + 1;
-                        pushed.push(id);
-                        batch_with_id(id, rng.random_range(1..=40))
-                    })
-                    .collect();
-                threads.push((
-                    w,
-                    std::thread::spawn(move || {
-                        for batch in &batches {
-                            sink.push_batch(batch).unwrap();
-                        }
-                        sink
-                    }),
-                ));
-            }
-            pauser.release_phase();
-            for (w, thread) in threads {
-                sinks[w] = Some(thread.join().unwrap());
-            }
-
-            // Quiescent point: no push is in progress and none will happen until
-            // the reader is done. Every batch pushed so far must be readable now,
-            // in any amount. `RepartitionExec` relies on exactly this: it blocks
-            // on the reader once per pushed batch while its channel gate keeps
-            // the writers parked. Sometimes leave a backlog for later phases.
-            let read_now = rng.random_range(0..=pushed.len() - read.len());
-            for _ in 0..read_now {
-                let next = tokio::time::timeout(READ_TIMEOUT, reader.next())
-                    .await
-                    .unwrap_or_else(|_| {
-                        panic!(
-                            "{context}, phase {phase}: reader stalled with {} of {} \
-                             batches unread and {} writers alive",
-                            pushed.len() - read.len(),
-                            pushed.len(),
-                            alive.len()
-                        )
-                    });
-                let batch = next.unwrap_or_else(|| {
-                    panic!("{context}, phase {phase}: EOF while writers are alive")
-                })?;
-                read.push(id_of(&batch));
-            }
-
-            // With nothing left to read the reader must wait, not signal EOF.
-            if read.len() == pushed.len() && rng.random_bool(0.3) {
-                let probe =
-                    tokio::time::timeout(Duration::from_millis(50), reader.next()).await;
-                assert!(
-                    probe.is_err(),
-                    "{context}, phase {phase}: reader yielded {probe:?} with nothing \
-                     pushed and writers alive"
-                );
-            }
-
-            // Dropping one of several writers must not disturb anything.
-            if alive.len() > 1 && rng.random_bool(0.3) {
-                sinks[alive[rng.random_range(0..alive.len())]] = None;
-            }
-        }
-
-        // Once the last writer is gone the reader must hand out the backlog and
-        // then signal EOF.
-        sinks.clear();
-        while read.len() < pushed.len() {
-            let next = tokio::time::timeout(READ_TIMEOUT, reader.next())
-                .await
-                .unwrap_or_else(|_| {
-                    panic!(
-                        "{context}: reader stalled with {} of {} batches unread after \
-                         all writers were dropped",
-                        pushed.len() - read.len(),
-                        pushed.len()
-                    )
-                });
-            let batch = next.unwrap_or_else(|| {
-                panic!(
-                    "{context}: EOF with {} batches unread",
-                    pushed.len() - read.len()
-                )
-            })?;
-            read.push(id_of(&batch));
-        }
-        let eof = tokio::time::timeout(READ_TIMEOUT, reader.next())
-            .await
-            .unwrap_or_else(|_| {
-                panic!("{context}: reader stalled instead of signalling EOF after all writers were dropped")
-            });
-        assert!(eof.is_none(), "{context}: batch after everything was read");
-
-        let mut expected = pushed.clone();
-        expected.sort_unstable();
-        let mut actual = read.clone();
-        actual.sort_unstable();
-        assert_eq!(actual, expected, "{context}: batches lost or duplicated");
-        if n_writers == 1 {
-            assert_eq!(read, pushed, "{context}: single-writer pool must be FIFO");
-        }
-
-        drop(reader);
-        assert_eq!(
-            disk_manager.used_disk_space(),
-            0,
-            "{context}: spill files not released"
-        );
-        Ok(())
     }
 }

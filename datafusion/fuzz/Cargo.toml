@@ -29,13 +29,19 @@ autotests = false
 workspace = true
 
 [features]
-extended_tests = ["datafusion-physical-plan/test_utils"]
+extended_tests = []
 
 [dev-dependencies]
+arrow = { workspace = true }
+bytes = { workspace = true }
 datafusion-common = { workspace = true }
+datafusion-execution = { workspace = true }
 datafusion-physical-plan = { workspace = true }
+futures = { workspace = true }
+parking_lot = { workspace = true }
+rand = { workspace = true }
 test-utils = { path = "../../test-utils" }
-tokio = { workspace = true, features = ["rt-multi-thread"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }
 
 [[test]]
 name = "fuzz"

@@ -31,23 +31,23 @@ async fn fuzz_tests() -> Result<()> {
 async fn run_suites<'a>(suites: impl IntoIterator<Item = Suite<'a>>) -> Result<()> {
     for suite in suites {
         eprintln!("Running fuzz suite: {}", suite.name);
-        suite.campaign.await?;
+        suite.run.await?;
     }
     Ok(())
 }
 
-/// Erase only a campaign's future, retaining each adapter's concrete dataset
-/// type. Borrowed fixtures and futures that are not `Send` remain supported.
+/// Wrapper for one fuzzing test suite
 struct Suite<'a> {
     name: &'a str,
-    campaign: Pin<Box<dyn Future<Output = Result<()>> + 'a>>,
+    /// Run the test suite. Report an error on failure or execution statistics on success.
+    run: Pin<Box<dyn Future<Output = Result<()>> + 'a>>,
 }
 
 impl<'a> Suite<'a> {
     fn new<T: FuzzTest>(test: &'a T, config: RunConfig) -> Self {
         Self {
             name: test.name(),
-            campaign: Box::pin(async move {
+            run: Box::pin(async move {
                 let stats = run(test, config).await?;
                 eprintln!(
                     "Fuzz suite {}: {} cases, {} datasets, {:?}",

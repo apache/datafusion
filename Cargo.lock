@@ -2415,8 +2415,14 @@ dependencies = [
 name = "datafusion-fuzz"
 version = "0.1.0"
 dependencies = [
+ "arrow",
+ "bytes",
  "datafusion-common",
+ "datafusion-execution",
  "datafusion-physical-plan",
+ "futures",
+ "parking_lot 0.13.0",
+ "rand 0.9.4",
  "test-utils",
  "tokio",
 ]
