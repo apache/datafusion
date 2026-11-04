@@ -25,10 +25,16 @@
 //!
 //! [`ParquetOptions::pushdown_filters`]: datafusion::config::ParquetOptions::pushdown_filters
 
+use std::sync::Arc;
+
+use arrow::array::{ArrayRef, Int32Array, RecordBatch};
+use bytes::Bytes;
 use datafusion::prelude::SessionConfig;
 use insta::assert_snapshot;
+use parquet::arrow::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 
-use super::{ParquetIoTest, three_row_group_file};
+use super::ParquetIoTest;
 
 /// Without filter pushdown, the scan fetches every column of every row group
 #[tokio::test]
@@ -37,12 +43,12 @@ async fn test_filter_pushdown_io_disabled() {
     assert_snapshot!(test.query("SELECT * FROM t WHERE val = 7").await, @r"
     --- Query: SELECT * FROM t WHERE val = 7 (1 rows) ---
     Read Parquet footer (offsets 0..1402)
-    Read data page for column 'id' (rg 0) (offsets 4..51)
-    Read data page for column 'val' (rg 0) (offsets 51..98)
-    Read data page for column 'id' (rg 1) (offsets 98..145)
-    Read data page for column 'val' (rg 1) (offsets 145..192)
-    Read data page for column 'id' (rg 2) (offsets 192..239)
-    Read data page for column 'val' (rg 2) (offsets 239..286)
+    Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
+    Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
+    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
+    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
+    Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
+    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     Produce batch (1 rows)
     ");
 }
@@ -55,15 +61,21 @@ async fn test_filter_pushdown_io_enabled() {
     let test = filter_pushdown_test(true).await;
     // Note: `id` for row group 1 is fetched as two ranges, its dictionary
     // page and its data page, rather than as a single column chunk read.
+    // Once the filter has produced a row selection, the parquet reader uses
+    // the offset index to request only the pages needed for the selected
+    // rows (plus the dictionary page), one range per page, even when the
+    // ranges are adjacent. The object store's default `get_ranges`
+    // coalesces adjacent ranges into a single request, so this does not
+    // necessarily mean two requests to the storage system.
     assert_snapshot!(test.query("SELECT * FROM t WHERE val = 7").await, @r"
     --- Query: SELECT * FROM t WHERE val = 7 (1 rows) ---
     Read Parquet footer (offsets 0..1402)
-    Read data page for column 'val' (rg 0) (offsets 51..98)
-    Read data page for column 'val' (rg 1) (offsets 145..192)
-    Read data page for column 'id' (rg 1) (offsets 98..124)
-    Read data page for column 'id' (rg 1) (offsets 124..145)
+    Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
+    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
+    Read dictionary page for column 'id' (rg 1) (offsets 98..124)
+    Read data page 0 for column 'id' (rg 1) (offsets 124..145)
     Produce batch (1 rows)
-    Read data page for column 'val' (rg 2) (offsets 239..286)
+    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     ");
 }
 
@@ -71,4 +83,23 @@ async fn filter_pushdown_test(pushdown_filters: bool) -> ParquetIoTest {
     let mut config = SessionConfig::new().with_target_partitions(1);
     config.options_mut().execution.parquet.pushdown_filters = pushdown_filters;
     ParquetIoTest::new(three_row_group_file(), config).await
+}
+
+/// Returns the Parquet file described in the module docs: three row groups of
+/// three rows each, with `id` sorted across row groups.
+fn three_row_group_file() -> Bytes {
+    let id: ArrayRef = Arc::new(Int32Array::from_iter_values(1..=9));
+    let val: ArrayRef = Arc::new(Int32Array::from(vec![0, 5, 10, 0, 7, 10, 0, 5, 10]));
+    let batch = RecordBatch::try_from_iter([("id", id), ("val", val)]).unwrap();
+
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(3))
+        .build();
+
+    let mut buffer = Vec::new();
+    let mut writer =
+        ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    Bytes::from(buffer)
 }

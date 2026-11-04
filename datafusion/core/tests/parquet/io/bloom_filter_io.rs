@@ -45,8 +45,8 @@ async fn test_parquet_bloom_filter_io_matching() {
     Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
     Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
     Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
-    Read data page for column 'a' (rg 0) (offsets 4..51)
-    Read data page for column 'b' (rg 0) (offsets 51..98)
+    Read dictionary page and data page 0 for column 'a' (rg 0) (offsets 4..51)
+    Read dictionary page and data page 0 for column 'b' (rg 0) (offsets 51..98)
     Produce batch (1 rows)
     ");
 }

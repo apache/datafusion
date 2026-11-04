@@ -23,10 +23,16 @@
 //!  id > 100  -> no row groups
 //! ```
 
+use std::sync::Arc;
+
+use arrow::array::{ArrayRef, Int32Array, RecordBatch};
+use bytes::Bytes;
 use datafusion::prelude::SessionConfig;
 use insta::assert_snapshot;
+use parquet::arrow::ArrowWriter;
+use parquet::file::properties::WriterProperties;
 
-use super::{ParquetIoTest, three_row_group_file};
+use super::ParquetIoTest;
 
 /// No predicate, so every row group is read.
 #[tokio::test]
@@ -35,14 +41,14 @@ async fn test_row_group_pruning_io_no_predicate() {
     assert_snapshot!(test.query("SELECT * FROM t").await, @r"
     --- Query: SELECT * FROM t (9 rows) ---
     Read Parquet footer (offsets 0..1402)
-    Read data page for column 'id' (rg 0) (offsets 4..51)
-    Read data page for column 'val' (rg 0) (offsets 51..98)
+    Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
+    Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
     Produce batch (3 rows)
-    Read data page for column 'id' (rg 1) (offsets 98..145)
-    Read data page for column 'val' (rg 1) (offsets 145..192)
+    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
+    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
     Produce batch (3 rows)
-    Read data page for column 'id' (rg 2) (offsets 192..239)
-    Read data page for column 'val' (rg 2) (offsets 239..286)
+    Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
+    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     Produce batch (3 rows)
     ");
 }
@@ -55,8 +61,8 @@ async fn test_row_group_pruning_io_one_row_group() {
     assert_snapshot!(test.query("SELECT * FROM t WHERE id = 5").await, @r"
     --- Query: SELECT * FROM t WHERE id = 5 (1 rows) ---
     Read Parquet footer (offsets 0..1402)
-    Read data page for column 'id' (rg 1) (offsets 98..145)
-    Read data page for column 'val' (rg 1) (offsets 145..192)
+    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
+    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
     Produce batch (1 rows)
     ");
 }
@@ -69,10 +75,10 @@ async fn test_row_group_pruning_io_two_row_groups() {
     assert_snapshot!(test.query("SELECT * FROM t WHERE id > 5").await, @r"
     --- Query: SELECT * FROM t WHERE id > 5 (4 rows) ---
     Read Parquet footer (offsets 0..1402)
-    Read data page for column 'id' (rg 1) (offsets 98..145)
-    Read data page for column 'val' (rg 1) (offsets 145..192)
-    Read data page for column 'id' (rg 2) (offsets 192..239)
-    Read data page for column 'val' (rg 2) (offsets 239..286)
+    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
+    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
+    Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
+    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     Produce batch (4 rows)
     ");
 }
@@ -92,4 +98,23 @@ async fn row_group_pruning_test() -> ParquetIoTest {
         .with_target_partitions(1)
         .with_parquet_pruning(true);
     ParquetIoTest::new(three_row_group_file(), config).await
+}
+
+/// Returns the Parquet file described in the module docs: three row groups of
+/// three rows each, with `id` sorted across row groups.
+fn three_row_group_file() -> Bytes {
+    let id: ArrayRef = Arc::new(Int32Array::from_iter_values(1..=9));
+    let val: ArrayRef = Arc::new(Int32Array::from(vec![0, 5, 10, 0, 7, 10, 0, 5, 10]));
+    let batch = RecordBatch::try_from_iter([("id", id), ("val", val)]).unwrap();
+
+    let props = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(3))
+        .build();
+
+    let mut buffer = Vec::new();
+    let mut writer =
+        ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
+    writer.write(&batch).unwrap();
+    writer.close().unwrap();
+    Bytes::from(buffer)
 }

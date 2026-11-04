@@ -15,7 +15,6 @@ use std::fmt::Write as _;
 use std::ops::Range;
 use std::sync::{Arc, Mutex};
 
-use arrow::array::{ArrayRef, Int32Array, RecordBatch};
 use async_trait::async_trait;
 use bytes::Bytes;
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
@@ -27,14 +26,14 @@ use object_store::{
     GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
-use parquet::arrow::ArrowWriter;
-use parquet::file::properties::WriterProperties;
 use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::file::serialized_reader::ReadOptionsBuilder;
 use url::Url;
 
 // Tests are in submodules
 mod bloom_filter_io;
 mod filter_pushdown_io;
+mod page_pruning_io;
 mod row_group_pruning_io;
 mod topk_io;
 
@@ -44,20 +43,79 @@ struct ByteRangeDescriptor {
     description: String,
 }
 
+/// Byte ranges of one column chunk:
+///
+/// 1. (optional) dictionary page
+/// 2. data pages (from the offset index, if present)
+#[derive(Debug, Clone)]
+struct ColumnChunkLayout {
+    col_name: String,
+    /// Row Group Index
+    rg_idx: usize,
+    /// The whole column chunk (dictionary page + data pages)
+    range: Range<u64>,
+    /// Byte range of the dictionary page
+    dictionary_page: Option<Range<u64>>,
+    /// Byte range of each data page, in page order (empty without an offset index)
+    data_pages: Vec<Range<u64>>,
+}
+
+impl ColumnChunkLayout {
+    /// Describes `range` in terms of the pages of this column chunk it covers
+    fn describe(&self, range: &Range<u64>) -> String {
+        let overlaps = |r: &Range<u64>| range.start < r.end && range.end > r.start;
+        let mut parts = vec![];
+        if self.dictionary_page.as_ref().is_some_and(overlaps) {
+            parts.push("dictionary page".to_string());
+        }
+        let pages: Vec<usize> = self
+            .data_pages
+            .iter()
+            .enumerate()
+            .filter(|(_, r)| overlaps(r))
+            .map(|(idx, _)| idx)
+            .collect();
+        match pages.as_slice() {
+            [] if self.data_pages.is_empty() => parts.push("data pages".to_string()),
+            [] => {}
+            [page] => parts.push(format!("data page {page}")),
+            [first, .., last] if last - first + 1 == pages.len() => {
+                parts.push(format!("data pages {first}..={last}"))
+            }
+            pages => {
+                let pages: Vec<String> = pages.iter().map(|p| p.to_string()).collect();
+                parts.push(format!("data pages {}", pages.join(", ")))
+            }
+        }
+        format!(
+            "{} for column '{}' (rg {})",
+            parts.join(" and "),
+            self.col_name,
+            self.rg_idx
+        )
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct ParquetFileLayout {
+    /// Bloom filter and page index byte ranges
     descriptors: Vec<ByteRangeDescriptor>,
+    column_chunks: Vec<ColumnChunkLayout>,
 }
 
 impl ParquetFileLayout {
     fn new(bytes: &Bytes) -> Self {
         let cursor = bytes.clone();
-        let reader = SerializedFileReader::new(cursor).expect("valid parquet file");
+        let options = ReadOptionsBuilder::new().with_page_index().build();
+        let reader = SerializedFileReader::new_with_options(cursor, options)
+            .expect("valid parquet file");
         let metadata = reader.metadata();
         let mut descriptors = Vec::new();
+        let mut column_chunks = Vec::new();
 
         for (rg_idx, rg) in metadata.row_groups().iter().enumerate() {
-            for col in rg.columns() {
+            let page_index = metadata.page_index_for_row_group(rg_idx);
+            for (col_idx, col) in rg.columns().iter().enumerate() {
                 let col_name = col.column_descr().name();
 
                 // Bloom filter byte range
@@ -92,22 +150,47 @@ impl ParquetFileLayout {
                     });
                 }
 
-                // Data pages / column chunk byte range
-                let data_start = col
+                // Dictionary page and data pages of the column chunk
+                let dictionary_start = col
                     .dictionary_page_offset()
-                    .and_then(|o| u64::try_from(o).ok())
-                    .unwrap_or_else(|| col.data_page_offset() as u64);
-                let data_end = data_start + col.compressed_size() as u64;
-                descriptors.push(ByteRangeDescriptor {
-                    range: data_start..data_end,
-                    description: format!(
-                        "data page for column '{col_name}' (rg {rg_idx})"
-                    ),
+                    .and_then(|o| u64::try_from(o).ok());
+                let data_pages: Vec<Range<u64>> = page_index
+                    .offset_index(col_idx)
+                    .map(|offset_index| {
+                        offset_index
+                            .page_locations()
+                            .iter()
+                            .map(|location| {
+                                let start = location.offset as u64;
+                                start..start + location.compressed_page_size as u64
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let dictionary_page = dictionary_start.map(|start| {
+                    let end = data_pages
+                        .first()
+                        .map(|page| page.start)
+                        .unwrap_or_else(|| col.data_page_offset() as u64);
+                    start..end
+                });
+                let chunk_start =
+                    dictionary_start.unwrap_or_else(|| col.data_page_offset() as u64);
+                let chunk_end = chunk_start + col.compressed_size() as u64;
+                column_chunks.push(ColumnChunkLayout {
+                    col_name: col_name.to_string(),
+                    rg_idx,
+                    range: chunk_start..chunk_end,
+                    dictionary_page,
+                    data_pages,
                 });
             }
         }
 
-        Self { descriptors }
+        Self {
+            descriptors,
+            column_chunks,
+        }
     }
 
     fn describe_range(&self, range: &Range<u64>, file_size: u64) -> String {
@@ -119,6 +202,16 @@ impl ParquetFileLayout {
                 return format!(
                     "{} (offsets {}..{})",
                     desc.description, range.start, range.end
+                );
+            }
+        }
+        for chunk in &self.column_chunks {
+            if range.start < chunk.range.end && range.end > chunk.range.start {
+                return format!(
+                    "{} (offsets {}..{})",
+                    chunk.describe(range),
+                    range.start,
+                    range.end
                 );
             }
         }
@@ -329,33 +422,4 @@ impl ParquetIoTest {
         }
         output
     }
-}
-
-/// Returns a Parquet file with three row groups of three rows each:
-///
-/// | row group | id      | val       |
-/// |-----------|---------|-----------|
-/// | 0         | 1, 2, 3 | 0, 5, 10  |
-/// | 1         | 4, 5, 6 | 0, 7, 10  |
-/// | 2         | 7, 8, 9 | 0, 5, 10  |
-///
-/// `id` is sorted, so its row group statistics are disjoint and predicates on
-/// it can prune row groups. `val` has the same min/max (`0`/`10`) in every row
-/// group, so statistics cannot prune row groups for predicates such as
-/// `val = 7`, even though only row group 1 contains a match.
-pub(crate) fn three_row_group_file() -> Bytes {
-    let id: ArrayRef = Arc::new(Int32Array::from_iter_values(1..=9));
-    let val: ArrayRef = Arc::new(Int32Array::from(vec![0, 5, 10, 0, 7, 10, 0, 5, 10]));
-    let batch = RecordBatch::try_from_iter([("id", id), ("val", val)]).unwrap();
-
-    let props = WriterProperties::builder()
-        .set_max_row_group_row_count(Some(3))
-        .build();
-
-    let mut buffer = Vec::new();
-    let mut writer =
-        ArrowWriter::try_new(&mut buffer, batch.schema(), Some(props)).unwrap();
-    writer.write(&batch).unwrap();
-    writer.close().unwrap();
-    Bytes::from(buffer)
 }
