@@ -61,15 +61,19 @@ const INITIAL_BUFFER_BYTES: usize = 1048576;
 /// this size, it is flushed to object store
 const BUFFER_FLUSH_BYTES: usize = 1024000;
 
+/// Metadata of the files a [`ParquetSink`] has written, keyed by path. Shared
+/// with the writer tasks, which insert into it as they close their files.
+type WrittenFiles = Arc<parking_lot::Mutex<HashMap<Path, ParquetMetaData>>>;
+
 /// Implements [`DataSink`] for writing to a parquet file.
 pub struct ParquetSink {
     /// Config options for writing data
     config: FileSinkConfig,
     /// Underlying parquet options
     parquet_options: TableParquetOptions,
-    /// File metadata from successfully produced parquet files. The Mutex is only used
-    /// to allow inserting to HashMap from behind borrowed reference in DataSink::write_all.
-    written: Arc<parking_lot::Mutex<HashMap<Path, ParquetMetaData>>>,
+    /// Metadata of every file written so far, for [`Self::written`]. `None`
+    /// once retention was turned off with [`Self::with_retain_written_metadata`].
+    written: Option<WrittenFiles>,
     /// Optional sorting columns to write to Parquet metadata
     sorting_columns: Option<Vec<SortingColumn>>,
     /// Metrics for tracking write operations
@@ -104,7 +108,7 @@ impl ParquetSink {
         Self {
             config,
             parquet_options,
-            written: Default::default(),
+            written: Some(Default::default()),
             sorting_columns: None,
             metrics: ExecutionPlanMetricsSet::new(),
         }
@@ -119,10 +123,29 @@ impl ParquetSink {
         self
     }
 
+    /// Whether to keep the [`ParquetMetaData`] of every written file so that it
+    /// can be read back with [`Self::written`]. Defaults to `true`.
+    ///
+    /// The metadata carries every column chunk's statistics and page indexes
+    /// and is held until the sink is dropped, so a write that produces many
+    /// files pays for it in memory. Turn it off when nothing reads
+    /// [`Self::written`], as the sinks `ParquetFormat` creates for `COPY` and
+    /// `INSERT` do.
+    pub fn with_retain_written_metadata(mut self, retain: bool) -> Self {
+        self.written = retain.then(Default::default);
+        self
+    }
+
     /// Retrieve the file metadata for the written files, keyed to the path
     /// which may be partitioned (in the case of hive style partitioning).
+    ///
+    /// Empty if retention was turned off with
+    /// [`Self::with_retain_written_metadata`].
     pub fn written(&self) -> HashMap<Path, ParquetMetaData> {
-        self.written.lock().clone()
+        self.written
+            .as_ref()
+            .map(|written| written.lock().clone())
+            .unwrap_or_default()
     }
 
     /// Create writer properties based upon configuration settings,
@@ -270,9 +293,10 @@ impl FileSink for ParquetSink {
 
         let parquet_opts = &self.parquet_options;
 
-        let mut file_write_tasks: JoinSet<
-            std::result::Result<(Path, ParquetMetaData), DataFusionError>,
-        > = JoinSet::new();
+        // Writer tasks hand back only their file's row and byte counts. The
+        // file's metadata is stored or dropped by `record_written_file` inside
+        // the task rather than buffered here until every file has been written.
+        let mut file_write_tasks: JoinSet<Result<(usize, usize)>> = JoinSet::new();
 
         let runtime = context.runtime_env();
         let parallel_options = ParallelParquetWriterOptions {
@@ -288,6 +312,7 @@ impl FileSink for ParquetSink {
             let parquet_props = self
                 .create_writer_props(&runtime, &file_metadata.path)
                 .await?;
+            let written = self.written.clone();
             // CDC requires the sequential writer: the chunker state lives in ArrowWriter
             // and persists across row groups. The parallel path bypasses ArrowWriter entirely.
             if !parquet_opts.global.allow_single_file_parallelism
@@ -312,7 +337,11 @@ impl FileSink for ParquetSink {
                             .close()
                             .await
                             .map_err(|e| DataFusionError::ParquetError(Box::new(e)))?;
-                        Ok((file_metadata.path, parquet_meta_data))
+                        record_written_file(
+                            written,
+                            file_metadata.path,
+                            parquet_meta_data,
+                        )
                     }
                     .with_elapsed_compute(elapsed_compute.clone()),
                 );
@@ -349,7 +378,7 @@ impl FileSink for ParquetSink {
                         encoding_time,
                     )
                     .await?;
-                    Ok((file_metadata.path, parquet_meta_data))
+                    record_written_file(written, file_metadata.path, parquet_meta_data)
                 });
             }
         }
@@ -357,20 +386,9 @@ impl FileSink for ParquetSink {
         while let Some(result) = file_write_tasks.join_next().await {
             match result {
                 Ok(r) => {
-                    let (path, parquet_meta_data) = r?;
-                    let file_rows = parquet_meta_data.file_metadata().num_rows() as usize;
-                    let file_bytes: usize = parquet_meta_data
-                        .row_groups()
-                        .iter()
-                        .map(|rg| rg.compressed_size() as usize)
-                        .sum();
+                    let (file_rows, file_bytes) = r?;
                     rows_written_counter.add(file_rows);
                     bytes_written_counter.add(file_bytes);
-                    let mut written_files = self.written.lock();
-                    written_files
-                        .try_insert(path.clone(), parquet_meta_data)
-                        .map_err(|e| internal_datafusion_err!("duplicate entry detected for partitioned file {path}: {e}"))?;
-                    drop(written_files);
                 }
                 Err(e) => {
                     if e.is_panic() {
@@ -389,6 +407,36 @@ impl FileSink for ParquetSink {
 
         Ok(rows_written_counter.value() as u64)
     }
+}
+
+/// Accounts for a file the sink has finished writing: returns its row count
+/// and the sum of its compressed row group sizes for the `rows_written` and
+/// `bytes_written` metrics, and stores its [`ParquetMetaData`] in `written`
+/// when the sink retains metadata.
+///
+/// Runs inside the writer task so that, with retention off, the metadata is
+/// dropped as soon as the file is closed and the sink holds no per-file state.
+fn record_written_file(
+    written: Option<WrittenFiles>,
+    path: Path,
+    parquet_meta_data: ParquetMetaData,
+) -> Result<(usize, usize)> {
+    let rows = parquet_meta_data.file_metadata().num_rows() as usize;
+    let bytes = parquet_meta_data
+        .row_groups()
+        .iter()
+        .map(|rg| rg.compressed_size() as usize)
+        .sum();
+    if let Some(written) = written {
+        let mut written = written.lock();
+        written.try_insert(path, parquet_meta_data).map_err(|e| {
+            internal_datafusion_err!(
+                "duplicate entry detected for partitioned file {}: {e}",
+                e.entry.key()
+            )
+        })?;
+    }
+    Ok((rows, bytes))
 }
 
 #[async_trait]
@@ -423,7 +471,8 @@ impl DataSink for ParquetSink {
         let Self {
             config: _,
             parquet_options: _,
-            // Runtime output state, not part of the plan.
+            // Written-file metadata and its retention switch are runtime
+            // state, not part of the plan.
             written: _,
             sorting_columns: _,
             // Runtime metrics are recreated on decode.
@@ -455,7 +504,8 @@ impl TryFrom<&ParquetSink> for datafusion_proto_models::protobuf::ParquetSink {
         let ParquetSink {
             config,
             parquet_options,
-            // Runtime output state, not part of the plan.
+            // Written-file metadata and its retention switch are runtime
+            // state, not part of the plan.
             written: _,
             sorting_columns,
             // Runtime metrics are recreated on decode.
