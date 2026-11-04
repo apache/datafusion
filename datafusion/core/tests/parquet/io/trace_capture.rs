@@ -15,16 +15,21 @@
 //!         Read byte range (range=98..145, parquet=Bloom filter for column 'a' (rg 0))
 //! ```
 //!
-//! The subscriber is installed with [`tracing::subscriber::set_default`], which
-//! is thread-local. `#[tokio::test]` uses a current-thread runtime, so every
-//! task of the query runs on the test thread and reports to this subscriber.
+//! One global subscriber records into the capture that is active on the
+//! current thread. `#[tokio::test]` uses a current-thread runtime, so every
+//! task of the query runs on the test thread.
+//!
+//! A thread-local subscriber (`tracing::subscriber::set_default`) is not used.
+//! `tracing` caches per-callsite interest across threads. A test thread without
+//! a subscriber can then disable a callsite for every other test thread, and
+//! events go missing at random when tests run in parallel.
 
+use std::cell::RefCell;
 use std::fmt::{self, Write as _};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 
 use tracing::field::{Field, Visit};
 use tracing::span::{Attributes, Id, Record as SpanRecord};
-use tracing::subscriber::DefaultGuard;
 use tracing::{Event, Subscriber};
 use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
 use tracing_subscriber::registry::{LookupSpan, Registry};
@@ -56,15 +61,25 @@ impl Visit for FieldVisitor {
     }
 }
 
-/// Stored in a span's extensions: its index in the captured records.
+type Records = Arc<Mutex<Vec<Record>>>;
+
+thread_local! {
+    /// The records of the capture that is active on this thread
+    static ACTIVE: RefCell<Option<Records>> = const { RefCell::new(None) };
+}
+
+fn active() -> Option<Records> {
+    ACTIVE.with(|active| active.borrow().clone())
+}
+
+/// Stored in a span's extensions: where the span's record lives.
 struct SpanSlot {
+    records: Records,
     record: usize,
     depth: usize,
 }
 
-struct CaptureLayer {
-    records: Arc<Mutex<Vec<Record>>>,
-}
+struct CaptureLayer;
 
 fn child_depth<S>(ctx: &Context<'_, S>, parent: Option<Id>) -> usize
 where
@@ -85,6 +100,7 @@ where
         if !metadata.target().starts_with(TARGET_PREFIX) {
             return;
         }
+        let Some(records) = active() else { return };
         let parent = if attrs.is_contextual() {
             ctx.current_span().id().cloned()
         } else {
@@ -94,15 +110,19 @@ where
         let mut visitor = FieldVisitor::default();
         attrs.record(&mut visitor);
 
-        let mut records = self.records.lock().unwrap();
-        records.push(Record {
-            depth,
-            name: metadata.name().to_string(),
-            fields: visitor.0,
-        });
+        let record = {
+            let mut records = records.lock().unwrap();
+            records.push(Record {
+                depth,
+                name: metadata.name().to_string(),
+                fields: visitor.0,
+            });
+            records.len() - 1
+        };
         let span = ctx.span(id).expect("span exists");
         span.extensions_mut().insert(SpanSlot {
-            record: records.len() - 1,
+            records,
+            record,
             depth,
         });
     }
@@ -115,7 +135,7 @@ where
         };
         let mut visitor = FieldVisitor::default();
         values.record(&mut visitor);
-        self.records.lock().unwrap()[slot.record]
+        slot.records.lock().unwrap()[slot.record]
             .fields
             .extend(visitor.0);
     }
@@ -124,6 +144,7 @@ where
         if !event.metadata().target().starts_with(TARGET_PREFIX) {
             return;
         }
+        let Some(records) = active() else { return };
         let depth = child_depth(&ctx, ctx.event_span(event).map(|s| s.id()));
         let mut visitor = FieldVisitor::default();
         event.record(&mut visitor);
@@ -133,7 +154,7 @@ where
             .position(|(name, _)| name == "message")
             .map(|idx| fields.remove(idx).1)
             .unwrap_or_default();
-        self.records.lock().unwrap().push(Record {
+        records.lock().unwrap().push(Record {
             depth,
             name,
             fields,
@@ -143,21 +164,24 @@ where
 
 /// Spans and events captured on this thread until it is dropped.
 pub(crate) struct TraceCapture {
-    records: Arc<Mutex<Vec<Record>>>,
-    _guard: DefaultGuard,
+    records: Records,
 }
 
 impl TraceCapture {
     pub(crate) fn new() -> Self {
-        let records = Arc::new(Mutex::new(Vec::new()));
-        let subscriber = Registry::default().with(CaptureLayer {
-            records: Arc::clone(&records),
+        static INIT: Once = Once::new();
+        INIT.call_once(|| {
+            tracing::subscriber::set_global_default(
+                Registry::default().with(CaptureLayer),
+            )
+            .expect("no other global subscriber in this test binary");
         });
-        let guard = tracing::subscriber::set_default(subscriber);
-        Self {
-            records,
-            _guard: guard,
-        }
+        let records = Records::default();
+        ACTIVE.with(|active| {
+            let previous = active.borrow_mut().replace(Arc::clone(&records));
+            assert!(previous.is_none(), "one TraceCapture per thread");
+        });
+        Self { records }
     }
 
     /// Renders everything captured so far as an indented tree.
@@ -178,5 +202,11 @@ impl TraceCapture {
             output.push('\n');
         }
         output
+    }
+}
+
+impl Drop for TraceCapture {
+    fn drop(&mut self) {
+        ACTIVE.with(|active| active.borrow_mut().take());
     }
 }
