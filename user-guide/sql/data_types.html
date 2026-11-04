@@ -630,10 +630,13 @@ an error when the length is passed, set <code class="docutils literal notranslat
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span> <span class="pre">WITHOUT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">None)</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMPTZ(p)</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DATETIME</span></code>, <code class="docutils literal notranslate"><span class="pre">DATETIME(p)</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">None)</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMPTZ(p)</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">None)</span></code> by default — see the warning below</p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">INTERVAL</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">INTERVAL</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Interval(MonthDayNano)</span></code></p></td>
 </tr>
 </tbody>
@@ -655,7 +658,8 @@ aware type here, because their session time zone always has a value.</p>
 <p>Set <code class="docutils literal notranslate"><span class="pre">datafusion.execution.time_zone</span></code> to make these types aware. <code class="docutils literal notranslate"><span class="pre">'UTC'</span></code> is a
 good value.</p>
 </div>
-<p><code class="docutils literal notranslate"><span class="pre">unit</span></code> comes from the optional precision <code class="docutils literal notranslate"><span class="pre">p</span></code> on the two <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code> rows. Use
+<p><code class="docutils literal notranslate"><span class="pre">unit</span></code> comes from the optional precision <code class="docutils literal notranslate"><span class="pre">p</span></code> on the <code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code> and <code class="docutils literal notranslate"><span class="pre">DATETIME</span></code>
+rows. Use
 <code class="docutils literal notranslate"><span class="pre">0</span></code>, <code class="docutils literal notranslate"><span class="pre">3</span></code>, <code class="docutils literal notranslate"><span class="pre">6</span></code> or <code class="docutils literal notranslate"><span class="pre">9</span></code> for <code class="docutils literal notranslate"><span class="pre">Second</span></code>, <code class="docutils literal notranslate"><span class="pre">Millisecond</span></code>, <code class="docutils literal notranslate"><span class="pre">Microsecond</span></code> or <code class="docutils literal notranslate"><span class="pre">Nanosecond</span></code>.
 DataFusion rejects each other value of <code class="docutils literal notranslate"><span class="pre">p</span></code>. If you omit <code class="docutils literal notranslate"><span class="pre">p</span></code>, the unit is
 <code class="docutils literal notranslate"><span class="pre">Nanosecond</span></code>. The precision goes after <code class="docutils literal notranslate"><span class="pre">TIMESTAMPTZ</span></code>, but before
@@ -762,9 +766,6 @@ set to <code class="docutils literal notranslate"><span class="pre">c0</span></c
 <td class="text-left"><p><em>Not yet supported</em></p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">SET</span></code></p></td>
-<td class="text-left"><p><em>Not yet supported</em></p></td>
-</tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DATETIME</span></code></p></td>
 <td class="text-left"><p><em>Not yet supported</em></p></td>
 </tr>
 </tbody>
