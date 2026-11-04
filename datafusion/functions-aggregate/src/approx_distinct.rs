@@ -734,7 +734,14 @@ impl AggregateUDFImpl for ApproxDistinct {
         Ok(ScalarValue::UInt64(Some(0)))
     }
 
-    fn return_field(&self, _arg_fields: &[FieldRef]) -> Result<FieldRef> {
+    fn return_field(&self, arg_fields: &[FieldRef]) -> Result<FieldRef> {
+        let data_type = arg_fields[0].data_type();
+        if !is_supported_type(data_type) {
+            return not_impl_err!(
+                "Support for 'approx_distinct' for data type {data_type} is not implemented"
+            );
+        }
+
         Ok(Arc::new(Field::new(self.name(), DataType::UInt64, false)))
     }
 

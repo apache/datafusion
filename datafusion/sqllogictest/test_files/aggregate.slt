@@ -1967,6 +1967,9 @@ SELECT approx_distinct(l) FROM (VALUES ([[1.5]]), ([[2.5]])) t(l);
 statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type List\(Float64\) is not implemented
 SELECT g, approx_distinct(l) FROM (VALUES (1, [1.5]), (1, [2.5]), (2, [1.5])) t(g, l) GROUP BY g;
 
+statement error DataFusion error: This feature is not implemented: Support for 'approx_distinct' for data type List\(Float64\) is not implemented
+SELECT g, approx_distinct(l) FROM (VALUES (1, [1.5])) t(g, l) WHERE false GROUP BY g;
+
 # List
 statement ok
 CREATE TABLE approx_distinct_list_test (g INT, l INT[]) AS VALUES
