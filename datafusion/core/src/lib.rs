@@ -277,26 +277,18 @@
 //! possible, significant effort is spent planning and
 //! optimizing, in the following manner:
 //!
-//! 1. The [`LogicalPlan`] is checked and rewritten to enforce
-//!    semantic rules, such as type coercion, by [`AnalyzerRule`]s
+//! 1. The [`LogicalPlan`] is checked and rewritten by the [`Analyzer`] to enforce
+//!    semantic rules, such as type coercion, using [`AnalyzerRule`]s
 //!
-//! 2. The [`LogicalPlan`] is rewritten by [`OptimizerRule`]s, such as
-//!    projection and filter pushdown, to improve its efficiency.
+//! 2. The [`LogicalPlan`] is rewritten by the [`Optimizer`] to improve its efficiency, such as
+//!    projection and filter pushdown using [`OptimizerRule`]s.
 //!
 //! 3. The [`LogicalPlan`] is converted to an [`ExecutionPlan`] by a
 //!    [`PhysicalPlanner`]
 //!
-//! 4. The [`ExecutionPlan`] is rewritten by
-//!    [`PhysicalOptimizerRule`]s, such as sort and join selection, to
-//!    improve its efficiency.
-//!
-//! The built-in rules, in the order they run by default, are listed in the
-//! documentation of [`Analyzer::new`], [`Optimizer::new`] and
-//! [`PhysicalOptimizer::new`].
-//!
-//! [`Analyzer::new`]: datafusion_optimizer::Analyzer::new
-//! [`Optimizer::new`]: datafusion_optimizer::Optimizer::new
-//! [`PhysicalOptimizer::new`]: datafusion_physical_optimizer::optimizer::PhysicalOptimizer::new
+//! 4. The [`ExecutionPlan`] is rewritten by the [`PhysicalOptimizer`]  to further
+//!    improve its efficiency, such as by specific sort and join algorithm selection,
+//!    by  [`PhysicalOptimizerRule`]s
 //!
 //! ## Data Sources
 //!
