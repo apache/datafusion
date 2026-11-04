@@ -501,6 +501,14 @@ impl PushDecoderStreamState {
                 Ok(DecodeResult::NeedsData(ranges)) => {
                     // I/O, not compute.
                     timer.stop();
+                    for range in &ranges {
+                        tracing::debug!(
+                            target: "datafusion::parquet::io",
+                            offset_start = range.start,
+                            offset_end = range.end,
+                            "Read column chunk data"
+                        );
+                    }
                     let data = self
                         .reader
                         .get_byte_ranges(ranges.clone())

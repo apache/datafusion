@@ -37,18 +37,27 @@ use super::ParquetIoTest;
 #[tokio::test]
 async fn test_parquet_bloom_filter_io_matching() {
     let test = bloom_filter_test().await;
+    let traces = test.capture_traces();
     // Loads the Bloom filters, finds a match, then reads the data pages and
     // produces a batch.
-    assert_snapshot!(test.query("SELECT * FROM t WHERE a = 10 AND b = 100").await, @r"
+    test.query("SELECT * FROM t WHERE a = 10 AND b = 100")
+        .await
+        .unwrap();
+    assert_snapshot!(traces.render(), @"
     --- Query: SELECT * FROM t WHERE a = 10 AND b = 100 (1 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..678)
+        HEAD object metadata
+    Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
     Request 2
         Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
+    Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
     Request 3
         Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
+    Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
     Request 4
         Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
+    Read dictionary page and data page 0 for column 'a' (rg 0) (offsets 4..51)
+    Read dictionary page and data page 0 for column 'b' (rg 0) (offsets 51..98)
     Request 5
         Read dictionary page and data page 0 for column 'a' (rg 0) (offsets 4..51)
         Read dictionary page and data page 0 for column 'b' (rg 0) (offsets 51..98)
@@ -60,18 +69,25 @@ async fn test_parquet_bloom_filter_io_matching() {
 #[tokio::test]
 async fn test_parquet_bloom_filter_io_pruned() {
     let test = bloom_filter_test().await;
+    let traces = test.capture_traces();
     // Currently the Bloom filters for all candidate columns (`a` and `b`) are
     // loaded upfront. With incremental pruning
     // (https://github.com/apache/datafusion/issues/25811), `a` would be
     // evaluated first and the Bloom filter for `b` would not be loaded.
-    assert_snapshot!(test.query("SELECT * FROM t WHERE a = 999 AND b = 100").await, @r"
+    test.query("SELECT * FROM t WHERE a = 999 AND b = 100")
+        .await
+        .unwrap();
+    assert_snapshot!(traces.render(), @"
     --- Query: SELECT * FROM t WHERE a = 999 AND b = 100 (0 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..678)
+        HEAD object metadata
+    Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
     Request 2
         Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
+    Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
     Request 3
         Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
+    Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
     Request 4
         Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
     ");

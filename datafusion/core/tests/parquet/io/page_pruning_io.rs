@@ -44,10 +44,14 @@ use super::ParquetIoTest;
 #[tokio::test]
 async fn test_page_pruning_io_no_predicate() {
     let test = page_pruning_test(true).await;
-    assert_snapshot!(test.query("SELECT * FROM t").await, @r"
+    let traces = test.capture_traces();
+    test.query("SELECT * FROM t").await.unwrap();
+    assert_snapshot!(traces.render(), @"
     --- Query: SELECT * FROM t (9 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..838)
+        HEAD object metadata
+    Read data pages 0..=2 for column 'id' (rg 0) (offsets 4..91)
+    Read data pages 0..=2 for column 'val' (rg 0) (offsets 91..178)
     Request 2
         Read data pages 0..=2 for column 'id' (rg 0) (offsets 4..91)
         Read data pages 0..=2 for column 'val' (rg 0) (offsets 91..178)
@@ -60,10 +64,14 @@ async fn test_page_pruning_io_no_predicate() {
 #[tokio::test]
 async fn test_page_pruning_io_one_page() {
     let test = page_pruning_test(true).await;
-    assert_snapshot!(test.query("SELECT * FROM t WHERE id = 5").await, @r"
+    let traces = test.capture_traces();
+    test.query("SELECT * FROM t WHERE id = 5").await.unwrap();
+    assert_snapshot!(traces.render(), @"
     --- Query: SELECT * FROM t WHERE id = 5 (1 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..838)
+        HEAD object metadata
+    Read data page 1 for column 'id' (rg 0) (offsets 33..62)
+    Read data page 1 for column 'val' (rg 0) (offsets 120..149)
     Request 2
         Read data page 1 for column 'id' (rg 0) (offsets 33..62)
         Read data page 1 for column 'val' (rg 0) (offsets 120..149)
@@ -76,10 +84,16 @@ async fn test_page_pruning_io_one_page() {
 #[tokio::test]
 async fn test_page_pruning_io_two_pages() {
     let test = page_pruning_test(true).await;
-    assert_snapshot!(test.query("SELECT * FROM t WHERE id > 3").await, @r"
+    let traces = test.capture_traces();
+    test.query("SELECT * FROM t WHERE id > 3").await.unwrap();
+    assert_snapshot!(traces.render(), @"
     --- Query: SELECT * FROM t WHERE id > 3 (6 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..838)
+        HEAD object metadata
+    Read data page 1 for column 'id' (rg 0) (offsets 33..62)
+    Read data page 2 for column 'id' (rg 0) (offsets 62..91)
+    Read data page 1 for column 'val' (rg 0) (offsets 120..149)
+    Read data page 2 for column 'val' (rg 0) (offsets 149..178)
     Request 2
         Read data page 1 for column 'id' (rg 0) (offsets 33..62)
         Read data page 2 for column 'id' (rg 0) (offsets 62..91)
@@ -94,10 +108,14 @@ async fn test_page_pruning_io_two_pages() {
 #[tokio::test]
 async fn test_page_pruning_io_disabled() {
     let test = page_pruning_test(false).await;
-    assert_snapshot!(test.query("SELECT * FROM t WHERE id = 5").await, @r"
+    let traces = test.capture_traces();
+    test.query("SELECT * FROM t WHERE id = 5").await.unwrap();
+    assert_snapshot!(traces.render(), @"
     --- Query: SELECT * FROM t WHERE id = 5 (1 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..838)
+        HEAD object metadata
+    Read data pages 0..=2 for column 'id' (rg 0) (offsets 4..91)
+    Read data pages 0..=2 for column 'val' (rg 0) (offsets 91..178)
     Request 2
         Read data pages 0..=2 for column 'id' (rg 0) (offsets 4..91)
         Read data pages 0..=2 for column 'val' (rg 0) (offsets 91..178)

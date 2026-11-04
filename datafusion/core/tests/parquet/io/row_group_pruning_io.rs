@@ -38,18 +38,26 @@ use super::ParquetIoTest;
 #[tokio::test]
 async fn test_row_group_pruning_io_no_predicate() {
     let test = row_group_pruning_test().await;
-    assert_snapshot!(test.query("SELECT * FROM t").await, @r"
+    let traces = test.capture_traces();
+    test.query("SELECT * FROM t").await.unwrap();
+    assert_snapshot!(traces.render(), @"
     --- Query: SELECT * FROM t (9 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..1402)
+        HEAD object metadata
+    Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
+    Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
     Request 2
         Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
         Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
     Produce batch (3 rows)
+    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
+    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
     Request 3
         Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
         Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
     Produce batch (3 rows)
+    Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
+    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     Request 4
         Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
         Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
@@ -62,10 +70,14 @@ async fn test_row_group_pruning_io_no_predicate() {
 #[tokio::test]
 async fn test_row_group_pruning_io_one_row_group() {
     let test = row_group_pruning_test().await;
-    assert_snapshot!(test.query("SELECT * FROM t WHERE id = 5").await, @r"
+    let traces = test.capture_traces();
+    test.query("SELECT * FROM t WHERE id = 5").await.unwrap();
+    assert_snapshot!(traces.render(), @"
     --- Query: SELECT * FROM t WHERE id = 5 (1 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..1402)
+        HEAD object metadata
+    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
+    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
     Request 2
         Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
         Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
@@ -78,13 +90,19 @@ async fn test_row_group_pruning_io_one_row_group() {
 #[tokio::test]
 async fn test_row_group_pruning_io_two_row_groups() {
     let test = row_group_pruning_test().await;
-    assert_snapshot!(test.query("SELECT * FROM t WHERE id > 5").await, @r"
+    let traces = test.capture_traces();
+    test.query("SELECT * FROM t WHERE id > 5").await.unwrap();
+    assert_snapshot!(traces.render(), @"
     --- Query: SELECT * FROM t WHERE id > 5 (4 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..1402)
+        HEAD object metadata
+    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
+    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
     Request 2
         Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
         Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
+    Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
+    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     Request 3
         Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
         Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
@@ -96,10 +114,12 @@ async fn test_row_group_pruning_io_two_row_groups() {
 #[tokio::test]
 async fn test_row_group_pruning_io_all_pruned() {
     let test = row_group_pruning_test().await;
-    assert_snapshot!(test.query("SELECT * FROM t WHERE id > 100").await, @r"
+    let traces = test.capture_traces();
+    test.query("SELECT * FROM t WHERE id > 100").await.unwrap();
+    assert_snapshot!(traces.render(), @"
     --- Query: SELECT * FROM t WHERE id > 100 (0 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..1402)
+        HEAD object metadata
     ");
 }
 

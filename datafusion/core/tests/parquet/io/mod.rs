@@ -11,13 +11,13 @@
 //! `ListingTable`object store access tests live in
 //! [`datafusion/core/tests/datasource/object_store_access.rs`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/datasource/object_store_access.rs).
 
-use std::fmt::Write as _;
 use std::ops::Range;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use bytes::Bytes;
+use datafusion::error::Result;
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -37,6 +37,9 @@ mod filter_pushdown_io;
 mod page_pruning_io;
 mod row_group_pruning_io;
 mod topk_io;
+mod trace_capture;
+
+use trace_capture::TraceCapture;
 
 #[derive(Debug, Clone)]
 struct ByteRangeDescriptor {
@@ -223,9 +226,7 @@ impl ParquetFileLayout {
 #[derive(Debug)]
 struct InstrumentedObjectStore {
     inner: Arc<dyn ObjectStore>,
-    layout: ParquetFileLayout,
     file_size: u64,
-    events: Arc<Mutex<Vec<String>>>,
     /// Number of requests made to the store (reset for each query)
     requests: Arc<AtomicUsize>,
 }
@@ -233,32 +234,48 @@ struct InstrumentedObjectStore {
 impl InstrumentedObjectStore {
     fn new(
         inner: Arc<dyn ObjectStore>,
-        layout: ParquetFileLayout,
         file_size: u64,
-        events: Arc<Mutex<Vec<String>>>,
         requests: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             inner,
-            layout,
             file_size,
-            events,
             requests,
         }
     }
 
-    /// Records the start of a new request to the store
-    fn record_request(&self) {
+    /// Emits a span for a `HEAD` request, which reads no bytes.
+    fn record_head_request(&self) {
         let request = self.requests.fetch_add(1, Ordering::SeqCst) + 1;
-        self.events
-            .lock()
-            .unwrap()
-            .push(format!("Request {request}"));
+        let span = tracing::debug_span!(
+            target: "datafusion::test::object_store",
+            "object_store_request",
+            request
+        );
+        span.in_scope(|| {
+            tracing::debug!(target: "datafusion::test::object_store", "HEAD object metadata");
+        });
     }
 
-    fn record_range(&self, range: &Range<u64>) {
-        let desc = self.layout.describe_range(range, self.file_size);
-        self.events.lock().unwrap().push(format!("    Read {desc}"));
+    /// Emits a span for one request to the store, with an event per byte
+    /// range it reads.
+    fn record_request(&self, ranges: impl IntoIterator<Item = Range<u64>>) {
+        let request = self.requests.fetch_add(1, Ordering::SeqCst) + 1;
+        let span = tracing::debug_span!(
+            target: "datafusion::test::object_store",
+            "object_store_request",
+            request
+        );
+        span.in_scope(|| {
+            for range in ranges {
+                tracing::debug!(
+                    target: "datafusion::test::object_store",
+                    offset_start = range.start,
+                    offset_end = range.end,
+                    "Read byte range"
+                );
+            }
+        });
     }
 }
 
@@ -292,23 +309,19 @@ impl ObjectStore for InstrumentedObjectStore {
         location: &Path,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
-        self.record_request();
-        if let Some(range) = &options.range {
-            match range {
-                GetRange::Bounded(r) => {
-                    self.record_range(&(r.start..r.end));
-                }
-                GetRange::Offset(offset) => {
-                    self.record_range(&(*offset..self.file_size));
-                }
-                GetRange::Suffix(suffix) => {
-                    let start = self.file_size.saturating_sub(*suffix);
-                    self.record_range(&(start..self.file_size));
-                }
-            }
-        } else {
-            self.record_range(&(0..self.file_size));
+        if options.head {
+            self.record_head_request();
+            return self.inner.get_opts(location, options).await;
         }
+        let range = match &options.range {
+            Some(GetRange::Bounded(r)) => r.clone(),
+            Some(GetRange::Offset(offset)) => *offset..self.file_size,
+            Some(GetRange::Suffix(suffix)) => {
+                self.file_size.saturating_sub(*suffix)..self.file_size
+            }
+            None => 0..self.file_size,
+        };
+        self.record_request([range]);
         self.inner.get_opts(location, options).await
     }
 
@@ -317,10 +330,7 @@ impl ObjectStore for InstrumentedObjectStore {
         location: &Path,
         ranges: &[Range<u64>],
     ) -> object_store::Result<Vec<Bytes>> {
-        self.record_request();
-        for range in ranges {
-            self.record_range(range);
-        }
+        self.record_request(ranges.iter().cloned());
         self.inner.get_ranges(location, ranges).await
     }
 
@@ -364,17 +374,21 @@ impl ObjectStore for InstrumentedObjectStore {
 }
 
 /// Test fixture: a single Parquet file registered as table `t`, read through an
-/// [`InstrumentedObjectStore`] that records every storage request.
+/// [`InstrumentedObjectStore`] that emits a `tracing` span for every storage
+/// request.
 ///
 /// Typical use:
 ///
 /// ```text
 /// let test = ParquetIoTest::new(file_bytes, SessionConfig::new()).await;
-/// assert_snapshot!(test.query("SELECT * FROM t WHERE ...").await, @"...");
+/// let traces = test.capture_traces();
+/// test.query("SELECT * FROM t WHERE ...").await.unwrap();
+/// assert_snapshot!(traces.render(), @"...");
 /// ```
 pub(crate) struct ParquetIoTest {
     ctx: SessionContext,
-    events: Arc<Mutex<Vec<String>>>,
+    layout: ParquetFileLayout,
+    file_size: u64,
     requests: Arc<AtomicUsize>,
 }
 
@@ -395,13 +409,10 @@ impl ParquetIoTest {
             .await
             .unwrap();
 
-        let events = Arc::new(Mutex::new(Vec::new()));
         let requests = Arc::new(AtomicUsize::new(0));
         let instrumented_store = Arc::new(InstrumentedObjectStore::new(
             memory_store,
-            layout,
             file_size,
-            Arc::clone(&events),
             Arc::clone(&requests),
         ));
 
@@ -413,37 +424,39 @@ impl ParquetIoTest {
 
         Self {
             ctx,
-            events,
+            layout,
+            file_size,
             requests,
         }
     }
 
-    /// Runs `sql` and returns the storage requests and output batches it
-    /// produced, formatted for snapshot comparison.
-    ///
-    /// Only events recorded while running this query are included.
-    pub(crate) async fn query(&self, sql: &str) -> String {
-        self.events.lock().unwrap().clear();
+    /// Captures the spans and events that DataFusion emits on this thread
+    /// until the returned [`TraceCapture`] is dropped.
+    pub(crate) fn capture_traces(&self) -> TraceCapture {
+        TraceCapture::new(self.layout.clone(), self.file_size)
+    }
+
+    /// Runs `sql` to completion inside a `query` span and returns the number
+    /// of output rows. Emits a `Produce batch` event for each output batch.
+    pub(crate) async fn query(&self, sql: &str) -> Result<usize> {
         self.requests.store(0, Ordering::SeqCst);
+        let span = tracing::debug_span!(
+            target: "datafusion::test",
+            "query",
+            sql,
+            rows = tracing::field::Empty
+        );
+        let _entered = span.enter();
 
-        let df = self.ctx.sql(sql).await.unwrap();
-        let mut stream = df.execute_stream().await.unwrap();
-
+        let df = self.ctx.sql(sql).await?;
+        let mut stream = df.execute_stream().await?;
         let mut row_count = 0;
         while let Some(batch) = stream.next().await {
-            let batch = batch.unwrap();
-            row_count += batch.num_rows();
-            self.events
-                .lock()
-                .unwrap()
-                .push(format!("Produce batch ({} rows)", batch.num_rows()));
+            let rows = batch?.num_rows();
+            row_count += rows;
+            tracing::debug!(target: "datafusion::test", rows, "Produce batch");
         }
-
-        let recorded = self.events.lock().unwrap().clone();
-        let mut output = format!("--- Query: {sql} ({row_count} rows) ---\n");
-        for event in recorded {
-            let _ = writeln!(output, "{event}");
-        }
-        output
+        span.record("rows", row_count);
+        Ok(row_count)
     }
 }

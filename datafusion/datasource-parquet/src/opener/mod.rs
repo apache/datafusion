@@ -1547,6 +1547,19 @@ impl RowGroupsPrunedParquetOpen {
                 for (column_name, column_idx, physical_type, type_length) in
                     &parquet_columns
                 {
+                    let column = builder.metadata().row_group(idx).column(*column_idx);
+                    if let (Some(offset), Some(length)) =
+                        (column.bloom_filter_offset(), column.bloom_filter_length())
+                    {
+                        tracing::debug!(
+                            target: "datafusion::parquet::io",
+                            column = column_name.as_str(),
+                            row_group = idx,
+                            offset_start = offset,
+                            offset_end = offset + i64::from(length),
+                            "Read Bloom filter"
+                        );
+                    }
                     let bf: Sbbf = match builder
                         .get_row_group_column_bloom_filter(idx, *column_idx)
                         .await

@@ -774,6 +774,12 @@ impl<'a> ObjectStoreFetch<'a> {
 
 impl MetadataFetch for ObjectStoreFetch<'_> {
     fn fetch(&mut self, range: Range<u64>) -> BoxFuture<'_, Result<Bytes, ParquetError>> {
+        tracing::debug!(
+            target: "datafusion::parquet::io",
+            offset_start = range.start,
+            offset_end = range.end,
+            "Read Parquet metadata"
+        );
         async {
             self.store
                 .get_range(&self.meta.location, range)

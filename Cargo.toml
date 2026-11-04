@@ -163,6 +163,8 @@ itertools = "0.15"
 itoa = "1.0"
 liblzma = { version = "0.4.6", features = ["static"] }
 log = "^0.4"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
 loom = "0.7"
 memchr = "2.8.1"
 num-traits = { version = "0.2" }

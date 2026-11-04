@@ -364,6 +364,12 @@ impl<'a> DFParquetMetadata<'a> {
         if let Some(hint) = self.metadata_size_hint {
             let prefetch_start = file_size.saturating_sub(hint as u64);
             let prefetch_range = prefetch_start..file_size;
+            tracing::debug!(
+                target: "datafusion::parquet::io",
+                offset_start = prefetch_range.start,
+                offset_end = prefetch_range.end,
+                "Prefetch Parquet footer"
+            );
             let data = self
                 .store
                 .get_ranges(
@@ -381,6 +387,25 @@ impl<'a> DFParquetMetadata<'a> {
             match decoder.try_decode().map_err(DataFusionError::from)? {
                 DecodeResult::Data(metadata) => break metadata,
                 DecodeResult::NeedsData(ranges) => {
+                    for range in &ranges {
+                        // The decoder asks for the footer at the end of the
+                        // file, and for the page index before it.
+                        if range.end == file_size {
+                            tracing::debug!(
+                                target: "datafusion::parquet::io",
+                                offset_start = range.start,
+                                offset_end = range.end,
+                                "Read Parquet footer"
+                            );
+                        } else {
+                            tracing::debug!(
+                                target: "datafusion::parquet::io",
+                                offset_start = range.start,
+                                offset_end = range.end,
+                                "Read page index"
+                            );
+                        }
+                    }
                     let buffers = self
                         .store
                         .get_ranges(&self.object_meta.location, &ranges)
