@@ -186,8 +186,8 @@ struct MinMaxStructState {
     min_max: Vec<Option<StructArray>>,
     /// The data type of the array
     data_type: DataType,
-    /// The total bytes of the string data (for pre-allocating the final array,
-    /// and tracking memory usage)
+    /// The sum of `get_array_memory_size()` of all stored values (for tracking
+    /// memory usage)
     total_data_bytes: usize,
 }
 
@@ -292,7 +292,8 @@ impl MinMaxStructState {
     ///
     /// Returns (data_capacity, min_maxes), updating the current value of total_data_bytes
     ///
-    /// - `data_capacity`: the total length of all strings and their contents,
+    /// - `data_capacity`: the total memory size, in bytes, of the emitted values
+    ///   (as tracked in `total_data_bytes`),
     /// - `min_maxes`: the actual min/max values for each group
     fn emit_to(&mut self, emit_to: EmitTo) -> (usize, Vec<Option<StructArray>>) {
         match emit_to {
@@ -306,7 +307,9 @@ impl MinMaxStructState {
                 let first_min_maxes = split_vec_min_alloc(&mut self.min_max, n);
                 let first_data_capacity: usize = first_min_maxes
                     .iter()
-                    .map(|opt| opt.as_ref().map(|s| s.len()).unwrap_or(0))
+                    .map(|opt| {
+                        opt.as_ref().map(|s| s.get_array_memory_size()).unwrap_or(0)
+                    })
                     .sum();
                 self.total_data_bytes -= first_data_capacity;
                 (first_data_capacity, first_min_maxes)
@@ -624,5 +627,42 @@ mod tests {
         let str_array = max_result.column(1).as_string::<i32>();
         assert_eq!(int_array.value(0), 4);
         assert_eq!(str_array.value(0), "d");
+    }
+
+    /// Regression test for <https://github.com/apache/datafusion/issues/26891>:
+    /// `EmitTo::First(n)` must release the memory accounted for the emitted
+    /// groups, not just their row counts.
+    #[test]
+    fn test_min_max_struct_size_after_emit_first() {
+        let long = "x".repeat(4096);
+        let strs: Vec<String> = (0..4).map(|i| format!("{i}{long}")).collect();
+        let array = create_test_struct_array(
+            vec![Some(1), Some(2), Some(3), Some(4)],
+            strs.iter().map(|s| Some(s.as_str())).collect(),
+        );
+        let data_type = array.data_type().clone();
+        let values = vec![Arc::new(array) as ArrayRef];
+
+        let mut accumulator = MinMaxStructAccumulator::new_min(data_type.clone());
+        accumulator
+            .update_batch(&values, &[0, 1, 2, 3], None, 4)
+            .unwrap();
+        let initial_size = accumulator.size();
+
+        // Reference accumulator holding only the groups that remain after
+        // emitting the first two
+        let remaining = vec![values[0].slice(2, 2)];
+        let mut expected = MinMaxStructAccumulator::new_min(data_type);
+        expected.update_batch(&remaining, &[0, 1], None, 2).unwrap();
+
+        let emitted = accumulator.evaluate(EmitTo::First(2)).unwrap();
+        assert_eq!(emitted.len(), 2);
+        assert_eq!(accumulator.size(), expected.size());
+        assert!(accumulator.size() < initial_size);
+
+        // Emitting the remaining groups releases all tracked memory
+        let emitted = accumulator.evaluate(EmitTo::First(2)).unwrap();
+        assert_eq!(emitted.len(), 2);
+        assert_eq!(accumulator.size(), 0);
     }
 }
