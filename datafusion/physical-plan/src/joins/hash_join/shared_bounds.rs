@@ -370,15 +370,16 @@ struct AccumulatorState {
 enum PartitionStatus {
     Pending,
     Reported(PartitionData),
-    /// The partition's stream was dropped before it reported its build data.
+    /// The partition's stream was dropped before it delivered its build report.
     ///
-    /// This status describes one partition, not the query. Other partitions of
-    /// the same join, and the rest of the query, can still be running. For
-    /// example, a parent operator can finish early and drop this partition's
-    /// stream (see <https://github.com/apache/datafusion/issues/21625>). The
-    /// partition's build keys are unknown, so the filter builder uses `true`
-    /// for this partition. A `true` contribution is correct for every consumer
-    /// of the filter.
+    /// Only this partition is done. Sibling partitions and the rest of the
+    /// query can still run. For example, a parent join drops a probe-side
+    /// stream early when its own build partition is empty
+    /// (<https://github.com/apache/datafusion/issues/21625>).
+    ///
+    /// The stream has emitted no row and never will, because a stream probes
+    /// only after its report is delivered. The filter treats the partition's
+    /// build keys as unknown and keeps every probe row routed to it.
     CanceledUnknown,
 }
 
@@ -513,14 +514,8 @@ impl SharedBuildAccumulator {
         self.wait_for_completion().await
     }
 
-    /// Marks a `Pending` partition as [`PartitionStatus::CanceledUnknown`].
-    ///
-    /// The stream of a partition calls this method when it is dropped before
-    /// it delivers its build report. The call does not mean that the query was
-    /// canceled: sibling partitions can still report and wait for the filter.
-    /// The call counts the partition as complete, so the coordinator can
-    /// finalize the filter without waiting for a report that never comes. See
-    /// <https://github.com/apache/datafusion/pull/21666>.
+    /// Marks a `Pending` partition as [`PartitionStatus::CanceledUnknown`], so
+    /// the filter can finalize without a report that never comes.
     pub(crate) fn report_canceled_partition(&self, partition_id: usize) {
         let finalize_input = {
             let mut guard = self.inner.lock();
