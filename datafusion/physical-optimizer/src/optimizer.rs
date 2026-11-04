@@ -163,13 +163,13 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 ///   maintain. Instead, add a custom rule that rewrites your plan into the
 ///   canonical shape recognized by the built-in rules. If extending a built-in
 ///   rule still seems necessary, please open a DataFusion issue to discuss it.
-/// 
+///
 /// # Built-in Physical Optimizer Rules
 ///
-/// The rules are applied in the following order. Note: the list may change between
-/// releases. Some rules run twice, in different phases. See the
-/// [contract](#physical-optimizer-contract) before reordering or extending the
-/// list.
+/// The rules are applied in the following order. Note: the list may change
+/// between releases. Some rules run twice, in different phases. See the
+/// [contract](#physical-optimizer-contract) above before reordering or
+/// extending the list.
 ///
 /// After the last rule, the physical planner checks the plan and returns an
 /// error if it is not valid.

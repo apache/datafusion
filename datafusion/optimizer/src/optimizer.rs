@@ -240,8 +240,8 @@ impl OptimizerConfig for OptimizerContext {
 ///
 /// # Built-in Optimizer Rules
 ///
-/// The rules are applied in the following order. Note: the list may change between
-/// releases.
+/// The rules are applied in the following order. Note: the list may change
+/// between releases.
 ///
 /// | rule (name in EXPLAIN plan)               | struct name                      | summary                                                                                                                          |
 /// | ----------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
