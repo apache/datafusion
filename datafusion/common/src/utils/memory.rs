@@ -158,7 +158,8 @@ pub fn get_record_batch_memory_size(batch: &RecordBatch) -> usize {
 #[derive(Debug, Default)]
 pub struct RecordBatchMemoryCounter {
     /// Start addresses of `Buffer`s that have already been counted (instead of
-    /// actual used data region's pointer represented by current `Array`)
+    /// actual used data region's pointer represented by current `Array`), with
+    /// the largest capacity seen for each
     counted_buffers: BufferIdSet,
     /// Array objects already counted by [`Self::count_batch_with_array_overhead`]
     counted_arrays: HashSet<usize>,
@@ -226,9 +227,9 @@ impl RecordBatchMemoryCounter {
 
 impl BufferVisitor for RecordBatchMemoryCounter {
     fn visit(&mut self, buffer: &Buffer) {
-        if self.counted_buffers.insert(buffer.data_ptr().addr()) {
-            self.memory_usage += buffer.capacity();
-        }
+        self.memory_usage += self
+            .counted_buffers
+            .insert(buffer.data_ptr().addr(), buffer.capacity());
     }
 }
 
@@ -604,18 +605,27 @@ fn array_children(array: &ArrayRef) -> Vec<&ArrayRef> {
 }
 
 /// Tracks a small number of buffers inline, avoiding a heap allocation for
-/// typical batches, and promotes to a hash set when more buffers are seen.
+/// typical batches, and promotes to a hash map when more buffers are seen.
+///
+/// Each buffer is keyed by its start address and remembers the largest
+/// capacity reported for that address. Buffers that share an allocation
+/// normally report the same capacity, but buffers imported through the Arrow C
+/// Data Interface (`Buffer::from_custom_allocation`) report the length they
+/// were imported with, so slices of one allocation can disagree.
 #[derive(Debug)]
 struct BufferIdSet {
     inline: [Option<NonZero<usize>>; INLINE_BUFFER_IDS],
+    /// Largest capacity seen for each inline slot, parallel to `inline`.
+    capacities: [usize; INLINE_BUFFER_IDS],
     len: usize,
-    overflow: Option<HashSet<NonZero<usize>>>,
+    overflow: Option<HashMap<NonZero<usize>, usize>>,
 }
 
 impl Default for BufferIdSet {
     fn default() -> Self {
         Self {
             inline: [None; INLINE_BUFFER_IDS],
+            capacities: [0; INLINE_BUFFER_IDS],
             len: 0,
             overflow: None,
         }
@@ -623,26 +633,43 @@ impl Default for BufferIdSet {
 }
 
 impl BufferIdSet {
-    fn insert(&mut self, buffer_id: NonZero<usize>) -> bool {
+    /// Records a buffer with the given `capacity`, returning the bytes that
+    /// were not counted before: the whole capacity for a new address, the
+    /// growth when a larger capacity is seen for a known address, and zero
+    /// otherwise.
+    fn insert(&mut self, buffer_id: NonZero<usize>, capacity: usize) -> usize {
         if let Some(overflow) = &mut self.overflow {
-            return overflow.insert(buffer_id);
+            let counted = overflow.entry(buffer_id).or_insert(0);
+            let added = capacity.saturating_sub(*counted);
+            *counted += added;
+            return added;
         }
 
-        if self.inline[..self.len].contains(&Some(buffer_id)) {
-            return false;
+        if let Some(i) = self.inline[..self.len]
+            .iter()
+            .position(|id| *id == Some(buffer_id))
+        {
+            let added = capacity.saturating_sub(self.capacities[i]);
+            self.capacities[i] += added;
+            return added;
         }
 
         if self.len < INLINE_BUFFER_IDS {
             self.inline[self.len] = Some(buffer_id);
+            self.capacities[self.len] = capacity;
             self.len += 1;
-            return true;
+            return capacity;
         }
 
-        let mut overflow = HashSet::with_capacity(INLINE_BUFFER_IDS + 1);
-        overflow.extend(self.inline.iter().flatten().copied());
-        let inserted = overflow.insert(buffer_id);
+        let mut overflow = HashMap::with_capacity(INLINE_BUFFER_IDS + 1);
+        for i in 0..self.len {
+            if let Some(id) = self.inline[i] {
+                overflow.insert(id, self.capacities[i]);
+            }
+        }
+        overflow.insert(buffer_id, capacity);
         self.overflow = Some(overflow);
-        inserted
+        capacity
     }
 }
 
@@ -803,11 +830,12 @@ mod record_batch_tests {
         ListViewArray, MapArray, RunArray, StringArray, StringViewArray, StructArray,
         UnionArray, new_null_array,
     };
-    use arrow::buffer::OffsetBuffer;
+    use arrow::buffer::{OffsetBuffer, ScalarBuffer};
     use arrow::datatypes::{
         DataType, Field, Fields, Int16Type, Int32Type, Int64Type, Schema, UnionFields,
         UnionMode,
     };
+    use std::ptr::NonNull;
     use std::sync::Arc;
 
     fn array_data_memory_size(array: &dyn Array) -> usize {
@@ -1227,6 +1255,75 @@ mod record_batch_tests {
         );
         assert!(counter.counted_buffers.overflow.is_some());
         assert_eq!(counter.count_batch(&batch), 0);
+    }
+
+    /// Two buffers over one allocation that report different capacities, as
+    /// `arrow::ffi::from_ffi` produces for slices imported over the C Data
+    /// Interface: the address is shared but each import declares its own length.
+    fn custom_allocation_arrays(
+        short_len: usize,
+        long_len: usize,
+    ) -> (Int32Array, Int32Array) {
+        let values: Vec<i32> = (0..long_len as i32).collect();
+        let ptr = NonNull::new(values.as_ptr().cast_mut().cast::<u8>()).unwrap();
+        let owner = Arc::new(values);
+        let make = |len: usize| {
+            // SAFETY: `owner` keeps the vector alive for as long as the buffer
+            // exists, and `len` values fit in it.
+            let buffer = unsafe {
+                Buffer::from_custom_allocation(
+                    ptr,
+                    len * size_of::<i32>(),
+                    Arc::clone(&owner) as _,
+                )
+            };
+            Int32Array::new(ScalarBuffer::new(buffer, 0, len), None)
+        };
+        (make(short_len), make(long_len))
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_takes_largest_capacity_for_shared_address() {
+        let (short, long) = custom_allocation_arrays(16, 1024);
+        assert_eq!(
+            short.values().inner().data_ptr(),
+            long.values().inner().data_ptr()
+        );
+        let long_capacity = long.values().inner().capacity();
+        assert_eq!(long_capacity, 1024 * size_of::<i32>());
+
+        // The larger capacity wins whichever buffer is seen first, so the count
+        // never falls below what counting any one of the arrays alone reports.
+        let mut counter = RecordBatchMemoryCounter::new();
+        assert_eq!(counter.count_array(&short), 16 * size_of::<i32>());
+        assert_eq!(counter.count_array(&long), (1024 - 16) * size_of::<i32>());
+        assert_eq!(counter.count_array(&short), 0);
+        assert_eq!(counter.memory_usage(), long_capacity);
+
+        let mut counter = RecordBatchMemoryCounter::new();
+        assert_eq!(counter.count_array(&long), long_capacity);
+        assert_eq!(counter.count_array(&short), 0);
+        assert_eq!(counter.memory_usage(), long_capacity);
+    }
+
+    #[test]
+    fn test_record_batch_memory_counter_takes_largest_capacity_after_promotion() {
+        let (short, long) = custom_allocation_arrays(16, 1024);
+        let fields = (0..INLINE_BUFFER_IDS)
+            .map(|index| Field::new(format!("col_{index}"), DataType::Int32, false))
+            .collect::<Vec<_>>();
+        let columns = (0..INLINE_BUFFER_IDS)
+            .map(|value| Arc::new(Int32Array::from(vec![value as i32])) as _)
+            .collect::<Vec<_>>();
+        let filler =
+            RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+
+        let mut counter = RecordBatchMemoryCounter::new();
+        counter.count_array(&short);
+        counter.count_batch(&filler);
+        assert!(counter.counted_buffers.overflow.is_some());
+        assert_eq!(counter.count_array(&long), (1024 - 16) * size_of::<i32>());
+        assert_eq!(counter.count_array(&long), 0);
     }
 
     #[test]
