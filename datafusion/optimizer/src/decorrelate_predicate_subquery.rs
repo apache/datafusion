@@ -4,6 +4,7 @@
 
 //! [`DecorrelatePredicateSubquery`] converts `IN`/`EXISTS` subquery predicates to `SEMI`/`ANTI` joins
 use std::collections::BTreeSet;
+use std::num::NonZeroUsize;
 use std::ops::Deref;
 use std::sync::Arc;
 
@@ -817,6 +818,9 @@ fn with_null_aware_value_keys(
 ) -> Result<LogicalPlan> {
     let LogicalPlan::Join(join) = plan else {
         return internal_err!("expected a join, got {}", plan.display());
+    };
+    let Some(null_aware_value_keys) = NonZeroUsize::new(null_aware_value_keys) else {
+        return internal_err!("a null-aware join needs at least one value key");
     };
     Ok(LogicalPlan::Join(
         join.with_null_aware_value_keys(null_aware_value_keys),

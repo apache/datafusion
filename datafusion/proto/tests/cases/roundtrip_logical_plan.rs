@@ -3889,7 +3889,7 @@ async fn roundtrip_join_null_aware() -> Result<()> {
                 FROM (VALUES (CAST(1 AS INT)), (CAST(NULL AS INT))) AS excludes(bad_id)
             )
             ",
-            (1, 1),
+            (1, Some(1)),
         ),
         (
             "
@@ -3901,7 +3901,7 @@ async fn roundtrip_join_null_aware() -> Result<()> {
                 WHERE t2.k = t1.k
             )
             ",
-            (3, 2),
+            (3, Some(2)),
         ),
     ];
 
@@ -3916,7 +3916,8 @@ async fn roundtrip_join_null_aware() -> Result<()> {
                 && j.join_type == JoinType::LeftAnti
                 && j.null_aware
             {
-                null_aware_keys = Some((j.on.len(), j.null_aware_value_keys));
+                null_aware_keys =
+                    Some((j.on.len(), j.null_aware_value_keys.map(|n| n.get())));
             }
             Ok(TreeNodeRecursion::Continue)
         })?;
@@ -3925,6 +3926,87 @@ async fn roundtrip_join_null_aware() -> Result<()> {
         let bytes = logical_plan_to_bytes(&plan)?;
         let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
         assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    }
+
+    Ok(())
+}
+
+/// A null-aware join built without a `NOT IN` value key count keeps the
+/// count unset through the round trip, as does a plan encoded before the
+/// field existed. Physical planning then accepts the join as a scalar
+/// `NOT IN` with a single key, and rejects it with more keys rather than
+/// guessing which of them are value keys.
+#[tokio::test]
+async fn roundtrip_null_aware_join_unset_value_keys() -> Result<()> {
+    use datafusion_common::NullEquality;
+    use datafusion_expr::JoinType;
+    use datafusion_expr::logical_plan::{Join, JoinConstraint};
+    use datafusion_proto::logical_plan::AsLogicalPlan;
+
+    let ctx = SessionContext::new();
+    let fields = |names: [&str; 2]| {
+        Arc::new(Schema::new(
+            names
+                .map(|name| Field::new(name, DataType::Int32, true))
+                .to_vec(),
+        ))
+    };
+    ctx.register_table("t1", Arc::new(EmptyTable::new(fields(["a", "b"]))))?;
+    ctx.register_table("t2", Arc::new(EmptyTable::new(fields(["x", "y"]))))?;
+    let left = Arc::new(ctx.table("t1").await?.into_optimized_plan()?);
+    let right = Arc::new(ctx.table("t2").await?.into_optimized_plan()?);
+
+    for (on, error) in [
+        (vec![(col("t1.a"), col("t2.x"))], false),
+        (
+            vec![(col("t1.a"), col("t2.x")), (col("t1.b"), col("t2.y"))],
+            true,
+        ),
+    ] {
+        let join = LogicalPlan::Join(Join::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            on,
+            None,
+            JoinType::LeftAnti,
+            JoinConstraint::On,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?);
+
+        let mut node = protobuf::LogicalPlanNode::try_from_logical_plan(
+            &join,
+            &DefaultLogicalExtensionCodec {},
+        )?;
+        let Some(protobuf::logical_plan_node::LogicalPlanType::Join(join_node)) =
+            node.logical_plan_type.as_mut()
+        else {
+            panic!("expected a JoinNode");
+        };
+        assert_eq!(join_node.null_aware_value_keys, None);
+
+        // Zero value keys is not a count the plan can hold.
+        join_node.null_aware_value_keys = Some(0);
+        let err = logical_plan_from_bytes(&node.encode_to_vec(), &ctx.task_ctx())
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("null_aware_value_keys 0"), "{err}");
+
+        let round_trip =
+            logical_plan_from_bytes(&logical_plan_to_bytes(&join)?, &ctx.task_ctx())?;
+        let LogicalPlan::Join(round_trip_join) = &round_trip else {
+            panic!("expected a join, got {round_trip}");
+        };
+        assert_eq!(round_trip_join.null_aware_value_keys, None);
+        assert_eq!(format!("{join:?}"), format!("{round_trip:?}"));
+
+        let physical = ctx.state().create_physical_plan(&round_trip).await;
+        if error {
+            let err = physical.unwrap_err().to_string();
+            assert!(err.contains("with_null_aware_value_keys"), "{err}");
+        } else {
+            physical?;
+        }
     }
 
     Ok(())

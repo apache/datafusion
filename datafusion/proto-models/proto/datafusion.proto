@@ -275,9 +275,11 @@ message JoinNode {
   LogicalExprNode filter = 8;
   bool null_aware = 9;
   // Number of `NOT IN` value keys of a null-aware join (see
-  // `Join::null_aware_value_keys`). Messages predating this field decode it
-  // as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
-  uint32 null_aware_value_keys = 10;
+  // `Join::null_aware_value_keys`). Presence-tracked (`optional`) so that an
+  // unset count stays unset: absent decodes to `None`, which is only valid
+  // for a single-key (scalar `NOT IN`) join, the only kind messages predating
+  // this field can hold.
+  optional uint32 null_aware_value_keys = 10;
 }
 
 enum AsOfMatchOperator {
@@ -1465,10 +1467,11 @@ message HashJoinExecNode {
   // `None`, which is the correct reading of an older message.
   optional uint64 fetch = 12;
   // Number of `NOT IN` value keys of a null-aware join (see
-  // `HashJoinExec::null_aware_value_keys`). Messages predating this field
-  // decode it as 0, which is read as 1: they can only hold scalar `NOT IN`
-  // joins.
-  uint32 null_aware_value_keys = 13;
+  // `HashJoinExec::null_aware_value_keys`). Presence-tracked (`optional`) so
+  // that an unset count stays unset: absent decodes to `None`, which is only
+  // valid for a single-key (scalar `NOT IN`) join, the only kind messages
+  // predating this field can hold.
+  optional uint32 null_aware_value_keys = 13;
 }
 
 enum StreamPartitionMode {

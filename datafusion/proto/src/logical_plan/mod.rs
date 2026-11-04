@@ -4,6 +4,7 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use crate::protobuf::{
@@ -1057,8 +1058,29 @@ impl AsLogicalPlan for LogicalPlanNode {
                 // them silently loses both fields. Both sides of the round
                 // trip should already have validated keys, so we don't need
                 // the builder's normalization / equijoin-pair checks.
-                Ok(LogicalPlan::Join(
-                    Join::try_new(
+                //
+                // The value key count is presence-tracked: an absent count
+                // (including every plan encoded before the field existed,
+                // which can only hold a scalar `NOT IN`) stays unset, and
+                // physical planning accepts that only for a single key.
+                let null_aware_value_keys = join
+                    .null_aware_value_keys
+                    .map(|value_keys| {
+                        let value_keys = usize_from_wire(
+                            value_keys,
+                            "JoinNode",
+                            "null_aware_value_keys",
+                        )?;
+                        NonZeroUsize::new(value_keys).ok_or_else(|| {
+                            proto_error(
+                                "Received a JoinNode message with null_aware_value_keys 0, it must be at least 1",
+                            )
+                        })
+                    })
+                    .transpose()?;
+                Ok(LogicalPlan::Join(Join {
+                    null_aware_value_keys,
+                    ..Join::try_new(
                         Arc::new(left),
                         Arc::new(right),
                         on,
@@ -1068,17 +1090,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         NullEquality::from(null_equality),
                         join.null_aware,
                     )?
-                    // Plans encoded before the field existed decode it as 0; they
-                    // could only hold scalar `NOT IN` joins.
-                    .with_null_aware_value_keys(
-                        usize_from_wire(
-                            join.null_aware_value_keys,
-                            "JoinNode",
-                            "null_aware_value_keys",
-                        )?
-                        .max(1),
-                    ),
-                ))
+                }))
             }
             LogicalPlanType::AsOfJoin(join) => {
                 let left_keys =
@@ -1808,14 +1820,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                             null_equality: null_equality.into(),
                             filter,
                             null_aware: *null_aware,
-                            null_aware_value_keys: u32::try_from(
-                                *null_aware_value_keys,
-                            )
-                            .map_err(|_| {
-                                internal_datafusion_err!(
-                                    "JoinNode: null_aware_value_keys {null_aware_value_keys} does not fit in u32"
-                                )
-                            })?,
+                            null_aware_value_keys: null_aware_value_keys
+                                .map(|value_keys| {
+                                    u32::try_from(value_keys.get()).map_err(|_| {
+                                        internal_datafusion_err!(
+                                            "JoinNode: null_aware_value_keys {value_keys} does not fit in u32"
+                                        )
+                                    })
+                                })
+                                .transpose()?,
                         },
                     ))),
                 })

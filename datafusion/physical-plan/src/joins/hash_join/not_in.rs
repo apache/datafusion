@@ -20,6 +20,7 @@
 //! - [`NotInBuild::final_chunk`] on each chunk of build rows emitted after
 //!   the probe side is exhausted.
 
+use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
@@ -99,10 +100,22 @@ impl NotIn {
         join_type: JoinType,
         partition_mode: PartitionMode,
         num_keys: usize,
-        num_value_keys: usize,
+        num_value_keys: Option<NonZeroUsize>,
         has_filter: bool,
     ) -> Result<Self> {
-        if num_value_keys == 0 || num_value_keys > num_keys {
+        // An unset count is only unambiguous with a single key: a scalar
+        // `NOT IN`. With more keys, any default would silently pick which of
+        // them are `NOT IN` value keys and which are correlation scope keys.
+        let num_value_keys = match num_value_keys {
+            Some(num_value_keys) => num_value_keys.get(),
+            None if num_keys == 1 => 1,
+            None => {
+                return plan_err!(
+                    "null_aware {join_type} join with {num_keys} keys needs the number of its `NOT IN` value keys, set it with `with_null_aware_value_keys`"
+                );
+            }
+        };
+        if num_value_keys > num_keys {
             return plan_err!(
                 "null_aware {join_type} join needs between 1 and {num_keys} `NOT IN` value keys, got {num_value_keys}"
             );

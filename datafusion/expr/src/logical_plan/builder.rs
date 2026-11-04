@@ -1440,7 +1440,7 @@ impl LogicalPlanBuilder {
             schema: DFSchemaRef::new(join_schema),
             null_equality,
             null_aware,
-            null_aware_value_keys: 1,
+            null_aware_value_keys: None,
         })))
     }
 

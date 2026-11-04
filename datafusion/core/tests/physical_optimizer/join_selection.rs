@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use insta::assert_snapshot;
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::{
     pin::Pin,
@@ -495,7 +496,7 @@ async fn test_null_aware_left_anti_swaps_to_right_anti(
     .with_filter(if with_filter { nl_join_filter() } else { None })
     .with_partition_mode(partition_mode)
     .with_null_aware(true)
-    .with_null_aware_value_keys(value_keys)
+    .with_null_aware_value_keys(NonZeroUsize::new(value_keys).unwrap())
     .build()?;
     let original_schema = join.schema();
 
@@ -508,7 +509,10 @@ async fn test_null_aware_left_anti_swaps_to_right_anti(
     assert_eq!(*swapped_join.join_type(), JoinType::RightAnti);
     assert_eq!(*swapped_join.partition_mode(), PartitionMode::CollectLeft);
     assert!(swapped_join.null_aware);
-    assert_eq!(swapped_join.null_aware_value_keys, value_keys);
+    assert_eq!(
+        swapped_join.null_aware_value_keys,
+        NonZeroUsize::new(value_keys)
+    );
     assert_eq!(swapped_join.on().len(), num_keys);
     assert_eq!(swapped_join.left().schema().field(0).name(), "small_col");
     assert_eq!(swapped_join.right().schema().field(0).name(), "big_col");

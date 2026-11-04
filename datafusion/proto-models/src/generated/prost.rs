@@ -442,10 +442,12 @@ pub struct JoinNode {
     #[prost(bool, tag = "9")]
     pub null_aware: bool,
     /// Number of `NOT IN` value keys of a null-aware join (see
-    /// `Join::null_aware_value_keys`). Messages predating this field decode it
-    /// as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
-    #[prost(uint32, tag = "10")]
-    pub null_aware_value_keys: u32,
+    /// `Join::null_aware_value_keys`). Presence-tracked (`optional`) so that an
+    /// unset count stays unset: absent decodes to `None`, which is only valid
+    /// for a single-key (scalar `NOT IN`) join, the only kind messages predating
+    /// this field can hold.
+    #[prost(uint32, optional, tag = "10")]
+    pub null_aware_value_keys: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsOfJoinNode {
@@ -2235,11 +2237,12 @@ pub struct HashJoinExecNode {
     #[prost(uint64, optional, tag = "12")]
     pub fetch: ::core::option::Option<u64>,
     /// Number of `NOT IN` value keys of a null-aware join (see
-    /// `HashJoinExec::null_aware_value_keys`). Messages predating this field
-    /// decode it as 0, which is read as 1: they can only hold scalar `NOT IN`
-    /// joins.
-    #[prost(uint32, tag = "13")]
-    pub null_aware_value_keys: u32,
+    /// `HashJoinExec::null_aware_value_keys`). Presence-tracked (`optional`) so
+    /// that an unset count stays unset: absent decodes to `None`, which is only
+    /// valid for a single-key (scalar `NOT IN`) join, the only kind messages
+    /// predating this field can hold.
+    #[prost(uint32, optional, tag = "13")]
+    pub null_aware_value_keys: ::core::option::Option<u32>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
