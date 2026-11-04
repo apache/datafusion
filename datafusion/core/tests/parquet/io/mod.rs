@@ -246,7 +246,7 @@ impl InstrumentedObjectStore {
             requests,
         }
     }
-    
+
     /// Records the start of a new request to the store
     fn record_request(&self) {
         let request = self.requests.fetch_add(1, Ordering::SeqCst) + 1;
