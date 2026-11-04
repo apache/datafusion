@@ -250,9 +250,11 @@
 //!
 //! Note the parser checks *syntax* only. Semantic checks belong on the
 //! [`LogicalPlan`], so they apply to plans built by the DataFrame API and other
-//! frontends as well as by SQL. See the [Syntax vs Semantics] specification.
+//! frontends as well as by SQL. See [Syntax vs Semantics] in the
+//! [`sql::parser`] module documentation.
 //!
-//! [Syntax vs Semantics]: https://datafusion.apache.org/contributor-guide/specification/syntax-vs-semantics.html
+//! [Syntax vs Semantics]: sql::parser#syntax-vs-semantics
+//! [`sql::parser`]: sql::parser
 //!
 //! [`Statement`]: https://docs.rs/sqlparser/latest/sqlparser/ast/enum.Statement.html
 //!

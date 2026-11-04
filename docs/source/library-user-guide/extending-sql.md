@@ -47,7 +47,7 @@ The `Parser` stage checks syntax only, and validation that depends on schemas,
 types, or the catalog belongs on the `LogicalPlan` rather than in the parser or
 the SQL planner. See [Syntax vs Semantics] for where to put such checks.
 
-[syntax vs semantics]: ../contributor-guide/specification/syntax-vs-semantics.md
+[syntax vs semantics]: https://docs.rs/datafusion/latest/datafusion/sql/parser/index.html#syntax-vs-semantics
 
 ## Extension Points
 
