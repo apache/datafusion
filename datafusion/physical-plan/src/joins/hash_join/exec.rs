@@ -851,16 +851,18 @@ pub struct HashJoinExec {
     /// [`Self::null_aware`] is set.
     ///
     /// A scalar `x NOT IN (SELECT y ...)` has one value key; a multi-column
-    /// `(a, b) NOT IN (SELECT x, y ...)` has one per tuple element. The tuple
-    /// comparison is UNKNOWN rather than FALSE when no element pair is a
-    /// definite mismatch and at least one of them involves a NULL, so a NULL in
-    /// one element does not make every comparison UNKNOWN the way a scalar
-    /// NULL does.
+    /// `(a, b) NOT IN (SELECT x, y ...)` has one per tuple element that can be
+    /// NULL. The tuple comparison is UNKNOWN rather than FALSE when no element
+    /// pair is a definite mismatch and at least one of them involves a NULL,
+    /// so a NULL in one element does not make every comparison UNKNOWN the
+    /// way a scalar NULL does. A tuple element that cannot be NULL on either
+    /// side never makes the comparison UNKNOWN; the planner passes it as a
+    /// scope key after the value keys, so it narrows the rows a NULL-valued
+    /// row is compared with.
     ///
     /// Such a join decides UNKNOWN per row, like a correlated scalar `NOT IN`:
-    /// without correlation keys every NULL-valued row is paired with every row
-    /// on the other side to check its other elements. See
-    /// <https://github.com/apache/datafusion/issues/26088> for the follow-up.
+    /// without scope keys every NULL-valued row is paired with every row on
+    /// the other side to check its other elements.
     pub null_aware_value_keys: usize,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
@@ -3302,7 +3304,6 @@ fn build_in_memory(
         .map(|not_in| {
             NotInBuild::try_new(
                 not_in,
-                on_left,
                 &batch,
                 &left_values,
                 &normalized_values,
@@ -10582,6 +10583,111 @@ mod tests {
         Ok(())
     }
 
+    /// Runs a null-aware `LeftAnti` join with the value key `id` and the
+    /// scope key `grp`, over 10,000 build rows `(2 * i, i % 100)`, with a
+    /// NULL `id` for each multiple of `null_build_every`, and the probe rows
+    /// `(probe_ids[i], i)`, in a memory pool of `memory_limit` bytes or an
+    /// unbounded one. Returns the output rows and the `build_mem_used` metric.
+    async fn run_scope_key_anti_join(
+        null_build_every: Option<i32>,
+        probe_ids: Vec<Option<i32>>,
+        memory_limit: Option<usize>,
+    ) -> Result<(usize, usize)> {
+        let build_rows = 10_000;
+        let build_id = |i: i32| match null_build_every {
+            Some(every) if i % every == 0 => None,
+            _ => Some(i * 2),
+        };
+        let left = build_table_two_cols(
+            ("id", &(0..build_rows).map(build_id).collect()),
+            ("grp", &(0..build_rows).map(|i| Some(i % 100)).collect()),
+        );
+        let probe_grps = (0..probe_ids.len() as i32).map(Some).collect();
+        let right = build_table_two_cols(("id", &probe_ids), ("grp", &probe_grps));
+        let on = vec![
+            (
+                Arc::new(Column::new_with_schema("id", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("id", &right.schema())?) as _,
+            ),
+            (
+                Arc::new(Column::new_with_schema("grp", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("grp", &right.schema())?) as _,
+            ),
+        ];
+        let join = HashJoinExec::try_new(
+            left,
+            right,
+            on,
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )?;
+        let task_ctx = fallback_context(memory_limit);
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        let rows = batches.iter().map(|b| b.num_rows()).sum();
+        let build_mem_used = join
+            .metrics()
+            .unwrap()
+            .sum_by_name("build_mem_used")
+            .unwrap()
+            .as_usize();
+        Ok((rows, build_mem_used))
+    }
+
+    /// The hash table over the build rows' correlation scope keys is only
+    /// looked up for probe rows with a NULL value key, so a probe side
+    /// without one never builds it. A memory pool that holds the build side
+    /// but not that table makes the join pair the NULL-valued probe rows with
+    /// every build row instead. The result is the same in all three runs.
+    #[tokio::test]
+    async fn null_aware_scope_map_built_only_for_null_probe_values() -> Result<()> {
+        // `(0, 0)` matches the build row `(0, 0)`; `(1, 1)` matches nothing.
+        let (rows, without_null) =
+            run_scope_key_anti_join(None, vec![Some(0), Some(1)], None).await?;
+        assert_eq!(rows, 9_999);
+        // `(NULL, 1)` makes the 100 build rows with `grp = 1` UNKNOWN.
+        let (rows, with_null) =
+            run_scope_key_anti_join(None, vec![Some(0), None], None).await?;
+        assert_eq!(rows, 9_899);
+        // The scope map holds a bucket and a chain entry for every build row.
+        assert!(
+            with_null >= without_null + 10_000 * size_of::<u32>(),
+            "{without_null} -> {with_null}"
+        );
+        // Not enough memory for the scope map.
+        let limit = without_null + 10_000 * size_of::<u32>() / 2;
+        let (rows, build_mem_used) =
+            run_scope_key_anti_join(None, vec![Some(0), None], Some(limit)).await?;
+        assert_eq!(rows, 9_899, "fallback without the scope map");
+        assert_eq!(
+            build_mem_used, without_null,
+            "fallback without the scope map"
+        );
+        Ok(())
+    }
+
+    /// The same for the hash table over the scope keys of the NULL-valued
+    /// build rows, which is built with the build side.
+    #[tokio::test]
+    async fn null_aware_null_build_scope_map_falls_back_when_memory_is_short()
+    -> Result<()> {
+        // The build rows `(NULL, 0)` for each multiple of 100 are UNKNOWN for
+        // the probe row `(0, 0)`, and `(0, 0)` matches the build row `(0, 0)`
+        // no more, as its `id` is NULL.
+        let probe_ids = vec![Some(0), Some(1)];
+        let (rows, unbounded) =
+            run_scope_key_anti_join(Some(100), probe_ids.clone(), None).await?;
+        assert_eq!(rows, 9_900);
+        let (rows, build_mem_used) =
+            run_scope_key_anti_join(Some(100), probe_ids, Some(unbounded - 1)).await?;
+        assert_eq!(rows, 9_900);
+        assert!(build_mem_used < unbounded, "{build_mem_used} < {unbounded}");
+        Ok(())
+    }
+
     /// `left.z > right.z` over the second column of two-column tables: the
     /// non-equality correlation of
     /// `id NOT IN (SELECT r.id FROM r WHERE r.z < l.z)`.
@@ -10911,6 +11017,57 @@ mod tests {
             ");
         }
 
+        Ok(())
+    }
+
+    /// A probe batch with more NULL-valued rows than the batch size, spread
+    /// among other rows. The NULL-valued rows past the first batch of them
+    /// decide `(3, 7)` and `(4, 9)`, so the pairing must find them again at
+    /// their own rows for every chunk of build rows that the first batch
+    /// leaves undecided.
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_left_anti_multi_column_null_probe_rows_past_batch(
+        batch_size: usize,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, false);
+        let left = build_table_two_cols(
+            ("a", &vec![Some(3), Some(4), Some(6)]),
+            ("b", &vec![Some(7), Some(9), Some(6)]),
+        );
+        let right = build_table_two_cols(
+            ("a", &vec![Some(1), None, None, Some(5), None, None]),
+            (
+                "b",
+                &vec![Some(1), Some(8), Some(8), Some(5), Some(7), Some(9)],
+            ),
+        );
+        let on = ["a", "b"]
+            .into_iter()
+            .map(|name| {
+                Ok((
+                    Arc::new(Column::new_with_schema(name, &left.schema())?) as _,
+                    Arc::new(Column::new_with_schema(name, &right.schema())?) as _,
+                ))
+            })
+            .collect::<Result<JoinOn>>()?;
+        // Both elements are value keys, so the NULL-valued probe rows are
+        // paired with every build row.
+        let join = HashJoinExecBuilder::new(left, right, on, JoinType::LeftAnti)
+            .with_partition_mode(PartitionMode::CollectLeft)
+            .with_null_aware(true)
+            .with_null_aware_value_keys(2)
+            .build()?;
+        let batches = common::collect(join.execute(0, task_ctx)?).await?;
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +---+---+
+            | a | b |
+            +---+---+
+            | 6 | 6 |
+            +---+---+
+            ");
+        }
         Ok(())
     }
 

@@ -1512,7 +1512,7 @@ config_namespace! {
         /// (writing)  Sets default encoding for any column.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
-        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         pub encoding: Option<DFParquetEncoding>, default = None
@@ -1643,6 +1643,16 @@ config_namespace! {
         /// can improve performance. However, for high cardinality keys, it may
         /// cause regressions in both memory usage and runtime.
         pub enable_window_topn: bool, default = false
+
+        /// When set to true, the optimizer will rewrite a "top-1 per group"
+        /// pattern of the form `Filter(row_number() = 1)` over a `PARTITION BY` window into an
+        /// `Aggregate(first_value(... ORDER BY ...) GROUP BY partition)`.
+        /// This avoids buffering / fully sorting the input, which is especially beneficial on wide payloads.
+        /// Disabled by default because on nested/wide value types the aggregate only becomes memory
+        /// efficient once the columnar nested-type `GroupsAccumulator` fast
+        /// path is available; enabling it without that support can route wide
+        /// payloads onto the slow per-group accumulator path.
+        pub enable_row_number_to_aggregate: bool, default = false
 
         /// When set to true, the optimizer will push TopK (Sort with fetch)
         /// below hash repartition when the partition key is a prefix of the
@@ -3509,7 +3519,7 @@ config_namespace_with_hashmap! {
         /// Sets encoding for the column path.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
-        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
         pub encoding: Option<String>, default = None
