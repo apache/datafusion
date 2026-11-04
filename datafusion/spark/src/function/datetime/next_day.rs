@@ -7,10 +7,11 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, AsArray, Date32Array, StringArrayType};
 use arrow::datatypes::{DataType, Date32Type, Field, FieldRef};
 use chrono::{Datelike, Weekday};
+use datafusion_common::types::{NativeType, logical_date, logical_string};
 use datafusion_common::{Result, ScalarValue, exec_err, internal_err};
 use datafusion_expr::{
-    ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    Coercion, ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, TypeSignatureClass, Volatility,
 };
 
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#next_day>
@@ -28,8 +29,24 @@ impl Default for SparkNextDay {
 impl SparkNextDay {
     pub fn new() -> Self {
         Self {
-            signature: Signature::exact(
-                vec![DataType::Date32, DataType::Utf8],
+            // Spark casts the start date to DATE, so STRING and TIMESTAMP are accepted
+            signature: Signature::coercible(
+                vec![
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_date()),
+                        vec![
+                            TypeSignatureClass::Native(logical_string()),
+                            TypeSignatureClass::Timestamp,
+                        ],
+                        NativeType::Date,
+                    ),
+                    Coercion::new_implicit(
+                        TypeSignatureClass::Native(logical_string()),
+                        // Preserve the previous Exact signature's weekday-to-string coercion.
+                        vec![TypeSignatureClass::Any],
+                        NativeType::String,
+                    ),
+                ],
                 Volatility::Immutable,
             ),
         }

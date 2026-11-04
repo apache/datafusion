@@ -9,14 +9,17 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use super::ProjectionMapping;
-use crate::expressions::Literal;
+use crate::expressions::{Column, Literal};
 use crate::physical_expr::add_offset_to_expr;
 use crate::projection::ProjectionTargets;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Result, ScalarValue};
-use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use datafusion_expr::sort_properties::SortProperties;
+use datafusion_physical_expr_common::physical_expr::{
+    format_physical_expr_list, is_volatile,
+};
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -171,6 +174,14 @@ pub struct EquivalenceClass {
 }
 
 impl EquivalenceClass {
+    /// Keeps what still holds on a join side whose unmatched rows are padded
+    /// with NULLs: padded columns stay equal to each other, but constants and
+    /// computed members do not (`coalesce(a, 0)` is 0 where `a` is NULL).
+    fn null_pad(&mut self) {
+        self.constant = None;
+        self.exprs.retain(|expr| expr.is::<Column>());
+    }
+
     // Create a new equivalence class from a pre-existing collection.
     pub fn new(exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>) -> Self {
         let mut class = Self::default();
@@ -348,8 +359,9 @@ impl EquivalenceGroup {
             return;
         }
         // If the expression is not in any equivalence class, but has the same
-        // constant value with some class, add it to that class:
-        if let AcrossPartitions::Uniform(_) = &const_expr.across_partitions {
+        // constant value with some class, add it to that class. An unknown
+        // value is never known to match, so it gets a class of its own:
+        if let AcrossPartitions::Uniform(Some(_)) = &const_expr.across_partitions {
             for (idx, cls) in self.classes.iter_mut().enumerate() {
                 if cls
                     .constant
@@ -738,6 +750,7 @@ impl EquivalenceGroup {
         let mut new_constants = vec![];
         let mut new_classes =
             IndexMap::<_, EquivalenceClass>::with_capacity(mapping.len());
+        let mut augmented = None;
         for (source, targets) in mapping.iter() {
             // We need to find equivalent projected expressions. For example,
             // consider a table with columns `[a, b, c]` with `a` == `b`, and
@@ -748,6 +761,15 @@ impl EquivalenceGroup {
             let cls = new_classes.entry(normalized_expr).or_default();
             for (target, _) in targets.iter() {
                 cls.push(Arc::clone(target));
+            }
+            // Retain deterministic expressions as equalities so orderings derived
+            // through strict functions can be inferred after a merge clears orderings.
+            if !source.children().is_empty() && !is_volatile(source) {
+                let augmented = augmented
+                    .get_or_insert_with(|| self.augment_projection_mapping(mapping));
+                if let Some(projected) = Self::project_expr_indirect(augmented, source) {
+                    cls.push(projected);
+                }
             }
             // Save new constants arising from the projection:
             if let Some(across) = self.is_expr_constant(source) {
@@ -789,9 +811,21 @@ impl EquivalenceGroup {
         // TODO: This function should be able to return values of non-literal
         //       complex constants as well; e.g. it should return `8` for the
         //       expression `3 + 5`, not an unknown `heterogenous` value.
+        // A volatile expression can change from row to row, even when all of
+        // its inputs are constant
+        if expr.is_volatile_node() {
+            return None;
+        }
         let children = expr.children();
         if children.is_empty() {
-            return None;
+            // A leaf that reads no column can still be constant, e.g. an
+            // uncorrelated scalar subquery, which reports itself as a
+            // singleton. It does not depend on the row or the partition, so
+            // its value is the same everywhere, even if it is not known yet.
+            let singleton = expr
+                .get_properties(&[])
+                .is_ok_and(|props| props.sort_properties == SortProperties::Singleton);
+            return singleton.then_some(AcrossPartitions::Uniform(None));
         }
         for child in children {
             self.is_expr_constant(child)?;
@@ -819,21 +853,35 @@ impl EquivalenceGroup {
         let group = match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
                 let mut result = Self::new(
-                    self.iter().cloned().chain(
-                        right_equivalences
-                            .iter()
-                            .map(|cls| {
-                                let mut cls = cls.try_with_offset(left_size as _)?;
-                                // Rows without a match on the right side are
-                                // padded with NULLs, so its constants no
-                                // longer hold.
-                                if matches!(join_type, JoinType::Left | JoinType::Full) {
-                                    cls.constant = None;
-                                }
-                                Ok(cls)
-                            })
-                            .collect::<Result<Vec<_>>>()?,
-                    ),
+                    self.iter()
+                        .cloned()
+                        .map(|mut cls| {
+                            // Rows without a match on the left side are
+                            // padded with NULLs, so its constants and computed
+                            // equalities no longer hold.
+                            if matches!(join_type, JoinType::Right | JoinType::Full) {
+                                cls.null_pad();
+                            }
+                            cls
+                        })
+                        .chain(
+                            right_equivalences
+                                .iter()
+                                .map(|cls| {
+                                    let mut cls = cls.try_with_offset(left_size as _)?;
+                                    // Rows without a match on the right side are
+                                    // padded with NULLs, so its constants and computed
+                                    // equalities no longer hold.
+                                    if matches!(
+                                        join_type,
+                                        JoinType::Left | JoinType::Full
+                                    ) {
+                                        cls.null_pad();
+                                    }
+                                    Ok(cls)
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                        ),
                 );
                 // In we have an inner join, expressions in the "on" condition
                 // are equal in the resulting table.
@@ -1459,6 +1507,117 @@ mod tests {
         Ok(())
     }
 
+    /// An uncorrelated scalar subquery is a leaf with no columns, so the only
+    /// way to know it is constant is to ask the expression itself.
+    /// <https://github.com/apache/datafusion/issues/26572>
+    #[test]
+    fn test_scalar_subquery_is_uniform_constant() -> Result<()> {
+        use crate::scalar_subquery::ScalarSubqueryExpr;
+        use datafusion_expr::physical_planning_context::{
+            ScalarSubqueryResults, SubqueryIndex,
+        };
+
+        let subquery: Arc<dyn PhysicalExpr> = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int32,
+            true,
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
+        ));
+        let group = EquivalenceGroup::default();
+        assert_eq!(
+            group.is_expr_constant(&subquery),
+            Some(AcrossPartitions::Uniform(None))
+        );
+        // A column is a leaf too, but it is not constant
+        let schema = abc_schema();
+        assert_eq!(group.is_expr_constant(&col("a", &schema)?), None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_volatile_function_of_constants_is_not_constant() -> Result<()> {
+        use crate::ScalarFunctionExpr;
+        use crate::scalar_subquery::ScalarSubqueryExpr;
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::physical_planning_context::{
+            ScalarSubqueryResults, SubqueryIndex,
+        };
+        use datafusion_expr::{ColumnarValue, Volatility, create_udf};
+
+        let schema = abc_schema();
+        let group = EquivalenceGroup::default();
+        let subquery: Arc<dyn PhysicalExpr> = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int32,
+            true,
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
+        ));
+        let call = |volatility, arg: Arc<dyn PhysicalExpr>| -> Result<_> {
+            let udf = Arc::new(create_udf(
+                "f",
+                vec![DataType::Int32],
+                DataType::Int32,
+                volatility,
+                Arc::new(|args: &[ColumnarValue]| Ok(args[0].clone())),
+            ));
+            let expr = ScalarFunctionExpr::try_new(
+                udf,
+                vec![arg],
+                &schema,
+                Arc::new(ConfigOptions::new()),
+            )?;
+            Ok(Arc::new(expr) as Arc<dyn PhysicalExpr>)
+        };
+
+        // A volatile function can return a new value for every row, even
+        // when its argument is constant
+        for arg in [lit(1i32), Arc::clone(&subquery)] {
+            let volatile = call(Volatility::Volatile, arg)?;
+            assert_eq!(group.is_expr_constant(&volatile), None);
+        }
+        // A stable function of a constant is constant
+        let stable = call(Volatility::Stable, subquery)?;
+        assert_eq!(
+            group.is_expr_constant(&stable),
+            Some(AcrossPartitions::Heterogeneous)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unknown_constants_stay_apart() -> Result<()> {
+        // Two constants whose values are unknown are not known to be equal,
+        // so they must not be merged into one class
+        let schema = abc_schema();
+        let mut group = EquivalenceGroup::default();
+        group.add_constant(ConstExpr::new(
+            col("a", &schema)?,
+            AcrossPartitions::Uniform(None),
+        ));
+        group.add_constant(ConstExpr::new(
+            col("b", &schema)?,
+            AcrossPartitions::Uniform(None),
+        ));
+        assert_eq!(group.len(), 2);
+
+        // Two constants with the same known value are merged
+        let mut group = EquivalenceGroup::default();
+        let one = Some(ScalarValue::Int32(Some(1)));
+        group.add_constant(ConstExpr::new(
+            col("a", &schema)?,
+            AcrossPartitions::Uniform(one.clone()),
+        ));
+        group.add_constant(ConstExpr::new(
+            col("b", &schema)?,
+            AcrossPartitions::Uniform(one),
+        ));
+        assert_eq!(group.len(), 1);
+
+        Ok(())
+    }
+
     /// A constant on the right side of a join stays constant in the join
     /// output, unless unmatched rows pad the right side with NULLs.
     /// <https://github.com/apache/datafusion/issues/26283>
@@ -1479,6 +1638,31 @@ mod tests {
             let joined = EquivalenceGroup::default().join(&right, &join_type, 4, &[])?;
             assert_eq!(
                 joined.is_expr_constant(&right_a).is_some(),
+                expected,
+                "{join_type}"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// The same for a constant on the left side, whose rows are padded with
+    /// NULLs by a right or full join.
+    #[test]
+    fn test_join_keeps_left_constants() -> Result<()> {
+        let schema = abc_schema();
+        let mut left = EquivalenceGroup::default();
+        left.add_constant(ConstExpr::from(col("a", &schema)?));
+        let left_a = col("a", &schema)?;
+        for (join_type, expected) in [
+            (JoinType::Inner, true),
+            (JoinType::Left, true),
+            (JoinType::Right, false),
+            (JoinType::Full, false),
+        ] {
+            let joined = left.join(&EquivalenceGroup::default(), &join_type, 4, &[])?;
+            assert_eq!(
+                joined.is_expr_constant(&left_a).is_some(),
                 expected,
                 "{join_type}"
             );

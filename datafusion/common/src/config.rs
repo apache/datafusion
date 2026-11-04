@@ -229,11 +229,10 @@ config_namespace! {
         /// virtual tables for displaying schema information
         pub information_schema: bool, default = false
 
-        /// The system catalog name - when set together with `information_schema`, the
-        /// `information_schema` for each catalog will only describe objects contained in the
-        /// catalog itself. The global, cross-catalog `information_schema` is available under
-        /// the virtual catalog named by this option.
-        pub system_catalog: Option<String>, default = None
+        /// When set together with `information_schema`, the `information_schema`
+        /// of each catalog only describes the objects in that catalog. When not
+        /// set, the `information_schema` of each catalog describes all catalogs.
+        pub partition_information_schema: bool, default = false
 
         /// Location scanned to load tables for `default` schema
         pub location: Option<String>, default = None
@@ -1326,7 +1325,9 @@ config_namespace! {
 
         /// (reading) If true, the parquet reader skip the optional embedded metadata that may be in
         /// the file Schema. This setting can help avoid schema conflicts when querying
-        /// multiple parquet files with schemas containing compatible types but different metadata
+        /// multiple parquet files with schemas containing compatible types but different metadata.
+        /// Arrow extension types (the `ARROW:extension:name` and `ARROW:extension:metadata`
+        /// field metadata) are kept, because they are part of the type of a column
         pub skip_metadata: bool, default = true
 
         /// (reading) If specified, the parquet reader will try and fetch the last `size_hint`
@@ -1511,7 +1512,7 @@ config_namespace! {
         /// (writing)  Sets default encoding for any column.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
-        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         pub encoding: Option<DFParquetEncoding>, default = None
@@ -1642,6 +1643,16 @@ config_namespace! {
         /// can improve performance. However, for high cardinality keys, it may
         /// cause regressions in both memory usage and runtime.
         pub enable_window_topn: bool, default = false
+
+        /// When set to true, the optimizer will rewrite a "top-1 per group"
+        /// pattern of the form `Filter(row_number() = 1)` over a `PARTITION BY` window into an
+        /// `Aggregate(first_value(... ORDER BY ...) GROUP BY partition)`.
+        /// This avoids buffering / fully sorting the input, which is especially beneficial on wide payloads.
+        /// Disabled by default because on nested/wide value types the aggregate only becomes memory
+        /// efficient once the columnar nested-type `GroupsAccumulator` fast
+        /// path is available; enabling it without that support can route wide
+        /// payloads onto the slow per-group accumulator path.
+        pub enable_row_number_to_aggregate: bool, default = false
 
         /// When set to true, the optimizer will push TopK (Sort with fetch)
         /// below hash repartition when the partition key is a prefix of the
@@ -3508,7 +3519,7 @@ config_namespace_with_hashmap! {
         /// Sets encoding for the column path.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
-        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
         pub encoding: Option<String>, default = None

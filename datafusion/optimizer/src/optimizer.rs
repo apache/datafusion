@@ -49,6 +49,7 @@ use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
+use crate::replace_filter_top1::ReplaceFilterTop1;
 use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
@@ -298,6 +299,7 @@ impl Optimizer {
     /// | 24    | `extract_leaf_expressions`                | [`ExtractLeafExpressions`]        | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
     /// | 25    | `push_down_leaf_projections`              | [`PushDownLeafProjections`]       | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
     /// | 26    | `optimize_projections`                    | [`OptimizeProjections`]           | Prunes unused columns and removes unnecessary logical projections.                                                          |
+    /// | 27    | `replace_filter_top1`                     | [`ReplaceFilterTop1`]             | Rewrites `Filter(row_number() = 1)` over a partitioned window into a `first_value` aggregate.                               |
     pub fn new() -> Self {
         // NOTEs:
         // - The order of rules in this list is important, as it determines the
@@ -338,6 +340,7 @@ impl Optimizer {
             Arc::new(ExtractLeafExpressions::new()),
             Arc::new(PushDownLeafProjections::new()),
             Arc::new(OptimizeProjections::new()),
+            Arc::new(ReplaceFilterTop1::new()),
         ];
 
         Self::with_rules(rules)
@@ -504,7 +507,7 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         | LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::Values { .. }
         | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
-        | LogicalPlan::DescribeTable(_)
+        | LogicalPlan::Show(_)
         | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))

@@ -20,7 +20,6 @@ use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::output_requirements::OutputRequirements;
 use crate::projection_pushdown::ProjectionPushdown;
-use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
 use crate::topk_repartition::TopKRepartition;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
@@ -104,12 +103,14 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 /// - [`EnsureRequirements`] inserts the repartitioning and sorting needed to
 ///   satisfy the distribution and ordering requirements.
 /// - [`OutputRequirements`] records output requirements.
-/// - [`SanityCheckPlan`] rejects plans whose requirements are not satisfied.
-///   It should run last.
 ///
 /// Custom pipelines must keep these rules in a compatible relative order. We
 /// are working to remove these exceptions, so that all rules can be reordered
 /// freely.
+///
+/// After the last rule, including rules added by the user, the physical
+/// planner rejects the plan if its requirements are not satisfied (see
+/// [`check_plan_tree_sanity`](crate::sanity_checker::check_plan_tree_sanity)).
 ///
 /// ## Optimization Coverage Is Not Guaranteed
 ///
@@ -187,6 +188,12 @@ impl PhysicalOptimizer {
     /// the [`PhysicalOptimizer`](Self) documentation for the contract that
     /// governs reordering or extending this list.
     ///
+    /// After the last rule, including any rule added by the user, the physical
+    /// planner checks that the final plan meets its ordering, distribution, and
+    /// infinite-input safety requirements (`SanityCheckPlan`). If the ordering
+    /// or distribution requirements do not hold, the error names the rule that
+    /// broke them.
+    ///
     /// | order | rule                           | struct                           | phase                   | summary                                                                                                      |
     /// | ----- | ------------------------------ | -------------------------------- | ----------------------- | ------------------------------------------------------------------------------------------------------------ |
     /// | 1     | `OutputRequirements`           | [`OutputRequirements`]           | add phase               | Adds helper nodes so output requirements survive later physical rewrites.                                    |
@@ -210,7 +217,6 @@ impl PhysicalOptimizer {
     /// | 19    | `PushdownSort`                 | [`PushdownSort`]                 | -                       | Pushes sort requirements into data sources that can already return sorted output.                            |
     /// | 20    | `EnsureCooperative`            | [`EnsureCooperative`]            | -                       | Wraps non-cooperative plan parts so long-running tasks yield fairly.                                         |
     /// | 21    | `FilterPushdown(Post)`         | [`FilterPushdown`]               | post-optimization phase | Pushes dynamic filters at the end of optimization, after plan references stop moving.                        |
-    /// | 22    | `SanityCheckPlan`              | [`SanityCheckPlan`]              | -                       | Validates that the final physical plan meets ordering, distribution, and infinite-input safety requirements. |
     pub fn new() -> Self {
         // NOTEs:
         // - The order of rules in this list is important, as it determines the
@@ -315,15 +321,10 @@ impl PhysicalOptimizer {
             // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new_post_optimization()),
-            // The SanityCheckPlan rule checks whether the order and
-            // distribution requirements of each node in the plan
-            // is satisfied. It will also reject non-runnable query
-            // plans that use pipeline-breaking operators on infinite
-            // input(s). The rule generates a diagnostic error
-            // message for invalid plans. It makes no changes to the
-            // given query plan; i.e. it only acts as a final
-            // gatekeeping rule.
-            Arc::new(SanityCheckPlan::new()),
+            // There is no `SanityCheckPlan` rule at the end of this list. The
+            // physical planner runs the same check on the final plan, after
+            // every rule including the ones appended by the user. See
+            // `crate::sanity_checker`.
         ];
 
         Self::with_rules(rules)
