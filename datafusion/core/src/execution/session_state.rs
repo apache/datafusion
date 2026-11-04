@@ -429,7 +429,10 @@ impl SessionState {
             let information_schema_provider =
                 InformationSchemaProvider::new(Arc::clone(self.catalog_list()))
                     .with_information_schema_enabled(true)
-                    .with_table_functions(self.inner.table_functions.clone());
+                    .with_table_functions(self.inner.table_functions.clone())
+                    .with_extension_type_registry(Arc::clone(
+                        &self.inner.extension_types,
+                    ));
 
             // If partitioned information schema is enabled, restrict the information schema to
             // the containing catalog

@@ -2356,7 +2356,9 @@ fn create_information_schema_provider(
     // Do not set a catalog filter. `SHOW` statements describe all catalogs,
     // regardless of `SessionConfig::partition_information_schema`
     let provider = InformationSchemaProvider::new(session.catalog_list());
-    provider.with_information_schema_enabled(session.config().information_schema())
+    provider
+        .with_information_schema_enabled(session.config().information_schema())
+        .with_extension_type_registry(Arc::clone(session.extension_type_registry()))
 }
 
 /// Expand and align a GROUPING SET expression.

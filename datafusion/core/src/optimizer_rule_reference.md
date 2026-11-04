@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 ## Built-in Optimizer Rules
@@ -90,6 +77,7 @@ Rule order matters. The default pipeline may change between releases.
 | 24    | `extract_leaf_expressions`                | Pulls cheap leaf expressions closer to data sources so later pruning and filter rules can act earlier.                      |
 | 25    | `push_down_leaf_projections`              | Pushes the helper projections created by leaf extraction toward leaf inputs.                                                |
 | 26    | `optimize_projections`                    | Prunes unused columns and removes unnecessary logical projections.                                                          |
+| 27    | `replace_filter_top1`                     | Rewrites `Filter(row_number() = 1)` over a partitioned window into a `first_value` aggregate.                               |
 
 ### Physical Analyzer Rules
 

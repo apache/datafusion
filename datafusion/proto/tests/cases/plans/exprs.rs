@@ -446,10 +446,11 @@ fn roundtrip_hash_table_lookup_expr_to_lit() -> Result<()> {
     let lookup_expr: Arc<dyn PhysicalExpr> = Arc::new(HashTableLookupExpr::new(
         on_columns,
         datafusion::physical_plan::joins::SeededRandomState::with_seed(0),
-        hash_map,
+        None,
+        vec![Some(hash_map)],
         "test_lookup".to_string(),
         None,
-    ));
+    )?);
 
     // Create a filter with the lookup expression
     let filter = Arc::new(FilterExec::try_new(lookup_expr, input)?);
