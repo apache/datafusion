@@ -18,7 +18,7 @@ use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::not_in::NotIn;
 use crate::joins::hash_join::partitioned_hash_eval::{
-    HashExpr, HashTableLookupExpr, PartitionRouter, SeededRandomState,
+    HashTableLookupExpr, PartitionRouter, SeededRandomState,
 };
 use crate::joins::join_hash_map::{JoinHashMapType, JoinHashMapU32};
 use crate::joins::key_range_bitmap::{KeyRangeBitmap, KeyRangePart};
@@ -35,7 +35,7 @@ use datafusion_common::{
 use datafusion_expr::Operator;
 use datafusion_functions::core::r#struct as struct_func;
 use datafusion_physical_expr::expressions::{
-    BinaryExpr, CaseExpr, DynamicFilterPhysicalExpr, InListExpr, IsNullExpr, lit,
+    BinaryExpr, DynamicFilterPhysicalExpr, InListExpr, IsNullExpr, lit,
 };
 use datafusion_physical_expr::{
     PhysicalExpr, PhysicalExprRef, RangePartitioning, ScalarFunctionExpr,
@@ -708,16 +708,13 @@ impl SharedBuildAccumulator {
         }
     }
 
-    /// Builds one routed probe-side filter from finalized partitioned build data.
-    /// Empty and canceled partitions reject their routed rows.
+    /// Builds one probe-side filter from finalized partitioned build data.
+    /// Empty and canceled partitions contribute no key.
     fn build_partitioned_filter(&self, partitions: Vec<PartitionStatus>) -> Result<()> {
-        let mut partition_filters = Vec::with_capacity(partitions.len());
-        let mut real_partition_ids = Vec::new();
-        let mut keys_have_null = false;
-        // Every non-empty partition's membership strategy and bounds, merged into
-        // one membership filter below; `None` once a partition cannot be merged.
-        let mut members = Some(Vec::with_capacity(partitions.len()));
+        let num_partitions = partitions.len();
+        let mut members = Vec::with_capacity(num_partitions);
         let mut merged_bounds: Option<PartitionBounds> = None;
+        let mut keys_have_null = false;
 
         for (partition_id, partition) in partitions.into_iter().enumerate() {
             match partition {
@@ -728,118 +725,33 @@ impl SharedBuildAccumulator {
                 | PartitionStatus::Reported(PartitionData {
                     pushdown: PushdownStrategy::Empty,
                     ..
-                }) => {
-                    partition_filters.push(lit(false));
-                }
+                }) => {}
                 PartitionStatus::Reported(PartitionData {
                     bounds,
                     pushdown,
                     keys_have_null: partition_keys_have_null,
                 }) => {
-                    real_partition_ids.push(partition_id);
                     keys_have_null |= partition_keys_have_null;
-                    members = members.map(|mut members| {
-                        members.push((partition_id, pushdown.clone(), bounds.clone()));
-                        members
-                    });
                     merged_bounds = Some(match merged_bounds {
                         None => bounds.clone(),
                         Some(merged) => merged.union(&bounds),
                     });
-
-                    let membership_expr = create_membership_predicate(
-                        &self.on_right,
-                        pushdown,
-                        &HASH_JOIN_SEED,
-                        self.probe_schema.as_ref(),
-                    )?;
-                    let bounds_expr = create_bounds_predicate(&self.on_right, &bounds);
-                    let then_expr =
-                        combine_membership_and_bounds(membership_expr, bounds_expr)
-                            .unwrap_or_else(|| lit(true));
-                    partition_filters.push(then_expr);
+                    members.push((partition_id, pushdown, bounds));
                 }
                 PartitionStatus::Pending => {
-                    return datafusion_common::internal_err!(
+                    return internal_err!(
                         "attempted to finalize dynamic filter with pending partition"
                     );
                 }
             }
         }
 
-        let filter_expr = if real_partition_ids.is_empty() {
+        let filter_expr = if members.is_empty() {
             // No build row exists, so no probe row can match.
             lit(false)
-        } else if real_partition_ids.len() == 1 {
-            // Only one build partition contains rows, so its filter covers every
-            // possible probe match without routing.
-            Arc::clone(&partition_filters[real_partition_ids[0]])
-        } else if let Some(members) = members {
-            self.merged_membership_filter(
-                &members,
-                merged_bounds,
-                partition_filters.len(),
-            )?
         } else {
-            // Builds the shared sparse `CASE` for partition filter routing.
-            // Omitted branches are known empty and fall through to `ELSE false`.
-            let branches = real_partition_ids
-                .iter()
-                .map(|&partition_id| {
-                    (
-                        lit(partition_id as u64),
-                        Arc::clone(&partition_filters[partition_id]),
-                    )
-                })
-                .collect::<Vec<_>>();
-
-            let routing_expr = if let Some(range_partitioning) =
-                &self.probe_range_partitioning
-            {
-                // Routes probe rows with the partition id selected by [`RangeExpr`].
-                // CASE range_partition(keys)
-                //   WHEN real_partition_id THEN F(real_partition_id)
-                //   ...
-                //   ELSE false
-                // END
-                assert_or_internal_err!(
-                    partition_filters.len() == range_partitioning.partition_count(),
-                    "Dynamic filter partition count {} does not match Range partition count {}",
-                    partition_filters.len(),
-                    range_partitioning.partition_count()
-                );
-                Arc::new(RangeExpr::try_new_with_schema(
-                    self.on_right.clone(),
-                    range_partitioning,
-                    &self.probe_schema,
-                )?) as Arc<dyn PhysicalExpr>
-            } else {
-                // Routes probe rows with the same `hash(keys) % partition_count` expression used
-                // by Hash repartitioning.
-                // CASE hash(keys) % partition_count
-                //   WHEN real_partition_id THEN F(real_partition_id)
-                //   ...
-                //   ELSE false
-                // END
-                let routing_hash_expr = Arc::new(HashExpr::new(
-                    self.on_right.clone(),
-                    self.repartition_random_state.clone(),
-                    "hash_repartition".to_string(),
-                )) as Arc<dyn PhysicalExpr>;
-                Arc::new(BinaryExpr::new(
-                    routing_hash_expr,
-                    Operator::Modulo,
-                    lit(partition_filters.len() as u64),
-                )) as Arc<dyn PhysicalExpr>
-            };
-
-            Arc::new(CaseExpr::try_new(
-                Some(routing_expr),
-                branches,
-                Some(lit(false)),
-            )?)
+            self.merged_membership_filter(&members, merged_bounds, num_partitions)?
         };
-
         self.dynamic_filter
             .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?)
     }
@@ -1329,7 +1241,6 @@ mod tests {
         .unwrap();
 
         let expr = current_expr(&acc);
-        assert!(expr.downcast_ref::<CaseExpr>().is_none());
         assert_eq!(
             expr.to_string(),
             "probe_key@0 >= 1 AND probe_key@0 <= 10 AND hash_lookup"
@@ -1407,11 +1318,6 @@ mod tests {
         )))
         .unwrap();
 
-        assert!(
-            current_expr(&acc).downcast_ref::<CaseExpr>().is_none(),
-            "expected a merged lookup, got: {}",
-            current_expr(&acc)
-        );
         let probe: Vec<i32> = (0..40).collect();
         let expected: Vec<bool> = probe.iter().map(|key| key % 2 == 0).collect();
         assert_matches(&acc, &probe, &expected);
@@ -1437,8 +1343,7 @@ mod tests {
 
         let expr = current_expr(&acc);
         assert!(
-            expr.downcast_ref::<CaseExpr>().is_none()
-                && expr.downcast_ref::<InListExpr>().is_none(),
+            expr.downcast_ref::<InListExpr>().is_none(),
             "expected a hash lookup, got: {expr}"
         );
         let probe: Vec<i32> = (0..20).collect();
@@ -1498,11 +1403,6 @@ mod tests {
         )))
         .unwrap();
 
-        assert!(
-            current_expr(&acc).downcast_ref::<CaseExpr>().is_none(),
-            "expected a merged lookup, got: {}",
-            current_expr(&acc)
-        );
         let probe: Vec<i32> = (0..40).collect();
         let expected: Vec<bool> = probe.iter().map(|key| key % 2 == 0).collect();
         assert_matches(&acc, &probe, &expected);
@@ -1533,7 +1433,6 @@ mod tests {
             reported(array_map_of(&[37, 38, 39]), bounds(37, 39)),
         ]))?;
 
-        assert!(current_expr(&acc).downcast_ref::<CaseExpr>().is_none());
         let probe: Vec<i32> = (0..50).collect();
         let expected: Vec<bool> = probe
             .iter()
@@ -1573,7 +1472,6 @@ mod tests {
 
         let expr = current_expr(&acc);
         in_list_expr(&expr);
-        assert!(expr.downcast_ref::<CaseExpr>().is_none());
     }
 
     #[test]
