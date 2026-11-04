@@ -14,7 +14,7 @@ use std::{
 use crate::expr::{Exists, InSubquery, SetComparison, Sort};
 #[cfg(not(feature = "sql"))]
 use crate::sql::Ident;
-use arrow::datatypes::DataType;
+use arrow::datatypes::FieldRef;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -900,7 +900,8 @@ pub struct CreateFunction {
     pub temporary: bool,
     pub name: String,
     pub args: Option<Vec<OperateFunctionArg>>,
-    pub return_type: Option<DataType>,
+    /// The return type, which may carry metadata such as an extension type
+    pub return_field: Option<FieldRef>,
     pub params: CreateFunctionBody,
     /// Dummy schema
     pub schema: DFSchemaRef,
@@ -918,7 +919,7 @@ impl CreateFunction {
         temporary: bool,
         name: String,
         args: Option<Vec<OperateFunctionArg>>,
-        return_type: Option<DataType>,
+        return_field: Option<FieldRef>,
         params: CreateFunctionBody,
     ) -> Result<Self> {
         let arg_count = args.as_ref().map_or(0, |declared| declared.len());
@@ -937,7 +938,7 @@ impl CreateFunction {
             temporary,
             name,
             args,
-            return_type,
+            return_field,
             params,
             schema: DFSchemaRef::new(DFSchema::empty()),
         })
@@ -1004,7 +1005,7 @@ impl PartialOrd for CreateFunction {
             pub temporary: &'a bool,
             pub name: &'a String,
             pub args: &'a Option<Vec<OperateFunctionArg>>,
-            pub return_type: &'a Option<DataType>,
+            pub return_field: &'a Option<FieldRef>,
             pub params: &'a CreateFunctionBody,
         }
         let comparable_self = ComparableCreateFunction {
@@ -1012,7 +1013,7 @@ impl PartialOrd for CreateFunction {
             temporary: &self.temporary,
             name: &self.name,
             args: &self.args,
-            return_type: &self.return_type,
+            return_field: &self.return_field,
             params: &self.params,
         };
         let comparable_other = ComparableCreateFunction {
@@ -1020,7 +1021,7 @@ impl PartialOrd for CreateFunction {
             temporary: &other.temporary,
             name: &other.name,
             args: &other.args,
-            return_type: &other.return_type,
+            return_field: &other.return_field,
             params: &other.params,
         };
         comparable_self
@@ -1038,7 +1039,8 @@ pub struct OperateFunctionArg {
     // TODO: figure out how to support mode
     // pub mode: Option<ArgMode>,
     pub name: Option<Ident>,
-    pub data_type: DataType,
+    /// The argument type, which may carry metadata such as an extension type
+    pub field: FieldRef,
     pub default_expr: Option<Expr>,
 }
 
@@ -1172,6 +1174,7 @@ mod test {
         LogicalPlanBuilder, Subquery,
     };
     use arrow::datatypes::DataType;
+    use datafusion_common::datatype::DataTypeExt;
     use datafusion_common::{DFSchema, DFSchemaRef, TableReference};
     use std::{cmp::Ordering, collections::HashMap, sync::Arc};
 
@@ -1184,10 +1187,10 @@ mod test {
                 "f".to_string(),
                 Some(vec![OperateFunctionArg {
                     name: None,
-                    data_type: DataType::Int64,
+                    field: DataType::Int64.into_nullable_field_ref(),
                     default_expr,
                 }]),
-                Some(DataType::Int64),
+                Some(DataType::Int64.into_nullable_field_ref()),
                 CreateFunctionBody {
                     language: None,
                     behavior: None,

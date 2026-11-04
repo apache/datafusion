@@ -13,7 +13,7 @@ use arrow::array::{
 use arrow::array::{Int8Array, UInt64Array, as_string_array, create_array, record_batch};
 use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{DataType, Field, Metadata, Schema};
-use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
+use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType, Uuid};
 use arrow_schema::{ArrowError, FieldRef, SchemaRef};
 use datafusion::common::test_util::batches_to_string;
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
@@ -33,7 +33,7 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
     OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, TypeSignatureClass, Volatility, lit_with_metadata,
+    Signature, TypeSignatureClass, Volatility, expr::Placeholder, lit_with_metadata,
 };
 use datafusion_expr_common::signature::Coercion;
 use datafusion_expr_common::signature::TypeSignature;
@@ -1016,7 +1016,10 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                         type_signatures.push(TypeSignature::Nullary)
                     } else {
                         type_signatures.push(TypeSignature::Exact(
-                            args.iter().take(n).map(|a| a.data_type.clone()).collect(),
+                            args.iter()
+                                .take(n)
+                                .map(|a| a.field.data_type().clone())
+                                .collect(),
                         ))
                     }
                 }
@@ -1026,7 +1029,7 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                 )
             }
             None => Signature::exact(
-                args.iter().map(|a| a.data_type.clone()).collect(),
+                args.iter().map(|a| a.field.data_type().clone()).collect(),
                 definition.params.behavior.unwrap_or(Volatility::Volatile),
             ),
         };
@@ -1037,8 +1040,10 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                 .function_body
                 .expect("Expression has to be defined!"),
             return_type: definition
-                .return_type
-                .expect("Return type has to be defined!"),
+                .return_field
+                .expect("Return type has to be defined!")
+                .data_type()
+                .clone(),
             signature,
             defaults,
         })
@@ -1337,10 +1342,10 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
                 quote_style: None,
                 span: Span::empty(),
             }),
-            data_type: DataType::Utf8View,
+            field: Arc::new(Field::new("name", DataType::Utf8View, true)),
             default_expr: None,
         }]),
-        return_type: Some(DataType::Int32),
+        return_field: Some(Arc::new(Field::new("", DataType::Int32, true))),
         params: CreateFunctionBody {
             language: Some(Ident {
                 value: "plrust".into(),
@@ -1354,6 +1359,39 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
     };
 
     assert_eq!(call, &expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_function_keeps_extension_types() -> Result<()> {
+    let function_factory = Arc::new(RecordingFunctionFactory::new());
+    let ctx = SessionContext::new().with_function_factory(function_factory.clone());
+
+    ctx.sql("CREATE FUNCTION same_uuid(id UUID) RETURNS UUID RETURN $1")
+        .await?;
+
+    let calls = function_factory.calls();
+    assert_eq!(calls.len(), 1);
+    let call = &calls[0];
+    let uuid_field = |name| {
+        Arc::new(
+            Field::new(name, DataType::FixedSizeBinary(16), true)
+                .with_extension_type(Uuid),
+        )
+    };
+    let args = call.args.as_ref().expect("arguments");
+    assert_eq!(args.len(), 1);
+    assert_eq!(args[0].field, uuid_field("id"));
+    assert_eq!(call.return_field, Some(uuid_field("")));
+    // The placeholder in the body has the type of the argument
+    assert_eq!(
+        call.params.function_body,
+        Some(Expr::Placeholder(Placeholder::new_with_field(
+            "$1".to_string(),
+            Some(uuid_field("id")),
+        )))
+    );
 
     Ok(())
 }
