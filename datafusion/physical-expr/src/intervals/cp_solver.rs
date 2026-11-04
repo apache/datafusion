@@ -287,11 +287,10 @@ pub fn propagate_arithmetic(
 /// Compare two scalars the way runtime `Eq` does, instead of with
 /// `ScalarValue`'s bit-wise equality. `ScalarValue::PartialEq` is bit-wise for
 /// floats (`to_bits`), under which `-0.0 != +0.0`; runtime `Eq` normalizes
-/// them via `normalize_float_scalar` (see
+/// them via [`ScalarValue::normalize`] (see
 /// `physical-expr-common/src/datum.rs`).
 fn singleton_values_equal(left: &ScalarValue, right: &ScalarValue) -> bool {
-    use datafusion_common::float_semantics::normalize_float_scalar;
-    normalize_float_scalar(left.clone()) == normalize_float_scalar(right.clone())
+    left.clone().normalize() == right.clone().normalize()
 }
 
 /// This function refines intervals `left_child` and `right_child` by applying
