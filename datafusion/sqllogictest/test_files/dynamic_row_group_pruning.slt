@@ -348,7 +348,7 @@ statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
 
 # Partitioned hash join with filter pushdown off. The dynamic filter is one
-# global filter (no `CASE hash_repartition % N` routing). The probe scan uses it
+# global filter. The probe scan uses it
 # only for statistics pruning, so the bloom filter is never built, but the
 # key-range bitmap merged from all build partitions prunes row groups 1 and 2,
 # which the [5, 390] bounds alone cannot prune.

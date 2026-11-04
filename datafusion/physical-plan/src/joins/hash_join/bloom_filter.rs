@@ -329,7 +329,7 @@ impl PhysicalExpr for BloomFilterExpr {
         use datafusion_proto_models::protobuf;
         use datafusion_proto_models::protobuf::physical_expr_node::ExprType;
 
-        // Like `HashTableLookupExpr`, the expression holds runtime build side
+        // The expression holds runtime build side
         // state that is not serialized. It is replaced with lit(true), which
         // keeps every row: the dynamic filter is only an optimization. A plan
         // that is executed again calls reset_state(), and the join builds a new
