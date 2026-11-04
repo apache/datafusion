@@ -3,6 +3,24 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Tests tracking storage I/O events during Parquet Bloom filter evaluation.
+//!
+//! The file has a single row group with Bloom filters on both columns and no
+//! statistics, so only the Bloom filters are used to prune.
+//!
+//! ```text
+//!   row group 0
+//! ┌──────┬───────┐
+//! │  a   │  b    │
+//! ├──────┼───────┤
+//! │  10  │  100  │
+//! │  20  │  200  │
+//! │  30  │  300  │
+//! └──────┴───────┘
+//!  Bloom filter (a)   Bloom filter (b)   no min/max statistics
+//!
+//!  a = 10  AND b = 100  -> Bloom filters match, row group read
+//!  a = 999 AND b = 100  -> Bloom filter on `a` misses, row group pruned
+//! ```
 
 use std::sync::Arc;
 

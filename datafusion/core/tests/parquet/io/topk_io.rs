@@ -2,7 +2,27 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Tests tracking storage I/O events for TopK (`ORDER BY .. LIMIT`) queries.
+//! Tests tracking I/O events for TopK (`ORDER BY .. LIMIT`) queries.
+//!
+//! Both tests run `ORDER BY id DESC LIMIT 2`. `id` is sorted across row
+//! groups, so sort pushdown reads the row groups in reverse order (largest
+//! `id` first) and the two matching rows are both in row group 2:
+//!
+//! ```text
+//!   row group 0        row group 1        row group 2
+//! ┌──────┬───────┐   ┌──────┬───────┐   ┌──────┬───────┐
+//! │  id  │  val  │   │  id  │  val  │   │  id  │  val  │
+//! ├──────┼───────┤   ├──────┼───────┤   ├──────┼───────┤
+//! │   1  │   0   │   │   4  │   0   │   │   7  │   0   │
+//! │   2  │   5   │   │   5  │   7   │   │   8  │   5 * │
+//! │   3  │  10   │   │   6  │  10   │   │   9  │  10 * │
+//! └──────┴───────┘   └──────┴───────┘   └──────┴───────┘
+//!  id: min 1 max 3    id: min 4 max 6    id: min 7 max 9
+//!
+//!  read order: 3rd    read order: 2nd    read order: 1st
+//!
+//!  * the two rows returned by `ORDER BY id DESC LIMIT 2`
+//! ```
 
 use datafusion::prelude::SessionConfig;
 use insta::assert_snapshot;
@@ -11,10 +31,10 @@ use super::{ParquetIoTest, three_row_group_file};
 
 /// TopK dynamic filter pushdown prunes row groups during the scan.
 ///
-/// Sort pushdown reorders the row groups using their statistics so row group
-/// 2 (largest `id` values) is read first. After it is read, the TopK heap holds
-/// `id` 9 and 8, and its dynamic filter (`id > 8`) proves that row groups 1
-/// and 0 cannot contain better rows, so they are pruned without being fetched.
+/// Sort pushdown reorders the row groups using their statistics so row group 2
+/// (largest `id` values) is read first. After it is read, the TopK filter  is
+/// `id > 8` which  proves that row groups 1 and 0 cannot contain better rows,
+/// so they are pruned without being fetched.
 #[tokio::test]
 async fn test_topk_io_dynamic_filter() {
     let test = topk_test(true).await;

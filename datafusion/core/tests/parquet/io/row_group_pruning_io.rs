@@ -2,8 +2,26 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Tests tracking storage I/O events during Parquet row group pruning based
-//! on row group statistics (min/max values).
+//! Tests tracking I/O events during Parquet row group pruning
+//!
+//! All tests filter on `id`, whose values are sorted across row groups so the
+//! row group statistics are disjoint and can prune:
+//!
+//! ```text
+//!   row group 0        row group 1        row group 2
+//! ┌──────┬───────┐   ┌──────┬───────┐   ┌──────┬───────┐
+//! │  id  │  val  │   │  id  │  val  │   │  id  │  val  │
+//! ├──────┼───────┤   ├──────┼───────┤   ├──────┼───────┤
+//! │   1  │   0   │   │   4  │   0   │   │   7  │   0   │
+//! │   2  │   5   │   │   5  │   7   │   │   8  │   5   │
+//! │   3  │  10   │   │   6  │  10   │   │   9  │  10   │
+//! └──────┴───────┘   └──────┴───────┘   └──────┴───────┘
+//!  id: min 1 max 3    id: min 4 max 6    id: min 7 max 9
+//!
+//!  id = 5    -> row group 1 only
+//!  id > 5    -> row groups 1 and 2
+//!  id > 100  -> no row groups
+//! ```
 
 use datafusion::prelude::SessionConfig;
 use insta::assert_snapshot;

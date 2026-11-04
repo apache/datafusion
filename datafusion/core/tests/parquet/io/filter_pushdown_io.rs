@@ -2,11 +2,28 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Tests tracking storage I/O events with and without Parquet filter pushdown
-//! (`datafusion.execution.parquet.pushdown_filters`).
+//! Tests tracking I/O events with and without Parquet filter pushdown
+//! (`datafusion.execution.parquet.pushdown_filters`, see
+//! [`ParquetOptions::pushdown_filters`]).
 //!
-//! Both tests run `val = 7`, which statistics cannot prune (every row group
-//! has `val` in `0..=10`), but which only matches a row in row group 1.
+//! Both tests run `val = 7`, which statistics cannot prune, but which only
+//! matches a row in row group 1:
+//!
+//! ```text
+//!   row group 0        row group 1        row group 2
+//! ┌──────┬───────┐   ┌──────┬───────┐   ┌──────┬───────┐
+//! │  id  │  val  │   │  id  │  val  │   │  id  │  val  │
+//! ├──────┼───────┤   ├──────┼───────┤   ├──────┼───────┤
+//! │   1  │   0   │   │   4  │   0   │   │   7  │   0   │
+//! │   2  │   5   │   │   5  │   7 * │   │   8  │   5   │
+//! │   3  │  10   │   │   6  │  10   │   │   9  │  10   │
+//! └──────┴───────┘   └──────┴───────┘   └──────┴───────┘
+//!  val: min 0 max 10  val: min 0 max 10  val: min 0 max 10
+//!
+//!  * the only row matching `val = 7`
+//! ```
+//!
+//! [`ParquetOptions::pushdown_filters`]: datafusion::config::ParquetOptions::pushdown_filters
 
 use datafusion::prelude::SessionConfig;
 use insta::assert_snapshot;
@@ -14,7 +31,6 @@ use insta::assert_snapshot;
 use super::{ParquetIoTest, three_row_group_file};
 
 /// Without filter pushdown, the scan fetches every column of every row group
-/// and the filter is applied after decoding.
 #[tokio::test]
 async fn test_filter_pushdown_io_disabled() {
     let test = filter_pushdown_test(false).await;
@@ -31,15 +47,14 @@ async fn test_filter_pushdown_io_disabled() {
     ");
 }
 
-/// With filter pushdown, the scan first fetches and evaluates the filter
+/// **With** filter pushdown, the scan first fetches and evaluates the filter
 /// column (`val`) for each row group, and then fetches the remaining columns
 /// (`id`) only for the row groups with matching rows (row group 1).
-///
-/// Note that `id` for row group 1 is fetched as two ranges, its dictionary
-/// page and its data page, rather than as a single column chunk read.
 #[tokio::test]
 async fn test_filter_pushdown_io_enabled() {
     let test = filter_pushdown_test(true).await;
+    // Note: `id` for row group 1 is fetched as two ranges, its dictionary
+    // page and its data page, rather than as a single column chunk read.
     assert_snapshot!(test.query("SELECT * FROM t WHERE val = 7").await, @r"
     --- Query: SELECT * FROM t WHERE val = 7 (1 rows) ---
     Read Parquet footer (offsets 0..1402)
