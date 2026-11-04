@@ -4,6 +4,7 @@
 
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
 use datafusion::common::Result;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{
     DFSchema, DataFusionError, ScalarValue, not_impl_err, plan_err, substrait_err,
 };
@@ -56,10 +57,24 @@ pub async fn from_scalar_function(
     // try to first match the requested function into registered higher-order functions, then udfs, built-in ops
     // and finally built-in expressions
     if let Ok(func) = higher_order_func {
-        Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+        let expr = Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
             func.to_owned(),
             args,
-        )))
+        ));
+        // Substrait types carry no struct field names, so a lambda parameter over a list
+        // of structs is declared as `{c0, c1, ...}`, and a field access in the body such
+        // as `get_field(x, 'b')` would not find `b`. Give the parameters the fields the
+        // function derives from its arguments instead, which keep the list's field names.
+        //
+        // A function that uses a parameter of an outer lambda can't be resolved on its
+        // own, as only the outer function knows that parameter's type. In
+        // `array_transform(s, x -> array_transform([1, 2], i -> get_field(x, 'a') + i))`
+        // the inner call uses `x`, so it is resolved when the outer call is.
+        if uses_outer_lambda_parameters(&expr, &mut Vec::new())? {
+            Ok(expr)
+        } else {
+            Ok(expr.resolve_lambda_variables(input_schema)?.data)
+        }
     } else if let Ok(func) = udf_func {
         Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             func.to_owned(),
@@ -78,6 +93,47 @@ pub async fn from_scalar_function(
         builder.build(consumer, f, args)
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
+    }
+}
+
+/// Checks whether `expr` uses a lambda parameter that comes from outside of it.
+///
+/// In `array_transform(s, x -> array_transform([1, 2], i -> get_field(x, 'a') + i))`,
+/// the inner `array_transform([1, 2], i -> get_field(x, 'a') + i)` uses its own
+/// parameter `i`, but also `x`, which belongs to the outer lambda, so this returns true
+/// for it. For the whole expression it returns false: `x` and `i` both belong to
+/// lambdas inside it.
+///
+/// `own_params` collects the parameters of the lambdas we are inside of while walking
+/// `expr`.
+fn uses_outer_lambda_parameters(
+    expr: &Expr,
+    own_params: &mut Vec<String>,
+) -> Result<bool> {
+    match expr {
+        // a parameter that wasn't collected on the way down comes from outside `expr`
+        Expr::LambdaVariable(var) => Ok(!own_params.contains(&var.name)),
+        Expr::Lambda(lambda) => {
+            // a lambda's parameters can be used in its body, and only there
+            let before = own_params.len();
+            own_params.extend(lambda.params.iter().cloned());
+            let uses = uses_outer_lambda_parameters(&lambda.body, own_params);
+            own_params.truncate(before);
+            uses
+        }
+        // anything else: check its children, stopping at the first one that uses one
+        _ => {
+            let mut uses = false;
+            expr.apply_children(|child| {
+                uses = uses_outer_lambda_parameters(child, own_params)?;
+                Ok(if uses {
+                    TreeNodeRecursion::Stop
+                } else {
+                    TreeNodeRecursion::Continue
+                })
+            })?;
+            Ok(uses)
+        }
     }
 }
 
