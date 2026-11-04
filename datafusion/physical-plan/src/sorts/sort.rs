@@ -1841,6 +1841,11 @@ impl ExecutionPlan for SortExec {
                 BaselineMetrics::new(&self.metrics_set, partition),
             ))),
             (true, None) => Ok(input),
+            // `TopK` requires `k > 0`. `LIMIT 0` is normally removed by the
+            // logical optimizer, but a `SortExec` with `fetch = Some(0)` can
+            // still reach execution, for example when the logical optimizer
+            // is disabled or the plan is built directly.
+            (false, Some(0)) => Ok(Box::pin(EmptyRecordBatchStream::new(self.schema()))),
             (false, Some(fetch)) => {
                 let filter = self.filter.clone();
                 let mut topk = TopK::try_new(
