@@ -838,6 +838,40 @@ async fn aggregate_assert_no_empty_batches() -> Result<()> {
     Ok(())
 }
 
+// The DataFrame API puts an alias on the aggregate itself, where SQL leaves the
+// aggregate bare and aliases it in a projection. Both have to reach the same plan.
+#[tokio::test]
+async fn aliased_single_distinct_aggregate_is_rewritten() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx
+        .read_batch(record_batch!(
+            ("a", Int32, [1, 1, 2, 2]),
+            ("b", Int32, [1, 1, 1, 2])
+        )?)?
+        .aggregate(vec![col("a")], vec![count_distinct(col("b")).alias("n")])?;
+
+    assert_snapshot!(df.clone().into_optimized_plan()?, @r"
+    Projection: ?table?.a, count(alias1) AS n
+      Aggregate: groupBy=[[?table?.a]], aggr=[[count(alias1)]]
+        Aggregate: groupBy=[[?table?.a, ?table?.b AS alias1]], aggr=[[]]
+          TableScan: ?table? projection=[a, b]
+    ");
+
+    assert_batches_eq!(
+        &[
+            "+---+---+",
+            "| a | n |",
+            "+---+---+",
+            "| 1 | 1 |",
+            "| 2 | 2 |",
+            "+---+---+",
+        ],
+        &df.sort_by(vec![col("a")])?.collect().await?
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_aggregate_with_pk() -> Result<()> {
     // create the dataframe

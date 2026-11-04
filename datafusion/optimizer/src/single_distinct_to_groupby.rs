@@ -15,6 +15,7 @@ use datafusion_common::{
 };
 use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
+use datafusion_expr::expr_rewriter::unalias;
 use datafusion_expr::expr_schema::ExprSchemable;
 use datafusion_expr::{
     AggregateUDF, Expr, cast, col,
@@ -118,6 +119,13 @@ fn is_single_distinct_agg(
     let mut distinct_aggs = vec![];
     let mut has_count_rollup = false;
     for expr in aggr_expr {
+        // Peel aliases on the aggregate itself. The DataFrame API puts them there
+        // (e.g. `count(col("b")).distinct().alias("n")`), and so do rewrites that
+        // have to preserve an aggregate's output name.
+        let mut expr = expr;
+        while let Expr::Alias(alias) = expr {
+            expr = alias.expr.as_ref();
+        }
         if let Expr::AggregateFunction(AggregateFunction {
             func,
             params:
@@ -284,7 +292,9 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 // zero that `sum` reports as NULL over an empty input.
                 let (outer_aggr_exprs, outer_proj_exprs): (Vec<Expr>, Vec<Expr>) = aggr_expr
                     .into_iter()
-                    .map(|aggr_expr| match aggr_expr {
+                    // Strip aliases (see `is_single_distinct_agg`); the outer
+                    // projection below restores output names from the schema.
+                    .map(|aggr_expr| match unalias(aggr_expr) {
                         Expr::AggregateFunction(AggregateFunction {
                             func,
                             params:
@@ -371,7 +381,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 Ok((outer, proj))
                             }
                         }
-                        _ => Ok((aggr_expr.clone(), aggr_expr)),
+                        other => Ok((other.clone(), other)),
                     })
                     .collect::<Result<Vec<_>>>()?
                     .into_iter()
@@ -734,6 +744,191 @@ mod tests {
           Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
             Aggregate: groupBy=[[Int32(2) * test.b AS alias1]], aggr=[[]] [alias1:Int64]
               TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn aliased_single_distinct_and_groupby() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // DataFrame-API shape: alias applied directly to the aggregate expr.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![count_distinct(col("b")).alias("n")])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, count(alias1) AS n [a:UInt32, n:Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn nested_aliased_single_distinct_and_groupby() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Chained aliases nest `Expr::Alias`; all levels must be peeled.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![count_distinct(col("b")).alias("x").alias("n")],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, count(alias1) AS n [a:UInt32, n:Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn aliased_single_distinct_no_groupby() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![count_distinct(col("b")).alias("n")],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: count(alias1) AS n [n:Int64]
+          Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
+            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[]] [alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn aliased_single_distinct_expr() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Alias on top of a distinct aggregate over a complex argument.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![count_distinct(lit(2) * col("b")).alias("n")],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: count(alias1) AS n [n:Int64]
+          Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
+            Aggregate: groupBy=[[Int32(2) * test.b AS alias1]], aggr=[[]] [alias1:Int64]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn aliased_group_by_with_expr() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Aliased distinct aggregate combined with a complex group-by expression.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a") + lit(1)],
+                vec![count_distinct(col("c")).alias("n")],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: group_alias_0 AS test.a + Int32(1), count(alias1) AS n [test.a + Int32(1):Int64, n:Int64]
+          Aggregate: groupBy=[[group_alias_0]], aggr=[[count(alias1)]] [group_alias_0:Int64, count(alias1):Int64]
+            Aggregate: groupBy=[[test.a + Int32(1) AS group_alias_0, test.c AS alias1]], aggr=[[]] [group_alias_0:Int64, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn aliased_distinct_and_common() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Mix of an aliased distinct aggregate and an aliased common aggregate.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("c")],
+                vec![
+                    min(col("a")).alias("mn"),
+                    count_distinct(col("b")).alias("n"),
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.c, min(alias2) AS mn, count(alias1) AS n [c:UInt32, mn:UInt32;N, n:Int64]
+          Aggregate: groupBy=[[test.c]], aggr=[[min(alias2), count(alias1)]] [c:UInt32, min(alias2):UInt32;N, count(alias1):Int64]
+            Aggregate: groupBy=[[test.c, test.b AS alias1]], aggr=[[min(test.a) AS alias2]] [c:UInt32, alias1:UInt32, alias2:UInt32;N]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn partially_aliased_distinct_and_common() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Only some aggregate exprs carry an alias; the rule must still fire.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("c")],
+                vec![min(col("a")), count_distinct(col("b")).alias("n")],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.c, min(alias2) AS min(test.a), count(alias1) AS n [c:UInt32, min(test.a):UInt32;N, n:Int64]
+          Aggregate: groupBy=[[test.c]], aggr=[[min(alias2), count(alias1)]] [c:UInt32, min(alias2):UInt32;N, count(alias1):Int64]
+            Aggregate: groupBy=[[test.c, test.b AS alias1]], aggr=[[min(test.a) AS alias2]] [c:UInt32, alias1:UInt32, alias2:UInt32;N]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn aliased_two_distinct_fields_and_groupby() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Two distinct aggregates on different fields: not eligible even when
+        // aliased. The plan must be left unchanged (aliases retained).
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    count_distinct(col("b")).alias("nb"),
+                    count_distinct(col("c")).alias("nc"),
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b) AS nb, count(DISTINCT test.c) AS nc]] [a:UInt32, nb:Int64, nc:Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }
@@ -1199,6 +1394,30 @@ mod tests {
             plan,
             @r"
         Projection: CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(Int64(1)), count(alias1) AS count(DISTINCT test.b) [count(Int64(1)):Int64, count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[]], aggr=[[sum(alias2), count(alias1)]] [sum(alias2):Int64;N, count(alias1):Int64]
+            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[count(Int64(1)) AS alias2]] [alias1:Utf8, alias2:Int64]
+              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn aliased_count_star_and_distinct_without_groupby() -> Result<()> {
+        let table_scan = test_table_scan_utf8_b()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![count_star().alias("n"), count_distinct(col("b")).alias("d")],
+            )?
+            .build()?;
+
+        // Should work. The aliases don't stop the `count` from being rolled up
+        // and both are restored by the projection.
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS n, count(alias1) AS d [n:Int64, d:Int64]
           Aggregate: groupBy=[[]], aggr=[[sum(alias2), count(alias1)]] [sum(alias2):Int64;N, count(alias1):Int64]
             Aggregate: groupBy=[[test.b AS alias1]], aggr=[[count(Int64(1)) AS alias2]] [alias1:Utf8, alias2:Int64]
               TableScan: test [a:UInt32, b:Utf8, c:UInt32]
