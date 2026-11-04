@@ -2,8 +2,11 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{Column, JoinType, NullEquality, not_impl_err, plan_err};
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
+use datafusion::common::{
+    Column, JoinType, NullEquality, internal_datafusion_err, not_impl_err, plan_err,
+    substrait_err,
+};
 use datafusion::logical_expr::requalify_sides_if_needed;
 use datafusion::logical_expr::utils::split_conjunction_owned;
 use datafusion::logical_expr::{
@@ -15,17 +18,26 @@ use substrait::proto::{JoinRel, join_rel};
 pub async fn from_join_rel(
     consumer: &impl SubstraitConsumer,
     join: &JoinRel,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
     if join.post_join_filter.is_some() {
         return not_impl_err!("JoinRel with post_join_filter is not yet supported");
     }
 
-    let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
-        consumer.consume_rel(join.left.as_ref().unwrap()).await?,
-    );
-    let right = LogicalPlanBuilder::from(
-        consumer.consume_rel(join.right.as_ref().unwrap()).await?,
-    );
+    let (Some(left), Some(right)) = (join.left.as_deref(), join.right.as_deref()) else {
+        return substrait_err!("JoinRel requires left and right inputs");
+    };
+    let [left, right] = consumer
+        .consume_rel_inputs(&[left, right], context)
+        .await?
+        .try_into()
+        .map_err(|_| {
+            internal_datafusion_err!(
+                "JoinRel consumer returned the wrong number of inputs"
+            )
+        })?;
+    let left = LogicalPlanBuilder::from(left);
+    let right = LogicalPlanBuilder::from(right);
     let (left, right, _requalified) = requalify_sides_if_needed(left, right)?;
 
     let join_type = from_substrait_jointype(join.r#type)?;
@@ -37,7 +49,9 @@ pub async fn from_join_rel(
     // Otherwise, build join with only the filter, without join keys
     match &join.expression.as_ref() {
         Some(expr) => {
-            let on = consumer.consume_expression(expr, &in_join_schema).await?;
+            let on = consumer
+                .consume_expression(expr, &in_join_schema, context)
+                .await?;
             // The join expression can contain both equal and non-equal ops.
             // As of datafusion 31.0.0, the equal and non equal join conditions are in separate fields.
             // So we extract each part as follows:

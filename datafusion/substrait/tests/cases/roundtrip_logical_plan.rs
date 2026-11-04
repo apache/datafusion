@@ -2645,11 +2645,34 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
     assert_snapshot!(
     plan,
     @"
-    Projection: array_transform2(make_array(make_array(data3.p1)), (p0) -> array_concat(array_transform2(p0, (p2) -> p2 * Int64(2)), array_transform2(p0, (p3) -> p3 * Int64(2)))) AS array_transform2(make_array(make_array(data3.p1)),(v) -> array_concat(array_transform2(v,(v) -> v * Int64(2)),array_transform2(v,(v) -> v * Int64(2))))
+    Projection: array_transform2(make_array(make_array(data3.p1)), (p0) -> array_concat(array_transform2(p0, (p2) -> p2 * Int64(2)), array_transform2(p0, (p2) -> p2 * Int64(2)))) AS array_transform2(make_array(make_array(data3.p1)),(v) -> array_concat(array_transform2(v,(v) -> v * Int64(2)),array_transform2(v,(v) -> v * Int64(2))))
       TableScan: data3 projection=[p1]
     "
     );
 
+    Ok(())
+}
+
+// Sibling lambda parameter names may repeat, but nested captures must still
+// resolve against their own enclosing scopes during optimization and execution.
+#[tokio::test]
+async fn roundtrip_executes_sibling_and_nested_lambda_scopes() -> Result<()> {
+    let ctx = create_context_with_dialect(Some(Dialect::Databricks)).await?;
+    let df = ctx.sql(
+        "SELECT array_transform([1, 2], x -> x + 10) AS ints,
+                array_transform(['a', 'b'], s -> upper(s)) AS strings,
+                array_transform([1, 2], x -> array_transform([10, 20], y -> x + y)) AS nested",
+    ).await?;
+    let plan = df.logical_plan().clone();
+    let expected = df.collect().await?;
+    assert_eq!(
+        expected.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        1
+    );
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let consumed = from_substrait_plan(&ctx.state(), &proto).await?;
+    let actual = DataFrame::new(ctx.state(), consumed).collect().await?;
+    assert_eq!(actual, expected);
     Ok(())
 }
 
