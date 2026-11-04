@@ -372,15 +372,12 @@ enum PartitionStatus {
     Reported(PartitionData),
     /// The partition's stream was dropped before it delivered its build report.
     ///
-    /// Only this partition is done. Sibling partitions and the rest of the
-    /// query can still run. For example, a parent join partition whose build
-    /// side is empty drops its probe-side stream unpolled: that is this join's
-    /// stream for the same partition only
-    /// (<https://github.com/apache/datafusion/issues/21625>).
-    ///
-    /// The stream has emitted no row and never will. A stream starts to probe
-    /// only after its report is delivered, and delivery waits for the dynamic
-    /// filter to be final.
+    /// The partition counts as complete, so sibling partitions do not wait for
+    /// its report. Its build keys are unknown, but no probe row routed to it
+    /// reaches a consumer: the stream probes only after delivery, and delivery
+    /// waits for this filter to be final. So the filter may keep or reject those
+    /// rows. See `BuildReportHandle` for what a canceled partition means for the
+    /// join.
     CanceledUnknown,
 }
 

@@ -252,16 +252,23 @@ enum BuildReportState {
     NotReported,
     Scheduled,
     Delivered,
-    /// Dropped before delivery and reported as canceled.
+    /// Dropped before delivery. See [`BuildReportHandle`].
     Canceled,
     Finalized,
 }
 
 /// Owns the stream-side lifecycle for one partition's build-data report.
 ///
-/// In `Partitioned` mode, dropping the handle before delivery reports the
-/// partition as canceled. `PartitionStatus::CanceledUnknown` says what that
-/// does and does not imply.
+/// In `Partitioned` mode, dropping the stream before its report is delivered
+/// cancels its partition. A canceled partition is one partition of this join,
+/// not the query. For example, a parent join partition whose build side is
+/// empty drops this join's stream for the same partition unpolled
+/// (<https://github.com/apache/datafusion/issues/21625>).
+///
+/// The sibling partitions keep running, and so does the probe input they
+/// share. A `RepartitionExec` in that input discards the rows it routes to the
+/// canceled partition. The canceled stream has emitted no row and never will,
+/// because a stream starts to probe only after its report is delivered.
 struct BuildReportHandle {
     partition: usize,
     mode: PartitionMode,
