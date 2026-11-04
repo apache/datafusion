@@ -5701,7 +5701,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns))
+    Projection: CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns, "UTC"))
       EmptyRelation: rows=1
     "#
     );
@@ -5711,7 +5711,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)) AS Timestamp(ns))
+    Projection: CAST(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)) AS Timestamp(ns, "UTC"))
       EmptyRelation: rows=1
     "#
     );
@@ -5723,7 +5723,7 @@ fn test_custom_type_plan() -> Result<()> {
     assert_snapshot!(
         plan,
         @r#"
-    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns)), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(ns)))
+    Projection: make_array(CAST(Utf8("2001-01-01 18:00:00") AS Timestamp(ns, "UTC")), CAST(Utf8("2001-01-02 18:00:00") AS Timestamp(ns, "UTC")))
       EmptyRelation: rows=1
     "#
     );
