@@ -264,7 +264,7 @@ impl ExecutionPlan for WindowAggExec {
             ChildrenPropertiesMode::Recompute => Ok(Arc::new(WindowAggExec::try_new(
                 self.window_expr.clone(),
                 children.swap_remove(0),
-                true,
+                self.can_repartition,
             )?)),
         }
     }
@@ -664,6 +664,50 @@ mod tests {
             window.cardinality_effect(),
             CardinalityEffect::Equal
         ));
+        Ok(())
+    }
+
+    #[test]
+    fn test_window_agg_replace_children_preserves_can_repartition() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+        let input: Arc<dyn ExecutionPlan> =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let args = vec![crate::expressions::col("a", &schema)?];
+        let window_expr = create_window_expr(
+            &WindowFunctionDefinition::AggregateUDF(count_udaf()),
+            "count(a)".to_string(),
+            &args,
+            &[],
+            &[],
+            Arc::new(WindowFrame::new_bounds(
+                WindowFrameUnits::Rows,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None)),
+                WindowFrameBound::CurrentRow,
+            )),
+            Arc::clone(&schema),
+            false,
+            false,
+            None,
+        )?;
+
+        for can_repartition in [false, true] {
+            let window = Arc::new(WindowAggExec::try_new(
+                vec![window_expr.clone()],
+                Arc::clone(&input),
+                can_repartition,
+            )?);
+            assert_eq!(window.can_repartition, can_repartition);
+
+            let new_child: Arc<dyn ExecutionPlan> =
+                Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+            let replaced = window.replace_children(
+                vec![new_child],
+                ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+            )?;
+            let replaced_window = replaced.downcast_ref::<WindowAggExec>().unwrap();
+            assert_eq!(replaced_window.can_repartition, can_repartition);
+        }
+
         Ok(())
     }
 }
