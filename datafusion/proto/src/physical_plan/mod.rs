@@ -1241,8 +1241,8 @@ pub trait PhysicalPlanNodeExt: Sized {
                     AvroSource::try_from_proto(self.node(), &decode_ctx)
                 }
                 #[cfg(not(feature = "avro"))]
-                panic!(
-                    "Unable to process a Avro PhysicalPlan when `avro` feature is not enabled"
+                not_impl_err!(
+                    "Unable to process an Avro PhysicalPlan when the `avro` feature is not enabled"
                 )
             }
             PhysicalPlanType::MemoryScan(_) => {

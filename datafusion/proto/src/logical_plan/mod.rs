@@ -603,7 +603,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 Arc::new(parquet)
                             }
                             #[cfg(not(feature = "parquet"))]
-                            panic!("Unable to process parquet file since `parquet` feature is not enabled");
+                            return not_impl_err!("Unable to process parquet file since `parquet` feature is not enabled");
                         }
                         FileFormatType::Csv(protobuf::CsvFormat {
                             options
@@ -630,7 +630,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             }
                             #[cfg(not(feature = "avro"))]
                             {
-                                panic!(
+                                return not_impl_err!(
                                     "Unable to process avro file since `avro` feature is not enabled"
                                 );
                             }
