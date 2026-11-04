@@ -372,23 +372,31 @@ impl RangePartitioning {
         start_bound: Option<SplitPoint>,
         end_bound: Option<SplitPoint>,
     ) -> Result<Self> {
-        // Samples are already ordered, so their endpoints suffice to validate
-        // the bounds, including samples omitted from the effective split points.
-        let endpoints = start_bound
+        let sort_options = self
+            .ordering
             .iter()
-            .chain(self.samples.first())
-            .chain(self.samples.last())
-            .chain(end_bound.iter())
-            .cloned()
+            .map(|expr| expr.options)
             .collect::<Vec<_>>();
-        validate_range_split_points(
-            &endpoints,
-            &self
-                .ordering
+        // Samples are already ordered. Only compare each bound with the nearest
+        // sample, including samples omitted from the effective split points.
+        if let (Some(first), Some(last)) = (self.samples.first(), self.samples.last()) {
+            if let Some(start) = &start_bound {
+                validate_range_split_points(
+                    &[start.clone(), first.clone()],
+                    &sort_options,
+                )?;
+            }
+            if let Some(end) = &end_bound {
+                validate_range_split_points(&[last.clone(), end.clone()], &sort_options)?;
+            }
+        } else {
+            let bounds = start_bound
                 .iter()
-                .map(|expr| expr.options)
-                .collect::<Vec<_>>(),
-        )?;
+                .chain(end_bound.iter())
+                .cloned()
+                .collect::<Vec<_>>();
+            validate_range_split_points(&bounds, &sort_options)?;
+        }
         self.start_bound = start_bound;
         self.end_bound = end_bound;
         Ok(self)
@@ -548,9 +556,10 @@ impl RangePartitioning {
         }
         Some(Self {
             ordering: new_ordering,
+            samples: Arc::clone(&self.samples),
+            split_points: Arc::clone(&self.split_points),
             start_bound: None,
             end_bound: None,
-            ..self.clone()
         })
     }
 }
@@ -1611,6 +1620,26 @@ mod tests {
             assert!(range.adapt(&[fixture.col(0)], &fixture.schema).is_some());
             assert!(range.adapt(&[fixture.col(1)], &fixture.schema).is_none());
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_range_partitioning_unbounded_nested_list_sample() -> Result<()> {
+        let list = ScalarValue::List(ScalarValue::new_list(
+            &[ScalarValue::Int32(Some(10))],
+            &DataType::Int32,
+            false,
+        ));
+        let nested_list = ScalarValue::List(ScalarValue::new_list(
+            std::slice::from_ref(&list),
+            &list.data_type(),
+            false,
+        ));
+        let fixture = PartitioningTestFixture::new(vec![("a", nested_list.data_type())])?;
+        let range = fixture.range([0], vec![SplitPoint::new(vec![nested_list])]);
+
+        // Removing bounds must not compare an already validated sample with itself.
+        assert_eq!(range.clone().try_with_bounds(None, None)?, range);
         Ok(())
     }
 
