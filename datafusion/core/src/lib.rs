@@ -277,18 +277,19 @@
 //! possible, significant effort is spent planning and
 //! optimizing, in the following manner:
 //!
-//! 1. The [`LogicalPlan`] is checked and rewritten by the [`Analyzer`] to enforce
-//!    semantic rules, such as type coercion, using [`AnalyzerRule`]s
+//! 1. The [`LogicalPlan`] is checked and rewritten by the [`Analyzer`], using
+//!    [`AnalyzerRule`]s, to enforce semantic rules such as type coercion.
 //!
-//! 2. The [`LogicalPlan`] is rewritten by the [`Optimizer`] to improve its efficiency, such as
-//!    projection and filter pushdown using [`OptimizerRule`]s.
+//! 2. The [`LogicalPlan`] is rewritten by the [`Optimizer`], using
+//!    [`OptimizerRule`]s such as projection and filter pushdown, to improve
+//!    its efficiency.
 //!
 //! 3. The [`LogicalPlan`] is converted to an [`ExecutionPlan`] by a
-//!    [`PhysicalPlanner`]
+//!    [`PhysicalPlanner`].
 //!
-//! 4. The [`ExecutionPlan`] is rewritten by the [`PhysicalOptimizer`]  to further
-//!    improve its efficiency, such as by specific sort and join algorithm selection,
-//!    by  [`PhysicalOptimizerRule`]s
+//! 4. The [`ExecutionPlan`] is rewritten by the [`PhysicalOptimizer`], using
+//!    [`PhysicalOptimizerRule`]s such as join algorithm selection, to further
+//!    improve its efficiency.
 //!
 //! ## Data Sources
 //!
@@ -739,6 +740,9 @@
 //! [`Expr`]: datafusion_expr::Expr
 //! [`LogicalPlan`]: datafusion_expr::LogicalPlan
 //! [`AnalyzerRule`]: datafusion_optimizer::analyzer::AnalyzerRule
+//! [`Analyzer`]: datafusion_optimizer::Analyzer
+//! [`Optimizer`]: datafusion_optimizer::Optimizer
+//! [`PhysicalOptimizer`]: datafusion_physical_optimizer::optimizer::PhysicalOptimizer
 //! [`OptimizerRule`]: optimizer::optimizer::OptimizerRule
 //! [`ExecutionPlan`]: physical_plan::ExecutionPlan
 //! [`PhysicalPlanner`]: physical_planner::PhysicalPlanner
