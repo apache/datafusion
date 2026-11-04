@@ -751,6 +751,55 @@ mod tests {
         Ok(())
     }
 
+    // Substrait literals and lambda parameters carry no struct field names. Reading
+    // fields inside a lambda over `coalesce(zones, [])` needs the empty list to take the
+    // column's field names, and the lambda parameter to take the list's.
+    #[tokio::test]
+    async fn test_transform_coalesce_struct_list_with_empty_list() -> Result<()> {
+        let batches =
+            execute_plan("transform_coalesce_struct_list_empty_literal.substrait.json")
+                .await?;
+        assert_snapshot!(pretty_sorted(&batches), @r"
+        +------------------+----------------------+
+        | zone_names       | subnet_ids           |
+        +------------------+----------------------+
+        | []               | []                   |
+        | [zone-a, zone-b] | [subnet-1, subnet-2] |
+        +------------------+----------------------+
+        ");
+        Ok(())
+    }
+
+    // One branch pads a struct column with a typed NULL, whose struct type carries no
+    // field names, while the other reads the column with its names.
+    #[tokio::test]
+    async fn test_union_all_null_struct() -> Result<()> {
+        let batches = execute_plan("union_all_null_struct.substrait.json").await?;
+        assert_snapshot!(pretty_sorted(&batches), @r"
+        +----------------------------------------------------------+
+        | r                                                        |
+        +----------------------------------------------------------+
+        |                                                          |
+        | {last_used_date: 2023-11-14T22:13:20, region: us-east-1} |
+        +----------------------------------------------------------+
+        ");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_union_all_null_struct_first() -> Result<()> {
+        let batches = execute_plan("union_all_null_struct_first.substrait.json").await?;
+        assert_snapshot!(pretty_sorted(&batches), @r"
+        +----------------------------------------------------------+
+        | r                                                        |
+        +----------------------------------------------------------+
+        |                                                          |
+        | {last_used_date: 2023-11-14T22:13:20, region: us-east-1} |
+        +----------------------------------------------------------+
+        ");
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_join_with_expression_key() -> Result<()> {
         let plan_str = test_plan_to_string("join_with_expression_key.json").await?;

@@ -1,0 +1,184 @@
+{
+  "relations": [
+    {
+      "root": {
+        "input": {
+          "set": {
+            "inputs": [
+              {
+                "project": {
+                  "common": {
+                    "emit": {
+                      "outputMapping": [
+                        1
+                      ]
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "literal": {
+                        "null": {
+                          "struct": {
+                            "types": [
+                              {
+                                "precisionTimestamp": {
+                                  "precision": 6,
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              },
+                              {
+                                "string": {
+                                  "nullability": "NULLABILITY_NULLABLE"
+                                }
+                              }
+                            ],
+                            "nullability": "NULLABILITY_NULLABLE"
+                          }
+                        },
+                        "nullable": true
+                      }
+                    }
+                  ],
+                  "input": {
+                    "read": {
+                      "baseSchema": {
+                        "names": [
+                          "name"
+                        ],
+                        "struct": {
+                          "types": [
+                            {
+                              "string": {
+                                "nullability": "NULLABILITY_NULLABLE"
+                              }
+                            }
+                          ],
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      "virtualTable": {
+                        "expressions": [
+                          {
+                            "fields": [
+                              {
+                                "literal": {
+                                  "string": "user-1",
+                                  "nullable": true
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              {
+                "project": {
+                  "common": {
+                    "emit": {
+                      "outputMapping": [
+                        2
+                      ]
+                    }
+                  },
+                  "expressions": [
+                    {
+                      "selection": {
+                        "directReference": {
+                          "structField": {
+                            "field": 1
+                          }
+                        },
+                        "rootReference": {}
+                      }
+                    }
+                  ],
+                  "input": {
+                    "read": {
+                      "baseSchema": {
+                        "names": [
+                          "name",
+                          "last_used",
+                          "last_used_date",
+                          "region"
+                        ],
+                        "struct": {
+                          "types": [
+                            {
+                              "string": {
+                                "nullability": "NULLABILITY_NULLABLE"
+                              }
+                            },
+                            {
+                              "struct": {
+                                "types": [
+                                  {
+                                    "precisionTimestamp": {
+                                      "precision": 6,
+                                      "nullability": "NULLABILITY_NULLABLE"
+                                    }
+                                  },
+                                  {
+                                    "string": {
+                                      "nullability": "NULLABILITY_NULLABLE"
+                                    }
+                                  }
+                                ],
+                                "nullability": "NULLABILITY_NULLABLE"
+                              }
+                            }
+                          ],
+                          "nullability": "NULLABILITY_REQUIRED"
+                        }
+                      },
+                      "virtualTable": {
+                        "expressions": [
+                          {
+                            "fields": [
+                              {
+                                "literal": {
+                                  "string": "role-1",
+                                  "nullable": true
+                                }
+                              },
+                              {
+                                "literal": {
+                                  "struct": {
+                                    "fields": [
+                                      {
+                                        "precisionTimestamp": {
+                                          "precision": 6,
+                                          "value": "1700000000000000"
+                                        }
+                                      },
+                                      {
+                                        "string": "us-east-1"
+                                      }
+                                    ]
+                                  },
+                                  "nullable": true
+                                }
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              }
+            ],
+            "op": "SET_OP_UNION_ALL"
+          }
+        },
+        "names": [
+          "r",
+          "last_used_date",
+          "region"
+        ]
+      }
+    }
+  ]
+}

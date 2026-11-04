@@ -2698,6 +2698,65 @@ async fn roundtrip_lambda_parameter_struct_field_names() -> Result<()> {
     Ok(())
 }
 
+// Substrait literals carry no struct field names, so a struct literal combined with a
+// struct column must take the column's field names for the two to have the same type.
+#[tokio::test]
+async fn roundtrip_struct_literal_next_to_struct_column() -> Result<()> {
+    let ctx = create_context().await?;
+    ctx.sql(
+        "CREATE TABLE structs AS SELECT [named_struct('a', 1, 'b', 'x')] AS s \
+         UNION ALL SELECT NULL AS s",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    // coalesce is simplified to a CASE whose ELSE branch is the literal
+    roundtrip_with_ctx(
+        "SELECT coalesce(s, [named_struct('a', 0, 'b', 'z')]) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    // a NULL struct in the ELSE branch, from https://github.com/apache/datafusion/issues/14632
+    roundtrip(
+        "SELECT (CASE WHEN column1 IS NOT NULL THEN named_struct('f1', column1) ELSE NULL END) AS res \
+         FROM (VALUES ('a'), (NULL))",
+    )
+    .await?;
+
+    ctx.sql("CREATE TABLE struct_rows AS SELECT named_struct('a', 1, 'b', 'x') AS st")
+        .await?
+        .collect()
+        .await?;
+
+    // a set operation input padded with a NULL struct, on either side. The consumer
+    // rebuilds a union with the alias above it rather than in each input, so the plans
+    // can't be compared as text: check the output type and that the plan runs instead.
+    for sql in [
+        "SELECT st AS r FROM struct_rows UNION ALL SELECT NULL AS r FROM struct_rows",
+        "SELECT NULL AS r FROM struct_rows UNION ALL SELECT st AS r FROM struct_rows",
+    ] {
+        let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+        let plan2 = substrait_roundtrip(&plan, &ctx).await?;
+        assert_eq!(
+            plan.schema().field(0).data_type(),
+            plan2.schema().field(0).data_type()
+        );
+        DataFrame::new(ctx.state(), plan2).collect().await?;
+    }
+
+    // struct literals in an IN list
+    roundtrip_with_ctx(
+        "SELECT st IN (named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y')) \
+         FROM struct_rows",
+        ctx.clone(),
+    )
+    .await?;
+
+    Ok(())
+}
+
 pub(crate) async fn higher_order_function_ctx() -> Result<SessionContext> {
     let ctx = create_context_with_dialect(Some(Dialect::Databricks)).await?;
 

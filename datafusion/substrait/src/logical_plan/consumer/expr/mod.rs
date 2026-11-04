@@ -22,6 +22,7 @@ pub use function_arguments::*;
 pub use if_then::*;
 pub use lambda::*;
 pub use literal::*;
+pub(crate) use literal::{contains_struct, is_literal, name_struct_literal_like};
 pub use nested::*;
 pub use scalar_function::*;
 pub use singular_or_list::*;

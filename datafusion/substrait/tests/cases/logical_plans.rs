@@ -621,6 +621,33 @@ mod tests {
         Ok(())
     }
 
+    // Substrait literals carry no struct field names, so the empty list is consumed as a
+    // list of `{c0, c1: List<{c0}>}`, which coalesce can't combine with the column's
+    // `{a, inner: List<{x}>}` unless the literal takes the column's names.
+    #[tokio::test]
+    async fn coalesce_struct_list_column_with_empty_list_literal() -> Result<()> {
+        let proto_plan = read_json(
+            "tests/testdata/test_plans/coalesce_struct_list_empty_literal.substrait.json",
+        );
+        let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto_plan)?;
+        let plan = from_substrait_plan(&ctx.state(), &proto_plan).await?;
+
+        assert_snapshot!(
+        plan,
+        @"
+        Projection: coalesce(t.s, List([])) AS s
+          TableScan: t
+        "
+        );
+        assert_snapshot!(
+            plan.schema().field(0).data_type(),
+            @r#"List(Struct("a": Utf8, "inner": List(Struct("x": Utf8))))"#
+        );
+
+        DataFrame::new(ctx.state(), plan).show().await?;
+        Ok(())
+    }
+
     // A higher order function can be the value argument of another one, where its own
     // lambda parameter has to be resolved too.
     #[tokio::test]
