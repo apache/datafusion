@@ -245,18 +245,30 @@ pub(super) struct EmitUnmatchedBuildRowsState {
 /// `Scheduled` means the reporting `OnceFut` has been constructed but is lazy:
 /// the coordinator has not necessarily observed the report. Only `Delivered`
 /// guarantees the coordinator saw it, so `Drop` must still cancel a `Scheduled`
-/// partition — otherwise sibling partitions can wait forever for a report that
+/// partition. Otherwise sibling partitions can wait forever for a report that
 /// never runs.
 #[derive(Debug, PartialEq, Eq)]
 enum BuildReportState {
     NotReported,
     Scheduled,
     Delivered,
+    /// The stream was dropped before it delivered its report, and the handle
+    /// reported the partition as canceled. This state describes one partition
+    /// only. See [`BuildReportHandle`] for what a canceled partition means.
     Canceled,
     Finalized,
 }
 
 /// Owns the stream-side lifecycle for one partition's build-data report.
+///
+/// In `Partitioned` mode, `Drop` reports a canceled partition when the stream
+/// is dropped before its report is delivered. A canceled partition does not
+/// mean that the query was canceled. A parent operator can legally finish early
+/// and drop this stream while sibling partitions of the same join keep running.
+/// For example, a `RightSemi` join whose own build side is empty for some
+/// partitions drops its probe-side hash join streams before they report. See
+/// <https://github.com/apache/datafusion/issues/21625> and
+/// <https://github.com/apache/datafusion/pull/21666>.
 struct BuildReportHandle {
     partition: usize,
     mode: PartitionMode,
