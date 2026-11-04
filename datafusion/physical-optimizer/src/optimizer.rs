@@ -190,7 +190,11 @@ impl PhysicalOptimizer {
     /// itself and names the rule that broke an ordering or distribution
     /// requirement.
     ///
-    /// | rule                           | struct                           | summary                                                                                       |
+    /// Note: The rules up to and including [`EnsureRequirements`] make the plan
+    /// executable rather than optimize it. This may be improved in the future.
+    /// See <https://github.com/apache/datafusion/issues/26481>.
+    ///
+    /// | rule (name in EXPLAIN plan)                          | struct name                           | summary                                                                                       |
     /// | ------------------------------ | -------------------------------- | --------------------------------------------------------------------------------------------- |
     /// | `OutputRequirements`           | [`OutputRequirements`]           | Adds helper nodes so output requirements survive later rewrites (add mode).                   |
     /// | `aggregate_statistics`         | [`AggregateStatistics`]          | Answers some aggregates from exact statistics without scanning data.                          |

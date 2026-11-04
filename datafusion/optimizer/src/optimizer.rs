@@ -233,10 +233,45 @@ impl OptimizerConfig for OptimizerContext {
     }
 }
 
-/// A rule-based logical optimizer.
+/// A rule-based optimizer for [`LogicalPlan`]s.
 ///
 /// Applies rules in order for up to `datafusion.optimizer.max_passes` passes,
 /// stopping early if the plan repeats.
+///
+/// # Built-in Optimizer Rules
+///
+/// Then it applies the following rules in this order. Note: the list may change
+/// between releases.
+///
+/// | rule (name in EXPLAIN plan)                                      | struct name                          | summary                                                                                                                          |
+/// | ----------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+/// | `rewrite_set_comparison`                  | [`RewriteSetComparison`]         | Rewrites `ANY` and `ALL` subqueries into `EXISTS` expressions with SQL NULL semantics.                                           |
+/// | `optimize_unions`                         | [`OptimizeUnions`]               | Flattens nested unions and removes single-input unions.                                                                          |
+/// | `unions_to_filter`                        | [`UnionsToFilter`]               | Merges `UNION DISTINCT` branches over the same source into one filtered branch.                                                  |
+/// | `simplify_expressions`                    | [`SimplifyExpressions`]          | Constant-folds and simplifies expressions.                                                                                       |
+/// | `replace_distinct_aggregate`              | [`ReplaceDistinctWithAggregate`] | Rewrites `DISTINCT` and `DISTINCT ON` into aggregates.                                                                           |
+/// | `eliminate_join`                          | [`EliminateJoin`]                | Rewrites inner joins to semi joins, drops unused outer join sides, and replaces always-false inner joins with an empty relation. |
+/// | `decorrelate_predicate_subquery`          | [`DecorrelatePredicateSubquery`] | Rewrites `IN` and `EXISTS` subqueries into semi or anti joins.                                                                   |
+/// | `scalar_subquery_to_join`                 | [`ScalarSubqueryToJoin`]         | Rewrites scalar subqueries into joins.                                                                                           |
+/// | `decorrelate_lateral_join`                | [`DecorrelateLateralJoin`]       | Rewrites lateral joins into regular joins.                                                                                       |
+/// | `extract_equijoin_predicate`              | [`ExtractEquijoinPredicate`]     | Splits join filters into equijoin keys and residual predicates.                                                                  |
+/// | `eliminate_duplicated_expr`               | [`EliminateDuplicatedExpr`]      | Removes duplicate expressions from projections, aggregates, and similar operators.                                               |
+/// | `eliminate_filter`                        | [`EliminateFilter`]              | Drops always-true filters and replaces always-false or NULL filters with an empty relation.                                      |
+/// | `eliminate_cross_join`                    | [`EliminateCrossJoin`]           | Replaces cross joins with inner joins when a filter supplies join keys.                                                          |
+/// | `eliminate_limit`                         | [`EliminateLimit`]               | Removes no-op limits.                                                                                                            |
+/// | `propagate_empty_relation`                | [`PropagateEmptyRelation`]       | Collapses operators whose inputs produce no rows.                                                                                |
+/// | `filter_null_join_keys`                   | [`FilterNullJoinKeys`]           | Adds `IS NOT NULL` filters on nullable equijoin keys.                                                                            |
+/// | `eliminate_outer_join`                    | [`EliminateOuterJoin`]           | Rewrites outer joins to inner joins when a later filter rejects the NULL-extended rows.                                          |
+/// | `push_down_limit`                         | [`PushDownLimit`]                | Pushes limits toward scans and merges adjacent limits.                                                                           |
+/// | `push_down_filter`                        | [`PushDownFilter`]               | Pushes filters as close to the sources as possible.                                                                              |
+/// | `eliminate_aggregate_distinct`            | [`EliminateAggregateDistinct`]   | Drops `DISTINCT` from aggregates it cannot affect, such as `min` and `max`.                                                      |
+/// | `single_distinct_aggregation_to_group_by` | [`SingleDistinctToGroupBy`]      | Rewrites single-column `DISTINCT` aggregates into two-stage `GROUP BY` plans.                                                    |
+/// | `eliminate_group_by_constant`             | [`EliminateGroupByConstant`]     | Removes constant expressions from `GROUP BY`.                                                                                    |
+/// | `common_sub_expression_eliminate`         | [`CommonSubexprEliminate`]       | Computes repeated subexpressions once.                                                                                           |
+/// | `extract_leaf_expressions`                | [`ExtractLeafExpressions`]       | Moves cheap leaf expressions closer to the sources.                                                                              |
+/// | `push_down_leaf_projections`              | [`PushDownLeafProjections`]      | Pushes the projections created by leaf extraction toward the sources.                                                            |
+/// | `optimize_projections`                    | [`OptimizeProjections`]          | Prunes unused columns and redundant projections.                                                                                 |
+/// | `replace_filter_top1`                     | [`ReplaceFilterTop1`]            | Rewrites `Filter(row_number() = 1)` over a partitioned window into a `first_value` aggregate.                                    |
 #[derive(Clone, Debug)]
 pub struct Optimizer {
     /// All optimizer rules to apply
@@ -262,43 +297,7 @@ impl Default for Optimizer {
 }
 
 impl Optimizer {
-    /// Create a new optimizer using the recommended list of rules
-    ///
-    /// # Built-in Logical Optimizer Rules
-    ///
-    /// Rules run in the order listed. Order matters, and the list may change
-    /// between releases. The `rule` column is the name shown by
-    /// `EXPLAIN VERBOSE`.
-    ///
-    /// | rule                                      | struct                           | summary                                                                                                                          |
-    /// | ----------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-    /// | `rewrite_set_comparison`                  | [`RewriteSetComparison`]         | Rewrites `ANY` and `ALL` subqueries into `EXISTS` expressions with SQL NULL semantics.                                           |
-    /// | `optimize_unions`                         | [`OptimizeUnions`]               | Flattens nested unions and removes single-input unions.                                                                          |
-    /// | `unions_to_filter`                        | [`UnionsToFilter`]               | Merges `UNION DISTINCT` branches over the same source into one filtered branch.                                                  |
-    /// | `simplify_expressions`                    | [`SimplifyExpressions`]          | Constant-folds and simplifies expressions.                                                                                       |
-    /// | `replace_distinct_aggregate`              | [`ReplaceDistinctWithAggregate`] | Rewrites `DISTINCT` and `DISTINCT ON` into aggregates.                                                                           |
-    /// | `eliminate_join`                          | [`EliminateJoin`]                | Rewrites inner joins to semi joins, drops unused outer join sides, and replaces always-false inner joins with an empty relation. |
-    /// | `decorrelate_predicate_subquery`          | [`DecorrelatePredicateSubquery`] | Rewrites `IN` and `EXISTS` subqueries into semi or anti joins.                                                                   |
-    /// | `scalar_subquery_to_join`                 | [`ScalarSubqueryToJoin`]         | Rewrites scalar subqueries into joins.                                                                                           |
-    /// | `decorrelate_lateral_join`                | [`DecorrelateLateralJoin`]       | Rewrites lateral joins into regular joins.                                                                                       |
-    /// | `extract_equijoin_predicate`              | [`ExtractEquijoinPredicate`]     | Splits join filters into equijoin keys and residual predicates.                                                                  |
-    /// | `eliminate_duplicated_expr`               | [`EliminateDuplicatedExpr`]      | Removes duplicate expressions from projections, aggregates, and similar operators.                                               |
-    /// | `eliminate_filter`                        | [`EliminateFilter`]              | Drops always-true filters and replaces always-false or NULL filters with an empty relation.                                      |
-    /// | `eliminate_cross_join`                    | [`EliminateCrossJoin`]           | Replaces cross joins with inner joins when a filter supplies join keys.                                                          |
-    /// | `eliminate_limit`                         | [`EliminateLimit`]               | Removes no-op limits.                                                                                                            |
-    /// | `propagate_empty_relation`                | [`PropagateEmptyRelation`]       | Collapses operators whose inputs produce no rows.                                                                                |
-    /// | `filter_null_join_keys`                   | [`FilterNullJoinKeys`]           | Adds `IS NOT NULL` filters on nullable equijoin keys.                                                                            |
-    /// | `eliminate_outer_join`                    | [`EliminateOuterJoin`]           | Rewrites outer joins to inner joins when a later filter rejects the NULL-extended rows.                                          |
-    /// | `push_down_limit`                         | [`PushDownLimit`]                | Pushes limits toward scans and merges adjacent limits.                                                                           |
-    /// | `push_down_filter`                        | [`PushDownFilter`]               | Pushes filters as close to the sources as possible.                                                                              |
-    /// | `eliminate_aggregate_distinct`            | [`EliminateAggregateDistinct`]   | Drops `DISTINCT` from aggregates it cannot affect, such as `min` and `max`.                                                      |
-    /// | `single_distinct_aggregation_to_group_by` | [`SingleDistinctToGroupBy`]      | Rewrites single-column `DISTINCT` aggregates into two-stage `GROUP BY` plans.                                                    |
-    /// | `eliminate_group_by_constant`             | [`EliminateGroupByConstant`]     | Removes constant expressions from `GROUP BY`.                                                                                    |
-    /// | `common_sub_expression_eliminate`         | [`CommonSubexprEliminate`]       | Computes repeated subexpressions once.                                                                                           |
-    /// | `extract_leaf_expressions`                | [`ExtractLeafExpressions`]       | Moves cheap leaf expressions closer to the sources.                                                                              |
-    /// | `push_down_leaf_projections`              | [`PushDownLeafProjections`]      | Pushes the projections created by leaf extraction toward the sources.                                                            |
-    /// | `optimize_projections`                    | [`OptimizeProjections`]          | Prunes unused columns and redundant projections.                                                                                 |
-    /// | `replace_filter_top1`                     | [`ReplaceFilterTop1`]            | Rewrites `Filter(row_number() = 1)` over a partitioned window into a `first_value` aggregate.                                    |
+    /// Create a new optimizer using the [built-in rules](Self#built-in-logical-optimizer-rules)
     pub fn new() -> Self {
         // NOTEs:
         // - The order of rules in this list is important, as it determines the

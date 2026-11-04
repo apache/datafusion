@@ -48,13 +48,26 @@ pub trait AnalyzerRule: Debug {
     fn name(&self) -> &str;
 }
 
-/// Rule-based Analyzer.
+/// Rule-based Analyzer for [`LogicalPlan`]s
 ///
 /// Applies [`FunctionRewrite`]s and [`AnalyzerRule`]s to transform a
 /// [`LogicalPlan`] in preparation for execution.
 ///
 /// For example, the `Analyzer` applies type coercion to ensure the types of
 /// operands match the types required by functions.
+///
+/// # Built-in Analyzer Rules
+///
+/// The Analyzer first applies any [`FunctionRewrite`]s added with
+/// [`Self::add_function_rewrite`].
+///
+/// Then it applies the following rules in this order. Note: the list may change
+/// between releases.
+///
+/// | rule                        | summary                                                                   |
+/// | --------------------------- | ------------------------------------------------------------------------- |
+/// | [`ResolveGroupingFunction`] | Rewrites `GROUPING(...)` into expressions over the internal grouping id.  |
+/// | [`TypeCoercion`]            | Adds implicit casts so operators and functions receive valid input types. |
 #[derive(Clone, Debug)]
 pub struct Analyzer {
     /// Expr --> Function writes to apply prior to analysis passes
@@ -70,18 +83,7 @@ impl Default for Analyzer {
 }
 
 impl Analyzer {
-    /// Create a new analyzer using the recommended list of rules
-    ///
-    /// # Built-in Analyzer Rules
-    ///
-    /// Rules run in the order listed, after any [`FunctionRewrite`]s added
-    /// with [`Self::add_function_rewrite`]. The list may change between
-    /// releases.
-    ///
-    /// | rule                        | summary                                                                   |
-    /// | --------------------------- | ------------------------------------------------------------------------- |
-    /// | [`ResolveGroupingFunction`] | Rewrites `GROUPING(...)` into expressions over the internal grouping id.  |
-    /// | [`TypeCoercion`]            | Adds implicit casts so operators and functions receive valid input types. |
+    /// Create a new analyzer using the [built-in rules](Self#built-in-analyzer-rules)
     pub fn new() -> Self {
         let rules: Vec<Arc<dyn AnalyzerRule + Send + Sync>> = vec![
             Arc::new(ResolveGroupingFunction::new()),

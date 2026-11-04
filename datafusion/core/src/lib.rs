@@ -289,7 +289,13 @@
 //!
 //! 4. The [`ExecutionPlan`] is rewritten by the [`PhysicalOptimizer`], using
 //!    [`PhysicalOptimizerRule`]s such as join algorithm selection, to further
-//!    improve its efficiency.
+//!    improve efficiency.
+//!
+//! There is not yet a physical counterpart to the [`Analyzer`]. The rules that
+//! make an [`ExecutionPlan`] executable, by enforcing its distribution and
+//! ordering requirements, currently run at the start of the
+//! [`PhysicalOptimizer`]. Moving them into a separate physical analyzer phase
+//! is tracked in <https://github.com/apache/datafusion/issues/26481>.
 //!
 //! ## Data Sources
 //!
