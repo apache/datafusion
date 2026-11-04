@@ -178,8 +178,7 @@ fn coerce_data_type(
         }
         (Utf8View, Utf8 | LargeUtf8) => Some(Utf8View),
         (BinaryView, Binary | LargeBinary) => Some(BinaryView),
-        // Struct children match by name. Nested binary fields are never read as
-        // strings, see the module docs.
+        // Struct children match by name
         (Struct(table_fields), Struct(file_fields)) => {
             coerce_fields_by_name(table_fields, file_fields, false, enable_rle)
                 .map(Struct)
@@ -219,8 +218,7 @@ fn coerce_data_type(
 }
 
 /// Coerce a single nested child field, keeping everything but its data type
-/// from `file_child`. A nested binary child is never read as a string, see the
-/// module docs.
+/// from `file_child`. Nested binary is never read as a string (see module docs).
 fn coerce_child(
     table_child: &FieldRef,
     file_child: &FieldRef,
@@ -1153,10 +1151,8 @@ mod tests {
             ArrowReaderOptions, ParquetRecordBatchReaderBuilder,
         };
 
-        // Binary list elements and struct fields holding bytes that are not
-        // valid UTF-8. Reading them as strings would produce invalid arrays,
-        // since the Parquet reader only validates columns annotated `UTF8`, so
-        // they must be left binary for the (validating) cast to reject.
+        // Invalid UTF-8 in a binary list element and struct field must stay
+        // binary, for the validating cast to reject.
         let values: ArrayRef =
             Arc::new(BinaryArray::from(vec![b"one".as_slice(), &[0xff]]));
         let list = ListArray::new(
@@ -1200,7 +1196,7 @@ mod tests {
             None
         );
 
-        // So the reader keeps them binary and the decoded batch is valid
+        // So the decoded batch is valid
         let mut reader = ParquetRecordBatchReaderBuilder::try_new_with_options(
             bytes,
             ArrowReaderOptions::new().with_schema(file_schema),
@@ -1389,7 +1385,7 @@ mod tests {
                 );
             }
         }
-        // A nested binary field is never read as a string, see the module docs
+        // Nested binary fields are never read as strings
         for table_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
             for file_type in [
                 DataType::Binary,
