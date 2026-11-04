@@ -156,7 +156,11 @@ impl ScalarUDFImpl for FloorFunc {
         let is_scalar = matches!(arg, ColumnarValue::Scalar(_));
 
         // Array path (also handles decimal scalars converted to size-1 arrays)
-        let value = arg.to_array(args.number_rows)?;
+        let value = if is_scalar {
+            arg.to_array(1)?
+        } else {
+            arg.to_array(args.number_rows)?
+        };
 
         let result: ArrayRef = match value.data_type() {
             DataType::Float64 => Arc::new(
@@ -825,5 +829,106 @@ mod tests {
             matches!(result, PreimageResult::None),
             "Expected None (not an Err) when the argument's type can't be resolved"
         );
+    }
+
+    #[test]
+    fn test_floor_decimal_scalar_zero_rows() {
+        use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+        let udf = FloorFunc::new();
+
+        let test_scalars = vec![
+            ScalarValue::Decimal32(Some(150), 9, 2),
+            ScalarValue::Decimal32(Some(-150), 9, 2),
+            ScalarValue::Decimal32(None, 9, 2),
+            ScalarValue::Decimal64(Some(150), 18, 2),
+            ScalarValue::Decimal64(Some(-150), 18, 2),
+            ScalarValue::Decimal64(None, 18, 2),
+            ScalarValue::Decimal128(Some(150), 38, 2),
+            ScalarValue::Decimal128(Some(-150), 38, 2),
+            ScalarValue::Decimal128(None, 38, 2),
+            ScalarValue::Decimal256(Some(150.into()), 76, 2),
+            ScalarValue::Decimal256(Some((-150).into()), 76, 2),
+            ScalarValue::Decimal256(None, 76, 2),
+        ];
+
+        for arg in test_scalars {
+            let arg_fields = vec![Arc::new(Field::new("a", arg.data_type(), true))];
+            let return_field = udf
+                .return_field_from_args(ReturnFieldArgs {
+                    arg_fields: &arg_fields,
+                    scalar_arguments: &[Some(&arg)],
+                })
+                .unwrap();
+
+            let result_zero_rows = udf
+                .invoke_with_args(ScalarFunctionArgs {
+                    args: vec![ColumnarValue::Scalar(arg.clone())],
+                    arg_fields: arg_fields.clone(),
+                    number_rows: 0,
+                    return_field: Arc::clone(&return_field),
+                    config_options: Arc::new(
+                        datafusion_common::config::ConfigOptions::default(),
+                    ),
+                })
+                .unwrap();
+
+            let result_one_row = udf
+                .invoke_with_args(ScalarFunctionArgs {
+                    args: vec![ColumnarValue::Scalar(arg)],
+                    arg_fields,
+                    number_rows: 1,
+                    return_field,
+                    config_options: Arc::new(
+                        datafusion_common::config::ConfigOptions::default(),
+                    ),
+                })
+                .unwrap();
+
+            let ColumnarValue::Scalar(scalar_zero_rows) = result_zero_rows else {
+                panic!("Expected scalar result for zero rows");
+            };
+            let ColumnarValue::Scalar(scalar_one_row) = result_one_row else {
+                panic!("Expected scalar result for one row");
+            };
+            assert_eq!(scalar_zero_rows, scalar_one_row);
+        }
+    }
+
+    #[test]
+    fn test_floor_decimal_array_zero_rows() {
+        use arrow::array::Array;
+        use datafusion_expr::{ReturnFieldArgs, ScalarUDFImpl};
+
+        let udf = FloorFunc::new();
+        let array = Arc::new(
+            arrow::array::Decimal128Array::from(Vec::<Option<i128>>::new())
+                .with_precision_and_scale(38, 2)
+                .unwrap(),
+        );
+        let arg_fields = vec![Arc::new(Field::new("a", array.data_type().clone(), true))];
+        let return_field = udf
+            .return_field_from_args(ReturnFieldArgs {
+                arg_fields: &arg_fields,
+                scalar_arguments: &[None],
+            })
+            .unwrap();
+
+        let result = udf
+            .invoke_with_args(ScalarFunctionArgs {
+                args: vec![ColumnarValue::Array(array)],
+                arg_fields,
+                number_rows: 0,
+                return_field,
+                config_options: Arc::new(
+                    datafusion_common::config::ConfigOptions::default(),
+                ),
+            })
+            .unwrap();
+
+        match result {
+            ColumnarValue::Array(res_arr) => assert_eq!(res_arr.len(), 0),
+            _ => panic!("Expected array result"),
+        }
     }
 }
