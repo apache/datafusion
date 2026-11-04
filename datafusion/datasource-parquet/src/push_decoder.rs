@@ -25,7 +25,8 @@
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use arrow::array::RecordBatch;
+use arrow::array::{RecordBatch, UInt32Array};
+use arrow::compute::take_record_batch;
 use arrow::datatypes::SchemaRef;
 use futures::StreamExt;
 use futures::stream::BoxStream;
@@ -43,6 +44,7 @@ use parquet::arrow::push_decoder::{
 use parquet::file::metadata::ParquetMetaData;
 
 use datafusion_common::{DataFusionError, Result, internal_err};
+use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use datafusion_physical_plan::metrics::{BaselineMetrics, Count, Gauge};
@@ -307,6 +309,22 @@ pub(crate) struct PushDecoderStreamState {
     /// group at a time as they are decoded or skipped, and topped up to the
     /// full range when the stream is dropped.
     pub(crate) byte_progress: ByteProgress,
+    /// Emit each row group's rows in reverse order. The active reader is
+    /// drained into [`Self::reversed_batches`] before anything is returned,
+    /// so one decoded row group is held in memory at a time.
+    pub(crate) reverse_rows: bool,
+    /// The scan's row limit, if any, when `reverse_rows` is set. No more than
+    /// this many rows of a row group can reach the output, so only its last
+    /// `limit` rows are kept.
+    pub(crate) reverse_limit: Option<usize>,
+    /// The current row group's batches, each already row-reversed and kept
+    /// in decode order, so popping from the end yields the row group back to
+    /// front.
+    pub(crate) reversed_batches: Vec<RecordBatch>,
+    /// Charges the memory pool for the batches held while a row group is
+    /// reversed. `None` when the scan does not reverse rows or was opened
+    /// without a pool.
+    pub(crate) reversed_reservation: Option<MemoryReservation>,
 }
 
 /// A reusable, `Arc`-shared list of prebuilt row-filter candidates.
@@ -432,6 +450,25 @@ impl PushDecoderStreamState {
         let elapsed_compute = self.baseline_metrics.elapsed_compute().clone();
         let mut timer = elapsed_compute.timer();
         loop {
+            // Step 1a: a reversed row group still being emitted.
+            if let Some(batch) = self.reversed_batches.pop() {
+                if let Some(reservation) = &self.reversed_reservation {
+                    reservation.shrink(batch.get_array_memory_size());
+                }
+                return Some((Ok(batch), self));
+            }
+
+            // Step 1b: in reverse mode, drain the whole row group, reverse it
+            // into `reversed_batches`, and emit it from step 1a.
+            if self.reverse_rows
+                && let Some(reader) = self.active_reader.take()
+            {
+                if let Err(e) = self.buffer_reversed_row_group(reader) {
+                    return Some((Err(e), self));
+                }
+                continue;
+            }
+
             // Step 1: drain a batch from the active reader if any.
             if let Some(reader) = self.active_reader.as_mut() {
                 match reader.next() {
@@ -706,6 +743,82 @@ impl PushDecoderStreamState {
     fn project_batch(&self, batch: &RecordBatch) -> Result<RecordBatch> {
         self.decoder_projection.map(batch)
     }
+
+    /// Decodes every remaining batch of `reader`'s row group, projects it,
+    /// reverses its rows, and stores the results in
+    /// [`Self::reversed_batches`]. Batches stay in decode order there, so
+    /// popping them yields the row group's rows last to first.
+    ///
+    /// Under [`Self::reverse_limit`] only the row group's last `limit` rows
+    /// are kept: batches that fall entirely before them are dropped as soon
+    /// as later batches cover the limit, so at most `limit` rows plus one
+    /// batch are held while decoding.
+    fn buffer_reversed_row_group(
+        &mut self,
+        reader: ParquetRecordBatchReader,
+    ) -> Result<()> {
+        let mut kept: VecDeque<RecordBatch> = VecDeque::new();
+        let mut kept_rows = 0;
+        for batch in reader {
+            let batch = batch.map_err(DataFusionError::from)?;
+            self.copy_arrow_reader_metrics();
+            let batch = self.project_batch(&batch)?;
+            if batch.num_rows() == 0 {
+                continue;
+            }
+            if let Some(reservation) = &self.reversed_reservation {
+                reservation.try_grow(batch.get_array_memory_size())?;
+            }
+            kept_rows += batch.num_rows();
+            kept.push_back(batch);
+            if let Some(limit) = self.reverse_limit {
+                while let Some(front) = kept.front()
+                    && kept_rows - front.num_rows() >= limit
+                {
+                    kept_rows -= front.num_rows();
+                    if let Some(dropped) = kept.pop_front()
+                        && let Some(reservation) = &self.reversed_reservation
+                    {
+                        reservation.shrink(dropped.get_array_memory_size());
+                    }
+                }
+            }
+        }
+        if let Some(limit) = self.reverse_limit
+            && kept_rows > limit
+            && let Some(front) = kept.front_mut()
+        {
+            let excess = kept_rows - limit;
+            *front = front.slice(excess, front.num_rows() - excess);
+        }
+        // The reversed copies replace the decoded batches, so the
+        // reservation is resized to exactly what is stored, which is what
+        // step 1a releases batch by batch.
+        for batch in kept {
+            self.reversed_batches.push(reverse_batch_rows(&batch)?);
+        }
+        if let Some(reservation) = &self.reversed_reservation {
+            let stored = self
+                .reversed_batches
+                .iter()
+                .map(RecordBatch::get_array_memory_size)
+                .sum();
+            reservation.try_resize(stored)?;
+        }
+        Ok(())
+    }
+}
+
+/// Returns `batch` with its rows in reverse order.
+fn reverse_batch_rows(batch: &RecordBatch) -> Result<RecordBatch> {
+    let num_rows = u32::try_from(batch.num_rows()).map_err(|_| {
+        DataFusionError::Internal(format!(
+            "record batch of {} rows is too large to reverse",
+            batch.num_rows()
+        ))
+    })?;
+    let indices = UInt32Array::from_iter_values((0..num_rows).rev());
+    Ok(take_record_batch(batch, &indices)?)
 }
 
 #[cfg(test)]

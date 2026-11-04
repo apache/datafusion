@@ -760,6 +760,9 @@ impl DataSource for FileScanConfig {
             .unwrap_or_else(|| context.session_config().batch_size());
 
         let source = self.file_source.with_batch_size(batch_size);
+        let source = source
+            .with_memory_pool(context.memory_pool())
+            .unwrap_or(source);
 
         let morselizer = source.create_morselizer(object_store, self, partition)?;
 
@@ -3731,6 +3734,128 @@ mod tests {
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         assert!(!pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
+
+    /// A source that is `Exact` for the reverse of the declared ordering
+    /// (it reads every file back to front): the files of each group are
+    /// reversed and the scan declares the reversed ordering.
+    #[test]
+    fn sort_pushdown_exact_reverse_reverses_files_and_ordering() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::from(&file_schema);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+            make_file_with_stats("file3", 20.0, 30.0),
+        ])];
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let reversed = sort_expr.reverse();
+        let result = config.try_pushdown_sort(std::slice::from_ref(&reversed))?;
+
+        let SortOrderPushdownResult::Exact { inner } = result else {
+            panic!("Expected Exact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        let names: Vec<_> = pushed_config.file_groups[0]
+            .files()
+            .iter()
+            .map(|f| f.object_meta.location.as_ref())
+            .collect();
+        assert_eq!(names, ["file3", "file2", "file1"]);
+        assert_eq!(
+            pushed_config.output_ordering,
+            vec![LexOrdering::new(vec![reversed]).unwrap()]
+        );
+        Ok(())
+    }
+
+    /// Reading overlapping files back to front does not give an ordered
+    /// stream, so an `Exact` reverse claim is downgraded to `Inexact`.
+    #[test]
+    fn sort_pushdown_exact_reverse_overlapping_downgraded_to_inexact() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::from(&file_schema);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 15.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+        ])];
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr.reverse()])?;
+
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        assert!(pushed_config.output_ordering.is_empty());
+        Ok(())
+    }
+
+    /// A source can be `Exact` for a request that only its equivalence
+    /// reasoning recognises as the reverse of the declared ordering, here
+    /// `a DESC NULLS LAST` on a non-nullable `a` declared `a ASC NULLS LAST`.
+    /// `FileScanConfig` compares the orderings literally, so it sorts the
+    /// files by statistics instead of taking its reverse path, and the
+    /// forward ordering it would keep no longer describes the scan: the
+    /// claim is downgraded to `Inexact` and the sort is kept.
+    #[test]
+    fn sort_pushdown_exact_without_file_reversal_downgraded_to_inexact() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::from(&file_schema);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+        let column = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let asc_nulls_last = PhysicalSortExpr::new(
+            Arc::clone(&column),
+            arrow::compute::SortOptions::new(false, false),
+        );
+        let file_groups = vec![FileGroup::new(vec![
+            make_file_with_stats("file1", 0.0, 9.0),
+            make_file_with_stats("file2", 10.0, 19.0),
+        ])];
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(file_groups)
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![asc_nulls_last]).unwrap(),
+                ])
+                .build();
+        let desc_nulls_last =
+            PhysicalSortExpr::new(column, arrow::compute::SortOptions::new(true, false));
+
+        let result = config.try_pushdown_sort(&[desc_nulls_last])?;
+
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("Expected Inexact result, got {result:?}");
+        };
+        let pushed_config = inner
+            .downcast_ref::<FileScanConfig>()
+            .expect("Expected FileScanConfig");
+        assert!(pushed_config.output_ordering.is_empty());
         Ok(())
     }
 

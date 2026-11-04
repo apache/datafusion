@@ -1354,6 +1354,14 @@ config_namespace! {
         /// pattern of selected rows.
         pub force_filter_selections: bool, default = false
 
+        /// (reading) If true, a scan whose requested ordering is the reverse of
+        /// the files' declared ordering reads each row group into memory and
+        /// emits its rows in reverse, so the scan is exactly ordered and the
+        /// `SortExec` above it can be removed. Peak memory per scanned file is
+        /// one decoded row group (after projection and filtering). If false,
+        /// only the row group order is reversed and the sort is kept.
+        pub enable_exact_reverse_scan: bool, default = false
+
         /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
         /// and `Binary/BinaryLarge` with `BinaryView`.
         ///
