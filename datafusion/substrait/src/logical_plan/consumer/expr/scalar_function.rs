@@ -4,6 +4,7 @@
 
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
 use datafusion::common::Result;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{
     DFSchema, DataFusionError, ScalarValue, not_impl_err, plan_err, substrait_err,
 };
@@ -56,10 +57,24 @@ pub async fn from_scalar_function(
     // try to first match the requested function into registered higher-order functions, then udfs, built-in ops
     // and finally built-in expressions
     if let Ok(func) = higher_order_func {
-        Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+        let expr = Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
             func.to_owned(),
             args,
-        )))
+        ));
+        // Substrait types carry no struct field names, so a lambda parameter over a list
+        // of structs is declared as `{c0, c1, ...}`, and a field access in the body such
+        // as `get_field(x, 'b')` would not find `b`. Give the parameters the fields the
+        // function derives from its arguments instead, which keep the list's field names.
+        //
+        // A function that reads a parameter of an enclosing lambda can't be resolved on
+        // its own, as that parameter's type is only known to the enclosing function. In
+        // `array_transform(s, x -> array_transform([1, 2], i -> get_field(x, 'a') + i))`
+        // the inner call reads `x`, so it is resolved when the outer call is.
+        if reads_enclosing_lambda_parameters(&expr, &mut Vec::new())? {
+            Ok(expr)
+        } else {
+            Ok(expr.resolve_lambda_variables(input_schema)?.data)
+        }
     } else if let Ok(func) = udf_func {
         Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             func.to_owned(),
@@ -78,6 +93,38 @@ pub async fn from_scalar_function(
         builder.build(consumer, f, args)
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
+    }
+}
+
+/// Returns true if `expr` reads a lambda parameter that is not declared by a lambda
+/// inside `expr`, i.e. one that belongs to an enclosing lambda. `declared` holds the
+/// parameters of the lambdas entered so far while walking `expr`.
+fn reads_enclosing_lambda_parameters(
+    expr: &Expr,
+    declared: &mut Vec<String>,
+) -> Result<bool> {
+    match expr {
+        Expr::LambdaVariable(var) => Ok(!declared.contains(&var.name)),
+        Expr::Lambda(lambda) => {
+            // the parameters are only in scope inside the body
+            let scope = declared.len();
+            declared.extend(lambda.params.iter().cloned());
+            let reads = reads_enclosing_lambda_parameters(&lambda.body, declared);
+            declared.truncate(scope);
+            reads
+        }
+        _ => {
+            let mut reads = false;
+            expr.apply_children(|child| {
+                reads = reads_enclosing_lambda_parameters(child, declared)?;
+                Ok(if reads {
+                    TreeNodeRecursion::Stop
+                } else {
+                    TreeNodeRecursion::Continue
+                })
+            })?;
+            Ok(reads)
+        }
     }
 }
 
