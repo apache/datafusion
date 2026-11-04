@@ -68,6 +68,11 @@ async fn assert_max_count(
     Ok(())
 }
 
+const COALESCE_CAST_UNION: &str = "\
+SELECT CAST(coalesce(b, 7) AS BIGINT) AS x FROM t \
+UNION ALL \
+SELECT CAST(coalesce(b, 7) AS BIGINT) AS x FROM t";
+
 const COALESCE_CAST_UNION_AGG: &str = "\
 SELECT max(x) AS m, count(x) AS c FROM (\
   SELECT CAST(coalesce(b, 7) AS BIGINT) AS x FROM t \
@@ -109,6 +114,39 @@ async fn coalesce_cast_union_aggregate_controls() -> Result<()> {
     assert_max_count(&ctx, DIRECT_COLUMN_UNION_AGG, 6).await?;
     // Without UNION ALL the three input rows are not doubled.
     assert_max_count(&ctx, COALESCE_CAST_AGG_NO_UNION, 3).await?;
+    Ok(())
+}
+
+/// Same rewrite as the aggregate case, without the aggregate. `x` keeps
+/// `PARQUET:field_id = 1` on the optimized plan and on the batches.
+#[tokio::test]
+async fn coalesce_cast_union_preserves_field_metadata_on_output() -> Result<()> {
+    let ctx = SessionContext::new();
+    register_t(&ctx, true)?;
+    let df = ctx.sql(COALESCE_CAST_UNION).await?;
+    let plan = df.clone().into_optimized_plan()?;
+    let logical = plan.schema().field_with_unqualified_name("x")?;
+    assert_eq!(
+        logical
+            .metadata()
+            .get("PARQUET:field_id")
+            .map(String::as_str),
+        Some("1"),
+        "optimized union schema dropped field metadata: {logical:?}"
+    );
+
+    let batches = df.collect().await?;
+    assert!(!batches.is_empty());
+    let batch_schema = batches[0].schema();
+    let batch_field = batch_schema.field_with_name("x")?;
+    assert_eq!(
+        batch_field
+            .metadata()
+            .get("PARQUET:field_id")
+            .map(String::as_str),
+        Some("1"),
+        "output batch dropped field metadata: {batch_field:?}"
+    );
     Ok(())
 }
 
