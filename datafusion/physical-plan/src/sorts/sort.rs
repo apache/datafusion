@@ -2535,6 +2535,60 @@ mod tests {
     use insta::assert_snapshot;
     use tokio::sync::Notify;
 
+    /// Runs whose buffers start at the same address but declare different
+    /// lengths, as `arrow::ffi::from_ffi` produces for zero-copy slices of one
+    /// batch, must not trip the shared input reservation check in `sort_run`.
+    /// <https://github.com/apache/datafusion/issues/27069>
+    #[tokio::test]
+    async fn sort_runs_sharing_address_with_different_capacities() -> Result<()> {
+        use arrow::buffer::{Buffer, ScalarBuffer};
+        use std::ptr::NonNull;
+
+        let owner: Arc<Vec<i32>> = Arc::new((0..1024).rev().collect());
+        let ptr = NonNull::new(owner.as_ptr().cast::<u8>().cast_mut()).unwrap();
+        let batch = |len: usize| -> Result<RecordBatch> {
+            // SAFETY: `owner` holds 1024 >= len initialized i32 values at `ptr`
+            // and the buffer keeps `owner` alive.
+            let buffer = unsafe {
+                Buffer::from_custom_allocation(ptr, len * 4, Arc::clone(&owner) as _)
+            };
+            let array = Int32Array::new(ScalarBuffer::new(buffer, 0, len), None);
+            Ok(RecordBatch::try_from_iter([(
+                "a",
+                Arc::new(array) as ArrayRef,
+            )])?)
+        };
+        // The smaller length comes first, so it is the first capacity seen for
+        // the shared address.
+        let batches = vec![batch(16)?, batch(1024)?];
+        let schema = batches[0].schema();
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let sort = SortExec::new(
+            [PhysicalSortExpr::new_default(col("a", &schema)?)].into(),
+            input,
+        );
+        // Keep each batch as its own run instead of concatenating them.
+        let context = Arc::new(TaskContext::default().with_session_config(
+            SessionConfig::new().with_sort_in_place_threshold_bytes(0),
+        ));
+
+        let output = collect(Arc::new(sort), context).await?;
+        let values = output
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int32Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let mut expected = (0..1024).rev().chain(1008..1024).collect::<Vec<i32>>();
+        expected.sort_unstable();
+        assert_eq!(values, expected);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn sort_run_records_compute_before_consumption() -> Result<()> {
         let batch = RecordBatch::try_from_iter([(
