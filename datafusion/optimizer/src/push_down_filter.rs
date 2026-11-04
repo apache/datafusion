@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`PushDownFilter`] applies filters as early as possible
 //!
@@ -39,6 +26,7 @@
 //!
 //! [`PushDownLeafProjections`]: crate::extract_leaf_expressions::PushDownLeafProjections
 
+use datafusion_expr::logical_plan::MaterializedCtePlan;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
@@ -62,9 +50,8 @@ use datafusion_expr::utils::{
     conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
 };
 use datafusion_expr::{
-    BinaryExpr, Distinct, EmptyRelation, Expr, Extension, Filter, MaterializedCte,
-    Operator, Projection, TableProviderFilterPushDown, UserDefinedLogicalNodeCore, and,
-    or,
+    BinaryExpr, Distinct, EmptyRelation, Expr, Filter, Operator, Projection,
+    TableProviderFilterPushDown, and, or,
 };
 
 use crate::extract_leaf_expressions::is_pure_extraction_projection;
@@ -1129,9 +1116,15 @@ impl OptimizerRule for PushDownFilter {
                 // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
                 // After push, we need to replace `a+b` with Column(a)+Column(b)
                 // So we need create a replace_map, add {`a+b` --> Expr(Column(a)+Column(b))}
+                //
+                // Keyed by the output column, the same key `group_expr_columns`
+                // is built from, so a predicate admitted below cannot miss its
+                // replacement. See `replace_cols_by_column` for why the flat
+                // name is not enough.
                 let mut replace_map = HashMap::with_capacity(agg.group_expr.len());
                 for expr in &agg.group_expr {
-                    replace_map.insert(expr.schema_name().to_string(), unalias(expr));
+                    let (relation, name) = expr.qualified_name();
+                    replace_map.insert(Column::new(relation, name), unalias(expr));
                 }
 
                 let predicates = split_conjunction_owned(filter.predicate);
@@ -1140,7 +1133,7 @@ impl OptimizerRule for PushDownFilter {
                 for expr in predicates {
                     let cols = expr.column_refs();
                     if cols.iter().all(|c| group_expr_columns.contains(c)) {
-                        push_predicates.push(replace_cols_by_name(expr, &replace_map)?);
+                        push_predicates.push(replace_cols_by_column(expr, &replace_map)?);
                     } else {
                         keep_predicates.push(expr);
                     }
@@ -1403,22 +1396,22 @@ impl OptimizerRule for PushDownFilter {
                     LogicalPlan::TableScan(scan),
                 )))
             }
-            LogicalPlan::Extension(Extension { node })
-                if node.as_any().is::<MaterializedCte>() =>
-            {
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(mut cte)) => {
                 // The output is the output of the continuation, so the filter
                 // moves onto the continuation. The body is shared by every scan
                 // of the CTE and is never filtered for one of them.
-                let cte = node.as_any().downcast_ref::<MaterializedCte>().unwrap();
-                let continuation = LogicalPlan::Filter(Filter::new(
+                cte.continuation = Arc::new(LogicalPlan::Filter(Filter::new(
                     filter.predicate,
-                    Arc::new(cte.continuation.clone()),
-                ));
-                let cte = cte
-                    .with_exprs_and_inputs(vec![], vec![cte.cte.clone(), continuation])?;
-                Ok(Transformed::yes(LogicalPlan::Extension(Extension {
-                    node: Arc::new(cte),
-                })))
+                    cte.continuation,
+                )));
+                Ok(Transformed::yes(LogicalPlan::MaterializedCte(
+                    MaterializedCtePlan::Cte(cte),
+                )))
+            }
+            // A scan reads the shared body, so the filter stays above it.
+            scan @ LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => {
+                filter.input = Arc::new(scan);
+                Ok(Transformed::no(LogicalPlan::Filter(filter)))
             }
             LogicalPlan::Extension(extension_plan) => {
                 // This check prevents the Filter from being removed when the extension node has no children,
@@ -1557,12 +1550,17 @@ fn rewrite_projection(
     // into a filter causes optimizer instability — ExtractLeafExpressions will
     // undo the push-down, creating an infinite loop that runs until the
     // iteration limit is hit).
-    let (non_pushable_map, pushable_map) = projection
+    //
+    // Keyed by the output column rather than its flat name, for the reason
+    // given on `replace_cols_by_column`. `EliminateGroupByConstant` can leave a
+    // projection that outputs both `t.a` and `CAST(t.a AS ...)` under that one
+    // name.
+    let (non_pushable_map, pushable_map): (HashMap<_, _>, HashMap<_, _>) = projection
         .schema
         .iter()
         .zip(projection.expr.iter())
         .map(|((qualifier, field), expr)| {
-            (qualified_name(qualifier, field.name()), unalias(expr))
+            (Column::new(qualifier.cloned(), field.name()), unalias(expr))
         })
         .partition(|(_, value)| {
             value.is_volatile()
@@ -1572,7 +1570,7 @@ fn rewrite_projection(
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
     for expr in predicates {
-        if contain(&expr, &non_pushable_map) {
+        if contains_column(&expr, &non_pushable_map) {
             keep_predicates.push(expr);
         } else {
             push_predicates.push(expr);
@@ -1583,7 +1581,7 @@ fn rewrite_projection(
         // re-write all filters based on this projection
         // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
         projection.input = Arc::new(LogicalPlan::Filter(Filter::new(
-            replace_cols_by_name(expr, &pushable_map)?,
+            replace_cols_by_column(expr, &pushable_map)?,
             projection.input,
         )));
 
@@ -1643,6 +1641,28 @@ pub fn replace_cols_by_name(
     .data()
 }
 
+/// Replaces column references by the expression the node below computes for
+/// that column.
+///
+/// Keyed by [`Column`] rather than by its flat name, because a qualified column
+/// `t.a` and an unqualified field named `t.a` are different columns that share a
+/// flat name, and a node can output both.
+fn replace_cols_by_column(
+    e: Expr,
+    replace_map: &HashMap<Column, impl AsRef<Expr>>,
+) -> Result<Expr> {
+    e.transform_up(|expr| {
+        if let Expr::Column(c) = &expr
+            && let Some(new_expr) = replace_map.get(c)
+        {
+            Ok(Transformed::yes(new_expr.as_ref().clone()))
+        } else {
+            Ok(Transformed::no(expr))
+        }
+    })
+    .data()
+}
+
 /// Unalias expression reference.
 fn unalias(expr: &Expr) -> &Expr {
     if let Expr::Alias(alias) = expr {
@@ -1653,11 +1673,9 @@ fn unalias(expr: &Expr) -> &Expr {
 }
 
 /// check whether the expression uses the columns in `check_map`.
-fn contain<T>(e: &Expr, check_map: &HashMap<String, T>) -> bool {
-    e.exists(|expr| {
-        Ok(matches!(expr, Expr::Column(c) if check_map.contains_key(&c.flat_name())))
-    })
-    .unwrap()
+fn contains_column<T>(e: &Expr, check_map: &HashMap<Column, T>) -> bool {
+    e.exists(|expr| Ok(matches!(expr, Expr::Column(c) if check_map.contains_key(c))))
+        .unwrap()
 }
 
 fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {

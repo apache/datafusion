@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`AggregateUDF`]: User Defined Aggregate Functions
 
@@ -208,7 +195,9 @@ impl AggregateUDF {
         self.inner.window_function_display_name(params)
     }
 
+    #[deprecated(since = "56.0.0", note = "Use `AggregateUDF::return_field` instead.")]
     pub fn is_nullable(&self) -> bool {
+        #[expect(deprecated)]
         self.inner.is_nullable()
     }
 
@@ -570,6 +559,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// For example, aggregate functions like `COUNT` always return a non null value
     /// but others like `MIN` will return `NULL` if there is nullable input.
     /// Note that if the function is declared as *not* nullable, make sure the [`AggregateUDFImpl::default_value`] is `non-null`
+    #[deprecated(since = "56.0.0", note = "Use `return_field` instead.")]
     fn is_nullable(&self) -> bool {
         true
     }
@@ -1514,6 +1504,7 @@ pub fn udaf_default_return_field<F: AggregateUDFImpl + ?Sized>(
     Ok(Arc::new(Field::new(
         func.name(),
         data_type,
+        #[expect(deprecated)]
         func.is_nullable(),
     )))
 }
@@ -1678,6 +1669,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
     }
 
     fn is_nullable(&self) -> bool {
+        #[expect(deprecated)]
         self.inner.is_nullable()
     }
 

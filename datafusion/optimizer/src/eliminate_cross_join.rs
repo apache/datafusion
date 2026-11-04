@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`EliminateCrossJoin`] converts `CROSS JOIN` to `INNER JOIN` if join predicates are available.
 use crate::{OptimizerConfig, OptimizerRule};
@@ -155,6 +142,16 @@ impl OptimizerRule for EliminateCrossJoin {
             }
         };
 
+        // Rewrite each flattened input once, before reassembling the joins.
+        // `rewrite` preserves its input's schema, which is all that
+        // `find_inner_join` looks at, so this is equivalent to rewriting the
+        // children of the reassembled join tree, but avoids flattening and
+        // rebuilding the rest of the join chain again at every nesting level.
+        let mut all_inputs = all_inputs
+            .into_iter()
+            .map(|input| self.rewrite(input, config).map(|t| t.data))
+            .collect::<Result<Vec<_>>>()?;
+
         // Join keys are handled locally:
         let mut all_join_keys = JoinKeySet::new();
         let mut left = all_inputs.remove(0);
@@ -165,10 +162,11 @@ impl OptimizerRule for EliminateCrossJoin {
                 &possible_join_keys,
                 &mut all_join_keys,
                 null_equality,
-            )?;
+            )?
+            // Join keys may contain uncorrelated subqueries to rewrite
+            .map_uncorrelated_subqueries(|input| self.rewrite(input, config))?
+            .data;
         }
-
-        left = rewrite_children(self, left, config)?.data;
 
         if &plan_schema != left.schema() {
             left = LogicalPlan::Projection(Projection::new_from_schema(
@@ -460,6 +458,7 @@ mod tests {
         Operator::{And, Or},
         binary_expr, col, lit,
         logical_plan::builder::LogicalPlanBuilder,
+        scalar_subquery,
     };
     use insta::assert_snapshot;
 
@@ -1351,6 +1350,43 @@ mod tests {
                 TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
                 TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
               TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn eliminate_cross_join_in_join_key_subquery() -> Result<()> {
+        // An uncorrelated subquery containing a cross join that can be eliminated
+        let subquery = LogicalPlanBuilder::from(test_table_scan_with_name("s1")?)
+            .cross_join(test_table_scan_with_name("s2")?)?
+            .filter(col("s1.a").eq(col("s2.a")))?
+            .project(vec![col("s1.b")])?
+            .build()?;
+
+        // The subquery ends up in the join key of the innermost join
+        let plan = LogicalPlanBuilder::from(test_table_scan_with_name("t1")?)
+            .cross_join(test_table_scan_with_name("t2")?)?
+            .cross_join(test_table_scan_with_name("t3")?)?
+            .filter(binary_expr(
+                (col("t1.a") + scalar_subquery(Arc::new(subquery))).eq(col("t2.a")),
+                And,
+                col("t2.b").eq(col("t3.b")),
+            ))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @ r"
+        Inner Join: t2.b = t3.b [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
+          Inner Join: t1.a + (<subquery>) = t2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
+            Subquery: [b:UInt32]
+              Projection: s1.b [b:UInt32]
+                Inner Join: s1.a = s2.a [a:UInt32, b:UInt32, c:UInt32, a:UInt32, b:UInt32, c:UInt32]
+                  TableScan: s1 [a:UInt32, b:UInt32, c:UInt32]
+                  TableScan: s2 [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: t1 [a:UInt32, b:UInt32, c:UInt32]
+            TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
+          TableScan: t3 [a:UInt32, b:UInt32, c:UInt32]
         "
         )
     }

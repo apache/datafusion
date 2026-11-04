@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`PullUpCorrelatedExpr`] converts correlated subqueries to `Joins`
 
@@ -39,9 +26,9 @@ use datafusion_expr::logical_plan::{Join, JoinType};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{collect_subquery_cols, conjunction, split_conjunction};
 use datafusion_expr::{
-    Aggregate, BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, Extension,
-    FetchType, LogicalPlan, LogicalPlanBuilder, MaterializedCte, Operator, SkipType,
-    UserDefinedLogicalNodeCore, Window, expr, lit,
+    Aggregate, BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, FetchType,
+    LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCtePlan, Operator,
+    SkipType, Window, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -110,6 +97,12 @@ pub struct PullUpCorrelatedExpr {
     /// grouping set that omits a correlated column can tell whether
     /// something above it reads the column the pull up would fill in.
     column_refs_above: Vec<BTreeSet<Column>>,
+    /// For each node on that same path, whether it returns rows based only on
+    /// whether its input has rows (see [`depends_only_on_input_having_rows`]). One
+    /// entry per node, pushed and popped with [`Self::column_refs_above`].
+    /// `f_down`'s `Limit` arm reads it: a `Limit` is only dropped from an
+    /// `EXISTS` subquery when this holds for every node above it.
+    depends_only_on_input_having_rows_above: Vec<bool>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -134,6 +127,7 @@ impl PullUpCorrelatedExpr {
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
             column_refs_above: Vec::new(),
+            depends_only_on_input_having_rows_above: Vec::new(),
         }
     }
 
@@ -196,6 +190,8 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             column_refs.extend(expr.column_refs().into_iter().cloned());
         }
         self.column_refs_above.push(column_refs);
+        self.depends_only_on_input_having_rows_above
+            .push(depends_only_on_input_having_rows(&plan));
 
         // This match is exhaustive on purpose. A correlated filter moves above
         // a node only when the node is known to keep the result the same. Add
@@ -208,35 +204,25 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             LogicalPlan::Subquery(_) => {
                 Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
             }
-            LogicalPlan::Extension(Extension { node })
-                if node.as_any().is::<MaterializedCte>() =>
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(ref cte))
+                if !cte.cte.all_out_ref_exprs().is_empty() =>
             {
-                let cte = node.as_any().downcast_ref::<MaterializedCte>().unwrap();
-                if !cte.cte.all_out_ref_exprs().is_empty() {
-                    // A correlated body would have to run once per outer row.
-                    return Ok(
-                        self.stop_pull_up(LogicalPlan::Extension(Extension { node }))
-                    );
-                }
+                // A correlated body would have to run once per outer row.
+                Ok(self.stop_pull_up(plan))
+            }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
                 // Only the continuation can hold correlated expressions. Rewrite
                 // it alone, so that the body shared by every scan keeps its schema.
-                let continuation = cte.continuation.clone().rewrite(self)?;
-                if !continuation.transformed {
-                    return Ok(Transformed::new(
-                        LogicalPlan::Extension(Extension { node }),
-                        false,
-                        TreeNodeRecursion::Jump,
-                    ));
-                }
-                let cte = cte.with_exprs_and_inputs(
-                    vec![],
-                    vec![cte.cte.clone(), continuation.data],
-                )?;
+                let continuation =
+                    Arc::unwrap_or_clone(cte.continuation).rewrite(self)?;
                 Ok(Transformed::new(
-                    LogicalPlan::Extension(Extension {
-                        node: Arc::new(cte),
-                    }),
-                    true,
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                        MaterializedCte {
+                            continuation: Arc::new(continuation.data),
+                            ..cte
+                        },
+                    )),
+                    continuation.transformed,
                     TreeNodeRecursion::Jump,
                 ))
             }
@@ -291,9 +277,8 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 if !self.exists_sub_query {
                     return Ok(self.stop_pull_up(plan));
                 }
-                // Only emptiness matters for EXISTS, so remove a limit that
-                // cannot make its input empty and replace one that always does
-                // with an empty relation.
+                // A `LIMIT 0` always gives an empty input, whatever is
+                // above it, so it becomes an empty relation.
                 let fetch = limit.get_fetch_type()?;
                 if matches!(fetch, FetchType::Literal(Some(0))) {
                     return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
@@ -303,6 +288,20 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         },
                     )));
                 }
+                // `EXISTS` asks whether the whole subquery returns a row, not
+                // whether this `Limit` does. If a node above the `Limit` looks
+                // at which rows it gets, such as a `Filter` or the `HAVING` in
+                // https://github.com/apache/datafusion/issues/26629, removing
+                // the `Limit` hands it different rows and can change the
+                // answer, so the `Limit` has to stay.
+                let (_, above) = self
+                    .depends_only_on_input_having_rows_above
+                    .split_last()
+                    .expect("f_down pushed this Limit's own entry");
+                if !above.iter().all(|follows| *follows) {
+                    return Ok(self.stop_pull_up(plan));
+                }
+
                 match (limit.get_skip_type()?, fetch) {
                     (SkipType::Literal(0), FetchType::Literal(_)) => {
                         // The rewriter does not call `f_down` on the returned
@@ -312,6 +311,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         // `f_up` call reaches this tree position once `Limit`
                         // is gone, so only one entry must remain pushed.
                         self.column_refs_above.pop();
+                        self.depends_only_on_input_having_rows_above.pop();
                         let mut t = self.f_down((*limit.input).clone())?;
                         t.transformed = true;
                         Ok(t)
@@ -350,6 +350,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             | LogicalPlan::SubqueryAlias(_)
             | LogicalPlan::TableScan(_)
             | LogicalPlan::EmptyRelation(_)
+            | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
             | LogicalPlan::Values(_) => {
                 if plan.contains_outer_reference() {
                     // the unsupported cases, the plan expressions contain out
@@ -372,7 +373,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => {
+            | LogicalPlan::Show(_) => {
                 if holds_outer_reference(&plan) {
                     Ok(self.stop_pull_up(plan))
                 } else {
@@ -386,6 +387,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
         // Pop this node's own entry, pushed by the matching `f_down` call, so
         // `column_refs_above` holds only the nodes strictly above `plan`.
         self.column_refs_above.pop();
+        self.depends_only_on_input_having_rows_above.pop();
 
         // A node that null-extends or regroups rows can put a NULL back into
         // a column that a correlated filter below it rejected, so the filters
@@ -494,7 +496,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                             LogicalPlanBuilder::from((*plan_filter.input).clone())
                                 .build()?;
                         self.correlated_subquery_cols_map
-                            .insert(new_plan.clone(), correlated_subquery_cols);
+                            .entry(new_plan.clone())
+                            .or_default()
+                            .extend(correlated_subquery_cols);
                         Ok(Transformed::yes(new_plan))
                     }
                     (None, _) => {
@@ -506,7 +510,9 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         }
                         let new_plan = plan.build()?;
                         self.correlated_subquery_cols_map
-                            .insert(new_plan.clone(), correlated_subquery_cols);
+                            .entry(new_plan.clone())
+                            .or_default()
+                            .extend(correlated_subquery_cols);
                         Ok(Transformed::yes(new_plan))
                     }
                 }
@@ -913,6 +919,43 @@ impl PullUpCorrelatedExpr {
         }
         Ok(missing_exprs)
     }
+}
+
+/// Whether `plan` returns rows based only on whether its input has rows, and
+/// not on which rows those are.
+///
+/// This is what lets `EXISTS` drop a `Limit` with no skip and a non-zero
+/// fetch. Such a `Limit` returns rows exactly when its input has rows. If
+/// every node above it also only depends on whether it gets rows, the whole
+/// subquery returns rows exactly when the `Limit`'s input has rows, with or
+/// without the `Limit`, so removing it cannot change the `EXISTS` result.
+///
+/// It holds for:
+/// - `Projection`, `SubqueryAlias`, `Sort`, `Window` and `Repartition`, which
+///   return rows whenever their input has rows (a `Sort` with a fetch of 0
+///   returns none either way)
+/// - `DISTINCT` and a grouped `Aggregate`, which return at least one row for a
+///   non-empty input and none for an empty one
+/// - an `Aggregate` without grouping, which always returns one row
+/// - a materialized CTE, which returns its continuation's rows
+///
+/// It does not hold for a `Filter`, which keeps or removes rows by their
+/// values, so the rows the `Limit` kept decide whether any survive. A `Join`
+/// and an `Unnest` can also turn rows into none. Every other plan, including a
+/// user-defined `Extension`, is treated as not holding: the `Limit` stays and
+/// the subquery is not decorrelated.
+fn depends_only_on_input_having_rows(plan: &LogicalPlan) -> bool {
+    matches!(
+        plan,
+        LogicalPlan::Projection(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Window(_)
+            | LogicalPlan::Repartition(_)
+            | LogicalPlan::Distinct(Distinct::All(_))
+            | LogicalPlan::Aggregate(_)
+            | LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(_))
+    )
 }
 
 /// Whether `plan` can output a NULL in a column that a filter below it keeps

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarSubqueryToJoin`] rewriting scalar subquery filters to `JOIN`s
 
@@ -1275,5 +1262,47 @@ mod tests {
         );
 
         Ok(())
+    }
+
+    #[test]
+    fn correlated_scalar_subquery_filter_above_correlated_derived_table() -> Result<()> {
+        let derived = LogicalPlanBuilder::from(scan_tpch_table("orders"))
+            .filter(
+                col("orders.o_custkey")
+                    .eq(out_ref_col(DataType::Int64, "customer.c_custkey")),
+            )?
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![max(col("orders.o_custkey")).alias("n")],
+            )?
+            .project(vec![col("n")])?
+            .alias("t")?
+            .build()?;
+
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(derived)
+                .filter(out_ref_col(DataType::Int64, "customer.c_custkey").gt(lit(0i64)))?
+                .project(vec![col("t.n")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .project(vec![col("customer.c_custkey"), scalar_subquery(sq)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: customer.c_custkey, __scalar_sq_1.n AS n [c_custkey:Int64, n:Int64;N]
+          Left Join:  Filter: __scalar_sq_1.o_custkey = customer.c_custkey AND customer.c_custkey > Int64(0) [c_custkey:Int64, c_name:Utf8, n:Int64;N, o_custkey:Int64;N, __always_true:Boolean;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+            SubqueryAlias: __scalar_sq_1 [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
+              Projection: t.n, t.o_custkey, t.__always_true [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
+                SubqueryAlias: t [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
+                  Projection: n, orders.o_custkey, __always_true [n:Int64;N, o_custkey:Int64, __always_true:Boolean]
+                    Aggregate: groupBy=[[orders.o_custkey, Boolean(true) AS __always_true]], aggr=[[max(orders.o_custkey) AS n]] [o_custkey:Int64, __always_true:Boolean, n:Int64;N]
+                      TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+        "
+        )
     }
 }

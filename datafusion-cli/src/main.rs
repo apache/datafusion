@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashMap;
 use std::env;
@@ -869,7 +856,11 @@ mod tests {
             .build_arc()
             .unwrap();
 
-        let ctx = SessionContext::new_with_config_rt(SessionConfig::default(), rt);
+        // Pin `created_by` so the size of the written parquet files (checked
+        // below) does not depend on the DataFusion version string
+        let config = SessionConfig::default()
+            .set_str("datafusion.execution.parquet.created_by", "datafusion");
+        let ctx = SessionContext::new_with_config_rt(config, rt);
 
         ctx.register_object_store(
             &Url::parse("mem://test_table").unwrap(),
@@ -942,8 +933,8 @@ mod tests {
         +---------------------+-----------+-----------------+------+------+
         | metadata_size_bytes | filename  | file_size_bytes | etag | hits |
         +---------------------+-----------+-----------------+------+------+
-        | 216                 | 0.parquet | 3620            | "0"  | 2    |
-        | 216                 | 1.parquet | 3620            | "1"  | 2    |
+        | 216                 | 0.parquet | 3605            | "0"  | 2    |
+        | 216                 | 1.parquet | 3605            | "1"  | 2    |
         +---------------------+-----------+-----------------+------+------+
         "#);
 

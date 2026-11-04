@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SingleDistinctToGroupBy`] replaces `AGG(DISTINCT ..)` with `AGG(..) GROUP BY ..`
 
@@ -30,7 +17,7 @@ use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::expr_schema::ExprSchemable;
 use datafusion_expr::{
-    AggregateUDF, Expr, col,
+    AggregateUDF, Expr, cast, col,
     expr::AggregateFunction,
     lit,
     logical_plan::{Aggregate, LogicalPlan},
@@ -402,6 +389,12 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .map(|(expr, _)| expr.clone())
                     .collect();
 
+                let outer_aggr = LogicalPlan::Aggregate(Aggregate::try_new(
+                    Arc::new(inner_agg),
+                    outer_group_exprs,
+                    outer_aggr_exprs,
+                )?);
+
                 // so the aggregates are displayed in the same way even after the rewrite
                 // this optimizer has two kinds of alias:
                 // - group_by aggr
@@ -417,15 +410,16 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .chain(outer_proj_exprs.into_iter().enumerate().map(|(idx, expr)| {
                         let idx = idx + group_size;
                         let (qualifier, field) = schema.qualified_field(idx);
+                        let current_type = outer_aggr.schema().field(idx).data_type();
+                        let expr = if current_type != field.data_type() {
+                            cast(expr, field.data_type().clone())
+                        } else {
+                            expr
+                        };
                         expr.alias_qualified(qualifier.cloned(), field.name())
                     }))
                     .collect();
 
-                let outer_aggr = LogicalPlan::Aggregate(Aggregate::try_new(
-                    Arc::new(inner_agg),
-                    outer_group_exprs,
-                    outer_aggr_exprs,
-                )?);
                 Ok(Transformed::yes(project(outer_aggr, alias_expr)?))
             }
             _ => Ok(Transformed::no(plan)),
@@ -1309,5 +1303,31 @@ mod tests {
           TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         ",
         )
+    }
+
+    #[test]
+    fn sum_decimal_with_distinct_preserves_declared_type() -> Result<()> {
+        let schema = Schema::new(vec![
+            Field::new("d", DataType::Decimal128(5, 2), false),
+            Field::new("x", DataType::Int32, false),
+        ]);
+        let table_scan = table_scan(Some("test"), &schema, None)?.build()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![sum(col("d")), count_distinct(col("x"))],
+            )?
+            .build()?;
+
+        let rule: Arc<dyn OptimizerRule + Send + Sync> =
+            Arc::new(SingleDistinctToGroupBy::new());
+        let optimizer = Optimizer::with_rules(vec![rule]);
+        let optimized_plan = optimizer
+            .optimize(plan.clone(), &RegistryOptimizerContext::new(), |_, _| {})
+            .expect("failed to optimize plan");
+
+        assert_eq!(plan.schema().as_ref(), optimized_plan.schema().as_ref());
+        Ok(())
     }
 }

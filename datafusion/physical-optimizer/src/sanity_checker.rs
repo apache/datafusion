@@ -1,25 +1,18 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! The [SanityCheckPlan] rule ensures that a given plan can
 //! accommodate its infinite sources, if there are any. It will reject
 //! non-runnable query plans that use pipeline-breaking operators on
 //! infinite input(s). In addition, it will check if all order and
 //! distribution requirements of a plan are satisfied by its children.
+//!
+//! The physical planner runs the same check on the final plan of every query,
+//! after all physical optimizer rules, including rules appended by the user.
+//! The rule is therefore not part of the default rule list and is deprecated.
+//! Code that drives optimizer rules directly can call
+//! [`check_plan_tree_sanity`] on the final plan.
 
 use std::sync::Arc;
 
@@ -48,9 +41,14 @@ use itertools::izip;
 ///    are not satisfied by their children.
 /// 2. Plans that use pipeline-breaking operators on infinite input(s),
 ///    it is impossible to execute such queries (they will never generate output nor finish)
+#[deprecated(
+    since = "56.0.0",
+    note = "The physical planner checks the final plan after all rules. To check a plan outside the planner, use `check_plan_tree_sanity`"
+)]
 #[derive(Default, Debug)]
 pub struct SanityCheckPlan {}
 
+#[expect(deprecated)]
 impl SanityCheckPlan {
     #[expect(missing_docs)]
     pub fn new() -> Self {
@@ -58,6 +56,7 @@ impl SanityCheckPlan {
     }
 }
 
+#[expect(deprecated)]
 impl PhysicalOptimizerRule for SanityCheckPlan {
     fn optimize(
         &self,
@@ -75,6 +74,29 @@ impl PhysicalOptimizerRule for SanityCheckPlan {
     fn schema_check(&self) -> bool {
         true
     }
+}
+
+/// Checks every node of `plan` with [`check_plan_sanity`], children first.
+pub fn check_plan_tree_sanity(
+    plan: &Arc<dyn ExecutionPlan>,
+    optimizer_options: &OptimizerOptions,
+) -> Result<()> {
+    check_plan_sanity_recursive(plan, optimizer_options).map(|_| ())
+}
+
+/// Returns whether every node of `plan` has its order and distribution
+/// requirements satisfied by its children, as checked by
+/// [`check_input_requirements`].
+pub fn input_requirements_hold(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    let mut hold = true;
+    let _ = plan.apply(|node| {
+        if check_input_requirements(node).is_err() {
+            hold = false;
+            return Ok(TreeNodeRecursion::Stop);
+        }
+        Ok(TreeNodeRecursion::Continue)
+    });
+    hold
 }
 
 /// Bottom-up (post-order) read-only traversal that checks plan sanity.
@@ -146,6 +168,15 @@ pub fn check_plan_sanity(
     optimizer_options: &OptimizerOptions,
 ) -> Result<()> {
     check_finiteness_requirements(plan.as_ref(), optimizer_options)?;
+    check_input_requirements(plan)?;
+    plan.check_invariants(InvariantLevel::Executable)?;
+
+    Ok(())
+}
+
+/// Checks that the order and distribution requirements of `plan` are
+/// satisfied by its children.
+pub fn check_input_requirements(plan: &Arc<dyn ExecutionPlan>) -> Result<()> {
     let input_distributions = plan.input_distribution_requirements();
 
     for ((idx, child), sort_req, dist_req) in izip!(
@@ -189,8 +220,6 @@ pub fn check_plan_sanity(
             );
         }
     }
-
-    plan.check_invariants(InvariantLevel::Executable)?;
 
     Ok(())
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`WindowTopN`] optimizer rule for per-partition top-K window queries.
 //!
@@ -122,6 +109,9 @@ use datafusion_physical_plan::windows::{BoundedWindowAggExec, WindowUDFExpr};
 /// All of the following must be true:
 /// - Config flag `enable_window_topn` is `true`
 /// - The plan matches `FilterExec → [ProjectionExec] → BoundedWindowAggExec`
+/// - Every `ProjectionExec` between the filter and the window passes the
+///   filtered column through as a bare column, possibly at another position
+///   (as when a column the query no longer needs is dropped)
 /// - The window function is `ROW_NUMBER`, `RANK`, or `DENSE_RANK`
 /// - Every window expression in the `BoundedWindowAggExec` is `ROW_NUMBER`,
 ///   `RANK`, or `DENSE_RANK` over the same `PARTITION BY` / `ORDER BY`. A
@@ -162,6 +152,21 @@ impl WindowTopN {
             return None;
         }
 
+        // The rewrite replaces the `FilterExec` entirely, so anything it
+        // carries beyond the predicate has to be reproduced or declined.
+        // `fetch` is applied by `FilterExec::execute` *after* the predicate,
+        // and the rewritten plan has nowhere to put it: a
+        // `PartitionedTopKExec` bounds rows per partition, which is not the
+        // same as a row limit over the filtered output. Declining keeps the
+        // rule from silently returning more rows than were asked for.
+        //
+        // The default rule list runs `LimitPushdown` after this rule, so no
+        // plan reaches here with a fetch today. The guard is cheap insurance
+        // for pipelines that reorder the two.
+        if filter.fetch().is_some() {
+            return None;
+        }
+
         // Step 2: Extract limit from predicate (rn <= K, rn < K, etc.)
         let (col_idx, limit_n) = extract_window_limit(filter.predicate())?;
 
@@ -178,7 +183,10 @@ impl WindowTopN {
         let child = filter.input();
         let (window_exec, intermediates) = find_window_below(child)?;
 
-        // Step 4: Verify col_idx references a supported window function output column
+        // Step 4: Verify col_idx references a supported window function output column.
+        // `col_idx` indexes the filter's input; resolve it to the window's output
+        // first, since a projection in between can drop or reorder columns.
+        let col_idx = column_index_below(col_idx, &intermediates)?;
         let window_exec_typed = window_exec.downcast_ref::<BoundedWindowAggExec>()?;
         let input_field_count = window_exec_typed.input().schema().fields().len();
         if col_idx < input_field_count {
@@ -440,8 +448,10 @@ type PlanAndIntermediates = (Arc<dyn ExecutionPlan>, Vec<Arc<dyn ExecutionPlan>>
 ///
 /// Handles sequences of `ProjectionExec` and `RepartitionExec`.
 /// This is safe because `PartitionedTopKExec` can be pushed below them:
-/// projections only provide aliases, and pushing the limit below repartitions
-/// is safe because the limit is computed per-partition.
+/// projections only rename, drop, reorder or compute over the window's
+/// columns (the filter's column is mapped back through them by
+/// [`column_index_below`]), and pushing the limit below repartitions is safe
+/// because the limit is computed per-partition.
 ///
 /// Returns the window exec and a list of intermediate nodes to rebuild,
 /// or `None` if no `BoundedWindowAggExec` is found.
@@ -462,4 +472,29 @@ fn find_window_below(plan: &Arc<dyn ExecutionPlan>) -> Option<PlanAndIntermediat
             return None;
         }
     }
+}
+
+/// Maps `col_idx`, an index into the output of `intermediates[0]` (the
+/// filter's input), to the index of the same column in the output of the
+/// node below the last intermediate (the window).
+///
+/// `intermediates` is top-down, as [`find_window_below`] returns it, so each
+/// step reads an index into the node's output and yields one into its input.
+/// A `RepartitionExec` keeps its input's schema. A `ProjectionExec` must pass
+/// the column through as a bare [`Column`]: one it computes (e.g. `rn + 1`)
+/// has no single input column to follow, so this returns `None`.
+fn column_index_below(
+    col_idx: usize,
+    intermediates: &[Arc<dyn ExecutionPlan>],
+) -> Option<usize> {
+    intermediates.iter().try_fold(col_idx, |idx, node| {
+        if let Some(projection) = node.downcast_ref::<ProjectionExec>() {
+            let expr = &projection.expr().get(idx)?.expr;
+            Some(expr.downcast_ref::<Column>()?.index())
+        } else if node.downcast_ref::<RepartitionExec>().is_some() {
+            Some(idx)
+        } else {
+            None
+        }
+    })
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Sort-merge join stream specialized for semi/anti/mark joins.
 //!
@@ -123,14 +110,16 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::EmptyRecordBatchStream;
-use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
+use crate::joins::utils::{JoinFilter, JoinKeyComparator};
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time,
 };
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
-use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch, RecordBatchOptions,
+};
 use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch, not};
 use arrow::datatypes::SchemaRef;
 use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
@@ -1226,30 +1215,15 @@ fn keys_match(
     null_equality: NullEquality,
 ) -> Result<bool> {
     debug_assert!(left_arrays.iter().all(|a| a.len() == 1));
-    if left_arrays
-        .iter()
-        .any(|array| array.data_type().is_floating())
-    {
-        // The scalar comparator's partial_cmp panics on NaN. Match the merge
-        // scan's floating-point equality, including its signed-zero handling.
-        let right_keys = slice_keys(right_arrays, 0);
-        return Ok(JoinKeyComparator::new(
-            left_arrays,
-            &right_keys,
-            sort_options,
-            null_equality,
-        )?
-        .is_equal(0, 0));
-    }
-    let cmp = compare_join_arrays(
-        left_arrays,
-        0,
-        right_arrays,
-        0,
-        sort_options,
-        null_equality,
-    )?;
-    Ok(cmp == Ordering::Equal)
+    // Use the merge scan's comparator so every key type it supports, and its
+    // floating-point equality (NaN, signed zero), also applies across batches.
+    // Slicing the right side to one row keeps construction independent of the
+    // batch size.
+    let right_keys = slice_keys(right_arrays, 0);
+    Ok(
+        JoinKeyComparator::new(left_arrays, &right_keys, sort_options, null_equality)?
+            .is_equal(0, 0),
+    )
 }
 
 /// Evaluate the join filter for one inner row against a slice of outer rows.
@@ -1306,7 +1280,11 @@ fn evaluate_filter_for_inner_row(
         }
     }
 
-    let filter_batch = RecordBatch::try_new(Arc::clone(filter.schema()), columns)?;
+    let filter_batch = RecordBatch::try_new_with_options(
+        Arc::clone(filter.schema()),
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(num_outer_rows)),
+    )?;
     let result = filter
         .expression()
         .evaluate(&filter_batch)?

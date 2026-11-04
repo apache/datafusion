@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::aggregates::group_values::GroupValues;
 use arrow::array::{
@@ -25,9 +12,9 @@ use arrow::compute::cast;
 use arrow::datatypes::{DataType, SchemaRef};
 use arrow::row::{RowConverter, Rows, SortField};
 use datafusion_common::Result;
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
-use datafusion_common::utils::normalize_float_zero;
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{EmitTo, GroupSelection};
 use hashbrown::hash_table::HashTable;
@@ -125,8 +112,7 @@ impl GroupValues for GroupValuesRows {
         // Normalize -0.0 → +0.0 so RowConverter (IEEE 754 totalOrder) and
         // primitive hashing both group ±0 together. No-op for non-float
         // columns.
-        let normalized_cols: Vec<ArrayRef> =
-            cols.iter().map(normalize_float_zero).collect();
+        let normalized_cols: Vec<ArrayRef> = cols.iter().map(normalize_floats).collect();
         let cols = normalized_cols.as_slice();
 
         // Convert the group keys into the row format
@@ -291,6 +277,16 @@ impl GroupValues for GroupValuesRows {
 
     fn supports_values_preserving(&self) -> bool {
         true
+    }
+
+    fn shrink_to_fit(&mut self) {
+        self.map.shrink_to_fit(|(hash, _)| *hash);
+        // Scratch for one `intern` call.
+        self.hashes_buffer.clear();
+        self.hashes_buffer.shrink_to_fit();
+        if self.rows_buffer.size() > self.initial_rows_buffer_size {
+            self.rows_buffer = Self::new_rows_buffer(&self.row_converter);
+        }
     }
 
     fn clear_shrink(&mut self, num_rows: usize) {
