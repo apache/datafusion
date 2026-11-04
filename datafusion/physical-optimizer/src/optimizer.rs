@@ -182,19 +182,16 @@ impl PhysicalOptimizer {
     ///
     /// Rules run in the order listed. Order matters, and the list may change
     /// between releases; see [`PhysicalOptimizer`](Self) for the rules on
-    /// reordering or extending it. The `rule` column is the name shown by
-    /// `EXPLAIN VERBOSE`. Some rules run twice, in different phases.
+    /// reordering or extending it. Some rules run twice, in different phases.
     ///
-    /// There is no final `SanityCheckPlan` rule. After the last rule,
-    /// including any added by the user, the physical planner checks the plan
-    /// itself and names the rule that broke an ordering or distribution
-    /// requirement.
+    /// After the last rule, including any added by the user, the physical
+    /// planner checks the plan produces an error if it is not valid.
     ///
     /// Note: The rules up to and including [`EnsureRequirements`] make the plan
     /// executable rather than optimize it. This may be improved in the future.
     /// See <https://github.com/apache/datafusion/issues/26481>.
     ///
-    /// | rule (name in EXPLAIN plan)                          | struct name                           | summary                                                                                       |
+    /// | rule (name in EXPLAIN plan)    | struct name                      | summary                                                                                       |
     /// | ------------------------------ | -------------------------------- | --------------------------------------------------------------------------------------------- |
     /// | `OutputRequirements`           | [`OutputRequirements`]           | Adds helper nodes so output requirements survive later rewrites (add mode).                   |
     /// | `aggregate_statistics`         | [`AggregateStatistics`]          | Answers some aggregates from exact statistics without scanning data.                          |

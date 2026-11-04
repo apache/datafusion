@@ -240,10 +240,10 @@ impl OptimizerConfig for OptimizerContext {
 ///
 /// # Built-in Optimizer Rules
 ///
-/// Then it applies the following rules in this order. Note: the list may change
-/// between releases.
+/// The rules are applied in this order. Note: the list may change between
+/// releases.
 ///
-/// | rule (name in EXPLAIN plan)                                      | struct name                          | summary                                                                                                                          |
+/// | rule (name in EXPLAIN plan)               | struct name                      | summary                                                                                                                          |
 /// | ----------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
 /// | `rewrite_set_comparison`                  | [`RewriteSetComparison`]         | Rewrites `ANY` and `ALL` subqueries into `EXISTS` expressions with SQL NULL semantics.                                           |
 /// | `optimize_unions`                         | [`OptimizeUnions`]               | Flattens nested unions and removes single-input unions.                                                                          |
@@ -297,7 +297,7 @@ impl Default for Optimizer {
 }
 
 impl Optimizer {
-    /// Create a new optimizer using the [built-in rules](Self#built-in-logical-optimizer-rules)
+    /// Create a new optimizer using the [built-in rules](Self#built-in-optimizer-rules)
     pub fn new() -> Self {
         // NOTEs:
         // - The order of rules in this list is important, as it determines the
