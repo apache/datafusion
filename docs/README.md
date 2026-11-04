@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # DataFusion Documentation
@@ -88,3 +75,8 @@ The Apache Software Foundation provides https://datafusion.apache.org/,
 which serves content based on the configuration in
 [.asf.yaml](https://github.com/apache/datafusion/blob/main/.asf.yaml),
 which specifies the target as https://datafusion.apache.org/.
+
+The documentation for previously released versions is served under
+`/versions/<version>/`. See the
+[release instructions](../dev/release/README.md#publish-the-versioned-documentation)
+for how it is published.

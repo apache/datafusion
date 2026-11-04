@@ -34,6 +34,7 @@ use datafusion_expr::{
     exists, in_subquery, lit, not, not_exists, not_in_subquery, when,
 };
 
+use arrow::datatypes::DataType;
 use log::debug;
 
 /// Optimizer rule for rewriting predicate(IN/EXISTS) subquery to left semi/anti joins
@@ -556,7 +557,7 @@ struct MarkJoin {
 /// Are the `IN` equalities, in order, the first equalities of `join_filter`
 /// that the hash join can use as keys? A null-aware hash join reads its first
 /// `V` keys as the `IN` values (one per tuple element of a multi-column
-/// `IN`) and the other keys as the correlation.
+/// `IN` that can be NULL in scope) and the other keys as the correlation.
 fn values_are_first_keys(
     in_values: &[InValue],
     join_filter: &Expr,
@@ -618,6 +619,67 @@ impl InValue {
             scope_filters,
         ))
     }
+
+    /// Can either side hold a NULL that its schema does not show? See
+    /// [`type_may_hide_null`]. `left` is the outer plan, `subquery` the plan
+    /// that `output_expr` reads, and `right_schema` the schema of the aliased
+    /// subquery.
+    ///
+    /// Each side checks the type of its key and of every column the key
+    /// reads. A cast or a function over a column that hides a NULL can turn
+    /// it into a real NULL under a type that hides none, and the schema still
+    /// declares the result non-nullable.
+    fn may_hide_null(
+        &self,
+        left: &LogicalPlan,
+        subquery: &LogicalPlan,
+        right_schema: &DFSchema,
+    ) -> Result<bool> {
+        Ok(type_may_hide_null(&self.value.get_type(left.schema())?)
+            || type_may_hide_null(&self.subquery_column.get_type(right_schema)?)
+            || reads_column_that_may_hide_null(&self.value, left)?
+            || reads_column_that_may_hide_null(&self.output_expr, subquery)?)
+    }
+}
+
+/// Does `expr` read a column of `plan` whose type may hide a NULL (see
+/// [`type_may_hide_null`])? A column is looked up in the schemas of `plan`
+/// and its inputs. A column found in none of them is assumed to hide one,
+/// which only keeps its element a value key.
+fn reads_column_that_may_hide_null(expr: &Expr, plan: &LogicalPlan) -> Result<bool> {
+    for column in expr.column_refs() {
+        let mut found = false;
+        let mut hides_null = false;
+        plan.apply(|node| {
+            if let Ok((_, field)) = node.schema().qualified_field_from_column(column) {
+                found = true;
+                hides_null |= type_may_hide_null(field.data_type());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        if hides_null || !found {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Can an array of this type hold a NULL in a field declared non-nullable?
+///
+/// An array of these types can be logically NULL at a slot without a null
+/// bit: every slot of a `Null` array, a dictionary key that points to a NULL
+/// value, a run of NULLs, or a NULL in the selected union child. The null
+/// count covers only the null bits, so a field inferred from such an array,
+/// as `RecordBatch::try_from_iter` does, is non-nullable although the array
+/// holds NULLs.
+fn type_may_hide_null(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        DataType::Null
+            | DataType::Dictionary(_, _)
+            | DataType::RunEndEncoded(_, _)
+            | DataType::Union(_, _)
+    )
 }
 
 /// Can this join key be NULL for a row inside the scope of an outer row?
@@ -644,6 +706,11 @@ impl InValue {
 /// aside. Any other conjunct is assumed to let a NULL through, which keeps
 /// the join null-aware.
 ///
+/// A volatile key, such as one built on `random()`, is evaluated once in the
+/// subquery filter and once more as the join key. The two calls can disagree,
+/// so a conjunct on one tells nothing about the other, and such a key keeps
+/// the join null-aware.
+///
 /// `key_is_outer` tells on which side of the join the key is. The scope
 /// filters keep their outer references, and a side of a conjunct matches an
 /// outer key only if it names outer columns alone. A subquery column can have
@@ -657,6 +724,9 @@ fn key_may_be_null_in_scope(
 ) -> bool {
     if !nullable {
         return false;
+    }
+    if key.is_volatile() {
+        return true;
     }
     let key = strip_casts(key);
     !scope_filters
@@ -709,9 +779,11 @@ fn strip_casts(expr: &Expr) -> &Expr {
 /// Combines the `IN`/`NOT IN` equalities, one per value, with the correlation
 /// predicates, if any.
 ///
-/// The equalities stay the leading conjuncts, in order, so that they become
-/// `on[..V]`, the key positions a null-aware hash join reads as the `NOT IN`
-/// value keys (see `HashJoinExec::null_aware`).
+/// The equalities stay the leading conjuncts, in order, so that the first `V`
+/// of them become `on[..V]`, the key positions a null-aware hash join reads as
+/// the `NOT IN` value keys (see `HashJoinExec::null_aware`). The equalities
+/// after them, if any, are on tuple elements that cannot be NULL, which the
+/// join reads as scope keys like the correlation.
 fn in_join_filter(in_values: &[InValue], correlation: Option<Expr>) -> Result<Expr> {
     conjunction(
         in_values
@@ -940,16 +1012,19 @@ fn build_join(
         None => vec![],
     };
 
-    // True if an `IN` value or the subquery column it is compared with can be
-    // NULL inside the scope of an outer row.
-    let mut value_may_be_null = false;
-    for in_value in &in_values {
-        value_may_be_null |= in_value.may_be_null_in_scope(
-            left.schema(),
-            sub_query_alias.schema(),
-            &pull_up.correlated_filters,
-        )?;
-    }
+    // For each `IN` value, true if it or the subquery column it is compared
+    // with can be NULL inside the scope of an outer row.
+    let elements_may_be_null = in_values
+        .iter()
+        .map(|in_value| {
+            in_value.may_be_null_in_scope(
+                left.schema(),
+                sub_query_alias.schema(),
+                &pull_up.correlated_filters,
+            )
+        })
+        .collect::<Result<Vec<_>>>()?;
+    let value_may_be_null = elements_may_be_null.contains(&true);
 
     // Whether this join needs null-aware (`NOT IN` three-valued) semantics.
     // Decided once: the constant projection below, the mark branch and the anti
@@ -1024,6 +1099,53 @@ fn build_join(
     }
     let left = projected_left.as_ref().unwrap_or(left);
 
+    // The first `V` keys of a null-aware join are its `NOT IN` value keys.
+    //
+    // A tuple element that cannot be NULL in scope on either side never makes
+    // the tuple comparison UNKNOWN: compared with a definite value it is either
+    // equal, which leaves the other elements to decide, or a definite mismatch,
+    // which makes the comparison FALSE whatever the other elements are. It
+    // therefore only selects which subquery rows a NULL in another element is
+    // compared with, which is what a correlation scope key does. Moving such
+    // elements after the ones that can be NULL turns them into scope keys, so
+    // the hash join finds the rows a NULL-valued row is compared with through a
+    // hash lookup instead of pairing it with every row of the other side
+    // (<https://github.com/apache/datafusion/issues/26088>).
+    //
+    // A null-aware tuple has at least one element that can be NULL, so `V` is
+    // at least one. With exactly one, the join is a scalar `NOT IN` on that
+    // element, correlated by the other elements.
+    //
+    // An element whose type can hide a NULL from its schema (see
+    // `type_may_hide_null`) stays a value key too. As a scope key, such a NULL
+    // would put its row outside every scope, which makes the comparison FALSE
+    // instead of UNKNOWN; a value key still sees it.
+    let null_aware_value_keys = if null_aware && in_values.len() > 1 {
+        let mut keyed = in_values
+            .into_iter()
+            .zip(elements_may_be_null)
+            .map(|(in_value, may_be_null)| {
+                let keeps_value_key = may_be_null
+                    || in_value.may_hide_null(
+                        left,
+                        subquery,
+                        sub_query_alias.schema(),
+                    )?;
+                Ok((keeps_value_key, in_value))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        // A stable sort keeps the order within each group.
+        keyed.sort_by_key(|(keeps_value_key, _)| !keeps_value_key);
+        let null_aware_value_keys = keyed
+            .iter()
+            .take_while(|(keeps_value_key, _)| *keeps_value_key)
+            .count();
+        in_values = keyed.into_iter().map(|(_, in_value)| in_value).collect();
+        null_aware_value_keys
+    } else {
+        in_values.len().max(1)
+    };
+
     let join_filter = match (in_values.is_empty(), join_filter_opt) {
         (false, correlation_opt) => in_join_filter(&in_values, correlation_opt)?,
         (true, Some(correlation)) => correlation,
@@ -1033,23 +1155,22 @@ fn build_join(
     // Only a null-aware join reads the key order.
     let value_is_first_key = null_aware
         && values_are_first_keys(
-            &in_values,
+            &in_values[..null_aware_value_keys],
             &join_filter,
             left.schema(),
             sub_query_alias.schema(),
         )?;
 
     // A multi-column `IN` has no fallback that materializes the UNKNOWN rows
-    // (see below), so a tuple element that does not become its key, for
-    // example because its type is not hashable, is rejected instead of being
-    // read in the wrong key position.
+    // (see below), so a tuple element that can be NULL and does not become its
+    // key, for example because its type is not hashable, is rejected instead
+    // of being read in the wrong key position. The other elements need not be
+    // keys: like any correlation, they may stay in the join filter.
     if null_aware && !value_is_first_key && in_values.len() > 1 {
         return not_impl_err!(
             "Multi-column NOT IN subquery is not supported when a tuple element is not a hashable equi-join key: {join_filter}"
         );
     }
-    // The first `V` keys of a null-aware join are its `NOT IN` value keys.
-    let null_aware_value_keys = in_values.len().max(1);
 
     // A `NOT IN` in a filter builds a `LeftAnti` join. The null-aware hash
     // join reads its first key as the `NOT IN` value and the other keys as the
@@ -1317,8 +1438,8 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_expr::builder::table_source;
     use datafusion_expr::{
-        TableScanBuilder, and, binary_expr, col, cube, grouping_set, out_ref_col, rollup,
-        table_scan,
+        ScalarUDF, TableScanBuilder, Volatility, and, binary_expr, col, cube,
+        grouping_set, out_ref_col, rollup, table_scan,
     };
     use datafusion_functions_aggregate::count::count_udaf;
 
@@ -2453,6 +2574,39 @@ mod tests {
         let optimized = optimize_with_decorrelate(plan)?;
         assert!(
             has_non_null_aware_left_mark_join(&optimized),
+            "{}",
+            optimized.display_indent_schema()
+        );
+
+        Ok(())
+    }
+
+    /// A volatile key is evaluated again for the join, so a correlation on the
+    /// same expression says nothing about the join key, and the mark join
+    /// stays null-aware.
+    #[test]
+    fn mark_join_for_volatile_in_predicate_correlation_is_null_aware() -> Result<()> {
+        let volatile_key = |arg: Expr| {
+            ScalarUDF::from(
+                udfs::PlacementTestUDF::new().with_volatility(Volatility::Volatile),
+            )
+            .call(vec![arg])
+        };
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(
+                    col("sq.c").eq(volatile_key(out_ref_col(DataType::UInt32, "test.c"))),
+                )?
+                .project(vec![col("sq.c")])?
+                .build()?,
+        );
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .filter(not_in_subquery(volatile_key(col("test.c")), subquery).is_null())?
+            .build()?;
+
+        let optimized = optimize_with_decorrelate(plan)?;
+        assert!(
+            has_null_aware_left_mark_join(&optimized),
             "{}",
             optimized.display_indent_schema()
         );

@@ -559,7 +559,11 @@ impl ScalarUDFImpl for DateTruncFunc {
         }
     }
 
-    fn supports_range_key_locality_analysis(&self, argument_types: &[DataType]) -> bool {
+    fn supports_range_key_locality_analysis(
+        &self,
+        argument_types: &[DataType],
+        _literal_arguments: &[Option<&ScalarValue>],
+    ) -> bool {
         // Across an America/Goose_Bay transition, ascending epoch seconds
         // 562129259 < 562129260 truncate to 562129200 > 562125600.
         // Keep the audited domain to timezone-less timestamp columns.
@@ -1400,19 +1404,30 @@ mod tests {
     fn range_key_locality_analysis_requires_timezone_less_timestamp() {
         let date_trunc = DateTruncFunc::new();
 
-        assert!(date_trunc.supports_range_key_locality_analysis(&[
-            DataType::Utf8,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-        ]));
-        assert!(!date_trunc.supports_range_key_locality_analysis(&[
-            DataType::Utf8,
-            DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-        ]));
-        assert!(!date_trunc.supports_range_key_locality_analysis(&[
-            DataType::Int64,
-            DataType::Timestamp(TimeUnit::Nanosecond, None),
-        ]));
-        assert!(!date_trunc.supports_range_key_locality_analysis(&[DataType::Utf8]));
+        assert!(date_trunc.supports_range_key_locality_analysis(
+            &[
+                DataType::Utf8,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ],
+            &[None, None],
+        ));
+        assert!(!date_trunc.supports_range_key_locality_analysis(
+            &[
+                DataType::Utf8,
+                DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+            ],
+            &[None, None],
+        ));
+        assert!(!date_trunc.supports_range_key_locality_analysis(
+            &[
+                DataType::Int64,
+                DataType::Timestamp(TimeUnit::Nanosecond, None),
+            ],
+            &[None, None],
+        ));
+        assert!(
+            !date_trunc.supports_range_key_locality_analysis(&[DataType::Utf8], &[None])
+        );
     }
 
     fn invoke_date_trunc(
