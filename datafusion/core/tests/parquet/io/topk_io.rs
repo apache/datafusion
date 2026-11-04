@@ -46,9 +46,11 @@ async fn test_topk_io_dynamic_filter() {
     let test = topk_test(true).await;
     assert_snapshot!(test.query("SELECT * FROM t ORDER BY id DESC LIMIT 2").await, @r"
     --- Query: SELECT * FROM t ORDER BY id DESC LIMIT 2 (2 rows) ---
-    Read Parquet footer (offsets 0..1402)
-    Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
-    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
+    Request 1
+        Read Parquet footer (offsets 0..1402)
+    Request 2
+        Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
+        Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     Produce batch (2 rows)
     ");
 }
@@ -60,13 +62,17 @@ async fn test_topk_io_no_dynamic_filter() {
     let test = topk_test(false).await;
     assert_snapshot!(test.query("SELECT * FROM t ORDER BY id DESC LIMIT 2").await, @r"
     --- Query: SELECT * FROM t ORDER BY id DESC LIMIT 2 (2 rows) ---
-    Read Parquet footer (offsets 0..1402)
-    Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
-    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
-    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
-    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
-    Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
-    Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
+    Request 1
+        Read Parquet footer (offsets 0..1402)
+    Request 2
+        Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
+        Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
+    Request 3
+        Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
+        Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
+    Request 4
+        Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
+        Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
     Produce batch (2 rows)
     ");
 }

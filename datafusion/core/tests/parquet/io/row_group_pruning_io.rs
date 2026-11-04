@@ -40,15 +40,19 @@ async fn test_row_group_pruning_io_no_predicate() {
     let test = row_group_pruning_test().await;
     assert_snapshot!(test.query("SELECT * FROM t").await, @r"
     --- Query: SELECT * FROM t (9 rows) ---
-    Read Parquet footer (offsets 0..1402)
-    Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
-    Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
+    Request 1
+        Read Parquet footer (offsets 0..1402)
+    Request 2
+        Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
+        Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
     Produce batch (3 rows)
-    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
-    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
+    Request 3
+        Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
+        Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
     Produce batch (3 rows)
-    Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
-    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
+    Request 4
+        Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
+        Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     Produce batch (3 rows)
     ");
 }
@@ -60,9 +64,11 @@ async fn test_row_group_pruning_io_one_row_group() {
     let test = row_group_pruning_test().await;
     assert_snapshot!(test.query("SELECT * FROM t WHERE id = 5").await, @r"
     --- Query: SELECT * FROM t WHERE id = 5 (1 rows) ---
-    Read Parquet footer (offsets 0..1402)
-    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
-    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
+    Request 1
+        Read Parquet footer (offsets 0..1402)
+    Request 2
+        Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
+        Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
     Produce batch (1 rows)
     ");
 }
@@ -74,11 +80,14 @@ async fn test_row_group_pruning_io_two_row_groups() {
     let test = row_group_pruning_test().await;
     assert_snapshot!(test.query("SELECT * FROM t WHERE id > 5").await, @r"
     --- Query: SELECT * FROM t WHERE id > 5 (4 rows) ---
-    Read Parquet footer (offsets 0..1402)
-    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
-    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
-    Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
-    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
+    Request 1
+        Read Parquet footer (offsets 0..1402)
+    Request 2
+        Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
+        Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
+    Request 3
+        Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
+        Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     Produce batch (4 rows)
     ");
 }
@@ -89,7 +98,8 @@ async fn test_row_group_pruning_io_all_pruned() {
     let test = row_group_pruning_test().await;
     assert_snapshot!(test.query("SELECT * FROM t WHERE id > 100").await, @r"
     --- Query: SELECT * FROM t WHERE id > 100 (0 rows) ---
-    Read Parquet footer (offsets 0..1402)
+    Request 1
+        Read Parquet footer (offsets 0..1402)
     ");
 }
 

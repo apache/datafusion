@@ -42,13 +42,17 @@ async fn test_filter_pushdown_io_disabled() {
     let test = filter_pushdown_test(false).await;
     assert_snapshot!(test.query("SELECT * FROM t WHERE val = 7").await, @r"
     --- Query: SELECT * FROM t WHERE val = 7 (1 rows) ---
-    Read Parquet footer (offsets 0..1402)
-    Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
-    Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
-    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
-    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
-    Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
-    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
+    Request 1
+        Read Parquet footer (offsets 0..1402)
+    Request 2
+        Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
+        Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
+    Request 3
+        Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
+        Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
+    Request 4
+        Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
+        Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     Produce batch (1 rows)
     ");
 }
@@ -59,23 +63,20 @@ async fn test_filter_pushdown_io_disabled() {
 #[tokio::test]
 async fn test_filter_pushdown_io_enabled() {
     let test = filter_pushdown_test(true).await;
-    // Note: `id` for row group 1 is fetched as two ranges, its dictionary
-    // page and its data page, rather than as a single column chunk read.
-    // Once the filter has produced a row selection, the parquet reader uses
-    // the offset index to request only the pages needed for the selected
-    // rows (plus the dictionary page), one range per page, even when the
-    // ranges are adjacent. The object store's default `get_ranges`
-    // coalesces adjacent ranges into a single request, so this does not
-    // necessarily mean two requests to the storage system.
     assert_snapshot!(test.query("SELECT * FROM t WHERE val = 7").await, @r"
     --- Query: SELECT * FROM t WHERE val = 7 (1 rows) ---
-    Read Parquet footer (offsets 0..1402)
-    Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
-    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
-    Read dictionary page for column 'id' (rg 1) (offsets 98..124)
-    Read data page 0 for column 'id' (rg 1) (offsets 124..145)
+    Request 1
+        Read Parquet footer (offsets 0..1402)
+    Request 2
+        Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
+    Request 3
+        Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
+    Request 4
+        Read dictionary page for column 'id' (rg 1) (offsets 98..124)
+        Read data page 0 for column 'id' (rg 1) (offsets 124..145)
     Produce batch (1 rows)
-    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
+    Request 5
+        Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     ");
 }
 

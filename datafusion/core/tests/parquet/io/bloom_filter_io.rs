@@ -41,12 +41,17 @@ async fn test_parquet_bloom_filter_io_matching() {
     // produces a batch.
     assert_snapshot!(test.query("SELECT * FROM t WHERE a = 10 AND b = 100").await, @r"
     --- Query: SELECT * FROM t WHERE a = 10 AND b = 100 (1 rows) ---
-    Read Parquet footer (offsets 0..678)
-    Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
-    Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
-    Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
-    Read dictionary page and data page 0 for column 'a' (rg 0) (offsets 4..51)
-    Read dictionary page and data page 0 for column 'b' (rg 0) (offsets 51..98)
+    Request 1
+        Read Parquet footer (offsets 0..678)
+    Request 2
+        Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
+    Request 3
+        Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
+    Request 4
+        Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
+    Request 5
+        Read dictionary page and data page 0 for column 'a' (rg 0) (offsets 4..51)
+        Read dictionary page and data page 0 for column 'b' (rg 0) (offsets 51..98)
     Produce batch (1 rows)
     ");
 }
@@ -61,10 +66,14 @@ async fn test_parquet_bloom_filter_io_pruned() {
     // evaluated first and the Bloom filter for `b` would not be loaded.
     assert_snapshot!(test.query("SELECT * FROM t WHERE a = 999 AND b = 100").await, @r"
     --- Query: SELECT * FROM t WHERE a = 999 AND b = 100 (0 rows) ---
-    Read Parquet footer (offsets 0..678)
-    Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
-    Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
-    Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
+    Request 1
+        Read Parquet footer (offsets 0..678)
+    Request 2
+        Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
+    Request 3
+        Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
+    Request 4
+        Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
     ");
 }
 

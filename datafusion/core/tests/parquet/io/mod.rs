@@ -13,6 +13,7 @@
 
 use std::fmt::Write as _;
 use std::ops::Range;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
@@ -225,6 +226,8 @@ struct InstrumentedObjectStore {
     layout: ParquetFileLayout,
     file_size: u64,
     events: Arc<Mutex<Vec<String>>>,
+    /// Number of requests made to the store (reset for each query)
+    requests: Arc<AtomicUsize>,
 }
 
 impl InstrumentedObjectStore {
@@ -233,18 +236,29 @@ impl InstrumentedObjectStore {
         layout: ParquetFileLayout,
         file_size: u64,
         events: Arc<Mutex<Vec<String>>>,
+        requests: Arc<AtomicUsize>,
     ) -> Self {
         Self {
             inner,
             layout,
             file_size,
             events,
+            requests,
         }
+    }
+    
+    /// Records the start of a new request to the store
+    fn record_request(&self) {
+        let request = self.requests.fetch_add(1, Ordering::SeqCst) + 1;
+        self.events
+            .lock()
+            .unwrap()
+            .push(format!("Request {request}"));
     }
 
     fn record_range(&self, range: &Range<u64>) {
         let desc = self.layout.describe_range(range, self.file_size);
-        self.events.lock().unwrap().push(format!("Read {desc}"));
+        self.events.lock().unwrap().push(format!("    Read {desc}"));
     }
 }
 
@@ -278,6 +292,7 @@ impl ObjectStore for InstrumentedObjectStore {
         location: &Path,
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
+        self.record_request();
         if let Some(range) = &options.range {
             match range {
                 GetRange::Bounded(r) => {
@@ -302,6 +317,7 @@ impl ObjectStore for InstrumentedObjectStore {
         location: &Path,
         ranges: &[Range<u64>],
     ) -> object_store::Result<Vec<Bytes>> {
+        self.record_request();
         for range in ranges {
             self.record_range(range);
         }
@@ -359,6 +375,7 @@ impl ObjectStore for InstrumentedObjectStore {
 pub(crate) struct ParquetIoTest {
     ctx: SessionContext,
     events: Arc<Mutex<Vec<String>>>,
+    requests: Arc<AtomicUsize>,
 }
 
 impl ParquetIoTest {
@@ -379,11 +396,13 @@ impl ParquetIoTest {
             .unwrap();
 
         let events = Arc::new(Mutex::new(Vec::new()));
+        let requests = Arc::new(AtomicUsize::new(0));
         let instrumented_store = Arc::new(InstrumentedObjectStore::new(
             memory_store,
             layout,
             file_size,
             Arc::clone(&events),
+            Arc::clone(&requests),
         ));
 
         let ctx = SessionContext::new_with_config(config);
@@ -392,7 +411,11 @@ impl ParquetIoTest {
             .await
             .unwrap();
 
-        Self { ctx, events }
+        Self {
+            ctx,
+            events,
+            requests,
+        }
     }
 
     /// Runs `sql` and returns the storage requests and output batches it
@@ -401,6 +424,7 @@ impl ParquetIoTest {
     /// Only events recorded while running this query are included.
     pub(crate) async fn query(&self, sql: &str) -> String {
         self.events.lock().unwrap().clear();
+        self.requests.store(0, Ordering::SeqCst);
 
         let df = self.ctx.sql(sql).await.unwrap();
         let mut stream = df.execute_stream().await.unwrap();
