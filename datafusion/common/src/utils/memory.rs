@@ -634,11 +634,10 @@ impl BufferIdSet {
             return grow_counted_capacity(counted, capacity);
         }
 
-        if let Some(i) = self.inline[..self.len]
-            .iter()
-            .position(|id| *id == Some(buffer_id))
-        {
-            return grow_counted_capacity(&mut self.capacities[i], capacity);
+        for i in 0..self.len {
+            if self.inline[i] == Some(buffer_id) {
+                return grow_counted_capacity(&mut self.capacities[i], capacity);
+            }
         }
 
         if self.len < INLINE_BUFFER_IDS {
