@@ -54,8 +54,8 @@ use datafusion_common::utils::{
     get_available_parallelism, memory::RecordBatchMemoryCounter,
 };
 use datafusion_common::{
-    DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
-    unwrap_or_internal_err,
+    DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_datafusion_err, unwrap_or_internal_err,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
@@ -1017,9 +1017,11 @@ impl ExternalSorter {
     {
         let reserved_bytes = get_reserved_bytes_for_record_batch(&batch)?;
         match &shared_input {
-            None => assert_eq!(reserved_bytes, reservation.size()),
+            None => assert_eq_or_internal_err!(reserved_bytes, reservation.size()),
             // `shared_input` covers every buffer of every run's input
-            Some(shared) => assert!(reservation.size() + shared.size() >= reserved_bytes),
+            Some(shared) => assert_or_internal_err!(
+                reservation.size() + shared.size() >= reserved_bytes
+            ),
         }
 
         let expressions = self.expr.clone();

@@ -5,6 +5,7 @@
 //! This module provides a function to estimate the memory size of a HashTable prior to allocation
 
 use crate::error::_exec_datafusion_err;
+use crate::hash_map::Entry;
 use crate::{HashMap, HashSet, Result};
 use arrow::array::types::{
     ByteArrayType, ByteViewType, Int8Type, Int16Type, Int32Type, Int64Type,
@@ -237,8 +238,8 @@ impl BufferVisitor for RecordBatchMemoryCounter {
 /// Operators that retain batches incrementally and drop them later (sort,
 /// window, sort-merge join, TopK) count a batch when they retain it and
 /// [`Self::uncount_batch`] it when they drop it. The tracker keeps a reference
-/// count per buffer: its capacity is added when it is first counted and
-/// released when its count returns to 0.
+/// count per buffer: it is charged the largest capacity seen while its count
+/// is positive, and released when its count returns to 0.
 ///
 /// **Contract**: a batch must be uncounted *before* its buffers are dropped.
 /// The tracker identifies buffers by their data-pointer address and does not
@@ -604,8 +605,9 @@ fn array_children(array: &ArrayRef) -> Vec<&ArrayRef> {
 /// Tracks a small number of buffers inline, avoiding a heap allocation for
 /// typical batches, and promotes to a hash map when more buffers are seen.
 ///
-/// Keeps the largest capacity seen per address: FFI-imported slices of one
-/// allocation share an address but report the length they were imported with.
+/// Keeps the largest capacity seen per address: buffers built with
+/// `Buffer::from_custom_allocation`, such as FFI imports, can share an address
+/// while reporting different capacities.
 #[derive(Debug)]
 struct BufferIdSet {
     inline: [Option<NonZero<usize>>; INLINE_BUFFER_IDS],
@@ -672,9 +674,9 @@ fn grow_counted_capacity(counted: &mut usize, capacity: usize) -> usize {
 /// tracker promotes to a heap-allocated `HashMap`.
 ///
 /// The inline path stores addresses, counts and capacities in **separate**
-/// arrays so that the hot `position()` scan over addresses touches a
-/// contiguous `[Option<NonZero<usize>>; 16]` (128 bytes, two cache lines)
-/// without interleaved count words.
+/// arrays so that the hot scan over addresses touches a contiguous
+/// `[Option<NonZero<usize>>; 16]` (128 bytes, two cache lines) without
+/// interleaved count words.
 #[derive(Debug)]
 struct BufferIdMap {
     /// Inline storage: buffer addresses (None = empty slot).
@@ -714,12 +716,11 @@ impl BufferIdMap {
         }
 
         // Search inline slots.
-        if let Some(i) = self.ids[..self.len]
-            .iter()
-            .position(|id| *id == Some(buffer_id))
-        {
-            self.counts[i] += 1;
-            return grow_counted_capacity(&mut self.capacities[i], capacity);
+        for i in 0..self.len {
+            if self.ids[i] == Some(buffer_id) {
+                self.counts[i] += 1;
+                return grow_counted_capacity(&mut self.capacities[i], capacity);
+            }
         }
 
         // New buffer: try inline first.
@@ -747,15 +748,12 @@ impl BufferIdMap {
     /// capacity when the count reaches zero and 0 otherwise.
     fn decrement(&mut self, buffer_id: NonZero<usize>) -> usize {
         if let Some(overflow) = &mut self.overflow {
-            if let Some((count, counted)) = overflow.get_mut(&buffer_id) {
-                *count -= 1;
-                if *count == 0 {
-                    let counted = *counted;
-                    overflow.remove(&buffer_id);
-                    return counted;
-                }
-            }
-            return 0;
+            let Entry::Occupied(mut entry) = overflow.entry(buffer_id) else {
+                return 0;
+            };
+            let (count, _) = entry.get_mut();
+            *count -= 1;
+            return if *count == 0 { entry.remove().1 } else { 0 };
         }
 
         // Search inline slots.
