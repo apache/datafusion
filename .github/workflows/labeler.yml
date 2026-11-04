@@ -30,27 +30,22 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      # `workflow_run.pull_requests` is empty for pull requests from forks, so
-      # find the pull requests by their head branch and commit. The same branch
-      # can target `main` and a release branch, so label every match. An
-      # outdated commit matches nothing, since a newer run labels the new head.
+      # This checks out the default branch, never the pull request.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          sparse-checkout: ci/scripts
+          persist-credentials: false
+
+      # The same branch can target `main` and a release branch, so label every
+      # match.
       - name: Find the pull requests
         id: pr
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         with:
           script: |
-            const run = context.payload.workflow_run;
-            const { data } = await github.rest.pulls.list({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'open',
-              head: `${run.head_repository.owner.login}:${run.head_branch}`,
-            });
-            const numbers = data
-              .filter((pr) => pr.head.sha === run.head_sha)
-              .map((pr) => String(pr.number));
-            if (numbers.length) core.setOutput('numbers', numbers.join('\n'));
-            else core.info(`No open pull request for ${run.head_sha}`);
+            const pulls = await require('./ci/scripts/pull_requests_of_run.js')({ github, context });
+            if (pulls.length) core.setOutput('numbers', pulls.map((pull) => pull.number).join('\n'));
+            else core.info(`No open pull request for ${context.payload.workflow_run.head_sha}`);
 
       - name: Assign GitHub labels
         if: steps.pr.outputs.numbers != ''

@@ -27,11 +27,21 @@ function loadWorkflow(name) {
     )
   );
 }
-const script =
-  loadWorkflow("fork_ci_status.yml").jobs.bridge.steps[0].with.script;
+const script = loadWorkflow("fork_ci_status.yml").jobs.bridge.steps.find(
+  (step) => step.with && step.with.script
+).with.script;
 const rustWorkflow = loadWorkflow("rust.yml");
 const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-const bridge = new AsyncFunction("github", "context", "core", "Date", script);
+const bridge = new AsyncFunction(
+  "github",
+  "context",
+  "core",
+  "Date",
+  "require",
+  script
+);
+// actions/github-script resolves relative paths from the checked out workspace.
+const workspaceRequire = (file) => require(path.join(__dirname, "../..", file));
 const now = Date.UTC(2026, 0, 1);
 class Clock extends Date {
   static now() {
@@ -85,6 +95,7 @@ async function execute({
   recentPrs = [pr],
   slice = [pr],
   openPrs = [pr],
+  triggeringRun = workflowRun,
   calls = [],
 }) {
   const writes = [];
@@ -118,6 +129,7 @@ async function execute({
       pulls: {
         list: async ({ per_page, head, base }) => {
           if (head) {
+            calls.push("pulls.list");
             assert.equal(head, "contributor:feature");
             return { data: openPrs.filter((p) => p.base.ref === base) };
           }
@@ -138,10 +150,11 @@ async function execute({
     {
       repo: { owner: "apache", repo: "datafusion" },
       eventName: event,
-      payload: { workflow_run: workflowRun },
+      payload: { workflow_run: triggeringRun },
     },
     { info: () => {} },
-    Clock
+    Clock,
+    workspaceRequire
   );
   return writes;
 }
@@ -182,6 +195,73 @@ test("notification skips a commit that is no longer a pull request head", async 
     event: "workflow_run",
     openPrs: [{ ...pr, head: { ...pr.head, sha: "b".repeat(40) } }],
     runs: [run(1)],
+  });
+
+  test("notification skips a run whose fork was deleted", async () => {
+    const calls = [];
+    const writes = await execute({
+      event: "workflow_run",
+      triggeringRun: { ...workflowRun, head_repository: null },
+      runs: [run(1)],
+      calls,
+    });
+    assert.deepEqual(writes, []);
+    assert.deepEqual(calls, []);
+  });
+
+  // The labeler uses the same lookup without a base, to label every match.
+  const findPullRequests = require("./pull_requests_of_run.js");
+  const lookup = async ({ openPrs, base, triggeringRun = workflowRun }) => {
+    const calls = [];
+    const github = {
+      rest: {
+        pulls: {
+          list: async (params) => {
+            calls.push(params);
+            return { data: openPrs };
+          },
+        },
+      },
+    };
+    const context = {
+      repo: { owner: "apache", repo: "datafusion" },
+      payload: { workflow_run: triggeringRun },
+    };
+    const found = await findPullRequests({ github, context, base });
+    return { found: found.map((p) => p.number), calls };
+  };
+
+  test("lookup returns every pull request from the head commit and no stale one", async () => {
+    const stale = {
+      ...pr,
+      number: 3,
+      head: { ...pr.head, sha: "b".repeat(40) },
+    };
+    const release = { ...pr, number: 2, base: { ref: "branch-55" } };
+    const { found, calls } = await lookup({ openPrs: [stale, release, pr] });
+    assert.deepEqual(found, [2, 1]);
+    assert.deepEqual(calls, [
+      {
+        owner: "apache",
+        repo: "datafusion",
+        state: "open",
+        head: "contributor:feature",
+      },
+    ]);
+  });
+
+  test("lookup passes the base to the API", async () => {
+    const { calls } = await lookup({ openPrs: [pr], base: "main" });
+    assert.equal(calls[0].base, "main");
+  });
+
+  test("lookup returns nothing when the fork was deleted", async () => {
+    const { found, calls } = await lookup({
+      openPrs: [pr],
+      triggeringRun: { ...workflowRun, head_repository: null },
+    });
+    assert.deepEqual(found, []);
+    assert.deepEqual(calls, []);
   });
   assert.deepEqual(writes, []);
 });

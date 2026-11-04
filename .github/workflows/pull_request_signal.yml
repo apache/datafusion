@@ -8,11 +8,19 @@
 # (https://infra.apache.org/github-actions-policy.html), and GitHub is adding a
 # default policy that blocks it. The `workflow_run` workflows below run from the
 # default branch with a write token and never check out or run pull request
-# code. They trigger on the `requested` event of this workflow, which GitHub
-# sends at once for every run, even for a first-time contributor whose run waits
-# for approval:
+# code:
 #   - labeler.yml
 #   - fork_ci_status.yml
+#
+# They trigger on the `requested` event of this workflow. GitHub sends it at
+# once for every run, even one that waits for the approval of a first-time
+# contributor. This is not documented, but it is seen in
+# apache/spark-kubernetes-operator, which uses the same pattern.
+#
+# A pull request runs its own copy of this file, so it can change or delete it.
+# That only skips the labels and the immediate `Rust (fork)` check for that pull
+# request. The scheduled update in `fork_ci_status.yml` still creates the check,
+# and the merge queue stays the gate.
 name: Pull request signal
 
 on:

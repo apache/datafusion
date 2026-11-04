@@ -9,10 +9,10 @@
 # reviewers see the result without opening the fork. It never checks out or
 # runs code from the pull request: on `workflow_run` of
 # `pull_request_signal.yml` it reads the fork's public run list and creates the
-# check (`pull_request_target` is disabled by ASF infra policy), and on a
-# schedule it updates the active or missing runs of recently updated pull
-# requests plus a rotating slice of all open pull requests. The check is informational. The merge
-# queue runs the full workflow on the merged result and stays the gate.
+# check, and on a schedule it updates the active or missing runs of recently
+# updated pull requests plus a rotating slice of all open pull requests. The
+# check is informational. The merge queue runs the full workflow on the merged
+# result and stays the gate.
 #
 # See docs/source/contributor-guide/index.md, "Pull Requests from Forks".
 name: Fork CI status
@@ -33,6 +33,7 @@ on:
 permissions:
   actions: read
   checks: write
+  contents: read
   pull-requests: read
 
 concurrency:
@@ -46,6 +47,14 @@ jobs:
     runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
+      # Only a `workflow_run` needs the pull request lookup. This checks out
+      # the default branch, never the pull request.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        if: github.event_name == 'workflow_run'
+        with:
+          sparse-checkout: ci/scripts
+          persist-credentials: false
+
       - name: Create or update the check
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
         env:
@@ -201,25 +210,16 @@ jobs:
               core.info(`Created ${CHECK} for ${sha}: ${payload.conclusion || payload.status}`);
             }
 
-            // `workflow_run.pull_requests` is empty for pull requests from
-            // forks, so find the pull request by its head branch and commit.
-            // The same branch can also target a release branch, which gets no
-            // mirrored check, so list only the pull requests to `main`.
-            async function pullRequestOf(run) {
-              const { data } = await github.rest.pulls.list({
-                ...upstream,
-                state: 'open',
-                base: 'main',
-                head: `${run.head_repository.owner.login}:${run.head_branch}`,
-              });
-              return data.find((pr) => pr.head.sha === run.head_sha);
-            }
-
             async function notify() {
-              // An outdated commit matches nothing, since a newer run mirrors the new head.
-              const pr = await pullRequestOf(context.payload.workflow_run);
+              // The same branch can also target a release branch, which gets no
+              // mirrored check, so look only at the pull request to `main`.
+              const [pr] = await require('./ci/scripts/pull_requests_of_run.js')({
+                github,
+                context,
+                base: 'main',
+              });
               if (!pr) {
-                core.info('No open pull request for this commit; nothing to mirror.');
+                core.info('No open pull request to main for this commit; nothing to mirror.');
                 return;
               }
               // Only fork PRs to main skip jobs upstream; release branches have
