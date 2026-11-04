@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ##########
 # Tests for parquet filter pushdown (filtering on data in the
@@ -1099,3 +1086,40 @@ set datafusion.execution.parquet.pushdown_filters = false;
 
 statement ok
 DROP TABLE case_without_else;
+
+###
+# The physical simplifier must not unwrap a narrowing TRY_CAST either
+# (max_passes = 0 so only the physical rewrite runs).
+# See https://github.com/apache/datafusion/issues/24702
+###
+
+statement ok
+COPY (VALUES (5::bigint), (7::bigint), (9999999999::bigint), (10000000000::bigint))
+TO 'test_files/scratch/parquet_filter_pushdown/try_cast_narrowing.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2');
+
+statement ok
+CREATE EXTERNAL TABLE try_cast_narrowing_pq STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/try_cast_narrowing.parquet';
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+query I rowsort
+SELECT column1 FROM try_cast_narrowing_pq WHERE try_cast(column1 AS INT) > 1;
+----
+5
+7
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+DROP TABLE try_cast_narrowing_pq;

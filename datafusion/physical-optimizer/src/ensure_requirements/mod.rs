@@ -1,26 +1,17 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`EnsureRequirements`] optimizer rule that enforces distribution and
 //! sorting requirements together so that the two never invalidate each other.
 //!
-//! This rule replaces the separate `EnforceDistribution` + `EnforceSorting`
-//! rules with a unified approach inspired by Apache Spark's `EnsureRequirements`
-//! and Presto/Trino's `AddExchanges`.
+//! # Placement in the Optimizer Pipeline
+//!
+//! Unlike most optimizer rules, this rule modifies an unexecutable physical
+//! plan that does not satisfy distribution and ordering requirements into an
+//! *executable* one. A pipeline that omits this rule may produce a plan that
+//! is not runnable or that returns incorrect results. See the [Physical
+//! Optimizer](crate::optimizer) for details.
 //!
 //! # Motivation
 //!
@@ -150,20 +141,21 @@ pub mod enforce_sorting;
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
-use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
+use crate::optimizer::{
+    ConfigOnlyContext, PhysicalOptimizerContext, with_statistics_context,
+};
 
 use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::statistics::StatisticsContext;
 
 /// Optimizer rule that enforces both distribution and sorting requirements.
 ///
-/// This rule combines the functionality of `EnforceDistribution` and
-/// `EnforceSorting` into a coordinated sequence where distribution is
-/// always settled before sorting for each operator, preventing the
-/// non-idempotent interactions between the two separate rules.
+/// This rule inserts the repartitioning and sorting operators needed to
+/// satisfy the requirements that operators declare via
+/// [`ExecutionPlan::input_distribution_requirements`] and
+/// [`ExecutionPlan::required_input_ordering`].
 ///
 /// See [module level documentation](self) for more details.
 #[derive(Default, Debug)]
@@ -221,17 +213,13 @@ impl PhysicalOptimizerRule for EnsureRequirements {
 
         // Step 2a: Distribution enforcement (bottom-up)
         let dist_ctx = DistributionContext::new_default(plan);
-        // Share one statistics context across the whole distribution pass so each
-        // subtree's statistics are computed once instead of once per ancestor.
-        // Build it from the session's statistics registry so registered providers
-        // are consulted (an empty registry, the default, is unchanged behavior).
-        let stats_ctx = match context.statistics_registry() {
-            Some(registry) => StatisticsContext::new_with_registry(registry.clone()),
-            None => StatisticsContext::new(),
-        };
-        let dist_ctx = dist_ctx
-            .transform_up(|ctx| ensure_distribution_with_stats(ctx, config, &stats_ctx))
-            .data()?;
+        let dist_ctx = with_statistics_context(context, |stats_ctx| {
+            dist_ctx
+                .transform_up(|ctx| {
+                    ensure_distribution_with_stats(ctx, config, stats_ctx)
+                })
+                .data()
+        })?;
 
         // Step 2b: Sorting enforcement (bottom-up) — runs on distribution-fixed plan
         let sort_ctx = PlanWithCorrespondingSort::new_default(dist_ctx.plan);

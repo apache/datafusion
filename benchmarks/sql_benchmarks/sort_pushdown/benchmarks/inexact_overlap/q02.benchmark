@@ -1,0 +1,13 @@
+template sql_benchmarks/sort_pushdown/sort_pushdown.benchmark.template
+QPAD=02
+VARIANT=inexact_overlap
+DATASET=sort_pushdown_inexact_overlap
+SETTINGS=inexact
+ORDERING=ordered
+
+run
+-- Overlapping RGs: DESC LIMIT with larger fetch.
+SELECT l_orderkey, l_partkey, l_suppkey
+FROM lineitem
+ORDER BY l_orderkey DESC
+LIMIT 1000

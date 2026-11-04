@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`Optimizer`] and [`OptimizerRule`]
 
@@ -36,9 +23,9 @@ use datafusion_expr::dml::CopyTo;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
-    DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit, Projection,
-    RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias, Union, Unnest,
-    Window,
+    DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit,
+    MaterializedCte, MaterializedCtePlan, Projection, RecursiveQuery, Repartition, Sort,
+    Statement, Subquery, SubqueryAlias, Union, Unnest, Window,
 };
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -62,6 +49,7 @@ use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
+use crate::replace_filter_top1::ReplaceFilterTop1;
 use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
@@ -91,12 +79,6 @@ pub trait OptimizerRule: Debug {
     /// If returns `None`, the default, the rule must handle recursion itself
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
-    }
-
-    /// Does this rule support rewriting owned plans (rather than by reference)?
-    #[deprecated(since = "47.0.0", note = "This method is no longer used")]
-    fn supports_rewrite(&self) -> bool {
-        true
     }
 
     /// Try to rewrite `plan` to an optimized form, returning [`Transformed::yes`]
@@ -251,7 +233,10 @@ impl OptimizerConfig for OptimizerContext {
     }
 }
 
-/// A rule-based optimizer.
+/// A rule-based logical optimizer.
+///
+/// Applies rules in order for up to `datafusion.optimizer.max_passes` passes,
+/// stopping early if the plan repeats.
 #[derive(Clone, Debug)]
 pub struct Optimizer {
     /// All optimizer rules to apply
@@ -318,6 +303,7 @@ impl Optimizer {
             Arc::new(ExtractLeafExpressions::new()),
             Arc::new(PushDownLeafProjections::new()),
             Arc::new(OptimizeProjections::new()),
+            Arc::new(ReplaceFilterTop1::new()),
         ];
 
         Self::with_rules(rules)
@@ -446,6 +432,15 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
             let r = f(Arc::make_mut(recursive_term))?;
             s || r
         }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+            cte,
+            continuation,
+            ..
+        })) => {
+            let b = f(Arc::make_mut(cte))?;
+            let c = f(Arc::make_mut(continuation))?;
+            b || c
+        }
         LogicalPlan::Statement(Statement::Prepare(p)) => f(Arc::make_mut(&mut p.input))?,
         LogicalPlan::Extension(Extension { node }) => {
             let inputs = node.inputs();
@@ -474,7 +469,8 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         LogicalPlan::TableScan { .. }
         | LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::Values { .. }
-        | LogicalPlan::DescribeTable(_)
+        | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
+        | LogicalPlan::Show(_)
         | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))
@@ -992,10 +988,6 @@ mod tests {
             "bad rule"
         }
 
-        fn supports_rewrite(&self) -> bool {
-            true
-        }
-
         fn rewrite(
             &self,
             _plan: LogicalPlan,
@@ -1012,10 +1004,6 @@ mod tests {
     impl OptimizerRule for GetTableScanRule {
         fn name(&self) -> &str {
             "get table_scan rule"
-        }
-
-        fn supports_rewrite(&self) -> bool {
-            true
         }
 
         fn rewrite(
@@ -1040,10 +1028,6 @@ mod tests {
 
         fn apply_order(&self) -> Option<ApplyOrder> {
             Some(ApplyOrder::TopDown)
-        }
-
-        fn supports_rewrite(&self) -> bool {
-            true
         }
 
         fn rewrite(
@@ -1087,10 +1071,6 @@ mod tests {
 
         fn apply_order(&self) -> Option<ApplyOrder> {
             Some(ApplyOrder::TopDown)
-        }
-
-        fn supports_rewrite(&self) -> bool {
-            true
         }
 
         fn rewrite(

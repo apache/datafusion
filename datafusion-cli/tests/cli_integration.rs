@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::process::Command;
 
@@ -717,6 +704,38 @@ fn test_cli_wide_result_set_no_crash() {
     cmd.args(["--maxrows", "5", "--command", sql]);
 
     assert_cmd_snapshot!(cmd);
+}
+
+#[rstest]
+#[case("csv", "\n8200\n")]
+#[case("tsv", "\n8200\n")]
+#[case("json", r#"{"value":8200}]"#)]
+#[case("nd-json", "\n{\"value\":8200}\n")]
+fn test_non_table_formats_ignore_maxrows(
+    #[case] format: &str,
+    #[case] final_row_fragment: &str,
+) {
+    let output = cli()
+        .args([
+            "--format",
+            format,
+            "--maxrows",
+            "1",
+            "--command",
+            "SELECT value FROM generate_series(1, 8200)",
+        ])
+        .output()
+        .expect("Failed to execute command");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "query failed for {format} output:\n{stdout}"
+    );
+    assert!(
+        stdout.contains(final_row_fragment),
+        "expected the final row in {format} output"
+    );
 }
 
 #[tokio::test]

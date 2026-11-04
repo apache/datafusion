@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Development Environment
@@ -51,6 +38,21 @@ Notes:
 - The pinned Rust version is defined in `rust-toolchain.toml`.
 - `protoc` is required to compile DataFusion from source.
 - Some tests and examples rely on git submodule data being present locally.
+
+## Nix and direnv
+
+The repository's `flake.nix` provides a Nix development shell. Enter it directly
+with `nix develop`, or install and configure [direnv](https://direnv.net/) and run
+`direnv allow` from the repository root to load it automatically.
+
+The repository's `.envrc` first loads the nearest ancestor `.envrc`, if one
+exists, and then loads the shared Nix environment when Nix is installed. Put
+project-specific direnv settings in `.envrc.local`. This file is ignored by Git
+and loaded last so that local settings take precedence.
+
+If you previously kept personal settings in the repository's `.envrc`, move
+only those settings to `.envrc.local`. Do not copy the shared `.envrc`, as doing
+so would load the Nix environment twice.
 
 ## Windows Setup
 
@@ -108,7 +110,7 @@ DataFusion is written in Rust and it uses a standard rust toolkit:
 
 - `rustup update stable` DataFusion generally uses the latest stable release of Rust, though it may lag when new Rust toolchains release
   - See which toolchain is currently pinned in the [`rust-toolchain.toml`](https://github.com/apache/datafusion/blob/main/rust-toolchain.toml) file
-  - This can cause issues such as not having the rust-analyzer component installed for the specified toolchain, in which case just install it manually, e.g. `rustup component add --toolchain 1.99.0 rust-analyzer`
+  - This can cause issues such as not having the rust-analyzer component installed for the specified toolchain, in which case just install it manually, e.g. `rustup component add --toolchain 1.99.1 rust-analyzer`
 - `cargo build`
 - `cargo fmt` to format the code
 - etc.

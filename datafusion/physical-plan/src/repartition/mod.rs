@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This file implements the [`RepartitionExec`] operator, which maps N input
 //! partitions to M output partitions based on a partitioning scheme, optionally
@@ -213,10 +200,14 @@ impl PartitionSpillWriters {
 }
 
 impl OutputChannel {
-    fn coalesce(&mut self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
+    /// Appends the batches that are ready to send to `out`.
+    fn coalesce(&mut self, batch: RecordBatch, out: &mut Vec<RecordBatch>) -> Result<()> {
         match &self.shared_coalescer {
-            Some(shared) => Ok(shared.push_and_drain(batch)?),
-            None => Ok(vec![batch]),
+            Some(shared) => shared.push_and_drain(batch, out),
+            None => {
+                out.push(batch);
+                Ok(())
+            }
         }
     }
 
@@ -288,15 +279,18 @@ impl SharedCoalescer {
     }
 
     /// Push `batch` into the coalescer and drain any newly completed
-    /// batches. The mutex is held only briefly.
-    fn push_and_drain(&self, batch: RecordBatch) -> Result<Vec<RecordBatch>> {
-        let mut acc = Vec::new();
+    /// batches into `out`. The mutex is held only briefly.
+    fn push_and_drain(
+        &self,
+        batch: RecordBatch,
+        out: &mut Vec<RecordBatch>,
+    ) -> Result<()> {
         let mut c = self.inner.lock();
         c.push_batch(batch)?;
         while let Some(b) = c.next_completed_batch() {
-            acc.push(b);
+            out.push(b);
         }
-        Ok(acc)
+        Ok(())
     }
 
     /// Decrement the active-senders counter. If this caller was the last
@@ -788,6 +782,20 @@ impl RangeExpr {
     /// Returns the per-key sort options used for routing.
     pub fn sort_options(&self) -> &[SortOptions] {
         self.router.sort_options()
+    }
+
+    /// Appends the partition of each row of `arrays`, the evaluated
+    /// `on_columns`, to `partition_ids`.
+    pub(crate) fn route_partition_ids(
+        &self,
+        arrays: &[arrow::array::ArrayRef],
+        partition_ids: &mut Vec<u64>,
+    ) -> Result<()> {
+        if self.router.split_points().is_empty() {
+            partition_ids.resize(partition_ids.len() + arrays[0].len(), 0);
+            return Ok(());
+        }
+        self.router.route_partition_ids(arrays, partition_ids)
     }
 }
 
@@ -1758,7 +1766,8 @@ impl ExecutionPlan for RepartitionExec {
             Arc::clone(&context.runtime_env()),
             spill_metrics,
             input.schema(),
-        );
+        )
+        .with_compression_type(context.session_config().spill_compression());
 
         // Get existing ordering to use for merging
         let sort_exprs = self.sort_exprs().cloned();
@@ -1884,7 +1893,7 @@ impl ExecutionPlan for RepartitionExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.metrics.clone_inner().with_output_rows_skew())
     }
 
     fn child_stats_requests(&self, _partition: Option<usize>) -> Vec<ChildStats> {
@@ -1958,7 +1967,7 @@ impl ExecutionPlan for RepartitionExec {
 
         let new_partitioning = match self.partitioning() {
             Partitioning::Hash(partitions, size) => {
-                let mut new_partitions = vec![];
+                let mut new_partitions = Vec::with_capacity(partitions.len());
                 for partition in partitions {
                     let Some(new_partition) =
                         update_expr(partition, projection.expr(), false)?
@@ -2192,15 +2201,15 @@ impl RepartitionExec {
         input: &Arc<dyn ExecutionPlan>,
         preserve_order: bool,
     ) -> EquivalenceProperties {
-        // Equivalence Properties
         let mut eq_properties = input.equivalence_properties().clone();
-        // If the ordering is lost, reset the ordering equivalence class:
-        if !Self::maintains_input_order_helper(input, preserve_order)[0] {
-            eq_properties.clear_orderings();
-        }
-        // When there are more than one input partitions, they will be fused at the output.
-        // Therefore, remove per partition constants.
+        // Fusing several input partitions keeps only the merge key ordering,
+        // and per-partition constants no longer hold.
         if input.output_partitioning().partition_count() > 1 {
+            eq_properties.clear_orderings();
+            if preserve_order && let Some(ordering) = input.output_ordering() {
+                eq_properties.add_ordering(ordering.clone());
+            }
+            eq_properties.clear_groupings();
             eq_properties.clear_per_partition_constants();
         }
         eq_properties
@@ -2299,6 +2308,7 @@ impl RepartitionExec {
 
         // While there are still outputs to send to, keep pulling inputs
         let mut batches_until_yield = partitioner.num_partitions();
+        let mut coalesced = Vec::new();
         while !output_channels.is_empty() {
             // fetch the next batch
             let timer = metrics.fetch_time.timer();
@@ -2322,7 +2332,8 @@ impl RepartitionExec {
                 let timer = metrics.send_time[partition].timer();
                 // if there is still a receiver, send to it
                 if let Some(output_channel) = output_channels.get_mut(&partition) {
-                    for batch in output_channel.coalesce(batch)? {
+                    output_channel.coalesce(batch, &mut coalesced)?;
+                    for batch in coalesced.drain(..) {
                         if output_channel.send(batch).await.is_err() {
                             // If the other end has hung up, it was an early shutdown (e.g. LIMIT)
                             // so ignore this channel from now on.
@@ -2656,6 +2667,7 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::{as_string_array, as_uint32_array};
+    use datafusion_common::config::SpillCompression;
     use datafusion_common::exec_err;
     use datafusion_common::test_util::batches_to_sort_string;
     use datafusion_common_runtime::JoinSet;
@@ -2665,6 +2677,38 @@ mod tests {
         LexOrdering, PhysicalSortExpr, RangePartitioning, SplitPoint,
     };
     use insta::assert_snapshot;
+
+    #[test]
+    fn grouping_is_cleared_only_when_input_partitions_are_merged() -> Result<()> {
+        let input = crate::test::mem_exec(2);
+        let grouping = col("i", &input.schema())?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(
+            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
+        );
+        assert!(
+            input
+                .equivalence_properties()
+                .grouping_satisfy([Arc::clone(&grouping)])?
+        );
+        let repartition =
+            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2))?;
+        let properties = repartition.properties().equivalence_properties();
+        assert!(properties.geq_class().is_empty());
+        assert!(!properties.grouping_satisfy([grouping])?);
+
+        // Splitting one stream preserves contiguity in each output subsequence.
+        let input = crate::test::mem_exec(1);
+        let grouping = col("i", &input.schema())?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(
+            input.try_with_grouping_information(vec![vec![Arc::clone(&grouping)]])?,
+        );
+        let repartition =
+            RepartitionExec::try_new(input, Partitioning::RoundRobinBatch(2))?;
+        let properties = repartition.properties().equivalence_properties();
+        assert_eq!(properties.geq_class().len(), 1);
+        assert!(properties.grouping_satisfy([grouping])?);
+        Ok(())
+    }
 
     #[derive(Debug)]
     struct UnboundedTestPartition {
@@ -4585,6 +4629,80 @@ mod tests {
         );
 
         println!("No spilling occurred - all data processed in memory");
+
+        Ok(())
+    }
+
+    /// Runs a spilling `RepartitionExec` with the given spill compression and
+    /// returns `(spilled_rows, spilled_bytes)`.
+    async fn repartition_spill_with_compression(
+        spill_compression: SpillCompression,
+    ) -> Result<(usize, usize)> {
+        // Highly compressible input: 20 batches of 8192 identical values
+        let schema = test_schema(false);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(UInt32Array::from(vec![42; 8192]))],
+        )?;
+        let num_batches = 20;
+        let input_partitions = vec![vec![batch; num_batches]];
+
+        // Tight memory limit to force every batch to spill
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(1, 1.0)
+            .build_arc()?;
+        let session_config =
+            SessionConfig::new().with_spill_compression(spill_compression);
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_runtime(runtime)
+                .with_session_config(session_config),
+        );
+
+        let exec =
+            TestMemoryExec::try_new_exec(&input_partitions, Arc::clone(&schema), None)?;
+        let exec = RepartitionExec::try_new(exec, Partitioning::RoundRobinBatch(4))?;
+
+        let mut total_rows = 0;
+        for i in 0..exec.partitioning().partition_count() {
+            let mut stream = exec.execute(i, Arc::clone(&task_ctx))?;
+            while let Some(result) = stream.next().await {
+                let batch = result?;
+                // Spilled data must read back intact regardless of the codec
+                let values = as_uint32_array(batch.column(0))?;
+                assert!(values.iter().all(|v| v == Some(42)));
+                total_rows += batch.num_rows();
+            }
+        }
+        assert_eq!(total_rows, num_batches * 8192);
+
+        let metrics = exec.metrics().unwrap();
+        Ok((
+            metrics.spilled_rows().unwrap(),
+            metrics.spilled_bytes().unwrap(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn repartition_spill_honors_spill_compression() -> Result<()> {
+        let (uncompressed_rows, uncompressed_bytes) =
+            repartition_spill_with_compression(SpillCompression::Uncompressed).await?;
+        assert!(uncompressed_rows > 0, "Expected spilling to occur");
+
+        for spill_compression in [SpillCompression::Lz4Frame, SpillCompression::Zstd] {
+            let (rows, bytes) =
+                repartition_spill_with_compression(spill_compression).await?;
+            assert_eq!(
+                rows, uncompressed_rows,
+                "Expected the same rows to spill with {spill_compression}"
+            );
+            // The input is constant, so any codec shrinks it by far more than 2x
+            assert!(
+                bytes * 2 < uncompressed_bytes,
+                "Expected {spill_compression} spill files to be much smaller than \
+                 uncompressed ones: {bytes} vs {uncompressed_bytes} bytes"
+            );
+        }
 
         Ok(())
     }

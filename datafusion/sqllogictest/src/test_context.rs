@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -29,22 +16,23 @@ use arrow::array::{
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
-    DataType, Field, FieldRef, Fields, Metadata, Schema, SchemaRef, TimeUnit, UInt32Type,
-    UnionFields,
+    DataType, Field, Fields, Schema, SchemaRef, TimeUnit, UInt32Type, UnionFields,
 };
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
 };
 use datafusion::common::config::Dialect;
+use datafusion::common::stats::Precision;
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
-use datafusion::logical_expr::planner::TypePlanner;
+use datafusion::logical_expr::registry::MemoryExtensionTypeRegistry;
 use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
 };
+use datafusion::physical_optimizer::optimizer::PhysicalOptimizer;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::*;
 use datafusion::{
@@ -55,7 +43,8 @@ use datafusion_spark::SessionStateBuilderSpark;
 
 use crate::is_spark_path;
 use range_partitioning::{
-    register_range_partitioned_table, register_range_sorted_time_bin_table,
+    register_range_partitioned_table, register_range_sorted_day_bin_table,
+    register_range_sorted_time_bin_table,
 };
 
 use async_trait::async_trait;
@@ -63,11 +52,16 @@ use datafusion::common::cast::as_float64_array;
 use datafusion::execution::SessionStateBuilder;
 use datafusion::execution::memory_pool::UnboundedMemoryPool;
 use datafusion::execution::runtime_env::RuntimeEnvBuilder;
-use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
+use datafusion::physical_plan::joins::HashJoinExec;
+use datafusion::physical_plan::operator_statistics::{
+    ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
+};
+use datafusion::physical_plan::statistics::StatisticsArgs;
 use log::info;
-use sqlparser::ast;
 use tempfile::TempDir;
 
+mod custom_sort_pushdown;
+mod evaluation_counter;
 mod range_partitioning;
 
 /// Context for running tests
@@ -76,22 +70,6 @@ pub struct TestContext {
     ctx: SessionContext,
     /// Temporary directory created and cleared at the end of the test
     test_dir: Option<TempDir>,
-}
-
-#[derive(Debug)]
-struct SqlLogicTestTypePlanner;
-
-impl TypePlanner for SqlLogicTestTypePlanner {
-    fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
-        match sql_type {
-            ast::DataType::Uuid => Ok(Some(Arc::new(
-                Field::new("", DataType::FixedSizeBinary(16), true).with_metadata(
-                    Metadata::new().with("ARROW:extension:name", "arrow.uuid"),
-                ),
-            ))),
-            _ => Ok(None),
-        }
-    }
 }
 
 impl TestContext {
@@ -108,9 +86,16 @@ impl TestContext {
     /// If `None` is returned (e.g. because some needed feature is not
     /// enabled), the file should be skipped
     pub async fn try_new_for_test_file(relative_path: &Path) -> Option<Self> {
+        let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         let config = SessionConfig::new()
             // hardcode target partitions so plans are deterministic
-            .with_target_partitions(4);
+            .with_target_partitions(4)
+            // The default `created_by` embeds the DataFusion version, which
+            // changes the size of written parquet files (and thus metrics such
+            // as `scan_efficiency_ratio` in EXPLAIN ANALYZE output) whenever
+            // the version string length changes. Pin it so test output is
+            // independent of the version.
+            .set_str("datafusion.execution.parquet.created_by", "datafusion");
         let pool = crate::memory_drift::wrap_pool(
             Arc::new(UnboundedMemoryPool::default()),
             &relative_path.display().to_string(),
@@ -132,29 +117,68 @@ impl TestContext {
             }
         }
 
-        if matches!(
-            relative_path.file_name().and_then(|name| name.to_str()),
-            Some("cast_extension_type_metadata.slt")
-        ) {
-            state_builder =
-                state_builder.with_type_planner(Arc::new(SqlLogicTestTypePlanner));
+        if file_name == "sql_extension_types.slt" {
+            state_builder = state_builder.with_extension_type_registry(Arc::new(
+                MemoryExtensionTypeRegistry::new_with_canonical_extension_types(),
+            ));
         }
 
         if matches!(
             relative_path.file_name().and_then(|name| name.to_str()),
             Some("statistics_registry.slt")
         ) {
-            state_builder = state_builder.with_statistics_registry(
-                StatisticsRegistry::default_with_builtin_providers(),
+            // Replaces the join estimate with the Cartesian product
+            let join_provider = ClosureStatisticsProvider::with_matches(
+                |plan| plan.downcast_ref::<HashJoinExec>().is_some(),
+                |plan, child_stats| {
+                    let (Some(&left_rows), Some(&right_rows)) = (
+                        child_stats[0].base().num_rows.get_value(),
+                        child_stats[1].base().num_rows.get_value(),
+                    ) else {
+                        return Ok(StatisticsResult::Delegate);
+                    };
+                    let child_base = child_stats
+                        .iter()
+                        .map(|c| Arc::clone(c.base_arc()))
+                        .collect::<Vec<_>>();
+                    let mut stats = Arc::unwrap_or_clone(
+                        plan.statistics_from_inputs(&child_base, &StatisticsArgs::new())?,
+                    );
+                    stats.num_rows =
+                        Precision::Inexact(left_rows.saturating_mul(right_rows));
+                    Ok(StatisticsResult::Computed(stats.into()))
+                },
             );
+            let registry =
+                StatisticsRegistry::with_providers(vec![Arc::new(join_provider)]);
+            state_builder = state_builder.with_statistics_registry(registry);
+        }
+
+        if file_name == "sort_pushdown.slt" {
+            let mut rules = PhysicalOptimizer::new().rules;
+            let ensure_requirements = rules
+                .iter()
+                .position(|rule| rule.name() == "EnsureRequirements")
+                .expect("default optimizer includes EnsureRequirements");
+            rules.insert(
+                ensure_requirements,
+                Arc::new(custom_sort_pushdown::CustomLimitRule),
+            );
+            state_builder = state_builder.with_physical_optimizer_rules(rules);
         }
 
         let state = state_builder.build();
 
         let mut test_ctx = TestContext::new(SessionContext::new_with_state(state));
+        evaluation_counter::register_evaluation_counter(test_ctx.session_ctx());
 
-        let file_name = relative_path.file_name().unwrap().to_str().unwrap();
         match file_name {
+            "sort_pushdown.slt" => {
+                custom_sort_pushdown::register_custom_sort_pushdown(
+                    test_ctx.session_ctx(),
+                )
+                .expect("register custom projection table");
+            }
             "parquet_missing_bounds.slt" => {
                 register_parquet_missing_bounds(&mut test_ctx).await;
             }
@@ -204,6 +228,7 @@ impl TestContext {
             "range_sorted_time_bin_agg.slt" => {
                 info!("Registering range-sorted time-bin table");
                 register_range_sorted_time_bin_table(test_ctx.session_ctx());
+                register_range_sorted_day_bin_table(test_ctx.session_ctx());
             }
             "metadata.slt" | "arrow_field.slt" => {
                 info!("Registering metadata table tables");

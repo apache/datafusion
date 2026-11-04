@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::{NameTracker, SubstraitConsumer};
 use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
@@ -32,7 +19,7 @@ pub async fn from_aggregate_rel(
 ) -> datafusion::common::Result<LogicalPlan> {
     if let Some(input) = agg.input.as_ref() {
         let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
-        let mut ref_group_exprs = vec![];
+        let mut ref_group_exprs = Vec::with_capacity(agg.grouping_expressions.len());
 
         for e in &agg.grouping_expressions {
             let x = consumer.consume_expression(e, input.schema()).await?;
@@ -40,7 +27,7 @@ pub async fn from_aggregate_rel(
         }
 
         let mut group_exprs = vec![];
-        let mut aggr_exprs = vec![];
+        let mut aggr_exprs = Vec::with_capacity(agg.measures.len());
 
         match agg.groupings.len() {
             0 => {}
@@ -56,7 +43,7 @@ pub async fn from_aggregate_rel(
                 );
             }
             _ => {
-                let mut grouping_sets = vec![];
+                let mut grouping_sets = Vec::with_capacity(agg.groupings.len());
                 for grouping in &agg.groupings {
                     let grouping_set = from_substrait_grouping(
                         consumer,
