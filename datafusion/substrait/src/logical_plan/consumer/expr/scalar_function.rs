@@ -66,11 +66,11 @@ pub async fn from_scalar_function(
         // as `get_field(x, 'b')` would not find `b`. Give the parameters the fields the
         // function derives from its arguments instead, which keep the list's field names.
         //
-        // A function that reads a parameter of an enclosing lambda can't be resolved on
-        // its own, as that parameter's type is only known to the enclosing function. In
+        // A function that uses a parameter of an outer lambda can't be resolved on its
+        // own, as only the outer function knows that parameter's type. In
         // `array_transform(s, x -> array_transform([1, 2], i -> get_field(x, 'a') + i))`
-        // the inner call reads `x`, so it is resolved when the outer call is.
-        if reads_enclosing_lambda_parameters(&expr, &mut Vec::new())? {
+        // the inner call uses `x`, so it is resolved when the outer call is.
+        if uses_outer_lambda_parameters(&expr, &mut Vec::new())? {
             Ok(expr)
         } else {
             Ok(expr.resolve_lambda_variables(input_schema)?.data)
@@ -96,34 +96,43 @@ pub async fn from_scalar_function(
     }
 }
 
-/// Returns true if `expr` reads a lambda parameter that is not declared by a lambda
-/// inside `expr`, i.e. one that belongs to an enclosing lambda. `declared` holds the
-/// parameters of the lambdas entered so far while walking `expr`.
-fn reads_enclosing_lambda_parameters(
+/// Checks whether `expr` uses a lambda parameter that comes from outside of it.
+///
+/// In `array_transform(s, x -> array_transform([1, 2], i -> get_field(x, 'a') + i))`,
+/// the inner `array_transform([1, 2], i -> get_field(x, 'a') + i)` uses its own
+/// parameter `i`, but also `x`, which belongs to the outer lambda, so this returns true
+/// for it. For the whole expression it returns false: `x` and `i` both belong to
+/// lambdas inside it.
+///
+/// `own_params` collects the parameters of the lambdas we are inside of while walking
+/// `expr`.
+fn uses_outer_lambda_parameters(
     expr: &Expr,
-    declared: &mut Vec<String>,
+    own_params: &mut Vec<String>,
 ) -> Result<bool> {
     match expr {
-        Expr::LambdaVariable(var) => Ok(!declared.contains(&var.name)),
+        // a parameter that wasn't collected on the way down comes from outside `expr`
+        Expr::LambdaVariable(var) => Ok(!own_params.contains(&var.name)),
         Expr::Lambda(lambda) => {
-            // the parameters are only in scope inside the body
-            let scope = declared.len();
-            declared.extend(lambda.params.iter().cloned());
-            let reads = reads_enclosing_lambda_parameters(&lambda.body, declared);
-            declared.truncate(scope);
-            reads
+            // a lambda's parameters can be used in its body, and only there
+            let before = own_params.len();
+            own_params.extend(lambda.params.iter().cloned());
+            let uses = uses_outer_lambda_parameters(&lambda.body, own_params);
+            own_params.truncate(before);
+            uses
         }
+        // anything else: check its children, stopping at the first one that uses one
         _ => {
-            let mut reads = false;
+            let mut uses = false;
             expr.apply_children(|child| {
-                reads = reads_enclosing_lambda_parameters(child, declared)?;
-                Ok(if reads {
+                uses = uses_outer_lambda_parameters(child, own_params)?;
+                Ok(if uses {
                     TreeNodeRecursion::Stop
                 } else {
                     TreeNodeRecursion::Continue
                 })
             })?;
-            Ok(reads)
+            Ok(uses)
         }
     }
 }
