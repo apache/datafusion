@@ -237,8 +237,8 @@ impl BufferVisitor for RecordBatchMemoryCounter {
 /// Operators that retain batches incrementally and drop them later (sort,
 /// window, sort-merge join, TopK) count a batch when they retain it and
 /// [`Self::uncount_batch`] it when they drop it. The tracker keeps a reference
-/// count per buffer: a buffer's capacity is added when its count goes from 0
-/// to 1 and subtracted when it returns to 0.
+/// count per buffer: its capacity is added when it is first counted and
+/// released when its count returns to 0.
 ///
 /// **Contract**: a batch must be uncounted *before* its buffers are dropped.
 /// The tracker identifies buffers by their data-pointer address and does not
@@ -604,17 +604,12 @@ fn array_children(array: &ArrayRef) -> Vec<&ArrayRef> {
 /// Tracks a small number of buffers inline, avoiding a heap allocation for
 /// typical batches, and promotes to a hash map when more buffers are seen.
 ///
-/// A buffer is identified by its start address, and the set records the
-/// capacity counted for it. Buffers that share an address usually report the
-/// same capacity, but a buffer from [`Buffer::from_custom_allocation`], which
-/// is how Arrow imports buffers through the C Data Interface, reports the
-/// length it was imported with. Zero-copy slices of one batch that are
-/// exported and imported separately therefore share an address but report
-/// different capacities, so the set keeps the largest one seen.
+/// Keeps the largest capacity seen per address: FFI-imported slices of one
+/// allocation share an address but report the length they were imported with.
 #[derive(Debug)]
 struct BufferIdSet {
-    ids: [Option<NonZero<usize>>; INLINE_BUFFER_IDS],
-    /// Counted capacity of each inline buffer, parallel to `ids`.
+    inline: [Option<NonZero<usize>>; INLINE_BUFFER_IDS],
+    /// Counted capacity of each inline buffer, parallel to `inline`.
     capacities: [usize; INLINE_BUFFER_IDS],
     len: usize,
     overflow: Option<HashMap<NonZero<usize>, usize>>,
@@ -623,7 +618,7 @@ struct BufferIdSet {
 impl Default for BufferIdSet {
     fn default() -> Self {
         Self {
-            ids: [None; INLINE_BUFFER_IDS],
+            inline: [None; INLINE_BUFFER_IDS],
             capacities: [0; INLINE_BUFFER_IDS],
             len: 0,
             overflow: None,
@@ -632,16 +627,14 @@ impl Default for BufferIdSet {
 }
 
 impl BufferIdSet {
-    /// Records a buffer of `capacity` bytes starting at `buffer_id`, returning
-    /// the bytes not counted before: `capacity` for a new buffer, the growth if
-    /// `capacity` exceeds what was counted for the address, and 0 otherwise.
+    /// Returns the bytes of `capacity` not already counted for `buffer_id`.
     fn insert(&mut self, buffer_id: NonZero<usize>, capacity: usize) -> usize {
         if let Some(overflow) = &mut self.overflow {
             let counted = overflow.entry(buffer_id).or_insert(0);
             return grow_counted_capacity(counted, capacity);
         }
 
-        if let Some(i) = self.ids[..self.len]
+        if let Some(i) = self.inline[..self.len]
             .iter()
             .position(|id| *id == Some(buffer_id))
         {
@@ -649,18 +642,14 @@ impl BufferIdSet {
         }
 
         if self.len < INLINE_BUFFER_IDS {
-            self.ids[self.len] = Some(buffer_id);
+            self.inline[self.len] = Some(buffer_id);
             self.capacities[self.len] = capacity;
             self.len += 1;
             return capacity;
         }
 
         let mut overflow = HashMap::with_capacity(INLINE_BUFFER_IDS + 1);
-        for i in 0..self.len {
-            if let Some(id) = self.ids[i] {
-                overflow.insert(id, self.capacities[i]);
-            }
-        }
+        overflow.extend(self.inline.iter().flatten().copied().zip(self.capacities));
         overflow.insert(buffer_id, capacity);
         self.overflow = Some(overflow);
         capacity
@@ -677,12 +666,11 @@ fn grow_counted_capacity(counted: &mut usize, capacity: usize) -> usize {
 
 /// Reference-counted buffer tracker with an inline fast path.
 ///
-/// Tracks buffer addresses with their reference counts and the capacity
-/// counted for each, which is the largest capacity seen for the address (see
-/// [`BufferIdSet`] for why buffers at one address can differ). The first
-/// [`INLINE_BUFFER_IDS`] distinct buffers are stored in fixed-size inline
-/// arrays to avoid heap allocation for typical batches. When more buffers are
-/// encountered, the tracker promotes to a heap-allocated `HashMap`.
+/// Tracks buffer addresses with their reference counts and counted capacities
+/// (the largest seen, as in [`BufferIdSet`]). The first [`INLINE_BUFFER_IDS`]
+/// distinct buffers are stored in fixed-size inline arrays to avoid heap
+/// allocation for typical batches. When more buffers are encountered, the
+/// tracker promotes to a heap-allocated `HashMap`.
 ///
 /// The inline path stores addresses, counts and capacities in **separate**
 /// arrays so that the hot `position()` scan over addresses touches a
@@ -699,7 +687,7 @@ struct BufferIdMap {
     /// Number of occupied inline slots.
     len: usize,
     /// Overflow storage used when more than `INLINE_BUFFER_IDS` distinct
-    /// buffers are tracked: the reference count and counted capacity of each.
+    /// buffers are tracked: (reference count, counted capacity).
     overflow: Option<HashMap<NonZero<usize>, (u32, usize)>>,
 }
 
@@ -716,10 +704,8 @@ impl Default for BufferIdMap {
 }
 
 impl BufferIdMap {
-    /// Increment the reference count for a buffer of `capacity` bytes starting
-    /// at `buffer_id`. Returns the bytes not counted before: `capacity` for a
-    /// newly tracked buffer, the growth if `capacity` exceeds what was counted
-    /// for the address, and 0 otherwise.
+    /// Increment the reference count for `buffer_id`, returning the bytes of
+    /// `capacity` not already counted for it.
     #[inline(always)]
     fn increment(&mut self, buffer_id: NonZero<usize>, capacity: usize) -> usize {
         if let Some(overflow) = &mut self.overflow {
@@ -758,10 +744,8 @@ impl BufferIdMap {
         capacity
     }
 
-    /// Decrement the reference count for `buffer_id`. Returns the capacity
-    /// counted for the buffer when the count reached zero (i.e., the buffer is
-    /// no longer tracked), and 0 if the buffer was not tracked or its count is
-    /// still positive.
+    /// Decrement the reference count for `buffer_id`, returning its counted
+    /// capacity when the count reaches zero and 0 otherwise.
     fn decrement(&mut self, buffer_id: NonZero<usize>) -> usize {
         if let Some(overflow) = &mut self.overflow {
             if let Some((count, counted)) = overflow.get_mut(&buffer_id) {
@@ -1269,10 +1253,8 @@ mod record_batch_tests {
         assert_eq!(counter.count_batch(&batch), 0);
     }
 
-    /// Arrays over one allocation that declare different lengths, the way
-    /// `arrow::ffi::from_ffi` imports zero-copy slices of one batch: every
-    /// array's buffer starts at the same address, but its capacity is the
-    /// length it was imported with.
+    /// Arrays over one allocation with different capacities, as
+    /// `arrow::ffi::from_ffi` imports slices of one batch.
     fn custom_allocation_arrays(lens: &[usize]) -> Vec<ArrayRef> {
         use arrow::buffer::ScalarBuffer;
         use std::ptr::NonNull;
@@ -1282,8 +1264,7 @@ mod record_batch_tests {
         let ptr = NonNull::new(owner.as_ptr().cast::<u8>().cast_mut()).unwrap();
         lens.iter()
             .map(|&len| {
-                // SAFETY: `owner` holds `max_len >= len` initialized i32 values
-                // at `ptr` and the buffer keeps `owner` alive.
+                // SAFETY: `owner` holds `len` values at `ptr`; the buffer keeps it alive.
                 let buffer = unsafe {
                     Buffer::from_custom_allocation(
                         ptr,
@@ -1297,8 +1278,7 @@ mod record_batch_tests {
             .collect()
     }
 
-    /// Distinct single-value arrays that fill the inline buffer slots, so the
-    /// next new buffer promotes the set to its overflow map.
+    /// Arrays that fill the inline slots, so the next buffer promotes to overflow.
     fn inline_filler_arrays() -> Vec<ArrayRef> {
         (0..INLINE_BUFFER_IDS)
             .map(|i| Arc::new(Int32Array::from(vec![i as i32])) as ArrayRef)
@@ -1309,7 +1289,10 @@ mod record_batch_tests {
     fn test_record_batch_memory_counter_counts_largest_capacity_at_address() {
         let (small, large) = (16 * size_of::<i32>(), 1024 * size_of::<i32>());
         for promote in [false, true] {
-            for lens in [[16, 1024], [1024, 16]] {
+            for (lens, expected) in [
+                ([16, 1024], (small, large - small)),
+                ([1024, 16], (large, 0)),
+            ] {
                 let arrays = custom_allocation_arrays(&lens);
                 let mut counter = RecordBatchMemoryCounter::new();
                 if promote {
@@ -1321,11 +1304,7 @@ mod record_batch_tests {
 
                 let first = counter.count_array(arrays[0].as_ref());
                 let second = counter.count_array(arrays[1].as_ref());
-                if lens[0] < lens[1] {
-                    assert_eq!((first, second), (small, large - small));
-                } else {
-                    assert_eq!((first, second), (large, 0));
-                }
+                assert_eq!((first, second), expected);
                 assert_eq!(counter.memory_usage() - base, large);
                 assert_eq!(counter.counted_buffers.overflow.is_some(), promote);
             }
@@ -1349,8 +1328,7 @@ mod record_batch_tests {
             assert_eq!(tracker.count_array(arrays[0].as_ref()), small);
             assert_eq!(tracker.count_array(arrays[1].as_ref()), large - small);
             assert_eq!(tracker.counted_buffers.overflow.is_some(), promote);
-            // The allocation stays counted at its largest capacity until the
-            // last array over it is released, whatever the release order.
+            // Released at its largest capacity once the last array goes.
             assert_eq!(tracker.uncount_array(arrays[0].as_ref()), 0);
             assert_eq!(tracker.uncount_array(arrays[1].as_ref()), large);
             assert_eq!(tracker.memory_usage(), base);
