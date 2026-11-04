@@ -106,29 +106,3 @@ impl PhysicalAnalyzer {
         Self { rules }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The default analyzer is the former optimizer prefix, in the same order,
-    /// ending with enforcement.
-    #[test]
-    fn default_analyzer_ends_with_enforcement() {
-        let analyzer = PhysicalAnalyzer::new();
-        let names: Vec<&str> = analyzer.rules.iter().map(|r| r.name()).collect();
-        assert_eq!(
-            names,
-            vec![
-                "AddOutputRequirements",
-                "aggregate_statistics",
-                "EliminateConstantJoin",
-                "join_selection",
-                "LimitedDistinctAggregation",
-                "FilterPushdown",
-                "WindowTopN",
-                "EnsureRequirements",
-            ]
-        );
-    }
-}

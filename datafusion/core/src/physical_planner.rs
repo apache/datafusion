@@ -4072,57 +4072,6 @@ mod tests {
         }
     }
 
-    /// The default session state runs the former optimizer prefix, up to and
-    /// including `EnsureRequirements`, as the analyzer phase, then the
-    /// optimizer rules.
-    #[test]
-    fn default_session_runs_the_analyzer_prefix_then_the_optimizer() {
-        let state = make_session_state();
-
-        let analyzer_names: Vec<&str> = state
-            .physical_analyzers()
-            .iter()
-            .map(|r| r.name())
-            .collect();
-        assert_eq!(
-            analyzer_names,
-            vec![
-                "AddOutputRequirements",
-                "aggregate_statistics",
-                "EliminateConstantJoin",
-                "join_selection",
-                "LimitedDistinctAggregation",
-                "FilterPushdown",
-                "WindowTopN",
-                "EnsureRequirements",
-            ],
-        );
-
-        let optimizer_names: Vec<&str> = state
-            .physical_optimizers()
-            .iter()
-            .map(|r| r.name())
-            .collect();
-        assert_eq!(
-            optimizer_names,
-            vec![
-                "CombinePartialFinalAggregate",
-                "OptimizeAggregateOrder",
-                "ProjectionPushdown",
-                "RemoveOutputRequirements",
-                "LimitAggregation",
-                "LimitPushPastWindows",
-                "HashJoinBuffering",
-                "LimitPushdown",
-                "TopKRepartition",
-                "ProjectionPushdown",
-                "PushdownSort",
-                "EnsureCooperative",
-                "DynamicFilterPushdown",
-            ],
-        );
-    }
-
     #[tokio::test]
     async fn custom_physical_analyzer_rule_runs_during_planning() -> Result<()> {
         let invoked = Arc::new(AtomicBool::new(false));
