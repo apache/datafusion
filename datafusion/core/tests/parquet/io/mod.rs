@@ -13,7 +13,6 @@
 
 use std::ops::Range;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -29,6 +28,7 @@ use object_store::{
 };
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::serialized_reader::ReadOptionsBuilder;
+use tracing::Instrument;
 use url::Url;
 
 // Tests are in submodules
@@ -197,85 +197,51 @@ impl ParquetFileLayout {
         }
     }
 
+    /// Names the Parquet structure that `range` covers.
     fn describe_range(&self, range: &Range<u64>, file_size: u64) -> String {
         if range.end >= file_size && (file_size.saturating_sub(range.start)) <= 8192 {
-            return format!("Parquet footer (offsets {}..{})", range.start, range.end);
+            return "footer".to_string();
         }
-        for desc in &self.descriptors {
-            if range.start < desc.range.end && range.end > desc.range.start {
-                return format!(
-                    "{} (offsets {}..{})",
-                    desc.description, range.start, range.end
-                );
-            }
+        let overlaps = |r: &Range<u64>| range.start < r.end && range.end > r.start;
+        if let Some(desc) = self.descriptors.iter().find(|d| overlaps(&d.range)) {
+            return desc.description.clone();
         }
-        for chunk in &self.column_chunks {
-            if range.start < chunk.range.end && range.end > chunk.range.start {
-                return format!(
-                    "{} (offsets {}..{})",
-                    chunk.describe(range),
-                    range.start,
-                    range.end
-                );
-            }
+        if let Some(chunk) = self.column_chunks.iter().find(|c| overlaps(&c.range)) {
+            return chunk.describe(range);
         }
-        format!("byte range (offsets {}..{})", range.start, range.end)
+        "unknown".to_string()
     }
 }
 
+/// An [`ObjectStore`] that emits a `tracing` span for every operation. Each
+/// byte range read gets an event that names the Parquet structure it covers.
 #[derive(Debug)]
 struct InstrumentedObjectStore {
     inner: Arc<dyn ObjectStore>,
+    layout: ParquetFileLayout,
     file_size: u64,
-    /// Number of requests made to the store (reset for each query)
-    requests: Arc<AtomicUsize>,
+}
+
+/// Target of the spans and events that this test harness emits. The capture
+/// layer only records targets that start with `datafusion`.
+const TEST_TARGET: &str = "datafusion::test";
+
+macro_rules! store_span {
+    ($op:literal, $($fields:tt)*) => {
+        tracing::debug_span!(target: TEST_TARGET, $op, $($fields)*)
+    };
 }
 
 impl InstrumentedObjectStore {
-    fn new(
-        inner: Arc<dyn ObjectStore>,
-        file_size: u64,
-        requests: Arc<AtomicUsize>,
-    ) -> Self {
-        Self {
-            inner,
-            file_size,
-            requests,
+    fn record_ranges(&self, ranges: impl IntoIterator<Item = Range<u64>>) {
+        for range in ranges {
+            tracing::debug!(
+                target: TEST_TARGET,
+                range = ?range,
+                parquet = %self.layout.describe_range(&range, self.file_size),
+                "Read byte range"
+            );
         }
-    }
-
-    /// Emits a span for a `HEAD` request, which reads no bytes.
-    fn record_head_request(&self) {
-        let request = self.requests.fetch_add(1, Ordering::SeqCst) + 1;
-        let span = tracing::debug_span!(
-            target: "datafusion::test::object_store",
-            "object_store_request",
-            request
-        );
-        span.in_scope(|| {
-            tracing::debug!(target: "datafusion::test::object_store", "HEAD object metadata");
-        });
-    }
-
-    /// Emits a span for one request to the store, with an event per byte
-    /// range it reads.
-    fn record_request(&self, ranges: impl IntoIterator<Item = Range<u64>>) {
-        let request = self.requests.fetch_add(1, Ordering::SeqCst) + 1;
-        let span = tracing::debug_span!(
-            target: "datafusion::test::object_store",
-            "object_store_request",
-            request
-        );
-        span.in_scope(|| {
-            for range in ranges {
-                tracing::debug!(
-                    target: "datafusion::test::object_store",
-                    offset_start = range.start,
-                    offset_end = range.end,
-                    "Read byte range"
-                );
-            }
-        });
     }
 }
 
@@ -293,7 +259,12 @@ impl ObjectStore for InstrumentedObjectStore {
         payload: PutPayload,
         opts: PutOptions,
     ) -> object_store::Result<PutResult> {
-        self.inner.put_opts(location, payload, opts).await
+        let span =
+            store_span!("ObjectStore::put", %location, bytes = payload.content_length());
+        self.inner
+            .put_opts(location, payload, opts)
+            .instrument(span)
+            .await
     }
 
     async fn put_multipart_opts(
@@ -301,7 +272,11 @@ impl ObjectStore for InstrumentedObjectStore {
         location: &Path,
         opts: PutMultipartOptions,
     ) -> object_store::Result<Box<dyn MultipartUpload>> {
-        self.inner.put_multipart_opts(location, opts).await
+        let span = store_span!("ObjectStore::put_multipart", %location);
+        self.inner
+            .put_multipart_opts(location, opts)
+            .instrument(span)
+            .await
     }
 
     async fn get_opts(
@@ -310,8 +285,12 @@ impl ObjectStore for InstrumentedObjectStore {
         options: GetOptions,
     ) -> object_store::Result<GetResult> {
         if options.head {
-            self.record_head_request();
-            return self.inner.get_opts(location, options).await;
+            let span = store_span!("ObjectStore::head", %location);
+            return self
+                .inner
+                .get_opts(location, options)
+                .instrument(span)
+                .await;
         }
         let range = match &options.range {
             Some(GetRange::Bounded(r)) => r.clone(),
@@ -321,8 +300,12 @@ impl ObjectStore for InstrumentedObjectStore {
             }
             None => 0..self.file_size,
         };
-        self.record_request([range]);
-        self.inner.get_opts(location, options).await
+        let span = store_span!("ObjectStore::get", %location);
+        span.in_scope(|| self.record_ranges([range]));
+        self.inner
+            .get_opts(location, options)
+            .instrument(span)
+            .await
     }
 
     async fn get_ranges(
@@ -330,14 +313,20 @@ impl ObjectStore for InstrumentedObjectStore {
         location: &Path,
         ranges: &[Range<u64>],
     ) -> object_store::Result<Vec<Bytes>> {
-        self.record_request(ranges.iter().cloned());
-        self.inner.get_ranges(location, ranges).await
+        let span =
+            store_span!("ObjectStore::get_ranges", %location, ranges = ranges.len());
+        span.in_scope(|| self.record_ranges(ranges.iter().cloned()));
+        self.inner
+            .get_ranges(location, ranges)
+            .instrument(span)
+            .await
     }
 
     fn delete_stream(
         &self,
         locations: BoxStream<'static, object_store::Result<Path>>,
     ) -> BoxStream<'static, object_store::Result<Path>> {
+        tracing::debug!(target: TEST_TARGET, "ObjectStore::delete_stream");
         self.inner.delete_stream(locations)
     }
 
@@ -345,6 +334,7 @@ impl ObjectStore for InstrumentedObjectStore {
         &self,
         prefix: Option<&Path>,
     ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        tracing::debug!(target: TEST_TARGET, prefix = ?prefix.map(Path::as_ref), "ObjectStore::list");
         self.inner.list(prefix)
     }
 
@@ -353,6 +343,12 @@ impl ObjectStore for InstrumentedObjectStore {
         prefix: Option<&Path>,
         offset: &Path,
     ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
+        tracing::debug!(
+            target: TEST_TARGET,
+            prefix = ?prefix.map(Path::as_ref),
+            %offset,
+            "ObjectStore::list_with_offset"
+        );
         self.inner.list_with_offset(prefix, offset)
     }
 
@@ -360,7 +356,14 @@ impl ObjectStore for InstrumentedObjectStore {
         &self,
         prefix: Option<&Path>,
     ) -> object_store::Result<ListResult> {
-        self.inner.list_with_delimiter(prefix).await
+        let span = store_span!(
+            "ObjectStore::list_with_delimiter",
+            prefix = ?prefix.map(Path::as_ref)
+        );
+        self.inner
+            .list_with_delimiter(prefix)
+            .instrument(span)
+            .await
     }
 
     async fn copy_opts(
@@ -369,7 +372,11 @@ impl ObjectStore for InstrumentedObjectStore {
         to: &Path,
         options: object_store::CopyOptions,
     ) -> object_store::Result<()> {
-        self.inner.copy_opts(from, to, options).await
+        let span = store_span!("ObjectStore::copy", %from, %to);
+        self.inner
+            .copy_opts(from, to, options)
+            .instrument(span)
+            .await
     }
 }
 
@@ -387,9 +394,6 @@ impl ObjectStore for InstrumentedObjectStore {
 /// ```
 pub(crate) struct ParquetIoTest {
     ctx: SessionContext,
-    layout: ParquetFileLayout,
-    file_size: u64,
-    requests: Arc<AtomicUsize>,
 }
 
 impl ParquetIoTest {
@@ -409,12 +413,11 @@ impl ParquetIoTest {
             .await
             .unwrap();
 
-        let requests = Arc::new(AtomicUsize::new(0));
-        let instrumented_store = Arc::new(InstrumentedObjectStore::new(
-            memory_store,
+        let instrumented_store = Arc::new(InstrumentedObjectStore {
+            inner: memory_store,
+            layout,
             file_size,
-            Arc::clone(&requests),
-        ));
+        });
 
         let ctx = SessionContext::new_with_config(config);
         ctx.register_object_store(&Url::parse("mem://").unwrap(), instrumented_store);
@@ -422,40 +425,37 @@ impl ParquetIoTest {
             .await
             .unwrap();
 
-        Self {
-            ctx,
-            layout,
-            file_size,
-            requests,
-        }
+        Self { ctx }
     }
 
     /// Captures the spans and events that DataFusion emits on this thread
     /// until the returned [`TraceCapture`] is dropped.
     pub(crate) fn capture_traces(&self) -> TraceCapture {
-        TraceCapture::new(self.layout.clone(), self.file_size)
+        TraceCapture::new()
     }
 
     /// Runs `sql` to completion inside a `query` span and returns the number
     /// of output rows. Emits a `Produce batch` event for each output batch.
     pub(crate) async fn query(&self, sql: &str) -> Result<usize> {
-        self.requests.store(0, Ordering::SeqCst);
         let span = tracing::debug_span!(
-            target: "datafusion::test",
-            "query",
+            target: TEST_TARGET,
+            "Query",
             sql,
             rows = tracing::field::Empty
         );
-        let _entered = span.enter();
-
-        let df = self.ctx.sql(sql).await?;
-        let mut stream = df.execute_stream().await?;
-        let mut row_count = 0;
-        while let Some(batch) = stream.next().await {
-            let rows = batch?.num_rows();
-            row_count += rows;
-            tracing::debug!(target: "datafusion::test", rows, "Produce batch");
+        let row_count = async {
+            let df = self.ctx.sql(sql).await?;
+            let mut stream = df.execute_stream().await?;
+            let mut row_count = 0;
+            while let Some(batch) = stream.next().await {
+                let rows = batch?.num_rows();
+                row_count += rows;
+                tracing::debug!(target: TEST_TARGET, rows, "Produce batch");
+            }
+            Ok::<_, datafusion::error::DataFusionError>(row_count)
         }
+        .instrument(span.clone())
+        .await?;
         span.record("rows", row_count);
         Ok(row_count)
     }

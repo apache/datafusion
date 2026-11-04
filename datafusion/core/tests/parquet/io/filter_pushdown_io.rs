@@ -43,25 +43,33 @@ async fn test_filter_pushdown_io_disabled() {
     let traces = test.capture_traces();
     test.query("SELECT * FROM t WHERE val = 7").await.unwrap();
     assert_snapshot!(traces.render(), @"
-    --- Query: SELECT * FROM t WHERE val = 7 (1 rows) ---
-    Request 1
-        HEAD object metadata
-    Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
-    Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
-    Request 2
-        Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
-        Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
-    Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
-    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
-    Request 3
-        Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
-        Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
-    Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
-    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
-    Request 4
-        Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
-        Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
-    Produce batch (1 rows)
+    Query (sql=SELECT * FROM t WHERE val = 7, rows=1)
+        ObjectStore::head (location=table.parquet)
+        Metadata cache hit (has_page_index=true)
+        Open Parquet file (file=table.parquet, size=1402)
+        Load Parquet metadata
+            Metadata cache hit (has_page_index=true)
+        Prune row groups
+            Row groups remaining (row_groups=3, row_groups_remaining=3, pruning_predicate=true)
+        Load page index
+        Load Bloom filters
+        Prune row groups with Bloom filters
+            Row groups remaining (row_groups_remaining=3)
+        Prune pages with page index
+            Row groups remaining (row_groups_remaining=3)
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=4..51, parquet=dictionary page and data page 0 for column 'id' (rg 0))
+                Read byte range (range=51..98, parquet=dictionary page and data page 0 for column 'val' (rg 0))
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=98..145, parquet=dictionary page and data page 0 for column 'id' (rg 1))
+                Read byte range (range=145..192, parquet=dictionary page and data page 0 for column 'val' (rg 1))
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=192..239, parquet=dictionary page and data page 0 for column 'id' (rg 2))
+                Read byte range (range=239..286, parquet=dictionary page and data page 0 for column 'val' (rg 2))
+        Produce batch (rows=1)
     ");
 }
 
@@ -74,24 +82,37 @@ async fn test_filter_pushdown_io_enabled() {
     let traces = test.capture_traces();
     test.query("SELECT * FROM t WHERE val = 7").await.unwrap();
     assert_snapshot!(traces.render(), @"
-    --- Query: SELECT * FROM t WHERE val = 7 (1 rows) ---
-    Request 1
-        HEAD object metadata
-    Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
-    Request 2
-        Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
-    Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
-    Request 3
-        Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
-    Read dictionary page for column 'id' (rg 1) (offsets 98..124)
-    Read data page 0 for column 'id' (rg 1) (offsets 124..145)
-    Request 4
-        Read dictionary page for column 'id' (rg 1) (offsets 98..124)
-        Read data page 0 for column 'id' (rg 1) (offsets 124..145)
-    Produce batch (1 rows)
-    Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
-    Request 5
-        Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
+    Query (sql=SELECT * FROM t WHERE val = 7, rows=1)
+        ObjectStore::head (location=table.parquet)
+        Metadata cache hit (has_page_index=true)
+        Open Parquet file (file=table.parquet, size=1402)
+        Load Parquet metadata
+            Metadata cache hit (has_page_index=true)
+        Prune row groups
+            Row groups remaining (row_groups=3, row_groups_remaining=3, pruning_predicate=true)
+        Load page index
+        Load Bloom filters
+        Prune row groups with Bloom filters
+            Row groups remaining (row_groups_remaining=3)
+        Prune pages with page index
+            Row groups remaining (row_groups_remaining=3)
+        Fetch column chunk data (ranges=1)
+            ObjectStore::get_ranges (location=table.parquet, ranges=1)
+                Read byte range (range=51..98, parquet=dictionary page and data page 0 for column 'val' (rg 0))
+        Evaluate row filter (predicate=val@0 = 7, rows=3, rows_matched=0)
+        Fetch column chunk data (ranges=1)
+            ObjectStore::get_ranges (location=table.parquet, ranges=1)
+                Read byte range (range=145..192, parquet=dictionary page and data page 0 for column 'val' (rg 1))
+        Evaluate row filter (predicate=val@0 = 7, rows=3, rows_matched=1)
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=98..124, parquet=dictionary page for column 'id' (rg 1))
+                Read byte range (range=124..145, parquet=data page 0 for column 'id' (rg 1))
+        Produce batch (rows=1)
+        Fetch column chunk data (ranges=1)
+            ObjectStore::get_ranges (location=table.parquet, ranges=1)
+                Read byte range (range=239..286, parquet=dictionary page and data page 0 for column 'val' (rg 2))
+        Evaluate row filter (predicate=val@0 = 7, rows=3, rows_matched=0)
     ");
 }
 

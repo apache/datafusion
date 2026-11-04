@@ -44,24 +44,34 @@ async fn test_parquet_bloom_filter_io_matching() {
         .await
         .unwrap();
     assert_snapshot!(traces.render(), @"
-    --- Query: SELECT * FROM t WHERE a = 10 AND b = 100 (1 rows) ---
-    Request 1
-        HEAD object metadata
-    Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
-    Request 2
-        Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
-    Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
-    Request 3
-        Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
-    Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
-    Request 4
-        Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
-    Read dictionary page and data page 0 for column 'a' (rg 0) (offsets 4..51)
-    Read dictionary page and data page 0 for column 'b' (rg 0) (offsets 51..98)
-    Request 5
-        Read dictionary page and data page 0 for column 'a' (rg 0) (offsets 4..51)
-        Read dictionary page and data page 0 for column 'b' (rg 0) (offsets 51..98)
-    Produce batch (1 rows)
+    Query (sql=SELECT * FROM t WHERE a = 10 AND b = 100, rows=1)
+        ObjectStore::head (location=table.parquet)
+        Metadata cache hit (has_page_index=false)
+        Load page index into cached metadata
+            Read Parquet metadata (range=192..213)
+            ObjectStore::get (location=table.parquet)
+                Read byte range (range=192..213, parquet=OffsetIndex for column 'a' (rg 0))
+        Open Parquet file (file=table.parquet, size=678)
+        Load Parquet metadata
+            Metadata cache hit (has_page_index=false)
+        Prune row groups
+            Row groups remaining (row_groups=1, row_groups_remaining=1, pruning_predicate=true)
+        Load Bloom filters
+            Read Bloom filter (column=a, row_group=0, range=98..145)
+            ObjectStore::get (location=table.parquet)
+                Read byte range (range=98..145, parquet=Bloom filter for column 'a' (rg 0))
+            Read Bloom filter (column=b, row_group=0, range=145..192)
+            ObjectStore::get (location=table.parquet)
+                Read byte range (range=145..192, parquet=Bloom filter for column 'b' (rg 0))
+        Prune row groups with Bloom filters
+            Row groups remaining (row_groups_remaining=1)
+        Prune pages with page index
+            Row groups remaining (row_groups_remaining=1)
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=4..51, parquet=dictionary page and data page 0 for column 'a' (rg 0))
+                Read byte range (range=51..98, parquet=dictionary page and data page 0 for column 'b' (rg 0))
+        Produce batch (rows=1)
     ");
 }
 
@@ -78,18 +88,27 @@ async fn test_parquet_bloom_filter_io_pruned() {
         .await
         .unwrap();
     assert_snapshot!(traces.render(), @"
-    --- Query: SELECT * FROM t WHERE a = 999 AND b = 100 (0 rows) ---
-    Request 1
-        HEAD object metadata
-    Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
-    Request 2
-        Read OffsetIndex for column 'a' (rg 0) (offsets 192..213)
-    Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
-    Request 3
-        Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
-    Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
-    Request 4
-        Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
+    Query (sql=SELECT * FROM t WHERE a = 999 AND b = 100, rows=0)
+        ObjectStore::head (location=table.parquet)
+        Metadata cache hit (has_page_index=false)
+        Load page index into cached metadata
+            Read Parquet metadata (range=192..213)
+            ObjectStore::get (location=table.parquet)
+                Read byte range (range=192..213, parquet=OffsetIndex for column 'a' (rg 0))
+        Open Parquet file (file=table.parquet, size=678)
+        Load Parquet metadata
+            Metadata cache hit (has_page_index=false)
+        Prune row groups
+            Row groups remaining (row_groups=1, row_groups_remaining=1, pruning_predicate=true)
+        Load Bloom filters
+            Read Bloom filter (column=a, row_group=0, range=98..145)
+            ObjectStore::get (location=table.parquet)
+                Read byte range (range=98..145, parquet=Bloom filter for column 'a' (rg 0))
+            Read Bloom filter (column=b, row_group=0, range=145..192)
+            ObjectStore::get (location=table.parquet)
+                Read byte range (range=145..192, parquet=Bloom filter for column 'b' (rg 0))
+        Prune row groups with Bloom filters
+            Row groups remaining (row_groups_remaining=0)
     ");
 }
 

@@ -47,15 +47,21 @@ async fn test_page_pruning_io_no_predicate() {
     let traces = test.capture_traces();
     test.query("SELECT * FROM t").await.unwrap();
     assert_snapshot!(traces.render(), @"
-    --- Query: SELECT * FROM t (9 rows) ---
-    Request 1
-        HEAD object metadata
-    Read data pages 0..=2 for column 'id' (rg 0) (offsets 4..91)
-    Read data pages 0..=2 for column 'val' (rg 0) (offsets 91..178)
-    Request 2
-        Read data pages 0..=2 for column 'id' (rg 0) (offsets 4..91)
-        Read data pages 0..=2 for column 'val' (rg 0) (offsets 91..178)
-    Produce batch (9 rows)
+    Query (sql=SELECT * FROM t, rows=9)
+        ObjectStore::head (location=table.parquet)
+        Metadata cache hit (has_page_index=true)
+        Open Parquet file (file=table.parquet, size=838)
+        Load Parquet metadata
+            Metadata cache hit (has_page_index=true)
+        Prune row groups
+            Row groups remaining (row_groups=1, row_groups_remaining=1, pruning_predicate=false)
+        Load Bloom filters
+        Prune row groups with Bloom filters
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=4..91, parquet=data pages 0..=2 for column 'id' (rg 0))
+                Read byte range (range=91..178, parquet=data pages 0..=2 for column 'val' (rg 0))
+        Produce batch (rows=9)
     ");
 }
 
@@ -67,15 +73,25 @@ async fn test_page_pruning_io_one_page() {
     let traces = test.capture_traces();
     test.query("SELECT * FROM t WHERE id = 5").await.unwrap();
     assert_snapshot!(traces.render(), @"
-    --- Query: SELECT * FROM t WHERE id = 5 (1 rows) ---
-    Request 1
-        HEAD object metadata
-    Read data page 1 for column 'id' (rg 0) (offsets 33..62)
-    Read data page 1 for column 'val' (rg 0) (offsets 120..149)
-    Request 2
-        Read data page 1 for column 'id' (rg 0) (offsets 33..62)
-        Read data page 1 for column 'val' (rg 0) (offsets 120..149)
-    Produce batch (1 rows)
+    Query (sql=SELECT * FROM t WHERE id = 5, rows=1)
+        ObjectStore::head (location=table.parquet)
+        Metadata cache hit (has_page_index=true)
+        Open Parquet file (file=table.parquet, size=838)
+        Load Parquet metadata
+            Metadata cache hit (has_page_index=true)
+        Prune row groups
+            Row groups remaining (row_groups=1, row_groups_remaining=1, pruning_predicate=true)
+        Load page index
+        Load Bloom filters
+        Prune row groups with Bloom filters
+            Row groups remaining (row_groups_remaining=1)
+        Prune pages with page index
+            Row groups remaining (row_groups_remaining=1)
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=33..62, parquet=data page 1 for column 'id' (rg 0))
+                Read byte range (range=120..149, parquet=data page 1 for column 'val' (rg 0))
+        Produce batch (rows=1)
     ");
 }
 
@@ -87,19 +103,27 @@ async fn test_page_pruning_io_two_pages() {
     let traces = test.capture_traces();
     test.query("SELECT * FROM t WHERE id > 3").await.unwrap();
     assert_snapshot!(traces.render(), @"
-    --- Query: SELECT * FROM t WHERE id > 3 (6 rows) ---
-    Request 1
-        HEAD object metadata
-    Read data page 1 for column 'id' (rg 0) (offsets 33..62)
-    Read data page 2 for column 'id' (rg 0) (offsets 62..91)
-    Read data page 1 for column 'val' (rg 0) (offsets 120..149)
-    Read data page 2 for column 'val' (rg 0) (offsets 149..178)
-    Request 2
-        Read data page 1 for column 'id' (rg 0) (offsets 33..62)
-        Read data page 2 for column 'id' (rg 0) (offsets 62..91)
-        Read data page 1 for column 'val' (rg 0) (offsets 120..149)
-        Read data page 2 for column 'val' (rg 0) (offsets 149..178)
-    Produce batch (6 rows)
+    Query (sql=SELECT * FROM t WHERE id > 3, rows=6)
+        ObjectStore::head (location=table.parquet)
+        Metadata cache hit (has_page_index=true)
+        Open Parquet file (file=table.parquet, size=838)
+        Load Parquet metadata
+            Metadata cache hit (has_page_index=true)
+        Prune row groups
+            Row groups remaining (row_groups=1, row_groups_remaining=1, pruning_predicate=true)
+        Load page index
+        Load Bloom filters
+        Prune row groups with Bloom filters
+            Row groups remaining (row_groups_remaining=1)
+        Prune pages with page index
+            Row groups remaining (row_groups_remaining=1)
+        Fetch column chunk data (ranges=4)
+            ObjectStore::get_ranges (location=table.parquet, ranges=4)
+                Read byte range (range=33..62, parquet=data page 1 for column 'id' (rg 0))
+                Read byte range (range=62..91, parquet=data page 2 for column 'id' (rg 0))
+                Read byte range (range=120..149, parquet=data page 1 for column 'val' (rg 0))
+                Read byte range (range=149..178, parquet=data page 2 for column 'val' (rg 0))
+        Produce batch (rows=6)
     ");
 }
 
@@ -111,15 +135,22 @@ async fn test_page_pruning_io_disabled() {
     let traces = test.capture_traces();
     test.query("SELECT * FROM t WHERE id = 5").await.unwrap();
     assert_snapshot!(traces.render(), @"
-    --- Query: SELECT * FROM t WHERE id = 5 (1 rows) ---
-    Request 1
-        HEAD object metadata
-    Read data pages 0..=2 for column 'id' (rg 0) (offsets 4..91)
-    Read data pages 0..=2 for column 'val' (rg 0) (offsets 91..178)
-    Request 2
-        Read data pages 0..=2 for column 'id' (rg 0) (offsets 4..91)
-        Read data pages 0..=2 for column 'val' (rg 0) (offsets 91..178)
-    Produce batch (1 rows)
+    Query (sql=SELECT * FROM t WHERE id = 5, rows=1)
+        ObjectStore::head (location=table.parquet)
+        Metadata cache hit (has_page_index=true)
+        Open Parquet file (file=table.parquet, size=838)
+        Load Parquet metadata
+            Metadata cache hit (has_page_index=true)
+        Prune row groups
+            Row groups remaining (row_groups=1, row_groups_remaining=1, pruning_predicate=true)
+        Load Bloom filters
+        Prune row groups with Bloom filters
+            Row groups remaining (row_groups_remaining=1)
+        Fetch column chunk data (ranges=2)
+            ObjectStore::get_ranges (location=table.parquet, ranges=2)
+                Read byte range (range=4..91, parquet=data pages 0..=2 for column 'id' (rg 0))
+                Read byte range (range=91..178, parquet=data pages 0..=2 for column 'val' (rg 0))
+        Produce batch (rows=1)
     ");
 }
 

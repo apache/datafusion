@@ -40,6 +40,7 @@ use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use std::any::Any;
 use std::sync::Arc;
+use tracing::Instrument;
 
 /// Minimum fraction of row groups that must report NDV statistics for the
 /// merged result to be `Inexact` rather than `Absent`, as the estimate
@@ -276,6 +277,10 @@ impl<'a> DFParquetMetadata<'a> {
                 .downcast_ref::<CachedParquetMetaData>()
         {
             let cached_metadata = Arc::clone(cached_parquet.parquet_metadata());
+            tracing::debug!(
+                has_page_index = Self::metadata_has_page_index(cached_metadata.as_ref()),
+                "Metadata cache hit"
+            );
             // Reuse the cache when it already has page index, or when the caller
             // asked to skip page index I/O (footer-only metadata is sufficient).
             if Self::metadata_has_page_index(cached_metadata.as_ref())
@@ -285,6 +290,9 @@ impl<'a> DFParquetMetadata<'a> {
             }
             let metadata =
                 Self::load_page_index(self.store, self.object_meta, cached_metadata)
+                    .instrument(tracing::debug_span!(
+                        "Load page index into cached metadata"
+                    ))
                     .await?;
             if cache_metadata {
                 self.cache_metadata(Arc::clone(&metadata))?;
@@ -292,6 +300,7 @@ impl<'a> DFParquetMetadata<'a> {
             return Ok(metadata);
         }
 
+        tracing::debug!(cache_enabled = cache_metadata, "Metadata cache miss");
         let metadata = self.fetch_metadata_from_store(page_index_policy).await?;
         if cache_metadata {
             self.cache_metadata(Arc::clone(&metadata))?;
@@ -364,12 +373,7 @@ impl<'a> DFParquetMetadata<'a> {
         if let Some(hint) = self.metadata_size_hint {
             let prefetch_start = file_size.saturating_sub(hint as u64);
             let prefetch_range = prefetch_start..file_size;
-            tracing::debug!(
-                target: "datafusion::parquet::io",
-                offset_start = prefetch_range.start,
-                offset_end = prefetch_range.end,
-                "Prefetch Parquet footer"
-            );
+            tracing::debug!(range = ?prefetch_range, "Prefetch Parquet footer");
             let data = self
                 .store
                 .get_ranges(
@@ -391,19 +395,9 @@ impl<'a> DFParquetMetadata<'a> {
                         // The decoder asks for the footer at the end of the
                         // file, and for the page index before it.
                         if range.end == file_size {
-                            tracing::debug!(
-                                target: "datafusion::parquet::io",
-                                offset_start = range.start,
-                                offset_end = range.end,
-                                "Read Parquet footer"
-                            );
+                            tracing::debug!(range = ?range, "Read Parquet footer");
                         } else {
-                            tracing::debug!(
-                                target: "datafusion::parquet::io",
-                                offset_start = range.start,
-                                offset_end = range.end,
-                                "Read page index"
-                            );
+                            tracing::debug!(range = ?range, "Read page index");
                         }
                     }
                     let buffers = self
