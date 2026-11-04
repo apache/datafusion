@@ -72,18 +72,6 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         }
     }
 
-    fn check_key_overflow(&self) -> Result<()> {
-        let non_null_count = self.inner.len();
-        if !Self::key_type_fits(non_null_count) {
-            return exec_err!(
-                "Dictionary key type {:?} cannot represent {} distinct values",
-                K::DATA_TYPE,
-                non_null_count
-            );
-        }
-        Ok(())
-    }
-
     fn key_type_fits(num_values: usize) -> bool {
         let max: usize = match K::DATA_TYPE {
             DataType::Int8 => i8::MAX as usize,
@@ -168,20 +156,15 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     }
 
     #[inline]
-    fn push_inner_slot(&mut self, inner_slot: usize) -> Result<()> {
-        if inner_slot == NULL_INNER_SLOT {
-            self.group_to_inner.push(Self::null_key());
-            self.group_nulls.append_null();
-            return Ok(());
-        }
-
-        let Some(key) = K::Native::from_usize(inner_slot) else {
-            self.check_key_overflow()?;
-            unreachable!("representable dictionary key rejected")
+    fn push_inner_slot(&mut self, inner_slot: usize) {
+        let valid = inner_slot != NULL_INNER_SLOT;
+        let key = if valid {
+            K::Native::usize_as(inner_slot)
+        } else {
+            Self::null_key()
         };
         self.group_to_inner.push(key);
-        self.group_nulls.append_non_null();
-        Ok(())
+        self.group_nulls.append(valid);
     }
 
     fn hash_values(&mut self, values: &ArrayRef) {
@@ -238,6 +221,13 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
             Some(slot) => Ok(slot),
             None => {
                 let slot = self.inner.len();
+                if !Self::key_type_fits(slot + 1) {
+                    return exec_err!(
+                        "Dictionary key type {:?} cannot represent {} distinct values",
+                        K::DATA_TYPE,
+                        slot + 1
+                    );
+                }
                 self.inner.append_val(dict_values, val_idx)?;
                 self.value_dedup.insert_accounted(
                     (hash, slot),
@@ -355,7 +345,8 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                 self.find_or_insert_value(dict_values, val_idx, self.val_hashes[val_idx])?
             }
         };
-        self.push_inner_slot(inner_slot)
+        self.push_inner_slot(inner_slot);
+        Ok(())
     }
 
     fn vectorized_equal_to(
@@ -557,12 +548,8 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                         self.val_hashes[val_idx],
                     )?;
                 }
-                let slot = self.val_to_inner[val_idx];
-                let Some(key) = K::Native::from_usize(slot) else {
-                    self.check_key_overflow()?;
-                    unreachable!("representable dictionary key rejected")
-                };
-                self.group_to_inner.push(key);
+                self.group_to_inner
+                    .push(K::Native::usize_as(self.val_to_inner[val_idx]));
                 Ok(())
             });
             self.group_nulls
@@ -584,7 +571,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                     };
                 }
                 let slot = self.val_to_inner[val_idx];
-                self.push_inner_slot(slot)?;
+                self.push_inner_slot(slot);
             }
         } else {
             let null_buf = dict_keys.nulls().unwrap();
@@ -606,7 +593,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                     }
                     self.val_to_inner[val_idx]
                 };
-                self.push_inner_slot(slot)?;
+                self.push_inner_slot(slot);
             }
         }
 
@@ -744,9 +731,8 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             } else {
                 old_to_new[old]
             };
-            self.push_inner_slot(slot).expect("key overflow in take_n");
+            self.push_inner_slot(slot);
         }
-        self.check_key_overflow().expect("key overflow in take_n");
 
         emitted
     }
