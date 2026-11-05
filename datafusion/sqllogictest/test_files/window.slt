@@ -7834,3 +7834,54 @@ DROP TABLE range_null_peers;
 
 statement ok
 DROP TABLE range_nan_peers;
+
+# A window ordered by `(total DESC, k)` over an input sorted by `[k, total]`,
+# where `k` is constant within each partition (`lower(g)` under `WHERE g = 'a'`).
+# Within a partition `k` has one value, so the input ordering satisfies the
+# window's requirement and no sort is added.
+# https://github.com/apache/datafusion/issues/26762
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE per_partition_constant(g VARCHAR, v BIGINT) AS VALUES ('a', 1), ('b', 2);
+
+query TI
+SELECT k, DENSE_RANK() OVER (ORDER BY total DESC, k) AS r
+FROM (
+  SELECT k, SUM(s) OVER (PARTITION BY k) AS total
+  FROM (SELECT lower(g) AS k, SUM(v) AS s FROM per_partition_constant WHERE g = 'a' GROUP BY lower(g))
+);
+----
+a 1
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT k, DENSE_RANK() OVER (ORDER BY total DESC, k) AS r
+FROM (
+  SELECT k, SUM(s) OVER (PARTITION BY k) AS total
+  FROM (SELECT lower(g) AS k, SUM(v) AS s FROM per_partition_constant WHERE g = 'a' GROUP BY lower(g))
+);
+----
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, dense_rank() ORDER BY [total DESC NULLS FIRST, k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as r]
+02)--BoundedWindowAggExec: wdw=[dense_rank() ORDER BY [total DESC NULLS FIRST, k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() ORDER BY [total DESC NULLS FIRST, k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----ProjectionExec: expr=[k@0 as k, sum(s) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as total]
+04)------WindowAggExec: wdw=[sum(s) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(s) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+05)--------ProjectionExec: expr=[lower(per_partition_constant.g)@0 as k, sum(per_partition_constant.v)@1 as s]
+06)----------AggregateExec: mode=Single, gby=[lower(g@0) as lower(per_partition_constant.g)], aggr=[sum(per_partition_constant.v)]
+07)------------FilterExec: g@0 = a
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+statement ok
+DROP TABLE per_partition_constant;
+
+# The SLT runner sets `target_partitions` to 4 instead of using the default, so
+# restore that value rather than resetting.
+statement ok
+set datafusion.execution.target_partitions = 4;

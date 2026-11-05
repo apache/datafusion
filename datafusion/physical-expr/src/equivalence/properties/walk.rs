@@ -50,12 +50,32 @@ pub(super) struct SortKeyWalk<'a> {
 
 impl<'a> SortKeyWalk<'a> {
     pub(super) fn new(props: &'a EquivalenceProperties) -> Self {
-        Self {
+        let mut walk = Self {
             props,
             pinned: HashSet::new(),
             implied: vec![],
             head_idxs: vec![],
+        };
+        // A normal ordering keeps a constant whose value differs between
+        // partitions (see `EquivalenceGroup::normalize_sort_exprs`), and such
+        // a constant may lead it. Within a partition it has one value, so it
+        // is fixed and the head is the first expression after it.
+        let normal = &props.oeq_cache.normal_cls;
+        if normal
+            .iter()
+            .any(|ordering| walk.is_fixed(&ordering[0].expr))
+        {
+            walk.head_idxs = normal
+                .iter()
+                .map(|ordering| {
+                    ordering
+                        .iter()
+                        .position(|sort_expr| !walk.is_fixed(&sort_expr.expr))
+                        .unwrap_or(ordering.len())
+                })
+                .collect();
         }
+        walk
     }
 
     /// Returns how many leading keys (in normal form) the existing orderings
@@ -327,6 +347,40 @@ mod tests {
         ScalarSubqueryResults, SubqueryIndex,
     };
     use datafusion_expr::{ColumnarValue, Operator, Volatility, create_udf};
+
+    /// A normal ordering keeps a constant whose value differs between
+    /// partitions (`AcrossPartitions::Heterogeneous`), and such a constant
+    /// can lead it. Within a partition the constant has one value, so it is
+    /// fixed and the head is the expression after it. With `k` such a
+    /// constant and ordering `[k, b]`, the requirements `[b]` and `[b, k]`
+    /// hold before anything is pinned.
+    /// See <https://github.com/apache/datafusion/issues/26762>.
+    #[test]
+    fn leading_per_partition_constant_is_not_a_head() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let [k, b] = ["k", "b"].map(|name| col(name, &schema).unwrap());
+
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.add_constants([ConstExpr::new(
+            Arc::clone(&k),
+            AcrossPartitions::Heterogeneous,
+        )])?;
+        // Added after the constant, so that `k` stays in the normal ordering:
+        properties.add_ordering(
+            [&k, &b].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
+        );
+
+        for required in [vec![&b], vec![&b, &k], vec![&k, &b]] {
+            let required = required
+                .into_iter()
+                .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
+            assert!(properties.ordering_satisfy(required)?);
+        }
+        Ok(())
+    }
 
     /// Pinning a key can move the head of an ordering to an expression that
     /// is equal to a function of the expressions after it, which implies a
