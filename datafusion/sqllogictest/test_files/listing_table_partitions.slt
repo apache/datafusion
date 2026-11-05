@@ -195,6 +195,11 @@ select * from limit_stray_last limit 1;
 query error File '.*limit_stray_last/zzz\.parquet'.*does not match partition columns \["year"\]: it is not under a directory for partition column 'year'
 select count(*) from limit_stray_last;
 
+# An insert lists every file in the table, so it fails even when writing to
+# another partition
+query error File '.*limit_stray_last/zzz\.parquet'.*does not match partition columns \["year"\]: it is not under a directory for partition column 'year'
+insert into limit_stray_last values (4, 'dave', '2026');
+
 # Declaring fewer partition columns than the directories have is an error
 statement count 0
 create external table multi_part_only_a

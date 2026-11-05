@@ -1117,6 +1117,8 @@ config_namespace! {
         /// false (non-matching files are skipped). Only files listed for a query are
         /// checked, so partition filters that narrow the listing prefix narrow the check,
         /// and a `LIMIT` can stop the listing before it reaches a non-matching file.
+        /// `INSERT INTO` lists every file in the table, so it also fails when any file
+        /// does not match.
         pub listing_table_strict_partitions: bool, default = false
 
         /// Should DataFusion support recursive CTEs
