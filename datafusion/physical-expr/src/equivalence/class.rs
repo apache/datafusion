@@ -744,7 +744,8 @@ impl EquivalenceGroup {
         let projected_classes = self.iter().map(|cls| {
             let new_exprs = self.project_expressions(mapping, cls.iter());
             let mut projected = EquivalenceClass::new(new_exprs.flatten());
-            // Projection changes column references, not values or partitions.
+            // Projection changes column references, not constant values or how
+            // they are distributed across partitions.
             projected.constant = projected.constant.or_else(|| cls.constant.clone());
             projected
         });
