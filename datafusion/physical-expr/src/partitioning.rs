@@ -1503,35 +1503,73 @@ mod tests {
     }
 
     #[test]
-    fn date_bin_literal_origin_shifts_aligned_splits() -> Result<()> {
+    fn date_bin_literal_origin_requires_aligned_ascending_splits() -> Result<()> {
         let fixture = PartitioningTestFixture::new(vec![(
             "ts",
             DataType::Timestamp(TimeUnit::Nanosecond, None),
         )])?;
         let hour = 3_600_000_000_000;
-        let origin = hour / 2;
-        let function = date_bin_of(fixture.col(0), hour, Some(origin));
-        let cases = [
-            ("ascending aligned", false, origin, true),
-            ("ascending crossing", false, hour, false),
-            ("descending aligned", true, origin - 1, true),
-            ("descending crossing", true, hour - 1, false),
-        ];
-        for (description, descending, split, expected) in cases {
-            let range = fixture.range_partitioning_with_ordering(
-                [fixture.range_sort_expr(0, SortOptions::new(descending, true))].into(),
-                vec![timestamp_split(Some(split), None)],
-            );
-            assert_eq!(
-                range.keeps_keys_local(
-                    &[Arc::clone(&function)],
-                    &fixture.eq_properties,
-                    false,
-                ),
-                expected,
-                "{description}",
-            );
-        }
+        let half_hour = hour / 2;
+        let time_bin = date_bin_of(fixture.col(0), hour, Some(half_hour));
+
+        let aligned_range =
+            fixture.range_partitioning([0], vec![timestamp_split(Some(half_hour), None)]);
+        assert!(aligned_range.keeps_keys_local(
+            &[Arc::clone(&time_bin)],
+            &fixture.eq_properties,
+            false,
+        ));
+
+        let crossing_range =
+            fixture.range_partitioning([0], vec![timestamp_split(Some(hour), None)]);
+        assert!(!crossing_range.keeps_keys_local(
+            &[time_bin],
+            &fixture.eq_properties,
+            false,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn date_bin_literal_origin_requires_aligned_descending_splits() -> Result<()> {
+        let fixture = PartitioningTestFixture::new(vec![(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+        )])?;
+        let hour = 3_600_000_000_000;
+        let half_hour = hour / 2;
+        let time_bin = date_bin_of(fixture.col(0), hour, Some(half_hour));
+        let descending_ordering = LexOrdering::from([fixture.range_sort_expr(
+            0,
+            SortOptions {
+                descending: true,
+                nulls_first: true,
+            },
+        )]);
+
+        // A descending split belongs to the lower timestamp range. To separate
+        // bins at 00:30, put the split at the last nanosecond before 00:30.
+        let last_timestamp_before_half_hour = half_hour - 1;
+        let aligned_range = fixture.range_partitioning_with_ordering(
+            descending_ordering.clone(),
+            vec![timestamp_split(Some(last_timestamp_before_half_hour), None)],
+        );
+        assert!(aligned_range.keeps_keys_local(
+            &[Arc::clone(&time_bin)],
+            &fixture.eq_properties,
+            false,
+        ));
+
+        let last_timestamp_before_hour = hour - 1;
+        let crossing_range = fixture.range_partitioning_with_ordering(
+            descending_ordering,
+            vec![timestamp_split(Some(last_timestamp_before_hour), None)],
+        );
+        assert!(!crossing_range.keeps_keys_local(
+            &[time_bin],
+            &fixture.eq_properties,
+            false,
+        ));
         Ok(())
     }
 
