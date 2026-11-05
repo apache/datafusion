@@ -277,7 +277,8 @@ pub struct PiecewiseMergeJoinExec {
     pub on: (Arc<dyn PhysicalExpr>, Arc<dyn PhysicalExpr>),
     /// Comparison operator in the range predicate
     pub operator: Operator,
-    /// How the join is performed
+    /// How the join is performed. See [`JoinType`] for information on the
+    /// different join types.
     pub join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,

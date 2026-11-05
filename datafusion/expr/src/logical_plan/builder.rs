@@ -1086,6 +1086,8 @@ impl LogicalPlanBuilder {
     /// optimize equality predicates there is no performance difference between
     /// this function and `join_on`
     ///
+    /// See [`JoinType`] for information on the different join types.
+    ///
     /// `left_cols` and `right_cols` are used to form "equijoin" predicates (see
     /// example below), which are then combined with the optional `filter`
     /// expression.

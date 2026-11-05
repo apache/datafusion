@@ -162,7 +162,8 @@ pub struct SortMergeJoinExec {
     pub on: JoinOn,
     /// Filters which are applied while finding matching rows
     pub filter: Option<JoinFilter>,
-    /// How the join is performed
+    /// How the join is performed. See [`JoinType`] for information on the
+    /// different join types.
     pub join_type: JoinType,
     /// The schema once the join is applied
     schema: SchemaRef,

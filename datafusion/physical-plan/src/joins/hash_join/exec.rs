@@ -801,7 +801,8 @@ pub struct HashJoinExec {
     pub on: Vec<(PhysicalExprRef, PhysicalExprRef)>,
     /// Filters which are applied while finding matching rows
     pub filter: Option<JoinFilter>,
-    /// How the join is performed (`OUTER`, `INNER`, etc)
+    /// How the join is performed. See [`JoinType`] for information on the
+    /// different join types.
     pub join_type: JoinType,
     /// The schema after join. Please be careful when using this schema,
     /// if there is a projection, the schema isn't the same as the output schema.

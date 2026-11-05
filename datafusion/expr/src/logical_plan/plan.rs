@@ -293,7 +293,8 @@ pub enum LogicalPlan {
     /// is used to implement SQL `ORDER BY`
     Sort(Sort),
     /// Join two logical plans on one or more join columns.
-    /// This is used to implement SQL `JOIN`
+    /// This is used to implement SQL `JOIN`.
+    /// See [`JoinType`] for information on the different join types.
     Join(Join),
     /// Repartitions the input based on a partitioning scheme. This is
     /// used to add parallelism and is sometimes referred to as an
@@ -4614,6 +4615,8 @@ pub struct Sort {
 }
 
 /// Join two logical plans on one or more join columns
+///
+/// See [`JoinType`] for information on the different join types.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Join {
     /// Left input
@@ -4624,7 +4627,7 @@ pub struct Join {
     pub on: Vec<(Expr, Expr)>,
     /// Filters applied during join (non-equi conditions)
     pub filter: Option<Expr>,
-    /// Join type
+    /// Join type. See [`JoinType`] for information on the different join types.
     pub join_type: JoinType,
     /// Join constraint
     pub join_constraint: JoinConstraint,
