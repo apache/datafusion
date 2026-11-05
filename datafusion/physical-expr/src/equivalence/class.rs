@@ -12,6 +12,7 @@ use super::ProjectionMapping;
 use crate::expressions::{Column, Literal};
 use crate::physical_expr::add_offset_to_expr;
 use crate::projection::ProjectionTargets;
+use crate::scalar_subquery::ScalarSubqueryExpr;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
@@ -631,8 +632,8 @@ impl EquivalenceGroup {
         aug_mapping: &AugmentedMapping,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        // Literals don't need to be projected
-        if expr.downcast_ref::<Literal>().is_some() {
+        // These leaves do not read columns from the projected input schema.
+        if expr.is::<Literal>() || expr.is::<ScalarSubqueryExpr>() {
             return Some(Arc::clone(expr));
         }
 
@@ -742,7 +743,10 @@ impl EquivalenceGroup {
     pub fn project(&self, mapping: &ProjectionMapping) -> Self {
         let projected_classes = self.iter().map(|cls| {
             let new_exprs = self.project_expressions(mapping, cls.iter());
-            EquivalenceClass::new(new_exprs.flatten())
+            let mut projected = EquivalenceClass::new(new_exprs.flatten());
+            // Projection changes column references, not values or partitions.
+            projected.constant = projected.constant.or_else(|| cls.constant.clone());
+            projected
         });
 
         // The key is the source expression, and the value is the equivalence
@@ -1330,6 +1334,49 @@ mod tests {
         let second_normalized = projected.normalize_expr(col("b+c", &projected_schema)?);
 
         assert!(first_normalized.eq(&second_normalized));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_preserves_constant_metadata() -> Result<()> {
+        let schema = abc_schema();
+        let expr = binary(col("b", &schema)?, Operator::Divide, lit(2i32), &schema)?;
+        let mapping = ProjectionMapping::from_indices(&[1], &schema)?;
+        let dropped_mapping = ProjectionMapping::from_indices(&[0], &schema)?;
+        let projected_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 0));
+        let projected_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&projected_b),
+            Operator::Divide,
+            lit(2i32),
+        ));
+
+        for across in [
+            AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(2)))),
+            AcrossPartitions::Uniform(None),
+            AcrossPartitions::Heterogeneous,
+        ] {
+            let mut group = EquivalenceGroup::default();
+            // The class has no literal member, so `EquivalenceClass::new` cannot
+            // restore the constant.
+            group.add_constant(ConstExpr::new(Arc::clone(&expr), across.clone()));
+
+            let mut projected = group.project(&mapping);
+            assert_eq!(
+                projected.is_expr_constant(&projected_expr),
+                Some(across.clone())
+            );
+            // A constant expression does not imply that its argument is constant.
+            assert_eq!(projected.is_expr_constant(&projected_b), None);
+            assert!(group.project(&dropped_mapping).is_empty());
+
+            let heterogeneous = across == AcrossPartitions::Heterogeneous;
+            assert_eq!(projected.clear_per_partition_constants(), heterogeneous);
+            assert_eq!(
+                projected.is_expr_constant(&projected_expr),
+                (!heterogeneous).then_some(across)
+            );
+        }
 
         Ok(())
     }
