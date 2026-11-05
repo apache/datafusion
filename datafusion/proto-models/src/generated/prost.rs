@@ -2760,6 +2760,13 @@ pub struct SortMergeJoinExecNode {
     pub null_equality: i32,
     #[prost(uint32, repeated, tag = "8")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+    /// Enables null-aware (`NOT IN`) semantics.
+    /// (See `SortMergeJoinExec::null_aware`)
+    ///
+    /// Currently supported only for uncorrelated `LeftAnti` joins with one
+    /// join key and no join filter.
+    #[prost(bool, tag = "9")]
+    pub null_aware: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PiecewiseMergeJoinExecNode {
