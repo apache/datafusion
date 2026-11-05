@@ -76,11 +76,22 @@ impl CommonSubexprEliminate {
             ..
         } = projection;
         let input = Arc::unwrap_or_clone(input);
-        self.try_unary_plan(expr, input, config)?
-            .map_data(|(new_expr, new_input)| {
-                Projection::try_new_with_schema(new_expr, Arc::new(new_input), schema)
-                    .map(LogicalPlan::Projection)
-            })
+        let rewritten = self.try_unary_plan(expr, input, config)?;
+        let transformed = rewritten.transformed;
+        rewritten.map_data(|(new_expr, new_input)| {
+            let new_input = Arc::new(new_input);
+            // The rewritten expressions keep their names, but their fields can
+            // differ: a CASE whose `WHEN x IS NOT NULL THEN x` guard is split
+            // into two common subexpressions can no longer be proven non-null.
+            // Derive the schema from the new expressions so it matches what
+            // the physical planner will compute from them.
+            if transformed {
+                Projection::try_new(new_expr, new_input)
+            } else {
+                Projection::try_new_with_schema(new_expr, new_input, schema)
+            }
+            .map(LogicalPlan::Projection)
+        })
     }
 
     fn try_optimize_sort(
@@ -889,11 +900,11 @@ mod test {
     use std::iter;
 
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_expr::logical_plan::{JoinType, table_scan};
+    use datafusion_expr::logical_plan::{JoinType, projection_schema, table_scan};
     use datafusion_expr::{
         AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ExprFunctionExt,
         ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
-        Volatility, WindowFunctionDefinition, grouping_set, is_null, not,
+        Volatility, WindowFunctionDefinition, grouping_set, is_null, not, when,
     };
     use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
 
@@ -2156,5 +2167,32 @@ mod test {
               TableScan: test
         "
         )
+    }
+
+    /// A projection rewritten by CSE carries the schema its new expressions
+    /// derive, not the one derived before the rewrite.
+    #[test]
+    fn projection_schema_follows_rewritten_exprs() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
+        let table_scan = table_scan(Some("t"), &schema, None)?.build()?;
+        let a = || col("a") + lit(1);
+        let expr = when(a().is_not_null(), a())
+            .when(a().is_not_null(), a())
+            .otherwise(lit(0))?;
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .project(vec![expr])?
+            .build()?;
+        // Before the rewrite the guard proves the CASE non-null.
+        assert!(!plan.schema().field(0).is_nullable());
+
+        let optimized = CommonSubexprEliminate::new()
+            .rewrite(plan, &OptimizerContext::new())?
+            .data;
+        let LogicalPlan::Projection(projection) = &optimized else {
+            panic!("expected a projection, got {optimized}");
+        };
+        let derived = projection_schema(&projection.input, &projection.expr)?;
+        assert_eq!(projection.schema.as_ref(), derived.as_ref());
+        Ok(())
     }
 }

@@ -25,6 +25,7 @@
 ##   https://github.com/apache/datafusion/issues/25166
 ##   https://github.com/apache/datafusion/issues/25167
 ##   https://github.com/apache/datafusion/issues/25170
+##   https://github.com/apache/datafusion/issues/25941
 ##
 ## Cross-engine notes below quote PostgreSQL with the session `TimeZone` named
 ## in the comment. The subset the two engines agree on is machine checked
@@ -488,14 +489,11 @@ RESET datafusion.execution.time_zone
 ##########
 ## SECTION 8: comparison and equality across tz-aware and tz-naive
 ##
-## The pins here record three behaviours. A tz-naive side is read in the other
+## The pins here record two behaviours. A tz-naive side is read in the other
 ## operand's zone, where PostgreSQL uses the session zone:
 ## https://github.com/apache/datafusion/issues/13212
 ## `'...Z'::timestamptz` is tz-naive while the session zone is unset
 ## (SECTION 0): https://github.com/apache/datafusion/issues/25166
-## And under a non-UTC session zone, unwrap_cast rewrites a tz-naive column
-## compared against a tz-aware literal into a different comparison:
-## https://github.com/apache/datafusion/issues/25095
 ##########
 
 statement ok
@@ -621,6 +619,114 @@ set datafusion.explain.logical_plan_only = false
 
 statement ok
 RESET datafusion.execution.time_zone
+
+# tz-naive column cast to a tz-aware type and compared against a tz-aware
+# literal under a non-UTC session zone. 2024-11-01 00:00 in Asia/Singapore
+# (+08:00) is 2024-10-31 16:00 UTC, so the literal comparison must agree with the
+# column-vs-column comparison. PostgreSQL and DuckDB under
+# TimeZone='Asia/Singapore' return 1, 0, 1, 1.
+# Regression test for https://github.com/apache/datafusion/issues/25095
+statement ok
+SET datafusion.execution.time_zone = 'Asia/Singapore'
+
+statement ok
+CREATE TABLE issue_25095_t AS SELECT TIMESTAMP '2024-11-01T00:00:00' AS ts
+
+statement ok
+CREATE TABLE issue_25095_u AS SELECT '2024-10-31T16:00:00Z'::timestamptz AS tstz
+
+# Explicit cast, matching instant
+query I
+SELECT count(*) FROM issue_25095_t WHERE ts::timestamptz = '2024-10-31T16:00:00Z'::timestamptz
+----
+1
+
+# Explicit cast, wrong instant
+query I
+SELECT count(*) FROM issue_25095_t WHERE ts::timestamptz = '2024-11-01T00:00:00Z'::timestamptz
+----
+0
+
+# Implicit coercion instead of an explicit cast
+query I
+SELECT count(*) FROM issue_25095_t WHERE ts = '2024-10-31T16:00:00Z'::timestamptz
+----
+1
+
+# Control: column vs column, nothing to unwrap
+query I
+SELECT count(*) FROM issue_25095_t, issue_25095_u WHERE issue_25095_t.ts::timestamptz = issue_25095_u.tstz
+----
+1
+
+statement ok
+RESET datafusion.execution.time_zone
+
+statement ok
+DROP TABLE issue_25095_t
+
+statement ok
+DROP TABLE issue_25095_u
+
+# tz-naive column cast to a fixed offset zone and compared against a literal in
+# that zone. Both sides display as 2024-01-01T10:00:00+05:00, so the literal
+# comparison must return the same row as the column comparison.
+# Regression test for https://github.com/apache/datafusion/issues/25941
+statement ok
+CREATE TABLE issue_25941_t AS VALUES (TIMESTAMP '2024-01-01 10:00:00')
+
+statement ok
+CREATE TABLE issue_25941_l AS SELECT arrow_cast('2024-01-01T10:00:00+05:00', 'Timestamp(Nanosecond, Some("+05:00"))') AS v
+
+query PP
+SELECT arrow_cast(column1, 'Timestamp(Nanosecond, Some("+05:00"))') AS lhs, v AS rhs FROM issue_25941_t, issue_25941_l
+----
+2024-01-01T10:00:00+05:00 2024-01-01T10:00:00+05:00
+
+# Compared against a column
+query I
+SELECT count(*) FROM issue_25941_t, issue_25941_l
+WHERE arrow_cast(issue_25941_t.column1, 'Timestamp(Nanosecond, Some("+05:00"))') = issue_25941_l.v
+----
+1
+
+# Compared against the same value as a literal
+query I
+SELECT count(*) FROM issue_25941_t
+WHERE arrow_cast(column1, 'Timestamp(Nanosecond, Some("+05:00"))')
+    = arrow_cast('2024-01-01T10:00:00+05:00', 'Timestamp(Nanosecond, Some("+05:00"))')
+----
+1
+
+# The same comparison through `::timestamptz` under a +05:00 session zone.
+# See https://github.com/apache/datafusion/issues/25941
+statement ok
+SET datafusion.execution.time_zone = '+05:00'
+
+statement ok
+CREATE TABLE issue_25941_t2 AS VALUES (TIMESTAMP '2024-01-01 10:00:00')
+
+query P
+SELECT column1::timestamptz FROM issue_25941_t2
+----
+2024-01-01T10:00:00+05:00
+
+query I
+SELECT count(*) FROM issue_25941_t2 WHERE column1::timestamptz = TIMESTAMPTZ '2024-01-01 10:00:00+05:00'
+----
+1
+
+statement ok
+RESET datafusion.execution.time_zone
+
+statement ok
+DROP TABLE issue_25941_t
+
+statement ok
+DROP TABLE issue_25941_l
+
+statement ok
+DROP TABLE issue_25941_t2
 
 # DIVERGES FROM POSTGRESQL: the tz-naive literal is read in the column's zone
 # (America/Denver), so it matches the July row. PostgreSQL reads a tz-naive
