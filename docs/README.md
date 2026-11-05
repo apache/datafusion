@@ -77,6 +77,9 @@ which serves content based on the configuration in
 which specifies the target as https://datafusion.apache.org/.
 
 The documentation for previously released versions is served under
-`/versions/<version>/`. See the
+`/versions/<version>/`. The releases in the version picker are listed in
+`source/_static/versions.json`, and older releases that are still published,
+but not shown in the picker, are listed in `source/_static/old_versions.json`.
+See the
 [release instructions](../dev/release/README.md#publish-the-versioned-documentation)
 for how it is published.
