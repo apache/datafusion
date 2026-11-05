@@ -9,18 +9,17 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::StreamExt;
 
-use super::AggregateExec;
 use super::aggregate_hash_table::{
     ClusteredAggregateTable, ClusteredAggregateTableMetrics, FinalMarker,
 };
 use super::order::GroupClusteringMode;
 use super::spill::AggregateSpill;
+use super::{AggregateExec, incoming_state_batch_reservation_bytes};
 use crate::SendableRecordBatchStream;
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
@@ -324,8 +323,13 @@ impl Aggregating {
 
         while let Some(batch) = self.input.next().await.transpose()? {
             let timer = elapsed_compute.timer();
-            let batch_memory = get_record_batch_memory_size(&batch);
-            match reservation.try_grow(batch_memory) {
+            let batch_memory = incoming_state_batch_reservation_bytes(&batch);
+            let admission = if batch_memory > 0 {
+                reservation.try_grow(batch_memory)
+            } else {
+                Ok(())
+            };
+            match admission {
                 Ok(()) => {}
                 Err(e @ DataFusionError::ResourcesExhausted(_)) => {
                     let Some(spill_context) = self.spill_context.as_mut() else {
