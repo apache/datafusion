@@ -1649,7 +1649,7 @@ fn coerce_case_expression(
 ///
 /// **Type coercion precedence**: The coerced type is determined by iteratively applying
 /// `type_union_coercion()` between the accumulated type and each new input's type. The
-/// result depends on type coercion rules, not input order.
+/// result follows input order, which matters for dictionary types.
 ///
 /// **Nullability merging**: Nullability is accumulated using logical OR (`||`).
 /// Once any input field is nullable, the result field becomes nullable permanently.
@@ -1671,17 +1671,23 @@ fn coerce_case_expression(
 /// ```
 ///
 /// **Precedence Summary**:
-/// - **Datatypes**: Determined by `type_union_coercion()` rules, not input order
+/// - **Datatypes**: Determined by `type_union_coercion()` in input order
 /// - **Nullability**: Later inputs can add nullability but cannot remove it (logical OR)
 /// - **Metadata**: Later inputs take precedence for same keys (HashMap::extend semantics)
 pub fn coerce_union_schema(inputs: &[Arc<LogicalPlan>]) -> Result<DFSchema> {
-    coerce_union_schema_with_schema(&inputs[1..], inputs[0].schema())
+    let Some(first) = inputs.first() else {
+        return plan_err!("UNION requires at least one input");
+    };
+    coerce_union_schema_with_schema(inputs, first.schema())
 }
 fn coerce_union_schema_with_schema(
     inputs: &[Arc<LogicalPlan>],
     base_schema: &DFSchemaRef,
 ) -> Result<DFSchema> {
-    let mut union_datatypes = base_schema
+    // The output schema may already contain inferred types. Feeding those types
+    // back into coercion can change the result, notably for dictionaries.
+    let mut union_datatypes = inputs[0]
+        .schema()
         .fields()
         .iter()
         .map(|f| f.data_type().clone())

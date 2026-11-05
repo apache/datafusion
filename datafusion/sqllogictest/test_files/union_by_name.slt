@@ -48,6 +48,28 @@ UNION ALL BY NAME SELECT 'a' AS y, 2::BIGINT AS x;
 x Int64 NO
 y Utf8 YES
 
+# Retain the first type if a later input prevents inference.
+query TTT
+DESCRIBE SELECT 1::SMALLINT AS x
+UNION ALL BY NAME SELECT true AS x;
+----
+x Int16 NO
+
+# Missing columns contribute NULL to type inference, including dictionaries.
+query TTT
+DESCRIBE SELECT arrow_cast('a', 'Dictionary(Int32, Utf8)') AS x
+UNION ALL BY NAME SELECT arrow_cast('b', 'Dictionary(Int32, Utf8)') AS y;
+----
+x Utf8 YES
+y Utf8 YES
+
+query TT
+SELECT DISTINCT arrow_typeof(x), arrow_typeof(y)
+FROM (SELECT arrow_cast('a', 'Dictionary(Int32, Utf8)') AS x
+      UNION ALL BY NAME SELECT arrow_cast('b', 'Dictionary(Int32, Utf8)') AS y);
+----
+Utf8 Utf8
+
 query I
 SELECT t1.x FROM t1 UNION BY NAME SELECT x FROM t1 ORDER BY x;
 ----

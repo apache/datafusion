@@ -136,11 +136,13 @@ SELECT CASE WHEN false THEN 1 ELSE 0 END FROM foo
 query TTT
 DESCRIBE SELECT
   CASE WHEN p THEN 1::INT ELSE 0.5 END AS else_widens,
-  CASE WHEN p THEN 1::INT WHEN NOT p THEN 0.5 END AS then_widens
+  CASE WHEN p THEN 1::INT WHEN NOT p THEN 0.5 END AS then_widens,
+  CASE WHEN p THEN 1::SMALLINT WHEN NOT p THEN 2::BIGINT ELSE true END AS deferred
 FROM (VALUES (true), (false)) AS t(p);
 ----
 else_widens Float64 NO
 then_widens Float64 YES
+deferred Int16 NO
 
 # List(Utf8) will be casted to List(Int64)
 query ?
@@ -183,7 +185,7 @@ SELECT CASE 1 WHEN 1 THEN arrow_cast([1, 2], 'FixedSizeList(2, Int64)') WHEN 2 T
 ----
 [1, 2]
 
-query error DataFusion error: Error during planning: Cannot find a common type for CASE result branches
+query error DataFusion error: type_coercion
 SELECT CASE 1 WHEN 1 THEN [1,2,3] WHEN 2 THEN 'test' ELSE null END;
 
 # test case when type coercion
@@ -421,7 +423,7 @@ FROM t;
 
 # coerce structs with subset of fields - field count mismatch causes type coercion failure
 # column3 has 2 fields but column4 has only 1 field
-query error DataFusion error: Error during planning: Cannot find a common type for CASE result branches .* and ELSE .*
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Failed to coerce then .* and else .* to common types in CASE WHEN expression
 SELECT
   case
     when column1 > 0 then column3

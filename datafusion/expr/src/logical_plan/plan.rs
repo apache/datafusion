@@ -3548,6 +3548,7 @@ impl Union {
 
     /// Constructs new Union instance deriving schema from inputs.
     /// Infers common output types without inserting casts into the inputs.
+    /// If inference fails, retains the first input's type until analysis.
     /// The analyzer coerces the inputs after their expressions are resolved.
     // TODO (https://github.com/apache/datafusion/issues/14380): Avoid creating uncoerced union at all.
     pub fn try_new_with_loose_types(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
@@ -3623,32 +3624,42 @@ impl Union {
         }
     }
 
-    fn coerce_field_type(data_type: &DataType, field: &Field) -> Result<DataType> {
-        type_union_coercion(data_type, field.data_type()).ok_or_else(|| {
-            plan_datafusion_err!(
-                "Incompatible inputs for Union: Previous inputs were \
-                of type {}, but got incompatible type {} on column '{}'",
-                data_type,
-                field.data_type(),
-                field.name()
-            )
-        })
-    }
-
     fn derive_schema_from_inputs_by_name(
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
     ) -> Result<DFSchemaRef> {
-        type FieldData<'a> = (DataType, bool, Vec<&'a Metadata>, usize);
+        // Keep the first type as a fallback if any input prevents inference.
+        type FieldData<'a> = (
+            &'a DataType,
+            Option<DataType>,
+            bool,
+            Vec<&'a Metadata>,
+            usize,
+        );
         let mut cols: Vec<(&str, FieldData)> = Vec::new();
-        for input in inputs.iter() {
+        for (input_index, input) in inputs.iter().enumerate() {
+            // Alignment projections supply NULL for missing columns. Include
+            // those inputs in order, since NULL can unwrap dictionary types.
+            if loose_types {
+                for (name, (_, common_type, ..)) in &mut cols {
+                    if !input.schema().has_column_with_unqualified_name(name) {
+                        *common_type = common_type.as_ref().and_then(|data_type| {
+                            type_union_coercion(data_type, &DataType::Null)
+                        });
+                    }
+                }
+            }
             for field in input.schema().fields() {
-                if let Some((_, (data_type, is_nullable, metadata, occurrences))) =
-                    cols.iter_mut().find(|(name, _)| name == field.name())
+                if let Some((
+                    _,
+                    (first_type, common_type, is_nullable, metadata, occurrences),
+                )) = cols.iter_mut().find(|(name, _)| name == field.name())
                 {
                     if loose_types {
-                        *data_type = Self::coerce_field_type(data_type, field)?;
-                    } else if data_type != field.data_type() {
+                        *common_type = common_type.as_ref().and_then(|data_type| {
+                            type_union_coercion(data_type, field.data_type())
+                        });
+                    } else if *first_type != field.data_type() {
                         return plan_err!(
                             "Found different types for field {}",
                             field.name()
@@ -3664,7 +3675,12 @@ impl Union {
                     cols.push((
                         field.name(),
                         (
-                            field.data_type().clone(),
+                            field.data_type(),
+                            if loose_types && input_index > 0 {
+                                type_union_coercion(&DataType::Null, field.data_type())
+                            } else {
+                                Some(field.data_type().clone())
+                            },
                             field.is_nullable(),
                             vec![field.metadata()],
                             1,
@@ -3677,7 +3693,16 @@ impl Union {
         let union_fields = cols
             .into_iter()
             .map(
-                |(name, (data_type, is_nullable, unmerged_metadata, occurrences))| {
+                |(
+                    name,
+                    (
+                        first_type,
+                        common_type,
+                        is_nullable,
+                        unmerged_metadata,
+                        occurrences,
+                    ),
+                )| {
                     // If the final number of occurrences of the field is less
                     // than the number of inputs (i.e. the field is missing from
                     // one or more inputs), then it must be treated as nullable.
@@ -3687,6 +3712,7 @@ impl Union {
                         true
                     };
 
+                    let data_type = common_type.unwrap_or_else(|| first_type.clone());
                     let mut field = Field::new(name, data_type, final_is_nullable);
                     field.set_metadata(merge_metadata_for_union(unmerged_metadata));
 
@@ -3738,8 +3764,9 @@ impl Union {
                         .iter()
                         .skip(1)
                         .try_fold(first_field.data_type().clone(), |acc, field| {
-                            Self::coerce_field_type(&acc, field)
-                        })?
+                            type_union_coercion(&acc, field.data_type())
+                        })
+                        .unwrap_or_else(|| first_field.data_type().clone())
                 } else {
                     fields
                         .iter()

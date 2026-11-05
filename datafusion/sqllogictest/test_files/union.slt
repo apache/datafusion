@@ -22,6 +22,20 @@ t Timestamp(ns, "UTC") YES
 large LargeUtf8 NO
 view Utf8View NO
 
+# Failed inference keeps the first type for analyzer rules to resolve or reject.
+query TTT
+DESCRIBE SELECT 1::SMALLINT AS x UNION ALL SELECT true;
+----
+x Int16 NO
+
+# Infer dictionary coercion from the actual inputs, without folding the inferred
+# UNION type back into the inputs and restoring the dictionary representation.
+query T
+SELECT DISTINCT arrow_typeof(x)
+FROM (SELECT NULL AS x UNION ALL SELECT arrow_cast('a', 'Dictionary(Int32, Utf8)') AS x);
+----
+Utf8
+
 statement ok
 CREATE TABLE t1(
   id INT,
@@ -932,7 +946,7 @@ SELECT NULL WHERE FALSE;
 1
 
 # Test Union of List Types. Issue: https://github.com/apache/datafusion/issues/12291
-query error DataFusion error: Error during planning: Incompatible inputs for Union: Previous inputs were of type List(.*), but got incompatible type List(.*) on column 'x'
+query error DataFusion error: type_coercion\ncaused by\nError during planning: Incompatible inputs for Union: Previous inputs were of type List(.*), but got incompatible type List(.*) on column 'x'
 SELECT make_array(2) x UNION ALL SELECT make_array(now()) x;
 
 query ? rowsort

@@ -188,10 +188,18 @@ impl ExprSchemable for Expr {
                     .as_ref()
                     .map(|expr| expr.get_type(schema))
                     .transpose()?;
-                get_coerce_type_for_case_expression(&then_types, else_type.as_ref())
-                    .ok_or_else(|| plan_datafusion_err!(
-                        "Cannot find a common type for CASE result branches {then_types:?} and ELSE {else_type:?}"
-                    ))
+                // Leave unsupported combinations for the analyzer, including
+                // custom rules that may resolve the branches before coercion.
+                Ok(
+                    get_coerce_type_for_case_expression(&then_types, else_type.as_ref())
+                        .unwrap_or_else(|| {
+                            then_types
+                                .into_iter()
+                                .find(|data_type| !data_type.is_null())
+                                .or(else_type)
+                                .unwrap_or(DataType::Null)
+                        }),
+                )
             }
             Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
                 Ok(field.data_type().clone())
