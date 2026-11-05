@@ -1440,7 +1440,10 @@ impl RowGroupsPrunedParquetOpen {
         // row group it reaches when that row group's output is known up
         // front (see `PreparedAccessPlan::select_tail_for_limit`). The
         // offset index lets the decoder skip the pages ahead of that tail
-        // instead of fetching the whole column chunk.
+        // instead of fetching the whole column chunk. `row_groups` is still
+        // in file order here (the reversal happens when the stream is
+        // built), so the row group a reversed scan reaches first is the
+        // last one.
         let prepared = &self.prepared.loaded.prepared;
         if prepared.reverse_rows
             && let Some(limit) = prepared.limit
