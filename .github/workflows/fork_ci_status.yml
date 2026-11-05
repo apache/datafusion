@@ -37,7 +37,7 @@ permissions:
   pull-requests: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.workflow_run.head_repository.full_name && format('{0}-{1}', github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch) || 'update' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'workflow_run' && format('{0}-{1}', github.event.workflow_run.head_repository.full_name, github.event.workflow_run.head_branch) || 'update' }}
   cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
 
 jobs:

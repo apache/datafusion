@@ -16,6 +16,8 @@ on:
 
 jobs:
   label:
+    # A fork that syncs its main branch also gets this push, and has nothing to label.
+    if: github.repository == 'apache/datafusion'
     runs-on: ubuntu-slim
     permissions:
       pull-requests: write

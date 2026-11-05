@@ -19,8 +19,10 @@
 #
 # A pull request runs its own copy of this file, so it can change or delete it.
 # That only skips the labels and the immediate `Rust (fork)` check for that pull
-# request. The scheduled update in `fork_ci_status.yml` still creates the check,
-# and the merge queue stays the gate.
+# request. GitHub also skips `pull_request` workflows while a pull request has
+# merge conflicts, so such a pull request gets its labels after a push that
+# resolves them. The scheduled update in `fork_ci_status.yml` creates the check
+# in both cases, and the merge queue stays the gate.
 name: Pull request signal
 
 on:

@@ -20,7 +20,14 @@ const pull = (
 // `lookups` maps a commit to the pull requests returned on each attempt. The
 // last response repeats once the attempts run out.
 async function execute({ lookups, commits }) {
-  const result = { listed: [], labeled: [], delays: [], logs: [] };
+  const result = {
+    listed: [],
+    labeled: [],
+    delays: [],
+    logs: [],
+    inFlight: 0,
+    maxInFlight: 0,
+  };
   const attempts = {};
   const github = {
     rest: {
@@ -32,6 +39,10 @@ async function execute({ lookups, commits }) {
       repos: {
         listPullRequestsAssociatedWithCommit: async ({ commit_sha }) => {
           result.listed.push(commit_sha);
+          result.maxInFlight = Math.max(result.maxInFlight, ++result.inFlight);
+          // Yield like a real request, so lookups that overlap are counted.
+          await Promise.resolve();
+          result.inFlight--;
           const responses = lookups[commit_sha];
           attempts[commit_sha] = (attempts[commit_sha] || 0) + 1;
           return {
@@ -90,11 +101,14 @@ test("retries until a merged pull request to main appears", async () => {
   );
 });
 
-test("gives up without failing when no merged pull request appears", async () => {
-  const result = await execute({ commits: ["a"], lookups: { a: [[]] } });
-  assert.deepEqual(result.listed, ["a", "a", "a"]);
+test("gives up without failing and names every commit it searched", async () => {
+  const result = await execute({
+    commits: ["a", "b"],
+    lookups: { a: [[]], b: [[]] },
+  });
+  assert.equal(result.listed.length, 6);
   assert.deepEqual(result.labeled, []);
-  assert.deepEqual(result.logs, ["No merged pull request found for head"]);
+  assert.deepEqual(result.logs, ["No merged pull request found for a, b"]);
 });
 
 test("labels every pull request in the push once", async () => {
@@ -102,6 +116,20 @@ test("labels every pull request in the push once", async () => {
     commits: ["a", "b"],
     lookups: { a: [[pull(1)]], b: [[pull(1), pull(2)]] },
   });
+  assert.deepEqual(
+    result.labeled.map(([number]) => number),
+    [1, 2]
+  );
+});
+
+test("looks the commits up in parallel and retries only the one that lags", async () => {
+  const result = await execute({
+    commits: ["a", "b"],
+    lookups: { a: [[pull(1)]], b: [[], [pull(2)]] },
+  });
+  assert.equal(result.maxInFlight, 2);
+  assert.equal(result.listed.filter((sha) => sha === "a").length, 1);
+  assert.equal(result.listed.filter((sha) => sha === "b").length, 2);
   assert.deepEqual(
     result.labeled.map(([number]) => number),
     [1, 2]

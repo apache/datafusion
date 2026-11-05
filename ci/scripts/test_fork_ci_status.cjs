@@ -196,74 +196,74 @@ test("notification skips a commit that is no longer a pull request head", async 
     openPrs: [{ ...pr, head: { ...pr.head, sha: "b".repeat(40) } }],
     runs: [run(1)],
   });
+  assert.deepEqual(writes, []);
+});
 
-  test("notification skips a run whose fork was deleted", async () => {
-    const calls = [];
-    const writes = await execute({
-      event: "workflow_run",
-      triggeringRun: { ...workflowRun, head_repository: null },
-      runs: [run(1)],
-      calls,
-    });
-    assert.deepEqual(writes, []);
-    assert.deepEqual(calls, []);
-  });
-
-  // The labeler uses the same lookup without a base, to label every match.
-  const findPullRequests = require("./pull_requests_of_run.js");
-  const lookup = async ({ openPrs, base, triggeringRun = workflowRun }) => {
-    const calls = [];
-    const github = {
-      rest: {
-        pulls: {
-          list: async (params) => {
-            calls.push(params);
-            return { data: openPrs };
-          },
-        },
-      },
-    };
-    const context = {
-      repo: { owner: "apache", repo: "datafusion" },
-      payload: { workflow_run: triggeringRun },
-    };
-    const found = await findPullRequests({ github, context, base });
-    return { found: found.map((p) => p.number), calls };
-  };
-
-  test("lookup returns every pull request from the head commit and no stale one", async () => {
-    const stale = {
-      ...pr,
-      number: 3,
-      head: { ...pr.head, sha: "b".repeat(40) },
-    };
-    const release = { ...pr, number: 2, base: { ref: "branch-55" } };
-    const { found, calls } = await lookup({ openPrs: [stale, release, pr] });
-    assert.deepEqual(found, [2, 1]);
-    assert.deepEqual(calls, [
-      {
-        owner: "apache",
-        repo: "datafusion",
-        state: "open",
-        head: "contributor:feature",
-      },
-    ]);
-  });
-
-  test("lookup passes the base to the API", async () => {
-    const { calls } = await lookup({ openPrs: [pr], base: "main" });
-    assert.equal(calls[0].base, "main");
-  });
-
-  test("lookup returns nothing when the fork was deleted", async () => {
-    const { found, calls } = await lookup({
-      openPrs: [pr],
-      triggeringRun: { ...workflowRun, head_repository: null },
-    });
-    assert.deepEqual(found, []);
-    assert.deepEqual(calls, []);
+test("notification skips a run whose fork was deleted", async () => {
+  const calls = [];
+  const writes = await execute({
+    event: "workflow_run",
+    triggeringRun: { ...workflowRun, head_repository: null },
+    runs: [run(1)],
+    calls,
   });
   assert.deepEqual(writes, []);
+  assert.deepEqual(calls, []);
+});
+
+// The labeler uses the same lookup without a base, to label every match.
+const findPullRequests = require("./pull_requests_of_run.js");
+const lookup = async ({ openPrs, base, triggeringRun = workflowRun }) => {
+  const calls = [];
+  const github = {
+    rest: {
+      pulls: {
+        list: async (params) => {
+          calls.push(params);
+          return { data: openPrs };
+        },
+      },
+    },
+  };
+  const context = {
+    repo: { owner: "apache", repo: "datafusion" },
+    payload: { workflow_run: triggeringRun },
+  };
+  const found = await findPullRequests({ github, context, base });
+  return { found: found.map((p) => p.number), calls };
+};
+
+test("lookup returns every pull request from the head commit and no stale one", async () => {
+  const stale = {
+    ...pr,
+    number: 3,
+    head: { ...pr.head, sha: "b".repeat(40) },
+  };
+  const release = { ...pr, number: 2, base: { ref: "branch-55" } };
+  const { found, calls } = await lookup({ openPrs: [stale, release, pr] });
+  assert.deepEqual(found, [2, 1]);
+  assert.deepEqual(calls, [
+    {
+      owner: "apache",
+      repo: "datafusion",
+      state: "open",
+      head: "contributor:feature",
+    },
+  ]);
+});
+
+test("lookup passes the base to the API", async () => {
+  const { calls } = await lookup({ openPrs: [pr], base: "main" });
+  assert.equal(calls[0].base, "main");
+});
+
+test("lookup returns nothing when the fork was deleted", async () => {
+  const { found, calls } = await lookup({
+    openPrs: [pr],
+    triggeringRun: { ...workflowRun, head_repository: null },
+  });
+  assert.deepEqual(found, []);
+  assert.deepEqual(calls, []);
 });
 
 for (const conclusion of ["cancelled", "failure"]) {
@@ -413,12 +413,21 @@ test("a recent active PR in the sweep slice is only polled once", async () => {
   assert.deepEqual(calls, ["checks.listForRef", "actions.listWorkflowRuns"]);
 });
 
-// The concurrency expressions use string lookups and &&/||, whose semantics
-// match JavaScript for these non-empty strings and booleans.
-function concurrencyGroup(github) {
-  return rustWorkflow.concurrency.group.replace(
+// The concurrency expressions use string lookups, format() and &&/||, whose
+// semantics match JavaScript for these non-empty strings and booleans. A
+// missing or null property is null in a GitHub expression, so read it with ?.
+// and print it as an empty string in format().
+const format = (template, ...args) =>
+  template.replace(/\{(\d+)\}/g, (_, index) => args[index] ?? "");
+function concurrencyGroup(github, workflow = rustWorkflow) {
+  return workflow.concurrency.group.replace(
     /\$\{\{\s*(.*?)\s*\}\}/g,
-    (_, expression) => new Function("github", `return (${expression});`)(github)
+    (_, expression) =>
+      new Function(
+        "github",
+        "format",
+        `return (${expression.replace(/\./g, "?.")});`
+      )(github, format)
   );
 }
 const forkPush = {
@@ -467,5 +476,36 @@ test("upstream PR updates still share a concurrency group", () => {
   assert.equal(
     concurrencyGroup(upstream),
     concurrencyGroup({ ...upstream, sha: "second" })
+  );
+});
+
+const forkStatus = loadWorkflow("fork_ci_status.yml");
+const signalRun = (head_repository, head_branch = "feature") => ({
+  workflow: "Fork CI status",
+  event_name: "workflow_run",
+  event: { workflow_run: { head_repository, head_branch } },
+});
+const sweepRun = {
+  workflow: "Fork CI status",
+  event_name: "schedule",
+  event: {},
+};
+
+test("signal runs for a fork branch share a group and other branches do not", () => {
+  const contributor = { full_name: "contributor/datafusion" };
+  const group = (github) => concurrencyGroup(github, forkStatus);
+  assert.equal(group(signalRun(contributor)), group(signalRun(contributor)));
+  assert.notEqual(
+    group(signalRun(contributor)),
+    group(signalRun(contributor, "other"))
+  );
+});
+
+test("a signal run from a deleted fork does not join the group of the sweep", () => {
+  const group = (github) => concurrencyGroup(github, forkStatus);
+  assert.notEqual(group(signalRun(null)), group(sweepRun));
+  assert.equal(
+    group(sweepRun),
+    group({ ...sweepRun, event_name: "workflow_dispatch" })
   );
 });

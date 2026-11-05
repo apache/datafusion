@@ -44,16 +44,14 @@ module.exports = async ({ github, context }) => {
         }
     }
 
-    // A push can include several merged pull requests.
-    const shas = (context.payload.commits || []).map((commit) => commit.id);
-    const numbers = new Set();
-    for (const sha of shas.length ? shas : [context.sha]) {
-        for (const pull of await mergedPulls({ github, context, sha })) {
-            numbers.add(pull.number);
-        }
-    }
+    // A push can include several merged pull requests. Look the commits up in
+    // parallel, so the retries of commits without one overlap.
+    const pushed = (context.payload.commits || []).map((commit) => commit.id);
+    const shas = pushed.length ? pushed : [context.sha];
+    const found = await Promise.all(shas.map((sha) => mergedPulls({ github, context, sha })));
+    const numbers = new Set(found.flat().map((pull) => pull.number));
     if (numbers.size === 0) {
-        console.log(`No merged pull request found for ${context.sha}`);
+        console.log(`No merged pull request found for ${shas.join(', ')}`);
     }
     for (const number of numbers) {
         await github.rest.issues.addLabels({
