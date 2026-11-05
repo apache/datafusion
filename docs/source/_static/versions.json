@@ -11,18 +11,28 @@
     "preferred": true
   },
   {
-    "name": "55.1.0",
-    "url": "/versions/55.1.0/",
-    "version": "55.1.0"
-  },
-  {
-    "name": "55.0.0",
-    "url": "/versions/55.0.0/",
-    "version": "55.0.0"
-  },
-  {
     "name": "54.1.0",
     "url": "/versions/54.1.0/",
     "version": "54.1.0"
+  },
+  {
+    "name": "53.0.0",
+    "url": "/versions/53.0.0/",
+    "version": "53.0.0"
+  },
+  {
+    "name": "52.0.0",
+    "url": "/versions/52.0.0/",
+    "version": "52.0.0"
+  },
+  {
+    "name": "51.0.0",
+    "url": "/versions/51.0.0/",
+    "version": "51.0.0"
+  },
+  {
+    "name": "50.0.0",
+    "url": "/versions/50.0.0/",
+    "version": "50.0.0"
   }
 ]
