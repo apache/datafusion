@@ -184,9 +184,10 @@ FROM (
 <slt:ignore>
 
 # --- Case G: partial/final aggregation under memory limit ---
-# Four final aggregate partitions share the runtime pool; leave replay headroom.
+# Four partial and final aggregate partitions share the runtime pool. Leave
+# room to reserve incoming state batches during final merge and spill replay.
 statement ok
-SET datafusion.runtime.memory_limit = '1M'
+SET datafusion.runtime.memory_limit = '2M'
 
 statement ok
 SET datafusion.execution.target_partitions = 4
