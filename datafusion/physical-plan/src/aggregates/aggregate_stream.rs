@@ -20,6 +20,7 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
@@ -372,6 +373,18 @@ impl AggregateStream {
             loop {
                 let result = match this.input.next().await {
                     Some(Ok(batch)) => {
+                        // Partial states can own the entire input. Reserve the batch
+                        // before merging it, then transfer that reservation to the
+                        // accumulator's state below.
+                        let previous_size = this.reservation.size();
+                        if this.mode.input_mode() == AggregateInputMode::Partial
+                            && let Err(e) = this
+                                .reservation
+                                .try_grow(get_record_batch_memory_size(&batch))
+                        {
+                            this.finished = true;
+                            return Some((Err(e), this));
+                        }
                         let result = {
                             let elapsed_compute = this.baseline_metrics.elapsed_compute();
                             let _timer = elapsed_compute.timer(); // Stops on drop
@@ -391,12 +404,11 @@ impl AggregateStream {
                             Ok(allocated)
                         });
 
-                        // allocate memory
-                        // This happens AFTER we actually used the memory, but simplifies the whole accounting and we are OK with
-                        // overshooting a bit. Also this means we either store the whole record batch or not.
-                        match result
-                            .and_then(|allocated| this.reservation.try_grow(allocated))
-                        {
+                        // Once the batch is merged, its buffers are either part of
+                        // the accumulator state or no longer retained.
+                        match result.and_then(|allocated| {
+                            this.reservation.try_resize(previous_size + allocated)
+                        }) {
                             Ok(_) => continue,
                             Err(e) => Err(e),
                         }
@@ -578,8 +590,11 @@ mod tests {
     use crate::metrics::{MetricValue, MetricsSet};
     use crate::test::TestMemoryExec;
     use crate::{ExecutionPlan, collect};
-    use arrow::array::{Float64Array, Int32Array, UInt32Array};
+    use arrow::array::{Float64Array, Int32Array, Int64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::DataFusionError;
+    use datafusion_execution::memory_pool::GreedyMemoryPool;
+    use datafusion_execution::runtime_env::RuntimeEnvBuilder;
     use datafusion_functions_aggregate::{
         array_agg::array_agg_udaf,
         min_max::{max_udaf, min_udaf},
@@ -1009,6 +1024,70 @@ mod tests {
         assert!(aggregate_metrics(&final_metrics, "update").is_empty());
         assert!(aggregate_metrics(&final_metrics, "state").is_empty());
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn final_aggregate_reserves_incoming_state_batch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        let aggregate = sum_aggregate(&schema, "v", "SUM(v)")?;
+        let group_by = PhysicalGroupBy::default();
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            vec![Arc::clone(&aggregate)],
+            vec![None],
+            empty,
+            Arc::clone(&schema),
+        )?;
+        // One batch may combine many partial states. The final SUM retains
+        // only one number, so reserving its accumulator alone misses the batch.
+        let state_schema = partial.schema();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&state_schema),
+            vec![Arc::new(Int64Array::from(vec![1_i64; 16_384]))],
+        )?;
+        let input = TestMemoryExec::try_new_exec(
+            &[vec![batch]],
+            Arc::clone(&state_schema),
+            None,
+        )?;
+        let final_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by.as_final(),
+            vec![aggregate],
+            vec![None],
+            input,
+            state_schema,
+        )?);
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(64 * 1024)))
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let err = collect(
+            Arc::clone(&final_aggregate) as Arc<dyn ExecutionPlan>,
+            context,
+        )
+        .await
+        .unwrap_err();
+        assert!(matches!(
+            err.find_root(),
+            DataFusionError::ResourcesExhausted(_)
+        ));
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(1024 * 1024)))
+            .build_arc()?;
+        let context = Arc::new(TaskContext::default().with_runtime(runtime));
+        let output = collect(final_aggregate as Arc<dyn ExecutionPlan>, context).await?;
+        let result = output[0]
+            .column(0)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(result.value(0), 16_384);
         Ok(())
     }
 }
