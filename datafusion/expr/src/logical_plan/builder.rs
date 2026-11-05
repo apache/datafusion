@@ -2189,8 +2189,9 @@ pub fn validate_unique_names<'a>(
 
 /// Union two [`LogicalPlan`]s.
 ///
-/// Constructs the UNION plan, but does not perform type-coercion. Therefore the
-/// subtree expressions will not be properly typed until the optimizer pass.
+/// Infers the common output schema, but leaves input casts to the analyzer.
+/// Input expressions and unbound parameters may still change type during analysis
+/// or parameter binding.
 ///
 /// If a properly typed UNION plan is needed, refer to [`TypeCoercionRewriter::coerce_union`]
 /// or alternatively, merge the union input schema using [`coerce_union_schema`] and

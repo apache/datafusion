@@ -6,6 +6,7 @@
 mod case;
 mod dataframe_functions;
 mod describe;
+mod union;
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,

@@ -44,6 +44,7 @@ use crate::{
 
 use crate::logical_plan::information_schema::ColumnsDetail;
 use crate::statistics::StatisticsRequest;
+use crate::type_coercion::binary::type_union_coercion;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
@@ -1878,8 +1879,8 @@ impl LogicalPlan {
     /// Recompute schema fields' data type after replacing params, ensuring fields data type can be
     /// updated according to the new parameters.
     ///
-    /// Unlike `recompute_schema()`, this method rebuilds VALUES plans entirely to properly infer
-    /// types from literal values after placeholder substitution.
+    /// Unlike `recompute_schema()`, this also rebuilds VALUES and UNION schemas
+    /// to infer types from literal values after placeholder substitution.
     fn update_schema_data_type(self) -> Result<LogicalPlan> {
         match self {
             // Build `LogicalPlan::Values` from the values for type inference.
@@ -1887,6 +1888,11 @@ impl LogicalPlan {
             // `LogicalPlan::Values`.
             LogicalPlan::Values(Values { values, schema: _ }) => {
                 LogicalPlanBuilder::values(values)?.build()
+            }
+            // UNION output types can change when previously untyped parameters
+            // acquire their bound values. Do not preserve the provisional schema.
+            LogicalPlan::Union(Union { inputs, .. }) => {
+                Ok(LogicalPlan::Union(Union::try_new_with_loose_types(inputs)?))
             }
             // other plans can just use `recompute_schema` directly.
             plan => plan.recompute_schema(),
@@ -3541,8 +3547,8 @@ impl Union {
     }
 
     /// Constructs new Union instance deriving schema from inputs.
-    /// Inputs do not have to have matching types and produced schema will
-    /// take type from the first input.
+    /// Infers common output types without inserting casts into the inputs.
+    /// The analyzer coerces the inputs after their expressions are resolved.
     // TODO (https://github.com/apache/datafusion/issues/14380): Avoid creating uncoerced union at all.
     pub fn try_new_with_loose_types(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, true, false)?;
@@ -3585,9 +3591,9 @@ impl Union {
                     );
                 }
             }
-            wrapped_inputs.push(Arc::new(LogicalPlan::Projection(
-                Projection::try_new_with_schema(expr, input, Arc::clone(schema))?,
-            )));
+            wrapped_inputs.push(Arc::new(LogicalPlan::Projection(Projection::try_new(
+                expr, input,
+            )?)));
         }
 
         Ok(wrapped_inputs)
@@ -3596,8 +3602,8 @@ impl Union {
     /// Constructs new Union instance deriving schema from inputs.
     ///
     /// If `loose_types` is true, inputs do not need to have matching types and
-    /// the produced schema will use the type from the first input.
-    /// TODO (<https://github.com/apache/datafusion/issues/14380>): This is not necessarily reasonable behavior.
+    /// the produced schema will use their common types. Input casts are deferred
+    /// until analysis, so unresolved parameters can still change these types.
     ///
     /// If `by_name` is `true`, input schemas need not be the same width. That is,
     /// the constructed schema follows `UNION BY NAME` semantics.
@@ -3617,18 +3623,32 @@ impl Union {
         }
     }
 
+    fn coerce_field_type(data_type: &DataType, field: &Field) -> Result<DataType> {
+        type_union_coercion(data_type, field.data_type()).ok_or_else(|| {
+            plan_datafusion_err!(
+                "Incompatible inputs for Union: Previous inputs were \
+                of type {}, but got incompatible type {} on column '{}'",
+                data_type,
+                field.data_type(),
+                field.name()
+            )
+        })
+    }
+
     fn derive_schema_from_inputs_by_name(
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
     ) -> Result<DFSchemaRef> {
-        type FieldData<'a> = (&'a DataType, bool, Vec<&'a Metadata>, usize);
+        type FieldData<'a> = (DataType, bool, Vec<&'a Metadata>, usize);
         let mut cols: Vec<(&str, FieldData)> = Vec::new();
         for input in inputs.iter() {
             for field in input.schema().fields() {
                 if let Some((_, (data_type, is_nullable, metadata, occurrences))) =
                     cols.iter_mut().find(|(name, _)| name == field.name())
                 {
-                    if !loose_types && *data_type != field.data_type() {
+                    if loose_types {
+                        *data_type = Self::coerce_field_type(data_type, field)?;
+                    } else if data_type != field.data_type() {
                         return plan_err!(
                             "Found different types for field {}",
                             field.name()
@@ -3644,7 +3664,7 @@ impl Union {
                     cols.push((
                         field.name(),
                         (
-                            field.data_type(),
+                            field.data_type().clone(),
                             field.is_nullable(),
                             vec![field.metadata()],
                             1,
@@ -3667,8 +3687,7 @@ impl Union {
                         true
                     };
 
-                    let mut field =
-                        Field::new(name, data_type.clone(), final_is_nullable);
+                    let mut field = Field::new(name, data_type, final_is_nullable);
                     field.set_metadata(merge_metadata_for_union(unmerged_metadata));
 
                     (None, Arc::new(field))
@@ -3715,14 +3734,17 @@ impl Union {
                 let base_name = first_field.name().to_string();
 
                 let data_type = if loose_types {
-                    // TODO apply type coercion here, or document why it's better to defer
-                    // temporarily use the data type from the left input and later rely on the analyzer to
-                    // coerce the two schemas into a common one.
-                    first_field.data_type()
+                    fields
+                        .iter()
+                        .skip(1)
+                        .try_fold(first_field.data_type().clone(), |acc, field| {
+                            Self::coerce_field_type(&acc, field)
+                        })?
                 } else {
-                    fields.iter().skip(1).try_fold(
-                        first_field.data_type(),
-                        |acc, field| {
+                    fields
+                        .iter()
+                        .skip(1)
+                        .try_fold(first_field.data_type(), |acc, field| {
                             if acc != field.data_type() {
                                 return plan_err!(
                                     "UNION field {i} have different type in inputs: \
@@ -3732,8 +3754,8 @@ impl Union {
                                 );
                             }
                             Ok(acc)
-                        },
-                    )?
+                        })?
+                        .clone()
                 };
                 let nullable = fields.iter().any(|field| field.is_nullable());
 
@@ -3746,7 +3768,7 @@ impl Union {
                     base_name
                 };
 
-                let mut field = Field::new(&name, data_type.clone(), nullable);
+                let mut field = Field::new(&name, data_type, nullable);
                 let field_metadata =
                     merge_metadata_for_union(fields.iter().map(|field| field.metadata()));
                 field.set_metadata(field_metadata);
