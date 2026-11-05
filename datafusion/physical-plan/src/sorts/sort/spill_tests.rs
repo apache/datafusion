@@ -1204,19 +1204,24 @@ async fn test_single_batch_spill_returns_live_workspace_loan_on_drop() -> Result
     Ok(())
 }
 
-/// The final merge of a spilled sort shares the pool with the operator that
-/// consumes its output and with sibling partitions still sorting their input.
-/// Seating every run the pool admits leaves them nothing, so whatever the
-/// merge takes beyond its own workspace, it must leave as much free.
+/// The final merge of a spilled sort shares the pool with sibling partitions
+/// still sorting their input. Seating every run the pool admits leaves them
+/// nothing, so whatever the merge takes beyond its own workspace, it must leave
+/// as much free: while another consumer holds memory, and while sibling
+/// partitions exist even if they hold nothing at the moment.
+#[rstest::rstest]
+#[case::other_consumer_holds_memory(false)]
+#[case::idle_sibling_partitions(true)]
 #[tokio::test]
-async fn test_final_spilled_merge_leaves_headroom() -> Result<()> {
+async fn test_final_spilled_merge_leaves_headroom(#[case] siblings: bool) -> Result<()> {
     let fixture = fixture()?;
     let schema = fixture.parent.schema();
     let capacity = 16 * fixture.capacity;
     let pool = AdjustablePool::new(capacity);
     // Spill under the fixture's limit, then merge with room for every run.
     pool.set_limit(fixture.capacity);
-    let (mut sorter, runtime) = sorter(&fixture, Arc::clone(&pool))?;
+    let (sorter, runtime) = sorter(&fixture, Arc::clone(&pool))?;
+    let mut sorter = sorter.with_sibling_partitions(siblings);
     for batch in &fixture.batches {
         sorter.insert_batch(batch.clone()).await?;
     }
@@ -1246,9 +1251,17 @@ async fn test_final_spilled_merge_leaves_headroom() -> Result<()> {
         .checked_sub(2 * workspace + smallest)
         .expect("the runs must need more than the workspace");
     assert!(all <= free + workspace);
+    // Either another consumer holds the rest of the pool, or idle siblings
+    // hold nothing and the pool is only as large as the merge may use.
     let contender =
         MemoryConsumer::new("sibling partition").register(&runtime.memory_pool);
-    contender.try_grow(capacity - workspace - free)?;
+    let limit = if siblings {
+        pool.set_limit(workspace + free);
+        workspace + free
+    } else {
+        contender.try_grow(capacity - workspace - free)?;
+        capacity
+    };
 
     let first = stream
         .try_next()
@@ -1256,9 +1269,9 @@ async fn test_final_spilled_merge_leaves_headroom() -> Result<()> {
         .expect("the merge must produce output");
     let taken = (pool.reserved() - contender.size()).saturating_sub(workspace);
     assert!(
-        capacity - pool.reserved() >= taken,
+        limit - pool.reserved() >= taken,
         "the final merge takes {taken} bytes beyond its workspace and leaves {} free",
-        capacity - pool.reserved()
+        limit - pool.reserved()
     );
     drop(contender);
 
