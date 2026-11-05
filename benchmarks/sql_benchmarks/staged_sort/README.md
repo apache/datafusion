@@ -49,8 +49,13 @@ threshold to 1 GiB (as do 09–10), intended to give one run at defaults without
 08 sets it to zero to exercise multiple runs. Very large row/width overrides or
 memory limits can change this behavior. Check plans and execution metrics with
 `--debug` or `EXPLAIN ANALYZE`; debug output affects the first run's timing.
-The timed region includes scanning, sorting, merging where applicable, and
-collecting the full output, not table creation or fixture assertions.
+The timed region includes planning, scanning, sorting, merging where applicable,
+and streaming and discarding output batches, not table creation or fixture
+assertions. Persist/validate modes buffer the full output in an untimed setup run.
+
+Measure query runtimes on the benchmark machine and tune `--rows` and
+`--payload-width` to target roughly a few seconds per query. Keep these options
+identical across baseline and candidate runs.
 
 From `benchmarks/`:
 
