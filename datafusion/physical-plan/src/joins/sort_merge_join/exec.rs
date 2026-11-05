@@ -16,8 +16,8 @@ use crate::execution_plan::{EmissionType, boundedness_from_children};
 use crate::expressions::PhysicalSortExpr;
 use crate::joins::utils::{
     JoinFilter, JoinOn, JoinOnRef, build_join_schema, check_join_is_valid,
-    estimate_join_statistics, reorder_output_after_swap, swap_join_projection,
-    symmetric_join_output_partitioning,
+    co_partitioned_key_requirements, estimate_join_statistics, reorder_output_after_swap,
+    swap_join_projection, symmetric_join_output_partitioning,
 };
 use crate::metrics::{ExecutionPlanMetricsSet, MetricsSet, SpillMetrics};
 use crate::projection::{
@@ -313,8 +313,13 @@ impl SortMergeJoinExec {
             join_on,
         )?;
 
-        let mut output_partitioning =
-            symmetric_join_output_partitioning(left, right, &join_type)?;
+        let mut output_partitioning = symmetric_join_output_partitioning(
+            left,
+            right,
+            &join_type,
+            join_on,
+            &mut eq_properties,
+        )?;
 
         if let Some(projection) = projection {
             let mapping = ProjectionMapping::from_indices(projection, schema)?;
@@ -480,15 +485,7 @@ impl ExecutionPlan for SortMergeJoinExec {
     }
 
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
-        let (left_expr, right_expr) = self
-            .on
-            .iter()
-            .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
-            .unzip();
-        InputDistributionRequirements::co_partitioned(vec![
-            Distribution::KeyPartitioned(left_expr),
-            Distribution::KeyPartitioned(right_expr),
-        ])
+        co_partitioned_key_requirements(&self.on)
     }
 
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
