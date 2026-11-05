@@ -185,8 +185,8 @@ query TTT
 describe partitioned_insert_test_readback;
 ----
 c Int64 YES
-a Dictionary(UInt16, Utf8) NO
-b Dictionary(UInt16, Utf8) NO
+a Dictionary(UInt16, Utf8) YES
+b Dictionary(UInt16, Utf8) YES
 
 query ITT
 select * from partitioned_insert_test_readback order by a,b,c;
