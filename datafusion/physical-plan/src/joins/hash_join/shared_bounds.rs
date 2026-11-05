@@ -13,6 +13,7 @@ use crate::ExecutionPlanProperties;
 use crate::Partitioning;
 use crate::joins::Map;
 use crate::joins::PartitionMode;
+use crate::joins::ReservedMap;
 use crate::joins::hash_join::exec::HASH_JOIN_SEED;
 use crate::joins::hash_join::inlist_builder::build_struct_fields;
 use crate::joins::hash_join::not_in::NotIn;
@@ -160,7 +161,7 @@ fn create_membership_predicate(
         }
         // Use hash table lookup for large build sides
         PushdownStrategy::Map(hash_map, pruning_bitmap) => {
-            Ok(Some(Arc::new(HashTableLookupExpr::new(
+            Ok(Some(Arc::new(HashTableLookupExpr::new_reserved(
                 on_right.to_vec(),
                 random_state.clone(),
                 None,
@@ -312,7 +313,7 @@ pub(crate) enum PushdownStrategy {
     InList(ArrayRef),
     /// Use map lookup for large build sides. If `Some` the second field
     /// represents the build side's keys using a bucket bitmap.
-    Map(Arc<Map>, Option<Arc<KeyRangeBitmap>>),
+    Map(Arc<ReservedMap>, Option<Arc<KeyRangeBitmap>>),
     /// There was no data in this partition, do not build a dynamic filter for it
     Empty,
 }
@@ -907,7 +908,7 @@ impl SharedBuildAccumulator {
                     }
                 });
             }
-            Arc::new(HashTableLookupExpr::new(
+            Arc::new(HashTableLookupExpr::new_reserved(
                 self.on_right.clone(),
                 HASH_JOIN_SEED,
                 Some(self.partition_router(num_partitions)?),
@@ -946,7 +947,10 @@ impl SharedBuildAccumulator {
 
     /// A hash table of an IN list partition's keys, hashed as the probe side
     /// hashes its join keys: one column per join key.
-    fn in_list_hash_map(&self, values: &ArrayRef) -> Result<Arc<Map>> {
+    ///
+    /// The table is not reserved, same as the IN list it is built from. Its
+    /// size follows that list, which `hash_join_inlist_pushdown_max_size` caps.
+    fn in_list_hash_map(&self, values: &ArrayRef) -> Result<Arc<ReservedMap>> {
         let columns = match values.as_struct_opt() {
             Some(columns) if self.on_right.len() > 1 => columns.columns(),
             _ => std::slice::from_ref(values),
@@ -955,7 +959,8 @@ impl SharedBuildAccumulator {
         create_hashes(columns, HASH_JOIN_SEED.random_state(), &mut hashes)?;
         let mut map = JoinHashMapU32::with_capacity(hashes.len());
         map.update_from_iter(Box::new(hashes.iter().enumerate()), 0);
-        Ok(Arc::new(Map::HashMap(Box::new(map))))
+        let map = Arc::new(Map::HashMap(Box::new(map)));
+        Ok(Arc::new(ReservedMap::unreserved(map)))
     }
 
     /// Container pruning reads one bitmap, so merge the partitions' key ranges:
@@ -1334,10 +1339,8 @@ mod tests {
     }
 
     fn hash_map() -> PushdownStrategy {
-        PushdownStrategy::Map(
-            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(1)))),
-            None,
-        )
+        let map = Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(1))));
+        PushdownStrategy::Map(Arc::new(ReservedMap::unreserved(map)), None)
     }
 
     #[test]
@@ -1368,7 +1371,8 @@ mod tests {
         create_hashes([&keys], HASH_JOIN_SEED.random_state(), &mut hashes).unwrap();
         let mut map = JoinHashMapU32::with_capacity(keys.len());
         map.update_from_iter(Box::new(hashes.iter().enumerate()), 0);
-        PushdownStrategy::Map(Arc::new(Map::HashMap(Box::new(map))), None)
+        let map = Arc::new(Map::HashMap(Box::new(map)));
+        PushdownStrategy::Map(Arc::new(ReservedMap::unreserved(map)), None)
     }
 
     /// Splits `keys` across `num_partitions` build partitions as hash
