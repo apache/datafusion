@@ -2076,3 +2076,71 @@ RESET datafusion.execution.batch_size;
 
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
+
+# Shared Utf8View buffers in a recursive CollectLeft join must not exhaust the pool.
+statement ok
+SET datafusion.execution.target_partitions = 2;
+
+statement ok
+SET datafusion.optimizer.hash_join_single_partition_threshold = 1000000000;
+
+statement ok
+SET datafusion.optimizer.hash_join_single_partition_threshold_rows = 1000000000;
+
+statement ok
+COPY (
+  SELECT 'trace-' || lpad(CAST(value / 8 AS VARCHAR), 10, '0') AS trace_id,
+         'span-' || lpad(CAST(value AS VARCHAR), 12, '0') AS span_id,
+         CASE WHEN value % 8 = 0 THEN NULL
+              ELSE 'span-' || lpad(CAST(value - 1 AS VARCHAR), 12, '0') END AS parent_span_id
+  FROM generate_series(0, 79999)
+) TO 'test_files/scratch/cte/recursive_shared_buffers.parquet' STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE recursive_spans STORED AS PARQUET
+LOCATION 'test_files/scratch/cte/recursive_shared_buffers.parquet';
+
+statement ok
+SET datafusion.execution.batch_size = 1024;
+
+statement ok
+SET datafusion.runtime.memory_limit = '50M';
+
+query II
+WITH RECURSIVE tree AS (
+    SELECT trace_id, span_id, 0 AS depth FROM recursive_spans WHERE parent_span_id IS NULL
+    UNION ALL
+    SELECT c.trace_id, c.span_id, p.depth + 1
+    FROM recursive_spans c JOIN tree p ON c.trace_id = p.trace_id AND c.parent_span_id = p.span_id
+)
+SELECT depth, count(*) FROM tree GROUP BY depth ORDER BY depth;
+----
+0 10000
+1 10000
+2 10000
+3 10000
+4 10000
+5 10000
+6 10000
+7 10000
+
+statement ok
+RESET datafusion.runtime.memory_limit;
+
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema;
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+RESET datafusion.optimizer.hash_join_single_partition_threshold;
+
+statement ok
+RESET datafusion.optimizer.hash_join_single_partition_threshold_rows;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE recursive_spans;
