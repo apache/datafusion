@@ -357,25 +357,17 @@ fn try_into_partitioned_file(
     table_path: &ListingTableUrl,
     strict: bool,
 ) -> Result<Option<PartitionedFile>> {
+    if strict {
+        check_partition_directories(table_path, &object_meta.location, partition_cols)?;
+    }
+
     let cols = partition_cols.iter().map(|(name, _)| name.as_str());
     let parsed = parse_partitions_for_path(table_path, &object_meta.location, cols);
 
     let Some(parsed) = parsed else {
-        if strict {
-            return strict_partitions_err(
-                table_path,
-                &object_meta.location,
-                partition_cols,
-                "it is not under a directory for every partition column",
-            );
-        }
         // parse_partitions_for_path already logs a debug message
         return Ok(None);
     };
-
-    if strict {
-        check_partition_directories(table_path, &object_meta.location, partition_cols)?;
-    }
 
     let partition_values = parsed
         .into_iter()
@@ -483,19 +475,20 @@ fn check_partition_directories(
     };
     let mut dirs: Vec<&str> = segments.collect();
     dirs.pop();
-    if dirs.len() < partition_cols.len() {
-        return strict_partitions_err(
-            table_path,
-            file_path,
-            partition_cols,
-            "it is not under a directory for every partition column",
-        );
+    let mut dirs = dirs.into_iter();
+    for (col, _) in partition_cols {
+        let reason = match dirs.next() {
+            Some(dir) if dir.split_once('=').is_some_and(|(name, _)| name == col) => {
+                continue;
+            }
+            Some(dir) => {
+                format!("directory '{dir}' does not match partition column '{col}'")
+            }
+            None => format!("it is not under a directory for partition column '{col}'"),
+        };
+        return strict_partitions_err(table_path, file_path, partition_cols, &reason);
     }
-    match dirs
-        .into_iter()
-        .skip(partition_cols.len())
-        .find(|d| d.contains('='))
-    {
+    match dirs.find(|d| d.contains('=')) {
         Some(dir) => strict_partitions_err(
             table_path,
             file_path,
@@ -933,22 +926,22 @@ mod tests {
             (
                 "bucket/mytable/data.parquet",
                 &["year_month"][..],
-                "not under a directory for every partition column",
+                "it is not under a directory for partition column 'year_month'",
             ),
             (
                 "bucket/mytable/wrong_col=2024-01/data.parquet",
                 &["year_month"][..],
-                "not under a directory for every partition column",
+                "directory 'wrong_col=2024-01' does not match partition column 'year_month'",
             ),
             (
                 "bucket/mytable/year=2024/data.parquet",
                 &["year", "month"][..],
-                "not under a directory for every partition column",
+                "it is not under a directory for partition column 'month'",
             ),
             (
                 "bucket/mytable/month=01/year=2024/data.parquet",
                 &["year", "month"][..],
-                "not under a directory for every partition column",
+                "directory 'month=01' does not match partition column 'year'",
             ),
             (
                 "bucket/mytable/year=2024/month=01/data.parquet",
@@ -976,6 +969,8 @@ mod tests {
             ("bucket/mytable/subdir/data.parquet", &[][..], true),
             ("bucket/mytable/year=2024/data.parquet", &[][..], false),
             ("bucket/mytable/year=2024/data.parquet", &year[..], true),
+            ("bucket/mytable/month=01/data.parquet", &year[..], false),
+            ("bucket/mytable/2024/data.parquet", &year[..], false),
             (
                 "bucket/mytable/year=2024/subdir/data.parquet",
                 &year[..],

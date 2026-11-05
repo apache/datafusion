@@ -157,7 +157,7 @@ select count(*) from root_file_test;
 statement count 0
 set datafusion.execution.listing_table_strict_partitions = true;
 
-query error DataFusion error: Error during planning: File '.*root_file_skipped/stale\.parquet' in table '.*' does not match partition columns \["year"\]: it is not under a directory for every partition column\. Set datafusion\.execution\.listing_table_strict_partitions = false to skip such files
+query error DataFusion error: Error during planning: File '.*root_file_skipped/stale\.parquet' in table '.*' does not match partition columns \["year"\]: it is not under a directory for partition column 'year'\. Set datafusion\.execution\.listing_table_strict_partitions = false to skip such files
 select count(*) from root_file_test;
 
 # Only listed files are checked: a partition filter narrows the listing
@@ -212,7 +212,7 @@ to 'test_files/scratch/listing_table_partitions/partition_filename/year=2025.par
 ----
 1
 
-query error File '.*partition_filename/year=2025\.parquet'.*does not match partition columns \["year"\]: it is not under a directory for every partition column
+query error File '.*partition_filename/year=2025\.parquet'.*does not match partition columns \["year"\]: it is not under a directory for partition column 'year'
 select * from partition_filename;
 
 query I
@@ -238,7 +238,7 @@ to 'test_files/scratch/listing_table_partitions/nested_partition_filename/year=2
 ----
 1
 
-query error File '.*nested_partition_filename/year=2024/month=02\.parquet'.*does not match partition columns \["year", "month"\]: it is not under a directory for every partition column
+query error File '.*nested_partition_filename/year=2024/month=02\.parquet'.*does not match partition columns \["year", "month"\]: it is not under a directory for partition column 'month'
 select * from nested_partition_filename;
 
 statement count 0
