@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{
     DataFusionError, Result, assert_ne_or_internal_err, internal_datafusion_err,
 };
@@ -680,6 +681,32 @@ impl FinalHashAggregateStream {
 
         while let Some(batch) = self.input.next().await.transpose()? {
             let _timer = elapsed_compute.timer();
+            // Partial states may retain input-sized buffers. Account for the
+            // incoming batch before merging it into the table.
+            let batch_memory = get_record_batch_memory_size(&batch);
+            match self.reservation.try_grow(batch_memory) {
+                Ok(()) => {}
+                Err(e @ DataFusionError::ResourcesExhausted(_)) => {
+                    // Spill the current table to make room for this batch, then
+                    // retry admission. An individual batch that still cannot fit
+                    // must fail rather than proceed without a reservation.
+                    let Some(spill_context) = spill_context.as_mut() else {
+                        return Err(e.context(
+                            "Final hash aggregate cannot spill because temporary files are not enabled in the DiskManager",
+                        ));
+                    };
+                    if hash_table.building_group_count() == 0 {
+                        return Err(e);
+                    }
+                    let result = hash_table
+                        .take_state_batch()
+                        .and_then(|state| spill_context.sort_and_spill(state));
+                    self.reservation.try_resize(hash_table.memory_size())?;
+                    result?;
+                    self.reservation.try_grow(batch_memory)?;
+                }
+                Err(e) => return Err(e),
+            }
             hash_table.aggregate_batch(&batch)?;
 
             // Soft group limits are usually small and rarely coincide with
@@ -688,11 +715,10 @@ impl FinalHashAggregateStream {
             let spilled = spill_context
                 .as_ref()
                 .is_some_and(|context| context.has_spills());
-            if self.hit_soft_group_limit(hash_table) && !spilled {
-                break;
-            }
+            let hit_soft_limit = self.hit_soft_group_limit(hash_table) && !spilled;
 
-            // Check memory reservation, and potentially spill.
+            // Replace the input-batch reservation with the table footprint,
+            // spilling if the table cannot be reserved.
             let resize_result =
                 self.reservation
                     .try_resize(Self::reservation_size_for_table(
@@ -701,7 +727,11 @@ impl FinalHashAggregateStream {
                     ));
 
             match resize_result {
-                Ok(()) => {}
+                Ok(()) => {
+                    if hit_soft_limit {
+                        break;
+                    }
+                }
 
                 // The table cannot reserve enough memory.
                 // Move all current states into one fully group-key-sorted spill run.
@@ -1733,6 +1763,91 @@ mod tests {
                 .as_usize()
                 > 0
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn final_hash_reserves_incoming_state_batch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int64, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let group_by =
+            PhysicalGroupBy::new_single(vec![(col("k", &schema)?, "k".into())]);
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("v", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("sum")
+                .build()?,
+        );
+        let empty = TestMemoryExec::try_new_exec(&[vec![]], Arc::clone(&schema), None)?;
+        let partial = AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            vec![Arc::clone(&aggregate)],
+            vec![None],
+            empty,
+            Arc::clone(&schema),
+        )?;
+        let state_schema = partial.schema();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&state_schema),
+            vec![
+                Arc::new(Int64Array::from(vec![1_i64; 16_384])),
+                Arc::new(Int64Array::from(vec![1_i64; 16_384])),
+            ],
+        )?;
+        let input = TestMemoryExec::try_new_exec(
+            &[vec![batch]],
+            Arc::clone(&state_schema),
+            None,
+        )?;
+        let final_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by.as_final(),
+            vec![aggregate],
+            vec![None],
+            input,
+            state_schema,
+        )?);
+        assert_eq!(
+            final_aggregate.group_clustering_mode(),
+            &GroupClusteringMode::None
+        );
+
+        let config = SessionConfig::new()
+            .set_bool("datafusion.execution.enable_migration_aggregate", true);
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(64 * 1024)))
+            .build_arc()?;
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(config.clone())
+                .with_runtime(runtime),
+        );
+        let err = collect(final_aggregate.execute(0, context)?)
+            .await
+            .unwrap_err();
+        assert!(matches!(
+            err.find_root(),
+            DataFusionError::ResourcesExhausted(_)
+        ));
+
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(1024 * 1024)))
+            .build_arc()?;
+        let context = Arc::new(
+            TaskContext::default()
+                .with_session_config(config)
+                .with_runtime(runtime),
+        );
+        let output = collect(final_aggregate.execute(0, context)?).await?;
+        let result = output[0]
+            .column(1)
+            .as_any()
+            .downcast_ref::<Int64Array>()
+            .unwrap();
+        assert_eq!(result.value(0), 16_384);
         Ok(())
     }
 }
