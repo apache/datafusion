@@ -45,7 +45,7 @@ impl fmt::Debug for PreparedHashJoinBuild {
 impl PreparedHashJoinBuild {
     /// Return the retained build reservation, excluding all per-probe state.
     pub fn reserved_bytes(&self) -> usize {
-        self.build.reservation.size()
+        self.build.reservation.size() + self.build.map.reserved_bytes()
     }
 
     /// Return the complete build row count, including duplicate and null keys.
@@ -290,8 +290,8 @@ impl HashJoinExecBuilder {
     ///   executions. An existing expression handle is preserved for its probe
     ///   consumers, while the build-report accumulator is reset.
     /// * Retain a prepared-build lease if a dynamic-filter expression outlives
-    ///   this plan. Its array/map references preserve allocation lifetime, but
-    ///   the lease is what preserves the corresponding memory charge.
+    ///   this plan. The map carries its own charge, but the IN-list arrays
+    ///   share the build batch, and the lease is what preserves their charge.
     /// * Attach after physical optimizations that rewrite the build child.
     ///   Probe-only rewrites must preserve the attached join's `left()`; replacing
     ///   it or making incompatible key, mode, or join-type changes fails.
