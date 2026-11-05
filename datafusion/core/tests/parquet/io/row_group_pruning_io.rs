@@ -41,16 +41,20 @@ async fn test_row_group_pruning_io_no_predicate() {
     assert_snapshot!(test.query("SELECT * FROM t").await, @r"
     --- Query: SELECT * FROM t (9 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..1402)
+        Head (object size and metadata)
     Request 2
+        Read Parquet footer (offsets 489..1402)
+    Request 3
+        Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
+    Request 4
         Read dictionary page and data page 0 for column 'id' (rg 0) (offsets 4..51)
         Read dictionary page and data page 0 for column 'val' (rg 0) (offsets 51..98)
     Produce batch (3 rows)
-    Request 3
+    Request 5
         Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
         Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
     Produce batch (3 rows)
-    Request 4
+    Request 6
         Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
         Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     Produce batch (3 rows)
@@ -65,8 +69,12 @@ async fn test_row_group_pruning_io_one_row_group() {
     assert_snapshot!(test.query("SELECT * FROM t WHERE id = 5").await, @r"
     --- Query: SELECT * FROM t WHERE id = 5 (1 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..1402)
+        Head (object size and metadata)
     Request 2
+        Read Parquet footer (offsets 489..1402)
+    Request 3
+        Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
+    Request 4
         Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
         Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
     Produce batch (1 rows)
@@ -81,25 +89,34 @@ async fn test_row_group_pruning_io_two_row_groups() {
     assert_snapshot!(test.query("SELECT * FROM t WHERE id > 5").await, @r"
     --- Query: SELECT * FROM t WHERE id > 5 (4 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..1402)
+        Head (object size and metadata)
     Request 2
+        Read Parquet footer (offsets 489..1402)
+    Request 3
+        Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
+    Request 4
         Read dictionary page and data page 0 for column 'id' (rg 1) (offsets 98..145)
         Read dictionary page and data page 0 for column 'val' (rg 1) (offsets 145..192)
-    Request 3
+    Request 5
         Read dictionary page and data page 0 for column 'id' (rg 2) (offsets 192..239)
         Read dictionary page and data page 0 for column 'val' (rg 2) (offsets 239..286)
     Produce batch (4 rows)
     ");
 }
 
-/// No row group can contain `id > 100`, so only the footer is read.
+/// No row group can contain `id > 100`, so only the footer and page index
+/// are read.
 #[tokio::test]
 async fn test_row_group_pruning_io_all_pruned() {
     let test = row_group_pruning_test().await;
     assert_snapshot!(test.query("SELECT * FROM t WHERE id > 100").await, @r"
     --- Query: SELECT * FROM t WHERE id > 100 (0 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..1402)
+        Head (object size and metadata)
+    Request 2
+        Read Parquet footer (offsets 489..1402)
+    Request 3
+        Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2) (offsets 286..489)
     ");
 }
 

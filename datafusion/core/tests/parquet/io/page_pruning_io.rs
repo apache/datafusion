@@ -47,8 +47,12 @@ async fn test_page_pruning_io_no_predicate() {
     assert_snapshot!(test.query("SELECT * FROM t").await, @r"
     --- Query: SELECT * FROM t (9 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..838)
+        Head (object size and metadata)
     Request 2
+        Read Parquet footer (offsets 323..838)
+    Request 3
+        Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0) (offsets 178..323)
+    Request 4
         Read data pages 0..=2 for column 'id' (rg 0) (offsets 4..91)
         Read data pages 0..=2 for column 'val' (rg 0) (offsets 91..178)
     Produce batch (9 rows)
@@ -63,8 +67,12 @@ async fn test_page_pruning_io_one_page() {
     assert_snapshot!(test.query("SELECT * FROM t WHERE id = 5").await, @r"
     --- Query: SELECT * FROM t WHERE id = 5 (1 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..838)
+        Head (object size and metadata)
     Request 2
+        Read Parquet footer (offsets 323..838)
+    Request 3
+        Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0) (offsets 178..323)
+    Request 4
         Read data page 1 for column 'id' (rg 0) (offsets 33..62)
         Read data page 1 for column 'val' (rg 0) (offsets 120..149)
     Produce batch (1 rows)
@@ -79,8 +87,12 @@ async fn test_page_pruning_io_two_pages() {
     assert_snapshot!(test.query("SELECT * FROM t WHERE id > 3").await, @r"
     --- Query: SELECT * FROM t WHERE id > 3 (6 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..838)
+        Head (object size and metadata)
     Request 2
+        Read Parquet footer (offsets 323..838)
+    Request 3
+        Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0) (offsets 178..323)
+    Request 4
         Read data page 1 for column 'id' (rg 0) (offsets 33..62)
         Read data page 2 for column 'id' (rg 0) (offsets 62..91)
         Read data page 1 for column 'val' (rg 0) (offsets 120..149)
@@ -97,8 +109,12 @@ async fn test_page_pruning_io_disabled() {
     assert_snapshot!(test.query("SELECT * FROM t WHERE id = 5").await, @r"
     --- Query: SELECT * FROM t WHERE id = 5 (1 rows) ---
     Request 1
-        Read Parquet footer (offsets 0..838)
+        Head (object size and metadata)
     Request 2
+        Read Parquet footer (offsets 323..838)
+    Request 3
+        Read ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0) (offsets 178..323)
+    Request 4
         Read data pages 0..=2 for column 'id' (rg 0) (offsets 4..91)
         Read data pages 0..=2 for column 'val' (rg 0) (offsets 91..178)
     Produce batch (1 rows)
