@@ -3990,7 +3990,12 @@ async fn roundtrip_null_aware_join_unset_value_keys() -> Result<()> {
         let err = logical_plan_from_bytes(&node.encode_to_vec(), &ctx.task_ctx())
             .unwrap_err()
             .to_string();
-        assert!(err.contains("null_aware_value_keys 0"), "{err}");
+        assert!(
+            err.contains(
+                "JoinNode: null_aware_value_keys wire value 0 must be at least 1"
+            ),
+            "{err}"
+        );
 
         let round_trip =
             logical_plan_from_bytes(&logical_plan_to_bytes(&join)?, &ctx.task_ctx())?;

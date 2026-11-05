@@ -1892,22 +1892,22 @@ impl DefaultPhysicalPlanner {
                         PartitionMode::CollectLeft
                     };
 
-                    let mut builder = HashJoinExecBuilder::new(
-                        physical_left,
-                        physical_right,
-                        join_on,
-                        *join_type,
-                    )
-                    .with_filter(join_filter)
-                    .with_partition_mode(partition_mode)
-                    .with_null_equality(*null_equality)
-                    .with_null_aware(*null_aware);
                     // An unset count is passed on unset: the build accepts it
                     // only for a single key, a scalar `NOT IN`.
-                    if let Some(value_keys) = null_aware_value_keys {
-                        builder = builder.with_null_aware_value_keys(*value_keys);
-                    }
-                    Arc::new(builder.build()?)
+                    Arc::new(
+                        HashJoinExecBuilder::new(
+                            physical_left,
+                            physical_right,
+                            join_on,
+                            *join_type,
+                        )
+                        .with_filter(join_filter)
+                        .with_partition_mode(partition_mode)
+                        .with_null_equality(*null_equality)
+                        .with_null_aware(*null_aware)
+                        .with_null_aware_value_keys(*null_aware_value_keys)
+                        .build()?,
+                    )
                 };
 
                 // If plan was mutated previously then need to create the ExecutionPlan

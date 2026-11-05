@@ -4897,9 +4897,9 @@ impl Join {
     /// [`Self::null_aware_value_keys`].
     pub fn with_null_aware_value_keys(
         mut self,
-        null_aware_value_keys: NonZeroUsize,
+        null_aware_value_keys: Option<NonZeroUsize>,
     ) -> Self {
-        self.null_aware_value_keys = Some(null_aware_value_keys);
+        self.null_aware_value_keys = null_aware_value_keys;
         self
     }
 

@@ -4,7 +4,6 @@
 
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::num::NonZeroUsize;
 use std::sync::Arc;
 
 use crate::protobuf::{
@@ -27,7 +26,9 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::format::{
     ExplainAnalyzeCategories, ExplainFormat, MetricCategory, MetricType,
 };
-use datafusion_common::utils::{usize_from_wire, usize_to_wire};
+use datafusion_common::utils::{
+    non_zero_usize_from_wire, usize_from_wire, usize_to_wire,
+};
 use datafusion_common::{
     NullEquality, Result, TableReference, assert_or_internal_err, context,
     internal_datafusion_err, internal_err, not_impl_err, plan_err,
@@ -1066,21 +1067,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let null_aware_value_keys = join
                     .null_aware_value_keys
                     .map(|value_keys| {
-                        let value_keys = usize_from_wire(
+                        non_zero_usize_from_wire(
                             value_keys,
                             "JoinNode",
                             "null_aware_value_keys",
-                        )?;
-                        NonZeroUsize::new(value_keys).ok_or_else(|| {
-                            proto_error(
-                                "Received a JoinNode message with null_aware_value_keys 0, it must be at least 1",
-                            )
-                        })
+                        )
                     })
                     .transpose()?;
-                Ok(LogicalPlan::Join(Join {
-                    null_aware_value_keys,
-                    ..Join::try_new(
+                Ok(LogicalPlan::Join(
+                    Join::try_new(
                         Arc::new(left),
                         Arc::new(right),
                         on,
@@ -1090,7 +1085,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                         NullEquality::from(null_equality),
                         join.null_aware,
                     )?
-                }))
+                    .with_null_aware_value_keys(null_aware_value_keys),
+                ))
             }
             LogicalPlanType::AsOfJoin(join) => {
                 let left_keys =
@@ -1822,11 +1818,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                             null_aware: *null_aware,
                             null_aware_value_keys: null_aware_value_keys
                                 .map(|value_keys| {
-                                    u32::try_from(value_keys.get()).map_err(|_| {
-                                        internal_datafusion_err!(
-                                            "JoinNode: null_aware_value_keys {value_keys} does not fit in u32"
-                                        )
-                                    })
+                                    usize_to_wire(
+                                        value_keys.get(),
+                                        "JoinNode",
+                                        "null_aware_value_keys",
+                                    )
                                 })
                                 .transpose()?,
                         },

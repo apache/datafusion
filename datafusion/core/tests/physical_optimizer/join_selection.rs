@@ -496,7 +496,7 @@ async fn test_null_aware_left_anti_swaps_to_right_anti(
     .with_filter(if with_filter { nl_join_filter() } else { None })
     .with_partition_mode(partition_mode)
     .with_null_aware(true)
-    .with_null_aware_value_keys(NonZeroUsize::new(value_keys).unwrap())
+    .with_null_aware_value_keys(NonZeroUsize::new(value_keys))
     .build()?;
     let original_schema = join.schema();
 

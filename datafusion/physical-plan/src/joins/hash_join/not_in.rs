@@ -103,6 +103,31 @@ impl NotIn {
         num_value_keys: Option<NonZeroUsize>,
         has_filter: bool,
     ) -> Result<Self> {
+        // The join type and mode come first: no value key count can make up
+        // for them, so their error is the one to report.
+        // `None` is `RightAnti`, which emits probe rows.
+        let output = match (join_type, partition_mode) {
+            (JoinType::LeftAnti, _) => Some(NotInOutput::Rows),
+            (JoinType::LeftMark, _) => Some(NotInOutput::Mark),
+            // `PartitionMode::CollectLeft` is safe because `RightAnti` is
+            // probe-driven: every probe row sees the whole build side.
+            (JoinType::RightAnti, PartitionMode::CollectLeft) => None,
+            _ => {
+                return plan_err!(
+                    "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, or LeftMark joins, got {join_type} with {partition_mode}"
+                );
+            }
+        };
+        // Build-driven joins decide in the final stage from state shared
+        // across the probe partitions: the per-build-row null bitmap for
+        // the correlated forms, and the probe-side NULL flag for the
+        // uncorrelated ones. `Partitioned` gives each output partition its
+        // own build side, so neither is global there.
+        if partition_mode == PartitionMode::Partitioned {
+            return plan_err!(
+                "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
+            );
+        }
         // An unset count is only unambiguous with a single key: a scalar
         // `NOT IN`. With more keys, any default would silently pick which of
         // them are `NOT IN` value keys and which are correlation scope keys.
@@ -131,31 +156,10 @@ impl NotIn {
         } else {
             NotInScope::Uncorrelated
         };
-        let output = match (join_type, partition_mode) {
-            (JoinType::LeftAnti, _) => NotInOutput::Rows,
-            (JoinType::LeftMark, _) => NotInOutput::Mark,
-            // `PartitionMode::CollectLeft` is safe because `RightAnti` is
-            // probe-driven: every probe row sees the whole build side.
-            (JoinType::RightAnti, PartitionMode::CollectLeft) => {
-                return Ok(Self::ProbeRows { scope });
-            }
-            _ => {
-                return plan_err!(
-                    "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, or LeftMark joins, got {join_type} with {partition_mode}"
-                );
-            }
-        };
-        // Build-driven joins decide in the final stage from state shared
-        // across the probe partitions: the per-build-row null bitmap for
-        // the correlated forms, and the probe-side NULL flag for the
-        // uncorrelated ones. `Partitioned` gives each output partition its
-        // own build side, so neither is global there.
-        if partition_mode == PartitionMode::Partitioned {
-            return plan_err!(
-                "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
-            );
-        }
-        Ok(Self::BuildRows { scope, output })
+        Ok(match output {
+            Some(output) => Self::BuildRows { scope, output },
+            None => Self::ProbeRows { scope },
+        })
     }
 
     fn scope(self) -> NotInScope {
