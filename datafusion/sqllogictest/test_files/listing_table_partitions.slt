@@ -186,6 +186,21 @@ select min(d), max(d) from null_part;
 ----
 2024-01-01 2024-01-01
 
+# Partition columns inferred from the directories are dictionary encoded.
+statement count 0
+create external table null_part_inferred
+stored as parquet
+location 'test_files/scratch/listing_table_partitions/null_part/';
+
+query TT
+select arrow_typeof(d), d from null_part_inferred where d is null;
+----
+Dictionary(UInt16, Utf8) NULL
+
+query I
+select column1 from null_part_inferred where d <> '2024-01-01';
+----
+
 # A null partition still lets files be ordered by their partition value.
 statement ok
 set datafusion.execution.target_partitions = 1;
