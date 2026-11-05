@@ -664,6 +664,57 @@ DataFusion CLI:</p>
 restores optimizations that depend on them. Preserve the required data ordering
 and ordering metadata when rewriting sorted files.</p>
 </section>
+<section id="hive-null-partition-directories-are-read-as-null">
+<h3>Hive null partition directories are read as NULL<a class="headerlink" href="#hive-null-partition-directories-are-read-as-null" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> now reads a partition directory named
+<code class="docutils literal notranslate"><span class="pre">__HIVE_DEFAULT_PARTITION__</span></code>, for example <code class="docutils literal notranslate"><span class="pre">/table/d=__HIVE_DEFAULT_PARTITION__/</span></code>,
+as a NULL partition value. This is the placeholder Hive compliant writers use for
+a null partition value, and matches how Hive, Spark and Impala read it.
+Previously the directory name was parsed as the partition column’s type, which
+failed for non-string columns and returned the literal string
+<code class="docutils literal notranslate"><span class="pre">__HIVE_DEFAULT_PARTITION__</span></code> for string columns.</p>
+<p>The placeholder is set by the new
+<code class="docutils literal notranslate"><span class="pre">datafusion.execution.listing_table_hive_default_partition_name</span></code> option, the
+equivalent of Hive’s <code class="docutils literal notranslate"><span class="pre">hive.exec.default.partition.name</span></code>. Setting it to the empty
+string reads the directory name as the value, as before.</p>
+<p>Partitioned writes (<code class="docutils literal notranslate"><span class="pre">INSERT</span> <span class="pre">INTO</span></code> and <code class="docutils literal notranslate"><span class="pre">COPY</span> <span class="pre">...</span> <span class="pre">PARTITIONED</span> <span class="pre">BY</span></code>) now reject a
+partition value equal to this placeholder, since it would be read back as NULL.</p>
+<p>To support this, <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> now declares all partition columns as nullable,
+so <code class="docutils literal notranslate"><span class="pre">DESCRIBE</span></code> and the table schema report them as nullable.</p>
+<p><strong>Who is affected:</strong></p>
+<ul class="simple">
+<li><p>Tables with string partition columns that contain a
+<code class="docutils literal notranslate"><span class="pre">__HIVE_DEFAULT_PARTITION__</span></code> directory. Its rows now have a NULL partition
+value, so <code class="docutils literal notranslate"><span class="pre">WHERE</span> <span class="pre">col</span> <span class="pre">=</span> <span class="pre">'__HIVE_DEFAULT_PARTITION__'</span></code> no longer matches them.</p></li>
+<li><p>Partitioned writes of the value <code class="docutils literal notranslate"><span class="pre">__HIVE_DEFAULT_PARTITION__</span></code>, which now
+return an error instead of writing a directory that reads back as NULL.</p></li>
+<li><p>Code that relies on <code class="docutils literal notranslate"><span class="pre">ListingTable</span></code> partition columns being non-nullable.</p></li>
+<li><p>Callers of <code class="docutils literal notranslate"><span class="pre">pruned_partition_list</span></code>, which can now return files with NULL
+partition values. Partition fields built from its output must be nullable.</p></li>
+<li><p>Users constructing <code class="docutils literal notranslate"><span class="pre">ExecutionOptions</span></code> (or <code class="docutils literal notranslate"><span class="pre">ConfigOptions</span></code>) with an exhaustive
+struct literal must provide the new
+<code class="docutils literal notranslate"><span class="pre">listing_table_hive_default_partition_name:</span> <span class="pre">String</span></code> field.</p></li>
+</ul>
+<p><strong>Migration guide:</strong></p>
+<p>Select the null partition with <code class="docutils literal notranslate"><span class="pre">IS</span> <span class="pre">NULL</span></code>:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SELECT</span><span class="w"> </span><span class="o">*</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="w"> </span><span class="k">WHERE</span><span class="w"> </span><span class="n">col</span><span class="w"> </span><span class="k">IS</span><span class="w"> </span><span class="k">NULL</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>To keep reading and writing <code class="docutils literal notranslate"><span class="pre">__HIVE_DEFAULT_PARTITION__</span></code> as a literal value,
+disable the mapping:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">execution</span><span class="p">.</span><span class="n">listing_table_hive_default_partition_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>If your writer uses a different <code class="docutils literal notranslate"><span class="pre">hive.exec.default.partition.name</span></code>, set the
+option to that name instead:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="k">mut</span><span class="w"> </span><span class="n">config</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SessionConfig</span><span class="p">::</span><span class="n">new</span><span class="p">();</span>
+<span class="n">config</span>
+<span class="w">    </span><span class="p">.</span><span class="n">options_mut</span><span class="p">()</span>
+<span class="w">    </span><span class="p">.</span><span class="n">execution</span>
+<span class="w">    </span><span class="p">.</span><span class="n">listing_table_hive_default_partition_name</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s">&quot;MY_NULL&quot;</span><span class="p">.</span><span class="n">to_string</span><span class="p">();</span>
+</pre></div>
+</div>
+</section>
 <section id="timestamp-u-some-tz-timestamp-u-none-reads-the-naive-operand-in-tz">
 <h3><code class="docutils literal notranslate"><span class="pre">Timestamp(u,</span> <span class="pre">Some(tz))</span> <span class="pre">-</span> <span class="pre">Timestamp(u,</span> <span class="pre">None)</span></code> reads the naive operand in <code class="docutils literal notranslate"><span class="pre">tz</span></code><a class="headerlink" href="#timestamp-u-some-tz-timestamp-u-none-reads-the-naive-operand-in-tz" title="Link to this heading">#</a></h3>
 <p>Subtracting a timezone-naive timestamp from a timezone-aware one <em>at the same
@@ -1930,6 +1981,7 @@ until the method is removed, as callers of the deprecated method still use them.
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquetaccessplan-into-overall-row-selection-is-deprecated"><code class="docutils literal notranslate"><span class="pre">ParquetAccessPlan::into_overall_row_selection</span></code> is deprecated</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#rowgroupaccessplanfilter-prune-by-range-takes-a-rowgrouprangeassignment"><code class="docutils literal notranslate"><span class="pre">RowGroupAccessPlanFilter::prune_by_range</span></code> takes a <code class="docutils literal notranslate"><span class="pre">RowGroupRangeAssignment</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#missing-parquet-null-counts-are-treated-as-unknown">Missing Parquet null counts are treated as unknown</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#hive-null-partition-directories-are-read-as-null">Hive null partition directories are read as NULL</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#timestamp-u-some-tz-timestamp-u-none-reads-the-naive-operand-in-tz"><code class="docutils literal notranslate"><span class="pre">Timestamp(u,</span> <span class="pre">Some(tz))</span> <span class="pre">-</span> <span class="pre">Timestamp(u,</span> <span class="pre">None)</span></code> reads the naive operand in <code class="docutils literal notranslate"><span class="pre">tz</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#foreignsession-create-physical-plan-is-unsupported"><code class="docutils literal notranslate"><span class="pre">ForeignSession::create_physical_plan</span></code> is unsupported</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#range-partitioning-supports-retained-samples-and-scaling">Range partitioning supports retained samples and scaling</a></li>
