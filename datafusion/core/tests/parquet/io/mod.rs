@@ -8,7 +8,7 @@
 //! correlates each requested byte range with the Parquet file structure it
 //! covers, so the resulting trace can be compared against `insta` snapshots.
 //!
-//! `ListingTable`object store access tests live in
+//! `ListingTable` object store access tests live in
 //! [`datafusion/core/tests/datasource/object_store_access.rs`](https://github.com/apache/datafusion/blob/main/datafusion/core/tests/datasource/object_store_access.rs).
 
 use std::fmt::Write as _;
@@ -41,7 +41,7 @@ mod row_group_pruning_io;
 mod topk_io;
 
 /// Kind of per column chunk metadata structure stored outside the footer
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum MetadataKind {
     BloomFilter,
     ColumnIndex,
@@ -276,6 +276,7 @@ impl ParquetFileLayout {
     /// A single request may span several items (for example, a coalesced read
     /// of adjacent column chunks), so all overlapping items are listed.
     fn describe_range(&self, range: &Range<u64>, file_size: u64) -> String {
+        // The footer is read as a suffix of the file (see `footer_size`)
         if range.end >= file_size && (file_size.saturating_sub(range.start)) <= 8192 {
             return format!("Parquet footer (offsets {}..{})", range.start, range.end);
         }
@@ -348,7 +349,10 @@ impl InstrumentedObjectStore {
     }
 
     /// Pushes a new `Request N` line and returns the held events lock so
-    /// the caller can append the lines of that request
+    /// the caller can append the lines of that request.
+    ///
+    /// Holding the lock while appending keeps the lines of concurrent
+    /// requests (for example, from multiple partitions) from interleaving.
     fn lock_new_request(&self) -> std::sync::MutexGuard<'_, Vec<String>> {
         let request = self.requests.fetch_add(1, Ordering::SeqCst) + 1;
         let mut events = self.events.lock().unwrap();
@@ -470,10 +474,10 @@ impl ParquetIoTest {
     /// Stores `file_bytes` as `mem:///table.parquet` and registers it as table
     /// `t` in a new [`SessionContext`] created with `config`.
     ///
-    /// Note: set the metadata size hint  to the exact size of the footer so
+    /// Note: sets the metadata size hint to the exact size of the footer so
     /// the first request reads only the footer metadata. Otherwise the default
     /// hint (512 KiB) covers the (small) test files entirely, hiding requests
-    /// for indexes and bloom filters
+    /// for the page index and Bloom filters.
     pub(crate) async fn new(file_bytes: Bytes, mut config: SessionConfig) -> Self {
         let file_size = file_bytes.len() as u64;
         let layout = ParquetFileLayout::new(&file_bytes);

@@ -36,10 +36,13 @@ use parquet::file::properties::WriterProperties;
 
 use super::ParquetIoTest;
 
-/// Without filter pushdown, the scan fetches every column of every row group
+/// Without filter pushdown, the scan fetches every column of every row group.
 #[tokio::test]
 async fn test_filter_pushdown_io_disabled() {
     let test = filter_pushdown_test(false).await;
+    // Note: in practice, the default 512 KiB metadata size hint often covers
+    // the OffsetIndex and Bloom filters for small files, so they wouldn't
+    // need separate requests.
     assert_snapshot!(test.query("SELECT * FROM t WHERE val = 7").await, @r"
     --- Query: SELECT * FROM t WHERE val = 7 (1 rows) ---
     Request 1
@@ -88,6 +91,7 @@ async fn test_filter_pushdown_io_enabled() {
     ");
 }
 
+/// Returns a [`ParquetIoTest`] for the file described in the module docs
 async fn filter_pushdown_test(pushdown_filters: bool) -> ParquetIoTest {
     let mut config = SessionConfig::new().with_target_partitions(1);
     config.options_mut().execution.parquet.pushdown_filters = pushdown_filters;

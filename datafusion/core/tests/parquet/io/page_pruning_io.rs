@@ -44,6 +44,8 @@ use super::ParquetIoTest;
 #[tokio::test]
 async fn test_page_pruning_io_no_predicate() {
     let test = page_pruning_test(true).await;
+    // Note: in practice, the default 512 KiB metadata size hint would fetch
+    // the page index of a small file like this along with the footer.
     assert_snapshot!(test.query("SELECT * FROM t").await, @r"
     --- Query: SELECT * FROM t (9 rows) ---
     Request 1
@@ -102,7 +104,8 @@ async fn test_page_pruning_io_two_pages() {
 }
 
 /// With page index pruning disabled, the whole column chunk of every column
-/// is read even though only page 1 can match.
+/// is read even though only page 1 can match. Note the page index itself is
+/// still read, it is just not used to prune.
 #[tokio::test]
 async fn test_page_pruning_io_disabled() {
     let test = page_pruning_test(false).await;

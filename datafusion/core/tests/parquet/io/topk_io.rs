@@ -44,6 +44,8 @@ use super::ParquetIoTest;
 #[tokio::test]
 async fn test_topk_io_dynamic_filter() {
     let test = topk_test(true).await;
+    // Note: in practice, the default 512 KiB metadata size hint would fetch
+    // the page index of a small file like this along with the footer.
     assert_snapshot!(test.query("SELECT * FROM t ORDER BY id DESC LIMIT 2").await, @r"
     --- Query: SELECT * FROM t ORDER BY id DESC LIMIT 2 (2 rows) ---
     Request 1
@@ -85,6 +87,7 @@ async fn test_topk_io_no_dynamic_filter() {
     ");
 }
 
+/// Returns a [`ParquetIoTest`] for the file described in the module docs
 async fn topk_test(dynamic_filter_pushdown: bool) -> ParquetIoTest {
     let mut config = SessionConfig::new().with_target_partitions(1);
     config

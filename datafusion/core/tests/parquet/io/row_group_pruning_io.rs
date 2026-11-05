@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Tests tracking I/O events during Parquet row group pruning
+//! Tests tracking I/O events during Parquet row group pruning.
 //!
 //! All tests filter on `id`, whose values are sorted across row groups so the
 //! row group statistics are disjoint and can prune:
@@ -38,6 +38,8 @@ use super::ParquetIoTest;
 #[tokio::test]
 async fn test_row_group_pruning_io_no_predicate() {
     let test = row_group_pruning_test().await;
+    // Note: in practice, the default 512 KiB metadata size hint would fetch
+    // the page index of a small file like this along with the footer.
     assert_snapshot!(test.query("SELECT * FROM t").await, @r"
     --- Query: SELECT * FROM t (9 rows) ---
     Request 1
@@ -120,6 +122,7 @@ async fn test_row_group_pruning_io_all_pruned() {
     ");
 }
 
+/// Returns a [`ParquetIoTest`] for the file described in the module docs
 async fn row_group_pruning_test() -> ParquetIoTest {
     let config = SessionConfig::new()
         .with_target_partitions(1)
