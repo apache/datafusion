@@ -557,7 +557,9 @@ mod tests {
         let strings: ArrayRef = Arc::new(LargeStringArray::from(vec![Some("a"); n]));
         let counts: ArrayRef = Arc::new(Int64Array::from(vec![Some(u32::MAX as i64); n]));
 
-        let err = super::repeat(&strings, &counts).unwrap_err().to_string();
+        let err = super::repeat(&strings, &counts)
+            .unwrap_err()
+            .strip_backtrace();
         assert_eq!(
             err,
             format!(
