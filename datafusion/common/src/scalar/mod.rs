@@ -2783,7 +2783,7 @@ impl ScalarValue {
     }
 
     /// Whether this is a float `0.0` or `-0.0`, including one inside a
-    /// dictionary. The two zeros are equal but sort apart (see
+    /// dictionary or run-end encoded value. The two zeros are equal but sort apart (see
     /// [`compare_floats`]), so a sort boundary at a zero has to account for
     /// both.
     ///
@@ -2793,7 +2793,8 @@ impl ScalarValue {
             ScalarValue::Float16(Some(v)) => f32::from(*v) == 0.0,
             ScalarValue::Float32(Some(v)) => *v == 0.0,
             ScalarValue::Float64(Some(v)) => *v == 0.0,
-            ScalarValue::Dictionary(_, inner) => inner.is_float_zero(),
+            ScalarValue::Dictionary(_, inner)
+            | ScalarValue::RunEndEncoded(_, _, inner) => inner.is_float_zero(),
             _ => false,
         }
     }
@@ -12102,6 +12103,11 @@ mod tests {
             ScalarValue::Float16(Some(f16::NEG_ZERO)),
             ScalarValue::Dictionary(
                 Box::new(DataType::Int32),
+                Box::new(ScalarValue::Float64(Some(-0.0))),
+            ),
+            ScalarValue::RunEndEncoded(
+                Field::new("run_ends", DataType::Int32, false).into(),
+                Field::new("values", DataType::Float64, true).into(),
                 Box::new(ScalarValue::Float64(Some(-0.0))),
             ),
         ] {

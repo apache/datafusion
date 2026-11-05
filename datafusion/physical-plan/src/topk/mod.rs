@@ -634,7 +634,8 @@ impl TopK {
             // equal (#22835), so `col < 0.0 OR (col = 0.0 AND ...)` would drop
             // `-0.0` rows that belong in the TopK. For a zero threshold, use a
             // non-strict bound that keeps both zeros and do not filter on any
-            // later key.
+            // later key. Temporary: remove once -0.0 and 0.0 sort as equal,
+            // see https://github.com/apache/datafusion/issues/26138
             let float_zero = value.is_float_zero();
 
             // Create the appropriate operator based on sort order

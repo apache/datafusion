@@ -855,10 +855,60 @@ select x, y from float_zero_desc order by x desc, y limit 2;
 0 7
 
 statement ok
+create table float_zero_ree as select arrow_cast(column1, 'RunEndEncoded("run_ends": non-null Int32, "values": Float64)') x, column2 y from (values (0.0, 1), (-0.0, 7));
+
+statement ok
+insert into float_zero_ree select arrow_cast(-0.0, 'RunEndEncoded("run_ends": non-null Int32, "values": Float64)'), 5;
+
+query I
+select y from float_zero_ree order by x, y limit 2;
+----
+5
+7
+
+# The filter also prunes files and row groups in the scan.
+query I
+copy (select * from (values (0.0, 1), (-0.0, 7)) t(x, y)) to 'test_files/scratch/topk/float_zero/a.parquet';
+----
+2
+
+query I
+copy (select * from (values (-0.0, 5)) t(x, y)) to 'test_files/scratch/topk/float_zero/b.parquet';
+----
+1
+
+statement ok
+create external table float_zero_pq stored as parquet location 'test_files/scratch/topk/float_zero/';
+
+query I
+select y from float_zero_pq order by x, y limit 2;
+----
+5
+7
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+query I
+select y from float_zero_pq order by x, y limit 2;
+----
+5
+7
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
 drop table float_zero;
 
 statement ok
 drop table float_zero_desc;
+
+statement ok
+drop table float_zero_ree;
+
+statement ok
+drop table float_zero_pq;
 
 statement ok
 set datafusion.execution.target_partitions = 4;
