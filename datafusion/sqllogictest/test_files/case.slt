@@ -173,7 +173,7 @@ SELECT CASE 1 WHEN 1 THEN arrow_cast([1, 2], 'FixedSizeList(2, Int64)') WHEN 2 T
 ----
 [1, 2]
 
-query error DataFusion error: type_coercion
+query error DataFusion error: Error during planning: Cannot find a common type for CASE result branches
 SELECT CASE 1 WHEN 1 THEN [1,2,3] WHEN 2 THEN 'test' ELSE null END;
 
 # test case when type coercion
@@ -411,7 +411,7 @@ FROM t;
 
 # coerce structs with subset of fields - field count mismatch causes type coercion failure
 # column3 has 2 fields but column4 has only 1 field
-query error DataFusion error: type_coercion\ncaused by\nError during planning: Failed to coerce then .* and else .* to common types in CASE WHEN expression
+query error DataFusion error: Error during planning: Cannot find a common type for CASE result branches .* and ELSE .*
 SELECT
   case
     when column1 > 0 then column3
