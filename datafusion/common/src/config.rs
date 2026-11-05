@@ -4093,7 +4093,8 @@ config_namespace! {
         /// and columns are matched by name: table columns missing from a file are filled with
         /// nulls, and file columns not declared in the table are ignored. Names are matched exactly
         /// (case-sensitive) and duplicate header names resolve to the first occurrence. Header
-        /// names containing quoted newlines are not supported.
+        /// names containing quoted newlines are not supported. The header is located the same
+        /// way the CSV parser does: a leading UTF-8 BOM, blank lines, and comment lines are skipped.
         ///
         /// Defaults to `false` when `None`.
         pub match_columns_by_header: Option<bool>, default = None

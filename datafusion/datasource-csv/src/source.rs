@@ -354,25 +354,48 @@ impl HeaderMapping {
     }
 }
 
-/// Returns the byte range of the header row in `buf`: the first line that is
-/// not a comment line, matching how the CSV decoder skips comments. Returns
-/// `None` when that line is not yet complete and more input may follow.
+/// Returns the byte range of the header row in `buf`, following the same
+/// rules as the CSV parser: a leading UTF-8 BOM is ignored, empty records are
+/// skipped, and comment lines (which always end at `\n`) are skipped. With no
+/// explicit terminator both `\r` and `\n` end a record. Returns `None` when
+/// the header is not yet complete and more input may follow.
 fn find_header_line(
     buf: &[u8],
-    terminator: u8,
+    terminator: Option<u8>,
     comment: Option<u8>,
     eof: bool,
 ) -> Option<Range<usize>> {
-    let is_comment = |line: &[u8]| comment.is_some_and(|c| line.first() == Some(&c));
+    const BOM: &[u8] = b"\xef\xbb\xbf";
+    let is_terminator = |b: u8| match terminator {
+        Some(t) => b == t,
+        None => b == b'\n' || b == b'\r',
+    };
+
     let mut start = 0;
+    if buf.starts_with(BOM) {
+        start = BOM.len();
+    } else if !eof && buf.len() < BOM.len() && BOM.starts_with(buf) {
+        return None;
+    }
+
     loop {
-        let rest = &buf[start..];
-        match rest.iter().position(|b| *b == terminator) {
-            Some(end) if is_comment(&rest[..end]) => start += end + 1,
-            Some(end) => return Some(start..start + end),
-            None if !eof => return None,
-            None if is_comment(rest) => return Some(buf.len()..buf.len()),
-            None => return Some(start..buf.len()),
+        let Some(&first) = buf.get(start) else {
+            return eof.then_some(buf.len()..buf.len());
+        };
+        if is_terminator(first) {
+            start += 1;
+        } else if comment == Some(first) {
+            match buf[start..].iter().position(|b| *b == b'\n') {
+                Some(end) => start += end + 1,
+                None if eof => return Some(buf.len()..buf.len()),
+                None => return None,
+            }
+        } else {
+            return match buf[start..].iter().position(|b| is_terminator(*b)) {
+                Some(end) => Some(start..start + end),
+                None if eof => Some(start..buf.len()),
+                None => None,
+            };
         }
     }
 }
@@ -381,7 +404,7 @@ fn find_header_line(
 /// still yields every byte of `input`.
 async fn peek_header_line(
     mut input: BoxStream<'static, Result<Bytes>>,
-    terminator: u8,
+    terminator: Option<u8>,
     comment: Option<u8>,
 ) -> Result<(Vec<u8>, BoxStream<'static, Result<Bytes>>)> {
     let mut prefix = Vec::new();
@@ -412,7 +435,7 @@ async fn fetch_header_line(
     store: &dyn ObjectStore,
     location: &Path,
     file_size: u64,
-    terminator: u8,
+    terminator: Option<u8>,
     comment: Option<u8>,
 ) -> Result<(Vec<u8>, u64)> {
     let mut len = file_size.min(64 * 1024);
@@ -702,7 +725,7 @@ impl FileOpener for CsvOpener {
                         store.as_ref(),
                         &location,
                         file_size,
-                        line_end,
+                        terminator,
                         comment,
                     )
                     .await?;
@@ -755,7 +778,7 @@ impl FileOpener for CsvOpener {
                         let header = loop {
                             let eof = decoder.read_until(line_end, &mut prefix)? == 0;
                             if let Some(header) =
-                                find_header_line(&prefix, line_end, comment, eof)
+                                find_header_line(&prefix, terminator, comment, eof)
                             {
                                 break prefix[header].to_vec();
                             }
@@ -787,7 +810,7 @@ impl FileOpener for CsvOpener {
                     let mut mapping = None;
                     if match_by_header {
                         let (header, rest) =
-                            peek_header_line(input, line_end, comment).await?;
+                            peek_header_line(input, terminator, comment).await?;
                         mapping = config
                             .header_mapping(&header, Arc::clone(&expr_adapter_factory))?;
                         input = rest;
@@ -1196,24 +1219,92 @@ mod tests {
     #[test]
     fn find_header_line_skips_comments() {
         let comment = Some(b'#');
+        let newline = Some(b'\n');
         assert_eq!(
-            find_header_line(b"# c1\n#c2\na,b\n1,2\n", b'\n', comment, false),
+            find_header_line(b"# c1\n#c2\na,b\n1,2\n", newline, comment, false),
             Some(9..12)
         );
         assert_eq!(
-            find_header_line(b"#c\na,b\n", b'\n', None, false),
+            find_header_line(b"#c\na,b\n", newline, None, false),
             Some(0..2)
         );
-        assert_eq!(find_header_line(b"# c1\na,", b'\n', comment, false), None);
+        assert_eq!(find_header_line(b"# c1\na,", newline, comment, false), None);
         assert_eq!(
-            find_header_line(b"# c1\na,b", b'\n', comment, true),
+            find_header_line(b"# c1\na,b", newline, comment, true),
             Some(5..8)
         );
         assert_eq!(
-            find_header_line(b"# c1\n# c2", b'\n', comment, true),
+            find_header_line(b"# c1\n# c2", newline, comment, true),
             Some(9..9)
         );
-        assert_eq!(find_header_line(b"", b'\n', comment, true), Some(0..0));
+        assert_eq!(
+            find_header_line(b"# c1\n# c2", newline, comment, false),
+            None
+        );
+        assert_eq!(find_header_line(b"", newline, comment, true), Some(0..0));
+    }
+
+    #[test]
+    fn find_header_line_skips_leading_blank_records() {
+        assert_eq!(
+            find_header_line(b"\n\na,b\n1,2\n", Some(b'\n'), None, false),
+            Some(2..5)
+        );
+        // Without an explicit terminator both `\r` and `\n` end a record
+        assert_eq!(
+            find_header_line(b"\r\n\n\ra,b\r\n1,2\r\n", None, None, false),
+            Some(4..7)
+        );
+        // A custom terminator keeps `\n` and `\r` as ordinary bytes
+        assert_eq!(
+            find_header_line(b";;a,b\n;1,2;", Some(b';'), None, false),
+            Some(2..6)
+        );
+        // Whitespace-only lines are records, not blank lines
+        assert_eq!(
+            find_header_line(b"  \na,b\n", Some(b'\n'), None, false),
+            Some(0..2)
+        );
+        assert_eq!(find_header_line(b"\n\n", Some(b'\n'), None, false), None);
+        assert_eq!(
+            find_header_line(b"\n\n", Some(b'\n'), None, true),
+            Some(2..2)
+        );
+    }
+
+    #[test]
+    fn find_header_line_strips_bom() {
+        let comment = Some(b'#');
+        assert_eq!(
+            find_header_line(b"\xef\xbb\xbfa,b\n1,2\n", Some(b'\n'), comment, false),
+            Some(3..6)
+        );
+        assert_eq!(
+            find_header_line(b"\xef\xbb\xbf# c1\n\na,b\n", Some(b'\n'), comment, false),
+            Some(9..12)
+        );
+        // An incomplete BOM needs more input before it can be classified
+        assert_eq!(
+            find_header_line(b"\xef\xbb", Some(b'\n'), comment, false),
+            None
+        );
+        assert_eq!(
+            find_header_line(b"\xef\xbb", Some(b'\n'), comment, true),
+            Some(0..2)
+        );
+        // Only a BOM at the very start of the file is ignored
+        assert_eq!(
+            find_header_line(b"\n\xef\xbb\xbfa,b\n", Some(b'\n'), comment, false),
+            Some(1..7)
+        );
+    }
+
+    #[test]
+    fn find_header_line_comment_ends_at_newline_with_custom_terminator() {
+        assert_eq!(
+            find_header_line(b"# c1;ignored\na,b;1,2;", Some(b';'), Some(b'#'), false),
+            Some(13..16)
+        );
     }
 
     #[test]
