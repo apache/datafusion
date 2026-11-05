@@ -1407,6 +1407,49 @@ reader decodes a payload without the field (value <code class="docutils literal 
 ignores the unknown field and would read the extra tuple elements as
 correlation keys, returning wrong results.</p>
 </section>
+<section id="null-aware-sort-merge-joins-add-a-protobuf-field">
+<h3>Null-aware sort-merge joins add a protobuf field<a class="headerlink" href="#null-aware-sort-merge-joins-add-a-protobuf-field" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">SortMergeJoinExec</span></code> now supports null-aware (<code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code>) semantics for
+uncorrelated, single-key <code class="docutils literal notranslate"><span class="pre">LeftAnti</span></code> joins without a join filter.
+The existing seven-argument <code class="docutils literal notranslate"><span class="pre">SortMergeJoinExec::try_new</span></code> continues
+to create a non-null-aware join. Enable null-aware semantics with
+<code class="docutils literal notranslate"><span class="pre">.with_null_aware(true)?</span></code>:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">exec</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SortMergeJoinExec</span><span class="p">::</span><span class="n">try_new</span><span class="p">(</span>
+<span class="w">    </span><span class="n">left</span><span class="p">,</span>
+<span class="w">    </span><span class="n">right</span><span class="p">,</span>
+<span class="w">    </span><span class="n">on</span><span class="p">,</span>
+<span class="w">    </span><span class="nb">None</span><span class="p">,</span>
+<span class="w">    </span><span class="n">JoinType</span><span class="p">::</span><span class="n">LeftAnti</span><span class="p">,</span>
+<span class="w">    </span><span class="fm">vec!</span><span class="p">[</span><span class="n">SortOptions</span><span class="p">::</span><span class="n">new</span><span class="p">(</span><span class="kc">false</span><span class="p">,</span><span class="w"> </span><span class="kc">true</span><span class="p">)],</span><span class="w"> </span><span class="c1">// ASC NULLS FIRST</span>
+<span class="w">    </span><span class="n">NullEquality</span><span class="p">::</span><span class="n">NullEqualsNothing</span><span class="p">,</span>
+<span class="p">)</span><span class="o">?</span>
+<span class="p">.</span><span class="n">with_null_aware</span><span class="p">(</span><span class="kc">true</span><span class="p">)</span><span class="o">?</span><span class="p">;</span>
+</pre></div>
+</div>
+<p>Both inputs must have a single partition when executed.</p>
+<p>The generated protobuf <code class="docutils literal notranslate"><span class="pre">SortMergeJoinExecNode</span></code> type has a new
+<code class="docutils literal notranslate"><span class="pre">null_aware</span></code> field. Exhaustive struct literals must initialize it;
+<code class="docutils literal notranslate"><span class="pre">false</span></code> preserves the previous behavior:</p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="kd">let</span><span class="w"> </span><span class="n">node</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">SortMergeJoinExecNode</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="n">left</span><span class="p">,</span>
+<span class="w">    </span><span class="n">right</span><span class="p">,</span>
+<span class="w">    </span><span class="n">on</span><span class="p">,</span>
+<span class="w">    </span><span class="n">join_type</span><span class="p">,</span>
+<span class="w">    </span><span class="n">filter</span><span class="p">,</span>
+<span class="w">    </span><span class="n">sort_options</span><span class="p">,</span>
+<span class="w">    </span><span class="n">null_equality</span><span class="p">,</span>
+<span class="w">    </span><span class="n">projection</span><span class="p">,</span>
+<span class="w">    </span><span class="n">null_aware</span><span class="p">:</span><span class="w"> </span><span class="nc">false</span><span class="p">,</span>
+<span class="p">};</span>
+</pre></div>
+</div>
+<p>For binary protobuf plans, an older sort-merge join payload without this
+field decodes with <code class="docutils literal notranslate"><span class="pre">null_aware</span> <span class="pre">=</span> <span class="pre">false</span></code>. A 55.x reader must not consume
+a new sort-merge join plan with <code class="docutils literal notranslate"><span class="pre">null_aware</span> <span class="pre">=</span> <span class="pre">true</span></code>: it ignores the
+unknown field and executes a plain anti join, which can return incorrect
+results. Upgrade all plan readers before sending them null-aware
+sort-merge join plans.</p>
+</section>
 <section id="functionaldependence-has-a-new-null-equality-field">
 <h3><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field<a class="headerlink" href="#functionaldependence-has-a-new-null-equality-field" title="Link to this heading">#</a></h3>
 <p><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> now records the NULL semantics its dependency holds under.
@@ -1918,6 +1961,7 @@ until the method is removed, as callers of the deprecated method still use them.
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#executionplan-supports-limit-pushdown-is-deprecated-in-favour-of-limit-behavior"><code class="docutils literal notranslate"><span class="pre">ExecutionPlan::supports_limit_pushdown</span></code> is deprecated in favour of <code class="docutils literal notranslate"><span class="pre">limit_behavior</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#mergeintoopnode-protobuf-literals-require-target-qualifier"><code class="docutils literal notranslate"><span class="pre">MergeIntoOpNode</span></code> protobuf literals require <code class="docutils literal notranslate"><span class="pre">target_qualifier</span></code></a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-aware-joins-record-their-not-in-value-key-count">Null-aware joins record their <code class="docutils literal notranslate"><span class="pre">NOT</span> <span class="pre">IN</span></code> value key count</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#null-aware-sort-merge-joins-add-a-protobuf-field">Null-aware sort-merge joins add a protobuf field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functionaldependence-has-a-new-null-equality-field"><code class="docutils literal notranslate"><span class="pre">FunctionalDependence</span></code> has a new <code class="docutils literal notranslate"><span class="pre">null_equality</span></code> field</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#nullable-unique-constraints-no-longer-add-or-remove-group-by-expressions">Nullable <code class="docutils literal notranslate"><span class="pre">UNIQUE</span></code> constraints no longer add or remove <code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span></code> expressions</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#functional-dependency-helpers-take-field-indices-instead-of-names">Functional dependency helpers take field indices instead of names</a></li>
