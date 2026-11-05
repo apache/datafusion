@@ -54,8 +54,8 @@ use datafusion_common::utils::{
     get_available_parallelism, memory::RecordBatchMemoryCounter,
 };
 use datafusion_common::{
-    DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
-    unwrap_or_internal_err,
+    DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_datafusion_err, unwrap_or_internal_err,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
@@ -1017,9 +1017,11 @@ impl ExternalSorter {
     {
         let reserved_bytes = get_reserved_bytes_for_record_batch(&batch)?;
         match &shared_input {
-            None => assert_eq!(reserved_bytes, reservation.size()),
+            None => assert_eq_or_internal_err!(reserved_bytes, reservation.size()),
             // `shared_input` covers every buffer of every run's input
-            Some(shared) => assert!(reservation.size() + shared.size() >= reserved_bytes),
+            Some(shared) => assert_or_internal_err!(
+                reservation.size() + shared.size() >= reserved_bytes
+            ),
         }
 
         let expressions = self.expr.clone();
@@ -2534,6 +2536,60 @@ mod tests {
     use futures::{FutureExt, Stream, TryStreamExt};
     use insta::assert_snapshot;
     use tokio::sync::Notify;
+
+    /// Runs sharing a buffer address with different capacities, as FFI-imported
+    /// slices do. <https://github.com/apache/datafusion/issues/27069>
+    #[tokio::test]
+    async fn sort_runs_sharing_address_with_different_capacities() -> Result<()> {
+        use arrow::buffer::{Buffer, ScalarBuffer};
+        use std::ptr::NonNull;
+
+        let owner: Arc<Vec<i32>> = Arc::new((0..1024).rev().collect());
+        let ptr = NonNull::new(owner.as_ptr().cast::<u8>().cast_mut()).unwrap();
+        let batch = |len: usize| -> Result<RecordBatch> {
+            // SAFETY: `owner` holds `len` values at `ptr`; the buffer keeps it alive.
+            let buffer = unsafe {
+                Buffer::from_custom_allocation(
+                    ptr,
+                    len * size_of::<i32>(),
+                    Arc::clone(&owner) as _,
+                )
+            };
+            let array = Int32Array::new(ScalarBuffer::new(buffer, 0, len), None);
+            Ok(RecordBatch::try_from_iter([(
+                "a",
+                Arc::new(array) as ArrayRef,
+            )])?)
+        };
+        // Smaller capacity first, so it is the first one seen for the address.
+        let batches = vec![batch(16)?, batch(1024)?];
+        let schema = batches[0].schema();
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let sort = SortExec::new(
+            [PhysicalSortExpr::new_default(col("a", &schema)?)].into(),
+            input,
+        );
+        // Keep each batch as its own run.
+        let context = Arc::new(TaskContext::default().with_session_config(
+            SessionConfig::new().with_sort_in_place_threshold_bytes(0),
+        ));
+
+        let output = collect(Arc::new(sort), context).await?;
+        let values = output
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int32Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let mut expected = (0..1024).chain(1008..1024).collect::<Vec<i32>>();
+        expected.sort_unstable();
+        assert_eq!(values, expected);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn sort_run_records_compute_before_consumption() -> Result<()> {
