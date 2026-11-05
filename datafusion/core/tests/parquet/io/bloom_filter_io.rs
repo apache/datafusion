@@ -41,7 +41,7 @@ async fn test_parquet_bloom_filter_io_matching() {
     // produces a batch.
     //
     // Note: in practice, the default 512 KiB metadata size hint often covers
-    // the OffsetIndex and Bloom filters for small files, so they wouldn't 
+    // the OffsetIndex and Bloom filters for small files, so they wouldn't
     // need separate requests.
     assert_snapshot!(test.query("SELECT * FROM t WHERE a = 10 AND b = 100").await, @r"
     --- Query: SELECT * FROM t WHERE a = 10 AND b = 100 (1 rows) ---
