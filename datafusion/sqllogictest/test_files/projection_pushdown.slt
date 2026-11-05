@@ -2675,5 +2675,120 @@ A 2
 statement ok
 DROP TABLE duplicate_alias;
 
+# A leaf expression must still reach the scan when its projection also holds a
+# `KeepInPlace` expression. See `try_split_leaf_projection` in
+# `datafusion/physical-optimizer/src/projection_pushdown.rs` for why that used
+# to be impossible.
+#
+# These are plan assertions on purpose. `get_field` stranded above the
+# repartition still returns the right answer, it just reads the whole struct,
+# so a result-only test passes whether or not the bug is present.
+#
+# Needs both a repartition (`target_partitions` > 1) and a row estimate above
+# `batch_size`, hence the two SETs. Restore them with `SET` rather than `RESET`:
+# `RESET` puts back the global default instead of the harness value, and the
+# harness rejects a file that leaves configuration modified.
+
+statement ok
+COPY (
+    SELECT column1 AS id, column2 AS s
+    FROM VALUES
+        (1, {value: 100, label: 'alpha'}),
+        (2, {value: 200, label: 'beta'}),
+        (3, {value: 150, label: 'gamma'}),
+        (4, {value: 300, label: 'delta'}),
+        (5, {value: 250, label: 'epsilon'})
+) TO 'test_files/scratch/projection_pushdown/leaf_split.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE leaf_split STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/leaf_split.parquet';
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+# The scan must read only the `value` leaf. A plan holding a bare `s` in the
+# `DataSourceExec` projection means the whole struct is being read.
+query TT
+EXPLAIN SELECT s['value'] + 1 AS v FROM leaf_split;
+----
+logical_plan
+01)Projection: get_field(leaf_split.s, Utf8("value")) + Int64(1) AS v
+02)--TableScan: leaf_split projection=[s]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@0 + 1 as v]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+
+# The leaf is bare here: the unrelated computed column is what triggers it.
+query TT
+EXPLAIN SELECT s['value'] AS v, id + 1 AS w FROM leaf_split;
+----
+logical_plan
+01)Projection: get_field(leaf_split.s, Utf8("value")) AS v, leaf_split.id + Int64(1) AS w
+02)--TableScan: leaf_split projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+
+# `s` is genuinely needed by the outer projection here, so it must stay.
+query TT
+EXPLAIN SELECT s['value'] + 1 AS v, s AS whole FROM leaf_split;
+----
+logical_plan
+01)Projection: get_field(leaf_split.s, Utf8("value")) + Int64(1) AS v, leaf_split.s AS whole
+02)--TableScan: leaf_split projection=[s]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 + 1 as v, s@0 as whole]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[s, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+
+# Two distinct leaves plus a computed sibling: both leaves must reach the scan
+# and the struct must not be read whole.
+query TT
+EXPLAIN SELECT s['value'] AS v, s['label'] AS l, id + 1 AS w FROM leaf_split;
+----
+logical_plan
+01)Projection: get_field(leaf_split.s, Utf8("value")) AS v, get_field(leaf_split.s, Utf8("label")) AS l, leaf_split.id + Int64(1) AS w
+02)--TableScan: leaf_split projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 as v, __datafusion_leaf_1@2 as l, id@0 + 1 as w]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0, get_field(s@1, label) as __datafusion_leaf_1], file_type=parquet
+
+query ITI
+SELECT s['value'] AS v, s['label'] AS l, id + 1 AS w FROM leaf_split ORDER BY v;
+----
+100 alpha 2
+150 gamma 4
+200 beta 3
+250 epsilon 6
+300 delta 5
+
+query I
+SELECT s['value'] + 1 AS v FROM leaf_split ORDER BY v;
+----
+101
+151
+201
+251
+301
+
+statement ok
+SET datafusion.execution.batch_size = 8192;
+
+# Back to 4, which is what this file leaves configured and what the harness
+# started from.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE leaf_split;
+
 statement ok
 RESET datafusion.execution.parquet.pushdown_filters;
