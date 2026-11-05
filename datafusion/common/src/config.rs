@@ -1115,7 +1115,8 @@ config_namespace! {
         /// column, in the declared order, with no further `key=value` directories below
         /// them (this also applies to tables without partition columns). Defaults to
         /// false (non-matching files are skipped). Only files listed for a query are
-        /// checked, so partition filters that narrow the listing prefix narrow the check.
+        /// checked, so partition filters that narrow the listing prefix narrow the check,
+        /// and a `LIMIT` can stop the listing before it reaches a non-matching file.
         pub listing_table_strict_partitions: bool, default = false
 
         /// Should DataFusion support recursive CTEs

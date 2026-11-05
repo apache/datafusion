@@ -167,6 +167,34 @@ select column1, column2, year from root_file_test where year = '2025';
 ----
 3 charlie 2025
 
+# A LIMIT stops the listing once enough rows are found, so a file listed
+# after that point is not checked
+query I
+copy (values(1, 'alice'), (2, 'bob'))
+to 'test_files/scratch/listing_table_partitions/limit_stray_last/year=2024/data.parquet';
+----
+2
+
+statement count 0
+create external table limit_stray_last (column1 int, column2 varchar, year varchar)
+stored as parquet
+partitioned by (year)
+location 'test_files/scratch/listing_table_partitions/limit_stray_last/';
+
+query I
+copy (values(3, 'charlie'))
+to 'test_files/scratch/listing_table_partitions/limit_stray_last/zzz.parquet';
+----
+1
+
+query ITT
+select * from limit_stray_last limit 1;
+----
+1 alice 2024
+
+query error File '.*limit_stray_last/zzz\.parquet'.*does not match partition columns \["year"\]: it is not under a directory for partition column 'year'
+select count(*) from limit_stray_last;
+
 # Declaring fewer partition columns than the directories have is an error
 statement count 0
 create external table multi_part_only_a
