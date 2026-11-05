@@ -3,10 +3,8 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 // Include tests in dataframe_functions
-mod case;
 mod dataframe_functions;
 mod describe;
-mod union;
 
 use arrow::array::{
     Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,

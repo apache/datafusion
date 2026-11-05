@@ -6,6 +6,22 @@
 ## UNION Tests
 ##########
 
+# Infer the common schema before analysis, including timestamp precision/timezone
+# and string representations (https://github.com/apache/datafusion/issues/27023).
+query TTT
+DESCRIBE SELECT
+  arrow_cast(1, 'Timestamp(Microsecond, Some("UTC"))') AS t,
+  arrow_cast('a', 'Utf8') AS large,
+  arrow_cast('a', 'Utf8') AS view
+UNION ALL SELECT
+  CAST(NULL AS TIMESTAMP),
+  arrow_cast('b', 'LargeUtf8'),
+  arrow_cast('b', 'Utf8View');
+----
+t Timestamp(ns, "UTC") YES
+large LargeUtf8 NO
+view Utf8View NO
+
 statement ok
 CREATE TABLE t1(
   id INT,

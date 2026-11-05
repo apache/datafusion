@@ -40,6 +40,14 @@ INSERT INTO t2 VALUES (2, 2), (4, 4);
 
 
 # Test binding
+# Infer common types by name while preserving missing-column nullability.
+query TTT
+DESCRIBE SELECT 1::INT AS x
+UNION ALL BY NAME SELECT 'a' AS y, 2::BIGINT AS x;
+----
+x Int64 NO
+y Utf8 YES
+
 query I
 SELECT t1.x FROM t1 UNION BY NAME SELECT x FROM t1 ORDER BY x;
 ----
