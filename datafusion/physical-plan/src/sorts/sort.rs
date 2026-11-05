@@ -630,6 +630,8 @@ impl ExternalSorter {
     /// For "smaller" datasets, the data is first concatenated into a
     /// single batch and then sorted. This is often faster than
     /// sorting and then merging.
+    /// During spilling, if concatenation needs unavailable memory, the batches
+    /// are sorted separately and merged as for larger datasets.
     ///
     /// ```text
     ///        ┌─────┐
@@ -714,19 +716,35 @@ impl ExternalSorter {
 
         // If less than sort_in_place_threshold_bytes, concatenate and sort in place
         if self.reservation.size() < self.sort_in_place_threshold_bytes {
-            // Concatenation can grow the ordinary sort reservation, which cannot
-            // borrow merge workspace. Return idle workspace to the execution pool
-            // so that growth can use it.
-            self.merge_pool.release_unused();
             // Concatenate memory batches together and sort
             let batch = concat_batches(&self.schema, &self.in_mem_batches)?;
-            self.in_mem_batches.clear();
-            self.reservation
-                .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
-                .map_err(Self::err_with_oom_context)?;
-            let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation, None)?;
-            return Ok(self.observe_if_output(sorted_stream, is_output_stream));
+            let size = get_reserved_bytes_for_record_batch(&batch)?;
+            // Admit any growth before dropping the inputs; shrink only afterwards.
+            // Keep spill workspace reserved so the next spill can reuse it.
+            match self
+                .reservation
+                .try_resize(size.max(self.reservation.size()))
+            {
+                Ok(()) => {
+                    self.in_mem_batches.clear();
+                    self.reservation.resize(size);
+                    let reservation = self.reservation.take();
+                    let sorted_stream =
+                        self.sort_batch_stream(batch, reservation, None)?;
+                    return Ok(self.observe_if_output(sorted_stream, is_output_stream));
+                }
+                Err(error)
+                    if !is_output_stream
+                        && matches!(
+                            error.find_root(),
+                            DataFusionError::ResourcesExhausted(_)
+                        ) =>
+                {
+                    // Concatenation can expand shared buffers. Sort the original
+                    // batches separately when that growth cannot fit.
+                }
+                Err(error) => return Err(Self::err_with_oom_context(error)),
+            }
         }
 
         // For single-column sorts, coalesce the buffered batches into fewer,
