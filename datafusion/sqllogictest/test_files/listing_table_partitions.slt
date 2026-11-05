@@ -247,6 +247,7 @@ set datafusion.execution.listing_table_strict_partitions = false;
 statement count 0
 reset datafusion.runtime.list_files_cache_limit;
 
+# Setting a runtime option rebuilds the session state, which turns this off
 statement count 0
 reset datafusion.catalog.create_default_catalog_and_schema;
 

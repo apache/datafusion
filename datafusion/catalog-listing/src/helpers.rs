@@ -22,7 +22,8 @@ use std::sync::Arc;
 
 use datafusion_catalog::Session;
 use datafusion_common::{
-    HashMap, Result, ScalarValue, TableReference, assert_or_internal_err, plan_err,
+    HashMap, Result, ScalarValue, TableReference, assert_or_internal_err, internal_err,
+    plan_err,
 };
 use datafusion_datasource::PartitionedFile;
 use datafusion_datasource::{FileExtensions, ListingTableUrl};
@@ -476,11 +477,8 @@ fn check_partition_directories(
     partition_cols: &[(String, DataType)],
 ) -> Result<()> {
     let Some(segments) = table_path.strip_prefix(file_path) else {
-        return strict_partitions_err(
-            table_path,
-            file_path,
-            partition_cols,
-            "it is not under the table path",
+        return internal_err!(
+            "File '{file_path}' is not under table path '{table_path}'"
         );
     };
     let mut dirs: Vec<&str> = segments.collect();
