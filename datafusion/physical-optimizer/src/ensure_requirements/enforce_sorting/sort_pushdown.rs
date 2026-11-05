@@ -132,7 +132,7 @@ fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
 }
 
 /// Returns whether a fetch on `plan` can move to its input.
-fn can_push_fetch_through(plan: &Arc<dyn ExecutionPlan>) -> bool {
+pub(crate) fn can_push_fetch_through(plan: &Arc<dyn ExecutionPlan>) -> bool {
     match plan.limit_behavior() {
         LimitBehavior::MoveToInput => true,
         LimitBehavior::Merge => plan.fetch().is_none(),
