@@ -4602,6 +4602,33 @@ mod test {
         assert_eq!(collect_int32_values(stream).await, [12, 11, 8, 7, 4, 3]);
     }
 
+    /// A limit larger than the first row group read spans the row group
+    /// boundary: row group `9..=12` is taken whole, the next one (`5..=8`)
+    /// is cut to the 2 rows still needed (`7, 8`), and the walk stops, so
+    /// row group `1..=4` is read as is and only its last `limit` rows are
+    /// kept. The file stream stops after the first 6 rows, which are exactly
+    /// `12..=7`.
+    #[tokio::test]
+    async fn test_exact_reverse_scan_limit_spans_row_groups() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = write_twelve_rows_in_three_row_groups(&store).await;
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_projection_indices(&[0])
+            .with_limit(6)
+            .with_batch_size(3)
+            .with_reverse_row_groups(true)
+            .with_reverse_rows(true)
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+        let values = collect_int32_values(stream).await;
+
+        assert_eq!(values[..6], [12, 11, 10, 9, 8, 7]);
+        assert_eq!(values, [12, 11, 10, 9, 8, 7, 4, 3, 2, 1]);
+    }
+
     /// Under a pushed-down filter a row group's output is known only when
     /// statistics prove every row passes. Row group `9..=12` is fully
     /// matched by `a > 5` and is cut to its last 3 rows up front; `5..=8` is
