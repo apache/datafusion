@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use arrow::array::RecordBatch;
 use arrow::compute::concat_batches;
+use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -210,9 +211,7 @@ impl SortQueryFuzzer {
                     if expected_results.is_none() {
                         expected_results = Some(results);
                     } else if let Some(ref expected) = expected_results {
-                        // Every projected column is an ORDER BY key, so tied
-                        // rows have identical output and can be compared in order.
-                        assert_eq!(expected, &results);
+                        assert_batches_equal_in_order(expected, &results, "");
                     } else {
                         unreachable!();
                     }
@@ -401,6 +400,9 @@ impl SortFuzzerTestGenerator {
 
     /// Generates a random SQL query string and an optional limit value.
     /// Returns a tuple containing the query string and an optional limit.
+    ///
+    /// Every projected column is an ORDER BY key, so tied rows have identical
+    /// output and results can be compared in order, including with LIMIT.
     pub fn generate_random_query(&self, rng_seed: u64) -> (String, Option<usize>) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
@@ -593,10 +595,10 @@ impl SortFuzzerTestGenerator {
                 let ctx =
                     self.generate_random_config(config_seed, false, Some(threshold))?;
                 let actual = ctx.sql(&query_str).await?.collect().await?;
-                assert_eq!(
-                    results,
-                    concat_batches(&schema, &actual)?,
-                    "sort_in_place_threshold_bytes={threshold}"
+                assert_batches_equal_in_order(
+                    &results,
+                    &concat_batches(&schema, &actual)?,
+                    &format!("sort_in_place_threshold_bytes={threshold}"),
                 );
             }
         }
@@ -605,9 +607,64 @@ impl SortFuzzerTestGenerator {
     }
 }
 
+/// Compares rows in order by their displayed values, so logically equal
+/// batches with different physical encodings (e.g. dictionaries) still match.
+#[track_caller]
+fn assert_batches_equal_in_order(
+    expected: &RecordBatch,
+    actual: &RecordBatch,
+    msg: &str,
+) {
+    let expected = pretty_format_batches(std::slice::from_ref(expected))
+        .unwrap()
+        .to_string();
+    let actual = pretty_format_batches(std::slice::from_ref(actual))
+        .unwrap()
+        .to_string();
+    assert_eq!(expected, actual, "{msg}");
+}
+
 #[cfg(test)]
 mod test {
     use super::*;
+
+    /// The sort query fuzzer uses the current time as its seed for each run.
+    /// This test replays seeds from previously failing cases.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_regression_sort_query_fuzz() {
+        let seeds = [
+            // https://github.com/apache/datafusion/actions/runs/41196052207/job/124522323666
+            (
+                1_793_445_468,
+                17_320_197_313_368_524_478,
+                16_774_755_103_655_697_964,
+                1_568_822_825_954_225_201,
+            ),
+            // https://github.com/apache/datafusion/actions/runs/41115808909/job/124269616294
+            (
+                1_793_388_738,
+                1_004_655_469_210_299_058,
+                17_630_739_076_404_108_311,
+                5_497_646_063_426_563_414,
+            ),
+        ];
+
+        for (gen_seed, dataset_seed, query_seed, config_seed) in seeds {
+            let mut test_generator = SortFuzzerTestGenerator::new(
+                2000,
+                3,
+                "sort_fuzz_table".to_string(),
+                get_supported_types_columns(gen_seed),
+                false,
+                gen_seed,
+            );
+
+            test_generator
+                .fuzzer_run(dataset_seed, query_seed, config_seed, true)
+                .await
+                .unwrap();
+        }
+    }
 
     /// Given the same seed, the result should be the same
     #[tokio::test]
@@ -624,6 +681,6 @@ mod test {
 
         let res1 = test_generator.fuzzer_run(1, 2, 3, false).await.unwrap();
         let res2 = test_generator.fuzzer_run(1, 2, 3, false).await.unwrap();
-        assert_eq!(res1, res2);
+        assert_batches_equal_in_order(&res1, &res2, "");
     }
 }

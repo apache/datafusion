@@ -1650,12 +1650,12 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // a between 3 and 5  -->  a >= 3 AND a <=5
             // a not between 3 and 5  -->  a < 3 OR a > 5
             Expr::Between(between) => Transformed::yes(if between.negated {
-                let l = *between.expr.clone();
+                let l = between.expr.as_ref().clone();
                 let r = *between.expr;
                 or(l.lt(*between.low), r.gt(*between.high))
             } else {
                 and(
-                    between.expr.clone().gt_eq(*between.low),
+                    between.expr.as_ref().clone().gt_eq(*between.low),
                     between.expr.lt_eq(*between.high),
                 )
             }),
@@ -2132,6 +2132,11 @@ fn get_preimage(
     if func.signature().volatility != Volatility::Immutable {
         return Ok(PreimageResult::None);
     }
+    // We can get duplicate expressions due to preimage rewrites due to volatile arguments
+    if args.iter().any(Expr::is_volatile) {
+        return Ok(PreimageResult::None);
+    }
+
     func.preimage(args, right_expr, info)
 }
 
@@ -2260,12 +2265,12 @@ fn as_inlist(expr: &'_ Expr) -> Option<Cow<'_, InList>> {
             match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(_), Expr::Literal(_, _)) => Some(Cow::Owned(InList {
                     expr: left.clone(),
-                    list: vec![*right.clone()],
+                    list: vec![right.as_ref().clone()],
                     negated: false,
                 })),
                 (Expr::Literal(_, _), Expr::Column(_)) => Some(Cow::Owned(InList {
                     expr: right.clone(),
-                    list: vec![*left.clone()],
+                    list: vec![left.as_ref().clone()],
                     negated: false,
                 })),
                 _ => None,
