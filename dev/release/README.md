@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Release Process
@@ -331,7 +318,15 @@ git push apache 55.2.0
 
 Open a PR against `main` that adds the release to
 `docs/source/_static/versions.json` immediately after the `Development (main)`
-entry mark it with `"preferred": true`.
+entry and marks it with `"preferred": true` (remove `"preferred"` from the
+previous release).
+
+The version picker only lists the most recent release of each major version.
+If the new release is a minor or patch release (e.g. `55.2.0`), move the
+previous release of the same major version (e.g. `55.1.0`) from `versions.json`
+to `docs/source/_static/old_versions.json`. Releases in `old_versions.json`
+are still built and published under `/versions/<version>/`, so existing links
+keep working, but they are not shown in the version picker.
 
 Once the PR is merged, the
 [Deploy DataFusion versioned docs](../../.github/workflows/docs_versions.yaml)
