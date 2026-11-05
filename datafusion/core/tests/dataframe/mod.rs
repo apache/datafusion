@@ -872,6 +872,50 @@ async fn aliased_single_distinct_aggregate_is_rewritten() -> Result<()> {
     Ok(())
 }
 
+/// Stripping the aliases leaves two identical aggregates, which an `Aggregate`
+/// can't output together. They must share one, as the SQL planner's do. The
+/// `sum` follows them so its position in the outer aggregate differs from its
+/// position in the original one; `b` is `Int64` so that `sum` needs no cast,
+/// which would count as a second distinct field and skip the rewrite.
+#[tokio::test]
+async fn identical_aliased_single_distinct_aggregates_are_computed_once() -> Result<()> {
+    let ctx = SessionContext::new();
+    let df = ctx
+        .read_batch(record_batch!(
+            ("a", Int32, [1, 1, 2, 2]),
+            ("b", Int64, [1, 1, 1, 2])
+        )?)?
+        .aggregate(
+            vec![col("a")],
+            vec![
+                count_distinct(col("b")).alias("n1"),
+                count_distinct(col("b")).alias("n2"),
+                sum_distinct(col("b")).alias("s"),
+            ],
+        )?;
+
+    assert_snapshot!(df.clone().into_optimized_plan()?, @r"
+    Projection: ?table?.a, count(alias1) AS n1, count(alias1) AS n2, sum(alias1) AS s
+      Aggregate: groupBy=[[?table?.a]], aggr=[[count(alias1), sum(alias1)]]
+        Aggregate: groupBy=[[?table?.a, ?table?.b AS alias1]], aggr=[[]]
+          TableScan: ?table? projection=[a, b]
+    ");
+
+    assert_batches_eq!(
+        &[
+            "+---+----+----+---+",
+            "| a | n1 | n2 | s |",
+            "+---+----+----+---+",
+            "| 1 | 1  | 1  | 1 |",
+            "| 2 | 2  | 2  | 3 |",
+            "+---+----+----+---+",
+        ],
+        &df.sort_by(vec![col("a")])?.collect().await?
+    );
+
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_aggregate_with_pk() -> Result<()> {
     // create the dataframe

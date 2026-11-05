@@ -24,6 +24,7 @@ use datafusion_expr::{
     logical_plan::{Aggregate, LogicalPlan},
     when,
 };
+use indexmap::IndexSet;
 
 /// single distinct to group by optimizer rule
 ///  ```text
@@ -387,6 +388,16 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .into_iter()
                     .unzip();
 
+                // With their aliases stripped, aggregates that differed only in
+                // their alias are the same expression, and an `Aggregate` cannot
+                // output a name twice. Compute each one once: the projection
+                // below still selects it under every original name.
+                let mut unique_outer_aggr_exprs = IndexSet::new();
+                let outer_aggr_positions: Vec<usize> = outer_aggr_exprs
+                    .into_iter()
+                    .map(|expr| unique_outer_aggr_exprs.insert_full(expr).0)
+                    .collect();
+
                 // construct the inner AggrPlan
                 let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
                     input,
@@ -402,7 +413,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 let outer_aggr = LogicalPlan::Aggregate(Aggregate::try_new(
                     Arc::new(inner_agg),
                     outer_group_exprs,
-                    outer_aggr_exprs,
+                    unique_outer_aggr_exprs.into_iter().collect(),
                 )?);
 
                 // so the aggregates are displayed in the same way even after the rewrite
@@ -417,17 +428,26 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                         }
                         None => group_expr,
                     })
-                    .chain(outer_proj_exprs.into_iter().enumerate().map(|(idx, expr)| {
-                        let idx = idx + group_size;
-                        let (qualifier, field) = schema.qualified_field(idx);
-                        let current_type = outer_aggr.schema().field(idx).data_type();
-                        let expr = if current_type != field.data_type() {
-                            cast(expr, field.data_type().clone())
-                        } else {
-                            expr
-                        };
-                        expr.alias_qualified(qualifier.cloned(), field.name())
-                    }))
+                    .chain(
+                        outer_proj_exprs
+                            .into_iter()
+                            .zip(outer_aggr_positions)
+                            .enumerate()
+                            .map(|(idx, (expr, position))| {
+                                let (qualifier, field) =
+                                    schema.qualified_field(idx + group_size);
+                                let current_type = outer_aggr
+                                    .schema()
+                                    .field(position + group_size)
+                                    .data_type();
+                                let expr = if current_type != field.data_type() {
+                                    cast(expr, field.data_type().clone())
+                                } else {
+                                    expr
+                                };
+                                expr.alias_qualified(qualifier.cloned(), field.name())
+                            }),
+                    )
                     .collect();
 
                 Ok(Transformed::yes(project(outer_aggr, alias_expr)?))
@@ -763,6 +783,88 @@ mod tests {
         Projection: test.a, count(alias1) AS n [a:UInt32, n:Int64]
           Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
             Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn identical_distinct_aggregates_with_different_aliases() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Both become `count(alias1)` once unaliased, so the outer aggregate
+        // computes it once. The trailing `sum` sits at a different position in
+        // the outer aggregate than in the original one.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    count_distinct(col("b")).alias("n1"),
+                    count_distinct(col("b")).alias("n2"),
+                    sum_distinct(col("b")).alias("s"),
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, count(alias1) AS n1, count(alias1) AS n2, sum(alias1) AS s [a:UInt32, n1:Int64, n2:Int64, s:UInt64;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1), sum(alias1)]] [a:UInt32, count(alias1):Int64, sum(alias1):UInt64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn identical_distinct_aggregates_one_unaliased() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![
+                    count_distinct(col("b")),
+                    count_distinct(col("b")).alias("n"),
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: count(alias1) AS count(DISTINCT test.b), count(alias1) AS n [count(DISTINCT test.b):Int64, n:Int64]
+          Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
+            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[]] [alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn identical_common_aggregates_with_different_aliases() -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // Non-distinct aggregates read their own `aliasN` column, so they stay
+        // separate outer aggregates and need no deduplication.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                vec![col("a")],
+                vec![
+                    count_distinct(col("b")).alias("n"),
+                    sum(col("c")).alias("x"),
+                    sum(col("c")).alias("y"),
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, count(alias1) AS n, sum(alias2) AS x, sum(alias3) AS y [a:UInt32, n:Int64, x:UInt64;N, y:UInt64;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1), sum(alias2), sum(alias3)]] [a:UInt32, count(alias1):Int64, sum(alias2):UInt64;N, sum(alias3):UInt64;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[sum(test.c) AS alias2, sum(test.c) AS alias3]] [a:UInt32, alias1:UInt32, alias2:UInt64;N, alias3:UInt64;N]
               TableScan: test [a:UInt32, b:UInt32, c:UInt32]
         "
         )
