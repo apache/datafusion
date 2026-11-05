@@ -4275,9 +4275,18 @@ mod tests {
         assert!(final_stats.total_byte_size.get_value().is_some());
 
         let task_ctx = if spill {
-            // The fair pool is shared by the partial and final tables, give each
-            // one its initial table plus a little, so the final aggregation spills
-            new_spill_ctx(2, initial_reservation(&merged_aggregate)? + 2 * 64)
+            // The final table must be able to reserve one incoming partial-state
+            // batch as well as its initial footprint. Keep only a little extra
+            // room so growth of the table still triggers spilling.
+            let max_state_batch = result
+                .iter()
+                .map(datafusion_common::utils::memory::get_record_batch_memory_size)
+                .max()
+                .unwrap_or(0);
+            new_spill_ctx(
+                2,
+                initial_reservation(&merged_aggregate)? + 2 * (max_state_batch + 64),
+            )
         } else {
             Arc::clone(&task_ctx)
         };
