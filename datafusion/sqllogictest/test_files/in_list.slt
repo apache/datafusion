@@ -1147,3 +1147,30 @@ true
 
 statement ok
 DROP TABLE in_list_nulls;
+
+# Short float IN lists must treat -0.0 and +0.0 as equal, matching `=`
+# https://github.com/apache/datafusion/issues/27121
+statement ok
+CREATE TABLE signed_zeros(id BIGINT, x DOUBLE, y FLOAT) AS VALUES
+  (1, -0.0, -0.0),
+  (2, 0.0, 0.0),
+  (3, 5.0, 5.0);
+
+query IBBBBBB
+SELECT
+  id,
+  x = 0.0,
+  x IN (0.0, 5.0),
+  x NOT IN (0.0, 5.0),
+  x IN (-0.0, 7.0),
+  y IN (CAST(0 AS FLOAT), CAST(9 AS FLOAT)),
+  y NOT IN (CAST(0 AS FLOAT), CAST(9 AS FLOAT))
+FROM signed_zeros
+ORDER BY id;
+----
+1 true true false true true false
+2 true true false true true false
+3 false true false false false true
+
+statement ok
+DROP TABLE signed_zeros;

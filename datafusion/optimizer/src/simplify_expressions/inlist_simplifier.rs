@@ -8,7 +8,7 @@ use super::THRESHOLD_INLINE_INLIST;
 
 use arrow::datatypes::DataType;
 use datafusion_common::tree_node::{Transformed, TreeNodeRewriter};
-use datafusion_common::{DFSchema, Result};
+use datafusion_common::{DFSchema, Result, ScalarValue};
 use datafusion_expr::expr::InList;
 use datafusion_expr::{Expr, ExprSchemable};
 
@@ -32,15 +32,25 @@ impl<'a> ShortenInListSimplifier<'a> {
         let Ok(data_type) = expr.get_type(self.schema) else {
             return false;
         };
-        matches!(
-            data_type,
-            DataType::Int32
-                | DataType::Int64
-                | DataType::UInt64
-                | DataType::Float32
-                | DataType::Float64
-                | DataType::FixedSizeBinary(1 | 2 | 4 | 8 | 16)
-        ) && list.iter().all(|expr| expr.as_literal().is_some())
+        let is_float = matches!(data_type, DataType::Float32 | DataType::Float64);
+        (is_float
+            || matches!(
+                data_type,
+                DataType::Int32
+                    | DataType::Int64
+                    | DataType::UInt64
+                    | DataType::FixedSizeBinary(1 | 2 | 4 | 8 | 16)
+            ))
+            && list.iter().all(|expr| match expr.as_literal() {
+                // The membership filters compare floats by bit pattern, so
+                // -0.0 and +0.0 would not match each other, while `=` treats
+                // them as equal. Keep the comparison chain when a zero is in
+                // the list so both forms agree.
+                Some(ScalarValue::Float32(Some(v))) if is_float => *v != 0.0,
+                Some(ScalarValue::Float64(Some(v))) if is_float => *v != 0.0,
+                Some(_) => true,
+                None => false,
+            })
     }
 }
 

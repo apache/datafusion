@@ -4961,8 +4961,6 @@ mod tests {
             };
             let left_list = literals(&[0.0, 1.0, 2.0, 3.0])?;
             let right_list = literals(&[-0.0, 4.0, 5.0, 6.0])?;
-            let retains_short_lists =
-                matches!(data_type, DataType::Float32 | DataType::Float64);
             let schema = Arc::new(Schema::new(vec![Field::new("x", data_type, false)]));
             let batch = RecordBatch::try_new(schema, vec![values])?;
             let schema = batch.schema().to_dfschema_ref()?;
@@ -4987,7 +4985,7 @@ mod tests {
                     (left(true).or(right(true)), vec![false, false]),
                 ] {
                     let simplified = simplifier.simplify(expr.clone())?;
-                    if list_len > THRESHOLD_INLINE_INLIST || retains_short_lists {
+                    if list_len > THRESHOLD_INLINE_INLIST {
                         // Floating-point literals must bypass structural set rewrites.
                         assert_eq!(simplified, expr);
                     } else {
