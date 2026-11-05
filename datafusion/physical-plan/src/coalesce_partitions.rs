@@ -589,6 +589,40 @@ mod tests {
         Ok(())
     }
 
+    /// `execute` must not start the input partitions; they start on the first poll.
+    ///
+    /// Consumers may create the stream long before polling it (e.g. a `CollectLeft`
+    /// hash join creates its build-side stream during setup). Starting the inputs
+    /// early lets scans run before dynamic filters from ancestor joins are populated.
+    #[tokio::test]
+    async fn inputs_start_on_first_poll_not_on_execute() -> Result<()> {
+        let task_ctx = Arc::new(TaskContext::default());
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, true)]));
+        let input_partitions = 2;
+        let batch = RecordBatch::new_empty(Arc::clone(&schema));
+        let input = Arc::new(
+            BarrierExec::new(vec![vec![batch]; input_partitions], schema)
+                .without_start_barrier()
+                .with_finish_barrier()
+                .with_log(false),
+        );
+
+        let coalesce = CoalescePartitionsExec::new(Arc::clone(&input) as _);
+        let stream = coalesce.execute(0, task_ctx)?;
+
+        // Give any spawned input tasks ample time to run. If `execute` had started
+        // them, every partition would emit its batch and reach the finish barrier.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(
+            !input.is_finish_barrier_reached(),
+            "input partitions must not run before the stream is polled"
+        );
+
+        drop(stream);
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_drop_cancel() -> Result<()> {
         let task_ctx = Arc::new(TaskContext::default());
