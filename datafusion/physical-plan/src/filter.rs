@@ -389,7 +389,13 @@ impl FilterExec {
         } else {
             let null_rejecting_columns = collect_null_rejecting_columns(predicate);
 
-            if check_statistics_support(predicate, schema) {
+            if check_statistics_support(predicate, schema)
+                && decimal_columns_have_bounds(
+                    predicate,
+                    schema,
+                    &input_stats.column_statistics,
+                )
+            {
                 let input_analysis_ctx = AnalysisContext::try_from_statistics(
                     schema,
                     &input_stats.column_statistics,
@@ -1247,6 +1253,33 @@ fn compute_fallback_selectivity(
     }
 
     selectivity
+}
+
+/// Returns true if every decimal column in `predicate` has both a min and a
+/// max statistic.
+///
+/// Interval analysis cannot narrow a column without bounds, so it estimates a
+/// selectivity of 1.0 for it. Filters on aggregate outputs, such as
+/// `HAVING sum(l_quantity) > 300` in TPC-H Q18, usually have no bounds. These
+/// decimal predicates used the default selectivity before interval analysis
+/// supported decimals, and join planning depends on that estimate, so they
+/// keep using it.
+fn decimal_columns_have_bounds(
+    predicate: &Arc<dyn PhysicalExpr>,
+    schema: &SchemaRef,
+    column_statistics: &[ColumnStatistics],
+) -> bool {
+    collect_columns(predicate).iter().all(|column| {
+        let is_decimal = schema
+            .fields()
+            .get(column.index())
+            .is_some_and(|field| field.data_type().is_decimal());
+        !is_decimal
+            || column_statistics.get(column.index()).is_some_and(|stats| {
+                stats.min_value.get_value().is_some()
+                    && stats.max_value.get_value().is_some()
+            })
+    })
 }
 
 /// Extracts the NDV from a [`Column`] reference, if the expression is a bare
@@ -2346,6 +2379,63 @@ mod tests {
         let column = &statistics.column_statistics[0];
         assert_eq!(column.min_value, Precision::Inexact(decimal(100)));
         assert_eq!(column.max_value, Precision::Inexact(decimal(500)));
+
+        Ok(())
+    }
+
+    /// Interval analysis cannot narrow a decimal column without min/max
+    /// statistics, such as an aggregate output. Predicates on such columns keep
+    /// the default selectivity, as they did before decimals were analyzed.
+    #[tokio::test]
+    async fn test_filter_statistics_decimal_without_bounds() -> Result<()> {
+        // Table:
+        //      a: Decimal128(15, 2), bounds vary per case
+        //      b: Int32, min=0, max=99
+        let decimal = |v: i128| ScalarValue::Decimal128(Some(v), 15, 2);
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Decimal128(15, 2), false),
+            Field::new("b", DataType::Int32, false),
+        ]);
+        let b_stats = ColumnStatistics {
+            min_value: Precision::Inexact(ScalarValue::Int32(Some(0))),
+            max_value: Precision::Inexact(ScalarValue::Int32(Some(99))),
+            ..Default::default()
+        };
+
+        // a > 3.00
+        let a_gt = binary(col("a", &schema)?, Operator::Gt, lit(decimal(300)), &schema)?;
+        // b < 50 AND a > 3.00
+        let b_lt_and_a_gt = binary(
+            binary(col("b", &schema)?, Operator::Lt, lit(50i32), &schema)?,
+            Operator::And,
+            Arc::clone(&a_gt),
+            &schema,
+        )?;
+
+        for a_stats in [
+            ColumnStatistics::new_unknown(),
+            // Only a lower bound
+            ColumnStatistics {
+                min_value: Precision::Inexact(decimal(100)),
+                ..Default::default()
+            },
+        ] {
+            for predicate in [&a_gt, &b_lt_and_a_gt] {
+                let input = Arc::new(StatisticsExec::new(
+                    Statistics {
+                        num_rows: Precision::Inexact(1000),
+                        total_byte_size: Precision::Absent,
+                        column_statistics: vec![a_stats.clone(), b_stats.clone()],
+                    },
+                    schema.clone(),
+                ));
+                let filter: Arc<dyn ExecutionPlan> =
+                    Arc::new(FilterExec::try_new(Arc::clone(predicate), input)?);
+                let statistics = StatisticsContext::new()
+                    .compute(filter.as_ref(), &StatisticsArgs::new())?;
+                assert_eq!(statistics.num_rows, Precision::Inexact(200), "{predicate}");
+            }
+        }
 
         Ok(())
     }

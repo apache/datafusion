@@ -81,6 +81,113 @@ SELECT count(*) FROM lineitem WHERE l_discount * 2 > 0.1;
 statement ok
 DROP TABLE lineitem;
 
+# TPC-H Q18 plan check (https://github.com/apache/datafusion/issues/27108).
+#
+# The tables follow the TPC-H shape: 10 orders per customer and 4 lineitems
+# per order. The HAVING filter runs on an aggregate output, which has no
+# min/max statistics, so the filter keeps the default selectivity. If it were
+# estimated to keep every row, the filtered subquery would look larger than the
+# joined orders, and the semi join would build its hash table on the wrong side.
+
+query I
+COPY (SELECT value AS c_custkey, 'Customer#' || value AS c_name FROM range(1, 1501))
+TO 'test_files/scratch/filter_statistics_decimal/q18/customer.parquet'
+STORED AS PARQUET;
+----
+1500
+
+query I
+COPY (
+  SELECT
+    value AS o_orderkey,
+    1 + value % 1500 AS o_custkey,
+    CAST(1000 + value % 9000 AS DECIMAL(15, 2)) AS o_totalprice,
+    arrow_cast(9000 + value % 2000, 'Date32') AS o_orderdate
+  FROM range(1, 15001)
+)
+TO 'test_files/scratch/filter_statistics_decimal/q18/orders.parquet'
+STORED AS PARQUET;
+----
+15000
+
+query I
+COPY (
+  SELECT
+    1 + value / 4 AS l_orderkey,
+    CAST(1 + value % 50 AS DECIMAL(15, 2)) AS l_quantity
+  FROM range(60000)
+)
+TO 'test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet'
+STORED AS PARQUET;
+----
+60000
+
+statement ok
+CREATE EXTERNAL TABLE customer
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_statistics_decimal/q18/customer.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE orders
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_statistics_decimal/q18/orders.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE lineitem
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet';
+
+# The filter on sum(l_quantity) keeps the default 20% of the aggregate's rows.
+query TT
+EXPLAIN SELECT l_orderkey FROM lineitem
+GROUP BY l_orderkey HAVING sum(l_quantity) > 300;
+----
+physical_plan
+01)FilterExec: sum(lineitem.l_quantity)@1 > 300.00, projection=[l_orderkey@0], statistics=[Rows=Inexact(12000), Bytes=Inexact(288000), [(Col[0]: Min=Inexact(Int64(1)) Max=Inexact(Int64(15000)))]]
+02)--AggregateExec: mode=Single, gby=[l_orderkey@0 as l_orderkey], aggr=[sum(lineitem.l_quantity)], statistics=[Rows=Inexact(60000), Bytes=Inexact(1440000), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(15000))),(Col[1]:)]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet]]}, projection=[l_orderkey, l_quantity], file_type=parquet, statistics=[Rows=Exact(60000), Bytes=Exact(1440000), [(Col[0]: Min=Exact(Int64(1)) Max=Exact(Int64(15000)) Null=Exact(0) ScanBytes=Exact(480000)),(Col[1]: Min=Exact(Decimal128(1.00,15,2)) Max=Exact(Decimal128(50.00,15,2)) Null=Exact(0) ScanBytes=Exact(960000))]]
+
+statement ok
+set datafusion.explain.show_statistics = false;
+
+# The semi join builds on the filtered subquery (RightSemi), as in DataFusion
+# 55, not on the joined customer, orders and lineitem rows (LeftSemi).
+query TT
+EXPLAIN SELECT
+  c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice, sum(l_quantity)
+FROM customer, orders, lineitem
+WHERE o_orderkey IN (
+    SELECT l_orderkey FROM lineitem
+    GROUP BY l_orderkey HAVING sum(l_quantity) > 300
+  )
+  AND c_custkey = o_custkey
+  AND o_orderkey = l_orderkey
+GROUP BY c_name, c_custkey, o_orderkey, o_orderdate, o_totalprice
+ORDER BY o_totalprice DESC, o_orderdate
+LIMIT 100;
+----
+physical_plan
+01)SortExec: TopK(fetch=100), expr=[o_totalprice@4 DESC, o_orderdate@3 ASC NULLS LAST], preserve_partitioning=[false]
+02)--AggregateExec: mode=Single, gby=[c_name@1 as c_name, c_custkey@0 as c_custkey, o_orderkey@2 as o_orderkey, o_orderdate@4 as o_orderdate, o_totalprice@3 as o_totalprice], aggr=[sum(lineitem.l_quantity)]
+03)----HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(l_orderkey@0, o_orderkey@2)]
+04)------FilterExec: sum(lineitem.l_quantity)@1 > 300.00, projection=[l_orderkey@0]
+05)--------AggregateExec: mode=Single, gby=[l_orderkey@0 as l_orderkey], aggr=[sum(lineitem.l_quantity)]
+06)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet]]}, projection=[l_orderkey, l_quantity], file_type=parquet
+07)------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(o_orderkey@2, l_orderkey@0)], projection=[c_custkey@0, c_name@1, o_orderkey@2, o_totalprice@3, o_orderdate@4, l_quantity@6]
+08)--------HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(c_custkey@0, o_custkey@1)], projection=[c_custkey@0, c_name@1, o_orderkey@2, o_totalprice@4, o_orderdate@5]
+09)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/customer.parquet]]}, projection=[c_custkey, c_name], output_ordering=[c_custkey@0 ASC NULLS LAST], file_type=parquet
+10)----------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/orders.parquet]]}, projection=[o_orderkey, o_custkey, o_totalprice, o_orderdate], output_ordering=[o_orderkey@0 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+11)--------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/q18/lineitem.parquet]]}, projection=[l_orderkey, l_quantity], file_type=parquet, predicate=DynamicFilter [ empty ] AND DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+
+statement ok
+DROP TABLE customer;
+
+statement ok
+DROP TABLE orders;
+
+statement ok
+DROP TABLE lineitem;
+
 statement ok
 set datafusion.execution.target_partitions = 4;
 
