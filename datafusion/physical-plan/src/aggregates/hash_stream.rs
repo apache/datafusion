@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{
     DataFusionError, Result, assert_ne_or_internal_err, internal_datafusion_err,
 };
@@ -20,7 +19,6 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::{Stream, StreamExt};
 
-use super::AggregateExec;
 use super::aggregate_hash_table::{
     AggregateHashTable, ClusteredAggregateTableMetrics, FinalMarker, PartialMarker,
     PartialSkipMarker,
@@ -28,6 +26,7 @@ use super::aggregate_hash_table::{
 use super::order::GroupClusteringMode;
 use super::skip_partial::SkipAggregationProbe;
 use super::spill::AggregateSpill;
+use super::{AggregateExec, incoming_state_batch_reservation_bytes};
 use crate::metrics::{
     BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput, SpillMetrics,
 };
@@ -683,8 +682,13 @@ impl FinalHashAggregateStream {
             let _timer = elapsed_compute.timer();
             // Partial states may retain input-sized buffers. Account for the
             // incoming batch before merging it into the table.
-            let batch_memory = get_record_batch_memory_size(&batch);
-            match self.reservation.try_grow(batch_memory) {
+            let batch_memory = incoming_state_batch_reservation_bytes(&batch);
+            let admission = if batch_memory > 0 {
+                self.reservation.try_grow(batch_memory)
+            } else {
+                Ok(())
+            };
+            match admission {
                 Ok(()) => {}
                 Err(e @ DataFusionError::ResourcesExhausted(_)) => {
                     // Spill the current table to make room for this batch, then

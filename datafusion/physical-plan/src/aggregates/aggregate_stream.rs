@@ -13,6 +13,7 @@ use crate::aggregates::{
     AccumulatorItem, AggrDynFilter, AggregateInputMode, AggregateMode,
     AggregateOutputMode, DynamicFilterAggregateType, aggregate_expressions,
     aggregate_metric_label, create_accumulators_with_metrics,
+    incoming_state_batch_reservation_bytes,
 };
 use crate::metrics::{BaselineMetrics, RecordOutput};
 use crate::stream::EmptyRecordBatchStream;
@@ -20,7 +21,6 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 use arrow::array::ArrayRef;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::utils::memory::get_record_batch_memory_size;
 use datafusion_common::{Result, ScalarValue, internal_datafusion_err, internal_err};
 use datafusion_execution::TaskContext;
 use datafusion_expr::Operator;
@@ -377,10 +377,10 @@ impl AggregateStream {
                         // before merging it, then transfer that reservation to the
                         // accumulator's state below.
                         let previous_size = this.reservation.size();
+                        let batch_memory = incoming_state_batch_reservation_bytes(&batch);
                         if this.mode.input_mode() == AggregateInputMode::Partial
-                            && let Err(e) = this
-                                .reservation
-                                .try_grow(get_record_batch_memory_size(&batch))
+                            && batch_memory > 0
+                            && let Err(e) = this.reservation.try_grow(batch_memory)
                         {
                             this.finished = true;
                             return Some((Err(e), this));
