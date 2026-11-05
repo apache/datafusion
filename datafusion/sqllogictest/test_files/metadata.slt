@@ -629,10 +629,10 @@ select nvl2(id,
   with_metadata(l_name, 'ARROW:extension:name', 'b.type'))
 from table_with_metadata;
 
-# These functions are rewritten to CASE before execution, so arrow_metadata()
-# does not observe the field they compute during planning. The tests below
-# observe it through the planning error instead: the outer coalesce only
-# reports 'a.type' if the inner expression carried it.
+# These functions are rewritten to CASE before execution. The tests below
+# observe the field they compute during planning, before that rewrite, through
+# the planning error: the outer coalesce only reports 'a.type' if the inner
+# expression carried it.
 
 # coalesce propagates an extension type its arguments agree on
 statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
@@ -686,6 +686,105 @@ from table_with_metadata;
 NULL
 l_bar
 baz
+
+# CASE merges the metadata of its value branches with the same rules as
+# coalesce: the earlier branch wins for each key, and an extension name is kept
+# together with its parameters. The operand of a simple CASE and the WHEN
+# conditions do not contribute.
+query TTT
+select
+  arrow_metadata(case when id > 1 then name else l_name end, 'metadata_key'),
+  arrow_metadata(case id when 1 then name else l_name end, 'metadata_key'),
+  arrow_metadata(
+    case when id > 1
+      then with_metadata(name, 'ARROW:extension:name', 'a.type')
+      else with_metadata(l_name, 'ARROW:extension:name', 'a.type') end,
+    'ARROW:extension:name')
+from table_with_metadata;
+----
+the name field the name field a.type
+the name field the name field a.type
+the name field the name field a.type
+
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+select case when id > 1
+  then with_metadata(name, 'ARROW:extension:name', 'a.type')
+  else with_metadata(l_name, 'ARROW:extension:name', 'b.type') end
+from table_with_metadata;
+
+# A branch without metadata, an untyped NULL ELSE, or no ELSE does not block the
+# extension type of another branch, as for coalesce
+query TTTT
+select
+  arrow_metadata(
+    case when id > 1 then upper(name)
+      else with_metadata(l_name, 'ARROW:extension:name', 'a.type') end,
+    'ARROW:extension:name'),
+  arrow_metadata(
+    coalesce(upper(name), with_metadata(l_name, 'ARROW:extension:name', 'a.type')),
+    'ARROW:extension:name'),
+  arrow_metadata(
+    case when id > 1 then with_metadata(name, 'ARROW:extension:name', 'a.type')
+      else NULL end,
+    'ARROW:extension:name'),
+  arrow_metadata(
+    case when id > 1 then with_metadata(name, 'ARROW:extension:name', 'a.type') end,
+    'ARROW:extension:name')
+from table_with_metadata;
+----
+a.type a.type a.type a.type
+a.type a.type a.type a.type
+a.type a.type a.type a.type
+
+# A typed NULL ELSE with metadata contributes its metadata, including when no
+# row reaches a THEN branch
+query TTTT
+select
+  case when id > 100 then name
+    else with_metadata(arrow_cast(NULL, 'Utf8'), 'source', 'null_else') end,
+  arrow_metadata(
+    case when id > 100 then name
+      else with_metadata(arrow_cast(NULL, 'Utf8'), 'source', 'null_else') end,
+    'source'),
+  case when id > 100 then upper(name)
+    else with_metadata(arrow_cast(NULL, 'Utf8'), 'source', 'null_else') end,
+  arrow_metadata(
+    case when id > 100 then upper(name)
+      else with_metadata(arrow_cast(NULL, 'Utf8'), 'source', 'null_else') end,
+    'source')
+from table_with_metadata;
+----
+NULL null_else NULL null_else
+NULL null_else NULL null_else
+NULL null_else NULL null_else
+
+# Nested CASE, and the CASE rewrites of coalesce, nvl, ifnull and nvl2, keep
+# the extension type at execution
+query TTTTT
+select
+  arrow_metadata(
+    case when id > 1
+      then case when id > 2
+        then with_metadata(name, 'ARROW:extension:name', 'a.type') end
+      else l_name end,
+    'ARROW:extension:name'),
+  arrow_metadata(
+    coalesce(with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
+    'ARROW:extension:name'),
+  arrow_metadata(
+    nvl(with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
+    'ARROW:extension:name'),
+  arrow_metadata(
+    ifnull(with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
+    'ARROW:extension:name'),
+  arrow_metadata(
+    nvl2(id, with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
+    'ARROW:extension:name')
+from table_with_metadata;
+----
+a.type a.type a.type a.type a.type
+a.type a.type a.type a.type a.type
+a.type a.type a.type a.type a.type
 
 statement ok
 drop table table_with_metadata;

@@ -14,9 +14,10 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
     FilterBuilder, FilterPredicate, is_not_null, not, nullif, prep_null_mask_filter,
 };
-use arrow::datatypes::{DataType, Schema, UInt32Type, UnionMode};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_or_internal_err, exec_err,
     internal_datafusion_err, internal_err,
@@ -337,6 +338,12 @@ impl std::fmt::Display for CaseExpr {
 /// expressions in the future
 fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>) -> bool {
     expr.is::<Column>()
+}
+
+/// Whether `expr` is a NULL literal
+fn is_null_literal(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    expr.downcast_ref::<Literal>()
+        .is_some_and(|literal| literal.value().is_null())
 }
 
 /// Creates a [FilterPredicate] from a boolean array.
@@ -674,10 +681,17 @@ impl CaseExpr {
         else_expr: Option<Arc<dyn PhysicalExpr>>,
     ) -> Result<Self> {
         // normalize null literals to None in the else_expr (this already happens
-        // during SQL planning, but not necessarily for other use cases)
+        // during SQL planning, but not necessarily for other use cases). A typed
+        // NULL with metadata is kept, since its metadata is part of the result field.
         let else_expr = match &else_expr {
             Some(e) => match e.downcast_ref::<Literal>() {
-                Some(lit) if lit.value().is_null() => None,
+                Some(lit)
+                    if lit.value().is_null()
+                        && (lit.metadata().is_empty()
+                            || lit.value().data_type().is_null()) =>
+                {
+                    None
+                }
                 _ => else_expr,
             },
             _ => else_expr,
@@ -707,15 +721,17 @@ impl CaseExpr {
             return Ok(EvalMethod::WithExpression(body.project()?));
         }
 
+        // A NULL literal ELSE evaluates like no ELSE
+        let null_else = body.else_expr.as_ref().is_none_or(is_null_literal);
         Ok(
             if body.when_then_expr.len() == 1
                 && is_cheap_and_infallible(&(body.when_then_expr[0].1))
-                && body.else_expr.is_none()
+                && null_else
             {
                 EvalMethod::InfallibleExprOrNull
             } else if body.when_then_expr.len() == 1
                 && body.when_then_expr[0].1.is::<Literal>()
-                && body.else_expr.is_some()
+                && !null_else
                 && body.else_expr.as_ref().unwrap().is::<Literal>()
             {
                 EvalMethod::ScalarOrScalar
@@ -1201,8 +1217,10 @@ impl CaseExpr {
         } else if !when_value.has_true() {
             // All input rows are false/null, just call the 'else' expression
             match &self.body.else_expr {
-                Some(else_expr) => else_expr.evaluate(batch),
-                None => {
+                Some(else_expr) if !is_null_literal(else_expr) => {
+                    else_expr.evaluate(batch)
+                }
+                _ => {
                     let return_type = self.data_type(&batch.schema())?;
                     Ok(ColumnarValue::Scalar(ScalarValue::try_new_null(
                         &return_type,
@@ -1305,6 +1323,24 @@ impl PhysicalExpr for CaseExpr {
             // (aka when none of the `when_then_exprs` match)
             Ok(true)
         }
+    }
+
+    fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
+        let fields = self
+            .body
+            .when_then_expr
+            .iter()
+            .map(|(_, then)| then)
+            .chain(self.body.else_expr.iter())
+            .map(|expr| expr.return_field(input_schema))
+            .collect::<Result<Vec<_>>>()?;
+        let metadata = coerced_fields_metadata(fields.iter().map(|f| f.as_ref()))?;
+        let field = Field::new(
+            format!("{self}"),
+            self.data_type(input_schema)?,
+            self.nullable(input_schema)?,
+        );
+        Ok(metadata.add_to_field(field).into())
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
