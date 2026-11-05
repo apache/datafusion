@@ -358,8 +358,10 @@ impl FileGroupPartitioner {
 /// in the group for the **full table schema** (file columns + partition columns).
 ///
 /// Partition column statistics are derived from the individual file partition values:
-/// - `min` = minimum partition value across all files in the group
-/// - `max` = maximum partition value across all files in the group
+/// - `min` = minimum partition value across all files in the group, or absent if any
+///   file in the group has a null partition value (see #26748)
+/// - `max` = maximum partition value across all files in the group, or absent if any
+///   file in the group has a null partition value
 /// - `null_count` = the number of rows in files with a null partition value
 ///
 /// This allows query optimizers to prune entire file groups based on partition bounds.
