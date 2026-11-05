@@ -727,7 +727,8 @@ impl ExternalSorter {
         if self.in_mem_batches.len() == 1 {
             let batch = self.in_mem_batches.swap_remove(0);
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation, None, staged)?;
+            let sorted_stream =
+                self.sort_batch_stream(batch, reservation, None, staged)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -744,7 +745,8 @@ impl ExternalSorter {
                 .try_resize(get_reserved_bytes_for_record_batch(&batch)?)
                 .map_err(Self::err_with_oom_context)?;
             let reservation = self.reservation.take();
-            let sorted_stream = self.sort_batch_stream(batch, reservation, None, staged)?;
+            let sorted_stream =
+                self.sort_batch_stream(batch, reservation, None, staged)?;
             return Ok(self.observe_if_output(sorted_stream, is_output_stream));
         }
 
@@ -807,7 +809,8 @@ impl ExternalSorter {
                 .enumerate()
                 .map(move |(index, (batch, size))| {
                     let reservation = self.reservation.split(size);
-                    let sort = self.sort_run(batch, reservation, shared_input.clone(), staged)?;
+                    let sort =
+                        self.sort_run(batch, reservation, shared_input.clone(), staged)?;
                     let permits = Arc::clone(&concurrency.permits);
                     Ok::<_, DataFusionError>(async move {
                         let stream = Self::prepare_sort_run(sort, permits).await?;
@@ -1020,9 +1023,13 @@ impl ExternalSorter {
         staged: bool,
     ) -> Result<SendableRecordBatchStream> {
         let schema = batch.schema();
-        let stream =
-            futures::stream::once(self.sort_run(batch, reservation, shared_input, staged)?)
-                .try_flatten();
+        let stream = futures::stream::once(self.sort_run(
+            batch,
+            reservation,
+            shared_input,
+            staged,
+        )?)
+        .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
