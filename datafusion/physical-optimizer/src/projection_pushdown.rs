@@ -18,13 +18,18 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{JoinSide, JoinType, Result, internal_datafusion_err};
+use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
+use datafusion_physical_expr::projection::ProjectionExpr;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
-use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::projection::{
     ProjectionExec, remove_unnecessary_projections,
+};
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, Partitioning, ReplaceChildrenOptions,
 };
 
 /// This rule inspects `ProjectionExec`'s in the given physical plan and tries to
@@ -61,6 +66,18 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
             })
             .map(|t| t.data)?;
 
+        // Push what can already descend, then split the projections that are
+        // stuck above a `RepartitionExec`, then clean up once more: the split
+        // can leave an outer projection that is now only column references.
+        let plan = plan.transform_down(remove_unnecessary_projections).data()?;
+        let plan = plan
+            .transform_down(|plan| {
+                Ok(match try_split_leaf_projection(&plan)? {
+                    Some(new_plan) => Transformed::yes(new_plan),
+                    None => Transformed::no(plan),
+                })
+            })
+            .data()?;
         plan.transform_down(remove_unnecessary_projections).data()
     }
 
@@ -445,6 +462,191 @@ fn remap_filter_expr(
             )) as _));
         }
         Ok(Transformed::no(expr))
+    })
+    .data()
+}
+
+/// Prefix for the columns this rule adds when it splits a projection.
+const LEAF_COLUMN_PREFIX: &str = "__datafusion_leaf";
+
+/// Name of the column the split adds for the leaf expression at `index`.
+///
+/// Single source of truth: the lower projection's alias and the reference the
+/// outer projection is rewritten to must agree, or the rewrite silently points
+/// at nothing.
+fn leaf_column_name(index: usize) -> String {
+    format!("{LEAF_COLUMN_PREFIX}_{index}")
+}
+
+/// Splits a `ProjectionExec` that mixes leaf expressions with ones that must
+/// stay in place, moving the leaves into a projection the source absorbs.
+///
+/// `benefits_from_input_partitioning` is true as soon as any expression is
+/// `KeepInPlace`, which both inserts a `RepartitionExec` below the projection
+/// and stops that projection descending past it, so a `MoveTowardsLeafNodes`
+/// expression sharing it never reaches the source. Splitting leaves the
+/// computation above the repartition, still parallelised.
+fn try_split_leaf_projection(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
+        return Ok(None);
+    };
+    let Some(repartition) = projection.input().downcast_ref::<RepartitionExec>() else {
+        return Ok(None);
+    };
+    // Hash and Range partitioning reference columns by index, which would have
+    // to be remapped against the rewritten child schema. Round robin carries no
+    // column references, and is what `EnsureRequirements` inserts here.
+    if !matches!(repartition.partitioning(), Partitioning::RoundRobinBatch(_)) {
+        return Ok(None);
+    }
+
+    let leaves = collect_leaf_exprs(projection.expr())?;
+    if leaves.is_empty() {
+        return Ok(None);
+    }
+
+    // Pass through only the child columns the outer expressions still need. A
+    // column used *only* inside an extracted leaf must be dropped, otherwise the
+    // source keeps reading it: for `s['a'] + 1` that would read the whole struct
+    // alongside the extracted field, which is worse than not splitting at all.
+    let child = repartition.input();
+    let child_schema = child.schema();
+    let passthrough_indices = collect_outer_columns(projection.expr(), &leaves)?;
+    let mut lower_exprs = passthrough_indices
+        .iter()
+        .map(|&idx| {
+            let field = child_schema.field(idx);
+            ProjectionExpr {
+                expr: Arc::new(Column::new(field.name(), idx)),
+                alias: field.name().to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    for (index, leaf) in leaves.iter().enumerate() {
+        lower_exprs.push(ProjectionExpr {
+            expr: Arc::clone(leaf),
+            alias: leaf_column_name(index),
+        });
+    }
+    let lower_projection = ProjectionExec::try_new(lower_exprs, Arc::clone(child))?;
+
+    // Only commit the split if the child really absorbs the leaf projection.
+    // Otherwise this would just add a projection that helps nobody.
+    let Some(new_child) = child.try_swapping_with_projection(&lower_projection)? else {
+        return Ok(None);
+    };
+
+    let new_exprs = projection
+        .expr()
+        .iter()
+        .map(|proj_expr| {
+            Ok(ProjectionExpr {
+                expr: rewrite_outer_expr(
+                    Arc::clone(&proj_expr.expr),
+                    &leaves,
+                    &passthrough_indices,
+                )?,
+                alias: proj_expr.alias.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // The child gained the leaf columns, so the repartition's properties have to
+    // be recomputed rather than carried over.
+    let new_repartition = Arc::clone(projection.input()).replace_children(
+        vec![new_child],
+        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+    )?;
+    Ok(Some(Arc::new(ProjectionExec::try_new(
+        new_exprs,
+        new_repartition,
+    )?)))
+}
+
+/// Collects the distinct outermost [`ExpressionPlacement::MoveTowardsLeafNodes`]
+/// sub-expressions of `exprs`.
+///
+/// Nested leaf expressions are not collected separately: `s['a']['b']` is one
+/// unit to hand to the source, not two.
+fn collect_leaf_exprs(exprs: &[ProjectionExpr]) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+    let mut leaves: Vec<Arc<dyn PhysicalExpr>> = vec![];
+    for proj_expr in exprs {
+        proj_expr.expr.apply(|node| {
+            if node.placement() == ExpressionPlacement::MoveTowardsLeafNodes {
+                if !leaves.iter().any(|leaf| leaf == node) {
+                    leaves.push(Arc::clone(node));
+                }
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    Ok(leaves)
+}
+
+/// Collects the child column indices that `exprs` still reference *outside* the
+/// extracted leaf sub-expressions, sorted and deduplicated.
+///
+/// Recursion stops at a leaf: columns used only inside one are supplied by the
+/// lower projection itself and must not be passed through.
+fn collect_outer_columns(
+    exprs: &[ProjectionExpr],
+    leaves: &[Arc<dyn PhysicalExpr>],
+) -> Result<Vec<usize>> {
+    let mut indices: Vec<usize> = vec![];
+    for proj_expr in exprs {
+        proj_expr.expr.apply(|node| {
+            if leaves.iter().any(|leaf| leaf == node) {
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            if let Some(column) = node.downcast_ref::<Column>() {
+                indices.push(column.index());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    indices.sort_unstable();
+    indices.dedup();
+    Ok(indices)
+}
+
+/// Rewrites an outer projection expression against the split child schema:
+/// every leaf sub-expression becomes a reference to the column the split added
+/// for it, and every surviving column is remapped to its new index.
+fn rewrite_outer_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    leaves: &[Arc<dyn PhysicalExpr>],
+    passthrough_indices: &[usize],
+) -> Result<Arc<dyn PhysicalExpr>> {
+    // The leaf columns were appended after the passthrough ones.
+    let first_leaf = passthrough_indices.len();
+    expr.transform_down(|node| {
+        if let Some(pos) = leaves.iter().position(|leaf| leaf == &node) {
+            let column = Column::new(&leaf_column_name(pos), first_leaf + pos);
+            return Ok(Transformed::new(
+                Arc::new(column) as Arc<dyn PhysicalExpr>,
+                true,
+                TreeNodeRecursion::Jump,
+            ));
+        }
+        if let Some(column) = node.downcast_ref::<Column>() {
+            let new_index = passthrough_indices
+                .iter()
+                .position(|&idx| idx == column.index())
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "projection split dropped column {} that is still referenced",
+                        column.index()
+                    )
+                })?;
+            if new_index != column.index() {
+                let remapped = Column::new(column.name(), new_index);
+                return Ok(Transformed::yes(Arc::new(remapped) as Arc<dyn PhysicalExpr>));
+            }
+        }
+        Ok(Transformed::no(node))
     })
     .data()
 }
