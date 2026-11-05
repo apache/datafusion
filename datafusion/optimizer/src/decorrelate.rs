@@ -573,10 +573,15 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     self.can_pull_up = false;
                     return Ok(Transformed::new(plan, false, TreeNodeRecursion::Stop));
                 }
-                // If the aggregation is from a distinct it will not change the result for
-                // exists/in subqueries so we can still pull up all predicates.
+                // Only a DISTINCT under EXISTS/IN may skip this check. The pulled
+                // up column becomes an extra group key, which for a DISTINCT only
+                // adds duplicate rows, and EXISTS/IN ignore duplicates. Elsewhere,
+                // e.g. LATERAL, the duplicates reach the result. See #25808.
                 let is_distinct = aggregate.aggr_expr.is_empty();
-                if !is_distinct {
+                let is_exists_or_in =
+                    self.exists_sub_query || self.in_predicate_opt.is_some();
+                let can_skip_check = is_distinct && is_exists_or_in;
+                if !can_skip_check {
                     self.can_pull_up = self.can_pull_up && self.can_pull_over_aggregation;
                 }
                 let mut local_correlated_cols = BTreeSet::new();
