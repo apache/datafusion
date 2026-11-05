@@ -780,7 +780,7 @@ async fn multi_column_not_in_sees_null_type_values() -> Result<()> {
 async fn mark_join_value_keys(
     ctx: &SessionContext,
     sql: &str,
-) -> Result<Vec<(bool, Option<usize>)>> {
+) -> Result<Vec<(bool, usize)>> {
     use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
     use datafusion::logical_expr::{JoinType, LogicalPlan};
 
@@ -790,7 +790,7 @@ async fn mark_join_value_keys(
         if let LogicalPlan::Join(join) = plan
             && join.join_type == JoinType::LeftMark
         {
-            joins.push((join.null_aware, join.null_aware_value_keys.map(|n| n.get())));
+            joins.push((join.null_aware, join.null_aware_value_keys));
         }
         Ok(TreeNodeRecursion::Continue)
     })?;
@@ -798,7 +798,7 @@ async fn mark_join_value_keys(
 }
 
 /// Decorrelation sets the value key count only on a null-aware join, which is
-/// the only one that reads it. Any other join keeps it unset, the same as a
+/// the only one that reads it. Any other join keeps it unset (`0`), the same as a
 /// join built through `Join::try_new` or `LogicalPlanBuilder`, so equal plans
 /// compare equal however they were built.
 #[tokio::test]
@@ -830,19 +830,19 @@ async fn decorrelated_mark_join_sets_value_keys_only_when_null_aware() -> Result
     ] {
         assert_eq!(
             mark_join_value_keys(&ctx, sql).await?,
-            [(false, None)],
+            [(false, 0)],
             "{sql}"
         );
     }
     // Nullable keys: both are null-aware and state their count.
     assert_eq!(
         mark_join_value_keys(&ctx, "SELECT a IN (SELECT a FROM n AS s) FROM n").await?,
-        [(true, Some(1))]
+        [(true, 1)]
     );
     assert_eq!(
         mark_join_value_keys(&ctx, "SELECT (a, b) IN (SELECT a, b FROM n AS s) FROM n")
             .await?,
-        [(true, Some(2))]
+        [(true, 2)]
     );
     Ok(())
 }

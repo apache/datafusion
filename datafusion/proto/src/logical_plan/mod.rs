@@ -26,9 +26,7 @@ use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::format::{
     ExplainAnalyzeCategories, ExplainFormat, MetricCategory, MetricType,
 };
-use datafusion_common::utils::{
-    non_zero_usize_from_wire, usize_from_wire, usize_to_wire,
-};
+use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
     NullEquality, Result, TableReference, assert_or_internal_err, context,
     internal_datafusion_err, internal_err, not_impl_err, plan_err,
@@ -1059,21 +1057,6 @@ impl AsLogicalPlan for LogicalPlanNode {
                 // them silently loses both fields. Both sides of the round
                 // trip should already have validated keys, so we don't need
                 // the builder's normalization / equijoin-pair checks.
-                //
-                // The value key count is presence-tracked: an absent count
-                // (including every plan encoded before the field existed,
-                // which can only hold a scalar `NOT IN`) stays unset, and
-                // physical planning accepts that only for a single key.
-                let null_aware_value_keys = join
-                    .null_aware_value_keys
-                    .map(|value_keys| {
-                        non_zero_usize_from_wire(
-                            value_keys,
-                            "JoinNode",
-                            "null_aware_value_keys",
-                        )
-                    })
-                    .transpose()?;
                 Ok(LogicalPlan::Join(
                     Join::try_new(
                         Arc::new(left),
@@ -1085,7 +1068,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                         NullEquality::from(null_equality),
                         join.null_aware,
                     )?
-                    .with_null_aware_value_keys(null_aware_value_keys),
+                    // `0` is an unset count, which physical planning accepts
+                    // only for a single key. Plans encoded before the field
+                    // existed decode it as 0; they could only hold scalar
+                    // `NOT IN` joins.
+                    .with_null_aware_value_keys(usize_from_wire(
+                        join.null_aware_value_keys,
+                        "JoinNode",
+                        "null_aware_value_keys",
+                    )?),
                 ))
             }
             LogicalPlanType::AsOfJoin(join) => {
@@ -1816,15 +1807,14 @@ impl AsLogicalPlan for LogicalPlanNode {
                             null_equality: null_equality.into(),
                             filter,
                             null_aware: *null_aware,
-                            null_aware_value_keys: null_aware_value_keys
-                                .map(|value_keys| {
-                                    usize_to_wire(
-                                        value_keys.get(),
-                                        "JoinNode",
-                                        "null_aware_value_keys",
-                                    )
-                                })
-                                .transpose()?,
+                            null_aware_value_keys: u32::try_from(
+                                *null_aware_value_keys,
+                            )
+                            .map_err(|_| {
+                                internal_datafusion_err!(
+                                    "JoinNode: null_aware_value_keys {null_aware_value_keys} does not fit in u32"
+                                )
+                            })?,
                         },
                     ))),
                 })

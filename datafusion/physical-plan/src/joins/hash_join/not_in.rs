@@ -20,7 +20,6 @@
 //! - [`NotInBuild::final_chunk`] on each chunk of build rows emitted after
 //!   the probe side is exhausted.
 
-use std::num::NonZeroUsize;
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::Mutex;
@@ -100,12 +99,11 @@ impl NotIn {
         join_type: JoinType,
         partition_mode: PartitionMode,
         num_keys: usize,
-        num_value_keys: Option<NonZeroUsize>,
+        num_value_keys: usize,
         has_filter: bool,
     ) -> Result<Self> {
         // The join type and mode come first: no value key count can make up
-        // for them, so their error is the one to report.
-        // `None` is `RightAnti`, which emits probe rows.
+        // for them. `None` is `RightAnti`, which emits probe rows.
         let output = match (join_type, partition_mode) {
             (JoinType::LeftAnti, _) => Some(NotInOutput::Rows),
             (JoinType::LeftMark, _) => Some(NotInOutput::Mark),
@@ -128,23 +126,24 @@ impl NotIn {
                 "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
             );
         }
-        // An unset count is only unambiguous with a single key: a scalar
-        // `NOT IN`. With more keys, any default would silently pick which of
-        // them are `NOT IN` value keys and which are correlation scope keys.
+        // `0` is an unset count, which is only unambiguous with a single key:
+        // a scalar `NOT IN`. With more keys, any default would silently pick
+        // which of them are `NOT IN` value keys and which are correlation
+        // scope keys.
         let num_value_keys = match num_value_keys {
-            Some(num_value_keys) => num_value_keys.get(),
-            None if num_keys == 1 => 1,
-            None => {
+            0 if num_keys == 1 => 1,
+            0 => {
                 return plan_err!(
                     "null_aware {join_type} join with {num_keys} keys needs the number of its `NOT IN` value keys, set it with `with_null_aware_value_keys`"
                 );
             }
+            n if n > num_keys => {
+                return plan_err!(
+                    "null_aware {join_type} join needs between 1 and {num_keys} `NOT IN` value keys, got {n}"
+                );
+            }
+            n => n,
         };
-        if num_value_keys > num_keys {
-            return plan_err!(
-                "null_aware {join_type} join needs between 1 and {num_keys} `NOT IN` value keys, got {num_value_keys}"
-            );
-        }
         // `num_keys > 1` also covers a multi-column value key without any
         // correlation: a NULL in one tuple element leaves the comparison FALSE
         // whenever another element is a definite mismatch, so it too must be

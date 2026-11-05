@@ -1153,22 +1153,6 @@ where
     })
 }
 
-/// Converts a wire integer to a [`NonZero<usize>`], rejecting zero and
-/// out-of-range values. `context` and `field` identify the value in the
-/// error message.
-pub fn non_zero_usize_from_wire<T>(
-    value: T,
-    context: &str,
-    field: &str,
-) -> Result<NonZero<usize>>
-where
-    T: TryInto<usize> + std::fmt::Display + Copy,
-{
-    NonZero::new(usize_from_wire(value, context, field)?).ok_or_else(|| {
-        _plan_datafusion_err!("{context}: {field} wire value 0 must be at least 1")
-    })
-}
-
 /// Converts a `usize` to a wire integer, rejecting out-of-range values.
 pub fn usize_to_wire<T: TryFrom<usize>>(
     value: usize,
@@ -1592,23 +1576,6 @@ mod tests {
         assert_eq!(
             err.strip_backtrace(),
             "Error during planning: SomeExec: fetch value 256 is out of range for the plan wire format"
-        );
-
-        assert_eq!(
-            non_zero_usize_from_wire(2_u32, "SomeExec", "keys")
-                .unwrap()
-                .get(),
-            2
-        );
-        let err = non_zero_usize_from_wire(0_u32, "SomeExec", "keys").unwrap_err();
-        assert_eq!(
-            err.strip_backtrace(),
-            "Error during planning: SomeExec: keys wire value 0 must be at least 1"
-        );
-        let err = non_zero_usize_from_wire(-1_i64, "SomeExec", "keys").unwrap_err();
-        assert_eq!(
-            err.strip_backtrace(),
-            "Error during planning: SomeExec: keys wire value -1 is out of range for usize"
         );
 
         let max = usize_from_wire(u64::MAX, "SomeExec", "fetch");

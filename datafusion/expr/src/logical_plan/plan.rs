@@ -8,7 +8,6 @@ use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
-use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
 use super::dml::CopyTo;
@@ -2378,10 +2377,8 @@ impl LogicalPlan {
                         let null_aware_expr = match (*null_aware, *null_aware_value_keys)
                         {
                             (false, _) => "".to_string(),
-                            (true, Some(n)) if n.get() > 1 => {
-                                format!(" null_aware(value_keys={n})")
-                            }
-                            (true, _) => " null_aware".to_string(),
+                            (true, 0 | 1) => " null_aware".to_string(),
+                            (true, n) => format!(" null_aware(value_keys={n})"),
                         };
                         let join_type = if filter.is_none()
                             && keys.is_empty()
@@ -4656,12 +4653,11 @@ pub struct Join {
     /// in a value key follows SQL three-valued logic across the whole tuple,
     /// while the scope keys only select which subquery rows are compared.
     ///
-    /// `None` (what [`Self::try_new`] and the [`LogicalPlanBuilder`] join
-    /// methods set) is only valid when the join ends up with a single
-    /// equi-join key, a scalar `NOT IN`. Physical planning rejects a
-    /// null-aware join with more keys and no count instead of guessing which
-    /// of them are value keys.
-    pub null_aware_value_keys: Option<NonZeroUsize>,
+    /// `0` leaves the count unset, which is the default of [`Self::try_new`]
+    /// and the `LogicalPlanBuilder` join methods. Physical planning accepts an
+    /// unset count only for a single-key join, a scalar `NOT IN`, and rejects
+    /// it for more keys: no default can tell which of them are value keys.
+    pub null_aware_value_keys: usize,
 }
 
 /// The ordered comparison used by an [`AsOfJoin`].
@@ -4889,16 +4885,13 @@ impl Join {
             schema: Arc::new(join_schema),
             null_equality,
             null_aware,
-            null_aware_value_keys: None,
+            null_aware_value_keys: 0,
         })
     }
 
     /// Sets the number of `NOT IN` value keys of a null-aware join, see
     /// [`Self::null_aware_value_keys`].
-    pub fn with_null_aware_value_keys(
-        mut self,
-        null_aware_value_keys: Option<NonZeroUsize>,
-    ) -> Self {
+    pub fn with_null_aware_value_keys(mut self, null_aware_value_keys: usize) -> Self {
         self.null_aware_value_keys = null_aware_value_keys;
         self
     }
@@ -7242,7 +7235,7 @@ mod tests {
                 schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equality: NullEquality::NullEqualsNothing,
                 null_aware: false,
-                null_aware_value_keys: None,
+                null_aware_value_keys: 0,
             }))
         }
 

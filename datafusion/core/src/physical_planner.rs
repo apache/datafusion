@@ -1892,8 +1892,6 @@ impl DefaultPhysicalPlanner {
                         PartitionMode::CollectLeft
                     };
 
-                    // An unset count is passed on unset: the build accepts it
-                    // only for a single key, a scalar `NOT IN`.
                     Arc::new(
                         HashJoinExecBuilder::new(
                             physical_left,
