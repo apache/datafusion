@@ -124,19 +124,13 @@ fn unsliced_hash_len(data: &ArrayData) -> usize {
 /// about 1/16 to the hashing work.
 const SHARED_VALUES_SLICE_FACTOR: usize = 16;
 
-/// The headroom from [`SHARED_VALUES_SLICE_FACTOR`] stops at this many rows
-/// (8 MiB of hashes), so a large merged dictionary cannot grow the hashes
-/// buffer and scratch space to the whole build side. Past it only the
-/// rehashing overhead grows, and it stays linear in the build rows.
-const MAX_HASH_CHUNK_ROWS: usize = 1 << 20;
-
 /// The number of rows in each slice the hash map is filled from.
 ///
 /// A slice is never shorter than the largest build batch or the longest
 /// shared values under any key, which keeps hashing linear in the build rows.
 /// The overhead ratio is per key column, so the longest key counts, not the sum.
 /// Beyond that, a slice is [`SHARED_VALUES_SLICE_FACTOR`] times the shared
-/// values, up to [`MAX_HASH_CHUNK_ROWS`], and never longer than the build side.
+/// values, and never longer than the build side.
 fn hash_chunk_rows(
     left_values: &[ArrayRef],
     max_batch_rows: usize,
@@ -147,9 +141,9 @@ fn hash_chunk_rows(
         .map(|values| unsliced_hash_len(&values.to_data()))
         .max()
         .unwrap_or(0);
-    let base = max_batch_rows.max(shared);
-    let amortized = base.max(shared.saturating_mul(SHARED_VALUES_SLICE_FACTOR));
-    amortized.min(base.max(MAX_HASH_CHUNK_ROWS)).min(num_rows)
+    max_batch_rows
+        .max(shared.saturating_mul(SHARED_VALUES_SLICE_FACTOR))
+        .min(num_rows)
 }
 
 /// The longest array anywhere in `data`, including `data` itself.
@@ -739,9 +733,8 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 /// concatenated in their input order. The hash table is then filled from slices of the
 /// concatenated batch, as long as the largest build-side batch. When a key has values
 /// under a dictionary or list view, which every slice hashes in full, slices grow to 16
-/// times the length of those values, capped at 2^20 rows unless the values alone are
-/// longer. Filling starts from the last slice, and each slice is inserted with the offset
-/// of its first row in the concatenated batch.
+/// times the length of those values. Filling starts from the last slice, and each slice
+/// is inserted with the offset of its first row in the concatenated batch.
 ///
 /// Example of build phase for 3 record batches, filled from slices of 3 rows:
 ///
@@ -3278,8 +3271,7 @@ fn build_in_memory(
         // Every slice shares everything beneath a dictionary or list view,
         // at any depth of a key, which `create_hashes` hashes on each call:
         // slices `SHARED_VALUES_SLICE_FACTOR` times longer than those values
-        // (up to `MAX_HASH_CHUNK_ROWS`, never shorter than the values or the
-        // largest batch) keep that cost small.
+        // (never shorter than the largest batch) keep that cost small.
         let chunk_rows = hash_chunk_rows(&left_values, max_batch_rows, num_rows);
 
         let scratch_reservation = reservation.new_empty();
@@ -3289,6 +3281,9 @@ fn build_in_memory(
                 on_left.len(),
                 null_equality,
             )?)?;
+        } else if chunk_rows > max_batch_rows {
+            // A hashes buffer longer than a batch grows with the build side
+            scratch_reservation.try_grow(chunk_rows * size_of::<u64>())?;
         }
         // The maximum is known: avoid geometric growth and its excess capacity.
         let mut hashes_buffer = Vec::with_capacity(chunk_rows);
@@ -5265,8 +5260,8 @@ mod tests {
     }
 
     /// A key with shared values gets slices `SHARED_VALUES_SLICE_FACTOR` times
-    /// longer than those values, up to `MAX_HASH_CHUNK_ROWS` unless the values
-    /// alone are longer, and never longer than the build side.
+    /// longer than those values, never shorter than the largest batch and
+    /// never longer than the build side.
     #[test]
     fn hash_chunk_rows_amortizes_shared_values() -> Result<()> {
         fn dict(values: i32) -> Result<ArrayRef> {
@@ -5287,10 +5282,10 @@ mod tests {
             // The largest batch is longer than 16 times the dictionary
             (vec![dict(100)?], 8192, 2_097_152, 8192),
             (vec![Arc::clone(&plain), dict(8192)?], 8192, 50_000, 50_000),
-            // Values longer than the cap are the slice length, not 16 times them
-            (vec![dict(2_097_152)?], 8192, 4_194_304, 2_097_152),
-            (vec![dict(100_000)?], 8192, 4_194_304, MAX_HASH_CHUNK_ROWS),
-            // A batch longer than the cap is still the slice length
+            (vec![dict(100_000)?], 8192, 4_194_304, 1_600_000),
+            // The build side caps the slice
+            (vec![dict(2_097_152)?], 8192, 4_194_304, 4_194_304),
+            // A batch longer than 16 times the values is the slice length
             (vec![dict(1000)?], 2_097_152, 4_194_304, 2_097_152),
             (vec![], 8192, 0, 0),
             (vec![dict(8)?], 8192, 0, 0),
@@ -8747,6 +8742,101 @@ mod tests {
             let result = common::collect(join.execute(0, task_ctx)?).await;
             if fits {
                 result?;
+            } else {
+                assert_contains!(
+                    result.unwrap_err().to_string(),
+                    "Resources exhausted: Additional allocation failed for HashJoinInput"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Slices longer than a build batch need a hashes buffer that grows with
+    /// the build side, which must be reserved.
+    #[tokio::test]
+    async fn join_build_hashes_buffer_is_reserved() -> Result<()> {
+        let dict_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Int32));
+        let schema = Arc::new(Schema::new(vec![Field::new("b1", dict_type, false)]));
+        // 8 batches of 1024 rows share 512 dictionary values, so the whole
+        // build side is hashed as one slice of 8192 rows
+        let values: ArrayRef = Arc::new(Int32Array::from_iter_values(0..512));
+        let batches = (0..8)
+            .map(|_| {
+                let keys = Int32Array::from_iter_values((0..1024).map(|i| i % 512));
+                let b1 =
+                    DictionaryArray::<Int32Type>::try_new(keys, Arc::clone(&values))?;
+                Ok(RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![Arc::new(b1)],
+                )?)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let build_rows = 8 * 1024;
+        assert_eq!(
+            hash_chunk_rows(&[Arc::clone(batches[0].column(0))], 1024, build_rows),
+            build_rows
+        );
+        let right = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![0]),
+                Arc::clone(&values),
+            )?)],
+        )?;
+        let on = vec![(
+            Arc::new(Column::new_with_schema("b1", &schema)?) as _,
+            Arc::new(Column::new_with_schema("b1", &schema)?) as _,
+        )];
+
+        // The concatenated copy and the map are held while the map is filled
+        let copy = get_record_batch_memory_size(&concat_batches(&schema, &batches)?);
+        let map =
+            estimate_memory_size::<(u32, u64)>(build_rows, size_of::<JoinHashMapU32>())?
+                + build_rows * size_of::<u32>();
+        let hashes = build_rows * size_of::<u64>();
+
+        for (limit, fits) in [
+            // Room for the copy and the map, not for the hashes too
+            (copy + map + hashes / 2, false),
+            (copy + map + hashes * 3 / 2, true),
+        ] {
+            let left = TestMemoryExec::try_new_exec(
+                std::slice::from_ref(&batches),
+                Arc::clone(&schema),
+                None,
+            )?;
+            let right = TestMemoryExec::try_new_exec(
+                &[vec![right.clone()]],
+                Arc::clone(&schema),
+                None,
+            )?;
+            let join = HashJoinExec::try_new(
+                left,
+                right,
+                on.clone(),
+                None,
+                &JoinType::Inner,
+                None,
+                PartitionMode::CollectLeft,
+                NullEquality::NullEqualsNothing,
+                false,
+            )?;
+
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(limit, 1.0)
+                .build_arc()?;
+            let task_ctx = prepare_task_ctx(8192, false);
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_session_config(task_ctx.session_config().clone())
+                    .with_runtime(runtime),
+            );
+
+            let result = common::collect(join.execute(0, task_ctx)?).await;
+            if fits {
+                assert_eq!(result?.iter().map(|b| b.num_rows()).sum::<usize>(), 16);
             } else {
                 assert_contains!(
                     result.unwrap_err().to_string(),
