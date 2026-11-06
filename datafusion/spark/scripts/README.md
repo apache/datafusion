@@ -65,10 +65,11 @@ Spark reads a literal such as `1.5` as a `DECIMAL` and DataFusion reads it as a
 `DOUBLE`, which explains many of the scale differences.
 
 The runner collects at most 1000 rows per query, because some tests expect an
-error from a query that Spark answers with billions of rows. Such a query can
-still exhaust Spark's memory, because `stack(2000000000, 1)` builds all of its
-rows at once. When the Spark session dies, the runner skips the rest of that
-file and starts a new session for the next one.
+error from a query that Spark answers with billions of rows. It skips a
+`stack()` of more than 1000 rows, such as `stack(2000000000, 1)`, because Spark
+builds all of those rows at once and runs out of memory. If Spark fails anyway,
+the runner skips the rest of that file and starts a new Spark session for the
+next one.
 
 ## How queries are run
 

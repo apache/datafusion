@@ -296,9 +296,9 @@ class RunRecordTest(unittest.TestCase):
         self.assertEqual(self.outcome("query R\nSELECT try_sum(x)\n----\n7\n", result).status, "scale")
 
     def test_row_limit(self):
-        # stack(2000000000, 1) is an error in DataFusion and billions of rows in Spark.
+        # A query that DataFusion rejects and Spark answers with many rows.
         result = (FakeSchema("IntegerType"), [(1,)] * (r.MAX_ROWS + 1))
-        outcome = self.outcome("query error .*\nSELECT stack(2000000000, 1)\n", result)
+        outcome = self.outcome("query error .*\nSELECT explode(sequence(1, 2000))\n", result)
         self.assertEqual(outcome.status, "no-spark-error")
         self.assertEqual(len(outcome.actual), r.MAX_ROWS + 1)
         self.assertEqual(outcome.actual[-1], f"... (more than {r.MAX_ROWS} rows)")
@@ -312,56 +312,103 @@ class RunRecordTest(unittest.TestCase):
 
     def test_out_of_memory_is_skipped(self):
         error = r.SparkError("memory", "Spark ran out of memory")
-        outcome = self.outcome("query error .*\nSELECT stack(2000000000, 1)\n", error)
+        outcome = self.outcome("query error .*\nSELECT stack(1, 1)\n", error)
         self.assertEqual((outcome.status, outcome.detail), ("skip", "Spark ran out of memory"))
+
+    def test_large_stack_is_not_run(self):
+        runner = FakeRunner()
+        [record] = parse("query error .*\nSELECT stack(2000000000, 1)\n")
+        outcome = r.run_record(runner, record)
+        self.assertEqual((outcome.status, outcome.detail), ("skip", "stack() of more than 1000 rows"))
+        self.assertFalse(hasattr(runner, "sql"))
+        # Spark rejects a BIGINT row count before running anything, so that one runs.
+        [record] = parse("query error .*\nSELECT stack(2147483648, 1)\n")
+        error = r.SparkError("error", "[DATATYPE_MISMATCH.UNEXPECTED_INPUT_TYPE]")
+        self.assertEqual(r.run_record(FakeRunner(error), record).status, "pass")
 
 
 class DyingRunner(FakeRunner):
-    """A fake session whose JVM dies when it runs `SELECT die`."""
+    """A fake session that fails the way a real one does after an OutOfMemoryError.
+
+    `SELECT die` kills the JVM. `SELECT oom` runs it out of memory, which leaves
+    it alive but failing every call, so `reset` raises an internal error.
+    """
 
     version = "4.2.0"
 
     def __init__(self):
         super().__init__((FakeSchema("IntegerType"), [(1,)]))
         self.dead = False
+        self.broken = False
         self.restarts = 0
 
     def reset(self):
         if self.dead:
             raise ConnectionRefusedError(61, "Connection refused")
+        if self.broken:
+            raise RuntimeError("An error occurred while calling o49.listTables.\n: [INTERNAL_ERROR]")
 
     def restart(self):
-        self.dead = False
+        self.dead = self.broken = False
         self.restarts += 1
 
     def run(self, sql):
         if self.dead or sql == "SELECT die":
             self.dead = True
             raise type("Py4JNetworkError", (Exception,), {})("Answer from Java side is empty")
+        if sql == "SELECT oom":
+            self.broken = True
+            raise r.SparkError("memory", "Spark ran out of memory")
         return super().run(sql)
 
 
 class RunFilesTest(unittest.TestCase):
-    def test_new_session_after_the_jvm_dies(self):
+    QUERY = "query I\nSELECT {}\n----\n1\n\n"
+
+    def run_files(self, *contents):
         with tempfile.TemporaryDirectory() as d:
-            first, second = Path(d, "a.slt"), Path(d, "b.slt")
-            query = "query I\nSELECT {}\n----\n1\n\n"
-            first.write_text(query.format(1) + query.format("die") + query.format(1))
-            second.write_text(query.format(1))
+            paths = []
+            for i, queries in enumerate(contents):
+                paths.append(Path(d, f"{i}.slt"))
+                paths[-1].write_text("".join(self.QUERY.format(q) for q in queries))
             runner = DyingRunner()
             with contextlib.redirect_stdout(io.StringIO()) as out:
-                statuses, reasons, stopped = r.run_files(runner, [first, second])
+                result = r.run_files(runner, paths)
+        return runner, result, out.getvalue()
+
+    def test_new_session_after_the_jvm_dies(self):
+        runner, (statuses, reasons, stopped), out = self.run_files([1, "die", 1], [1])
         self.assertIsNone(stopped)
         self.assertEqual(runner.restarts, 1)
         self.assertEqual(statuses["pass"], 2)
         self.assertEqual(
             reasons,
-            {
-                "the Spark session died while running it": 1,
-                "the Spark session died earlier in the file": 1,
-            },
+            {"the Spark session died while running it": 1, "Spark failed earlier in the file": 1},
         )
-        self.assertIn("a.slt:6: the Spark session died", out.getvalue())
+        self.assertIn("0.slt:6: the Spark session died", out)
+
+    def test_new_session_after_out_of_memory(self):
+        runner, (statuses, reasons, stopped), out = self.run_files([1, "oom", 1], [1])
+        self.assertIsNone(stopped)
+        self.assertEqual(runner.restarts, 1)
+        self.assertEqual(statuses["pass"], 2)
+        self.assertEqual(
+            reasons, {"Spark ran out of memory": 1, "Spark failed earlier in the file": 1}
+        )
+        self.assertIn("0.slt:6: Spark ran out of memory", out)
+
+    def test_new_session_when_reset_fails(self):
+        # The JVM ran out of memory in a background thread, as in a real run.
+        runner = DyingRunner()
+        runner.broken = True
+        with tempfile.TemporaryDirectory() as d:
+            path = Path(d, "0.slt")
+            path.write_text(self.QUERY.format(1))
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                statuses, _, stopped = r.run_files(runner, [path])
+        self.assertIsNone(stopped)
+        self.assertEqual((runner.restarts, statuses["pass"]), (1, 1))
+        self.assertIn("Spark failed (An error occurred while calling o49.listTables.)", out.getvalue())
 
 
 if __name__ == "__main__":

@@ -701,6 +701,12 @@ class SparkRunner:
                 f"error: this runner needs PySpark {SPARK_VERSION}, found "
                 f"{pyspark.__version__}. Install it with `{install}`."
             )
+        from pyspark.logger import PySparkLogger
+
+        # PySpark logs every failed query to stderr as JSON. The runner reports
+        # them itself.
+        for name in ("SQLQueryContextLogger", "DataFrameQueryContextLogger"):
+            PySparkLogger.getLogger(name).disabled = True
         self._start()
 
     def _start(self) -> None:
@@ -724,17 +730,20 @@ class SparkRunner:
         self.spark.sparkContext.setLogLevel("FATAL")
         self.version = self.spark.version
         self.time_zone = SPARK_DEFAULTS["spark.sql.session.timeZone"]
+        # Set when a query runs the JVM out of memory, which leaves it unusable.
+        self.broken = False
 
     def restart(self) -> None:
-        """Start a new session after the JVM died, for example of an OutOfMemoryError."""
+        """Replace the session with a new JVM, for example after an OutOfMemoryError."""
         from pyspark import SparkContext
         from pyspark.sql import SparkSession
 
-        try:
-            self.spark.stop()
-        except Exception:
-            pass
-        # PySpark keeps the dead gateway and session in class attributes, and
+        # A JVM that ran out of memory can hang in a clean stop, so end the process.
+        process = getattr(SparkContext._gateway, "proc", None)
+        if process is not None:
+            process.kill()
+            process.wait()
+        # PySpark keeps the old gateway and session in class attributes, and
         # would reuse them instead of launching a new JVM.
         SparkContext._gateway = None
         SparkContext._jvm = None
@@ -772,6 +781,7 @@ class SparkRunner:
             raise SparkError("parse", f"Spark cannot parse it ({_condition(e)})")
         except PySparkException as e:
             if "OutOfMemoryError" in str(e):
+                self.broken = True
                 raise SparkError("memory", "Spark ran out of memory")
             condition = _condition(e)
             if condition == "UNRESOLVED_ROUTINE":
@@ -784,6 +794,7 @@ class SparkRunner:
         except Py4JJavaError as e:
             message = str(e.java_exception)
             if "OutOfMemoryError" in message:
+                self.broken = True
                 raise SparkError("memory", "Spark ran out of memory")
             raise SparkError("error", message.strip().split("\n")[0])
 
@@ -821,6 +832,13 @@ DIVERGENT = {
 }
 
 
+# Spark's stack() builds all of its rows at once, so stack(2000000000, 1) runs
+# the JVM out of memory before the MAX_ROWS limit applies. A row count above
+# the INT range is a BIGINT, which Spark rejects before running anything.
+_LARGE_STACK_RE = re.compile(r"\bstack\s*\(\s*(\d+)", re.IGNORECASE)
+_MAX_INT = 2**31 - 1
+
+
 def run_record(runner: SparkRunner, record: Record) -> Outcome:
     if record.skip_reason:
         return Outcome(record, "skip", record.skip_reason)
@@ -840,6 +858,9 @@ def run_record(runner: SparkRunner, record: Record) -> Outcome:
         return Outcome(record, "skip", str(e))
     if any("<slt:ignore>" in line for line in record.expected):
         return Outcome(record, "skip", "uses <slt:ignore>")
+    m = _LARGE_STACK_RE.search(spark_sql)
+    if m and MAX_ROWS < int(m.group(1)) <= _MAX_INT:
+        return Outcome(record, "skip", f"stack() of more than {MAX_ROWS} rows")
 
     try:
         schema, rows = runner.run(spark_sql)
@@ -992,38 +1013,54 @@ def run_files(runner, files: list[Path], verbose: bool = False):
     statuses: Counter = Counter()
     skip_reasons: Counter = Counter()
     restarts = 0
-    for path in files:
+
+    def new_session(path: Path, reason: str) -> Optional[str]:
+        """Replace a session that failed, returning why the run must stop, if it must."""
+        nonlocal restarts
+        if restarts == MAX_RESTARTS:
+            return f"{reason}, and the Spark session has already been replaced {MAX_RESTARTS} times"
+        restarts += 1
+        print(f"{reason}. Starting a new Spark session before {_display_path(path)}\n")
         try:
+            runner.restart()
             runner.reset()
         except Exception as e:
-            if not _session_died(e) or restarts == MAX_RESTARTS:
-                return statuses, skip_reasons, f"the Spark session failed before {_display_path(path)}: {e}"
-            # The JVM died, usually of an OutOfMemoryError in the previous file.
-            restarts += 1
-            print(f"Starting a new Spark session before {_display_path(path)}\n")
+            return f"a new Spark session failed to start: {_first_line(e)}"
+        return None
+
+    broken = False
+    for path in files:
+        stopped = None
+        if broken:
+            stopped = new_session(path, "Spark failed in the previous file")
+        else:
             try:
-                runner.restart()
                 runner.reset()
             except Exception as e:
-                return statuses, skip_reasons, f"a new Spark session failed to start: {e}"
-        died = False
+                stopped = new_session(path, f"Spark failed ({_first_line(e)})")
+        if stopped:
+            return statuses, skip_reasons, stopped
+        broken = False
         for record in parse_slt(path):
-            if died:
-                # The new session would not have this file's views and settings.
-                outcome = Outcome(record, "skip", "the Spark session died earlier in the file")
+            location = f"{_display_path(record.path)}:{record.line}"
+            if broken:
+                # A new session would not have this file's views and settings.
+                outcome = Outcome(record, "skip", "Spark failed earlier in the file")
             else:
                 try:
                     outcome = run_record(runner, record)
                 except Exception as e:
                     if _session_died(e):
-                        died = True
-                        location = f"{_display_path(record.path)}:{record.line}"
+                        broken = True
                         print(f"{location}: the Spark session died, skipping the rest of the file\n")
                         outcome = Outcome(record, "skip", "the Spark session died while running it")
                     else:
                         # A bug in this runner must never look like Spark behavior.
                         detail = traceback.format_exc(limit=1).strip().split("\n")[-1]
                         outcome = Outcome(record, "runner-error", detail)
+                if not broken and getattr(runner, "broken", False):
+                    broken = True
+                    print(f"{location}: Spark ran out of memory, skipping the rest of the file\n")
             statuses[outcome.status] += 1
             if outcome.status == "skip":
                 skip_reasons[outcome.detail] += 1
@@ -1032,6 +1069,13 @@ def run_files(runner, files: list[Path], verbose: bool = False):
             elif verbose:
                 print(report(outcome, runner.version))
     return statuses, skip_reasons, None
+
+
+def _first_line(e: BaseException) -> str:
+    try:
+        return str(e).strip().split("\n")[0]
+    except Exception:
+        return type(e).__name__
 
 
 def _session_died(e: BaseException) -> bool:
