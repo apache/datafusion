@@ -80,6 +80,21 @@ struct RewrittenUnnestExprGroups {
     expr_groups: Vec<Vec<Expr>>,
 }
 
+/// The USING-join column sets of a SELECT's input plan, collected on first
+/// use: collecting walks the whole input plan, and wildcard-only projections
+/// never need them.
+#[derive(Default)]
+struct LazyUsingColumns(Option<Vec<HashSet<Column>>>);
+
+impl LazyUsingColumns {
+    fn get(&mut self, plan: &LogicalPlan) -> Result<&[HashSet<Column>]> {
+        if self.0.is_none() {
+            self.0 = Some(plan.using_columns()?);
+        }
+        Ok(self.0.as_deref().unwrap_or_default())
+    }
+}
+
 fn flatten_expr_groups(expr_groups: Vec<Vec<Expr>>) -> Vec<Expr> {
     expr_groups.into_iter().flatten().collect()
 }
@@ -1114,13 +1129,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Vec<SelectExpr>> {
         let mut prepared_select_exprs = Vec::with_capacity(projection.len());
         let mut error_builder = DataFusionErrorBuilder::new();
-        let using_columns = plan.using_columns()?;
+        let mut using_columns = LazyUsingColumns::default();
 
         for expr in projection {
             match self.sql_select_to_rex(
                 expr,
                 plan,
-                &using_columns,
+                &mut using_columns,
                 empty_from,
                 planner_context,
             ) {
@@ -1136,7 +1151,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         sql: SelectItem,
         plan: &LogicalPlan,
-        using_columns: &[HashSet<Column>],
+        using_columns: &mut LazyUsingColumns,
         empty_from: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<SelectExpr> {
@@ -1146,7 +1161,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let col = normalize_col_with_schemas_and_ambiguity_check(
                     expr,
                     &[&[plan.schema()]],
-                    using_columns,
+                    using_columns.get(plan)?,
                 )?;
 
                 Ok(SelectExpr::Expression(col))
@@ -1157,7 +1172,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let col = normalize_col_with_schemas_and_ambiguity_check(
                     select_expr,
                     &[&[plan.schema()]],
-                    using_columns,
+                    using_columns.get(plan)?,
                 )?;
                 let name = self.ident_normalizer.normalize(alias);
                 // avoiding adding an alias if the column name is the same.
@@ -1178,6 +1193,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 let planned_options = self.plan_wildcard_options(
                     plan,
+                    using_columns,
                     empty_from,
                     planner_context,
                     options,
@@ -1200,6 +1216,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let qualifier = self.object_name_to_table_reference(object_name)?;
                 let planned_options = self.plan_wildcard_options(
                     plan,
+                    using_columns,
                     empty_from,
                     planner_context,
                     options,
@@ -1237,6 +1254,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn plan_wildcard_options(
         &self,
         plan: &LogicalPlan,
+        using_columns: &mut LazyUsingColumns,
         empty_from: bool,
         planner_context: &mut PlannerContext,
         options: WildcardAdditionalOptions,
@@ -1249,7 +1267,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             rename: options.opt_rename,
         };
         if let Some(replace) = options.opt_replace {
-            let using_columns = plan.using_columns()?;
             let replace_expr = replace
                 .items
                 .iter()
@@ -1257,7 +1274,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     self.sql_select_to_rex(
                         SelectItem::UnnamedExpr(item.expr.clone()),
                         plan,
-                        &using_columns,
+                        using_columns,
                         empty_from,
                         planner_context,
                     )
