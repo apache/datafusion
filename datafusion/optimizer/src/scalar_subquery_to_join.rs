@@ -10,6 +10,9 @@ use std::sync::Arc;
 use crate::decorrelate::{
     PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR, build_join_filter,
 };
+use crate::decorrelate_nested::{
+    join_filters_read_outside, reads_columns_of, rewrite_nested_outer_references,
+};
 use crate::optimizer::ApplyOrder;
 use crate::utils::{evaluates_to_null, ids_builder, plan_builder, with_output_ids_of};
 use crate::{OptimizerConfig, OptimizerRule};
@@ -75,6 +78,36 @@ impl ScalarSubqueryToJoin {
 
 impl OptimizerRule for ScalarSubqueryToJoin {
     fn rewrite(
+        &self,
+        plan: LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
+        // first the references two levels up, from the subqueries nested in
+        // the subqueries of this node (a targeted fix, see
+        // `decorrelate_nested`)
+        let Transformed {
+            data: plan,
+            transformed: nested,
+            ..
+        } = rewrite_nested_outer_references(plan, config.column_id_generator())?;
+        self.rewrite_node(plan, config).map(|mut rewritten| {
+            rewritten.transformed |= nested;
+            rewritten
+        })
+    }
+
+    fn name(&self) -> &str {
+        "scalar_subquery_to_join"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
+    }
+}
+
+impl ScalarSubqueryToJoin {
+    /// Rewrites the scalar subqueries of `plan` itself
+    fn rewrite_node(
         &self,
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
@@ -232,14 +265,6 @@ impl OptimizerRule for ScalarSubqueryToJoin {
             plan => Ok(Transformed::no(plan)),
         }
     }
-
-    fn name(&self) -> &str {
-        "scalar_subquery_to_join"
-    }
-
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
-    }
 }
 
 /// Returns true if the expression contains a scalar subquery that this rule
@@ -359,7 +384,12 @@ fn build_join(
         Err(_) if !pull_up.can_pull_up => return Ok(None),
         Err(e) => return Err(e),
     };
-    if !pull_up.can_pull_up {
+    // the join filter would read a column two levels up, or the subquery
+    // still reads a column of the outer input (see `decorrelate_nested`)
+    if !pull_up.can_pull_up
+        || join_filters_read_outside(&pull_up.join_filters, outer_input.schema())
+        || reads_columns_of(&decorrelated_subquery, outer_input.schema())
+    {
         return Ok(None);
     }
 

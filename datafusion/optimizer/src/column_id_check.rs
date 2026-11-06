@@ -26,10 +26,7 @@
 //!     [`Stale`](ColumnIdIssueKind::Stale) references than its
 //!     input (which is the output of the planner, or a plan optimized before
 //!     for a prepared statement);
-//!   - after an optimizer rule, if it introduced issues of a kind it may not
-//!     introduce: a rule in [`UNMIGRATED_RULES`] may introduce issues of the
-//!     kind listed with it (a `Missing` or `Stale` reference), any other
-//!     rule nothing.
+//!   - after an optimizer rule, if it introduced any issue.
 //!
 //!   A plan without any id (built without a generator) is not checked: all
 //!   its references are `Missing`, as before ids. Neither is the output of
@@ -49,33 +46,6 @@ use std::sync::{LazyLock, Mutex};
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::{ColumnIdIssueKind, LogicalPlan};
 use log::{Level, debug, log_enabled};
-
-/// The rules that may still introduce column id issues, each with the one
-/// kind of issue it may introduce. Every other rule may introduce none;
-/// remove a rule once it keeps its ids, CI then fails if it regresses.
-///
-/// The rules listed are migrated: the issues they may introduce come from
-/// plans that are wrong without ids (on `main`), which the decorrelation
-/// rules build and the unnesting rule of #5492 replaces. See the
-/// [module documentation](self).
-///
-/// The analyzer is checked as a whole, after all its rules, and may not
-/// introduce any issue.
-pub const UNMIGRATED_RULES: &[(&str, ColumnIdIssueKind)] = &[
-    // decorrelating a subquery that reads a column two levels up (an
-    // `EXISTS` inside an `EXISTS` or a scalar subquery) leaves the
-    // reference as a plain column in a join filter where it is not in scope,
-    // as on `main` (merge_into.slt, explain-only tests in subquery.slt; the
-    // SELECT form fails on `main` with "No field named t.id"): the
-    // reference has the right id, which is stale there
-    ("decorrelate_predicate_subquery", ColumnIdIssueKind::Stale),
-    // a subquery nested in a correlated scalar subquery that reads a column
-    // two levels up (an `EXISTS` inside a scalar subquery) ends up reading
-    // it as a plain column in a join filter where it is not in scope, as on
-    // `main` (explain-only tests in subquery.slt): the reference has the
-    // right id, which is stale there
-    ("scalar_subquery_to_join", ColumnIdIssueKind::Stale),
-];
 
 /// The log target of the reports
 const LOG_TARGET: &str = "datafusion::column_id";
@@ -108,11 +78,6 @@ static VERIFY: LazyLock<bool> = LazyLock::new(|| {
 
 /// The number of issues of each kind, indexed like [`ColumnIdIssueKind::ALL`]
 type Counts = [usize; ColumnIdIssueKind::ALL.len()];
-
-/// Whether `rule` may introduce issues of `kind` (see [`UNMIGRATED_RULES`])
-fn may_introduce(rule: &str, kind: ColumnIdIssueKind) -> bool {
-    UNMIGRATED_RULES.contains(&(rule, kind))
-}
 
 /// The kinds of issues that a plan may not have after the analyzer at all
 const AFTER_ANALYZER_FORBIDDEN: [ColumnIdIssueKind; 2] = [
@@ -186,7 +151,7 @@ impl ColumnIdCheck {
 
     /// Records the issues that `rule` introduced, `plan` being its output,
     /// and returns an error if verification is on and `rule` introduced
-    /// issues of a kind it may not introduce (see [`UNMIGRATED_RULES`])
+    /// issues
     pub(crate) fn after_rule(&mut self, rule: &str, plan: &LogicalPlan) -> Result<()> {
         let before = match &self.before {
             Some(before) => *before,
@@ -200,10 +165,7 @@ impl ColumnIdCheck {
         }
         let failed: Vec<_> = ColumnIdIssueKind::ALL
             .into_iter()
-            .filter(|kind| {
-                after[*kind as usize] > before[*kind as usize]
-                    && !may_introduce(rule, *kind)
-            })
+            .filter(|kind| after[*kind as usize] > before[*kind as usize])
             .collect();
         fail_if_any(
             &format!(
@@ -400,22 +362,22 @@ mod tests {
     }
 
     #[test]
-    fn listed_rules_may_lose_ids() -> Result<()> {
+    fn no_rule_may_lose_ids() -> Result<()> {
         let plan = scan(true)?;
+        // a stale reference (`t.a#9` resolves by name to a field without an
+        // id), also from a decorrelation rule
         let mut check = ColumnIdCheck::new(&plan);
-        // a listed rule adds a stale reference (`t.a#9` resolves by name to
-        // a field without an id), the kind listed with it
-        check.after_rule("scalar_subquery_to_join", &filter(scan(false)?, Some(9))?)?;
-        // but not a missing one
         let err = check
-            .after_rule(
-                "scalar_subquery_to_join",
-                &filter(filter(scan(false)?, Some(9))?, None)?,
-            )
+            .after_rule("scalar_subquery_to_join", &filter(scan(false)?, Some(9))?)
             .unwrap_err();
-        assert!(err.to_string().contains("kinds missing"), "{err}");
+        assert!(
+            err.to_string().contains(
+                "optimizer rule 'scalar_subquery_to_join' introduced column id issues of kinds stale"
+            ),
+            "{err}"
+        );
 
-        // another rule may not
+        // a missing one
         let mut check = ColumnIdCheck::new(&plan);
         let err = check
             .after_rule("my_rule", &filter(scan(true)?, None)?)
@@ -487,20 +449,5 @@ mod tests {
         let plan = scan(false)?;
         let mut check = ColumnIdCheck::new(&plan);
         check.after_rule("my_rule", &filter(scan(false)?, None)?)
-    }
-
-    #[test]
-    fn unmigrated_rules_exist() {
-        let optimizer = crate::Optimizer::new();
-        let analyzer = crate::Analyzer::new();
-        let names: Vec<&str> = optimizer
-            .rules
-            .iter()
-            .map(|rule| rule.name())
-            .chain(analyzer.rules.iter().map(|rule| rule.name()))
-            .collect();
-        for (rule, _) in UNMIGRATED_RULES {
-            assert!(names.contains(rule), "{rule} is not a rule");
-        }
     }
 }

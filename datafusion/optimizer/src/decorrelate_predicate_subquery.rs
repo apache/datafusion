@@ -11,6 +11,9 @@ use crate::analyzer::type_coercion::TypeCoercionRewriter;
 use crate::decorrelate::{
     PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR, build_join_filter,
 };
+use crate::decorrelate_nested::{
+    join_filters_read_outside, reads_columns_of, rewrite_nested_outer_references,
+};
 use crate::extract_equijoin_predicate::split_eq_and_noneq_join_predicate;
 use crate::optimizer::ApplyOrder;
 use crate::utils::{ids_builder, plan_builder, with_output_ids_of};
@@ -56,6 +59,14 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        // first the references two levels up, from the subqueries nested in
+        // the subqueries of this node (a targeted fix, see
+        // `decorrelate_nested`)
+        let Transformed {
+            data: plan,
+            transformed: nested,
+            ..
+        } = rewrite_nested_outer_references(plan, config.column_id_generator())?;
         // the subqueries of this node, then the node: a rewrite of a nested
         // subquery is a rewrite of the plan
         let Transformed {
@@ -66,7 +77,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
             subquery.transform_down(|p| self.rewrite(p, config))
         })?;
         self.rewrite_node(plan, config).map(|mut rewritten| {
-            rewritten.transformed |= transformed;
+            rewritten.transformed |= transformed || nested;
             rewritten
         })
     }
@@ -965,7 +976,12 @@ fn build_join(
         (new_plan, pull_up) = rewrite(false)?;
         count_bug_compensation = None;
     }
-    if !pull_up.can_pull_up {
+    // the join filter would read a column two levels up, or the subquery
+    // still reads a column of `left` (see `decorrelate_nested`)
+    if !pull_up.can_pull_up
+        || join_filters_read_outside(&pull_up.join_filters, left.schema())
+        || reads_columns_of(&new_plan, left.schema())
+    {
         return Ok(None);
     }
     // TODO(#24960): stopgap until count-bug compensation covers `IN`/`NOT IN`.

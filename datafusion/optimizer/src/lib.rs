@@ -29,6 +29,7 @@ pub mod analyzer;
 pub mod common_subexpr_eliminate;
 pub mod decorrelate;
 pub mod decorrelate_lateral_join;
+mod decorrelate_nested;
 pub mod decorrelate_predicate_subquery;
 pub mod eliminate_aggregate_distinct;
 pub mod eliminate_cross_join;

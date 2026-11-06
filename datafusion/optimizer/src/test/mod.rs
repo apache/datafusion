@@ -188,10 +188,9 @@ pub fn assert_analyzer_check_err(
 }
 
 /// Asserts that `after`, the output of rules applied to `before`, has no
-/// more column id issues of any kind than `before`: the strict check of
-/// `column_id_check`, for the tests of a rule that stays in its
-/// `UNMIGRATED_RULES` only because it moves or copies references that other
-/// rules leave wrong
+/// more column id issues of any kind than `before`: the check of
+/// `column_id_check`, for the tests of a rule applied to a plan that has
+/// issues already
 ///
 /// A plan without any id is not checked, as by the verifier.
 pub fn assert_no_new_column_id_issues(before: &LogicalPlan, after: &LogicalPlan) {

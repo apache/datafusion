@@ -43,9 +43,9 @@ use datafusion_common::{
     Column, ColumnId, DFSchema, Result, ScalarValue, assert_eq_or_internal_err,
     internal_err, plan_err,
 };
-use datafusion_expr::expr::WindowFunction;
+use datafusion_expr::expr::{Exists, InSubquery, SetComparison, WindowFunction};
 use datafusion_expr::expr_rewriter::replace_col;
-use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan};
+use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, Subquery};
 use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
 use datafusion_expr::{
     BinaryExpr, Distinct, EmptyRelation, Expr, Filter, Operator, Projection,
@@ -954,6 +954,18 @@ impl OptimizerRule for PushDownFilter {
             )));
         }
 
+        // A filter with a correlated subquery (one that decorrelation left)
+        // stays where it is: below another node, the outer references of the
+        // subquery would read columns that are not in scope there. Such a
+        // plan cannot be executed, but a later pass may decorrelate it.
+        if has_correlated_subquery(&filter.predicate) {
+            return Ok(Transformed::new(
+                LogicalPlan::Filter(filter),
+                predicates_changed || reorder_changed,
+                TreeNodeRecursion::Continue,
+            ));
+        }
+
         // If the child has a fetch (limit) or skip (offset), pushing a filter
         // below it would change semantics: the limit/offset should apply before
         // the filter, not after.
@@ -1083,12 +1095,20 @@ impl OptimizerRule for PushDownFilter {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
                 // each output reads the column of each input at the same index
                 let outputs = OutputColumns::new(&union.schema);
-                for input in union.inputs {
+                for (n, input) in union.inputs.into_iter().enumerate() {
                     let input_columns = input.schema().columns();
                     let push_predicate = outputs
                         .replace(filter.predicate.clone(), |i| {
                             input_columns.get(i).cloned().map(Expr::Column)
                         })?;
+                    // each input but the first gets a copy of the subqueries
+                    // of the predicate (a correlated one is not pushed, see
+                    // `has_correlated_subquery`)
+                    let push_predicate = if n == 0 {
+                        push_predicate
+                    } else {
+                        with_fresh_subquery_ids(push_predicate, config)?
+                    };
                     inputs.push(Arc::new(LogicalPlan::Filter(Filter::new(
                         push_predicate,
                         input,
@@ -1373,7 +1393,16 @@ impl OptimizerRule for PushDownFilter {
                     .iter()
                     .zip(supported_filters.iter())
                     .filter(|(_, res)| *res != &TableProviderFilterPushDown::Unsupported)
-                    .map(|(pred, _)| pred);
+                    .map(|(pred, res)| match res {
+                        // an inexact filter also stays above the scan: the
+                        // subqueries of the copy the scan gets define
+                        // columns of their own
+                        TableProviderFilterPushDown::Inexact => {
+                            with_fresh_subquery_ids(pred.clone(), config)
+                        }
+                        _ => Ok(pred.clone()),
+                    })
+                    .collect::<Result<Vec<_>>>()?;
 
                 // Add new scan filters (labelled as the new ones are)
                 let scan_filters = scan
@@ -1382,10 +1411,9 @@ impl OptimizerRule for PushDownFilter {
                     .map(relabel)
                     .collect::<Result<Vec<_>>>()?;
                 let new_scan_filters: Vec<Expr> = scan_filters
-                    .iter()
+                    .into_iter()
                     .chain(new_scan_filters)
                     .unique()
-                    .cloned()
                     .collect();
 
                 if supported_filters
@@ -1739,6 +1767,95 @@ fn reads_beyond_this_node(node: &Expr) -> bool {
             | Expr::InSubquery(_)
             | Expr::SetComparison(_)
     )
+}
+
+/// Whether `expr` has a subquery that reads columns from outside itself
+/// (see [`Subquery::outer_ref_columns`])
+fn has_correlated_subquery(expr: &Expr) -> bool {
+    expr.exists(|expr| {
+        Ok(match expr {
+            Expr::Exists(Exists { subquery, .. })
+            | Expr::InSubquery(InSubquery { subquery, .. })
+            | Expr::SetComparison(SetComparison { subquery, .. })
+            | Expr::ScalarSubquery(subquery) => !subquery.outer_ref_columns.is_empty(),
+            _ => false,
+        })
+    })
+    .unwrap_or(false)
+}
+
+/// `expr` with every subquery in it renumbered
+/// ([`LogicalPlan::with_fresh_column_ids`]): for a copy of a predicate that
+/// stays in the plan as well, so that no column is defined twice
+fn with_fresh_subquery_ids(expr: Expr, config: &dyn OptimizerConfig) -> Result<Expr> {
+    map_subqueries_of(expr, |subquery| with_fresh_ids(subquery, config))
+}
+
+/// `subquery` renumbered (see [`with_fresh_subquery_ids`])
+fn with_fresh_ids(
+    mut subquery: Subquery,
+    config: &dyn OptimizerConfig,
+) -> Result<Subquery> {
+    subquery.subquery = Arc::new(
+        Arc::unwrap_or_clone(subquery.subquery)
+            .with_fresh_column_ids(config.column_id_generator())?,
+    );
+    Ok(subquery)
+}
+
+/// `expr` with `f` applied to every subquery in it (not to those nested in
+/// them); `expr` as it is if it has none
+fn map_subqueries_of(
+    expr: Expr,
+    mut f: impl FnMut(Subquery) -> Result<Subquery>,
+) -> Result<Expr> {
+    let has_subquery = expr.exists(|expr| {
+        Ok(matches!(
+            expr,
+            Expr::Exists(_)
+                | Expr::InSubquery(_)
+                | Expr::SetComparison(_)
+                | Expr::ScalarSubquery(_)
+        ))
+    })?;
+    if !has_subquery {
+        return Ok(expr);
+    }
+    expr.transform(|expr| {
+        Ok(match expr {
+            Expr::Exists(Exists { subquery, negated }) => {
+                Transformed::yes(Expr::Exists(Exists {
+                    subquery: f(subquery)?,
+                    negated,
+                }))
+            }
+            Expr::InSubquery(InSubquery {
+                expr,
+                subquery,
+                negated,
+            }) => Transformed::yes(Expr::InSubquery(InSubquery {
+                expr,
+                subquery: f(subquery)?,
+                negated,
+            })),
+            Expr::SetComparison(SetComparison {
+                expr,
+                subquery,
+                op,
+                quantifier,
+            }) => Transformed::yes(Expr::SetComparison(SetComparison {
+                expr,
+                subquery: f(subquery)?,
+                op,
+                quantifier,
+            })),
+            Expr::ScalarSubquery(subquery) => {
+                Transformed::yes(Expr::ScalarSubquery(f(subquery)?))
+            }
+            expr => Transformed::no(expr),
+        })
+    })
+    .data()
 }
 
 #[cfg(test)]
@@ -3562,6 +3679,119 @@ mod tests {
             @"
         Filter: a = Int64(1)
           TableScan: test, partial_filters=[test.a = Int64(1)]
+        "
+        )
+    }
+
+    /// The copy of an inexact filter that the scan gets has a subquery of its
+    /// own: the subquery stays in the filter above, and the macro checks
+    /// that no column is defined twice
+    #[test]
+    fn filter_with_subquery_with_table_provider_inexact() -> Result<()> {
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .project(vec![col("c")])?
+                .build()?,
+        );
+        let plan = table_scan_with_pushdown_provider_builder(
+            TableProviderFilterPushDown::Inexact,
+            vec![],
+            None,
+        )?
+        .filter(in_subquery(col("a"), subquery))?
+        .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @"
+        Filter: a IN (<subquery>)
+          Subquery:
+            Projection: sq.c
+              TableScan: sq
+          TableScan: test, partial_filters=[test.a IN (<subquery>)]
+            Subquery:
+              Projection: sq.c
+                TableScan: sq
+        "
+        )
+    }
+
+    /// A filter with an uncorrelated subquery pushed below a union: each
+    /// input but the first has a copy of its own (the macro checks that no
+    /// column is defined twice)
+    #[test]
+    fn filter_with_subquery_through_union() -> Result<()> {
+        let left = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a")])?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
+            .project(vec![col("a")])?
+            .build()?;
+        let union = LogicalPlanBuilder::from(left).union(right)?.build()?;
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .project(vec![col("sq.c")])?
+                .build()?,
+        );
+        let plan = LogicalPlanBuilder::from(union)
+            .filter(in_subquery(col("a"), subquery))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @"
+        Union
+          Projection: test.a
+            TableScan: test, full_filters=[test.a IN (<subquery>)]
+              Subquery:
+                Projection: sq.c
+                  TableScan: sq
+          Projection: test2.a
+            TableScan: test2, full_filters=[test2.a IN (<subquery>)]
+              Subquery:
+                Projection: sq.c
+                  TableScan: sq
+        "
+        )
+    }
+
+    /// A filter with a correlated subquery that decorrelation left stays
+    /// where it is: below the union, the outer reference would not be in
+    /// scope
+    #[test]
+    fn filter_with_correlated_subquery_not_pushed() -> Result<()> {
+        let left = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a")])?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test2")?)
+            .project(vec![col("a")])?
+            .build()?;
+        let union = LogicalPlanBuilder::from(left).union(right)?.build()?;
+        // the subquery reads the output `a` of the union, by id
+        let a = union.schema().columns()[0].clone();
+        let field = Arc::clone(union.schema().field(0));
+        let subquery = Arc::new(
+            LogicalPlanBuilder::from(test_table_scan_with_name("sq")?)
+                .filter(col("sq.a").eq(Expr::OuterReferenceColumn(field, a)))?
+                .project(vec![col("sq.c")])?
+                .build()?,
+        );
+        let plan = LogicalPlanBuilder::from(union)
+            .filter(exists(subquery))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @"
+        Filter: EXISTS (<subquery>)
+          Subquery:
+            Projection: sq.c
+              TableScan: sq, full_filters=[sq.a = outer_ref(a)]
+          Union
+            Projection: test.a
+              TableScan: test
+            Projection: test2.a
+              TableScan: test2
         "
         )
     }

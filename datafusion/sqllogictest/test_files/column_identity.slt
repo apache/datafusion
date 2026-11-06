@@ -358,6 +358,315 @@ SELECT sum(1 + 1) OVER (ORDER BY a + 1), sum(b) OVER (ORDER BY a + 1) FROM t2662
 4 30
 
 ##########
+# #15558: nested correlated subquery referencing a column two levels up
+# before: Schema error: No field named e1.dept_id
+# The conjunct `e2.dept_id = e1.dept_id` of the middle subquery lets the
+# innermost one read `e2.dept_id` instead of `e1.dept_id` (matched by column
+# id: the three levels read the same table). The plan is in subquery.slt.
+##########
+
+statement ok
+CREATE TABLE employees15558 (employee_id INT, employee_name VARCHAR, dept_id INT, salary INT) AS VALUES
+  (1, 'a', 1, 10), (2, 'b', 1, 20), (3, 'c', 1, 60),
+  (4, 'd', 2, 10), (5, 'e', 2, 30);
+
+query TI
+SELECT e1.employee_name, e1.salary
+FROM employees15558 e1
+WHERE e1.salary >= (
+    SELECT AVG(e2.salary)
+    FROM employees15558 e2
+    WHERE e2.dept_id = e1.dept_id
+    AND e2.salary > (
+        SELECT AVG(e3.salary)
+        FROM employees15558 e3
+        WHERE e3.dept_id = e1.dept_id
+    )
+)
+ORDER BY 1;
+----
+c 60
+e 30
+
+# The same substitution for other subqueries, with NULL keys (results checked
+# with SQLite)
+
+statement ok
+CREATE TABLE emp_2l (id INT, name VARCHAR, dept INT, sal INT) AS VALUES
+  (1, 'a', 1, 10), (2, 'b', 1, 20), (3, 'c', 1, 60),
+  (4, 'd', 2, 10), (5, 'e', 2, 30), (6, 'f', NULL, 50), (7, 'g', 2, NULL);
+
+# an EXISTS in a scalar subquery
+query II
+SELECT e1.id, (
+    SELECT count(*) FROM emp_2l e2 WHERE e2.dept = e1.dept AND EXISTS (
+        SELECT 1 FROM emp_2l e3 WHERE e3.dept = e1.dept AND e3.sal > e2.sal
+    )
+) AS n
+FROM emp_2l e1 ORDER BY 1;
+----
+1 2
+2 2
+3 2
+4 1
+5 1
+6 0
+7 1
+
+# a NOT EXISTS in a scalar subquery
+query I
+SELECT e1.id FROM emp_2l e1 WHERE e1.sal > (
+    SELECT min(e2.sal) FROM emp_2l e2 WHERE e2.dept = e1.dept AND NOT EXISTS (
+        SELECT 1 FROM emp_2l e3 WHERE e3.dept = e1.dept AND e3.sal < e2.sal
+    )
+) ORDER BY 1;
+----
+2
+3
+5
+
+# an IN in an EXISTS, where the middle subquery also reads `e1.id` itself
+query I
+SELECT e1.id FROM emp_2l e1 WHERE EXISTS (
+    SELECT 1 FROM emp_2l e2 WHERE e1.dept = e2.dept AND e2.id <> e1.id AND e2.sal IN (
+        SELECT e3.sal + 10 FROM emp_2l e3 WHERE e3.dept = e1.dept
+    )
+) ORDER BY 1;
+----
+1
+3
+
+##########
+# #21727: grandparent column referenced only in a nested subquery
+# before: Schema error: No field named t0.g
+# With no equality to substitute through, the nested EXISTS becomes an inner
+# join in the middle EXISTS (which only tells if it has a row), and `t0.g`
+# one of its own outer references.
+##########
+
+statement ok
+CREATE TABLE t0_21727 (g INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE t1_21727 (a INT) AS VALUES (10);
+
+statement ok
+CREATE TABLE t2_21727 (c INT) AS VALUES (1);
+
+query I
+SELECT g FROM t0_21727 WHERE EXISTS (
+    SELECT 1 FROM t1_21727 WHERE EXISTS (
+        SELECT 1 FROM t2_21727 WHERE t2_21727.c = t0_21727.g
+    )
+);
+----
+1
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT g FROM t0_21727 WHERE EXISTS (
+    SELECT 1 FROM t1_21727 WHERE EXISTS (
+        SELECT 1 FROM t2_21727 WHERE t2_21727.c = t0_21727.g
+    )
+);
+----
+logical_plan
+01)LeftSemi Join: t0_21727.g = __correlated_sq_1.c
+02)--TableScan: t0_21727 projection=[g]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Cross Join:
+05)------TableScan: t1_21727 projection=[]
+06)------TableScan: t2_21727 projection=[c]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+# The same flattening for other subqueries, with NULLs and duplicates
+# (results checked with SQLite)
+
+statement ok
+CREATE TABLE t0_2l (g INT) AS VALUES (1), (2), (3), (NULL);
+
+statement ok
+CREATE TABLE t1_2l (a INT, b INT) AS VALUES (10, 1), (20, 2), (30, NULL);
+
+statement ok
+CREATE TABLE t2_2l (c INT, d INT) AS VALUES (1, 10), (2, 20), (2, 21), (NULL, 30);
+
+# an IN in an IN
+query I
+SELECT g FROM t0_2l WHERE g IN (
+    SELECT b FROM t1_2l WHERE a IN (SELECT d FROM t2_2l WHERE t2_2l.c = t0_2l.g)
+) ORDER BY g;
+----
+1
+2
+
+# an IN in a NOT IN: the middle subquery is empty for g = 3 and g = NULL
+query I
+SELECT g FROM t0_2l WHERE g NOT IN (
+    SELECT b FROM t1_2l WHERE a IN (SELECT d FROM t2_2l WHERE t2_2l.c = t0_2l.g)
+) ORDER BY g;
+----
+3
+NULL
+
+# an EXISTS in a NOT EXISTS
+query I
+SELECT g FROM t0_2l WHERE NOT EXISTS (
+    SELECT 1 FROM t1_2l WHERE EXISTS (SELECT 1 FROM t2_2l WHERE t2_2l.c = t0_2l.g)
+) ORDER BY g;
+----
+3
+NULL
+
+# an EXISTS in an IN, reading a column one level up and one two levels up
+query I
+SELECT g FROM t0_2l WHERE g IN (
+    SELECT b FROM t1_2l WHERE EXISTS (
+        SELECT 1 FROM t2_2l WHERE t2_2l.c = t0_2l.g AND t2_2l.d >= t1_2l.a
+    )
+) ORDER BY g;
+----
+1
+2
+
+# an EXISTS in an EXISTS in a projection (a mark join)
+query IB
+SELECT g, EXISTS (
+    SELECT 1 FROM t1_2l WHERE EXISTS (
+        SELECT 1 FROM t2_2l WHERE t2_2l.c = t0_2l.g AND t2_2l.d > t1_2l.a
+    )
+) AS e FROM t0_2l ORDER BY g;
+----
+1 false
+2 true
+3 false
+NULL false
+
+# the same table in the middle and the nested subquery
+query I
+SELECT g FROM t0_2l WHERE EXISTS (
+    SELECT 1 FROM t2_2l WHERE EXISTS (
+        SELECT 1 FROM t2_2l x WHERE x.c = t0_2l.g AND x.d > t2_2l.d
+    )
+) ORDER BY g;
+----
+2
+
+# both rewrites: `e3.dept = e1.dept` reads `e2.dept` through the equality, and
+# `e3.id <> e1.id`, with no equality, is flattened
+query I
+SELECT e1.id FROM emp_2l e1 WHERE EXISTS (
+    SELECT 1 FROM emp_2l e2 WHERE e2.dept = e1.dept AND e2.id <> e1.id AND EXISTS (
+        SELECT 1 FROM emp_2l e3 WHERE e3.dept = e1.dept AND e3.sal > e2.sal AND e3.id <> e1.id
+    )
+) ORDER BY 1;
+----
+1
+2
+3
+7
+
+# three levels: flattened one level per optimizer pass
+query I
+SELECT g FROM t0_2l WHERE EXISTS (
+    SELECT 1 FROM t1_2l WHERE EXISTS (
+        SELECT 1 FROM t2_2l WHERE EXISTS (SELECT 1 FROM t2_2l x WHERE x.c = t0_2l.g)
+    )
+) ORDER BY g;
+----
+1
+2
+
+##########
+# Outer references two levels up that neither rewrite removes. The subqueries
+# are not decorrelated (the join filter would read the column out of scope),
+# and physical planning fails. Before: Schema error: No field named t0_2l.g
+# (or another column two levels up)
+##########
+
+# a NOT EXISTS in an EXISTS
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression (Exists|InSubquery|ScalarSubquery)
+SELECT g FROM t0_2l WHERE EXISTS (
+    SELECT 1 FROM t1_2l WHERE NOT EXISTS (SELECT 1 FROM t2_2l WHERE t2_2l.c = t0_2l.g)
+);
+
+# a NOT IN in an EXISTS
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression (Exists|InSubquery|ScalarSubquery)
+SELECT g FROM t0_2l WHERE EXISTS (
+    SELECT 1 FROM t1_2l WHERE a NOT IN (SELECT d FROM t2_2l WHERE t2_2l.c = t0_2l.g)
+);
+
+# an EXISTS under OR
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression (Exists|InSubquery|ScalarSubquery)
+SELECT g FROM t0_2l WHERE EXISTS (
+    SELECT 1 FROM t1_2l WHERE t1_2l.a > 25 OR EXISTS (SELECT 1 FROM t2_2l WHERE t2_2l.c = t0_2l.g)
+);
+
+# an aggregate above the filter of the middle subquery
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression (Exists|InSubquery|ScalarSubquery)
+SELECT g FROM t0_2l WHERE EXISTS (
+    SELECT count(*) FROM t1_2l WHERE EXISTS (SELECT 1 FROM t2_2l WHERE t2_2l.c = t0_2l.g)
+    HAVING count(*) > 1
+);
+
+# a LIMIT
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression (Exists|InSubquery|ScalarSubquery)
+SELECT g FROM t0_2l WHERE EXISTS (
+    SELECT 1 FROM t1_2l WHERE EXISTS (SELECT 1 FROM t2_2l WHERE t2_2l.c = t0_2l.g) LIMIT 1
+);
+
+# a DISTINCT
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression (Exists|InSubquery|ScalarSubquery)
+SELECT g FROM t0_2l WHERE g IN (
+    SELECT DISTINCT b FROM t1_2l WHERE EXISTS (SELECT 1 FROM t2_2l WHERE t2_2l.c = t0_2l.g)
+);
+
+# a window function
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression (Exists|InSubquery|ScalarSubquery)
+SELECT g FROM t0_2l WHERE EXISTS (
+    SELECT row_number() OVER () FROM t1_2l WHERE EXISTS (SELECT 1 FROM t2_2l WHERE t2_2l.c = t0_2l.g)
+);
+
+# a scalar middle subquery (its rows are counted) without an equality to
+# substitute through
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression (Exists|InSubquery|ScalarSubquery)
+SELECT g, (
+    SELECT count(*) FROM t1_2l WHERE EXISTS (SELECT 1 FROM t2_2l WHERE t2_2l.c = t0_2l.g)
+) FROM t0_2l;
+
+# the equality under OR
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression (Exists|InSubquery|ScalarSubquery)
+SELECT g, (
+    SELECT count(*) FROM t1_2l WHERE (t1_2l.b = t0_2l.g OR t1_2l.a > 25)
+    AND EXISTS (SELECT 1 FROM t2_2l WHERE t2_2l.c = t0_2l.g)
+) FROM t0_2l;
+
+statement ok
+CREATE TABLE tf_2l (g INT, f DOUBLE, h BIGINT) AS VALUES (1, 1.0, 1), (2, 2.0, 2), (NULL, NULL, NULL);
+
+statement ok
+CREATE TABLE tf1_2l (b INT, fb DOUBLE) AS VALUES (1, 1.0), (2, 2.0), (NULL, NULL);
+
+# an equality of floating point numbers (equal values are not always the
+# same: -0.0 and 0.0)
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression (Exists|InSubquery|ScalarSubquery)
+SELECT f, (
+    SELECT count(*) FROM tf1_2l WHERE tf1_2l.fb = tf_2l.f
+    AND EXISTS (SELECT 1 FROM t2_2l WHERE t2_2l.c = tf_2l.f)
+) FROM tf_2l;
+
+# an equality across a cast (INT and BIGINT)
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression (Exists|InSubquery|ScalarSubquery)
+SELECT h, (
+    SELECT count(*) FROM tf1_2l WHERE tf1_2l.b = tf_2l.h
+    AND EXISTS (SELECT 1 FROM t2_2l WHERE t2_2l.c = tf_2l.h)
+) FROM tf_2l;
+
+##########
 # Clean up
 ##########
 
@@ -420,6 +729,36 @@ DROP TABLE users13476;
 
 statement ok
 DROP TABLE t26620;
+
+statement ok
+DROP TABLE employees15558;
+
+statement ok
+DROP TABLE emp_2l;
+
+statement ok
+DROP TABLE t0_21727;
+
+statement ok
+DROP TABLE t1_21727;
+
+statement ok
+DROP TABLE t2_21727;
+
+statement ok
+DROP TABLE t0_2l;
+
+statement ok
+DROP TABLE t1_2l;
+
+statement ok
+DROP TABLE t2_2l;
+
+statement ok
+DROP TABLE tf_2l;
+
+statement ok
+DROP TABLE tf1_2l;
 
 ##########
 # Outputs with the same name next to UNNEST: the select list is planned as an
