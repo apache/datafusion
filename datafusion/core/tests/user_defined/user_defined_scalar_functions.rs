@@ -20,6 +20,7 @@ use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionS
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::{as_float64_array, as_int32_array};
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::take_function_args;
@@ -1345,7 +1346,7 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
             field: Arc::new(Field::new("name", DataType::Utf8View, true)),
             default_expr: None,
         }]),
-        return_field: Some(Arc::new(Field::new("", DataType::Int32, true))),
+        return_field: Some(DataType::Int32.into_nullable_field_ref()),
         params: CreateFunctionBody {
             language: Some(Ident {
                 value: "plrust".into(),
