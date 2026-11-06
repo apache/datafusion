@@ -37,6 +37,10 @@
 //!   the analyzer for such a plan.
 //!
 //! Only the verification switch fails queries; the others only report.
+//!
+//! [`check_column_ids_kept`] is the check that verification runs after each
+//! optimizer rule, for downstream code to call in the tests of its own rules,
+//! or of code that rewrites or combines plans.
 
 use std::fmt::Write as _;
 use std::fs::File;
@@ -53,23 +57,19 @@ use log::{Level, debug, log_enabled};
 ///
 /// The rules listed are migrated: the issues they may introduce come from
 /// plans that are wrong without ids (on `main`), which the decorrelation
-/// rules build and the unnesting rule of #5492 replaces, and from a node
-/// that does not define the columns it reads (MERGE INTO). See the
+/// rules build and the unnesting rule of #5492 replaces. See the
 /// [module documentation](self).
 ///
 /// The analyzer is checked as a whole, after all its rules, and may not
 /// introduce any issue.
-pub(crate) const UNMIGRATED_RULES: &[(&str, ColumnIdIssueKind)] = &[
-    // pushes into a join filter the reference that
-    // DecorrelatePredicateSubquery leaves out of scope when it decorrelates
-    // a subquery that reads a column two levels up (merge_into.slt; the
+pub const UNMIGRATED_RULES: &[(&str, ColumnIdIssueKind)] = &[
+    // decorrelating a subquery that reads a column two levels up (an
+    // `EXISTS` inside an `EXISTS` or a scalar subquery) leaves the
+    // reference as a plain column in a join filter where it is not in scope,
+    // as on `main` (merge_into.slt, explain-only tests in subquery.slt; the
     // SELECT form fails on `main` with "No field named t.id"): the
     // reference has the right id, which is stale there
-    ("push_down_filter", ColumnIdIssueKind::Stale),
-    // copies the subquery of a set comparison, and with it the outer
-    // references to the target columns of a MERGE INTO, which have no ids:
-    // no node defines them (the target is not an input of the `Dml` node)
-    ("rewrite_set_comparison", ColumnIdIssueKind::Missing),
+    ("decorrelate_predicate_subquery", ColumnIdIssueKind::Stale),
     // a subquery nested in a correlated scalar subquery that reads a column
     // two levels up (an `EXISTS` inside a scalar subquery) ends up reading
     // it as a plain column in a join filter where it is not in scope, as on
@@ -178,7 +178,14 @@ impl ColumnIdCheck {
                 }
             })
             .collect();
-        fail_if_any("the analyzer produced", &failed, &after, plan)
+        fail_if_any(
+            &format!(
+                "Column id verification ({VERIFY_ENV}) failed: the analyzer produced"
+            ),
+            &failed,
+            &after,
+            plan,
+        )
     }
 
     /// Records the issues that `rule` introduced, `plan` being its output,
@@ -203,7 +210,9 @@ impl ColumnIdCheck {
             })
             .collect();
         fail_if_any(
-            &format!("optimizer rule '{rule}' introduced"),
+            &format!(
+                "Column id verification ({VERIFY_ENV}) failed: optimizer rule '{rule}' introduced"
+            ),
             &failed,
             &after,
             plan,
@@ -253,6 +262,58 @@ impl ColumnIdCheck {
     }
 }
 
+/// Checks that `after`, a rewrite of `before` (the output of an optimizer
+/// rule, for example), keeps the column ids of `before`: returns an error
+/// listing the issues if `after` has more column id issues of some kind than
+/// `before` (see [`LogicalPlan::column_id_issues`]). A plan without any id
+/// (built without a generator) is not checked.
+///
+/// This is the check that the optimizer runs after each of its rules when
+/// verification is on (see the [module documentation](self)), but for every
+/// kind of issue: call it in the tests of a rule, or of code that rewrites or
+/// combines plans, to check that it keeps their ids.
+///
+/// # Example
+///
+/// ```
+/// # use datafusion_common::Result;
+/// # use datafusion_expr::{col, lit, logical_plan::builder::table_scan};
+/// # use datafusion_optimizer::column_id_check::check_column_ids_kept;
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # fn main() -> Result<()> {
+/// let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+/// let plan = table_scan(Some("t"), &schema, None)?.build()?;
+/// // a filter whose reference is resolved by the builder has its id
+/// let kept = datafusion_expr::LogicalPlanBuilder::from(plan.clone())
+///     .filter(col("t.a").eq(lit(1)))?
+///     .build()?;
+/// assert!(check_column_ids_kept(&plan, &kept).is_ok());
+/// // one built by hand, with a reference that has none, does not
+/// let lost = datafusion_expr::LogicalPlan::Filter(datafusion_expr::Filter::try_new(
+///     col("t.a").eq(lit(1)),
+///     std::sync::Arc::new(plan.clone()),
+/// )?);
+/// assert!(check_column_ids_kept(&plan, &lost).is_err());
+/// # Ok(())
+/// # }
+/// ```
+pub fn check_column_ids_kept(before: &LogicalPlan, after: &LogicalPlan) -> Result<()> {
+    let (before_counts, after_counts) = (
+        before.column_id_issue_counts(),
+        after.column_id_issue_counts(),
+    );
+    let introduced: Vec<_> = ColumnIdIssueKind::ALL
+        .into_iter()
+        .filter(|kind| after_counts[*kind as usize] > before_counts[*kind as usize])
+        .collect();
+    fail_if_any(
+        "Column id check failed: the rewrite introduced",
+        &introduced,
+        &after_counts,
+        after,
+    )
+}
+
 /// The number of issues listed in an error, per kind
 const MAX_LISTED_ISSUES: usize = 10;
 
@@ -285,7 +346,7 @@ fn fail_if_any(
         }
     }
     internal_err!(
-        "Column id verification ({VERIFY_ENV}) failed: {what} column id issues of kinds {}:{message}",
+        "{what} column id issues of kinds {}:{message}",
         failed
             .iter()
             .map(|kind| kind.as_str())

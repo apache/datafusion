@@ -2,13 +2,11 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::logical_plan::consumer::utils::plan_builder;
 use crate::logical_plan::consumer::{NameTracker, SubstraitConsumer};
 use crate::logical_plan::consumer::{from_substrait_agg_func, from_substrait_sorts};
 use datafusion::common::{Column, DFSchemaRef, internal_err, not_impl_err};
-use datafusion::logical_expr::builder::project;
-use datafusion::logical_expr::{
-    Aggregate, Expr, GroupingSet, LogicalPlan, LogicalPlanBuilder,
-};
+use datafusion::logical_expr::{Aggregate, Expr, GroupingSet, LogicalPlan};
 use substrait::proto::AggregateRel;
 use substrait::proto::aggregate_function::AggregationInvocation;
 use substrait::proto::aggregate_rel::Grouping;
@@ -18,7 +16,7 @@ pub async fn from_aggregate_rel(
     agg: &AggregateRel,
 ) -> datafusion::common::Result<LogicalPlan> {
     if let Some(input) = agg.input.as_ref() {
-        let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
+        let input = plan_builder(consumer, consumer.consume_rel(input).await?);
         let mut ref_group_exprs = Vec::with_capacity(agg.grouping_expressions.len());
 
         for e in &agg.grouping_expressions {
@@ -114,7 +112,7 @@ pub async fn from_aggregate_rel(
 
         let plan = input.aggregate(group_exprs, aggr_exprs)?.build()?;
         if agg.groupings.len() > 1 {
-            reorder_grouping_set_output(plan, agg.measures.len())
+            reorder_grouping_set_output(consumer, plan, agg.measures.len())
         } else {
             Ok(plan)
         }
@@ -126,6 +124,7 @@ pub async fn from_aggregate_rel(
 /// Reorders DataFusion's `[groups, grouping_id, measures]` aggregate schema to
 /// Substrait's direct output order of `[groups, measures, grouping_id]`.
 fn reorder_grouping_set_output(
+    consumer: &impl SubstraitConsumer,
     plan: LogicalPlan,
     measure_count: usize,
 ) -> datafusion::common::Result<LogicalPlan> {
@@ -159,7 +158,7 @@ fn reorder_grouping_set_output(
             })
             .collect()
     };
-    project(plan, exprs)
+    plan_builder(consumer, plan).project(exprs)?.build()
 }
 
 #[expect(deprecated)]

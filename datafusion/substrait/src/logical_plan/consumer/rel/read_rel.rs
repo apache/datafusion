@@ -54,7 +54,11 @@ pub async fn from_read_rel(
             )
             .with_filters(filters)
             .build()?;
-            LogicalPlanBuilder::table_scan(table_scan)?.build()?
+            LogicalPlanBuilder::table_scan_with_column_id_generator(
+                table_scan,
+                consumer.column_id_generator(),
+            )?
+            .build()?
         };
 
         ensure_schema_compatibility(plan.schema(), schema.clone())?;
@@ -100,9 +104,12 @@ pub async fn from_read_rel(
             .await
         }
         Some(ReadType::VirtualTable(vt)) => {
-            // a virtual table defines its columns: they get new ids (a join or
-            // set operation renumbers its right side if they overlap)
-            let generator = ColumnIdGenerator::new();
+            // a virtual table defines its columns: they get new ids (without
+            // the consumer's generator, a join or set operation renumbers its
+            // right side if they overlap)
+            let generator = consumer
+                .column_id_generator()
+                .unwrap_or_else(|| Arc::new(ColumnIdGenerator::new()));
             let ids = substrait_schema
                 .fields()
                 .iter()

@@ -12,7 +12,8 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::utils::quote_identifier;
 use datafusion_common::{
-    DFSchema, DFSchemaRef, Result, TableReference, internal_err, plan_err,
+    ColumnId, ColumnIdGenerator, DFSchema, DFSchemaRef, Result, TableReference,
+    internal_err, plan_err,
 };
 
 use crate::{Expr, LogicalPlan, TableSource};
@@ -303,7 +304,11 @@ impl Display for InsertOp {
 /// [`Self::target_qualifier`] is the SQL-visible relation name used by
 /// expressions. The target's catalog/provider identity remains in
 /// [`DmlStatement::table_name`].
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
+///
+/// The target table is not an input of the [`DmlStatement`]: the operation
+/// defines the [`ColumnId`]s of its columns ([`Self::target_column_ids`]),
+/// which the references of its expressions to the target read.
+#[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct MergeIntoOp {
     /// The join condition from `ON <expr>`.
@@ -312,6 +317,39 @@ pub struct MergeIntoOp {
     pub clauses: Vec<MergeIntoClause>,
     /// The target relation name visible to expressions in the MERGE scope.
     target_qualifier: TableReference,
+    /// The ids of the columns of the target, see
+    /// [`Self::target_column_ids`]
+    target_column_ids: Option<Arc<[ColumnId]>>,
+}
+
+// Manual implementations: like the other column ids of a plan, the ids of
+// the target columns are not part of equality, ordering and hashing
+impl PartialEq for MergeIntoOp {
+    fn eq(&self, other: &Self) -> bool {
+        self.on == other.on
+            && self.clauses == other.clauses
+            && self.target_qualifier == other.target_qualifier
+    }
+}
+
+impl Eq for MergeIntoOp {}
+
+impl PartialOrd for MergeIntoOp {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        (&self.on, &self.clauses, &self.target_qualifier).partial_cmp(&(
+            &other.on,
+            &other.clauses,
+            &other.target_qualifier,
+        ))
+    }
+}
+
+impl Hash for MergeIntoOp {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.on.hash(state);
+        self.clauses.hash(state);
+        self.target_qualifier.hash(state);
+    }
 }
 
 impl MergeIntoOp {
@@ -325,6 +363,7 @@ impl MergeIntoOp {
             target_qualifier: target_qualifier.into(),
             on,
             clauses,
+            target_column_ids: None,
         }
     }
 
@@ -333,22 +372,88 @@ impl MergeIntoOp {
         &self.target_qualifier
     }
 
+    /// The [`ColumnId`]s of the columns of the target table, indexed like the
+    /// fields of its schema, `None` if the operation has no ids.
+    ///
+    /// The target is not an input of the [`DmlStatement`], so the operation
+    /// defines them, as a `TableScan` defines the columns of its source
+    /// (`TableScan::source_column_ids`): they are the field ids of the target
+    /// part of [`Self::expression_schema`], which the references of the
+    /// expressions to the target read. They are allocated once, when the
+    /// operation is planned (see [`Self::new_target_column_ids`]), and kept
+    /// when it is rebuilt ([`Self::with_new_exprs`]).
+    pub fn target_column_ids(&self) -> Option<&Arc<[ColumnId]>> {
+        self.target_column_ids.as_ref()
+    }
+
+    /// Returns this operation with `ids` as the ids of the target columns
+    /// (see [`Self::target_column_ids`]). The references of its expressions
+    /// are not changed.
+    pub fn with_target_column_ids(mut self, ids: Option<Arc<[ColumnId]>>) -> Self {
+        self.target_column_ids = ids;
+        self
+    }
+
+    /// New ids from `generator` for the columns of a target table with
+    /// `target_schema` (see [`Self::target_column_ids`])
+    pub fn new_target_column_ids(
+        target_schema: &Schema,
+        generator: &ColumnIdGenerator,
+    ) -> Arc<[ColumnId]> {
+        target_schema
+            .fields()
+            .iter()
+            .map(|_| generator.next())
+            .collect()
+    }
+
+    /// The target ids, mutably (for renumbering)
+    pub(crate) fn target_column_ids_mut(&mut self) -> Option<&mut Arc<[ColumnId]>> {
+        self.target_column_ids.as_mut()
+    }
+
     /// Build the schema used to resolve expressions owned by this operation.
     ///
     /// Target fields precede source fields. The visible target qualifier must
-    /// not also identify a source relation in the outer MERGE scope.
+    /// not also identify a source relation in the outer MERGE scope. The
+    /// target fields have the ids of [`Self::target_column_ids`].
     pub fn expression_schema(
         &self,
         target_schema: &Schema,
         source_schema: &DFSchema,
     ) -> Result<DFSchema> {
-        Self::expression_schema_for(&self.target_qualifier, target_schema, source_schema)
+        Self::expression_schema_with_target_ids(
+            &self.target_qualifier,
+            target_schema,
+            self.target_column_ids.as_deref(),
+            source_schema,
+        )
     }
 
     /// Build a MERGE expression schema before constructing the operation.
+    ///
+    /// The target fields have no ids, see
+    /// [`Self::expression_schema_with_target_ids`].
     pub fn expression_schema_for(
         target_qualifier: &TableReference,
         target_schema: &Schema,
+        source_schema: &DFSchema,
+    ) -> Result<DFSchema> {
+        Self::expression_schema_with_target_ids(
+            target_qualifier,
+            target_schema,
+            None,
+            source_schema,
+        )
+    }
+
+    /// Build a MERGE expression schema before constructing the operation,
+    /// whose target fields have the ids `target_column_ids` (see
+    /// [`Self::target_column_ids`]), if given.
+    pub fn expression_schema_with_target_ids(
+        target_qualifier: &TableReference,
+        target_schema: &Schema,
+        target_column_ids: Option<&[ColumnId]>,
         source_schema: &DFSchema,
     ) -> Result<DFSchema> {
         if source_schema.iter().any(|(qualifier, _)| {
@@ -360,8 +465,30 @@ impl MergeIntoOp {
             );
         }
 
-        DFSchema::try_from_qualified_schema(target_qualifier.clone(), target_schema)?
+        Self::target_dfschema(target_qualifier, target_schema, target_column_ids)?
             .join(source_schema)
+    }
+
+    /// The schema of the target, qualified by `target_qualifier`, with the
+    /// ids `target_column_ids` if given
+    pub fn target_dfschema(
+        target_qualifier: &TableReference,
+        target_schema: &Schema,
+        target_column_ids: Option<&[ColumnId]>,
+    ) -> Result<DFSchema> {
+        let schema =
+            DFSchema::try_from_qualified_schema(target_qualifier.clone(), target_schema)?;
+        match target_column_ids {
+            Some(ids) if ids.len() == schema.fields().len() => {
+                schema.with_field_ids(ids.iter().copied().map(Some).collect())
+            }
+            Some(ids) => internal_err!(
+                "MERGE target has {} columns and {} column ids",
+                schema.fields().len(),
+                ids.len()
+            ),
+            None => Ok(schema),
+        }
     }
 
     /// Count of top-level [`Expr`]s owned by this operation (no allocation).
@@ -463,6 +590,7 @@ impl MergeIntoOp {
             target_qualifier: self.target_qualifier.clone(),
             on,
             clauses,
+            target_column_ids: self.target_column_ids.clone(),
         })
     }
 }

@@ -799,6 +799,7 @@ fn parse_merge_into_op_missing_on_errors() {
         on: None,
         clauses: vec![],
         target_qualifier: None,
+        target_column_ids: None,
     });
     let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
         .expect_err("missing `on` must fail");
@@ -814,6 +815,7 @@ fn parse_merge_into_op_without_target_qualifier_uses_table_name() {
         on: Some(Box::new(on)),
         clauses: vec![],
         target_qualifier: None,
+        target_column_ids: None,
     });
 
     let op = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec).unwrap();
@@ -840,6 +842,7 @@ fn parse_merge_into_clause_unknown_kind_errors() {
             }),
         }],
         target_qualifier: None,
+        target_column_ids: None,
     });
     let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
         .expect_err("unknown clause kind tag must fail");
@@ -862,6 +865,7 @@ fn parse_merge_into_clause_missing_action_errors() {
             action: None,
         }],
         target_qualifier: None,
+        target_column_ids: None,
     });
     let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
         .expect_err("missing clause `action` must fail");
@@ -884,6 +888,7 @@ fn parse_merge_into_action_missing_oneof_errors() {
             action: Some(protobuf::MergeIntoActionNode { action: None }),
         }],
         target_qualifier: None,
+        target_column_ids: None,
     });
     let err = from_proto::parse_write_op(&node, ctx.task_ctx().as_ref(), &codec)
         .expect_err("missing action oneof must fail");
@@ -3610,8 +3615,9 @@ async fn roundtrip_union_query() -> Result<()> {
     ctx.register_csv("t2", "tests/testdata/test.csv", CsvReadOptions::default())
         .await?;
     let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
-    // proto deserialization only supports 2-way union, hence this plan has nested unions
-    // apply the flatten unions optimizer rule to be able to compare
+    // a plan encoded without column ids decodes unions two inputs at a time,
+    // as nested unions: the flatten unions optimizer rule makes them
+    // comparable (a plan encoded with column ids decodes them as they were)
     let optimizer = Optimizer::with_rules(vec![Arc::new(OptimizeUnions::new())]);
     let unnested = optimizer.optimize(logical_round_trip, &(ctx.state()), |_x, _y| {})?;
     assert_eq!(
@@ -3658,6 +3664,7 @@ fn logical_values_reject_nonempty_rows_with_zero_columns() {
             protobuf::ValuesNode {
                 n_cols: 0,
                 values_list: vec![protobuf::LogicalExprNode::default()],
+                column_ids: None,
             },
         )),
     };

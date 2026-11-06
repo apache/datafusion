@@ -3793,6 +3793,25 @@ impl TableScanBuilder {
         self
     }
 
+    /// Set the ids of the columns of the source, indexed like the fields of
+    /// the source schema, as a decoded plan has them: if every column has
+    /// one, they are the [`TableScan::source_column_ids`]; otherwise the
+    /// projected columns take theirs. Ignored by [`Self::build`] if their
+    /// number is not the width of the source.
+    pub fn with_source_column_ids(mut self, ids: Vec<Option<ColumnId>>) -> Self {
+        match ids.iter().copied().collect::<Option<Arc<[ColumnId]>>>() {
+            Some(ids) => {
+                self.source_column_ids = Some(ids);
+                self.projected_column_ids = vec![];
+            }
+            None => {
+                self.source_column_ids = None;
+                self.projected_column_ids = ids;
+            }
+        }
+        self
+    }
+
     /// Build the [`TableScan`], deriving its `projected_schema` from the
     /// source schema and projection.
     pub fn build(self) -> Result<TableScan> {

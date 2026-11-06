@@ -56,12 +56,37 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
         plan: LogicalPlan,
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        let plan = plan
-            .map_subqueries(|subquery| {
-                subquery.transform_down(|p| self.rewrite(p, config))
-            })?
-            .data;
+        // the subqueries of this node, then the node: a rewrite of a nested
+        // subquery is a rewrite of the plan
+        let Transformed {
+            data: plan,
+            transformed,
+            ..
+        } = plan.map_subqueries(|subquery| {
+            subquery.transform_down(|p| self.rewrite(p, config))
+        })?;
+        self.rewrite_node(plan, config).map(|mut rewritten| {
+            rewritten.transformed |= transformed;
+            rewritten
+        })
+    }
 
+    fn name(&self) -> &str {
+        "decorrelate_predicate_subquery"
+    }
+
+    fn apply_order(&self) -> Option<ApplyOrder> {
+        Some(ApplyOrder::TopDown)
+    }
+}
+
+impl DecorrelatePredicateSubquery {
+    /// Rewrites the subqueries of `plan` itself (not those nested in them)
+    fn rewrite_node(
+        &self,
+        plan: LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
         if let LogicalPlan::Projection(projection) = plan {
             if !projection.expr.iter().any(|e| has_subquery(e)) {
                 return Ok(Transformed::no(LogicalPlan::Projection(projection)));
@@ -170,14 +195,6 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
         }
 
         Ok(Transformed::yes(cur_input))
-    }
-
-    fn name(&self) -> &str {
-        "decorrelate_predicate_subquery"
-    }
-
-    fn apply_order(&self) -> Option<ApplyOrder> {
-        Some(ApplyOrder::TopDown)
     }
 }
 

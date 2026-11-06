@@ -89,6 +89,19 @@ pub struct LogicalExtensionNode {
     pub node: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, repeated, tag = "2")]
     pub inputs: ::prost::alloc::vec::Vec<LogicalPlanNode>,
+    /// True when the plan was encoded with column ids: the inputs are not
+    /// renumbered when they are decoded
+    #[prost(bool, tag = "3")]
+    pub column_ids: bool,
+}
+/// The ids (`ColumnId`) of the columns a node defines, 0 for a column without
+/// an id. A node carries them when the plan was encoded with column ids, and
+/// they are used as they are when it is decoded. A plan encoded before column
+/// ids existed has none: its columns get new ids when it is decoded.
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
+pub struct ColumnIds {
+    #[prost(uint64, repeated, tag = "1")]
+    pub ids: ::prost::alloc::vec::Vec<u64>,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct ProjectionColumns {
@@ -129,6 +142,9 @@ pub struct ListingTableScanNode {
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "18")]
     pub skip: ::core::option::Option<u64>,
+    /// The ids of the columns of the source schema (`TableScan::source_column_ids`)
+    #[prost(message, optional, tag = "19")]
+    pub source_column_ids: ::core::option::Option<ColumnIds>,
     #[prost(
         oneof = "listing_table_scan_node::FileFormatType",
         tags = "10, 11, 12, 15, 16"
@@ -171,6 +187,9 @@ pub struct ViewTableScanNode {
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "8")]
     pub skip: ::core::option::Option<u64>,
+    /// The ids of the columns of the source schema (`TableScan::source_column_ids`)
+    #[prost(message, optional, tag = "9")]
+    pub source_column_ids: ::core::option::Option<ColumnIds>,
 }
 /// Logical Plan to Scan a CustomTableProvider registered at runtime
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -191,6 +210,9 @@ pub struct CustomTableScanNode {
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "8")]
     pub skip: ::core::option::Option<u64>,
+    /// The ids of the columns of the source schema (`TableScan::source_column_ids`)
+    #[prost(message, optional, tag = "9")]
+    pub source_column_ids: ::core::option::Option<ColumnIds>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionNode {
@@ -198,6 +220,9 @@ pub struct ProjectionNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
     pub expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    /// The id of each output, like `expr`
+    #[prost(message, optional, tag = "4")]
+    pub expr_ids: ::core::option::Option<ColumnIds>,
     #[prost(oneof = "projection_node::OptionalAlias", tags = "3")]
     pub optional_alias: ::core::option::Option<projection_node::OptionalAlias>,
 }
@@ -372,6 +397,9 @@ pub struct ValuesNode {
     pub n_cols: u64,
     #[prost(message, repeated, tag = "2")]
     pub values_list: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    /// The id of each column
+    #[prost(message, optional, tag = "3")]
+    pub column_ids: ::core::option::Option<ColumnIds>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AnalyzeNode {
@@ -413,6 +441,14 @@ pub struct AggregateNode {
     pub group_expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
     #[prost(message, repeated, tag = "3")]
     pub aggr_expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    /// The id of each grouping expression: like `group_expr`, or, for grouping
+    /// sets, like their distinct expressions (`GroupingSet::distinct_expr`),
+    /// followed by the id of the grouping id column
+    #[prost(message, optional, tag = "4")]
+    pub group_expr_ids: ::core::option::Option<ColumnIds>,
+    /// The id of each aggregate expression, like `aggr_expr`
+    #[prost(message, optional, tag = "5")]
+    pub aggr_expr_ids: ::core::option::Option<ColumnIds>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct WindowNode {
@@ -420,6 +456,9 @@ pub struct WindowNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
     #[prost(message, repeated, tag = "2")]
     pub window_expr: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    /// The id of each window expression, like `window_expr`
+    #[prost(message, optional, tag = "3")]
+    pub window_expr_ids: ::core::option::Option<ColumnIds>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct JoinNode {
@@ -446,6 +485,9 @@ pub struct JoinNode {
     /// as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
     #[prost(uint32, tag = "10")]
     pub null_aware_value_keys: u32,
+    /// The id of the mark column of a mark join (one id), empty otherwise
+    #[prost(message, optional, tag = "11")]
+    pub mark_column_id: ::core::option::Option<ColumnIds>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsOfJoinNode {
@@ -469,6 +511,10 @@ pub struct AsOfJoinNode {
     pub match_operator: i32,
     #[prost(enumeration = "super::datafusion_common::JoinConstraint", tag = "8")]
     pub join_constraint: i32,
+    /// True when the plan was encoded with column ids: the right side is not
+    /// renumbered when it is decoded
+    #[prost(bool, tag = "9")]
+    pub column_ids: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DistinctNode {
@@ -485,6 +531,9 @@ pub struct DistinctOnNode {
     pub sort_expr: ::prost::alloc::vec::Vec<SortExprNode>,
     #[prost(message, optional, boxed, tag = "4")]
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<LogicalPlanNode>>,
+    /// The id of each output, like `select_expr`
+    #[prost(message, optional, tag = "5")]
+    pub select_expr_ids: ::core::option::Option<ColumnIds>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CopyToNode {
@@ -588,6 +637,10 @@ pub struct MergeIntoOpNode {
     /// was introduced; readers then fall back to DmlNode.table_name.
     #[prost(message, optional, tag = "3")]
     pub target_qualifier: ::core::option::Option<TableReference>,
+    /// The column ids of the target's columns (MergeIntoOp::target_column_ids),
+    /// absent if the operation has none.
+    #[prost(message, optional, tag = "4")]
+    pub target_column_ids: ::core::option::Option<ColumnIds>,
 }
 /// A single WHEN clause within a MERGE INTO statement.
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -788,6 +841,9 @@ pub struct RecursionUnnestOption {
 pub struct UnionNode {
     #[prost(message, repeated, tag = "1")]
     pub inputs: ::prost::alloc::vec::Vec<LogicalPlanNode>,
+    /// The id of each output column
+    #[prost(message, optional, tag = "2")]
+    pub output_ids: ::core::option::Option<ColumnIds>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CrossJoinNode {
@@ -2650,6 +2706,9 @@ pub struct RecursiveQueryNode {
     >,
     #[prost(bool, tag = "4")]
     pub is_distinct: bool,
+    /// The id of each output column
+    #[prost(message, optional, tag = "5")]
+    pub output_ids: ::core::option::Option<ColumnIds>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CteWorkTableScanNode {
@@ -2657,6 +2716,9 @@ pub struct CteWorkTableScanNode {
     pub name: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "2")]
     pub schema: ::core::option::Option<super::datafusion_common::Schema>,
+    /// The ids of the columns of the work table (`TableScan::source_column_ids`)
+    #[prost(message, optional, tag = "3")]
+    pub source_column_ids: ::core::option::Option<ColumnIds>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct EmptyTableScanNode {
@@ -2668,6 +2730,9 @@ pub struct EmptyTableScanNode {
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(message, repeated, tag = "4")]
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    /// The ids of the columns of the source schema (`TableScan::source_column_ids`)
+    #[prost(message, optional, tag = "5")]
+    pub source_column_ids: ::core::option::Option<ColumnIds>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GenerateSeriesArgsContainsNull {

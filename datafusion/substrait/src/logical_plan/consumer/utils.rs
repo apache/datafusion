@@ -9,7 +9,9 @@ use datafusion::common::{
     substrait_datafusion_err, substrait_err,
 };
 use datafusion::logical_expr::expr::Sort;
-use datafusion::logical_expr::{Cast, Expr, ExprSchemable};
+use datafusion::logical_expr::{
+    Cast, Expr, ExprSchemable, LogicalPlan, LogicalPlanBuilder,
+};
 use std::collections::HashSet;
 use std::sync::Arc;
 use substrait::proto::SortField;
@@ -22,6 +24,31 @@ use substrait::proto::sort_field::SortKind::{ComparisonFunctionReference, Direct
 // However, DF uses the timezone also for some arithmetic and display purposes (see e.g.
 // https://github.com/apache/arrow-rs/blob/ee5694078c86c8201549654246900a4232d531a9/arrow-cast/src/cast/mod.rs#L1749).
 pub(super) const DEFAULT_TIMEZONE: &str = "UTC";
+
+/// A builder over `plan` whose new columns get ids from the consumer's
+/// generator (see [`SubstraitConsumer::column_id_generator`])
+pub(crate) fn plan_builder(
+    consumer: &impl SubstraitConsumer,
+    plan: LogicalPlan,
+) -> LogicalPlanBuilder {
+    LogicalPlanBuilder::from(plan)
+        .with_column_id_generator(consumer.column_id_generator())
+}
+
+/// Returns `plan`, built by a function that allocates column ids from a
+/// generator of its own, after moving the consumer's generator past its ids,
+/// so that the nodes built next do not define them again
+pub(crate) fn after_own_column_ids(
+    consumer: &impl SubstraitConsumer,
+    plan: LogicalPlan,
+) -> LogicalPlan {
+    if let (Some(generator), Some(max)) =
+        (consumer.column_id_generator(), plan.max_column_id())
+    {
+        generator.advance_past(max);
+    }
+    plan
+}
 
 pub(super) fn next_struct_field_name(
     column_idx: usize,

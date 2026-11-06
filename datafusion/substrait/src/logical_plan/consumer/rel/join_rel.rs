@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::utils::plan_builder;
 use datafusion::common::{Column, JoinType, NullEquality, not_impl_err, plan_err};
 use datafusion::logical_expr::requalify_sides_if_needed;
 use datafusion::logical_expr::utils::split_conjunction_owned;
@@ -20,10 +21,12 @@ pub async fn from_join_rel(
         return not_impl_err!("JoinRel with post_join_filter is not yet supported");
     }
 
-    let left: LogicalPlanBuilder = LogicalPlanBuilder::from(
+    let left: LogicalPlanBuilder = plan_builder(
+        consumer,
         consumer.consume_rel(join.left.as_ref().unwrap()).await?,
     );
-    let right = LogicalPlanBuilder::from(
+    let right = plan_builder(
+        consumer,
         consumer.consume_rel(join.right.as_ref().unwrap()).await?,
     );
     let (left, right, _requalified) = requalify_sides_if_needed(left, right)?;

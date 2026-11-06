@@ -925,12 +925,20 @@ impl serde::Serialize for Column {
         if self.relation.is_some() {
             len += 1;
         }
+        if self.id != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.Column", len)?;
         if !self.name.is_empty() {
             struct_ser.serialize_field("name", &self.name)?;
         }
         if let Some(v) = self.relation.as_ref() {
             struct_ser.serialize_field("relation", v)?;
+        }
+        if self.id != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("id", ToString::to_string(&self.id).as_str())?;
         }
         struct_ser.end()
     }
@@ -944,12 +952,14 @@ impl<'de> serde::Deserialize<'de> for Column {
         const FIELDS: &[&str] = &[
             "name",
             "relation",
+            "id",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Name,
             Relation,
+            Id,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -973,6 +983,7 @@ impl<'de> serde::Deserialize<'de> for Column {
                         match value {
                             "name" => Ok(GeneratedField::Name),
                             "relation" => Ok(GeneratedField::Relation),
+                            "id" => Ok(GeneratedField::Id),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -994,6 +1005,7 @@ impl<'de> serde::Deserialize<'de> for Column {
             {
                 let mut name__ = None;
                 let mut relation__ = None;
+                let mut id__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Name => {
@@ -1008,11 +1020,20 @@ impl<'de> serde::Deserialize<'de> for Column {
                             }
                             relation__ = map_.next_value()?;
                         }
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(Column {
                     name: name__.unwrap_or_default(),
                     relation: relation__,
+                    id: id__.unwrap_or_default(),
                 })
             }
         }
@@ -3671,12 +3692,20 @@ impl serde::Serialize for DfField {
         if self.qualifier.is_some() {
             len += 1;
         }
+        if self.id != 0 {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion_common.DfField", len)?;
         if let Some(v) = self.field.as_ref() {
             struct_ser.serialize_field("field", v)?;
         }
         if let Some(v) = self.qualifier.as_ref() {
             struct_ser.serialize_field("qualifier", v)?;
+        }
+        if self.id != 0 {
+            #[allow(clippy::needless_borrow)]
+            #[allow(clippy::needless_borrows_for_generic_args)]
+            struct_ser.serialize_field("id", ToString::to_string(&self.id).as_str())?;
         }
         struct_ser.end()
     }
@@ -3690,12 +3719,14 @@ impl<'de> serde::Deserialize<'de> for DfField {
         const FIELDS: &[&str] = &[
             "field",
             "qualifier",
+            "id",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             Field,
             Qualifier,
+            Id,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -3719,6 +3750,7 @@ impl<'de> serde::Deserialize<'de> for DfField {
                         match value {
                             "field" => Ok(GeneratedField::Field),
                             "qualifier" => Ok(GeneratedField::Qualifier),
+                            "id" => Ok(GeneratedField::Id),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -3740,6 +3772,7 @@ impl<'de> serde::Deserialize<'de> for DfField {
             {
                 let mut field__ = None;
                 let mut qualifier__ = None;
+                let mut id__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::Field => {
@@ -3754,11 +3787,20 @@ impl<'de> serde::Deserialize<'de> for DfField {
                             }
                             qualifier__ = map_.next_value()?;
                         }
+                        GeneratedField::Id => {
+                            if id__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("id"));
+                            }
+                            id__ = 
+                                Some(map_.next_value::<::pbjson::private::NumberDeserialize<_>>()?.0)
+                            ;
+                        }
                     }
                 }
                 Ok(DfField {
                     field: field__,
                     qualifier: qualifier__,
+                    id: id__.unwrap_or_default(),
                 })
             }
         }

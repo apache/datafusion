@@ -14,11 +14,15 @@ message ColumnRelation {
 message Column {
   string name = 1;
   ColumnRelation relation = 2;
+  // The id of the column this refers to (`ColumnId`), 0 if it has none
+  uint64 id = 3;
 }
 
 message DfField{
   Field field = 1;
   ColumnRelation qualifier = 2;
+  // The id of the column this field is (`ColumnId`), 0 if it has none
+  uint64 id = 3;
 }
 
 message DfSchema {

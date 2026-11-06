@@ -67,4 +67,9 @@ impl UserDefinedLogicalNodeCore for TestUserDefinedPlanNode {
     fn supports_limit_pushdown(&self) -> bool {
         false // Disallow limit push-down by default
     }
+
+    /// It reads no columns, and passes the columns of its input through
+    fn supports_column_ids(&self) -> bool {
+        true
+    }
 }

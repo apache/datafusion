@@ -19,6 +19,7 @@ use std::fmt::Debug;
 use std::hash::Hash;
 use std::sync::Arc;
 
+mod column_ids;
 mod plans;
 mod public_conversions;
 mod roundtrip_logical_plan;

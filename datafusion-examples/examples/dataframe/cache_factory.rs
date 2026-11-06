@@ -120,6 +120,11 @@ impl UserDefinedLogicalNodeCore for CacheNode {
             input: inputs.swap_remove(0),
         })
     }
+
+    /// It reads no columns, and passes the columns of its input through
+    fn supports_column_ids(&self) -> bool {
+        true
+    }
 }
 
 struct CacheNodePlanner {

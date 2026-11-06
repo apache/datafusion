@@ -54,10 +54,15 @@ pub async fn from_substrait_plan_with_consumer(
                             // Nothing to do if the schema is already equivalent
                             return Ok(plan);
                         }
-                        // the renamed outputs that define columns get ids after
-                        // the ids of the plan
+                        // the renamed outputs that define columns get new ids
+                        // (from a generator after the ids of the plan, without
+                        // the consumer's)
                         let generator =
-                            ColumnIdGenerator::new_after(plan.max_column_id());
+                            consumer.column_id_generator().unwrap_or_else(|| {
+                                Arc::new(ColumnIdGenerator::new_after(
+                                    plan.max_column_id(),
+                                ))
+                            });
                         match plan {
                             // If the last node of the plan produces expressions, bake the renames into those expressions.
                             // This isn't necessary for correctness, but helps with roundtrip tests.

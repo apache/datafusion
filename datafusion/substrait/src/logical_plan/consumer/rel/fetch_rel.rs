@@ -3,9 +3,10 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::utils::plan_builder;
 use async_recursion::async_recursion;
 use datafusion::common::{DFSchema, DFSchemaRef, not_impl_err};
-use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder, lit};
+use datafusion::logical_expr::{LogicalPlan, lit};
 use substrait::proto::{FetchRel, fetch_rel};
 
 #[async_recursion]
@@ -14,7 +15,7 @@ pub async fn from_fetch_rel(
     fetch: &FetchRel,
 ) -> datafusion::common::Result<LogicalPlan> {
     if let Some(input) = fetch.input.as_ref() {
-        let input = LogicalPlanBuilder::from(consumer.consume_rel(input).await?);
+        let input = plan_builder(consumer, consumer.consume_rel(input).await?);
         let empty_schema = DFSchemaRef::new(DFSchema::empty());
         let offset = match &fetch.offset_mode {
             #[expect(deprecated)]

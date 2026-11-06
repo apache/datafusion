@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashMap;
+use std::num::NonZeroU64;
 use std::sync::Arc;
 
 use crate::common::proto_error;
@@ -23,7 +24,7 @@ use arrow::ipc::{
 };
 
 use datafusion_common::{
-    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
+    Column, ColumnId, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
     arrow_datafusion_err,
     config::{
@@ -147,10 +148,15 @@ impl From<protobuf::ColumnRelation> for TableReference {
 
 impl From<protobuf::Column> for Column {
     fn from(c: protobuf::Column) -> Self {
-        let protobuf::Column { relation, name } = c;
+        let protobuf::Column { relation, name, id } = c;
 
-        Self::new(relation, name)
+        Self::new(relation, name).with_id(column_id_from_proto(id))
     }
+}
+
+/// The [`ColumnId`] encoded as `id`, where 0 means none
+pub fn column_id_from_proto(id: u64) -> Option<ColumnId> {
+    NonZeroU64::new(id).map(ColumnId::new)
 }
 
 impl From<&protobuf::Column> for Column {
@@ -177,9 +183,19 @@ impl TryFrom<&protobuf::DfSchema> for DFSchema {
             })
             .collect::<datafusion_common::Result<Vec<_>, Error>>()?;
 
-        Ok(DFSchema::new_with_metadata(
+        let schema = DFSchema::new_with_metadata(
             qualifiers_and_fields,
             df_schema.metadata.clone(),
+        )?;
+        // a schema encoded before column ids existed has none
+        if df_fields.iter().all(|df_field| df_field.id == 0) {
+            return Ok(schema);
+        }
+        Ok(schema.with_field_ids(
+            df_fields
+                .iter()
+                .map(|df_field| column_id_from_proto(df_field.id))
+                .collect(),
         )?)
     }
 }

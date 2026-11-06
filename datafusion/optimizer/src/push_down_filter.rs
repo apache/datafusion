@@ -1748,9 +1748,7 @@ mod tests {
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
-    /// Also asserts that the rule introduces no column id issues (it stays
-    /// in `UNMIGRATED_RULES` because it moves a reference that decorrelation
-    /// leaves out of scope)
+    /// Also asserts that the rule introduces no column id issues
     macro_rules! assert_optimized_plan_equal {
         (
             $plan:expr,

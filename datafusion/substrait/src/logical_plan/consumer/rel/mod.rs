@@ -25,10 +25,9 @@ pub use set_rel::*;
 pub use sort_rel::*;
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use crate::logical_plan::consumer::utils::NameTracker;
+use crate::logical_plan::consumer::utils::{NameTracker, plan_builder};
 use async_recursion::async_recursion;
 use datafusion::common::{Column, not_impl_err, substrait_datafusion_err, substrait_err};
-use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::{Expr, LogicalPlan, Projection};
 use std::sync::Arc;
 use substrait::proto::rel::RelType;
@@ -63,10 +62,11 @@ pub async fn from_substrait_rel(
         },
         None => return substrait_err!("rel must set rel_type"),
     };
-    apply_emit_kind(retrieve_rel_common(relation), plan?)
+    apply_emit_kind(consumer, retrieve_rel_common(relation), plan?)
 }
 
 fn apply_emit_kind(
+    consumer: &impl SubstraitConsumer,
     rel_common: Option<&RelCommon>,
     plan: LogicalPlan,
 ) -> datafusion::common::Result<LogicalPlan> {
@@ -97,7 +97,7 @@ fn apply_emit_kind(
                     }
 
                     let input = Arc::unwrap_or_clone(proj.input);
-                    project(input, exprs)
+                    plan_builder(consumer, input).project(exprs)?.build()
                 }
                 // Otherwise we just handle the output_mapping as a projection
                 _ => {
@@ -113,7 +113,7 @@ fn apply_emit_kind(
                         exprs.push(expr);
                     }
 
-                    project(plan, exprs)
+                    plan_builder(consumer, plan).project(exprs)?.build()
                 }
             }
         }

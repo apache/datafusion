@@ -56,6 +56,17 @@ message LogicalPlanNode {
 message LogicalExtensionNode {
   bytes node = 1;
   repeated LogicalPlanNode inputs = 2;
+  // True when the plan was encoded with column ids: the inputs are not
+  // renumbered when they are decoded
+  bool column_ids = 3;
+}
+
+// The ids (`ColumnId`) of the columns a node defines, 0 for a column without
+// an id. A node carries them when the plan was encoded with column ids, and
+// they are used as they are when it is decoded. A plan encoded before column
+// ids existed has none: its columns get new ids when it is decoded.
+message ColumnIds {
+  repeated uint64 ids = 1;
 }
 
 message ProjectionColumns {
@@ -93,6 +104,8 @@ message ListingTableScanNode {
   optional uint64 fetch = 17;
   // Optional number of rows to skip.
   optional uint64 skip = 18;
+  // The ids of the columns of the source schema (`TableScan::source_column_ids`)
+  ColumnIds source_column_ids = 19;
 }
 
 message ViewTableScanNode {
@@ -106,6 +119,8 @@ message ViewTableScanNode {
   optional uint64 fetch = 7;
   // Optional number of rows to skip.
   optional uint64 skip = 8;
+  // The ids of the columns of the source schema (`TableScan::source_column_ids`)
+  ColumnIds source_column_ids = 9;
 }
 
 // Logical Plan to Scan a CustomTableProvider registered at runtime
@@ -120,6 +135,8 @@ message CustomTableScanNode {
   optional uint64 fetch = 7;
   // Optional number of rows to skip.
   optional uint64 skip = 8;
+  // The ids of the columns of the source schema (`TableScan::source_column_ids`)
+  ColumnIds source_column_ids = 9;
 }
 
 message ProjectionNode {
@@ -128,6 +145,8 @@ message ProjectionNode {
   oneof optional_alias {
     string alias = 3;
   }
+  // The id of each output, like `expr`
+  ColumnIds expr_ids = 4;
 }
 
 message SelectionNode {
@@ -230,6 +249,8 @@ message CreateViewNode {
 message ValuesNode {
   uint64 n_cols = 1;
   repeated LogicalExprNode values_list = 2;
+  // The id of each column
+  ColumnIds column_ids = 3;
 }
 
 message AnalyzeNode {
@@ -257,11 +278,19 @@ message AggregateNode {
   LogicalPlanNode input = 1;
   repeated LogicalExprNode group_expr = 2;
   repeated LogicalExprNode aggr_expr = 3;
+  // The id of each grouping expression: like `group_expr`, or, for grouping
+  // sets, like their distinct expressions (`GroupingSet::distinct_expr`),
+  // followed by the id of the grouping id column
+  ColumnIds group_expr_ids = 4;
+  // The id of each aggregate expression, like `aggr_expr`
+  ColumnIds aggr_expr_ids = 5;
 }
 
 message WindowNode {
   LogicalPlanNode input = 1;
   repeated LogicalExprNode window_expr = 2;
+  // The id of each window expression, like `window_expr`
+  ColumnIds window_expr_ids = 3;
 }
 
 message JoinNode {
@@ -278,6 +307,8 @@ message JoinNode {
   // `Join::null_aware_value_keys`). Messages predating this field decode it
   // as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
   uint32 null_aware_value_keys = 10;
+  // The id of the mark column of a mark join (one id), empty otherwise
+  ColumnIds mark_column_id = 11;
 }
 
 enum AsOfMatchOperator {
@@ -297,6 +328,9 @@ message AsOfJoinNode {
   LogicalExprNode right_match_expr = 6;
   AsOfMatchOperator match_operator = 7;
   datafusion_common.JoinConstraint join_constraint = 8;
+  // True when the plan was encoded with column ids: the right side is not
+  // renumbered when it is decoded
+  bool column_ids = 9;
 }
 
 message DistinctNode {
@@ -308,6 +342,8 @@ message DistinctOnNode {
   repeated LogicalExprNode select_expr = 2;
   repeated SortExprNode sort_expr = 3;
   LogicalPlanNode input = 4;
+  // The id of each output, like `select_expr`
+  ColumnIds select_expr_ids = 5;
 }
 
 message CopyToNode {
@@ -362,6 +398,9 @@ message MergeIntoOpNode {
   // SQL-visible target qualifier. Absent in payloads written before this field
   // was introduced; readers then fall back to DmlNode.table_name.
   TableReference target_qualifier = 3;
+  // The column ids of the target's columns (MergeIntoOp::target_column_ids),
+  // absent if the operation has none.
+  ColumnIds target_column_ids = 4;
 }
 
 // A single WHEN clause within a MERGE INTO statement.
@@ -456,6 +495,8 @@ message RecursionUnnestOption {
 
 message UnionNode {
   repeated LogicalPlanNode inputs = 1;
+  // The id of each output column
+  ColumnIds output_ids = 2;
 }
 
 message CrossJoinNode {
@@ -1752,11 +1793,15 @@ message RecursiveQueryNode {
   LogicalPlanNode static_term = 2;
   LogicalPlanNode recursive_term = 3;
   bool is_distinct = 4;
+  // The id of each output column
+  ColumnIds output_ids = 5;
 }
 
 message CteWorkTableScanNode {
   string name = 1;
   datafusion_common.Schema schema = 2;
+  // The ids of the columns of the work table (`TableScan::source_column_ids`)
+  ColumnIds source_column_ids = 3;
 }
 
 message EmptyTableScanNode {
@@ -1764,6 +1809,8 @@ message EmptyTableScanNode {
   datafusion_common.Schema schema = 2;
   ProjectionColumns projection = 3;
   repeated LogicalExprNode filters = 4;
+  // The ids of the columns of the source schema (`TableScan::source_column_ids`)
+  ColumnIds source_column_ids = 5;
 }
 
 enum GenerateSeriesName {

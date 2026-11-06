@@ -4008,6 +4008,39 @@ fn plan_merge_into_preserves_target_qualifier_and_quoted_columns() {
     );
 }
 
+/// The target of a MERGE INTO is not an input of the `Dml` node: the
+/// operation defines the ids of its columns, which the references to the
+/// target read, also from a subquery
+#[test]
+fn plan_merge_into_defines_target_column_ids() {
+    let plan = logical_plan(
+        "MERGE INTO person AS t USING j2 AS s ON t.id = s.j2_id \
+         WHEN MATCHED AND t.age > ALL (SELECT j1_id FROM j1 WHERE j1_string = t.last_name) \
+         THEN UPDATE SET age = t.age + 1 \
+         WHEN NOT MATCHED THEN INSERT (id) VALUES (s.j2_id)",
+    )
+    .unwrap();
+    assert_eq!(plan.column_id_issues(), vec![]);
+    let LogicalPlan::Dml(dml) = &plan else {
+        panic!("expected Dml, got {plan:?}");
+    };
+    let datafusion_expr::WriteOp::MergeInto(merge_op) = &dml.op else {
+        panic!("expected MergeInto, got {:?}", dml.op);
+    };
+    let ids = merge_op.target_column_ids().expect("target column ids");
+    assert_eq!(ids.len(), dml.target.schema().fields().len());
+    let Expr::BinaryExpr(on) = &merge_op.on else {
+        panic!("expected a comparison, got {}", merge_op.on);
+    };
+    let Expr::Column(target_id) = on.left.as_ref() else {
+        panic!("expected a column, got {}", on.left);
+    };
+    assert_eq!(target_id.id, Some(ids[0]));
+    // the plan defines them (once: no issue above)
+    let defined = plan.defined_column_ids();
+    assert!(ids.iter().all(|id| defined.contains(id)));
+}
+
 #[test]
 fn plan_update_json_has_dml_node_without_merge_fields() {
     let plan = logical_plan("UPDATE person SET age = 42").unwrap();

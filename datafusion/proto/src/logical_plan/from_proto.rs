@@ -27,6 +27,7 @@ use datafusion_expr::{
     expr::{self, InList, WindowFunction},
 };
 use datafusion_expr::{ExprFunctionExt, WriteOp};
+use datafusion_proto_common::from_proto::column_id_from_proto;
 use datafusion_proto_common::{FromProtoError as Error, from_proto::FromOptionalField};
 
 use crate::protobuf::{self, CubeNode, GroupingSetNode, PlaceholderNode, RollupNode};
@@ -88,7 +89,23 @@ fn parse_merge_into_op(
         .iter()
         .map(|c| parse_merge_into_clause(c, ctx, codec))
         .collect::<Result<Vec<_>, Error>>()?;
-    Ok(MergeIntoOp::new(target_qualifier, on, clauses))
+    // the ids of the target columns, if the plan was encoded with column ids
+    let target_column_ids = op
+        .target_column_ids
+        .as_ref()
+        .map(|ids| {
+            ids.ids
+                .iter()
+                .map(|id| {
+                    column_id_from_proto(*id).ok_or_else(|| {
+                        Error::General("MergeIntoOpNode has a column id 0".to_string())
+                    })
+                })
+                .collect::<Result<Arc<[_]>, Error>>()
+        })
+        .transpose()?;
+    Ok(MergeIntoOp::new(target_qualifier, on, clauses)
+        .with_target_column_ids(target_column_ids))
 }
 
 fn parse_merge_into_clause(

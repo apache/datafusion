@@ -18,7 +18,7 @@ use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::catalog::TableProvider;
 use datafusion::common::datatype::FieldExt;
 use datafusion::common::{
-    DFSchema, ScalarValue, TableReference, not_impl_err, substrait_err,
+    ColumnIdGenerator, DFSchema, ScalarValue, TableReference, not_impl_err, substrait_err,
 };
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::expr::LambdaVariable;
@@ -431,6 +431,25 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         None
     }
 
+    // Column ids
+
+    /// The generator of the column ids (`ColumnId`) of the consumed plan.
+    ///
+    /// Every node the consumer builds allocates the ids of the columns it
+    /// defines from it (scans, virtual tables, projections, aggregates, set
+    /// operations, ...), so that the columns of the consumed plan are
+    /// defined once, and field references, which are positional, read the id
+    /// of the field at their position, outer references included.
+    ///
+    /// The default is `None`: each node then allocates from a generator of
+    /// its own, and the sides of a join or set operation, or a subquery and
+    /// its enclosing query, whose ids overlap are renumbered where they are
+    /// combined; the references taken before renumbering lose their ids and
+    /// resolve by name. [`DefaultSubstraitConsumer`] returns the session's.
+    fn column_id_generator(&self) -> Option<Arc<ColumnIdGenerator>> {
+        None
+    }
+
     // User-Defined Functionality
 
     // The details of extension relations, and how to handle them, are fully up to users to specify.
@@ -600,6 +619,12 @@ impl SubstraitConsumer for DefaultSubstraitConsumer<'_> {
 
     fn get_function_registry(&self) -> &impl FunctionRegistry {
         self.state
+    }
+
+    fn column_id_generator(&self) -> Option<Arc<ColumnIdGenerator>> {
+        Some(Arc::clone(
+            &self.state.execution_props().column_id_generator,
+        ))
     }
 
     fn push_outer_schema(&self, schema: Arc<DFSchema>) {

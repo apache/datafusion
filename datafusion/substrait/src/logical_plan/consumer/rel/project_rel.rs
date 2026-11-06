@@ -3,11 +3,10 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use crate::logical_plan::consumer::utils::NameTracker;
+use crate::logical_plan::consumer::utils::{NameTracker, plan_builder};
 use async_recursion::async_recursion;
 use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{Column, not_impl_err};
-use datafusion::logical_expr::builder::project;
 use datafusion::logical_expr::expr_rewriter::NamePreserver;
 use datafusion::logical_expr::utils::find_window_exprs;
 use datafusion::logical_expr::{Expr, LogicalPlan, LogicalPlanBuilder};
@@ -83,7 +82,11 @@ pub async fn from_project_rel(
                     .collect::<datafusion::common::Result<Vec<_>>>()?;
             }
 
-            LogicalPlanBuilder::window_plan(input, window_exprs)?
+            LogicalPlanBuilder::window_plan_with_column_id_generator(
+                input,
+                window_exprs,
+                consumer.column_id_generator(),
+            )?
         } else {
             input
         };
@@ -98,7 +101,7 @@ pub async fn from_project_rel(
             final_exprs.push(name_tracker.get_uniquely_named_expr(e)?);
         }
         final_exprs.append(&mut explicit_exprs);
-        project(input, final_exprs)
+        plan_builder(consumer, input).project(final_exprs)?.build()
     } else {
         not_impl_err!("Projection without an input is not supported")
     }

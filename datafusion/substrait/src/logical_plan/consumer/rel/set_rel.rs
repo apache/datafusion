@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::SubstraitConsumer;
+use crate::logical_plan::consumer::utils::{after_own_column_ids, plan_builder};
 use datafusion::arrow::datatypes::Field;
 use datafusion::common::{
     ColumnIdGenerator, JoinType, NullEquality, not_impl_err, substrait_err,
@@ -25,6 +26,7 @@ pub async fn from_set_rel(
             SetOp::UnionAll => union_rels(consumer, &set.inputs, true).await,
             SetOp::UnionDistinct => union_rels(consumer, &set.inputs, false).await,
             SetOp::IntersectionPrimary => intersect_rel(
+                consumer,
                 consumer.consume_rel(&set.inputs[0]).await?,
                 union_rels(consumer, &set.inputs[1..], true).await?,
                 false,
@@ -47,7 +49,8 @@ async fn union_rels(
     rels: &[Rel],
     is_all: bool,
 ) -> datafusion::common::Result<LogicalPlan> {
-    let mut union_builder = Ok(LogicalPlanBuilder::from(
+    let mut union_builder = Ok(plan_builder(
+        consumer,
         consumer.consume_rel(&rels[0]).await?,
     ));
     for input in &rels[1..] {
@@ -70,7 +73,7 @@ async fn intersect_rels(
     let mut rel = consumer.consume_rel(&rels[0]).await?;
 
     for input in &rels[1..] {
-        rel = intersect_rel(rel, consumer.consume_rel(input).await?, is_all)?;
+        rel = intersect_rel(consumer, rel, consumer.consume_rel(input).await?, is_all)?;
     }
 
     Ok(rel)
@@ -120,6 +123,7 @@ async fn intersect_rels(
 ///
 /// [Set Operation rules]: https://substrait.io/relations/logical_relations/#set-operation
 fn intersect_rel(
+    consumer: &impl SubstraitConsumer,
     left: LogicalPlan,
     right: LogicalPlan,
     is_all: bool,
@@ -141,17 +145,23 @@ fn intersect_rel(
 
     // `intersect` also reports inputs of different widths.
     if left_fields.len() != right_fields.len() || !from_right.contains(&true) {
-        return LogicalPlanBuilder::intersect(left, right, is_all);
+        return Ok(after_own_column_ids(
+            consumer,
+            LogicalPlanBuilder::intersect(left, right, is_all)?,
+        ));
     }
 
-    // The inputs may have been built with different column id generators:
-    // renumber the right side now, as the join would, so that the column
-    // references taken from its schema below stay unambiguous.
-    let right =
-        right.with_fresh_column_ids_if_overlapping(&left, &ColumnIdGenerator::new())?;
+    // Without the consumer's generator, the inputs may have been built with
+    // different column id generators: renumber the right side now, as the
+    // join would, so that the column references taken from its schema below
+    // stay unambiguous.
+    let generator = consumer
+        .column_id_generator()
+        .unwrap_or_else(|| Arc::new(ColumnIdGenerator::new()));
+    let right = right.with_fresh_column_ids_if_overlapping(&left, &generator)?;
     let (left, right, _) = requalify_sides_if_needed(
-        LogicalPlanBuilder::from(left),
-        LogicalPlanBuilder::from(right),
+        plan_builder(consumer, left),
+        plan_builder(consumer, right),
     )?;
     let left = if is_all { left } else { left.distinct()? };
     let right = right.distinct()?.build()?;
@@ -203,7 +213,7 @@ fn intersect_rel(
         )?
         .build()?;
 
-    LogicalPlanBuilder::from(joined).project(exprs)?.build()
+    plan_builder(consumer, joined).project(exprs)?.build()
 }
 
 async fn except_rels(
@@ -214,8 +224,9 @@ async fn except_rels(
     let mut rel = consumer.consume_rel(&rels[0]).await?;
 
     for input in &rels[1..] {
-        rel =
+        let except =
             LogicalPlanBuilder::except(rel, consumer.consume_rel(input).await?, is_all)?;
+        rel = after_own_column_ids(consumer, except);
     }
 
     Ok(rel)

@@ -15,6 +15,7 @@ use datafusion_expr::expr::{
 };
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{Expr, SortExpr, TryCast, WindowFunctionDefinition};
+use datafusion_proto_common::to_proto::column_id_to_proto;
 
 use crate::protobuf::{
     self, CubeNode, GroupingSetNode, LogicalExprList, PlaceholderNode, RollupNode,
@@ -580,6 +581,9 @@ pub fn serialize_merge_into_op(
         target_qualifier: Some(protobuf::TableReference::from(
             op.target_qualifier().clone(),
         )),
+        target_column_ids: op.target_column_ids().map(|ids| protobuf::ColumnIds {
+            ids: ids.iter().map(|id| column_id_to_proto(Some(*id))).collect(),
+        }),
     })
 }
 

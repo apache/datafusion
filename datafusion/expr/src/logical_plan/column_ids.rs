@@ -90,7 +90,16 @@
 //! and, when verification is on (`DATAFUSION_COLUMN_ID_VERIFY=1`, on in the
 //! tests of the optimizer and in the sqllogictest runner, off for users),
 //! fail a query whose rules break the ids (see the `column_id_check` module
-//! of `datafusion-optimizer`).
+//! of `datafusion-optimizer`, whose `check_column_ids_kept` compares the
+//! issues of a plan before and after a rewrite, for the tests of downstream
+//! rules).
+//!
+//! An extension node that does not support column ids
+//! ([`UserDefinedLogicalNode::supports_column_ids`]) is a boundary: the
+//! references of its expressions are not checked, nor the references above
+//! it to the columns of its schema that have no id.
+//!
+//! [`UserDefinedLogicalNode::supports_column_ids`]: crate::UserDefinedLogicalNode::supports_column_ids
 //!
 //! [`DFSchema::field_ids`]: datafusion_common::DFSchema::field_ids
 //! [`ColumnIdGenerator`]: datafusion_common::ColumnIdGenerator
@@ -100,15 +109,15 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::logical_plan::{
-    Aggregate, Distinct, DistinctOn, MaterializedCtePlan, Projection, Subquery,
-    TableScan, Window,
+    Aggregate, Distinct, DistinctOn, DmlStatement, Filter, Limit, MaterializedCtePlan,
+    Projection, Repartition, Sort, Subquery, SubqueryAlias, TableScan, Window,
 };
-use crate::{Expr, LogicalPlan};
+use crate::{Expr, LogicalPlan, WriteOp};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, ColumnId, ColumnIdGenerator, DFSchema, DFSchemaRef, Result,
+    Column, ColumnId, ColumnIdGenerator, DFSchema, DFSchemaRef, JoinType, Result,
 };
 
 /// Calls `f` on every column read by the expressions of `plan` (not of its
@@ -172,6 +181,10 @@ impl LogicalPlan {
                 ..
             }) = plan
             {
+                ids.iter().for_each(|id| update(Some(*id)));
+            }
+            // so does a MERGE INTO with the columns of its target
+            if let Some(ids) = merge_target_column_ids(plan) {
                 ids.iter().for_each(|id| update(Some(*id)));
             }
             apply_node_column_refs(plan, |col, _| update(col.id))?;
@@ -268,6 +281,12 @@ impl LogicalPlan {
     /// projections and `DistinctOn`s that do not pass a column through, the
     /// window expressions of windows, and the columns that nodes define
     /// without expressions (see the [module documentation](self)).
+    ///
+    /// The expressions of an extension node that does not support column
+    /// ids, and the references above it to its columns without an id, are not
+    /// checked (see [`UserDefinedLogicalNode::supports_column_ids`]).
+    ///
+    /// [`UserDefinedLogicalNode::supports_column_ids`]: crate::UserDefinedLogicalNode::supports_column_ids
     pub fn column_id_issues(&self) -> Vec<ColumnIdIssue> {
         let mut verifier = Verifier {
             describe: true,
@@ -359,8 +378,32 @@ impl LogicalPlan {
                     f(join.schema.fields().len() - 1, id)
                 }
             }
+            // the target columns of a MERGE INTO, which is not an input:
+            // the index is the index in the target schema (see
+            // [`defined_column`])
+            LogicalPlan::Dml(_) => {
+                if let Some(ids) = merge_target_column_ids(self) {
+                    for (i, id) in ids.iter().enumerate() {
+                        f(i, *id)
+                    }
+                }
+            }
             _ => {}
         }
+    }
+}
+
+/// The ids of the target columns of `plan`, if it is a MERGE INTO with ids
+/// (see [`MergeIntoOp::target_column_ids`])
+///
+/// [`MergeIntoOp::target_column_ids`]: crate::dml::MergeIntoOp::target_column_ids
+fn merge_target_column_ids(plan: &LogicalPlan) -> Option<&Arc<[ColumnId]>> {
+    match plan {
+        LogicalPlan::Dml(DmlStatement {
+            op: WriteOp::MergeInto(merge_op),
+            ..
+        }) => merge_op.target_column_ids(),
+        _ => None,
     }
 }
 
@@ -397,7 +440,39 @@ impl LogicalPlan {
     ///
     /// Used where a plan value is blended into another plan that may already
     /// contain it (see the [module documentation](self)), so that no id is
-    /// defined twice.
+    /// defined twice. `LogicalPlanBuilder` does it where it combines plans
+    /// (joins, set operations, subqueries) and where it inlines a view; code
+    /// that reuses a plan fragment otherwise (builds a node over two copies of
+    /// it by hand, or puts a copy of a subtree in a second place, as a rule
+    /// that duplicates a subtree does) renumbers the copy with this method.
+    /// In an optimizer rule, the generator is the
+    /// `OptimizerConfig::column_id_generator`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use datafusion_common::{ColumnIdGenerator, Result};
+    /// # use datafusion_expr::logical_plan::builder::table_scan;
+    /// # use datafusion_expr::{JoinType, LogicalPlan, Union};
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use std::sync::Arc;
+    /// # fn main() -> Result<()> {
+    /// let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+    /// let plan = table_scan(Some("t"), &schema, None)?.build()?;
+    /// // a generator whose ids follow those of the plan
+    /// let generator = ColumnIdGenerator::new_after(plan.max_column_id());
+    /// // a union of the plan with itself, built by hand: the second input is
+    /// // a copy, with ids of its own
+    /// let copy = plan.clone().with_fresh_column_ids(&generator)?;
+    /// assert!(plan.defined_column_ids().is_disjoint(&copy.defined_column_ids()));
+    /// let union = LogicalPlan::Union(Union::try_new(
+    ///     vec![Arc::new(plan), Arc::new(copy)],
+    ///     &generator,
+    /// )?);
+    /// assert!(union.column_id_issues().is_empty());
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn with_fresh_column_ids(self, generator: &ColumnIdGenerator) -> Result<Self> {
         self.renumber(generator, &HashSet::new())
     }
@@ -962,6 +1037,21 @@ fn rename_node_column_ids(
         transformed = true;
     }
 
+    // the target columns of a MERGE INTO
+    if let LogicalPlan::Dml(DmlStatement {
+        op: WriteOp::MergeInto(merge_op),
+        ..
+    }) = &mut plan
+        && let Some(ids) = merge_op.target_column_ids_mut()
+        && ids.iter().any(|id| renames.ids.contains_key(id))
+    {
+        *ids = ids
+            .iter()
+            .map(|id| renames.ids.get(id).copied().unwrap_or(*id))
+            .collect();
+        transformed = true;
+    }
+
     // columns stored outside of expressions
     match &mut plan {
         LogicalPlan::Subquery(Subquery {
@@ -1056,6 +1146,17 @@ impl Verifier {
         });
 
         let inputs = plan.inputs();
+        let merge_schema = match plan {
+            // the expressions of a MERGE INTO read the columns of its target
+            // and of its source (its input)
+            LogicalPlan::Dml(
+                dml @ DmlStatement {
+                    op: WriteOp::MergeInto(_),
+                    ..
+                },
+            ) => dml.merge_schema().ok(),
+            _ => None,
+        };
         let scopes: Vec<DFSchemaRef> = if let LogicalPlan::TableScan(scan) = plan {
             // the filters of a scan read the columns of its source
             match scan.filters.is_empty() {
@@ -1065,6 +1166,8 @@ impl Verifier {
                         .unwrap_or_else(|_| Arc::clone(plan.schema())),
                 ],
             }
+        } else if let Some(merge_schema) = merge_schema {
+            vec![Arc::new(merge_schema)]
         } else if inputs.is_empty() {
             vec![Arc::clone(plan.schema())]
         } else {
@@ -1074,17 +1177,33 @@ impl Verifier {
                 .collect()
         };
 
-        // `apply_node_column_refs` only fails if its closure does
-        let _ = apply_node_column_refs(plan, |col, is_outer| {
-            let kind = if is_outer {
-                classify(col, outer_scopes.iter().rev().flatten().map(|s| s.as_ref()))
-            } else {
-                classify(col, scopes.iter().map(|s| s.as_ref()))
-            };
-            if let Some(kind) = kind {
-                report(&mut self.issues, kind, col.clone());
-            }
-        });
+        // the expressions of an extension node that does not support column
+        // ids are not checked: its inputs are boundaries
+        let check_expressions = match plan {
+            LogicalPlan::Extension(extension) => extension.node.supports_column_ids(),
+            _ => true,
+        };
+        if check_expressions {
+            // `apply_node_column_refs` only fails if its closure does
+            let _ = apply_node_column_refs(plan, |col, is_outer| {
+                let kind = if is_outer {
+                    classify(col, outer_scopes.iter().rev().flatten().map(|s| s.as_ref()))
+                } else {
+                    classify(col, scopes.iter().map(|s| s.as_ref()))
+                };
+                // a column without an id of an extension node that does not
+                // support column ids is read by name
+                if kind == Some(ColumnIdIssueKind::Missing)
+                    && !is_outer
+                    && reads_extension_column_without_id(&inputs, col)
+                {
+                    return;
+                }
+                if let Some(kind) = kind {
+                    report(&mut self.issues, kind, col.clone());
+                }
+            });
+        }
 
         outer_scopes.push(scopes);
         let _ = plan.apply_subqueries(|subquery| {
@@ -1109,7 +1228,75 @@ fn defined_column(plan: &LogicalPlan, i: usize) -> Column {
             source_column_ids: Some(_),
             ..
         }) => Column::new(Some(table_name.clone()), source.schema().field(i).name()),
+        LogicalPlan::Dml(DmlStatement {
+            target,
+            op: WriteOp::MergeInto(merge_op),
+            ..
+        }) => Column::new(
+            Some(merge_op.target_qualifier().clone()),
+            target.schema().field(i).name(),
+        ),
         _ => Column::from(plan.schema().qualified_field(i)),
+    }
+}
+
+/// Whether `col` reads by name, in one of `inputs`, a column without an id
+/// of an extension node that does not support column ids (see
+/// [`UserDefinedLogicalNode::supports_column_ids`]), passed through
+///
+/// [`UserDefinedLogicalNode::supports_column_ids`]: crate::UserDefinedLogicalNode::supports_column_ids
+fn reads_extension_column_without_id(inputs: &[&LogicalPlan], col: &Column) -> bool {
+    inputs.iter().any(|input| {
+        let schema = input.schema();
+        schema
+            .index_of_column_by_name(col.relation.as_ref(), &col.name)
+            .is_some_and(|i| {
+                schema.field_id(i).is_none() && is_extension_column_without_id(input, i)
+            })
+    })
+}
+
+/// Whether the column at index `i` of the schema of `plan` is a column
+/// without an id of an extension node that does not support column ids,
+/// passed through by `plan` and the nodes below it
+fn is_extension_column_without_id(plan: &LogicalPlan, i: usize) -> bool {
+    match plan {
+        LogicalPlan::Extension(extension) => {
+            !extension.node.supports_column_ids()
+                && extension.node.schema().field_id(i).is_none()
+        }
+        LogicalPlan::Filter(Filter { input, .. })
+        | LogicalPlan::Sort(Sort { input, .. })
+        | LogicalPlan::Limit(Limit { input, .. })
+        | LogicalPlan::Repartition(Repartition { input, .. })
+        | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. })
+        | LogicalPlan::Distinct(Distinct::All(input)) => {
+            is_extension_column_without_id(input, i)
+        }
+        LogicalPlan::Window(window) => {
+            i < window.input.schema().fields().len()
+                && is_extension_column_without_id(&window.input, i)
+        }
+        LogicalPlan::Join(join) => {
+            let left_len = join.left.schema().fields().len();
+            let right_len = join.right.schema().fields().len();
+            match join.join_type {
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark => {
+                    i < left_len && is_extension_column_without_id(&join.left, i)
+                }
+                JoinType::RightSemi | JoinType::RightAnti | JoinType::RightMark => {
+                    i < right_len && is_extension_column_without_id(&join.right, i)
+                }
+                JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+                    if i < left_len {
+                        is_extension_column_without_id(&join.left, i)
+                    } else {
+                        is_extension_column_without_id(&join.right, i - left_len)
+                    }
+                }
+            }
+        }
+        _ => false,
     }
 }
 
@@ -1180,7 +1367,7 @@ mod tests {
             scan_with_ids("s", [Some(1), Some(2)])?,
             outer_ref.eq(inner_ref),
         )?;
-        let plan = LogicalPlan::Filter(crate::Filter::try_new(
+        let plan = LogicalPlan::Filter(Filter::try_new(
             exists(Arc::new(subquery)),
             Arc::new(scan_with_ids("t", [Some(3), Some(4)])?),
         )?);
@@ -1220,7 +1407,7 @@ mod tests {
 
     /// A filter `expr = 1` over `input`
     fn filter(input: LogicalPlan, expr: Expr) -> Result<LogicalPlan> {
-        Ok(LogicalPlan::Filter(crate::Filter::try_new(
+        Ok(LogicalPlan::Filter(Filter::try_new(
             expr.eq(lit(1)),
             Arc::new(input),
         )?))
@@ -1303,7 +1490,7 @@ mod tests {
             Arc::new(right),
             vec![],
             None,
-            crate::JoinType::Inner,
+            JoinType::Inner,
             crate::JoinConstraint::On,
             datafusion_common::NullEquality::NullEqualsNothing,
             false,
@@ -1456,13 +1643,10 @@ mod tests {
         // joins concatenate, semi joins keep one side, mark joins add a mark
         // column, defined by the join with a new id from the builder
         for (join_type, expected) in [
-            (
-                crate::JoinType::Left,
-                ids(&[Some(1), Some(2), Some(3), Some(4)]),
-            ),
-            (crate::JoinType::LeftSemi, ids(&[Some(1), Some(2)])),
-            (crate::JoinType::RightAnti, ids(&[Some(3), Some(4)])),
-            (crate::JoinType::LeftMark, ids(&[Some(1), Some(2), Some(5)])),
+            (JoinType::Left, ids(&[Some(1), Some(2), Some(3), Some(4)])),
+            (JoinType::LeftSemi, ids(&[Some(1), Some(2)])),
+            (JoinType::RightAnti, ids(&[Some(3), Some(4)])),
+            (JoinType::LeftMark, ids(&[Some(1), Some(2), Some(5)])),
         ] {
             let plan = LogicalPlanBuilder::from(t()?)
                 .join(s()?, join_type, (vec!["t.a"], vec!["s.a"]), None)?
@@ -1479,12 +1663,7 @@ mod tests {
 
         // a mark join defines its mark column
         let plan = LogicalPlanBuilder::from(t()?)
-            .join(
-                s()?,
-                crate::JoinType::LeftMark,
-                (vec!["t.a"], vec!["s.a"]),
-                None,
-            )?
+            .join(s()?, JoinType::LeftMark, (vec!["t.a"], vec!["s.a"]), None)?
             .build()?;
         assert_eq!(plan.defined_column_ids(), [1, 2, 3, 4, 5].map(id).into());
         assert_eq!(kinds(&plan), vec![]);
@@ -1837,6 +2016,88 @@ mod tests {
     }
 
     #[test]
+    fn merge_into_defines_its_target_columns() -> Result<()> {
+        use crate::dml::{
+            MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
+        };
+        use crate::{DmlStatement, WriteOp};
+
+        fn target_ids(plan: &LogicalPlan) -> Option<Vec<ColumnId>> {
+            match plan {
+                LogicalPlan::Dml(DmlStatement {
+                    op: WriteOp::MergeInto(op),
+                    ..
+                }) => op.target_column_ids().map(|ids| ids.to_vec()),
+                _ => None,
+            }
+        }
+
+        let generator = ColumnIdGenerator::new();
+        let target = source();
+        // the source of the MERGE (its input), ids 1 and 2
+        let input = scan_from("s", &generator)?;
+        // the target columns, ids 3 and 4
+        let ids = MergeIntoOp::new_target_column_ids(&target.schema(), &generator);
+        let merge = |on: Expr, ids: Option<Arc<[ColumnId]>>| {
+            let op = MergeIntoOp::new(
+                "t",
+                on,
+                vec![MergeIntoClause {
+                    kind: MergeIntoClauseKind::Matched,
+                    predicate: None,
+                    action: MergeIntoAction::Update(vec![(
+                        "b".to_string(),
+                        col_with_id("s", "b", Some(2)),
+                    )]),
+                }],
+            )
+            .with_target_column_ids(ids);
+            LogicalPlan::Dml(DmlStatement::new(
+                "t".into(),
+                Arc::clone(&target),
+                WriteOp::MergeInto(Box::new(op)),
+                Arc::new(input.clone()),
+            ))
+        };
+        let on = col_with_id("t", "a", Some(3)).eq(col_with_id("s", "a", Some(1)));
+
+        // the references to the target read the ids the operation defines
+        let plan = merge(on.clone(), Some(Arc::clone(&ids)));
+        assert_eq!(kinds(&plan), vec![]);
+        assert_eq!(
+            plan.defined_column_ids(),
+            [id(1), id(2), id(3), id(4)].into()
+        );
+        assert_eq!(plan.max_column_id(), Some(id(4)));
+        // equality ignores them
+        assert_eq!(plan, merge(on.clone(), None));
+        // without them, a reference to the target has nothing to read
+        assert_eq!(
+            kinds(&merge(on.clone(), None)),
+            vec![ColumnIdIssueKind::Stale]
+        );
+        // an id defined by the target and by the source is defined twice
+        assert_eq!(
+            kinds(&merge(on, Some([id(3), id(1)].into()))),
+            vec![ColumnIdIssueKind::DuplicateDefinition]
+        );
+
+        // a rebuild keeps them
+        let rebuilt = plan.with_new_exprs(plan.expressions(), vec![input.clone()])?;
+        assert_eq!(target_ids(&rebuilt), Some(vec![id(3), id(4)]));
+        assert_eq!(kinds(&rebuilt), vec![]);
+
+        // renumbering renames them, and the references to them
+        let plan = plan.with_fresh_column_ids(&generator)?;
+        assert_eq!(kinds(&plan), vec![]);
+        let new_ids = target_ids(&plan).unwrap();
+        assert!(new_ids.iter().all(|id| id.get().get() > 4), "{new_ids:?}");
+        assert_eq!(plan.defined_column_ids().len(), 4);
+        assert!(ref_ids(&plan).contains(&Some(new_ids[0])));
+        Ok(())
+    }
+
+    #[test]
     fn renumbering_renames_projection_outputs() -> Result<()> {
         let generator = ColumnIdGenerator::new();
         let scan = scan_from("t", &generator)?;
@@ -2118,7 +2379,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(scan)
             .with_column_id_generator(Some(Arc::clone(&generator)))
             .alias("l")?
-            .join_on(right, crate::JoinType::Inner, vec![a.eq(b)])?
+            .join_on(right, JoinType::Inner, vec![a.eq(b)])?
             .build()?;
         // the right side was renumbered: `r.b#2` would find `l.b#2`, so it
         // lost its id, and so did `l.a#1`; they were then bound again by
@@ -2141,7 +2402,7 @@ mod tests {
             .alias("l")?
             .join(
                 right,
-                crate::JoinType::Inner,
+                JoinType::Inner,
                 (
                     vec![Column::new(Some("l"), "a").with_id(Some(id(5)))],
                     vec![Column::new(Some("r"), "a").with_id(Some(id(5)))],
@@ -2208,7 +2469,7 @@ mod tests {
         )?);
         // one subquery in two places, as a rewrite may leave it
         let predicate = exists(Arc::clone(&subquery)).and(exists(subquery));
-        let plan = LogicalPlan::Filter(crate::Filter::try_new(
+        let plan = LogicalPlan::Filter(Filter::try_new(
             predicate.clone(),
             Arc::new(outer.clone()),
         )?);
@@ -2218,7 +2479,7 @@ mod tests {
         let renumbered = predicate
             .with_fresh_column_ids_in_repeated_subqueries(&mut seen, &generator)?;
         assert!(renumbered.transformed);
-        let plan = LogicalPlan::Filter(crate::Filter::try_new(
+        let plan = LogicalPlan::Filter(Filter::try_new(
             renumbered.data,
             Arc::new(outer.clone()),
         )?);
@@ -2237,11 +2498,118 @@ mod tests {
             .clone()
             .with_fresh_subquery_column_ids(&generator)?;
         assert!(copy.transformed);
-        let both = LogicalPlan::Filter(crate::Filter::try_new(
+        let both = LogicalPlan::Filter(Filter::try_new(
             filter.predicate.and(copy.data),
             Arc::new(outer),
         )?);
         assert_eq!(kinds(&both), vec![]);
+        Ok(())
+    }
+
+    /// An extension node over `input` that outputs `input`'s columns and a
+    /// column `x` (without an id) and reads `expr`
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct ExtensionNode {
+        input: LogicalPlan,
+        expr: Expr,
+        schema: DFSchemaRef,
+        supports_column_ids: bool,
+    }
+
+    impl PartialOrd for ExtensionNode {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            (&self.input, &self.expr).partial_cmp(&(&other.input, &other.expr))
+        }
+    }
+
+    impl crate::UserDefinedLogicalNodeCore for ExtensionNode {
+        fn name(&self) -> &str {
+            "ExtensionNode"
+        }
+
+        fn inputs(&self) -> Vec<&LogicalPlan> {
+            vec![&self.input]
+        }
+
+        fn schema(&self) -> &DFSchemaRef {
+            &self.schema
+        }
+
+        fn expressions(&self) -> Vec<Expr> {
+            vec![self.expr.clone()]
+        }
+
+        fn fmt_for_explain(&self, f: &mut fmt::Formatter) -> fmt::Result {
+            write!(f, "ExtensionNode: {}", self.expr)
+        }
+
+        fn with_exprs_and_inputs(
+            &self,
+            mut exprs: Vec<Expr>,
+            mut inputs: Vec<LogicalPlan>,
+        ) -> Result<Self> {
+            Ok(Self {
+                input: inputs.swap_remove(0),
+                expr: exprs.swap_remove(0),
+                schema: Arc::clone(&self.schema),
+                supports_column_ids: self.supports_column_ids,
+            })
+        }
+
+        fn supports_column_ids(&self) -> bool {
+            self.supports_column_ids
+        }
+    }
+
+    fn extension(
+        input: LogicalPlan,
+        expr: Expr,
+        supports_column_ids: bool,
+    ) -> Result<LogicalPlan> {
+        let x = DFSchema::from_unqualified_fields(
+            vec![Field::new("x", DataType::Int32, false)].into(),
+            HashMap::new(),
+        )?;
+        let schema = Arc::new(input.schema().join(&x)?);
+        Ok(LogicalPlan::Extension(crate::Extension {
+            node: Arc::new(ExtensionNode {
+                input,
+                expr,
+                schema,
+                supports_column_ids,
+            }),
+        }))
+    }
+
+    #[test]
+    fn extension_without_column_ids_is_a_boundary() -> Result<()> {
+        let scan = scan_with_ids("t", [Some(1), Some(2)])?;
+        // its expressions read its input by name, and the references above
+        // it read its column without an id by name, also through a node that
+        // passes it through
+        let plan = extension(scan, col("t.a"), false)?;
+        let plan = filter(plan, col("x"))?;
+        let plan = LogicalPlanBuilder::from(plan).alias("s")?.build()?;
+        let plan = filter(plan, col("s.x"))?;
+        assert_eq!(kinds(&plan), vec![]);
+        // the columns it passes through keep their ids and are checked
+        let plan = filter(plan, col("s.a"))?;
+        assert_eq!(kinds(&plan), vec![ColumnIdIssueKind::Missing]);
+        Ok(())
+    }
+
+    #[test]
+    fn extension_with_column_ids_is_checked() -> Result<()> {
+        let scan = scan_with_ids("t", [Some(1), Some(2)])?;
+        let plan = extension(scan, col("t.a"), true)?;
+        let plan = filter(plan, col("x"))?;
+        assert_eq!(
+            kinds(&plan),
+            vec![ColumnIdIssueKind::Missing, ColumnIdIssueKind::Missing]
+        );
+        let scan = scan_with_ids("t", [Some(1), Some(2)])?;
+        let plan = extension(scan, col_with_id("t", "a", Some(1)), true)?;
+        assert_eq!(kinds(&plan), vec![]);
         Ok(())
     }
 }

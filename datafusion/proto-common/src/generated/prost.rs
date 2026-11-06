@@ -12,6 +12,9 @@ pub struct Column {
     pub name: ::prost::alloc::string::String,
     #[prost(message, optional, tag = "2")]
     pub relation: ::core::option::Option<ColumnRelation>,
+    /// The id of the column this refers to (`ColumnId`), 0 if it has none
+    #[prost(uint64, tag = "3")]
+    pub id: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DfField {
@@ -19,6 +22,9 @@ pub struct DfField {
     pub field: ::core::option::Option<Field>,
     #[prost(message, optional, tag = "2")]
     pub qualifier: ::core::option::Option<ColumnRelation>,
+    /// The id of the column this field is (`ColumnId`), 0 if it has none
+    #[prost(uint64, tag = "3")]
+    pub id: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct DfSchema {

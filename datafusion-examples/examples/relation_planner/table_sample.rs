@@ -522,6 +522,11 @@ impl UserDefinedLogicalNodeCore for TableSamplePlanNode {
             seed: self.seed,
         })
     }
+
+    /// It reads no columns, and passes the columns of its input through
+    fn supports_column_ids(&self) -> bool {
+        true
+    }
 }
 
 /// Wrapper for f64 that implements Hash and Eq (required for LogicalPlan).

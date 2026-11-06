@@ -2516,9 +2516,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 TableReference::bare(self.ident_normalizer.normalize(a.name.clone()))
             })
             .unwrap_or_else(|| target_table_ref.clone());
-        let target_schema = Arc::new(DFSchema::try_from_qualified_schema(
-            target_qualifier.clone(),
+        // The target is not an input of the plan: the MERGE operation defines
+        // the ids of its columns, which the references to them below read
+        let target_column_ids = MergeIntoOp::new_target_column_ids(
             &target_table_source.schema(),
+            &self.column_id_generator(),
+        );
+        let target_schema = Arc::new(MergeIntoOp::target_dfschema(
+            &target_qualifier,
+            &target_table_source.schema(),
+            Some(&target_column_ids),
         )?);
 
         // 2. Plan the source (USING clause) as a LogicalPlan
@@ -2531,9 +2538,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             self.plan_from_tables(vec![source_table_with_joins], &mut planner_context)?;
 
         // 3. Build a combined schema for resolving expressions in ON and WHEN clauses
-        let combined_schema = Arc::new(MergeIntoOp::expression_schema_for(
+        let combined_schema = Arc::new(MergeIntoOp::expression_schema_with_target_ids(
             &target_qualifier,
             &target_table_source.schema(),
+            Some(&target_column_ids),
             source_plan.schema(),
         )?);
 
@@ -2557,7 +2565,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // 6. Preserve the target's visible qualifier in the public MERGE
         // representation. It is a scope-local SQL name, distinct from the
         // provider identity stored in `DmlStatement::table_name`.
-        let merge_op = MergeIntoOp::new(target_qualifier, on_expr, df_clauses);
+        let merge_op = MergeIntoOp::new(target_qualifier, on_expr, df_clauses)
+            .with_target_column_ids(Some(target_column_ids));
 
         Ok(LogicalPlan::Dml(DmlStatement::new(
             target_table_ref,

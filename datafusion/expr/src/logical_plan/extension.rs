@@ -189,6 +189,43 @@ pub trait UserDefinedLogicalNode: fmt::Debug + Send + Sync {
     fn supports_limit_pushdown(&self) -> bool {
         false
     }
+
+    /// Returns `true` if this node keeps the column ids ([`ColumnId`]) of the
+    /// plan it is in, `false` (the default) if its inputs are boundaries for
+    /// column ids.
+    ///
+    /// A node that returns `true`:
+    ///
+    /// - builds the column references of its expressions with the ids of
+    ///   the input columns they read (with
+    ///   `Column::from(schema.qualified_field(i)).with_id(schema.field_id(i))`,
+    ///   or by resolving them against the schemas of its inputs), and keeps
+    ///   the expressions it is given by [`Self::with_exprs_and_inputs`]
+    ///   (DataFusion renames the ids in them when it renumbers a plan);
+    /// - derives the columns of its schema that it passes through from the
+    ///   schemas of its inputs, so that they keep their ids, also when it is
+    ///   rebuilt with new inputs (a schema stored when the node was built
+    ///   goes stale when its inputs are renumbered);
+    /// - gives the columns it computes ids of their own, allocated when it is
+    ///   built and kept when it is rebuilt. DataFusion cannot renumber
+    ///   them: a plan value that contains such a node should not be used
+    ///   twice in one plan.
+    ///
+    /// Its ids are checked like those of the built-in nodes (see
+    /// [`LogicalPlan::column_id_issues`]).
+    ///
+    /// For a node that returns `false`, DataFusion does not require its
+    /// expressions to carry ids, and does not check them: they may read the
+    /// columns of its inputs by name, as without ids. The references above
+    /// the node read its columns by the ids its schema has (the ids of the
+    /// columns it passes through, if it derives its schema from its inputs);
+    /// a column of its schema without an id is read by name, and the
+    /// references to it are not reported either.
+    ///
+    /// [`ColumnId`]: datafusion_common::ColumnId
+    fn supports_column_ids(&self) -> bool {
+        false
+    }
 }
 
 impl Hash for dyn UserDefinedLogicalNode {
@@ -299,6 +336,11 @@ pub trait UserDefinedLogicalNodeCore:
     fn supports_limit_pushdown(&self) -> bool {
         false // Disallow limit push-down by default
     }
+
+    /// See [`UserDefinedLogicalNode::supports_column_ids`]
+    fn supports_column_ids(&self) -> bool {
+        false
+    }
 }
 
 /// Automatically derive `UserDefinedLogicalNode` from `UserDefinedLogicalNodeCore`
@@ -372,6 +414,10 @@ impl<T: UserDefinedLogicalNodeCore> UserDefinedLogicalNode for T {
 
     fn supports_limit_pushdown(&self) -> bool {
         self.supports_limit_pushdown()
+    }
+
+    fn supports_column_ids(&self) -> bool {
+        self.supports_column_ids()
     }
 }
 

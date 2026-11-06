@@ -28,8 +28,9 @@ use datafusion_common::format::{
 };
 use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
-    ColumnIdGenerator, NullEquality, Result, TableReference, assert_or_internal_err,
-    context, internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    ColumnId, ColumnIdGenerator, DFSchema, DFSchemaRef, NullEquality, Result,
+    TableReference, assert_or_internal_err, context, internal_datafusion_err,
+    internal_err, not_impl_err, plan_err,
 };
 use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::file_format::{
@@ -56,10 +57,12 @@ use datafusion_expr::{
         Aggregate, AsOfJoin, AsOfMatch, CreateCatalog, CreateCatalogSchema,
         CreateExternalTable, CreateView, DdlStatement, Distinct, EmptyRelation,
         Extension, Filter, Join, Prepare, Projection, Repartition, Sort, SubqueryAlias,
-        TableScan, TableScanBuilder, Values, Window,
+        TableScan, TableScanBuilder, Union, Values, Window,
     },
 };
+use datafusion_proto_common::from_proto::column_id_from_proto;
 use datafusion_proto_common::protobuf_common;
+use datafusion_proto_common::to_proto::column_id_to_proto;
 
 use self::to_proto::{serialize_expr, serialize_exprs};
 use crate::logical_plan::to_proto::serialize_range_split_point;
@@ -360,6 +363,148 @@ fn from_table_reference(
     Ok(TableReference::try_from(table_ref.clone())?)
 }
 
+/// The encoding of the ids of some columns (see [`protobuf::ColumnIds`])
+fn column_ids_to_proto(
+    ids: impl IntoIterator<Item = Option<ColumnId>>,
+) -> Option<protobuf::ColumnIds> {
+    Some(protobuf::ColumnIds {
+        ids: ids.into_iter().map(column_id_to_proto).collect(),
+    })
+}
+
+/// The ids of some columns, if the plan was encoded with column ids (see
+/// [`protobuf::ColumnIds`])
+fn column_ids_from_proto(ids: &protobuf::ColumnIds) -> Vec<Option<ColumnId>> {
+    ids.ids.iter().copied().map(column_id_from_proto).collect()
+}
+
+/// The ids of the `len` entries of `node` (a [`NamedExpr`] always has an id),
+/// if the plan was encoded with column ids
+fn entry_ids_from_proto(
+    ids: Option<&protobuf::ColumnIds>,
+    len: usize,
+    node: &str,
+) -> Result<Option<Vec<ColumnId>>> {
+    let Some(ids) = ids.map(column_ids_from_proto) else {
+        return Ok(None);
+    };
+    if ids.len() != len {
+        return Err(proto_error(format!(
+            "{node} has {len} expressions and {} column ids",
+            ids.len()
+        )));
+    }
+    ids.into_iter()
+        .map(|id| id.ok_or_else(|| proto_error(format!("{node} has a column id 0"))))
+        .collect::<Result<_>>()
+        .map(Some)
+}
+
+/// `exprs` as the entries of a node, with the ids `ids` if the plan was
+/// encoded with column ids; otherwise with new ids from `allocate`, as for a
+/// plan encoded before column ids existed
+fn named_exprs(
+    exprs: Vec<Expr>,
+    ids: Option<&protobuf::ColumnIds>,
+    node: &str,
+    allocate: impl FnMut(Expr) -> NamedExpr,
+) -> Result<Vec<NamedExpr>> {
+    Ok(match entry_ids_from_proto(ids, exprs.len(), node)? {
+        Some(ids) => exprs
+            .into_iter()
+            .zip(ids)
+            .map(|(expr, id)| NamedExpr::new(expr, id))
+            .collect(),
+        None => exprs.into_iter().map(allocate).collect(),
+    })
+}
+
+/// Returns `schema` where the fields take the ids `ids`, which must be as
+/// many as its fields
+fn with_field_ids_from_proto(
+    schema: &DFSchemaRef,
+    ids: Vec<Option<ColumnId>>,
+    node: &str,
+) -> Result<DFSchemaRef> {
+    if ids.len() != schema.fields().len() {
+        return Err(proto_error(format!(
+            "{node} has {} columns and {} column ids",
+            schema.fields().len(),
+            ids.len()
+        )));
+    }
+    Ok(Arc::new(schema.as_ref().clone().with_field_ids(ids)?))
+}
+
+/// The ids of the columns of the source of `scan`, indexed like the fields of
+/// the source schema (see [`TableScan::source_column_ids`]); for a scan
+/// without them, the ids of its projected columns
+fn scan_source_column_ids(scan: &TableScan) -> Option<protobuf::ColumnIds> {
+    match &scan.source_column_ids {
+        Some(ids) => column_ids_to_proto(ids.iter().copied().map(Some)),
+        None => {
+            let mut ids = vec![None; scan.source.schema().fields().len()];
+            let projected = scan.projected_schema.field_ids();
+            match &scan.projection {
+                Some(projection) => {
+                    for (i, id) in projection.iter().zip(projected) {
+                        ids[*i] = *id;
+                    }
+                }
+                None => {
+                    for (id, projected) in ids.iter_mut().zip(projected) {
+                        *id = *projected;
+                    }
+                }
+            }
+            column_ids_to_proto(ids)
+        }
+    }
+}
+
+/// The plan of the scan that `scan` builds, whose source columns have the
+/// ids `ids` if the plan was encoded with column ids. A plan encoded before
+/// column ids existed goes through [`LogicalPlanBuilder::table_scan`] as
+/// before: the columns get new ids, and a view is inlined.
+fn decode_table_scan(
+    scan: TableScanBuilder,
+    ids: Option<&protobuf::ColumnIds>,
+) -> Result<LogicalPlan> {
+    match ids.map(column_ids_from_proto) {
+        Some(ids) => Ok(LogicalPlan::TableScan(
+            scan.with_source_column_ids(ids).build()?,
+        )),
+        None => LogicalPlanBuilder::table_scan(scan.build()?)?.build(),
+    }
+}
+
+/// The ids of the grouping expressions of `aggregate`, in the order in which
+/// decoding its written grouping (see [`Aggregate::group_by_exprs`]) gives
+/// them back (see [`Aggregate::allocate_group_expr`]), followed by its
+/// grouping id if it has grouping sets
+fn aggregate_group_expr_ids(aggregate: &Aggregate) -> Option<protobuf::ColumnIds> {
+    let entry_id = |expr: &Expr| {
+        aggregate
+            .group_expr
+            .iter()
+            .find(|entry| entry.expr == *expr)
+            .map(|entry| entry.id)
+    };
+    match &aggregate.grouping_sets {
+        None => column_ids_to_proto(aggregate.group_expr.iter().map(|e| Some(e.id))),
+        Some(grouping_sets) => {
+            let written = grouping_sets.sets.to_grouping_set(&aggregate.group_expr);
+            column_ids_to_proto(
+                written
+                    .distinct_expr()
+                    .into_iter()
+                    .map(entry_id)
+                    .chain([Some(grouping_sets.grouping_id)]),
+            )
+        }
+    }
+}
+
 /// Converts [LogicalPlan::TableScan] to [TableSource]
 /// method to be used to deserialize nodes
 /// serialized by [from_table_source]
@@ -495,6 +640,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         })?;
         match plan {
             LogicalPlanType::Values(values) => {
+                let column_ids = values.column_ids.as_ref().map(column_ids_from_proto);
                 let n_cols = usize_from_wire(values.n_cols, "Values", "n_cols")?;
                 let values: Vec<Vec<Expr>> = if values.values_list.is_empty() {
                     Ok(Vec::new())
@@ -515,7 +661,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .map_err(|e| e.into())
                 }?;
 
-                LogicalPlanBuilder::values(values)?.build()
+                let plan = LogicalPlanBuilder::values(values)?.build()?;
+                match (plan, column_ids) {
+                    (LogicalPlan::Values(Values { schema, values }), Some(ids)) => {
+                        let schema = with_field_ids_from_proto(&schema, ids, "Values")?;
+                        Ok(LogicalPlan::Values(Values { schema, values }))
+                    }
+                    // a plan encoded before column ids existed: the columns
+                    // keep the new ids of the builder
+                    (plan, _) => Ok(plan),
+                }
             }
             LogicalPlanType::Projection(projection) => {
                 let input: LogicalPlan =
@@ -523,13 +678,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let expr: Vec<Expr> =
                     from_proto::parse_exprs(&projection.expr, ctx, extension_codec)?;
 
-                // ids are not encoded: the outputs get new ones, after the
+                // without encoded ids, the outputs get new ones, after the
                 // ids of the decoded input
                 let generator = ColumnIdGenerator::new_after(input.max_column_id());
-                let expr = expr
-                    .into_iter()
-                    .map(|e| NamedExpr::allocate(e, input.schema(), &generator))
-                    .collect();
+                let expr =
+                    named_exprs(expr, projection.expr_ids.as_ref(), "Projection", |e| {
+                        NamedExpr::allocate(e, input.schema(), &generator)
+                    })?;
                 let new_proj =
                     LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
                 match projection.optional_alias.as_ref() {
@@ -560,13 +715,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     into_logical_plan!(window.input, ctx, extension_codec)?;
                 let window_expr: Vec<Expr> =
                     from_proto::parse_exprs(&window.window_expr, ctx, extension_codec)?;
-                // ids are not encoded: the outputs get new ones, after the ids
+                // without encoded ids, the outputs get new ones, after the ids
                 // of the decoded input
                 let generator = ColumnIdGenerator::new_after(input.max_column_id());
-                let window_expr = window_expr
-                    .into_iter()
-                    .map(|e| NamedExpr::new(e, generator.next()))
-                    .collect();
+                let window_expr = named_exprs(
+                    window_expr,
+                    window.window_expr_ids.as_ref(),
+                    "Window",
+                    |e| NamedExpr::new(e, generator.next()),
+                )?;
                 Ok(LogicalPlan::Window(Window::try_new(
                     window_expr,
                     Arc::new(input),
@@ -579,18 +736,37 @@ impl AsLogicalPlan for LogicalPlanNode {
                     from_proto::parse_exprs(&aggregate.group_expr, ctx, extension_codec)?;
                 let aggr_expr =
                     from_proto::parse_exprs(&aggregate.aggr_expr, ctx, extension_codec)?;
-                // ids are not encoded: the outputs get new ones, after the ids
+                // without encoded ids, the outputs get new ones, after the ids
                 // of the decoded input (bare grouping columns pass through)
                 let generator = ColumnIdGenerator::new_after(input.max_column_id());
-                let (group_expr, grouping_sets) = Aggregate::allocate_group_expr(
+                let (mut group_expr, mut grouping_sets) = Aggregate::allocate_group_expr(
                     group_expr,
                     input.schema(),
                     &generator,
                 )?;
-                let aggr_expr = aggr_expr
-                    .into_iter()
-                    .map(|e| NamedExpr::new(e, generator.next()))
-                    .collect();
+                // the encoded ids are in the order of the flattened grouping
+                // expressions, followed by the grouping id
+                let group_len = group_expr.len() + usize::from(grouping_sets.is_some());
+                if let Some(ids) = entry_ids_from_proto(
+                    aggregate.group_expr_ids.as_ref(),
+                    group_len,
+                    "Aggregate",
+                )? {
+                    for (entry, id) in group_expr.iter_mut().zip(&ids) {
+                        entry.id = *id;
+                    }
+                    if let (Some(grouping_sets), Some(id)) =
+                        (grouping_sets.as_mut(), ids.last())
+                    {
+                        grouping_sets.grouping_id = *id;
+                    }
+                }
+                let aggr_expr = named_exprs(
+                    aggr_expr,
+                    aggregate.aggr_expr_ids.as_ref(),
+                    "Aggregate",
+                    |e| NamedExpr::new(e, generator.next()),
+                )?;
                 Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                     Arc::new(input),
                     group_expr,
@@ -723,9 +899,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 .with_projection(projection)
                 .with_filters(filters)
                 .with_fetch(scan.fetch.map(|f| f as usize))
-                .with_skip(scan.skip.map(|o| o as usize))
-                .build()?;
-                LogicalPlanBuilder::table_scan(table_scan)?.build()
+                .with_skip(scan.skip.map(|o| o as usize));
+                decode_table_scan(table_scan, scan.source_column_ids.as_ref())
             }
             LogicalPlanType::CustomScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -758,9 +933,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                         .with_projection(projection)
                         .with_filters(filters)
                         .with_fetch(scan.fetch.map(|f| f as usize))
-                        .with_skip(scan.skip.map(|o| o as usize))
-                        .build()?;
-                LogicalPlanBuilder::table_scan(table_scan)?.build()
+                        .with_skip(scan.skip.map(|o| o as usize));
+                decode_table_scan(table_scan, scan.source_column_ids.as_ref())
             }
             LogicalPlanType::Sort(sort) => {
                 let input: LogicalPlan =
@@ -1075,19 +1249,27 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map_or(Ok(None), |v| v.map(Some))?;
                 let left = into_logical_plan!(join.left, ctx, extension_codec)?;
                 let right = into_logical_plan!(join.right, ctx, extension_codec)?;
-                // the sides are decoded with their own ids, which may collide
-                let right = right.with_fresh_column_ids_if_overlapping(
-                    &left,
-                    &ColumnIdGenerator::new(),
-                )?;
                 let on: Vec<(Expr, Expr)> =
                     left_keys.into_iter().zip(right_keys).collect();
-                // ids are not encoded: the mark column of a mark join gets a
-                // new one, after the ids of both sides
-                let mark_id = ColumnIdGenerator::new_after(
-                    left.max_column_id().max(right.max_column_id()),
-                )
-                .next();
+                let (right, mark_id) =
+                    match join.mark_column_id.as_ref().map(column_ids_from_proto) {
+                        // the ids are used as they were encoded
+                        Some(ids) => (right, ids.first().copied().flatten()),
+                        // a plan encoded before column ids existed: the sides are
+                        // decoded with new ids, which may collide, and the mark
+                        // column of a mark join gets a new one, after them
+                        None => {
+                            let right = right.with_fresh_column_ids_if_overlapping(
+                                &left,
+                                &ColumnIdGenerator::new(),
+                            )?;
+                            let mark_id = ColumnIdGenerator::new_after(
+                                left.max_column_id().max(right.max_column_id()),
+                            )
+                            .next();
+                            (right, Some(mark_id))
+                        }
+                    };
 
                 // Construct the Join directly instead of going through
                 // LogicalPlanBuilder. The builder methods hardcode
@@ -1095,29 +1277,30 @@ impl AsLogicalPlan for LogicalPlanNode {
                 // them silently loses both fields. Both sides of the round
                 // trip should already have validated keys, so we don't need
                 // the builder's normalization / equijoin-pair checks.
-                Ok(LogicalPlan::Join(
-                    Join::try_new(
-                        Arc::new(left),
-                        Arc::new(right),
-                        on,
-                        filter,
-                        datafusion_expr::JoinType::from(join_type),
-                        JoinConstraint::from(join_constraint),
-                        NullEquality::from(null_equality),
-                        join.null_aware,
+                let decoded = Join::try_new(
+                    Arc::new(left),
+                    Arc::new(right),
+                    on,
+                    filter,
+                    datafusion_expr::JoinType::from(join_type),
+                    JoinConstraint::from(join_constraint),
+                    NullEquality::from(null_equality),
+                    join.null_aware,
+                )?
+                // Plans encoded before the field existed decode it as 0; they
+                // could only hold scalar `NOT IN` joins.
+                .with_null_aware_value_keys(
+                    usize_from_wire(
+                        join.null_aware_value_keys,
+                        "JoinNode",
+                        "null_aware_value_keys",
                     )?
-                    // Plans encoded before the field existed decode it as 0; they
-                    // could only hold scalar `NOT IN` joins.
-                    .with_null_aware_value_keys(
-                        usize_from_wire(
-                            join.null_aware_value_keys,
-                            "JoinNode",
-                            "null_aware_value_keys",
-                        )?
-                        .max(1),
-                    )
-                    .with_mark_column_id(mark_id)?,
-                ))
+                    .max(1),
+                );
+                Ok(LogicalPlan::Join(match mark_id {
+                    Some(id) => decoded.with_mark_column_id(id)?,
+                    None => decoded,
+                }))
             }
             LogicalPlanType::AsOfJoin(join) => {
                 let left_keys =
@@ -1173,12 +1356,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     ))
                 })?;
                 let left = into_logical_plan!(join.left, ctx, extension_codec)?;
-                let right = into_logical_plan!(join.right, ctx, extension_codec)?;
-                // the sides are decoded with their own ids, which may collide
-                let right = right.with_fresh_column_ids_if_overlapping(
-                    &left,
-                    &ColumnIdGenerator::new(),
-                )?;
+                let mut right = into_logical_plan!(join.right, ctx, extension_codec)?;
+                if !join.column_ids {
+                    // a plan encoded before column ids existed: the sides are
+                    // decoded with new ids, which may collide
+                    right = right.with_fresh_column_ids_if_overlapping(
+                        &left,
+                        &ColumnIdGenerator::new(),
+                    )?;
+                }
                 Ok(LogicalPlan::AsOfJoin(AsOfJoin::try_new(
                     Arc::new(left),
                     Arc::new(right),
@@ -1192,6 +1378,26 @@ impl AsLogicalPlan for LogicalPlanNode {
                     union.inputs.len() >= 2,
                     "Protobuf deserialization error, Union requires at least two inputs."
                 );
+                if let Some(ids) = union.output_ids.as_ref().map(column_ids_from_proto) {
+                    // the union is decoded as it was encoded, with all its
+                    // inputs, and its outputs keep their ids
+                    let inputs = union
+                        .inputs
+                        .iter()
+                        .map(|input| {
+                            input
+                                .try_into_logical_plan(ctx, extension_codec)
+                                .map(Arc::new)
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let generator = ColumnIdGenerator::new();
+                    let mut union = Union::try_new_with_loose_types(inputs, &generator)?;
+                    union.schema =
+                        with_field_ids_from_proto(&union.schema, ids, "Union")?;
+                    return Ok(LogicalPlan::Union(union));
+                }
+                // a plan encoded before column ids existed: a union of two
+                // inputs at a time, whose outputs get new ids
                 let (first, rest) = union.inputs.split_first().unwrap();
                 let mut builder = LogicalPlanBuilder::from(
                     first.try_into_logical_plan(ctx, extension_codec)?,
@@ -1209,17 +1415,23 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 LogicalPlanBuilder::from(left).cross_join(right)?.build()
             }
-            LogicalPlanType::Extension(LogicalExtensionNode { node, inputs }) => {
+            LogicalPlanType::Extension(LogicalExtensionNode {
+                node,
+                inputs,
+                column_ids,
+            }) => {
                 let mut input_plans: Vec<LogicalPlan> = Vec::with_capacity(inputs.len());
                 for input in inputs {
-                    // the inputs are decoded with their own ids, which may
-                    // collide
                     let mut plan = input.try_into_logical_plan(ctx, extension_codec)?;
-                    for previous in &input_plans {
-                        plan = plan.with_fresh_column_ids_if_overlapping(
-                            previous,
-                            &ColumnIdGenerator::new(),
-                        )?;
+                    if !column_ids {
+                        // a plan encoded before column ids existed: the inputs
+                        // are decoded with new ids, which may collide
+                        for previous in &input_plans {
+                            plan = plan.with_fresh_column_ids_if_overlapping(
+                                previous,
+                                &ColumnIdGenerator::new(),
+                            )?;
+                        }
                     }
                     input_plans.push(plan);
                 }
@@ -1251,9 +1463,30 @@ impl AsLogicalPlan for LogicalPlanNode {
                         extension_codec,
                     )?),
                 };
-                LogicalPlanBuilder::from(input)
-                    .distinct_on(on_expr, select_expr, sort_expr)?
-                    .build()
+                match entry_ids_from_proto(
+                    distinct_on.select_expr_ids.as_ref(),
+                    select_expr.len(),
+                    "DistinctOn",
+                )? {
+                    Some(ids) => {
+                        let select_expr = select_expr
+                            .into_iter()
+                            .zip(ids)
+                            .map(|(expr, id)| NamedExpr::new(expr, id))
+                            .collect();
+                        Ok(LogicalPlan::Distinct(Distinct::On(DistinctOn::try_new(
+                            on_expr,
+                            select_expr,
+                            sort_expr,
+                            Arc::new(input),
+                        )?)))
+                    }
+                    // a plan encoded before column ids existed: the outputs
+                    // get new ids
+                    None => LogicalPlanBuilder::from(input)
+                        .distinct_on(on_expr, select_expr, sort_expr)?
+                        .build(),
+                }
             }
             LogicalPlanType::ViewScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -1288,9 +1521,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                 )
                 .with_projection(projection)
                 .with_fetch(scan.fetch.map(|f| f as usize))
-                .with_skip(scan.skip.map(|o| o as usize))
-                .build()?;
-                LogicalPlanBuilder::table_scan(table_scan)?.build()
+                .with_skip(scan.skip.map(|o| o as usize));
+                // with encoded ids, the scan of the view is decoded as it
+                // was encoded; otherwise the view is inlined, as before
+                decode_table_scan(table_scan, scan.source_column_ids.as_ref())
             }
             LogicalPlanType::Prepare(prepare) => {
                 let input: LogicalPlan =
@@ -1355,7 +1589,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let input: LogicalPlan =
                     into_logical_plan!(unnest.input, ctx, extension_codec)?;
 
-                LogicalPlanBuilder::from(input)
+                let plan = LogicalPlanBuilder::from(input)
                     .unnest_columns_with_options(
                         unnest.exec_columns.iter().map(|c| c.into()).collect(),
                         unnest
@@ -1366,7 +1600,31 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 proto_error("Missing required field in protobuf")
                             })?,
                     )?
-                    .build()
+                    .build()?;
+                // the unnested columns keep the ids of the encoded schema; a
+                // plan encoded before column ids existed has none, and they
+                // keep the new ids of the builder
+                let encoded_schema: Option<DFSchema> =
+                    unnest.schema.as_ref().map(TryInto::try_into).transpose()?;
+                match (plan, encoded_schema) {
+                    (LogicalPlan::Unnest(mut plan), Some(encoded))
+                        if encoded.field_ids().iter().any(Option::is_some) =>
+                    {
+                        let mut ids = plan.schema.field_ids().to_vec();
+                        if encoded.field_ids().len() != ids.len() {
+                            return Err(proto_error(
+                                "Unnest has a schema of another width than encoded",
+                            ));
+                        }
+                        for i in plan.unnested_output_indices().collect::<Vec<_>>() {
+                            ids[i] = encoded.field_id(i);
+                        }
+                        plan.schema =
+                            with_field_ids_from_proto(&plan.schema, ids, "Unnest")?;
+                        Ok(LogicalPlan::Unnest(plan))
+                    }
+                    (plan, _) => Ok(plan),
+                }
             }
             LogicalPlanType::RecursiveQuery(recursive_query_node) => {
                 let static_term = recursive_query_node
@@ -1384,40 +1642,60 @@ impl AsLogicalPlan for LogicalPlanNode {
                         "Protobuf deserialization error, RecursiveQueryNode was missing required field recursive_term."
                     ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
-                // the terms are decoded with their own ids, which may collide
-                let recursive_term = recursive_term
-                    .with_fresh_column_ids_if_overlapping(
+                let output_ids = recursive_query_node
+                    .output_ids
+                    .as_ref()
+                    .map(column_ids_from_proto);
+                let recursive_term = match output_ids {
+                    Some(_) => recursive_term,
+                    // a plan encoded before column ids existed: the terms are
+                    // decoded with new ids, which may collide
+                    None => recursive_term.with_fresh_column_ids_if_overlapping(
                         &static_term,
                         &ColumnIdGenerator::new(),
-                    )?;
+                    )?,
+                };
 
                 // The output schema is derived state, so decoding goes through
-                // the constructor after restoring the child terms. Ids are not
-                // encoded: the outputs get new ones, after the ids of the terms
+                // the constructor after restoring the child terms. Without
+                // encoded ids, the outputs get new ones, after the ids of the
+                // terms
                 let generator = ColumnIdGenerator::new_after(
                     static_term
                         .max_column_id()
                         .max(recursive_term.max_column_id()),
                 );
-                RecursiveQuery::try_new(
+                let mut recursive_query = RecursiveQuery::try_new(
                     recursive_query_node.name.clone(),
                     Arc::new(static_term),
                     Arc::new(recursive_term),
                     recursive_query_node.is_distinct,
                     &generator,
-                )
-                .map(LogicalPlan::RecursiveQuery)
+                )?;
+                if let Some(ids) = output_ids {
+                    recursive_query.schema = with_field_ids_from_proto(
+                        &recursive_query.schema,
+                        ids,
+                        "RecursiveQuery",
+                    )?;
+                }
+                Ok(LogicalPlan::RecursiveQuery(recursive_query))
             }
             LogicalPlanType::CteWorkTableScan(cte_work_table_scan_node) => {
-                let CteWorkTableScanNode { name, schema } = cte_work_table_scan_node;
+                let CteWorkTableScanNode {
+                    name,
+                    schema,
+                    source_column_ids,
+                } = cte_work_table_scan_node;
                 let schema = convert_required!(*schema)?;
                 let cte_work_table = CteWorkTable::new(name.as_str(), Arc::new(schema));
-                LogicalPlanBuilder::scan(
-                    name.as_str(),
-                    provider_as_source(Arc::new(cte_work_table)),
-                    None,
-                )?
-                .build()
+                decode_table_scan(
+                    TableScanBuilder::new(
+                        name.as_str(),
+                        provider_as_source(Arc::new(cte_work_table)),
+                    ),
+                    source_column_ids.as_ref(),
+                )
             }
             LogicalPlanType::EmptyTableScan(scan) => {
                 let schema: Schema = convert_required!(scan.schema)?;
@@ -1443,9 +1721,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let table_scan =
                     TableScanBuilder::new(table_name, provider_as_source(provider))
                         .with_projection(projection)
-                        .with_filters(filters)
-                        .build()?;
-                LogicalPlanBuilder::table_scan(table_scan)?.build()
+                        .with_filters(filters);
+                decode_table_scan(table_scan, scan.source_column_ids.as_ref())
             }
             LogicalPlanType::Dml(dml_node) => {
                 let table_name =
@@ -1454,6 +1731,16 @@ impl AsLogicalPlan for LogicalPlanNode {
                     to_table_source(dml_node.target.as_deref(), ctx, extension_codec)?;
                 let write_op =
                     from_proto::parse_write_op(dml_node, ctx, extension_codec)?;
+                if let WriteOp::MergeInto(merge_op) = &write_op
+                    && let Some(ids) = merge_op.target_column_ids()
+                    && ids.len() != target.schema().fields().len()
+                {
+                    return Err(proto_error(format!(
+                        "MERGE INTO target has {} columns and {} column ids",
+                        target.schema().fields().len(),
+                        ids.len()
+                    )));
+                }
                 Ok(LogicalPlan::Dml(DmlStatement::new(
                     table_name,
                     target,
@@ -1473,7 +1760,7 @@ impl AsLogicalPlan for LogicalPlanNode {
         Self: Sized,
     {
         dispatch_logical_plan!(plan, {
-            LogicalPlan::Values(Values { values, .. }) => {
+            LogicalPlan::Values(Values { values, schema }) => {
                 let n_cols = if values.is_empty() {
                     0
                 } else {
@@ -1486,19 +1773,25 @@ impl AsLogicalPlan for LogicalPlanNode {
                         protobuf::ValuesNode {
                             n_cols,
                             values_list,
+                            column_ids: column_ids_to_proto(
+                                schema.field_ids().iter().copied(),
+                            ),
                         },
                     )),
                 })
             }
-            LogicalPlan::TableScan(TableScan {
-                table_name,
-                source,
-                filters,
-                projection,
-                fetch,
-                skip,
-                ..
-            }) => {
+            LogicalPlan::TableScan(
+                scan @ TableScan {
+                    table_name,
+                    source,
+                    filters,
+                    projection,
+                    fetch,
+                    skip,
+                    ..
+                },
+            ) => {
+                let source_column_ids = scan_source_column_ids(scan);
                 let provider = source_as_provider(source)?;
                 let schema = provider.schema();
 
@@ -1632,6 +1925,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 file_sort_order: exprs_vec,
                                 fetch: fetch.map(|f| f as u64),
                                 skip: skip.map(|o| o as u64),
+                                source_column_ids,
                             },
                         )),
                     })
@@ -1657,6 +1951,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .unwrap_or_default(),
                                 fetch: fetch.map(|f| f as u64),
                                 skip: skip.map(|o| o as u64),
+                                source_column_ids,
                             },
                         ))),
                     })
@@ -1672,6 +1967,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                             CteWorkTableScanNode {
                                 name,
                                 schema: Some(schema),
+                                source_column_ids,
                             },
                         )),
                     })
@@ -1687,6 +1983,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 schema: Some(schema),
                                 projection,
                                 filters,
+                                source_column_ids,
                             },
                         )),
                     })
@@ -1706,6 +2003,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         custom_table_data: bytes,
                         fetch: fetch.map(|f| f as u64),
                         skip: skip.map(|o| o as u64),
+                        source_column_ids,
                     });
                     let node = LogicalPlanNode {
                         logical_plan_type: Some(scan),
@@ -1728,6 +2026,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 extension_codec,
                             )?,
                             optional_alias: None,
+                            expr_ids: column_ids_to_proto(expr.iter().map(|e| Some(e.id))),
                         },
                     ))),
                 })
@@ -1787,6 +2086,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                             )?,
                             sort_expr,
                             input: Some(Box::new(input)),
+                            select_expr_ids: column_ids_to_proto(
+                                select_expr.iter().map(|e| Some(e.id)),
+                            ),
                         },
                     ))),
                 })
@@ -1806,6 +2108,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 window_expr.iter().map(|e| &e.expr),
                                 extension_codec,
                             )?,
+                            window_expr_ids: column_ids_to_proto(
+                                window_expr.iter().map(|e| Some(e.id)),
+                            ),
                         },
                     ))),
                 })
@@ -1830,23 +2135,38 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 aggr_expr.iter().map(|e| &e.expr),
                                 extension_codec,
                             )?,
+                            group_expr_ids: aggregate_group_expr_ids(agg),
+                            aggr_expr_ids: column_ids_to_proto(
+                                aggr_expr.iter().map(|e| Some(e.id)),
+                            ),
                         },
                     ))),
                 })
             }
-            LogicalPlan::Join(Join {
-                left,
-                right,
-                on,
-                filter,
-                join_type,
-                join_constraint,
-                null_equality,
-                null_aware,
-                null_aware_value_keys,
-                // Not encoded; recomputed by `Join::try_new` on decode.
-                schema: _,
-            }) => {
+            LogicalPlan::Join(
+                join @ Join {
+                    left,
+                    right,
+                    on,
+                    filter,
+                    join_type,
+                    join_constraint,
+                    null_equality,
+                    null_aware,
+                    null_aware_value_keys,
+                    // Not encoded (but for the id of the mark column);
+                    // recomputed by `Join::try_new` on decode.
+                    schema: _,
+                },
+            ) => {
+                let mark_column_id = column_ids_to_proto(
+                    matches!(
+                        join_type,
+                        datafusion_common::JoinType::LeftMark
+                            | datafusion_common::JoinType::RightMark
+                    )
+                    .then(|| join.mark_column_id()),
+                );
                 let left: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     left.as_ref(),
                     extension_codec,
@@ -1895,6 +2215,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     "JoinNode: null_aware_value_keys {null_aware_value_keys} does not fit in u32"
                                 )
                             })?,
+                            mark_column_id,
                         },
                     ))),
                 })
@@ -1957,6 +2278,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 *join_constraint,
                             )
                             .into(),
+                            column_ids: true,
                         },
                     ))),
                 })
@@ -2267,7 +2589,12 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .collect::<Result<_>>()?;
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Union(
-                        protobuf::UnionNode { inputs },
+                        protobuf::UnionNode {
+                            inputs,
+                            output_ids: column_ids_to_proto(
+                                union.schema.field_ids().iter().copied(),
+                            ),
+                        },
                     )),
                 })
             }
@@ -2284,7 +2611,11 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 Ok(LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Extension(
-                        LogicalExtensionNode { node: buf, inputs },
+                        LogicalExtensionNode {
+                            node: buf,
+                            inputs,
+                            column_ids: true,
+                        },
                     )),
                 })
             }
@@ -2499,6 +2830,9 @@ impl AsLogicalPlan for LogicalPlanNode {
                             static_term: Some(Box::new(static_term)),
                             recursive_term: Some(Box::new(recursive_term)),
                             is_distinct: recursive.is_distinct,
+                            output_ids: column_ids_to_proto(
+                                recursive.schema.field_ids().iter().copied(),
+                            ),
                         },
                     ))),
                 })

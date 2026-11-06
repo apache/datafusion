@@ -3,7 +3,8 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::logical_expr::{LogicalPlan, LogicalPlanBuilder};
+use crate::logical_plan::consumer::utils::plan_builder;
+use datafusion::logical_expr::LogicalPlan;
 
 use datafusion::logical_expr::requalify_sides_if_needed;
 
@@ -13,10 +14,12 @@ pub async fn from_cross_rel(
     consumer: &impl SubstraitConsumer,
     cross: &CrossRel,
 ) -> datafusion::common::Result<LogicalPlan> {
-    let left = LogicalPlanBuilder::from(
+    let left = plan_builder(
+        consumer,
         consumer.consume_rel(cross.left.as_ref().unwrap()).await?,
     );
-    let right = LogicalPlanBuilder::from(
+    let right = plan_builder(
+        consumer,
         consumer.consume_rel(cross.right.as_ref().unwrap()).await?,
     );
     let (left, right, _requalified) = requalify_sides_if_needed(left, right)?;

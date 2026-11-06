@@ -21,7 +21,7 @@ use arrow::ipc::writer::{
 };
 use datafusion_common::parsers::CsvQuoteStyle;
 use datafusion_common::{
-    Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
+    Column, ColumnId, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
     DataFusionError, JoinSide, ScalarValue, Statistics,
     config::{
         CsvOptions, JsonOptions, ParquetCdcOptions, ParquetColumnOptions, ParquetOptions,
@@ -238,8 +238,14 @@ impl From<Column> for protobuf::Column {
                 parts: relation.to_vec(),
             }),
             name: c.name,
+            id: column_id_to_proto(c.id),
         }
     }
+}
+
+/// The encoding of a [`ColumnId`]: 0 means none
+pub fn column_id_to_proto(id: Option<ColumnId>) -> u64 {
+    id.map_or(0, |id| id.get().get())
 }
 
 impl From<&Column> for protobuf::Column {
@@ -276,13 +282,15 @@ impl TryFrom<&DFSchema> for protobuf::DfSchema {
     fn try_from(s: &DFSchema) -> Result<Self, Self::Error> {
         let columns = s
             .iter()
-            .map(|(qualifier, field)| {
+            .zip(s.field_ids())
+            .map(|((qualifier, field), id)| {
                 Ok(protobuf::DfField {
                     field: Some(field.as_ref().try_into()?),
                     qualifier: qualifier.map(|r| protobuf::ColumnRelation {
                         relation: r.to_string(),
                         parts: r.to_vec(),
                     }),
+                    id: column_id_to_proto(*id),
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?;

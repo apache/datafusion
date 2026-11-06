@@ -620,6 +620,12 @@ impl UserDefinedLogicalNodeCore for TopKPlanNode {
     fn supports_limit_pushdown(&self) -> bool {
         false // Disallow limit push-down by default
     }
+
+    /// Its sort expression is the one of the sort it replaces, which reads
+    /// its input by id, and it passes the columns of its input through
+    fn supports_column_ids(&self) -> bool {
+        true
+    }
 }
 
 /// Physical planner for TopK nodes

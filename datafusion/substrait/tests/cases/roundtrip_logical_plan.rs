@@ -22,7 +22,7 @@ use std::mem::size_of_val;
 use datafusion::arrow::datatypes::{
     DataType, Field, FieldRef, IntervalUnit, Schema, TimeUnit,
 };
-use datafusion::common::tree_node::Transformed;
+use datafusion::common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion::common::{DFSchema, DFSchemaRef, Spans, not_impl_err, plan_err};
 use datafusion::error::Result;
 use datafusion::execution::registry::SerializerRegistry;
@@ -1059,6 +1059,8 @@ async fn roundtrip_correlated_exists() -> Result<()> {
     assert_eq!(outer_references(&proto), vec![(1, 0)]);
 
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    // outer references read the ids of the enclosing query's columns
+    assert!(plan2.column_id_issues().is_empty(), "{plan2}");
     assert_eq!(plan.schema(), plan2.schema());
     assert_snapshot!(
     plan2,
@@ -1087,6 +1089,8 @@ async fn roundtrip_correlated_in_subquery() -> Result<()> {
     assert_eq!(outer_references(&proto), vec![(1, 3)]);
 
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    // outer references read the ids of the enclosing query's columns
+    assert!(plan2.column_id_issues().is_empty(), "{plan2}");
     assert_eq!(plan.schema(), plan2.schema());
     assert_snapshot!(
     plan2,
@@ -1115,6 +1119,8 @@ async fn roundtrip_correlated_scalar_subquery() -> Result<()> {
     assert_eq!(outer_references(&proto), vec![(1, 0)]);
 
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    // outer references read the ids of the enclosing query's columns
+    assert!(plan2.column_id_issues().is_empty(), "{plan2}");
     assert_eq!(plan.schema(), plan2.schema());
     assert_snapshot!(
     plan2,
@@ -1150,6 +1156,8 @@ async fn roundtrip_nested_correlated_subquery() -> Result<()> {
     assert_eq!(outer_references(&proto), vec![(1, 0), (2, 0)]);
 
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    // outer references read the ids of the enclosing query's columns
+    assert!(plan2.column_id_issues().is_empty(), "{plan2}");
     assert_eq!(plan.schema(), plan2.schema());
     assert_snapshot!(
     plan2,
@@ -1191,6 +1199,8 @@ async fn roundtrip_correlated_subquery_shadowed_outer_column() -> Result<()> {
     assert_eq!(outer_references(&proto), vec![(1, 0)]);
 
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    // outer references read the ids of the enclosing query's columns
+    assert!(plan2.column_id_issues().is_empty(), "{plan2}");
     assert_eq!(plan.schema(), plan2.schema());
     assert_snapshot!(
     plan2,
@@ -1333,6 +1343,49 @@ async fn roundtrip_self_join() -> Result<()> {
     assert_eq!(plan3.schema(), plan4.schema());
     DataFrame::new(ctx.state(), plan4).show().await?;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn self_join_has_distinct_column_ids() -> Result<()> {
+    let ctx = create_context().await?;
+    let plan = ctx
+        .sql("SELECT l.a, r.c FROM data AS l JOIN data AS r ON l.b = r.b")
+        .await?
+        .into_optimized_plan()?;
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let consumed = from_substrait_plan(&ctx.state(), &proto).await?;
+    assert!(consumed.column_id_issues().is_empty());
+
+    // the two scans of `data` define distinct ids
+    let mut scans = vec![];
+    consumed.apply(|node| {
+        if let LogicalPlan::TableScan(scan) = node {
+            scans.push(scan.source_column_ids.clone().unwrap());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    let [left, right] = scans.as_slice() else {
+        panic!("expected two scans in {consumed}");
+    };
+    assert!(
+        left.iter().all(|id| !right.contains(id)),
+        "{left:?} {right:?}"
+    );
+
+    // the join keys read one side each, by id
+    let mut keys = vec![];
+    consumed.apply(|node| {
+        if let LogicalPlan::Join(join) = node {
+            keys.extend(join.on.iter().cloned());
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    let [(Expr::Column(l), Expr::Column(r))] = keys.as_slice() else {
+        panic!("expected one join key in {consumed}");
+    };
+    assert!(left.contains(&l.id.unwrap()));
+    assert!(right.contains(&r.id.unwrap()));
     Ok(())
 }
 
@@ -3199,6 +3252,9 @@ async fn substrait_roundtrip(
 ) -> Result<LogicalPlan> {
     let proto = to_substrait_plan(plan, &ctx.state())?;
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
+    // the consumer binds every reference to the id of the column it reads
+    let issues = plan2.column_id_issues();
+    assert!(issues.is_empty(), "{plan2}\n{issues:#?}");
     let plan2 = ctx.state().optimize(&plan2)?;
     Ok(plan2)
 }

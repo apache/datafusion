@@ -195,28 +195,9 @@ pub fn assert_analyzer_check_err(
 ///
 /// A plan without any id is not checked, as by the verifier.
 pub fn assert_no_new_column_id_issues(before: &LogicalPlan, after: &LogicalPlan) {
-    if after.max_column_id().is_none() {
-        return;
+    if let Err(e) = crate::column_id_check::check_column_ids_kept(before, after) {
+        panic!("{e}\nin\n{}", after.display_indent());
     }
-    let (before_counts, after_counts) = (
-        before.column_id_issue_counts(),
-        after.column_id_issue_counts(),
-    );
-    let introduced: Vec<_> = datafusion_expr::ColumnIdIssueKind::ALL
-        .into_iter()
-        .filter(|kind| after_counts[*kind as usize] > before_counts[*kind as usize])
-        .collect();
-    assert!(
-        introduced.is_empty(),
-        "column id issues of kinds {introduced:?} introduced:\n{}\nin\n{}",
-        after
-            .column_id_issues()
-            .iter()
-            .map(|issue| issue.to_string())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        after.display_indent()
-    );
 }
 
 fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}

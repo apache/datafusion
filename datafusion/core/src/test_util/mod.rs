@@ -338,6 +338,11 @@ impl UserDefinedLogicalNodeCore for CacheNode {
             input: inputs[0].clone(),
         })
     }
+
+    /// It reads no columns, and passes the columns of its input through
+    fn supports_column_ids(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]

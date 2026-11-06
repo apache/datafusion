@@ -30,6 +30,7 @@ mod tests {
         .expect("failed to parse json");
         let ctx = SessionContext::new();
         let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+        assert_no_column_id_issues(&plan);
         ctx.execute_logical_plan(plan).await?.collect().await
     }
 
@@ -60,8 +61,16 @@ mod tests {
 
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
         let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+        assert_no_column_id_issues(&plan);
         ctx.state().create_physical_plan(&plan).await?;
         Ok(format!("{plan}"))
+    }
+
+    /// The consumer binds every reference to the id of the column it reads,
+    /// and defines each column once
+    fn assert_no_column_id_issues(plan: &datafusion::logical_expr::LogicalPlan) {
+        let issues = plan.column_id_issues();
+        assert!(issues.is_empty(), "{plan}\n{issues:#?}");
     }
 
     #[tokio::test]
@@ -579,6 +588,7 @@ mod tests {
 
         let ctx = add_plan_schemas_to_ctx(SessionContext::new(), &proto)?;
         let plan = from_substrait_plan(&ctx.state(), &proto).await?;
+        assert_no_column_id_issues(&plan);
         ctx.state().create_physical_plan(&plan).await?;
         Ok(format!("{plan}"))
     }
