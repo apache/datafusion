@@ -393,8 +393,13 @@ fn take_case_rows<'a>(
     if indices.len() == batch.num_rows() {
         return Ok(Cow::Borrowed(batch));
     }
-    Ok(Cow::Owned(arrow::compute::take_record_batch(
-        batch, indices,
+    let columns = arrow::compute::take_arrays(batch.columns(), indices, None)?;
+    Ok(Cow::Owned(RecordBatch::try_new_with_options(
+        batch.schema(),
+        columns,
+        &RecordBatchOptions::new()
+            .with_match_field_names(false)
+            .with_row_count(Some(indices.len())),
     )?))
 }
 
@@ -1736,6 +1741,58 @@ mod tests {
                 );
             }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn taking_case_rows_preserves_zero_column_batch_length() -> Result<()> {
+        let batch = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(5)),
+        )?;
+        let selected = take_case_rows(&batch, &UInt32Array::from(vec![1, 3]))?;
+        assert_eq!(selected.num_rows(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn literal_when_preserves_nested_field_names() -> Result<()> {
+        let mut payload = ListBuilder::new(Int32Builder::new()).with_field(Field::new(
+            "value",
+            DataType::Int32,
+            true,
+        ));
+        for value in [10, 20] {
+            payload.values().append_value(value);
+            payload.append(true);
+        }
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new(
+                "payload",
+                DataType::List(Arc::new(Field::new("item", DataType::Int32, true))),
+                false,
+            ),
+        ]));
+        let batch = RecordBatch::try_new_with_options(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(payload.finish()),
+            ],
+            &RecordBatchOptions::new().with_match_field_names(false),
+        )?;
+        let expr = case(
+            Some(col("key", &schema)?),
+            vec![(lit(1i32), expressions::is_null(col("payload", &schema)?)?)],
+            Some(lit(false)),
+        )?;
+        let result = expr.evaluate(&batch)?.into_array(2)?;
+        assert_eq!(
+            as_boolean_array(&result)?,
+            &BooleanArray::from(vec![false, false])
+        );
         Ok(())
     }
 
