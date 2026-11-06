@@ -35,7 +35,7 @@ use crate::sorts::streaming_merge::{
 };
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
-use crate::spill::{gc_view_arrays, get_record_batch_memory_size};
+use crate::spill::{gc_view_arrays, get_record_batch_memory_size, views_share_bytes};
 use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
 use crate::stream::ReservationStream;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
@@ -1037,6 +1037,12 @@ impl ExternalSorter {
         let expressions = self.expr.clone();
         let merge_pool = Arc::clone(&self.merge_pool);
         let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
+        // Split batches of views sharing bytes would each be charged for them
+        let batch_size = if batch_size < self.batch_size && views_share_bytes(&batch) {
+            self.batch_size
+        } else {
+            batch_size
+        };
         // Set when `merge_run_batch_size` split this run
         let split = batch_size < self.batch_size;
 
@@ -1107,7 +1113,7 @@ impl ExternalSorter {
     /// small. The merge output still uses `batch_size`. Runs keep `batch_size`
     /// when their batches would share buffers other than the data of top-level
     /// view columns, such as dictionary values, since every batch is charged for
-    /// them.
+    /// them. `sort_run` also keeps it for a run whose views share bytes.
     fn merge_run_batch_size(&self) -> usize {
         let limited = !matches!(
             self.runtime.memory_pool.memory_limit(),

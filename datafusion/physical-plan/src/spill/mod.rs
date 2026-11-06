@@ -21,8 +21,8 @@ use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 
 use arrow::array::{
-    Array, ArrayRef, BinaryViewArray, BufferSpec, GenericByteViewArray, StringViewArray,
-    layout, make_array,
+    Array, ArrayRef, AsArray, BinaryViewArray, BufferSpec, GenericByteViewArray,
+    StringViewArray, layout, make_array,
 };
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -823,9 +823,11 @@ fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
 /// batch, and `gc()` copies it once per row
 /// (<https://github.com/apache/datafusion/issues/23564>).
 ///
-/// Repeated buffer entries are merged first. `gc()` then runs only if it
-/// writes less than the merged buffers hold, and runs on the original array
-/// so that the views are rewritten at most once.
+/// Repeated buffer entries are merged first. `gc()` then runs if it writes
+/// less than the merged buffers hold, or if several buffers remain and the
+/// views share no bytes, since each buffer read back from the spill is a slice
+/// of one IPC message and is charged for all of it. It runs on the original
+/// array so that the views are rewritten at most once.
 fn compact_view_array<T: ByteViewType>(
     array: &GenericByteViewArray<T>,
 ) -> Option<GenericByteViewArray<T>> {
@@ -836,7 +838,9 @@ fn compact_view_array<T: ByteViewType>(
 
     let (remap, unique) = dedup_buffer_entries(buffers);
     let unique_size: usize = unique.iter().map(|b| b.len()).sum();
-    if should_gc_view_array(array, unique_size) {
+    if should_gc_view_array(array, unique_size)
+        || (unique.len() > 1 && array.total_buffer_bytes_used() <= unique_size)
+    {
         return Some(array.gc());
     }
     if unique.len() == buffers.len() {
@@ -893,6 +897,21 @@ fn dedup_buffer_entries(buffers: &[Buffer]) -> (Vec<u32>, Vec<Buffer>) {
         })
         .collect();
     (remap, unique)
+}
+
+/// Returns whether a view column of `batch` references more bytes than its
+/// data buffers hold, as the views of a dictionary-encoded Parquet column do.
+/// Compacting such views would copy the shared bytes once per row.
+pub(crate) fn views_share_bytes(batch: &RecordBatch) -> bool {
+    fn shares_bytes<T: ByteViewType>(array: &GenericByteViewArray<T>) -> bool {
+        let (_, unique) = dedup_buffer_entries(array.data_buffers());
+        array.total_buffer_bytes_used() > unique.iter().map(|b| b.len()).sum::<usize>()
+    }
+    batch.columns().iter().any(|array| match array.data_type() {
+        DataType::Utf8View => shares_bytes(array.as_string_view()),
+        DataType::BinaryView => shares_bytes(array.as_binary_view()),
+        _ => false,
+    })
 }
 
 fn gc_array_children(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
@@ -2517,6 +2536,24 @@ mod tests {
         let arrays: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
         let merged = concat(&arrays)?;
         Ok((dictionary, merged.as_string_view().clone()))
+    }
+
+    #[test]
+    fn test_views_share_bytes() -> Result<()> {
+        use arrow::array::UInt32Array;
+        use arrow::compute::take;
+
+        // 8192 views over 1024 values reference 8x the dictionary's bytes
+        let dictionary = dictionary_array(1024)?;
+        let indices = UInt32Array::from_iter_values((0..8192).map(|i| i % 1024));
+        let batch =
+            RecordBatch::try_from_iter([("c", take(&dictionary, &indices, None)?)])?;
+        assert!(views_share_bytes(&batch));
+        // 8192 values used once each reference exactly the buffer's bytes
+        let views: ArrayRef = Arc::new(dictionary_array(8192)?);
+        let batch = RecordBatch::try_from_iter([("c", views)])?;
+        assert!(!views_share_bytes(&batch));
+        Ok(())
     }
 
     #[test]
