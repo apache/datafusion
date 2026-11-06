@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Data Types
@@ -110,6 +97,7 @@ The maximum supported precision for `DECIMAL` types is 76.
 | `DATE`                                                        | `Date32`                                                   |
 | `TIME`                                                        | `Time64(Nanosecond)`                                       |
 | `TIMESTAMP`, `TIMESTAMP(p)`, `TIMESTAMP(p) WITHOUT TIME ZONE` | `Timestamp(unit, None)`                                    |
+| `DATETIME`, `DATETIME(p)`                                     | `Timestamp(unit, None)`                                    |
 | `TIMESTAMPTZ(p)`, `TIMESTAMP(p) WITH TIME ZONE`               | `Timestamp(unit, None)` by default — see the warning below |
 | `INTERVAL`                                                    | `Interval(MonthDayNano)`                                   |
 
@@ -132,7 +120,8 @@ Set `datafusion.execution.time_zone` to make these types aware. `'UTC'` is a
 good value.
 :::
 
-`unit` comes from the optional precision `p` on the two `TIMESTAMP` rows. Use
+`unit` comes from the optional precision `p` on the `TIMESTAMP` and `DATETIME`
+rows. Use
 `0`, `3`, `6` or `9` for `Second`, `Millisecond`, `Microsecond` or `Nanosecond`.
 DataFusion rejects each other value of `p`. If you omit `p`, the unit is
 `Nanosecond`. The precision goes after `TIMESTAMPTZ`, but before
@@ -186,4 +175,3 @@ set to `c0`, `c1`, ..., `cn`.
 | `CUSTOM`      | _Not yet supported_ |
 | `ENUM`        | _Not yet supported_ |
 | `SET`         | _Not yet supported_ |
-| `DATETIME`    | _Not yet supported_ |

@@ -1299,3 +1299,35 @@ SET datafusion.optimizer.max_passes = 3;
 
 statement ok
 DROP TABLE t23534;
+
+# Regression test for https://github.com/apache/datafusion/issues/26431
+# `LIMIT 0` over unsorted input must return no rows instead of panicking in
+# TopK. With the logical optimizer disabled, `eliminate_limit` does not remove
+# the limit, so the physical plan sorts with `fetch=0`.
+statement ok
+SET datafusion.optimizer.max_passes = 0;
+
+statement ok
+CREATE TABLE t26431 (c0 BIGINT) AS VALUES (3), (1), (2);
+
+query TT
+EXPLAIN SELECT c0 FROM t26431 ORDER BY c0 LIMIT 0;
+----
+logical_plan
+01)Limit: skip=0, fetch=0
+02)--Sort: t26431.c0 ASC NULLS LAST
+03)----Projection: t26431.c0
+04)------TableScan: t26431
+physical_plan
+01)SortExec: TopK(fetch=0), expr=[c0@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+query I
+SELECT c0 FROM t26431 ORDER BY c0 LIMIT 0;
+----
+
+statement ok
+SET datafusion.optimizer.max_passes = 3;
+
+statement ok
+DROP TABLE t26431;

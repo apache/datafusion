@@ -1086,3 +1086,40 @@ set datafusion.execution.parquet.pushdown_filters = false;
 
 statement ok
 DROP TABLE case_without_else;
+
+###
+# The physical simplifier must not unwrap a narrowing TRY_CAST either
+# (max_passes = 0 so only the physical rewrite runs).
+# See https://github.com/apache/datafusion/issues/24702
+###
+
+statement ok
+COPY (VALUES (5::bigint), (7::bigint), (9999999999::bigint), (10000000000::bigint))
+TO 'test_files/scratch/parquet_filter_pushdown/try_cast_narrowing.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2');
+
+statement ok
+CREATE EXTERNAL TABLE try_cast_narrowing_pq STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/try_cast_narrowing.parquet';
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+query I rowsort
+SELECT column1 FROM try_cast_narrowing_pq WHERE try_cast(column1 AS INT) > 1;
+----
+5
+7
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+DROP TABLE try_cast_narrowing_pq;

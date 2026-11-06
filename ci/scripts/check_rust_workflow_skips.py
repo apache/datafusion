@@ -6,7 +6,7 @@
 """
 Validate the job-level skip conditions in rust.yml.
 
-rust.yml skips jobs on two events. Each skip set below pairs a clause with
+rust.yml skips jobs by event and repository. Each skip set below pairs a clause with
 the jobs that carry it: a job's `if:` is exactly `!(clause)` for every set
 it belongs to, joined with ` && ` in the order of SKIP_POLICIES, and a job
 in no set carries no job-level `if:`. A new job therefore runs everywhere
@@ -95,9 +95,13 @@ FORK_PR_SKIPPED_JOBS = frozenset(
     }
 )
 
+FORK_REPOSITORY = "github.repository != 'apache/datafusion'"
+FORK_REPO_SKIPPED_JOBS = frozenset({"macos-aarch64"})
+
 SKIP_POLICIES = (
     ("POST_MERGE_SKIPPED_JOBS", POST_MERGE_SKIPPED_JOBS, POST_MERGE_PUSH),
     ("FORK_PR_SKIPPED_JOBS", FORK_PR_SKIPPED_JOBS, FORK_PULL_REQUEST),
+    ("FORK_REPO_SKIPPED_JOBS", FORK_REPO_SKIPPED_JOBS, FORK_REPOSITORY),
 )
 
 
@@ -183,9 +187,7 @@ def check_skip_conditions(workflow, required_checks):
                     f"  - job `{job}` is not in {set_name} but needs "
                     f"{blocked}; GitHub would skip it with them"
                 )
-        # Only the merge queue gates a job that skips after the merge. A job
-        # that skips on a fork PR still runs on the fork, in the queue, and on
-        # main.
+        # Only the merge queue gates a job that skips after the merge.
         if required_checks and set_name == "POST_MERGE_SKIPPED_JOBS":
             for job in sorted(members & set(jobs)):
                 name = jobs[job].get("name", job)
