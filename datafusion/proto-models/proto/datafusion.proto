@@ -289,8 +289,9 @@ message JoinNode {
   LogicalExprNode filter = 8;
   bool null_aware = 9;
   // Number of `NOT IN` value keys of a null-aware join (see
-  // `Join::null_aware_value_keys`). Messages predating this field decode it
-  // as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
+  // `Join::null_aware_value_keys`). 0 is an unset count, accepted only for a
+  // single key. Messages predating this field decode it as 0: they can only
+  // hold scalar `NOT IN` joins.
   uint32 null_aware_value_keys = 10;
 }
 
@@ -1479,9 +1480,9 @@ message HashJoinExecNode {
   // `None`, which is the correct reading of an older message.
   optional uint64 fetch = 12;
   // Number of `NOT IN` value keys of a null-aware join (see
-  // `HashJoinExec::null_aware_value_keys`). Messages predating this field
-  // decode it as 0, which is read as 1: they can only hold scalar `NOT IN`
-  // joins.
+  // `HashJoinExec::null_aware_value_keys`). 0 is an unset count, accepted
+  // only for a single key. Messages predating this field decode it as 0:
+  // they can only hold scalar `NOT IN` joins.
   uint32 null_aware_value_keys = 13;
 }
 

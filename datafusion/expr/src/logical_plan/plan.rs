@@ -4650,6 +4650,11 @@ pub struct Join {
     /// after them are correlation scope keys of a correlated subquery. A NULL
     /// in a value key follows SQL three-valued logic across the whole tuple,
     /// while the scope keys only select which subquery rows are compared.
+    ///
+    /// `0` leaves the count unset, which is the default of [`Self::try_new`]
+    /// and the `LogicalPlanBuilder` join methods. Physical planning accepts an
+    /// unset count only for a single-key join, a scalar `NOT IN`, and rejects
+    /// it for more keys: no default can tell which of them are value keys.
     pub null_aware_value_keys: usize,
 }
 
@@ -4878,7 +4883,7 @@ impl Join {
             schema: Arc::new(join_schema),
             null_equality,
             null_aware,
-            null_aware_value_keys: 1,
+            null_aware_value_keys: 0,
         })
     }
 
@@ -7228,7 +7233,7 @@ mod tests {
                 schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equality: NullEquality::NullEqualsNothing,
                 null_aware: false,
-                null_aware_value_keys: 1,
+                null_aware_value_keys: 0,
             }))
         }
 
