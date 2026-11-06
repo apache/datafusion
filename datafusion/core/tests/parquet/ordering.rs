@@ -4,8 +4,17 @@
 
 //! Tests for ordering in Parquet sorting_columns metadata
 
-use datafusion::prelude::SessionContext;
+use std::sync::Arc;
+
+use arrow::array::{ArrayRef, Int64Array};
+use arrow::compute::SortOptions;
+use arrow::record_batch::RecordBatch;
+use datafusion::physical_plan::{collect, displayable};
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion_common::Result;
+use parquet::arrow::ArrowWriter;
+use parquet::file::metadata::SortingColumn;
+use parquet::file::properties::WriterProperties;
 use tempfile::tempdir;
 
 /// Test that CREATE TABLE ... WITH ORDER writes sorting_columns to Parquet metadata
@@ -87,6 +96,241 @@ async fn test_create_table_with_order_writes_sorting_columns() -> Result<()> {
     );
 
     Ok(())
+}
+
+#[tokio::test]
+async fn test_parquet_unordered_row_groups_require_sort() -> Result<()> {
+    for descending in [false, true] {
+        for nulls_first in [false, true] {
+            // Arrange
+            let options = SortOptions {
+                descending,
+                nulls_first,
+            };
+            let mut overlapping = [Some(1), Some(4), Some(2), Some(3)];
+            let mut reversed = [Some(3), Some(4), Some(1), Some(2)];
+            let mut expected = [Some(1), Some(2), Some(3), Some(4)];
+            if descending {
+                overlapping.reverse();
+                reversed.reverse();
+                expected.reverse();
+            }
+            let (first, second) = if descending {
+                (Some(2), Some(1))
+            } else {
+                (Some(1), Some(2))
+            };
+            let (null_boundary, expected_nulls) = if nulls_first {
+                ([None, first, None, second], [None, None, first, second])
+            } else {
+                ([first, None, second, None], [first, second, None, None])
+            };
+            let direction = if descending { "DESC" } else { "ASC" };
+            let nulls = if nulls_first { "FIRST" } else { "LAST" };
+            let query = format!("SELECT a FROM t ORDER BY a {direction} NULLS {nulls}");
+            for (name, values, expected) in [
+                ("overlapping", overlapping, expected),
+                ("reversed", reversed, expected),
+                ("null boundary", null_boundary, expected_nulls),
+            ] {
+                let batch = RecordBatch::try_from_iter([(
+                    "a",
+                    Arc::new(Int64Array::from(values.to_vec())) as ArrayRef,
+                )])?;
+
+                // Act
+                let (batches, plan) =
+                    query_row_groups(&batch, &[options], &query).await?;
+
+                // Assert
+                assert_eq!(int64_values(&batches, 0), expected, "{name}: {plan}");
+                assert!(plan.contains("SortExec"), "{name}: {plan}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_parquet_ordered_row_groups_eliminate_sort() -> Result<()> {
+    for descending in [false, true] {
+        for nulls_first in [false, true] {
+            // Arrange
+            let options = SortOptions {
+                descending,
+                nulls_first,
+            };
+            let mut separated = [Some(1), Some(2), Some(3), Some(4)];
+            let mut touching = [Some(1), Some(2), Some(2), Some(3)];
+            if descending {
+                separated.reverse();
+                touching.reverse();
+            }
+            let (first, second) = if descending {
+                (Some(2), Some(1))
+            } else {
+                (Some(1), Some(2))
+            };
+            let all_null_group = if nulls_first {
+                [None, None, first, second]
+            } else {
+                [first, second, None, None]
+            };
+            let direction = if descending { "DESC" } else { "ASC" };
+            let nulls = if nulls_first { "FIRST" } else { "LAST" };
+            let query = format!("SELECT a FROM t ORDER BY a {direction} NULLS {nulls}");
+            for (name, values) in [
+                ("separated", separated),
+                ("touching", touching),
+                ("all-null group", all_null_group),
+            ] {
+                let batch = RecordBatch::try_from_iter([(
+                    "a",
+                    Arc::new(Int64Array::from(values.to_vec())) as ArrayRef,
+                )])?;
+
+                // Act
+                let (batches, plan) =
+                    query_row_groups(&batch, &[options], &query).await?;
+
+                // Assert
+                assert_eq!(int64_values(&batches, 0), values, "{name}: {plan}");
+                assert!(!plan.contains("SortExec"), "{name}: {plan}");
+            }
+        }
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_parquet_unordered_row_groups_with_limit() -> Result<()> {
+    // Arrange
+    let batch = RecordBatch::try_from_iter([(
+        "a",
+        Arc::new(Int64Array::from(vec![1, 4, 2, 3])) as ArrayRef,
+    )])?;
+
+    // Act
+    let (batches, plan) = query_row_groups(
+        &batch,
+        &[SortOptions::default()],
+        "SELECT a FROM t ORDER BY a ASC NULLS FIRST LIMIT 2",
+    )
+    .await?;
+
+    // Assert
+    assert_eq!(int64_values(&batches, 0), [Some(1), Some(2)], "{plan}");
+    assert!(plan.contains("SortExec"), "{plan}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_parquet_row_group_lexicographic_ordering() -> Result<()> {
+    for descending in [false, true] {
+        for (name, a, mut b, requires_sort) in [
+            ("strict leading key", [1, 1, 2, 2], [40, 50, 10, 20], false),
+            ("tied leading key", [1, 1, 1, 1], [10, 20, 30, 40], false),
+            ("overlapping suffix", [1, 1, 1, 1], [10, 40, 20, 30], true),
+        ] {
+            // Arrange
+            if descending {
+                b.reverse();
+            }
+            let expected_b = if requires_sort {
+                if descending {
+                    [40, 30, 20, 10]
+                } else {
+                    [10, 20, 30, 40]
+                }
+            } else {
+                b
+            };
+            let batch = RecordBatch::try_from_iter([
+                ("a", Arc::new(Int64Array::from(a.to_vec())) as ArrayRef),
+                ("b", Arc::new(Int64Array::from(b.to_vec())) as ArrayRef),
+            ])?;
+            let direction = if descending { "DESC" } else { "ASC" };
+            let query = format!(
+                "SELECT a, b FROM t ORDER BY a ASC NULLS FIRST, b {direction} NULLS FIRST"
+            );
+
+            // Act
+            let (batches, plan) = query_row_groups(
+                &batch,
+                &[
+                    SortOptions::default(),
+                    SortOptions {
+                        descending,
+                        nulls_first: true,
+                    },
+                ],
+                &query,
+            )
+            .await?;
+
+            // Assert
+            assert_eq!(int64_values(&batches, 0), a.map(Some), "{name}: {plan}");
+            assert_eq!(
+                int64_values(&batches, 1),
+                expected_b.map(Some),
+                "{name}: {plan}"
+            );
+            assert_eq!(plan.contains("SortExec"), requires_sort, "{name}: {plan}");
+        }
+    }
+    Ok(())
+}
+
+async fn query_row_groups(
+    batch: &RecordBatch,
+    sort_options: &[SortOptions],
+    query: &str,
+) -> Result<(Vec<RecordBatch>, String)> {
+    let directory = tempdir()?;
+    let path = directory.path().join("data.parquet");
+    let sorting_columns = sort_options
+        .iter()
+        .zip(0..)
+        .map(|(options, column_idx)| SortingColumn {
+            column_idx,
+            descending: options.descending,
+            nulls_first: options.nulls_first,
+        })
+        .collect();
+    let properties = WriterProperties::builder()
+        .set_max_row_group_row_count(Some(2))
+        .set_sorting_columns(Some(sorting_columns))
+        .build();
+    let mut writer = ArrowWriter::try_new(
+        std::fs::File::create(&path)?,
+        batch.schema(),
+        Some(properties),
+    )?;
+    writer.write(batch)?;
+    writer.close()?;
+
+    let ctx =
+        SessionContext::new_with_config(SessionConfig::new().with_target_partitions(1));
+    ctx.register_parquet("t", path.to_str().unwrap(), ParquetReadOptions::default())
+        .await?;
+    let plan = ctx.sql(query).await?.create_physical_plan().await?;
+    let plan_text = displayable(plan.as_ref()).indent(true).to_string();
+    let batches = collect(plan, ctx.task_ctx()).await?;
+    Ok((batches, plan_text))
+}
+
+fn int64_values(batches: &[RecordBatch], column: usize) -> Vec<Option<i64>> {
+    batches
+        .iter()
+        .flat_map(|batch| {
+            batch
+                .column(column)
+                .as_any()
+                .downcast_ref::<Int64Array>()
+                .unwrap()
+                .iter()
+        })
+        .collect()
 }
 
 /// Test that partition columns are removed and remaining column indices are
