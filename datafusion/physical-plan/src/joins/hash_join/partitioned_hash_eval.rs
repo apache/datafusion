@@ -18,8 +18,8 @@ use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::dyn_eq::DynHash;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, PhysicalExprRef};
 
-use crate::joins::Map;
 use crate::joins::key_range_bitmap::KeyRangeBitmap;
+use crate::joins::{Map, ReservedMap};
 use crate::repartition::RangeExpr;
 
 /// RandomState wrapper that preserves the seed used to create it.
@@ -267,7 +267,7 @@ pub struct HashTableLookupExpr {
     on_columns: Vec<PhysicalExprRef>,
     /// Random state for hashing (with seeds preserved for serialization)
     random_state: SeededRandomState,
-    /// Map(s) to check against
+    /// Map(s) to check against, with their reservations
     lookup: Lookup,
     /// Description for display
     description: String,
@@ -279,14 +279,14 @@ pub struct HashTableLookupExpr {
 #[derive(Clone)]
 enum Lookup {
     /// One map holding every build key, probed directly with no routing.
-    Single(Arc<Map>),
+    Single(Arc<ReservedMap>),
     /// One hash table per build partition of a `Partitioned` join, `None` where
     /// the partition is empty. A key is only ever built into the partition its
     /// key routes to, so each probe row is looked up in that partition's table
     /// alone: no `CASE` over per-partition filters, and no merged table.
     Routed {
         router: PartitionRouter,
-        maps: Arc<[Option<Arc<Map>>]>,
+        maps: Arc<[Option<Arc<ReservedMap>>]>,
     },
 }
 
@@ -367,6 +367,30 @@ impl HashTableLookupExpr {
         description: String,
         pruning_bitmap: Option<Arc<KeyRangeBitmap>>,
     ) -> Result<Self> {
+        let maps = maps
+            .into_iter()
+            .map(|map| map.map(ReservedMap::unreserved).map(Arc::new))
+            .collect();
+        Self::new_reserved(
+            on_columns,
+            random_state,
+            router,
+            maps,
+            description,
+            pruning_bitmap,
+        )
+    }
+
+    /// [`Self::new`] for a join's maps, whose memory stays reserved while the
+    /// lookup holds them.
+    pub(crate) fn new_reserved(
+        on_columns: Vec<PhysicalExprRef>,
+        random_state: SeededRandomState,
+        router: Option<PartitionRouter>,
+        maps: Vec<Option<Arc<ReservedMap>>>,
+        description: String,
+        pruning_bitmap: Option<Arc<KeyRangeBitmap>>,
+    ) -> Result<Self> {
         let lookup = match (router, maps.as_slice()) {
             // Every row routes to the only partition, so skip routing.
             (_, [Some(map)]) => Lookup::Single(Arc::clone(map)),
@@ -376,11 +400,10 @@ impl HashTableLookupExpr {
                 );
             }
             (Some(router), _) => {
-                if maps
-                    .iter()
-                    .flatten()
-                    .any(|map| !matches!(map.as_ref(), Map::HashMap(_)))
-                {
+                if maps.iter().flatten().any(|map| {
+                    let map: &Map = map;
+                    !matches!(map, Map::HashMap(_))
+                }) {
                     return internal_err!(
                         "routed lookups only support hash table partitions"
                     );
@@ -410,7 +433,7 @@ impl HashTableLookupExpr {
         &self,
         keys: &[ArrayRef],
         router: &PartitionRouter,
-        maps: &[Option<Arc<Map>>],
+        maps: &[Option<Arc<ReservedMap>>],
     ) -> Result<BooleanArray> {
         let num_rows = keys[0].len();
         let mut partition_ids = Vec::with_capacity(num_rows);
@@ -441,7 +464,8 @@ impl HashTableLookupExpr {
             for (partition, map) in maps.iter().enumerate() {
                 // An empty partition holds no key, so its rows stay unmatched.
                 let Some(map) = map else { continue };
-                let Map::HashMap(map) = map.as_ref() else {
+                let map: &Map = map;
+                let Map::HashMap(map) = map else {
                     return internal_err!(
                         "routed lookups only support hash table partitions"
                     );
@@ -514,7 +538,7 @@ impl Lookup {
     /// created together with its maps, so the maps identify it as well.
     fn identity(&self) -> *const () {
         match self {
-            Lookup::Single(map) => Arc::as_ptr(map).cast(),
+            Lookup::Single(map) => std::ptr::from_ref::<Map>(map).cast(),
             Lookup::Routed { maps, .. } => Arc::as_ptr(maps).cast(),
         }
     }
@@ -557,18 +581,23 @@ impl PhysicalExpr for HashTableLookupExpr {
         let join_keys = evaluate_columns(&self.on_columns, batch)?;
 
         match &self.lookup {
-            Lookup::Single(map) => match map.as_ref() {
-                Map::HashMap(map) => {
-                    with_hashes(&join_keys, self.random_state.random_state(), |hashes| {
-                        let array = map.contain_hashes(hashes);
+            Lookup::Single(map) => {
+                let map: &Map = map;
+                match map {
+                    Map::HashMap(map) => with_hashes(
+                        &join_keys,
+                        self.random_state.random_state(),
+                        |hashes| {
+                            let array = map.contain_hashes(hashes);
+                            Ok(ColumnarValue::Array(Arc::new(array)))
+                        },
+                    ),
+                    Map::ArrayMap(map) => {
+                        let array = map.contain_keys(&join_keys)?;
                         Ok(ColumnarValue::Array(Arc::new(array)))
-                    })
+                    }
                 }
-                Map::ArrayMap(map) => {
-                    let array = map.contain_keys(&join_keys)?;
-                    Ok(ColumnarValue::Array(Arc::new(array)))
-                }
-            },
+            }
             Lookup::Routed { router, maps } => {
                 let array = self.evaluate_routed(&join_keys, router, maps)?;
                 Ok(ColumnarValue::Array(Arc::new(array)))

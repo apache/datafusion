@@ -54,8 +54,8 @@ use datafusion_common::utils::{
     get_available_parallelism, memory::RecordBatchMemoryCounter,
 };
 use datafusion_common::{
-    DataFusionError, Result, assert_or_internal_err, internal_datafusion_err,
-    unwrap_or_internal_err,
+    DataFusionError, Result, assert_eq_or_internal_err, assert_or_internal_err,
+    internal_datafusion_err, unwrap_or_internal_err,
 };
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
@@ -1017,9 +1017,11 @@ impl ExternalSorter {
     {
         let reserved_bytes = get_reserved_bytes_for_record_batch(&batch)?;
         match &shared_input {
-            None => assert_eq!(reserved_bytes, reservation.size()),
+            None => assert_eq_or_internal_err!(reserved_bytes, reservation.size()),
             // `shared_input` covers every buffer of every run's input
-            Some(shared) => assert!(reservation.size() + shared.size() >= reserved_bytes),
+            Some(shared) => assert_or_internal_err!(
+                reservation.size() + shared.size() >= reserved_bytes
+            ),
         }
 
         let expressions = self.expr.clone();
@@ -1755,8 +1757,8 @@ impl ExecutionPlan for SortExec {
         // we need to reset.
         if let Some(filter) = &new_sort.filter {
             filter.read().expr().reset();
+            new_sort.filter = Some(new_sort.create_filter());
         }
-        new_sort.rebuild_filter_for_current_partitioning();
         new_sort.metrics_set = ExecutionPlanMetricsSet::new();
         new_sort.sort_concurrency = Arc::new(OnceLock::new());
 
@@ -1794,6 +1796,11 @@ impl ExecutionPlan for SortExec {
                 BaselineMetrics::new(&self.metrics_set, partition),
             ))),
             (true, None) => Ok(input),
+            // `TopK` requires `k > 0`. `LIMIT 0` is normally removed by the
+            // logical optimizer, but a `SortExec` with `fetch = Some(0)` can
+            // still reach execution, for example when the logical optimizer
+            // is disabled or the plan is built directly.
+            (false, Some(0)) => Ok(Box::pin(EmptyRecordBatchStream::new(self.schema()))),
             (false, Some(fetch)) => {
                 let filter = self.filter.clone();
                 let mut topk = TopK::try_new(
@@ -2529,6 +2536,60 @@ mod tests {
     use futures::{FutureExt, Stream, TryStreamExt};
     use insta::assert_snapshot;
     use tokio::sync::Notify;
+
+    /// Runs sharing a buffer address with different capacities, as FFI-imported
+    /// slices do. <https://github.com/apache/datafusion/issues/27069>
+    #[tokio::test]
+    async fn sort_runs_sharing_address_with_different_capacities() -> Result<()> {
+        use arrow::buffer::{Buffer, ScalarBuffer};
+        use std::ptr::NonNull;
+
+        let owner: Arc<Vec<i32>> = Arc::new((0..1024).rev().collect());
+        let ptr = NonNull::new(owner.as_ptr().cast::<u8>().cast_mut()).unwrap();
+        let batch = |len: usize| -> Result<RecordBatch> {
+            // SAFETY: `owner` holds `len` values at `ptr`; the buffer keeps it alive.
+            let buffer = unsafe {
+                Buffer::from_custom_allocation(
+                    ptr,
+                    len * size_of::<i32>(),
+                    Arc::clone(&owner) as _,
+                )
+            };
+            let array = Int32Array::new(ScalarBuffer::new(buffer, 0, len), None);
+            Ok(RecordBatch::try_from_iter([(
+                "a",
+                Arc::new(array) as ArrayRef,
+            )])?)
+        };
+        // Smaller capacity first, so it is the first one seen for the address.
+        let batches = vec![batch(16)?, batch(1024)?];
+        let schema = batches[0].schema();
+        let input = TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None)?;
+        let sort = SortExec::new(
+            [PhysicalSortExpr::new_default(col("a", &schema)?)].into(),
+            input,
+        );
+        // Keep each batch as its own run.
+        let context = Arc::new(TaskContext::default().with_session_config(
+            SessionConfig::new().with_sort_in_place_threshold_bytes(0),
+        ));
+
+        let output = collect(Arc::new(sort), context).await?;
+        let values = output
+            .iter()
+            .flat_map(|batch| {
+                batch
+                    .column(0)
+                    .as_primitive::<Int32Type>()
+                    .values()
+                    .to_vec()
+            })
+            .collect::<Vec<_>>();
+        let mut expected = (0..1024).chain(1008..1024).collect::<Vec<i32>>();
+        expected.sort_unstable();
+        assert_eq!(values, expected);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn sort_run_records_compute_before_consumption() -> Result<()> {
@@ -4757,6 +4818,89 @@ mod tests {
 
         // Sorting the whole input keeps 10 rows in total.
         assert_eq!(num_rows(&topk(false), None)?, Precision::Exact(10));
+        Ok(())
+    }
+
+    /// Regression test for <https://github.com/apache/datafusion/issues/27130>
+    ///
+    /// Plans derived from the same TopK plan via `reset_state` must not share
+    /// dynamic filter state. This models a cached `LIMIT 1` plan that is reset
+    /// and executed by two queries at the same time: both copies are created
+    /// before either executes, and the first one to finish must not cause the
+    /// other to return an empty result.
+    #[tokio::test]
+    async fn test_topk_reset_state_copies_are_independent() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![3, 1, 2]))],
+        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let sort: Arc<dyn ExecutionPlan> = Arc::new(
+            SortExec::new(
+                [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into(),
+                input,
+            )
+            .with_fetch(Some(1)),
+        );
+
+        // Both executions are prepared before either runs
+        let first = Arc::clone(&sort).reset_state()?;
+        let second = Arc::clone(&sort).reset_state()?;
+
+        let task_ctx = Arc::new(TaskContext::default());
+        let first_result = collect(first, Arc::clone(&task_ctx)).await?;
+        let second_result = collect(second, task_ctx).await?;
+
+        assert_snapshot!(batches_to_string(&first_result), @r"
+        +---+
+        | a |
+        +---+
+        | 1 |
+        +---+
+        ");
+        assert_snapshot!(batches_to_string(&second_result), @r"
+        +---+
+        | a |
+        +---+
+        | 1 |
+        +---+
+        ");
+
+        Ok(())
+    }
+
+    /// A scan below a TopK keeps the dynamic filter it was given at planning
+    /// time. After the plan has run once, `reset_state` must clear that
+    /// filter's bounds, or running the reset plan again can return too few rows.
+    #[tokio::test]
+    async fn test_topk_reset_state_clears_pushed_down_filter() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![3, 1, 2]))],
+        )?;
+        let input =
+            TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+        let sort: Arc<dyn ExecutionPlan> = Arc::new(
+            SortExec::new(
+                [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into(),
+                input,
+            )
+            .with_fetch(Some(1)),
+        );
+        // The filter a scan would have received during filter pushdown
+        let pushed_down = sort.dynamic_expressions_produced();
+        assert_eq!(pushed_down.len(), 1);
+        let pushed_down = Arc::clone(&pushed_down[0]);
+
+        collect(Arc::clone(&sort), Arc::new(TaskContext::default())).await?;
+        assert_snapshot!(pushed_down.to_string(), @"DynamicFilter [ a@0 IS NULL OR a@0 < 1 ]");
+
+        let _reset = Arc::clone(&sort).reset_state()?;
+        assert_snapshot!(pushed_down.to_string(), @"DynamicFilter [ true ]");
+
         Ok(())
     }
 }
