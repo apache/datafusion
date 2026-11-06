@@ -70,6 +70,13 @@ TYPE_ALIASES = {
 # Spark's maximum decimal precision.
 MAX_DECIMAL_PRECISION = 38
 
+# The most rows collected from Spark for one query. Some tests expect an error
+# for a query that Spark answers with billions of rows, such as stack(2000000000, 1).
+MAX_ROWS = 1000
+
+# The most result lines printed for one difference.
+MAX_REPORT_LINES = 20
+
 
 class Skip(Exception):
     """The record cannot be run on Spark. The message says why."""
@@ -627,25 +634,34 @@ def results_match(expected: list[str], actual: list[str], sort_mode: str) -> boo
     return _sorted(expected, sort_mode) == _sorted(actual, sort_mode)
 
 
-def nearly_equal(expected: list[str], actual: list[str], sort_mode: str) -> bool:
-    """True if the results differ only in the last digits of floating-point values."""
+def numeric_difference(expected: list[str], actual: list[str], sort_mode: str) -> Optional[str]:
+    """Classify results that differ only in their numbers.
+
+    Returns "scale" if the numbers are equal but printed differently (`7` and
+    `7.0`), "close" if some also differ in their last floating-point digits, and
+    None if anything else differs.
+    """
     expected, actual = _sorted(expected, sort_mode), _sorted(actual, sort_mode)
     if len(expected) != len(actual):
-        return False
+        return None
+    kind = "scale"
     for e_line, a_line in zip(expected, actual):
         e_values, a_values = e_line.split(" "), a_line.split(" ")
         if len(e_values) != len(a_values):
-            return False
+            return None
         for e, a in zip(e_values, a_values):
             if e == a:
                 continue
             try:
                 e_float, a_float = float(e), float(a)
             except ValueError:
-                return False
+                return None
+            if e_float == a_float:
+                continue
             if not math.isclose(e_float, a_float, rel_tol=1e-12, abs_tol=1e-15):
-                return False
-    return True
+                return None
+            kind = "close"
+    return kind
 
 
 # ---------------------------------------------------------------------------
@@ -726,7 +742,7 @@ class SparkRunner:
 
         try:
             df = self.spark.sql(sql)
-            return df.schema, df.collect()
+            return df.schema, df.limit(MAX_ROWS + 1).collect()
         except ParseException as e:
             raise SparkError("parse", f"Spark cannot parse it ({_condition(e)})")
         except PySparkException as e:
@@ -768,6 +784,7 @@ DIVERGENT = {
     "spark-error": "Spark raises an error",
     "no-spark-error": "DataFusion expects an error, Spark returns a result",
     "type": "results match, column types differ",
+    "scale": "same numbers, printed with a different scale",
     "close": "results differ only in floating-point digits",
     "order": "same rows in a different order",
     "runner-error": "the runner failed",
@@ -805,9 +822,11 @@ def run_record(runner: SparkRunner, record: Record) -> Outcome:
 
     trees = [type_tree(f.dataType) for f in schema.fields]
     try:
-        actual = format_rows(rows, trees, runner.time_zone)
+        actual = format_rows(rows[:MAX_ROWS], trees, runner.time_zone)
     except Unsupported as e:
         return Outcome(record, "skip", f"Spark returned a {e} value", spark_sql)
+    if len(rows) > MAX_ROWS:
+        actual.append(f"... (more than {MAX_ROWS} rows)")
     if record.expect_error:
         return Outcome(record, "no-spark-error", spark_sql=spark_sql, actual=actual)
     if record.kind == "statement":
@@ -824,12 +843,9 @@ def run_record(runner: SparkRunner, record: Record) -> Outcome:
             detail = f"DataFusion `{record.types}`, Spark `{letters}` ({schema.simpleString()})"
             return Outcome(record, "type", detail, spark_sql, actual)
         return Outcome(record, "pass", spark_sql=spark_sql)
-    if nearly_equal(expected, actual, record.sort_mode):
-        status = "close"
-    elif results_match(expected, actual, "rowsort"):
-        status = "order"
-    else:
-        status = "mismatch"
+    status = numeric_difference(expected, actual, record.sort_mode)
+    if status is None:
+        status = "order" if results_match(expected, actual, "rowsort") else "mismatch"
     return Outcome(record, status, spark_sql=spark_sql, actual=actual)
 
 
@@ -847,6 +863,9 @@ def _display_path(path: Path) -> str:
 
 def _indent(lines, prefix: str = "    ") -> str:
     lines = list(lines) or ["(no rows)"]
+    if len(lines) > MAX_REPORT_LINES:
+        more = len(lines) - MAX_REPORT_LINES
+        lines = lines[:MAX_REPORT_LINES] + [f"... {more} more line(s)"]
     return "\n".join(prefix + line for line in lines)
 
 
@@ -860,7 +879,7 @@ def report(outcome: Outcome, spark_version: str) -> str:
     parts = [f"{location}: {DIVERGENT[outcome.status]}", _indent(record.sql.split("\n"))]
     if outcome.spark_sql and outcome.spark_sql != record.sql:
         parts += ["  Spark SQL:", _indent(outcome.spark_sql.split("\n"))]
-    if outcome.status in ("mismatch", "close", "order"):
+    if outcome.status in ("mismatch", "scale", "close", "order"):
         parts += ["  DataFusion (expected):", _indent(record.expected)]
         parts += [f"  Spark {spark_version}:", _indent(outcome.actual)]
     elif outcome.status == "no-spark-error":
@@ -907,16 +926,27 @@ def main(argv: Optional[list[str]] = None) -> int:
     if not files:
         raise SystemExit("error: no .slt files found")
 
+    # Keep the output complete when it is piped to a file and the run dies.
+    sys.stdout.reconfigure(line_buffering=True)
     runner = SparkRunner()
     print(f"Running {len(files)} file(s) on Spark {runner.version}\n")
     statuses: Counter = Counter()
     skip_reasons: Counter = Counter()
+    stopped = None
     for path in files:
-        runner.reset()
+        try:
+            runner.reset()
+        except Exception as e:
+            stopped = f"the Spark session failed before {_display_path(path)}: {e}"
+            break
         for record in parse_slt(path):
             try:
                 outcome = run_record(runner, record)
-            except Exception:
+            except Exception as e:
+                if _session_died(e):
+                    location = f"{_display_path(record.path)}:{record.line}"
+                    stopped = f"the Spark session died while running {location}: {e}"
+                    break
                 # A bug in this runner must never look like Spark behavior.
                 detail = traceback.format_exc(limit=1).strip().split("\n")[-1]
                 outcome = Outcome(record, "runner-error", detail)
@@ -927,6 +957,8 @@ def main(argv: Optional[list[str]] = None) -> int:
                 print(report(outcome, runner.version) + "\n")
             elif args.verbose:
                 print(report(outcome, runner.version))
+        if stopped:
+            break
 
     total = sum(statuses.values())
     print(f"Spark {runner.version}: {total} records in {len(files)} file(s)")
@@ -939,7 +971,16 @@ def main(argv: Optional[list[str]] = None) -> int:
         print(f"  {count:14d}  {reason}")
     if len(skip_reasons) > 15:
         print(f"  {'':>14}  ... {len(skip_reasons) - 15} more reasons (use --verbose)")
+    if stopped:
+        print(f"\nStopped early: {stopped}")
+        return 2
     return 1 if any(statuses[s] for s in DIVERGENT) else 0
+
+
+def _session_died(e: Exception) -> bool:
+    """True if the error means the connection to the Spark JVM is gone."""
+    names = {type(c).__name__ for c in (e, e.__cause__, e.__context__) if c is not None}
+    return bool(names & {"Py4JNetworkError", "ConnectionRefusedError", "ConnectionResetError"})
 
 
 if __name__ == "__main__":

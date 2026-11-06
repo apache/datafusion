@@ -207,20 +207,24 @@ class CompareTest(unittest.TestCase):
         self.assertTrue(r.results_match(["2", "1 "], ["1", "2"], "rowsort"))
         self.assertFalse(r.results_match(["2", "1"], ["1", "2"], "nosort"))
 
-    def test_nearly_equal(self):
-        self.assertTrue(r.nearly_equal(["0.123456789012346 a"], ["0.123456789012345 a"], "nosort"))
-        self.assertFalse(r.nearly_equal(["0.1235"], ["0.1234"], "nosort"))
-        self.assertFalse(r.nearly_equal(["NULL"], ["0"], "nosort"))
+    def test_numeric_difference(self):
+        self.assertEqual(r.numeric_difference(["7 a", "0"], ["7.0 a", "0.0"], "nosort"), "scale")
+        self.assertEqual(
+            r.numeric_difference(["0.123456789012346 a"], ["0.123456789012345 a"], "nosort"), "close"
+        )
+        self.assertIsNone(r.numeric_difference(["0.1235"], ["0.1234"], "nosort"))
+        self.assertIsNone(r.numeric_difference(["NULL"], ["0"], "nosort"))
 
 
-def spark_type(name: str):
+def spark_type(name: str, **attributes):
     """An object whose class name matches a PySpark DataType, for type_tree."""
-    return type(name, (), {})()
+    return type(name, (), attributes)()
 
 
 class FakeSchema:
-    def __init__(self, *type_names):
-        self.fields = [type("Field", (), {"dataType": spark_type(n)})() for n in type_names]
+    def __init__(self, *types):
+        types = [spark_type(t) if isinstance(t, str) else t for t in types]
+        self.fields = [type("Field", (), {"dataType": t})() for t in types]
 
     def simpleString(self):
         return "struct<...>"
@@ -282,6 +286,26 @@ class RunRecordTest(unittest.TestCase):
         value = datetime.datetime(2024, 7, 15)
         result = (FakeSchema("TimestampType"), [(value,)])
         self.assertEqual(self.outcome("query P\nSELECT ts\n----\n2024-07-15T00:00:00Z\n", result).status, "pass")
+
+    def test_scale(self):
+        # Spark reads 1.5 as a DECIMAL, DataFusion as a DOUBLE.
+        decimal = spark_type("DecimalType", precision=12, scale=1)
+        result = (FakeSchema(decimal), [(Decimal("7.0"),)])
+        self.assertEqual(self.outcome("query R\nSELECT try_sum(x)\n----\n7\n", result).status, "scale")
+
+    def test_row_limit(self):
+        # stack(2000000000, 1) is an error in DataFusion and billions of rows in Spark.
+        result = (FakeSchema("IntegerType"), [(1,)] * (r.MAX_ROWS + 1))
+        outcome = self.outcome("query error .*\nSELECT stack(2000000000, 1)\n", result)
+        self.assertEqual(outcome.status, "no-spark-error")
+        self.assertEqual(len(outcome.actual), r.MAX_ROWS + 1)
+        self.assertEqual(outcome.actual[-1], f"... (more than {r.MAX_ROWS} rows)")
+        self.assertIn("... 981 more line(s)", r.report(outcome, "4.2.0"))
+
+    def test_session_died(self):
+        died = type("Py4JNetworkError", (Exception,), {})("Answer from Java side is empty")
+        self.assertTrue(r._session_died(died))
+        self.assertFalse(r._session_died(ValueError("bug")))
 
 
 if __name__ == "__main__":
