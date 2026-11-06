@@ -5,7 +5,7 @@
 use arrow::datatypes::FieldRef;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    Column, DFSchema, Result, Span, TableReference, assert_or_internal_err,
+    Column, ColumnId, DFSchema, Result, Span, TableReference, assert_or_internal_err,
     exec_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::LambdaVariable;
@@ -61,13 +61,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
 
             // Check for qualified field with unqualified name
-            if let Ok((qualifier, _)) =
+            if let Ok((qualifier, field)) =
                 schema.qualified_field_with_unqualified_name(normalize_ident.as_str())
             {
+                let id = field_id(schema, qualifier, field);
                 let mut column = Column::new(
                     qualifier.filter(|q| q.table() != UNNAMED_TABLE).cloned(),
                     normalize_ident,
-                );
+                )
+                .with_id(id);
                 if self.options.collect_spans
                     && let Some(span) = Span::try_from_sqlparser_span(id_span)
                 {
@@ -82,9 +84,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     outer.qualified_field_with_unqualified_name(normalize_ident.as_str())
                 {
                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
+                    let id = field_id(outer, qualifier, field);
                     return Ok(Expr::OuterReferenceColumn(
                         Arc::clone(field),
-                        Column::from((qualifier, field)),
+                        Column::from((qualifier, field)).with_id(id),
                     ));
                 }
             }
@@ -159,7 +162,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
                 // Found matching field with no spare identifier(s)
                 Some((field, qualifier, _nested_names)) => {
-                    let mut column = Column::from((qualifier, field));
+                    let mut column = Column::from((qualifier, field))
+                        .with_id(field_id(schema, qualifier, field));
                     if self.options.collect_spans
                         && let Some(span) = ids_span
                     {
@@ -191,9 +195,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 // Found matching field with no spare identifier(s)
                                 Some((field, qualifier, _nested_names)) => {
                                     // Found an exact match on a qualified name in the outer plan schema, so this is an outer reference column
+                                    let id = field_id(outer, qualifier, field);
                                     Ok(Expr::OuterReferenceColumn(
                                         Arc::clone(field),
-                                        Column::from((qualifier, field)),
+                                        Column::from((qualifier, field)).with_id(id),
                                     ))
                                 }
                                 // Found no matching field, will return a default
@@ -292,6 +297,19 @@ fn form_identifier(idents: &[String]) -> Result<(Option<TableReference>, &String
         )),
         _ => internal_err!("Incorrect number of identifiers: {}", idents.len()),
     }
+}
+
+/// The id of the field `field` of `schema`, whose qualifier is `qualifier`:
+/// the id that a reference to it gets
+fn field_id(
+    schema: &DFSchema,
+    qualifier: Option<&TableReference>,
+    field: &FieldRef,
+) -> Option<ColumnId> {
+    schema
+        .iter()
+        .position(|(q, f)| q == qualifier && f.name() == field.name())
+        .and_then(|i| schema.field_id(i))
 }
 
 fn search_dfschema<'ids, 'schema>(

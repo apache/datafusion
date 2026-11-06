@@ -50,10 +50,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .collect::<Result<Vec<_>>>()?;
 
         let schema = planner_context.table_schema().unwrap_or(empty_schema);
-        if schema.fields().is_empty() {
-            LogicalPlanBuilder::values(values)?.build()
-        } else {
-            LogicalPlanBuilder::values_with_schema(values, &schema)?.build()
-        }
+        let schema = (!schema.fields().is_empty()).then_some(&schema);
+        // the columns of the VALUES get new ids
+        LogicalPlanBuilder::values_with_column_id_generator(
+            values,
+            schema,
+            planner_context.column_id_generator().cloned(),
+        )?
+        .build()
     }
 }

@@ -1297,17 +1297,14 @@ impl PartialEq for DFSchema {
 
 impl Eq for DFSchema {}
 
-// Shows `field_ids` only if a field has an id, so that the output is
-// unchanged without ids
+// Does not show `field_ids`: `Debug` ends up in error messages and test
+// expectations, which must not depend on the ids allocated
 impl std::fmt::Debug for DFSchema {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let mut s = f.debug_struct("DFSchema");
-        s.field("inner", &self.inner)
-            .field("field_qualifiers", &self.field_qualifiers);
-        if self.field_ids.iter().any(Option::is_some) {
-            s.field("field_ids", &self.field_ids);
-        }
-        s.field("functional_dependencies", &self.functional_dependencies)
+        f.debug_struct("DFSchema")
+            .field("inner", &self.inner)
+            .field("field_qualifiers", &self.field_qualifiers)
+            .field("functional_dependencies", &self.functional_dependencies)
             .finish()
     }
 }
@@ -1946,11 +1943,12 @@ mod tests {
     }
 
     #[test]
-    fn debug_shows_column_ids_only_if_set() -> Result<()> {
+    fn debug_does_not_show_column_ids() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
-        assert!(!format!("{schema:?}").contains("field_ids"));
+        let expected = format!("{schema:?}");
+        assert!(!expected.contains("field_ids"));
         let schema = schema.with_field_ids(ids(&[Some(1), None]))?;
-        assert!(format!("{schema:?}").contains("field_ids: [Some(ColumnId(1)), None]"));
+        assert_eq!(format!("{schema:?}"), expected);
         Ok(())
     }
 

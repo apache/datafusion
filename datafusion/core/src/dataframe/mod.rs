@@ -147,6 +147,21 @@ fn plan_builder(state: &SessionState, plan: LogicalPlan) -> LogicalPlanBuilder {
     )))
 }
 
+/// Returns `incoming`, about to be combined with `existing` (the right side of
+/// a set operation), with fresh column ids from the generator of `state` if it
+/// defines ids that `existing` also defines, as when a DataFrame is combined
+/// with itself
+fn blend(
+    state: &SessionState,
+    existing: &LogicalPlan,
+    incoming: LogicalPlan,
+) -> Result<LogicalPlan> {
+    incoming.with_fresh_column_ids_if_overlapping(
+        existing,
+        Some(&state.execution_props().column_id_generator),
+    )
+}
+
 /// Represents a logical set of rows with the same named columns.
 ///
 /// Similar to a [Pandas DataFrame] or [Spark DataFrame], a DataFusion DataFrame
@@ -2130,7 +2145,7 @@ impl DataFrame {
     /// ```
     pub fn intersect(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
-        let right_plan = dataframe.plan;
+        let right_plan = blend(&self.session_state, &left_plan, dataframe.plan)?;
         let plan = LogicalPlanBuilder::intersect(left_plan, right_plan, true)?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -2168,7 +2183,7 @@ impl DataFrame {
     /// ```
     pub fn intersect_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
-        let right_plan = dataframe.plan;
+        let right_plan = blend(&self.session_state, &left_plan, dataframe.plan)?;
         let plan = LogicalPlanBuilder::intersect(left_plan, right_plan, false)?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -2208,7 +2223,7 @@ impl DataFrame {
     /// ```
     pub fn except(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
-        let right_plan = dataframe.plan;
+        let right_plan = blend(&self.session_state, &left_plan, dataframe.plan)?;
         let plan = LogicalPlanBuilder::except(left_plan, right_plan, true)?;
         Ok(DataFrame {
             session_state: self.session_state,
@@ -2248,7 +2263,7 @@ impl DataFrame {
     /// ```
     pub fn except_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
         let left_plan = self.plan;
-        let right_plan = dataframe.plan;
+        let right_plan = blend(&self.session_state, &left_plan, dataframe.plan)?;
         let plan = LogicalPlanBuilder::except(left_plan, right_plan, false)?;
         Ok(DataFrame {
             session_state: self.session_state,

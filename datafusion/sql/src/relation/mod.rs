@@ -172,12 +172,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     let provider = self
                         .context_provider
                         .get_table_function_source(&tbl_func_name, args)?;
-                    let plan = LogicalPlanBuilder::scan(
+                    let plan = LogicalPlanBuilder::scan_with_column_id_generator(
                         TableReference::Bare {
                             table: format!("{tbl_func_name}()").into(),
                         },
                         provider,
                         None,
+                        planner_context.column_id_generator().cloned(),
                     )?
                     .build()?;
                     (plan, alias)
@@ -190,13 +191,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             cte,
                             self.context_provider.get_table_source(table_ref.clone()),
                         ) {
-                            (Some(cte_plan), _) => Ok(cte_plan.clone()),
-                            (_, Ok(provider)) => LogicalPlanBuilder::scan(
-                                table_ref.clone(),
-                                provider,
-                                None,
-                            )?
-                            .build(),
+                            // each reference to a CTE gets its own column ids
+                            (Some(cte_plan), _) => {
+                                cte_plan.clone().with_fresh_column_ids(
+                                    planner_context
+                                        .column_id_generator()
+                                        .map(Arc::as_ref),
+                                )
+                            }
+                            (_, Ok(provider)) => {
+                                LogicalPlanBuilder::scan_with_column_id_generator(
+                                    table_ref.clone(),
+                                    provider,
+                                    None,
+                                    planner_context.column_id_generator().cloned(),
+                                )?
+                                .build()
+                            }
                             (None, Err(e)) => {
                                 let e = e.with_diagnostic(Diagnostic::new_error(
                                     format!("table '{table_ref}' not found"),
@@ -286,9 +297,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let provider = self
                     .context_provider
                     .get_table_function_source(tbl_func_ref.table(), func_args)?;
-                let plan =
-                    LogicalPlanBuilder::scan(tbl_func_ref.table(), provider, None)?
-                        .build()?;
+                let plan = LogicalPlanBuilder::scan_with_column_id_generator(
+                    tbl_func_ref.table(),
+                    provider,
+                    None,
+                    planner_context.column_id_generator().cloned(),
+                )?
+                .build()?;
                 (plan, alias)
             }
             // @todo Support TableFactory::TableFunction?

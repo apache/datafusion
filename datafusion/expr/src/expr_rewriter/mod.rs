@@ -58,34 +58,55 @@ pub fn normalize_col(expr: Expr, plan: &LogicalPlan) -> Result<Expr> {
 
 /// Reuses the plan's normalization context across expressions. Initialize it
 /// lazily so literals and already-qualified columns need no plan traversal.
+///
+/// Normalizing also binds the columns: an unqualified column, or a qualified
+/// column without an id, gets the id of the field it resolves to (see
+/// [`Column::normalize_with_schemas_and_ambiguity_check`]).
 pub(crate) struct ColumnNormalizer<'a> {
     plan: &'a LogicalPlan,
-    context: Option<(Vec<&'a DFSchema>, Vec<HashSet<Column>>)>,
+    /// The schemas searched after the plan's own schema, and whether any of
+    /// these schemas has a field with an id
+    fallback_schemas: Option<(Vec<&'a DFSchema>, bool)>,
+    using_columns: Option<Vec<HashSet<Column>>>,
 }
 
 impl<'a> ColumnNormalizer<'a> {
     pub(crate) fn new(plan: &'a LogicalPlan) -> Self {
         Self {
             plan,
-            context: None,
+            fallback_schemas: None,
+            using_columns: None,
         }
     }
 
     #[inline]
     pub(crate) fn normalize_column(&mut self, column: Column) -> Result<Column> {
+        let plan = self.plan;
+        let (fallback_schemas, has_ids) =
+            self.fallback_schemas.get_or_insert_with(|| {
+                let fallback_schemas = plan.fallback_normalize_schemas();
+                let has_ids = std::iter::once(plan.schema().as_ref())
+                    .chain(fallback_schemas.iter().copied())
+                    .any(|schema| schema.field_ids().iter().any(Option::is_some));
+                (fallback_schemas, has_ids)
+            });
         if column.relation.is_some() {
-            return Ok(column);
+            // only binds a column that has no id yet, if there are ids
+            if column.id.is_some() || !*has_ids {
+                return Ok(column);
+            }
+            return column.normalize_with_schemas_and_ambiguity_check(
+                &[&[plan.schema()], fallback_schemas],
+                &[],
+            );
         }
 
-        let (fallback_schemas, using_columns) = match &mut self.context {
-            Some(context) => context,
-            context @ None => context.insert((
-                self.plan.fallback_normalize_schemas(),
-                self.plan.using_columns()?,
-            )),
+        let using_columns = match &mut self.using_columns {
+            Some(using_columns) => using_columns,
+            using_columns @ None => using_columns.insert(plan.using_columns()?),
         };
         column.normalize_with_schemas_and_ambiguity_check(
-            &[&[self.plan.schema()], fallback_schemas],
+            &[&[plan.schema()], fallback_schemas],
             using_columns,
         )
     }

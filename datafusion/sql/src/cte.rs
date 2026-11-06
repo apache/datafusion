@@ -87,11 +87,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // of the body. The body is already planned, so a reference
                 // of a recursive CTE to itself stays a work table scan.
                 let id = MaterializedCteId::next();
+                // the scan defines its own columns: it does not take the ids
+                // of the body (each reference renumbers it again)
+                let schema = Arc::unwrap_or_clone(Arc::clone(final_plan.schema()));
+                let ids = schema
+                    .fields()
+                    .iter()
+                    .map(|_| planner_context.column_id_generator().map(|g| g.next()))
+                    .collect();
                 let scan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
                     MaterializedCteScan::new(
                         id,
                         cte_name.clone(),
-                        Arc::clone(final_plan.schema()),
+                        Arc::new(schema.with_field_ids(ids)?),
                     ),
                 ));
                 materialized.push(PendingMaterializedCte {
@@ -199,10 +207,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Step 2.2: Create a temporary relation logical plan that will be used
         // as the input to the recursive term
-        let work_table_plan = LogicalPlanBuilder::scan(
+        let work_table_plan = LogicalPlanBuilder::scan_with_column_id_generator(
             cte_name.to_string(),
             Arc::clone(&work_table_source),
             None,
+            planner_context.column_id_generator().cloned(),
         )?
         .build()?;
 

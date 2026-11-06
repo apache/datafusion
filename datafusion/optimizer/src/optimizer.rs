@@ -30,7 +30,7 @@ use datafusion_expr::{
     Statement, Subquery, SubqueryAlias, Union, Unnest, Window,
 };
 
-use crate::column_id_check::ColumnIdCheck;
+use crate::column_id_check::{ColumnIdCheck, renumber_repeated_subqueries};
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
@@ -747,10 +747,21 @@ impl Optimizer {
                         _,
                     ) => {
                         new_plan = data;
+                        if transformed {
+                            has_subqueries = plan_has_subqueries(&new_plan);
+                            new_plan = renumber_repeated_subqueries(
+                                rule.name(),
+                                new_plan,
+                                has_subqueries,
+                                config,
+                            )?;
+                        }
                         observer(&new_plan, rule.as_ref());
                         if transformed {
-                            column_id_check.after_rule(rule.name(), &new_plan);
-                            has_subqueries = plan_has_subqueries(&new_plan);
+                            // a rule that breaks column ids fails the query
+                            // when verification is on, even if failed rules
+                            // are skipped
+                            column_id_check.after_rule(rule.name(), &new_plan)?;
                             log_plan(rule.name(), &new_plan);
                         } else {
                             debug!(

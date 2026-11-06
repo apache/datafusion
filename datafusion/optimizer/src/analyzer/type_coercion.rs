@@ -186,7 +186,9 @@ fn with_materialized_cte_scan_schema(
                 )?
                 .with_functional_dependencies(
                     body_schema.functional_dependencies().clone(),
-                )?;
+                )?
+                // the scan keeps the ids of the columns it defines
+                .with_field_ids(scan.schema.field_ids().to_vec())?;
                 Ok(Transformed::yes(LogicalPlan::MaterializedCte(
                     MaterializedCtePlan::Scan(MaterializedCteScan {
                         schema: Arc::new(schema),

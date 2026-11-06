@@ -80,7 +80,17 @@ fn config_change_result(
     }
 }
 
+/// Turns on the column id verification of the optimizer, which fails a
+/// query whose analyzer or optimizer rules break the column ids of its plan.
+/// Off for users; set it to `0` to turn it off here.
+const COLUMN_ID_VERIFY_ENV: &str = "DATAFUSION_COLUMN_ID_VERIFY";
+
 pub fn main() -> Result<()> {
+    if std::env::var_os(COLUMN_ID_VERIFY_ENV).is_none() {
+        // SAFETY: no other thread runs yet (the runtime is built below), so
+        // nothing reads the environment concurrently
+        unsafe { std::env::set_var(COLUMN_ID_VERIFY_ENV, "1") };
+    }
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .on_thread_stop(flush_thread_allocations)

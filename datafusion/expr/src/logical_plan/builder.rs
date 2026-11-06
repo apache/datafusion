@@ -37,6 +37,9 @@ use crate::{
 };
 
 use super::dml::InsertOp;
+use crate::logical_plan::column_ids::{
+    SubqueryBlender, strip_column_ids, with_new_field_ids,
+};
 use crate::logical_plan::information_schema::ColumnsDetail;
 use arrow::compute::can_cast_types;
 use arrow::datatypes::{DataType, Field, FieldRef, Fields, Schema, SchemaRef};
@@ -44,10 +47,10 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    Column, ColumnIdGenerator, Constraints, DFSchema, DFSchemaRef,
+    Column, ColumnId, ColumnIdGenerator, Constraints, DFSchema, DFSchemaRef,
     FunctionalDependencies, NullEquality, Result, ScalarValue, TableReference,
     ToDFSchema, UnnestOptions, exec_err, get_target_functional_dependencies,
-    internal_datafusion_err, plan_datafusion_err, plan_err,
+    internal_datafusion_err, internal_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::{
     type_union_coercion, type_union_resolution,
@@ -270,6 +273,61 @@ impl LogicalPlanBuilder {
         self.column_id_generator.as_ref()
     }
 
+    /// Returns `incoming`, about to be combined with the plan of this builder
+    /// (the right side of a join or set operation), with fresh column ids if
+    /// it defines ids that the plan of this builder also defines, as when a
+    /// plan is joined with itself. Without a generator, it strips them.
+    fn blend(&self, incoming: LogicalPlan) -> Result<LogicalPlan> {
+        self.blend_join(incoming).map(|(plan, _)| plan)
+    }
+
+    /// [`Self::blend`] for the right side of a join, which also returns the
+    /// ids that were defined on both sides (empty if it was not renumbered).
+    ///
+    /// The references to these ids that the caller passes (join keys, join
+    /// filter) cannot tell the two sides apart: they lose their ids (see
+    /// [`strip_column_ids`]), and resolve by qualifier and name.
+    fn blend_join(
+        &self,
+        incoming: LogicalPlan,
+    ) -> Result<(LogicalPlan, HashSet<ColumnId>)> {
+        incoming.blend_into(&self.plan, self.column_id_generator.as_deref())
+    }
+
+    /// Returns `exprs`, about to be added on top of the plan of this builder,
+    /// where the subqueries that define ids that the plan (or another of the
+    /// subqueries) also defines have fresh column ids, as when a subquery is
+    /// built from the plan it filters
+    fn blend_subqueries(
+        &self,
+        exprs: impl IntoIterator<Item = impl Into<Expr>>,
+    ) -> Result<Vec<Expr>> {
+        let mut blender =
+            SubqueryBlender::new(&self.plan, self.column_id_generator.as_deref());
+        exprs
+            .into_iter()
+            .map(|expr| blender.blend(expr.into()))
+            .collect()
+    }
+
+    /// [`Self::blend_subqueries`] for the expressions of a projection
+    fn blend_select_subqueries(
+        &self,
+        exprs: impl IntoIterator<Item = impl Into<SelectExpr>>,
+    ) -> Result<Vec<SelectExpr>> {
+        let mut blender =
+            SubqueryBlender::new(&self.plan, self.column_id_generator.as_deref());
+        exprs
+            .into_iter()
+            .map(|expr| match expr.into() {
+                SelectExpr::Expression(expr) => {
+                    blender.blend(expr).map(SelectExpr::Expression)
+                }
+                wildcard => Ok(wildcard),
+            })
+            .collect()
+    }
+
     /// Return the output schema of the plan build so far
     pub fn schema(&self) -> &DFSchemaRef {
         self.plan.schema()
@@ -459,6 +517,31 @@ impl LogicalPlanBuilder {
         Self::infer_values_from_schema(values, schema)
     }
 
+    /// [`Self::values`], or [`Self::values_with_schema`] if `schema` is
+    /// given, for a builder that allocates column ids with
+    /// `column_id_generator` (see [`Self::with_column_id_generator`]): the
+    /// columns of the `VALUES` get new ids.
+    pub fn values_with_column_id_generator(
+        values: Vec<Vec<Expr>>,
+        schema: Option<&DFSchemaRef>,
+        column_id_generator: Option<Arc<ColumnIdGenerator>>,
+    ) -> Result<Self> {
+        let builder = match schema {
+            Some(schema) => Self::values_with_schema(values, schema)?,
+            None => Self::values(values)?,
+        };
+        let LogicalPlan::Values(mut values) = Arc::unwrap_or_clone(builder.plan) else {
+            return internal_err!("Expected a Values plan");
+        };
+        if let Some(generator) = &column_id_generator {
+            values.schema = with_new_field_ids(values.schema, generator)?;
+        }
+        Ok(Self::chain(
+            column_id_generator,
+            LogicalPlan::Values(values),
+        ))
+    }
+
     fn infer_values_from_schema(
         values: Vec<Vec<Expr>>,
         schema: &DFSchema,
@@ -613,10 +696,22 @@ impl LogicalPlanBuilder {
         table_source: Arc<dyn TableSource>,
         projection: Option<Vec<usize>>,
     ) -> Result<Self> {
+        Self::scan_with_column_id_generator(table_name, table_source, projection, None)
+    }
+
+    /// [`Self::scan`], for a builder that allocates column ids with
+    /// `column_id_generator` (see
+    /// [`Self::table_scan_with_column_id_generator`])
+    pub fn scan_with_column_id_generator(
+        table_name: impl Into<TableReference>,
+        table_source: Arc<dyn TableSource>,
+        projection: Option<Vec<usize>>,
+        column_id_generator: Option<Arc<ColumnIdGenerator>>,
+    ) -> Result<Self> {
         let table_scan = TableScanBuilder::new(table_name, table_source)
             .with_projection(projection)
             .build()?;
-        Self::table_scan(table_scan)
+        Self::table_scan_with_column_id_generator(table_scan, column_id_generator)
     }
 
     /// Create a [CopyTo] for copying the contents of this builder to the specified file(s)
@@ -716,21 +811,45 @@ impl LogicalPlanBuilder {
     }
 
     /// Convert a [`TableScan`] into a builder
+    ///
+    /// If the source provides a logical plan (a view), the plan is inlined
+    /// instead. The ids of an inlined plan are stripped, as the builder has no
+    /// generator: see [`Self::table_scan_with_column_id_generator`].
     pub fn table_scan(table_scan: TableScan) -> Result<Self> {
+        Self::table_scan_with_column_id_generator(table_scan, None)
+    }
+
+    /// Convert a [`TableScan`] into a builder that allocates column ids with
+    /// `column_id_generator` (see [`Self::with_column_id_generator`])
+    ///
+    /// If the source provides a logical plan (a view), the plan is inlined
+    /// instead, with fresh column ids (see
+    /// [`LogicalPlan::with_fresh_column_ids`]): the same plan can be inlined
+    /// several times in one query.
+    pub fn table_scan_with_column_id_generator(
+        table_scan: TableScan,
+        column_id_generator: Option<Arc<ColumnIdGenerator>>,
+    ) -> Result<Self> {
         // Inline TableScan
         if table_scan.filters.is_empty()
             && let Some(p) = table_scan.source.get_logical_plan()
         {
-            let sub_plan = p.into_owned();
+            let sub_plan = p
+                .into_owned()
+                .with_fresh_column_ids(column_id_generator.as_deref())?;
 
             if let Some(proj) = table_scan.projection {
                 let projection_exprs = proj
                     .into_iter()
                     .map(|i| {
-                        Expr::Column(Column::from(sub_plan.schema().qualified_field(i)))
+                        let schema = sub_plan.schema();
+                        Expr::Column(
+                            Column::from(schema.qualified_field(i))
+                                .with_id(schema.field_id(i)),
+                        )
                     })
                     .collect::<Vec<_>>();
-                return Self::new(sub_plan)
+                return Self::chain(column_id_generator, sub_plan)
                     .project(projection_exprs)?
                     .alias(table_scan.table_name);
             }
@@ -738,10 +857,21 @@ impl LogicalPlanBuilder {
             // Ensures that the reference to the inlined table remains the
             // same, meaning we don't have to change any of the parent nodes
             // that reference this table.
-            return Self::new(sub_plan).alias(table_scan.table_name);
+            return Self::chain(column_id_generator, sub_plan)
+                .alias(table_scan.table_name);
         }
 
-        Ok(Self::new(LogicalPlan::TableScan(table_scan)))
+        // the scan defines its columns: they get new ids, unless they have
+        // some (a scan rebuilt from another one)
+        let mut table_scan = table_scan;
+        if let Some(generator) = &column_id_generator {
+            table_scan.projected_schema =
+                with_new_field_ids(table_scan.projected_schema, generator)?;
+        }
+        Ok(Self::chain(
+            column_id_generator,
+            LogicalPlan::TableScan(table_scan),
+        ))
     }
 
     /// Wrap a plan in a window
@@ -787,6 +917,7 @@ impl LogicalPlanBuilder {
         self,
         expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
     ) -> Result<Self> {
+        let expr = self.blend_select_subqueries(expr)?;
         project(Arc::unwrap_or_clone(self.plan), expr)
             .map(|plan| Self::chain(self.column_id_generator, plan))
     }
@@ -797,6 +928,11 @@ impl LogicalPlanBuilder {
         self,
         expr: Vec<(impl Into<SelectExpr>, bool)>,
     ) -> Result<Self> {
+        let (expr, validate): (Vec<_>, Vec<_>) = expr.into_iter().unzip();
+        let expr = self
+            .blend_select_subqueries(expr)?
+            .into_iter()
+            .zip(validate);
         project_with_validation(Arc::unwrap_or_clone(self.plan), expr, None)
             .map(|plan| Self::chain(self.column_id_generator, plan))
     }
@@ -808,6 +944,7 @@ impl LogicalPlanBuilder {
         expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
         schema: &DFSchemaRef,
     ) -> Result<Self> {
+        let expr = self.blend_select_subqueries(expr)?;
         project_with_validation(
             Arc::unwrap_or_clone(self.plan),
             expr.into_iter().map(|e| (e, true)),
@@ -827,7 +964,9 @@ impl LogicalPlanBuilder {
 
     /// Apply a filter
     pub fn filter(self, expr: impl Into<Expr>) -> Result<Self> {
-        let expr = normalize_col(expr.into(), &self.plan)?;
+        let expr = SubqueryBlender::new(&self.plan, self.column_id_generator.as_deref())
+            .blend(expr.into())?;
+        let expr = normalize_col(expr, &self.plan)?;
         Filter::try_new(expr, self.plan)
             .map(LogicalPlan::Filter)
             .map(|plan| Self::chain(self.column_id_generator, plan))
@@ -835,7 +974,9 @@ impl LogicalPlanBuilder {
 
     /// Apply a filter which is used for a having clause
     pub fn having(self, expr: impl Into<Expr>) -> Result<Self> {
-        let expr = normalize_col(expr.into(), &self.plan)?;
+        let expr = SubqueryBlender::new(&self.plan, self.column_id_generator.as_deref())
+            .blend(expr.into())?;
+        let expr = normalize_col(expr, &self.plan)?;
         Filter::try_new(expr, self.plan)
             .map(LogicalPlan::Filter)
             .map(|plan| Self::chain(self.column_id_generator, plan))
@@ -1079,18 +1220,21 @@ impl LogicalPlanBuilder {
 
     /// Apply a union, preserving duplicate rows
     pub fn union(self, plan: LogicalPlan) -> Result<Self> {
+        let plan = self.blend(plan)?;
         union(Arc::unwrap_or_clone(self.plan), plan)
             .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Apply a union by name, preserving duplicate rows
     pub fn union_by_name(self, plan: LogicalPlan) -> Result<Self> {
+        let plan = self.blend(plan)?;
         union_by_name(Arc::unwrap_or_clone(self.plan), plan)
             .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Apply a union by name, removing duplicate rows
     pub fn union_by_name_distinct(self, plan: LogicalPlan) -> Result<Self> {
+        let plan = self.blend(plan)?;
         let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
         let right_plan: LogicalPlan = plan;
 
@@ -1104,6 +1248,7 @@ impl LogicalPlanBuilder {
 
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
+        let plan = self.blend(plan)?;
         let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
         let right_plan: LogicalPlan = plan;
 
@@ -1311,6 +1456,21 @@ impl LogicalPlanBuilder {
         match_condition: AsOfMatch,
         join_constraint: JoinConstraint,
     ) -> Result<Self> {
+        let (right, overlap) = self.blend_join(right)?;
+        let on = on
+            .into_iter()
+            .map(|(l, r)| {
+                Ok((
+                    strip_column_ids(l, &overlap)?,
+                    strip_column_ids(r, &overlap)?,
+                ))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let match_condition = AsOfMatch {
+            left: strip_column_ids(match_condition.left, &overlap)?,
+            op: match_condition.op,
+            right: strip_column_ids(match_condition.right, &overlap)?,
+        };
         let left_columns = match_condition.left.column_refs();
         let right_columns = match_condition.right.column_refs();
         if left_columns.is_empty()
@@ -1388,13 +1548,18 @@ impl LogicalPlanBuilder {
         null_equality: NullEquality,
         null_aware: bool,
     ) -> Result<Self> {
+        let (right, overlap) = self.blend_join(right)?;
         if join_keys.0.len() != join_keys.1.len() {
             return plan_err!("left_keys and right_keys were not the same length");
         }
+        let strip_column = |col: Column| match col.id {
+            Some(id) if overlap.contains(&id) => col.with_id(None),
+            _ => col,
+        };
 
         let filter = if let Some(expr) = filter {
             let filter = normalize_col_with_schemas_and_ambiguity_check(
-                expr,
+                strip_column_ids(expr, &overlap)?,
                 &[&[self.schema(), right.schema()]],
                 &[],
             )?;
@@ -1409,8 +1574,8 @@ impl LogicalPlanBuilder {
                 .into_iter()
                 .zip(join_keys.1)
                 .map(|(l, r)| {
-                    let l = l.into();
-                    let r = r.into();
+                    let l = strip_column(l.into());
+                    let r = strip_column(r.into());
 
                     match (&l.relation, &r.relation) {
                         (Some(lr), Some(rr)) => {
@@ -1479,8 +1644,18 @@ impl LogicalPlanBuilder {
                 })
                 .unzip();
 
-        let left_keys = left_keys.into_iter().collect::<Result<Vec<Column>>>()?;
-        let right_keys = right_keys.into_iter().collect::<Result<Vec<Column>>>()?;
+        // bind the keys to the columns of their sides
+        let bind = |key: Result<Column>, schema: &DFSchema| {
+            key?.normalize_with_schemas_and_ambiguity_check(&[&[schema]], &[])
+        };
+        let left_keys = left_keys
+            .into_iter()
+            .map(|key| bind(key, self.plan.schema()))
+            .collect::<Result<Vec<Column>>>()?;
+        let right_keys = right_keys
+            .into_iter()
+            .map(|key| bind(key, right.schema()))
+            .collect::<Result<Vec<Column>>>()?;
 
         let on: Vec<_> = left_keys
             .into_iter()
@@ -1519,6 +1694,14 @@ impl LogicalPlanBuilder {
         join_type: JoinType,
         using_keys: Vec<Column>,
     ) -> Result<Self> {
+        let (right, overlap) = self.blend_join(right)?;
+        let using_keys: Vec<Column> = using_keys
+            .into_iter()
+            .map(|col| match col.id {
+                Some(id) if overlap.contains(&id) => col.with_id(None),
+                _ => col,
+            })
+            .collect();
         let left_keys: Vec<Column> = using_keys
             .clone()
             .into_iter()
@@ -1596,6 +1779,7 @@ impl LogicalPlanBuilder {
 
     /// Apply a cross join
     pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
+        let right = self.blend(right)?;
         let join = Join::try_new(
             self.plan,
             Arc::new(right),
@@ -1629,6 +1813,7 @@ impl LogicalPlanBuilder {
         self,
         window_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
+        let window_expr = self.blend_subqueries(window_expr)?;
         let window_expr = normalize_cols(window_expr, &self.plan)?;
         validate_unique_names("Windows", &window_expr)?;
         Ok(Self::chain(
@@ -1645,6 +1830,16 @@ impl LogicalPlanBuilder {
         group_expr: impl IntoIterator<Item = impl Into<Expr>>,
         aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
+        let mut blender =
+            SubqueryBlender::new(&self.plan, self.column_id_generator.as_deref());
+        let group_expr = group_expr
+            .into_iter()
+            .map(|expr| blender.blend(expr.into()))
+            .collect::<Result<Vec<_>>>()?;
+        let aggr_expr = aggr_expr
+            .into_iter()
+            .map(|expr| blender.blend(expr.into()))
+            .collect::<Result<Vec<_>>>()?;
         let group_expr = normalize_cols(group_expr, &self.plan)?;
         let aggr_expr = normalize_cols(aggr_expr, &self.plan)?;
 
@@ -1747,6 +1942,10 @@ impl LogicalPlanBuilder {
         join_type: JoinType,
         is_all: bool,
     ) -> Result<LogicalPlan> {
+        // without a generator, an overlapping right side is stripped of its
+        // ids (no generator, no ids)
+        let right_plan =
+            right_plan.with_fresh_column_ids_if_overlapping(&left_plan, None)?;
         let left_len = left_plan.schema().fields().len();
         let right_len = right_plan.schema().fields().len();
 
@@ -1818,17 +2017,21 @@ impl LogicalPlanBuilder {
         equi_exprs: (Vec<impl Into<Expr>>, Vec<impl Into<Expr>>),
         filter: Option<Expr>,
     ) -> Result<Self> {
+        let (right, overlap) = self.blend_join(right)?;
         if equi_exprs.0.len() != equi_exprs.1.len() {
             return plan_err!("left_keys and right_keys were not the same length");
         }
+        let filter = filter
+            .map(|filter| strip_column_ids(filter, &overlap))
+            .transpose()?;
 
         let join_key_pairs = equi_exprs
             .0
             .into_iter()
             .zip(equi_exprs.1)
             .map(|(l, r)| {
-                let left_key = l.into();
-                let right_key = r.into();
+                let left_key = strip_column_ids(l.into(), &overlap)?;
+                let right_key = strip_column_ids(r.into(), &overlap)?;
                 let mut left_using_columns  = HashSet::new();
                 expr_to_columns(&left_key, &mut left_using_columns)?;
                 let normalized_left_key = normalize_col_with_schemas_and_ambiguity_check(
@@ -2115,8 +2318,23 @@ pub fn build_join_schema(
     let mut metadata = schema1.metadata().clone();
     metadata.extend(schema2.metadata().clone());
 
+    // the input columns keep their ids; the mark column has none yet
+    let left_ids = left.field_ids().iter().copied();
+    let right_ids = right.field_ids().iter().copied();
+    let field_ids: Vec<_> = match join_type {
+        JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
+            left_ids.chain(right_ids).collect()
+        }
+        JoinType::LeftSemi | JoinType::LeftAnti => left_ids.collect(),
+        JoinType::LeftMark => left_ids.chain(once(None)).collect(),
+        JoinType::RightSemi | JoinType::RightAnti => right_ids.collect(),
+        JoinType::RightMark => right_ids.chain(once(None)).collect(),
+    };
+
     let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
-    dfschema.with_functional_dependencies(func_dependencies)
+    dfschema
+        .with_functional_dependencies(func_dependencies)?
+        .with_field_ids(field_ids)
 }
 
 /// Creates the schema for a left-preserving ASOF join.

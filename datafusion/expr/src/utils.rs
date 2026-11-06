@@ -1053,14 +1053,24 @@ pub fn passthrough_field_index(expr: &Expr, schema: &DFSchema) -> Option<usize> 
 
 /// Convert any `Expr` to an `Expr::Column`.
 pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
+    // the column, with the id of the field it refers to (if any)
+    let schema = plan.schema();
     match expr {
         Expr::Column(col) => {
-            let (qualifier, field) = plan.schema().qualified_field_from_column(col)?;
-            Ok(Expr::from(Column::from((qualifier, field))))
+            let (qualifier, field) = schema.qualified_field_from_column(col)?;
+            let column = Column::from((qualifier, field));
+            let id = schema
+                .maybe_index_of_column(&column)
+                .and_then(|i| schema.field_id(i));
+            Ok(Expr::from(column.with_id(id)))
         }
-        _ => Ok(Expr::Column(Column::from_name(
-            expr.schema_name().to_string(),
-        ))),
+        _ => {
+            let col = Column::from_name(expr.schema_name().to_string());
+            let id = schema
+                .maybe_index_of_column(&col)
+                .and_then(|i| schema.field_id(i));
+            Ok(Expr::Column(col.with_id(id)))
+        }
     }
 }
 

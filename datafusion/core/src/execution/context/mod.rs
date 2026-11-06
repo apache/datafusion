@@ -1851,11 +1851,16 @@ impl SessionContext {
     /// Creates a [`DataFrame`] for a [`TableProvider`] such as a
     /// [`ListingTable`] or a custom user defined provider.
     pub fn read_table(&self, provider: Arc<dyn TableProvider>) -> Result<DataFrame> {
-        Ok(DataFrame::new(
-            self.state(),
-            LogicalPlanBuilder::scan(UNNAMED_TABLE, provider_as_source(provider), None)?
-                .build()?,
-        ))
+        let state = self.state();
+        // a view is inlined with fresh column ids
+        let plan = LogicalPlanBuilder::scan_with_column_id_generator(
+            UNNAMED_TABLE,
+            provider_as_source(provider),
+            None,
+            Some(Arc::clone(&state.execution_props().column_id_generator)),
+        )?
+        .build()?;
+        Ok(DataFrame::new(state, plan))
     }
 
     /// Creates a [`DataFrame`] for reading a [`RecordBatch`]
@@ -2060,13 +2065,16 @@ impl SessionContext {
     pub async fn table(&self, table_ref: impl Into<TableReference>) -> Result<DataFrame> {
         let table_ref: TableReference = table_ref.into();
         let provider = self.table_provider(table_ref.clone()).await?;
-        let plan = LogicalPlanBuilder::scan(
+        let state = self.state();
+        // a view is inlined with fresh column ids
+        let plan = LogicalPlanBuilder::scan_with_column_id_generator(
             table_ref,
             provider_as_source(Arc::clone(&provider)),
             None,
+            Some(Arc::clone(&state.execution_props().column_id_generator)),
         )?
         .build()?;
-        Ok(DataFrame::new(self.state(), plan))
+        Ok(DataFrame::new(state, plan))
     }
 
     /// Retrieves a [`TableFunction`] reference by name.

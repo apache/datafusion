@@ -159,14 +159,14 @@ impl Ord for Column {
 
 impl fmt::Debug for Column {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let mut s = f.debug_struct("Column");
-        s.field("relation", &self.relation)
-            .field("name", &self.name);
-        // shown only when set, so that the output is unchanged without ids
-        if let Some(id) = &self.id {
-            s.field("id", id);
-        }
-        s.finish()
+        // The id is not shown: `Debug` of expressions ends up in error
+        // messages and test expectations, which must not depend on the ids
+        // allocated (as plans display as without ids). The verifier's issues
+        // show it.
+        f.debug_struct("Column")
+            .field("relation", &self.relation)
+            .field("name", &self.name)
+            .finish()
     }
 }
 
@@ -358,17 +358,18 @@ impl Column {
         using_columns: &[HashSet<Column>],
     ) -> Result<Self> {
         if self.relation.is_some() {
-            return Ok(self);
+            return Ok(self.bind_qualified(schemas));
         }
 
         for schema_level in schemas {
-            let qualified_fields = schema_level
+            // the matching columns, with the ids of their fields
+            let mut columns = schema_level
                 .iter()
-                .flat_map(|s| s.qualified_fields_with_unqualified_name(&self.name))
+                .flat_map(|s| s.columns_with_unqualified_name(&self.name))
                 .collect::<Vec<_>>();
-            match qualified_fields.len() {
+            match columns.len() {
                 0 => {}
-                1 => return Ok(Column::from(qualified_fields[0])),
+                1 => return Ok(columns.swap_remove(0)),
                 _ => {
                     // More than 1 fields in this schema have their names set to self.name.
                     //
@@ -383,10 +384,6 @@ impl Column {
                     // We will use the relation from the first matched field to normalize self.
 
                     // Compare matched fields with one USING JOIN clause at a time
-                    let columns = schema_level
-                        .iter()
-                        .flat_map(|s| s.columns_with_unqualified_name(&self.name))
-                        .collect::<Vec<_>>();
                     for using_col in using_columns {
                         let all_matched = columns.iter().all(|c| using_col.contains(c));
                         // All matched fields belong to the same using column set, in other words
@@ -429,6 +426,28 @@ impl Column {
                 .unique()
                 .collect(),
         })
+    }
+
+    /// Returns this qualified column with the id of the field it resolves to
+    /// in `schemas` (searched in order), if it has no id yet. Returned as is
+    /// if it has an id, or if no field has its qualifier and name: binding
+    /// never fails, the lookup then uses the qualifier and name.
+    fn bind_qualified(self, schemas: &[&[&DFSchema]]) -> Self {
+        if self.id.is_some() {
+            return self;
+        }
+        let id = schemas
+            .iter()
+            .flat_map(|level| level.iter())
+            .find_map(|schema| {
+                schema
+                    .index_of_column_by_name(self.relation.as_ref(), &self.name)
+                    .map(|i| schema.field_id(i))
+            });
+        match id {
+            Some(id) => self.with_id(id),
+            None => self,
+        }
     }
 
     /// Returns a reference to the set of locations in the SQL query where this
@@ -685,16 +704,11 @@ mod tests {
     }
 
     #[test]
-    fn debug_shows_id_only_if_set() {
+    fn debug_does_not_show_id() {
         let col = Column::new(Some("t1"), "a");
-        assert_eq!(
-            format!("{col:?}"),
-            r#"Column { relation: Some(Bare { table: "t1" }), name: "a" }"#
-        );
+        let expected = r#"Column { relation: Some(Bare { table: "t1" }), name: "a" }"#;
+        assert_eq!(format!("{col:?}"), expected);
         let col = col.with_id(Some(column_id(3)));
-        assert_eq!(
-            format!("{col:?}"),
-            r#"Column { relation: Some(Bare { table: "t1" }), name: "a", id: ColumnId(3) }"#
-        );
+        assert_eq!(format!("{col:?}"), expected);
     }
 }

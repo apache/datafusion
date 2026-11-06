@@ -23,6 +23,7 @@ use crate::expr::{
 use crate::expr_rewriter::{
     NamePreserver, create_col_from_scalar_expr, normalize_cols, normalize_sorts,
 };
+use crate::logical_plan::column_ids::pass_through_column_ids;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::materialized_cte::{
@@ -55,7 +56,7 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
+    Column, ColumnId, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
     ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
     aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
@@ -1246,6 +1247,11 @@ impl LogicalPlan {
                 // If inputs are not pruned do not change schema.
                 let schema = if schema.fields().len() == input_schema.fields().len() {
                     Arc::clone(schema)
+                } else if input_schema.field_ids().iter().any(Option::is_some) {
+                    // the outputs of a union are not the columns of its first
+                    // input: they do not take their ids
+                    let ids = vec![None; input_schema.fields().len()];
+                    Arc::new(input_schema.as_ref().clone().with_field_ids(ids)?)
                 } else {
                     Arc::clone(input_schema)
                 };
@@ -2852,6 +2858,8 @@ pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSc
             .with_functional_dependencies(calc_func_dependencies_for_project(
                 exprs, input,
             )?)?;
+    // bare columns pass the ids of their input fields through
+    let schema = schema.with_field_ids(pass_through_column_ids(exprs, input.schema()))?;
 
     Ok(Arc::new(schema))
 }
@@ -2889,9 +2897,11 @@ impl SubqueryAlias {
             let projection_expressions = aliases
                 .iter()
                 .zip(plan.schema().iter())
-                .map(|(alias, (qualifier, field))| {
-                    let column =
-                        Expr::Column(Column::new(qualifier.cloned(), field.name()));
+                .zip(plan.schema().field_ids())
+                .map(|((alias, (qualifier, field)), id)| {
+                    let column = Expr::Column(
+                        Column::new(qualifier.cloned(), field.name()).with_id(*id),
+                    );
                     match alias {
                         None => column,
                         Some(alias) => {
@@ -2914,9 +2924,11 @@ impl SubqueryAlias {
         let schema = DFSchema::from_unqualified_fields(fields, meta_data)?;
         let schema = schema.as_arrow();
 
+        // the fields keep their ids under the new qualifier
         let schema = DFSchemaRef::new(
             DFSchema::try_from_qualified_schema(alias.clone(), schema)?
-                .with_functional_dependencies(func_dependencies)?,
+                .with_functional_dependencies(func_dependencies)?
+                .with_field_ids(plan.schema().field_ids().to_vec())?,
         );
         Ok(SubqueryAlias {
             input: plan,
@@ -3196,12 +3208,21 @@ impl Window {
             );
         }
 
+        // the input columns keep their ids, the window outputs have none yet
+        let field_ids = input
+            .schema()
+            .field_ids()
+            .iter()
+            .copied()
+            .chain(std::iter::repeat_n(None, window_expr.len()))
+            .collect();
         Self::try_new_with_schema(
             window_expr,
             input,
             Arc::new(
                 DFSchema::new_with_metadata(window_fields, metadata)?
-                    .with_functional_dependencies(window_func_dependencies)?,
+                    .with_functional_dependencies(window_func_dependencies)?
+                    .with_field_ids(field_ids)?,
             ),
         )
     }
@@ -3390,6 +3411,11 @@ pub struct TableScanBuilder {
     skip: Option<usize>,
     #[expect(clippy::box_collection)] // additional indirection for smaller size_of()
     statistics_requests: Box<BTreeSet<StatisticsRequest>>,
+    /// The column ids of the columns of the source, indexed like the fields
+    /// of the source schema, when the builder was made from a scan whose
+    /// columns have ids (empty otherwise): the columns that the new
+    /// projection retains keep their ids
+    source_column_ids: Vec<Option<ColumnId>>,
 }
 
 impl TableScanBuilder {
@@ -3406,6 +3432,7 @@ impl TableScanBuilder {
             fetch: None,
             skip: None,
             statistics_requests: Box::default(),
+            source_column_ids: vec![],
         }
     }
 
@@ -3454,6 +3481,7 @@ impl TableScanBuilder {
             fetch,
             skip,
             statistics_requests,
+            source_column_ids,
         } = self;
 
         if table_name.table().is_empty() {
@@ -3485,6 +3513,16 @@ impl TableScanBuilder {
                     DFSchema::try_from_qualified_schema(table_name.clone(), &schema)?;
                 df_schema.with_functional_dependencies(func_dependencies)
             })?;
+        // the columns of the source keep their ids, whatever the projection
+        let projected_schema = if source_column_ids.len() == schema.fields().len() {
+            let ids = match &projection {
+                Some(p) => p.iter().map(|i| source_column_ids[*i]).collect(),
+                None => source_column_ids,
+            };
+            projected_schema.with_field_ids(ids)?
+        } else {
+            projected_schema
+        };
         let projected_schema = Arc::new(projected_schema);
 
         Ok(TableScan {
@@ -3500,8 +3538,34 @@ impl TableScanBuilder {
     }
 }
 
+/// The ids of the columns of `scan`'s source, indexed like the fields of the
+/// source schema, if the columns of `scan` have ids (empty otherwise)
+fn source_column_ids(scan: &TableScan) -> Vec<Option<ColumnId>> {
+    let projected_ids = scan.projected_schema.field_ids();
+    if projected_ids.iter().all(Option::is_none) {
+        return vec![];
+    }
+    let source_len = scan.source.schema().fields().len();
+    let mut ids = vec![None; source_len];
+    match &scan.projection {
+        Some(projection) => {
+            for (i, id) in projection.iter().zip(projected_ids) {
+                if let Some(slot) = ids.get_mut(*i) {
+                    *slot = *id;
+                }
+            }
+        }
+        None if projected_ids.len() == source_len => ids = projected_ids.to_vec(),
+        None => return vec![],
+    }
+    ids
+}
+
 impl From<TableScan> for TableScanBuilder {
+    /// A builder of `scan`, which keeps the column ids of `scan` for the
+    /// columns that the projection of the new scan retains
     fn from(scan: TableScan) -> Self {
+        let source_column_ids = source_column_ids(&scan);
         Self {
             table_name: scan.table_name,
             source: scan.source,
@@ -3510,6 +3574,7 @@ impl From<TableScan> for TableScanBuilder {
             fetch: scan.fetch,
             skip: scan.skip,
             statistics_requests: scan.statistics_requests,
+            source_column_ids,
         }
     }
 }
@@ -4187,10 +4252,12 @@ impl DistinctOn {
             .into_iter()
             .collect();
 
+        // bare columns pass the ids of their input fields through
         let dfschema = DFSchema::new_with_metadata(
             qualified_fields,
             input.schema().metadata().clone(),
-        )?;
+        )?
+        .with_field_ids(pass_through_column_ids(&select_expr, input.schema()))?;
 
         let mut distinct_on = DistinctOn {
             on_expr,
@@ -4313,6 +4380,10 @@ impl Aggregate {
 
         let grouping_expr: Vec<&Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
 
+        // bare grouping columns pass their ids through; the grouping id and
+        // the aggregates have none yet
+        let mut field_ids =
+            pass_through_column_ids(grouping_expr.iter().copied(), input.schema());
         let mut qualified_fields = exprlist_to_fields(grouping_expr, &input)?;
 
         // Even columns that cannot be null will become nullable when used in a grouping set.
@@ -4334,11 +4405,13 @@ impl Aggregate {
         }
 
         qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
+        field_ids.resize(qualified_fields.len(), None);
 
         let schema = DFSchema::new_with_metadata(
             qualified_fields,
             input.schema().metadata().clone(),
-        )?;
+        )?
+        .with_field_ids(field_ids)?;
 
         Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
     }
@@ -5398,7 +5471,20 @@ impl Unnest {
             .collect::<Vec<_>>();
 
         let metadata = input_schema.metadata().clone();
-        let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
+        // the columns that are not unnested keep their ids, the unnested ones
+        // have none yet
+        let field_ids = dependency_indices
+            .iter()
+            .map(|index| {
+                if indices_to_unnest.contains_key(index) {
+                    None
+                } else {
+                    input_schema.field_id(*index)
+                }
+            })
+            .collect();
+        let df_schema =
+            DFSchema::new_with_metadata(fields, metadata)?.with_field_ids(field_ids)?;
         let list_indices: HashSet<_> =
             list_columns.iter().map(|(index, _)| *index).collect();
         // Struct unnest may replace one input column with several output columns,

@@ -144,7 +144,7 @@ impl Analyzer {
             log_plan(rule.name(), &new_plan);
             observer(&new_plan, rule.as_ref());
         }
-        column_id_check.after_rule("analyzer", &new_plan);
+        column_id_check.after_analyzer(&new_plan)?;
 
         // verify at the end, after the last LP analyzer pass, that the plan is executable.
         new_plan
