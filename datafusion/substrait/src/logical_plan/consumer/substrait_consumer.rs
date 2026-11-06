@@ -17,6 +17,7 @@ use async_trait::async_trait;
 use datafusion::arrow::datatypes::{DataType, FieldRef};
 use datafusion::catalog::TableProvider;
 use datafusion::common::datatype::FieldExt;
+use datafusion::common::extensions::Extensions as ContextExtensions;
 use datafusion::common::{
     DFSchema, ScalarValue, TableReference, not_impl_err, substrait_err,
 };
@@ -653,9 +654,28 @@ pub struct SubstraitConsumerContext {
     outer_schemas: Vec<Arc<DFSchema>>,
     lambda_parameters: VecDeque<Vec<FieldRef>>,
     next_lambda_parameter: usize,
+    extensions: ContextExtensions,
 }
 
 impl SubstraitConsumerContext {
+    /// Derives a child scope with an application-specific value, keyed by its type.
+    ///
+    /// Children inherit these values, including through lambda and subquery scopes.
+    /// Replacing a value leaves the parent and sibling scopes unchanged. Values
+    /// are shared through `Arc`; interior mutations remain visible to all scopes
+    /// sharing that value. Use a replacement value for scope-local changes.
+    #[must_use]
+    pub fn with_extension<T: Send + Sync + 'static>(&self, value: Arc<T>) -> Self {
+        let mut child = self.clone();
+        child.extensions.insert_arc(value);
+        child
+    }
+
+    /// Returns the application-specific value of type `T` in this scope, if any.
+    pub fn get_extension<T: Send + Sync + 'static>(&self) -> Option<Arc<T>> {
+        self.extensions.get_arc::<T>()
+    }
+
     /// Derives a child scope whose immediately enclosing query has `schema`.
     pub fn with_outer_schema(&self, schema: Arc<DFSchema>) -> Self {
         let mut child = self.clone();
@@ -766,6 +786,32 @@ mod tests {
             DFSchema::try_from(Schema::new(vec![Field::new(name, data_type, true)]))
                 .unwrap(),
         )
+    }
+
+    #[test]
+    fn extensions_inherit_and_override_without_changing_other_scopes() {
+        struct Scope(&'static str);
+
+        let root = SubstraitConsumerContext::default();
+        let value = Arc::new(Scope("parent"));
+        let parent = root.with_extension(Arc::clone(&value));
+        let sibling = parent.with_outer_schema(schema("a", DataType::Int64));
+        let (child, _) = parent
+            .with_lambda_parameters(&test_consumer(), &[], &DFSchema::empty())
+            .unwrap();
+        assert!(Arc::ptr_eq(
+            &child.get_extension::<Scope>().unwrap(),
+            &value
+        ));
+        let child = child.with_extension(Arc::new(Scope("child")));
+
+        assert!(root.get_extension::<Scope>().is_none());
+        assert_eq!(parent.get_extension::<Scope>().unwrap().0, "parent");
+        assert!(Arc::ptr_eq(
+            &sibling.get_extension::<Scope>().unwrap(),
+            &value
+        ));
+        assert_eq!(child.get_extension::<Scope>().unwrap().0, "child");
     }
 
     #[test]
