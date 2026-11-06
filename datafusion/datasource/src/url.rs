@@ -5,8 +5,9 @@
 use std::sync::Arc;
 
 use datafusion_common::{DataFusionError, Result, TableReference};
-use datafusion_execution::cache::cache_manager::CachedFileList;
+use datafusion_execution::cache::CacheKey;
 use datafusion_execution::cache::cache_manager::TableScopedPath;
+use datafusion_execution::cache::cache_manager::{CachedFileList, meta_heap_bytes};
 use datafusion_execution::object_store::ObjectStoreUrl;
 use datafusion_session::Session;
 
@@ -357,6 +358,8 @@ impl ListingTableUrl {
 /// # Cache Behavior:
 /// A full table listing can satisfy a prefix-filtered request by filtering the
 /// cached files. On cache miss, only the requested path is listed and cached.
+/// Once the listing exceeds the cache budget, the buffered prefix and remaining
+/// objects are streamed without caching the incomplete listing.
 async fn list_with_cache<'b>(
     ctx: &'b dyn Session,
     store: &'b dyn ObjectStore,
@@ -398,10 +401,32 @@ async fn list_with_cache<'b>(
                 debug!("Hit list files cache for requested path");
                 cached.files_matching_prefix(&None)
             } else {
-                let mut vec = store
+                let mut list = store
                     .list(Some(&full_prefix))
-                    .try_collect::<Vec<ObjectMeta>>()
-                    .await?;
+                    .map_err(|e| DataFusionError::ObjectStore(Box::new(e)))
+                    .boxed();
+                let limit = cache.cache_limit();
+                let mut size = table_scoped_list_path.size();
+                if size > limit {
+                    return Ok(list);
+                }
+                let mut vec = Vec::new();
+                while let Some(meta) = list.try_next().await? {
+                    // Admission uses the final, right-sized vector, not spare capacity
+                    // from growth. Count only bytes that shrink_to_fit cannot remove.
+                    let next_size = size
+                        .checked_add(size_of::<ObjectMeta>())
+                        .and_then(|size| size.checked_add(meta_heap_bytes(&meta)));
+                    vec.push(meta);
+                    match next_size {
+                        Some(next_size) if next_size <= limit => size = next_size,
+                        _ => {
+                            return Ok(futures::stream::iter(vec.into_iter().map(Ok))
+                                .chain(list)
+                                .boxed());
+                        }
+                    }
+                }
                 vec.shrink_to_fit(); // Right-size before caching
                 let cached: CachedFileList = vec.into();
                 let result = cached.files_matching_prefix(&None);
@@ -498,6 +523,7 @@ mod tests {
     use datafusion_common::DFSchema;
     use datafusion_common::config::TableOptions;
     use datafusion_execution::TaskContext;
+    use datafusion_execution::cache::CacheValue;
     use datafusion_execution::config::SessionConfig;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use datafusion_expr::execution_props::ExecutionProps;
@@ -516,6 +542,7 @@ mod tests {
     use std::collections::HashMap;
     use std::ops::Range;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use tempfile::tempdir;
 
     #[test]
@@ -1130,6 +1157,189 @@ mod tests {
         Ok(())
     }
 
+    fn listing_cache_key(url: &ListingTableUrl) -> TableScopedPath {
+        TableScopedPath {
+            table: url.get_table_ref().clone(),
+            path: url.prefix().clone(),
+        }
+    }
+
+    fn generated_listing_weight(
+        url: &ListingTableUrl,
+        listing: &GeneratedListing,
+        count: usize,
+    ) -> usize {
+        let mut files = (0..count).map(|index| listing.object(index)).collect_vec();
+        files.shrink_to_fit();
+        listing_cache_key(url).size() + CachedFileList::new(files).size()
+    }
+
+    fn session_with_listing_cache(limit: usize) -> Result<MockSession> {
+        use datafusion_execution::runtime_env::RuntimeEnvBuilder;
+
+        Ok(MockSession::with_runtime_env(
+            RuntimeEnvBuilder::new()
+                .with_object_list_cache_limit(limit)
+                .build_arc()?,
+        ))
+    }
+
+    #[tokio::test]
+    async fn test_oversized_listing_only_prefetches_a_bounded_prefix() -> Result<()> {
+        let store = MockObjectStore::with_generated_listing(100, 128, None);
+        let listing = store.generated_listing.as_ref().unwrap();
+        let url = ListingTableUrl::parse("/table/")?;
+        let session =
+            session_with_listing_cache(generated_listing_weight(&url, listing, 2))?;
+        let stream = url.list_all_files(&session, &store, "parquet").await?;
+
+        // Two objects fit; the third proves this listing cannot be cached.
+        assert_eq!(listing.polled.load(Ordering::Relaxed), 3);
+        let files = stream.try_collect::<Vec<_>>().await?;
+        assert_eq!(
+            files,
+            (0..100).map(|index| listing.object(index)).collect_vec()
+        );
+        assert_eq!(listing.polled.load(Ordering::Relaxed), 100);
+        let cache = session
+            .runtime_env
+            .cache_manager
+            .get_list_files_cache()
+            .unwrap();
+        assert!(cache.get(&listing_cache_key(&url)).is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_dropping_oversized_listing_does_not_read_or_cache_its_tail()
+    -> Result<()> {
+        let store = MockObjectStore::with_generated_listing(100, 128, None);
+        let listing = store.generated_listing.as_ref().unwrap();
+        let url = ListingTableUrl::parse("/table/")?;
+        let session =
+            session_with_listing_cache(generated_listing_weight(&url, listing, 1))?;
+        let mut stream = url.list_all_files(&session, &store, "parquet").await?;
+        assert_eq!(stream.try_next().await?, Some(listing.object(0)));
+        drop(stream);
+
+        assert_eq!(listing.polled.load(Ordering::Relaxed), 2);
+        let cache = session
+            .runtime_env
+            .cache_manager
+            .get_list_files_cache()
+            .unwrap();
+        assert!(cache.get(&listing_cache_key(&url)).is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_listing_cache_admission_boundary_includes_key_and_metadata()
+    -> Result<()> {
+        let url = ListingTableUrl::parse("/table/")?
+            .with_table_ref(TableReference::bare("a_table_reference"));
+        for below_limit in [0, 1] {
+            let store = MockObjectStore::with_generated_listing(2, 128, None);
+            let listing = store.generated_listing.as_ref().unwrap();
+            let limit = generated_listing_weight(&url, listing, 2) - below_limit;
+            let session = session_with_listing_cache(limit)?;
+            let cache = session
+                .runtime_env
+                .cache_manager
+                .get_list_files_cache()
+                .unwrap();
+            let expected = (0..2).map(|index| listing.object(index)).collect_vec();
+
+            for _ in 0..2 {
+                let files = url
+                    .list_all_files(&session, &store, "parquet")
+                    .await?
+                    .try_collect::<Vec<_>>()
+                    .await?;
+                assert_eq!(files, expected);
+            }
+
+            assert_eq!(
+                cache.get(&listing_cache_key(&url)).is_some(),
+                below_limit == 0
+            );
+            assert_eq!(
+                listing.polled.load(Ordering::Relaxed),
+                if below_limit == 0 { 2 } else { 4 }
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_single_oversized_listing_object_is_returned_without_reading_tail()
+    -> Result<()> {
+        let store = MockObjectStore::with_generated_listing(100, 1024 * 1024, None);
+        let listing = store.generated_listing.as_ref().unwrap();
+        let url = ListingTableUrl::parse("/table/")?;
+        let session = session_with_listing_cache(1024)?;
+        let mut stream = url.list_all_files(&session, &store, "parquet").await?;
+
+        assert_eq!(listing.polled.load(Ordering::Relaxed), 1);
+        assert_eq!(stream.try_next().await?, Some(listing.object(0)));
+        drop(stream);
+        assert_eq!(listing.polled.load(Ordering::Relaxed), 1);
+        let cache = session
+            .runtime_env
+            .cache_manager
+            .get_list_files_cache()
+            .unwrap();
+        assert!(cache.get(&listing_cache_key(&url)).is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_listing_key_over_budget_skips_prefetch() -> Result<()> {
+        let store = MockObjectStore::with_generated_listing(3, 128, None);
+        let listing = store.generated_listing.as_ref().unwrap();
+        let url = ListingTableUrl::parse("/table/")?;
+        let session = session_with_listing_cache(listing_cache_key(&url).size() - 1)?;
+        let stream = url.list_all_files(&session, &store, "parquet").await?;
+
+        assert_eq!(listing.polled.load(Ordering::Relaxed), 0);
+        assert_eq!(stream.try_collect::<Vec<_>>().await?.len(), 3);
+        let cache = session
+            .runtime_env
+            .cache_manager
+            .get_list_files_cache()
+            .unwrap();
+        assert!(cache.get(&listing_cache_key(&url)).is_none());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_listing_errors_never_cache_a_partial_listing() -> Result<()> {
+        let url = ListingTableUrl::parse("/table/")?;
+        for fitting_objects in [1, 10] {
+            let store = MockObjectStore::with_generated_listing(10, 128, Some(2));
+            let listing = store.generated_listing.as_ref().unwrap();
+            let session = session_with_listing_cache(generated_listing_weight(
+                &url,
+                listing,
+                fitting_objects,
+            ))?;
+            let result = match url.list_all_files(&session, &store, "parquet").await {
+                Ok(stream) => stream.try_collect::<Vec<_>>().await,
+                Err(error) => Err(error),
+            };
+
+            let error = result.unwrap_err();
+            assert!(matches!(&error, DataFusionError::ObjectStore(_)));
+            assert!(error.to_string().contains("generated listing failure"));
+            let cache = session
+                .runtime_env
+                .cache_manager
+                .get_list_files_cache()
+                .unwrap();
+            assert!(cache.get(&listing_cache_key(&url)).is_none());
+        }
+        Ok(())
+    }
+
     /// Creates a file with "hello world" content at the specified path
     async fn create_file(object_store: &dyn ObjectStore, path: &str) {
         object_store
@@ -1186,6 +1396,28 @@ mod tests {
         in_mem: object_store::memory::InMemory,
         forbidden_paths: Vec<Path>,
         list_prefixes: Arc<Mutex<Vec<Option<Path>>>>,
+        generated_listing: Option<GeneratedListing>,
+    }
+
+    /// Generate metadata only when polled, so the store cannot hide eager listing.
+    #[derive(Clone, Debug)]
+    struct GeneratedListing {
+        num_objects: usize,
+        metadata_bytes: usize,
+        failure_at: Option<usize>,
+        polled: Arc<AtomicUsize>,
+    }
+
+    impl GeneratedListing {
+        fn object(&self, index: usize) -> ObjectMeta {
+            ObjectMeta {
+                location: Path::from(format!("table/file-{index:08}.parquet")),
+                last_modified: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                size: 1,
+                e_tag: Some("e".repeat(self.metadata_bytes)),
+                version: Some("version".to_string()),
+            }
+        }
     }
 
     impl MockObjectStore {
@@ -1198,6 +1430,23 @@ mod tests {
                 in_mem: object_store::memory::InMemory::new(),
                 forbidden_paths,
                 list_prefixes: Default::default(),
+                generated_listing: None,
+            }
+        }
+
+        fn with_generated_listing(
+            num_objects: usize,
+            metadata_bytes: usize,
+            failure_at: Option<usize>,
+        ) -> Self {
+            Self {
+                generated_listing: Some(GeneratedListing {
+                    num_objects,
+                    metadata_bytes,
+                    failure_at,
+                    polled: Default::default(),
+                }),
+                ..Self::new()
             }
         }
 
@@ -1266,6 +1515,29 @@ mod tests {
             prefix: Option<&Path>,
         ) -> BoxStream<'static, object_store::Result<ObjectMeta>> {
             self.list_prefixes.lock().unwrap().push(prefix.cloned());
+            if let Some(listing) = self.generated_listing.clone() {
+                let prefix = prefix.cloned();
+                return futures::stream::iter(0..listing.num_objects)
+                    .then(move |index| {
+                        listing.polled.fetch_add(1, Ordering::Relaxed);
+                        futures::future::ready(if listing.failure_at == Some(index) {
+                            Err(object_store::Error::Generic {
+                                store: "GeneratedListing",
+                                source: "generated listing failure".into(),
+                            })
+                        } else {
+                            Ok(listing.object(index))
+                        })
+                    })
+                    .try_filter(move |meta| {
+                        futures::future::ready(
+                            prefix.as_ref().is_none_or(|prefix| {
+                                meta.location.prefix_matches(prefix)
+                            }),
+                        )
+                    })
+                    .boxed();
+            }
             self.in_mem.list(prefix)
         }
 
