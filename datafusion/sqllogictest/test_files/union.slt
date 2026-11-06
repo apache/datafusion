@@ -6,6 +6,36 @@
 ## UNION Tests
 ##########
 
+# Infer the common schema before analysis, including timestamp precision/timezone
+# and string representations (https://github.com/apache/datafusion/issues/27023).
+query TTT
+DESCRIBE SELECT
+  arrow_cast(1, 'Timestamp(Microsecond, Some("UTC"))') AS t,
+  arrow_cast('a', 'Utf8') AS large,
+  arrow_cast('a', 'Utf8') AS view
+UNION ALL SELECT
+  CAST(NULL AS TIMESTAMP),
+  arrow_cast('b', 'LargeUtf8'),
+  arrow_cast('b', 'Utf8View');
+----
+t Timestamp(ns, "UTC") YES
+large LargeUtf8 NO
+view Utf8View NO
+
+# Failed inference keeps the first type for analyzer rules to resolve or reject.
+query TTT
+DESCRIBE SELECT 1::SMALLINT AS x UNION ALL SELECT true;
+----
+x Int16 NO
+
+# Infer dictionary coercion from the actual inputs, without folding the inferred
+# UNION type back into the inputs and restoring the dictionary representation.
+query T
+SELECT DISTINCT arrow_typeof(x)
+FROM (SELECT NULL AS x UNION ALL SELECT arrow_cast('a', 'Dictionary(Int32, Utf8)') AS x);
+----
+Utf8
+
 statement ok
 CREATE TABLE t1(
   id INT,

@@ -13,6 +13,7 @@ use crate::expr::{FieldMetadata, LambdaVariable};
 use crate::higher_order_function::HigherOrderReturnFieldArgs;
 use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lambdas;
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
+use crate::type_coercion::other::get_coerce_type_for_case_expression;
 use crate::udf::ReturnFieldArgs;
 use crate::{
     LogicalPlan, Operator, Projection, Subquery, WindowFunctionDefinition, utils,
@@ -177,15 +178,28 @@ impl ExprSchemable for Expr {
             Expr::ScalarVariable(field, _) => Ok(field.data_type().clone()),
             Expr::Literal(l, _) => Ok(l.data_type()),
             Expr::Case(case) => {
-                for (_, then_expr) in &case.when_then_expr {
-                    let then_type = then_expr.get_type(schema)?;
-                    if !then_type.is_null() {
-                        return Ok(then_type);
-                    }
-                }
-                case.else_expr
+                let then_types = case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, then_expr)| then_expr.get_type(schema))
+                    .collect::<Result<Vec<_>>>()?;
+                let else_type = case
+                    .else_expr
                     .as_ref()
-                    .map_or(Ok(DataType::Null), |e| e.get_type(schema))
+                    .map(|expr| expr.get_type(schema))
+                    .transpose()?;
+                // Leave unsupported combinations for the analyzer, including
+                // custom rules that may resolve the branches before coercion.
+                Ok(
+                    get_coerce_type_for_case_expression(&then_types, else_type.as_ref())
+                        .unwrap_or_else(|| {
+                            then_types
+                                .into_iter()
+                                .find(|data_type| !data_type.is_null())
+                                .or(else_type)
+                                .unwrap_or(DataType::Null)
+                        }),
+                )
             }
             Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
                 Ok(field.data_type().clone())
