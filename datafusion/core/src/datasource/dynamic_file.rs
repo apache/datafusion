@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! dynamic_file_schema contains an [`UrlTableFactory`] implementation that
 //! can create a [`ListingTable`] from the given url.
@@ -31,6 +18,7 @@ use datafusion_common::plan_datafusion_err;
 use datafusion_session::SessionStore;
 
 use async_trait::async_trait;
+use futures::future::BoxFuture;
 
 /// [DynamicListTableFactory] is a factory that can create a [ListingTable] from the given url.
 #[derive(Default, Debug)]
@@ -53,7 +41,30 @@ impl DynamicListTableFactory {
 
 #[async_trait]
 impl UrlTableFactory for DynamicListTableFactory {
-    async fn try_new(&self, url: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn try_new<'life0, 'life1, 'async_trait>(
+        &'life0 self,
+        url: &'life1 str,
+    ) -> BoxFuture<'async_trait, Result<Option<Arc<dyn TableProvider>>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.try_new_boxed(url)
+    }
+}
+
+impl DynamicListTableFactory {
+    fn try_new_boxed<'a>(
+        &'a self,
+        url: &'a str,
+    ) -> BoxFuture<'a, Result<Option<Arc<dyn TableProvider>>>> {
+        Box::pin(self.try_new_inner(url))
+    }
+
+    async fn try_new_inner(&self, url: &str) -> Result<Option<Arc<dyn TableProvider>>> {
         let Ok(table_url) = ListingTableUrl::parse(url) else {
             return Ok(None);
         };

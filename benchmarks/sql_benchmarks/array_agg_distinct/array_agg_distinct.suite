@@ -1,0 +1,11 @@
+description = "High-cardinality array_agg(DISTINCT) SQL benchmarks"
+
+query_pattern = "q{QUERY_ID_PADDED}.benchmark"
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- array_agg_distinct"
+description = "Run the high-cardinality array_agg(DISTINCT) benchmark."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- array_agg_distinct --query 1 --iterations 5 --output /tmp/array_agg_distinct.json"
+description = "Run five iterations and write comparable JSON results."

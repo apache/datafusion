@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion::execution::SessionStateDefaults;
 use datafusion_common::{HashSet, Result, not_impl_err};
@@ -34,12 +21,11 @@ use std::sync::Arc;
 fn main() -> Result<()> {
     let args: Vec<String> = args().collect();
 
-    if args.len() != 2 {
-        panic!(
-            "Usage: {} type (one of 'aggregate', 'scalar', 'window')",
-            args[0]
-        );
-    }
+    assert!(
+        args.len() == 2,
+        "Usage: {} type (one of 'aggregate', 'scalar', 'window')",
+        args[0]
+    );
 
     let function_type = args[1].trim().to_lowercase();
     let docs = match function_type.as_str() {
@@ -137,9 +123,9 @@ fn print_docs(
         let names = get_names_and_aliases(&providers);
 
         // write out the list of function names and aliases
-        names.iter().for_each(|name| {
+        for name in &names {
             let _ = writeln!(docs, "- [{name}](#{name})");
-        });
+        }
 
         // write out each function and alias in the order of the sorted name list
         for name in names {
@@ -214,7 +200,7 @@ fn print_docs(
                 let _ = writeln!(docs, "#### Aliases");
 
                 for alias in f.get_aliases() {
-                    let _ = writeln!(docs, "- {}", alias.replace("_", r#"\_"#));
+                    let _ = writeln!(docs, "- {}", alias.replace('_', r#"\_"#));
                 }
             }
 

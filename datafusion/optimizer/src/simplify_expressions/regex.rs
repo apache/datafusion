@@ -1,22 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{DataFusionError, Result, ScalarValue};
+use datafusion_common::{Result, ScalarValue, plan_err};
 use datafusion_expr::{BinaryExpr, Expr, Like, Operator, lit};
 use regex_syntax::hir::{Capture, Hir, HirKind, Literal, Look};
 
@@ -38,7 +25,7 @@ const ANY_CHAR_REGEX_PATTERN: &str = ".*";
 /// - full anchored regex patterns (e.g. `^foo$`) to `= 'foo'`
 /// - partial anchored regex patterns (e.g. `^foo`) to `LIKE 'foo%'`
 /// - combinations (alternatives) of the above, will be concatenated with `OR` or `AND`
-/// - `EQ .*` to NotNull
+/// - `EQ .*` to `col IS NOT NULL OR NULL` (true for any string, NULL if col is NULL)
 /// - `NE .*` to col IS NULL AND Boolean(NULL) (false for any string, or NULL if col is NULL)
 ///
 /// Dev note: unit tests of this function are in `expr_simplifier.rs`, case `test_simplify_regex`.
@@ -75,8 +62,11 @@ pub fn simplify_regex_expr(
                 right: Box::new(null_bool),
             })
         } else {
-            // not null
-            left.is_not_null()
+            // `col ~ '.*'` matches every non-NULL string and yields NULL for a
+            // NULL input (three-valued logic). Mirror the `not` branch so the
+            // NULL row is preserved (`NULL`) instead of collapsing to `false`.
+            let null_bool = lit(ScalarValue::Boolean(None));
+            left.is_not_null().or(null_bool)
         };
         return Ok(Transformed::yes(new_expr));
     }
@@ -95,11 +85,11 @@ pub fn simplify_regex_expr(
             }
         }
         Err(e) => {
-            // error out early since the execution may fail anyways
-            return Err(DataFusionError::Context(
-                "Invalid regex".to_owned(),
-                Box::new(DataFusionError::External(Box::new(e))),
-            ));
+            // A literal pattern that does not compile is an error in the query
+            // text, and it is known here, before execution. Report it with the
+            // diagnosis of the `regex_syntax` crate, in the same shape as the
+            // error that the regexp functions report at execution time.
+            return plan_err!("Regular expression did not compile: {e}");
         }
     }
 
@@ -208,7 +198,7 @@ fn is_anchored_literal(v: &[Hir]) -> bool {
     match v.len() {
         2..=3 => (),
         _ => return false,
-    };
+    }
 
     let first_last = (
         v.first().expect("length checked"),

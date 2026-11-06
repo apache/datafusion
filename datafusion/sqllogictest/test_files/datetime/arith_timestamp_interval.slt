@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 # timestamp + interval → timestamp
 # Add an interval to a timestamp
 # timestamp '2001-09-28 01:00' + interval '23 hours' → 2001-09-29 00:00:00

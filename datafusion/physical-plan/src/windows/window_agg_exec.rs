@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Stream and channel implementations for window function expressions.
 
@@ -320,7 +307,7 @@ impl ExecutionPlan for WindowAggExec {
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
+        Some(self.metrics.clone_inner().with_output_rows_skew())
     }
 
     fn child_stats_requests(&self, partition: Option<usize>) -> Vec<ChildStats> {
@@ -423,6 +410,7 @@ impl WindowAggExec {
     ) -> Result<Arc<dyn ExecutionPlan>> {
         use super::BoundedWindowAggExec;
         use crate::InputOrderMode;
+        use datafusion_common::utils::usize_from_wire;
         use datafusion_proto_models::protobuf;
         use protobuf::window_agg_exec_node::InputOrderMode as ProtoInputOrderMode;
 
@@ -458,7 +446,12 @@ impl WindowAggExec {
                 ProtoInputOrderMode::PartiallySorted(
                     protobuf::PartiallySortedInputOrderMode { columns },
                 ) => InputOrderMode::PartiallySorted(
-                    columns.iter().map(|column| *column as usize).collect(),
+                    columns
+                        .iter()
+                        .map(|column| {
+                            usize_from_wire(*column, "WindowAggExec", "columns")
+                        })
+                        .collect::<Result<Vec<_>>>()?,
                 ),
                 ProtoInputOrderMode::Sorted(_) => InputOrderMode::Sorted,
             };
@@ -549,7 +542,7 @@ impl WindowAggStream {
         let partition_points =
             evaluate_partition_ranges(batch.num_rows(), &partition_by_sort_keys)?;
 
-        let mut partition_results = vec![];
+        let mut partition_results = Vec::with_capacity(partition_points.len());
         // Calculate window cols
         for partition_point in partition_points {
             let length = partition_point.end - partition_point.start;
@@ -561,8 +554,6 @@ impl WindowAggStream {
         let columns = transpose(partition_results)
             .iter()
             .map(|elems| concat(&elems.iter().map(|x| x.as_ref()).collect::<Vec<_>>()))
-            .collect::<Vec<_>>()
-            .into_iter()
             .collect::<Result<Vec<ArrayRef>, ArrowError>>()?;
 
         // combine with the original cols

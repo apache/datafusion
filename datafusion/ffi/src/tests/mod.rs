@@ -1,21 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::array::{RecordBatch, record_batch};
 use arrow_schema::{DataType, Field, Schema};
@@ -26,15 +14,18 @@ use datafusion_catalog::MemTable;
 use datafusion_catalog::{Session, TableProvider};
 use datafusion_common::stats::Precision;
 use datafusion_common::{ColumnStatistics, Statistics};
-use datafusion_common::{Result, ScalarValue};
-use datafusion_expr::{Expr, TableType};
-use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_plan::ExecutionPlan;
+use datafusion_common::{Result, ScalarValue, SplitPoint, exec_err};
+use datafusion_expr::{Expr, TableType, col, lit};
+use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::{
+    LexOrdering, PhysicalExpr, PhysicalSortExpr, RangePartitioning,
+};
+use datafusion_physical_plan::{ExecutionPlan, Partitioning};
 use sync_provider::create_sync_table_provider;
 use udf_udaf_udwf::{
-    create_ffi_abs_func, create_ffi_first_value_func, create_ffi_random_func,
-    create_ffi_rank_func, create_ffi_stddev_func, create_ffi_sum_func,
-    create_ffi_table_func,
+    create_ffi_abs_func, create_ffi_first_value_func, create_ffi_min_func,
+    create_ffi_random_func, create_ffi_rank_func, create_ffi_stddev_func,
+    create_ffi_sum_func, create_ffi_table_func,
 };
 
 use crate::catalog_provider::FFI_CatalogProvider;
@@ -138,6 +129,9 @@ pub struct ForeignLibraryModule {
 
     /// Create an aggregate UDAF using first_value
     pub create_first_value_udaf: extern "C" fn() -> FFI_AggregateUDF,
+
+    /// Create an aggregate UDAF using min
+    pub create_min_udaf: extern "C" fn() -> FFI_AggregateUDF,
 }
 
 pub fn create_test_schema() -> Arc<Schema> {
@@ -227,7 +221,63 @@ pub fn make_test_statistics() -> Statistics {
 
 pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
     let schema = create_test_schema();
-    let plan = Arc::new(EmptyExec::new(schema).with_statistics(make_test_statistics()));
+    let ordering =
+        LexOrdering::new([PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))])
+            .expect("non-empty ordering");
+    let samples = [10, 20, 30, 40, 50]
+        .into_iter()
+        .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+        .collect();
+    let partitioning = Partitioning::Range(
+        RangePartitioning::try_new_with_samples(ordering, samples, 3)
+            .expect("valid sampled range partitioning"),
+    );
+    let plan = Arc::new(
+        EmptyExec::new(schema)
+            .with_statistics(make_test_statistics())
+            .with_partitioning(partitioning),
+    );
+    FFI_ExecutionPlan::new(plan, None)
+}
+
+/// Registers real Bytes-category [`MetricValue::Count`] and
+/// [`MetricValue::Gauge`] metrics (via the same [`MetricBuilder::bytes_counter`]
+/// and [`MetricBuilder::bytes_gauge`] constructors production code uses for
+/// `bytes_scanned`/`stream_memory_usage`) on the returned plan, so the
+/// consumer-side integration test can exercise the category-aware
+/// byte-formatting `Display` logic through a real cross-library `metrics()`
+/// FFI call rather than only the in-process `FFI_MetricValue` conversion
+/// tests in `physical_expr::metrics`.
+///
+/// This is deliberately exported as its own top-level symbol rather than a
+/// new field on [`ForeignLibraryModule`]: that struct is public and
+/// `#[repr(C)]` with no private/gated constructor, so every field is part of
+/// its exhaustive-construction ABI surface - adding one is exactly what
+/// `cargo-semver-checks`'s `constructible_struct_adds_field` lint flags, even
+/// for a test-only, `integration-tests`-gated struct like this one. A
+/// separate exported symbol, loaded the same way [`load_module`] loads
+/// `datafusion_ffi_get_module`, avoids touching that struct's layout at all.
+///
+/// [`MetricValue::Count`]: datafusion_physical_expr_common::metrics::MetricValue::Count
+/// [`MetricValue::Gauge`]: datafusion_physical_expr_common::metrics::MetricValue::Gauge
+#[unsafe(no_mangle)]
+pub extern "C" fn datafusion_ffi_test_create_exec_with_byte_metrics() -> FFI_ExecutionPlan
+{
+    use datafusion_physical_expr_common::metrics::{
+        ExecutionPlanMetricsSet, MetricBuilder,
+    };
+
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Float32, false)]));
+
+    let metrics_set = ExecutionPlanMetricsSet::new();
+    MetricBuilder::new(&metrics_set)
+        .bytes_counter("bytes_scanned", 0)
+        .add(1536);
+    MetricBuilder::new(&metrics_set)
+        .bytes_gauge("stream_memory_usage", 0)
+        .add(2048);
+
+    let plan = Arc::new(EmptyExec::new(schema).with_metrics(metrics_set.clone_inner()));
     FFI_ExecutionPlan::new(plan, None)
 }
 
@@ -237,6 +287,8 @@ pub(crate) extern "C" fn create_exec_with_statistics() -> FFI_ExecutionPlan {
 struct TableWithStats {
     inner: Arc<dyn TableProvider>,
     stats: Statistics,
+    delete_calls: AtomicUsize,
+    update_calls: AtomicUsize,
 }
 
 #[async_trait]
@@ -256,11 +308,61 @@ impl TableProvider for TableWithStats {
     async fn scan(
         &self,
         session: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         self.inner.scan(session, projection, filters, limit).await
+    }
+
+    async fn delete_from(
+        &self,
+        _state: &dyn Session,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let call = self.delete_calls.fetch_add(1, Ordering::Relaxed);
+        let valid = match call {
+            0 => filters == vec![col("a").gt(lit(10_i32)), col("b").lt(lit(2.5_f64))],
+            1 => filters.is_empty(),
+            _ => false,
+        };
+        if !valid {
+            return exec_err!("Unexpected DELETE filters for call {call}");
+        }
+        Ok(dml_count_plan())
+    }
+
+    async fn update(
+        &self,
+        _state: &dyn Session,
+        assignments: Vec<(String, Expr)>,
+        filters: Vec<Expr>,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        if assignments
+            != vec![
+                ("b".to_string(), lit(42_f64)),
+                ("a".to_string(), lit(7_i32)),
+            ]
+        {
+            return exec_err!("Unexpected UPDATE assignments");
+        }
+
+        let call = self.update_calls.fetch_add(1, Ordering::Relaxed);
+        let valid = match call {
+            0 => filters == vec![col("a").eq(lit(7_i32)), col("b").gt(lit(1.5_f64))],
+            1 => filters.is_empty(),
+            _ => false,
+        };
+
+        if !valid {
+            return exec_err!("Unexpected UPDATE filters for call {call}");
+        }
+
+        Ok(dml_count_plan())
+    }
+
+    async fn truncate(&self, _state: &dyn Session) -> Result<Arc<dyn ExecutionPlan>> {
+        Ok(dml_count_plan())
     }
 }
 
@@ -273,8 +375,19 @@ pub(crate) extern "C" fn create_table_with_statistics(
     let provider = Arc::new(TableWithStats {
         inner,
         stats: make_test_statistics(),
+        delete_calls: AtomicUsize::new(0),
+        update_calls: AtomicUsize::new(0),
     });
     FFI_TableProvider::new_with_ffi_codec(provider, true, None, codec)
+}
+
+fn dml_count_plan() -> Arc<dyn ExecutionPlan> {
+    let schema = Arc::new(Schema::new(vec![Field::new(
+        "count",
+        DataType::UInt64,
+        false,
+    )]));
+    Arc::new(EmptyExec::new(schema))
 }
 
 /// This defines the entry point for using the module.
@@ -306,5 +419,6 @@ pub extern "C" fn datafusion_ffi_get_module() -> ForeignLibraryModule {
         create_query_planner: query_planner::create_query_planner,
         version: super::version,
         create_first_value_udaf: create_ffi_first_value_func,
+        create_min_udaf: create_ffi_min_func,
     }
 }

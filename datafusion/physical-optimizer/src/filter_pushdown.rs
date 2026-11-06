@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Filter Pushdown Optimization Process
 //!
@@ -35,7 +22,6 @@ use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
 
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{Result, assert_eq_or_internal_err, config::ConfigOptions};
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr_common::physical_expr::is_volatile;
@@ -446,10 +432,10 @@ fn push_down_filters(
 ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
     let mut parent_filter_pushdown_supports: Vec<Vec<PushedDown>> =
         vec![vec![]; parent_predicates.len()];
-    let mut self_filters_pushdown_supports = vec![];
-    let mut new_children = Vec::with_capacity(node.children().len());
 
     let children = node.children();
+    let mut self_filters_pushdown_supports = Vec::with_capacity(children.len());
+    let mut new_children = Vec::with_capacity(children.len());
 
     // Filter out expressions that are not allowed for pushdown
     let parent_filtered = FilteredVec::new(&parent_predicates, allow_pushdown_for_expr);
@@ -622,8 +608,8 @@ impl<T: Clone> FilteredVec<T> {
     where
         F: Fn(&T) -> bool,
     {
-        let mut filtered_items = Vec::new();
-        let mut original_indices = Vec::new();
+        let mut filtered_items = Vec::with_capacity(items.len());
+        let mut original_indices = Vec::with_capacity(items.len());
 
         for (idx, item) in items.iter().enumerate() {
             if predicate(item) {
@@ -706,17 +692,7 @@ impl<T: Clone> FilteredVec<T> {
 }
 
 fn allow_pushdown_for_expr(expr: &Arc<dyn PhysicalExpr>) -> bool {
-    let mut allow_pushdown = true;
-    expr.apply(|e| {
-        allow_pushdown = allow_pushdown && !is_volatile(e);
-        if allow_pushdown {
-            Ok(TreeNodeRecursion::Continue)
-        } else {
-            Ok(TreeNodeRecursion::Stop)
-        }
-    })
-    .expect("Infallible traversal of PhysicalExpr tree failed");
-    allow_pushdown
+    !is_volatile(expr)
 }
 
 #[cfg(test)]

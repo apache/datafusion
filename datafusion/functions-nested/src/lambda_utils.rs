@@ -1,27 +1,14 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Shared utilities for `(array, lambda)` style higher-order functions.
 
 use arrow::array::{ArrayRef, AsArray, BooleanArray, OffsetSizeTrait, new_null_array};
 use arrow::buffer::{NullBuffer, OffsetBuffer};
 use arrow::compute::take_arrays;
-use arrow::datatypes::{ArrowNativeType, DataType, FieldRef};
-use datafusion_common::utils::{adjust_offsets_for_slice, list_values_row_number};
+use arrow::datatypes::{DataType, FieldRef};
+use datafusion_common::utils::list_values_row_number;
 use datafusion_common::{
     Result, ScalarValue, plan_err,
     utils::{list_values, take_function_args},
@@ -85,9 +72,8 @@ pub(crate) fn single_list_lambda_parameters(
 ) -> Result<LambdaParametersProgress> {
     let (list, _lambda) = value_lambda_pair(name, fields)?;
 
-    let field = match list.data_type() {
-        DataType::List(field) | DataType::LargeList(field) => field,
-        _ => return plan_err!("expected list, got {list}"),
+    let (DataType::List(field) | DataType::LargeList(field)) = list.data_type() else {
+        return plan_err!("expected list, got {list}");
     };
 
     Ok(LambdaParametersProgress::Complete(vec![vec![Arc::clone(
@@ -141,7 +127,6 @@ pub(crate) struct EvaluatedListLambda {
     pub original_list: ArrayRef,
     pub flattened_values: ArrayRef,
     pub evaluated_result: ColumnarValue,
-    row_offsets: Vec<usize>,
 }
 
 impl EvaluatedListLambda {
@@ -153,12 +138,10 @@ impl EvaluatedListLambda {
         self.original_list.nulls()
     }
 
-    pub(crate) fn row_range(&self, i: usize) -> (usize, usize) {
-        (self.row_offsets[i], self.row_offsets[i + 1])
-    }
-
-    pub(crate) fn adjusted_offsets<O: OffsetSizeTrait>(&self) -> OffsetBuffer<O> {
-        OffsetBuffer::from_lengths(self.row_offsets.windows(2).map(|w| w[1] - w[0]))
+    /// Row boundaries within `flattened_values`, including the elements that
+    /// NULL rows store. Functions that walk elements row by row compute this once.
+    pub(crate) fn row_offsets(&self) -> Result<Vec<usize>> {
+        adjusted_row_offsets(&self.original_list)
     }
 
     pub(crate) fn boolean_predicate(&self, name: &str) -> Result<BooleanArray> {
@@ -177,16 +160,16 @@ impl EvaluatedListLambda {
 
 fn adjusted_row_offsets(list: &ArrayRef) -> Result<Vec<usize>> {
     Ok(match list.data_type() {
-        DataType::List(_) => adjust_offsets_for_slice(list.as_list::<i32>())
-            .iter()
-            .map(|o| o.as_usize())
-            .collect(),
-        DataType::LargeList(_) => adjust_offsets_for_slice(list.as_list::<i64>())
-            .iter()
-            .map(|o| o.as_usize())
-            .collect(),
+        DataType::List(_) => offsets_from_zero(list.as_list::<i32>().offsets()),
+        DataType::LargeList(_) => offsets_from_zero(list.as_list::<i64>().offsets()),
         other => return exec_err!("expected list, got {other}"),
     })
+}
+
+/// Shift `offsets` so the first one is zero.
+fn offsets_from_zero<O: OffsetSizeTrait>(offsets: &OffsetBuffer<O>) -> Vec<usize> {
+    let first = offsets[0].as_usize();
+    offsets.iter().map(|o| o.as_usize() - first).collect()
 }
 
 fn evaluate_single_list_lambda(
@@ -210,13 +193,10 @@ fn evaluate_single_list_lambda(
         Ok(take_arrays(arrays, &indices, None)?)
     })?;
 
-    let row_offsets = adjusted_row_offsets(&original_list)?;
-
     Ok(SingleListLambdaResult::Ready(EvaluatedListLambda {
         original_list,
         flattened_values,
         evaluated_result,
-        row_offsets,
     }))
 }
 

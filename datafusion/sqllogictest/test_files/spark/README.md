@@ -52,6 +52,10 @@ statement ok
 set datafusion.execution.enable_ansi_mode = false;
 ```
 
+Run `datafusion-cli --spark` to explore Spark-compatible functions
+interactively. This enables the Spark SQL dialect and registers the
+Spark-compatible function library for the CLI session.
+
 ### Finding Test Cases
 
 To verify and compare function behavior at a minimum, you can refer to the following documentation sources:

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines `SUM` and `SUM DISTINCT` aggregate accumulators
 
@@ -153,7 +140,7 @@ macro_rules! downcast_sum {
     sql_example = r#"```sql
 > SELECT sum(column_name) FROM table_name;
 +-----------------------+
-| sum(column_name)       |
+| sum(column_name)      |
 +-----------------------+
 | 12345                 |
 +-----------------------+
@@ -261,21 +248,18 @@ impl AggregateUDFImpl for Sum {
     }
 
     fn accumulator(&self, args: AccumulatorArgs) -> Result<Box<dyn Accumulator>> {
-        if args.is_distinct {
-            macro_rules! helper {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(DistinctSumAccumulator::<$t>::new(&$dt)))
-                };
-            }
-            downcast_sum!(args, helper)
-        } else {
-            macro_rules! helper {
-                ($t:ty, $dt:expr) => {
-                    Ok(Box::new(SumAccumulator::<$t>::new($dt.clone())))
-                };
-            }
-            downcast_sum!(args, helper)
+        let is_distinct = args.is_distinct;
+        macro_rules! helper {
+            ($t:ty, $dt:expr) => {
+                if is_distinct {
+                    Ok(Box::new(DistinctSumAccumulator::<$t>::new($dt))
+                        as Box<dyn Accumulator>)
+                } else {
+                    Ok(Box::new(SumAccumulator::<$t>::new($dt)) as Box<dyn Accumulator>)
+                }
+            };
         }
+        downcast_sum!(args, helper)
     }
 
     fn state_fields(&self, args: StateFieldsArgs) -> Result<Vec<FieldRef>> {
@@ -398,6 +382,12 @@ impl AggregateUDFImpl for Sum {
             }
         };
         if lit_type == DataType::Null {
+            return Ok(None);
+        }
+        // `CAST(COUNT(arg) AS <lit type>)` is not valid for intervals, and for
+        // decimals it can overflow or change the SUM result type.
+        // See https://github.com/apache/datafusion/issues/25943
+        if !(lit_type.is_integer() || lit_type.is_floating()) {
             return Ok(None);
         }
 
@@ -680,7 +670,7 @@ impl Accumulator for SlidingDistinctSumAccumulator {
         let keys = self
             .counts
             .keys()
-            .cloned()
+            .copied()
             .map(Some)
             .map(ScalarValue::Int64)
             .collect::<Vec<_>>();
@@ -772,7 +762,7 @@ mod tests {
 
         let initial_capacity = acc.counts.capacity();
         let additional_values: ArrayRef =
-            Arc::new(Int64Array::from_iter(4..4 + initial_capacity as i64 + 1));
+            Arc::new(Int64Array::from_iter(4..=(4 + initial_capacity as i64)));
         acc.update_batch(&[Arc::clone(&additional_values)])?;
 
         let grown_size = expected_sliding_distinct_sum_size(&acc);

@@ -1,27 +1,16 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fs::{File, create_dir_all, remove_dir_all};
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int32Array};
+use arrow::array::{
+    ArrayRef, Int32Array, Int64Array, StringArray, TimestampNanosecondArray,
+};
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use datafusion::catalog::streaming::StreamingTable;
 use datafusion::common::{ScalarValue, SplitPoint};
@@ -29,7 +18,7 @@ use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::listing::{
     ListingOptions, ListingTable, ListingTableConfig, ListingTableUrl,
 };
-use datafusion::logical_expr::{Partitioning, RangePartitioning, col};
+use datafusion::logical_expr::{Partitioning, RangePartitioning, SortExpr, col};
 use datafusion::parquet::arrow::ArrowWriter;
 use datafusion::physical_expr::{
     Partitioning as PhysicalPartitioning, PhysicalSortExpr,
@@ -69,6 +58,12 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         &[(20, 1, 200)],
         &[(30, 1, 300), (40, 4, 400)],
     ];
+    const COMPOSITE_RANGE_PARTITIONS: [&[(i32, i32, i32)]; 4] = [
+        &[(1, 1, 10), (10, 0, 90)],
+        &[(10, 1, 100), (10, 1, 101), (20, 0, 190)],
+        &[(20, 1, 200), (30, 0, 290)],
+        &[(30, 1, 300), (35, 2, 350)],
+    ];
 
     let schema = Arc::new(Schema::new(vec![
         Field::new("range_key", DataType::Int32, false),
@@ -95,8 +90,9 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         "range_partitioned",
         &range_table_dir,
         Arc::clone(&schema),
-        RANGE_PARTITIONS,
+        range_batches(&schema, RANGE_PARTITIONS),
         output_partitioning,
+        None,
     );
 
     register_unbounded_range_stream_table(
@@ -132,8 +128,9 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("test_files/scratch_range_partitioning/range_partitioned_shifted"),
         Arc::clone(&schema),
-        SHIFTED_RANGE_PARTITIONS,
+        range_batches(&schema, SHIFTED_RANGE_PARTITIONS),
         shifted_output_partitioning,
+        None,
     );
 
     // Same rows as `range_partitioned` but split into only three range
@@ -156,8 +153,9 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("test_files/scratch_range_partitioning/range_partitioned_narrow"),
         Arc::clone(&schema),
-        NARROW_RANGE_PARTITIONS,
+        range_batches(&schema, NARROW_RANGE_PARTITIONS),
         narrow_output_partitioning,
+        None,
     );
 
     let sparse_output_partitioning = Partitioning::Range(
@@ -178,9 +176,41 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("test_files/scratch_range_partitioning/range_partitioned_sparse"),
         Arc::clone(&schema),
-        SPARSE_RANGE_PARTITIONS,
+        range_batches(&schema, SPARSE_RANGE_PARTITIONS),
         sparse_output_partitioning,
+        None,
     );
+    let composite_partitioning = Partitioning::Range(
+        RangePartitioning::try_new(
+            vec![
+                col("range_key").sort(true, true),
+                col("non_range_key").sort(true, true),
+            ],
+            [10, 20, 30]
+                .into_iter()
+                .map(|key| {
+                    SplitPoint::new(vec![
+                        ScalarValue::Int32(Some(key)),
+                        ScalarValue::Int32(Some(1)),
+                    ])
+                })
+                .collect(),
+        )
+        .expect("composite range partitioning should be valid"),
+    );
+
+    register_parquet_listing_table(
+        ctx,
+        "range_partitioned_composite",
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_files/scratch_range_partitioning/range_partitioned_composite"),
+        Arc::clone(&schema),
+        range_batches(&schema, COMPOSITE_RANGE_PARTITIONS),
+        composite_partitioning,
+        None,
+    );
+
+    register_sampled_range_stream_table(ctx, schema);
 }
 
 fn register_parquet_listing_table(
@@ -188,16 +218,16 @@ fn register_parquet_listing_table(
     name: &str,
     table_dir: impl AsRef<Path>,
     schema: SchemaRef,
-    partitions: impl IntoIterator<Item = &'static [(i32, i32, i32)]>,
+    batches: Vec<RecordBatch>,
     output_partitioning: Partitioning,
+    file_sort_order: Option<Vec<Vec<SortExpr>>>,
 ) {
     let table_dir = table_dir.as_ref();
     if table_dir.exists() {
         remove_dir_all(table_dir).expect("test table dir should be removable");
     }
     create_dir_all(table_dir).expect("test table dir should be created");
-    for (idx, rows) in partitions.into_iter().enumerate() {
-        let batch = range_batch(Arc::clone(&schema), rows);
+    for (idx, batch) in batches.into_iter().enumerate() {
         let file = File::create(table_dir.join(format!("part-{idx}.parquet")))
             .expect("test table parquet partition should be created");
         let mut writer = ArrowWriter::try_new(file, Arc::clone(&schema), None)
@@ -218,8 +248,11 @@ fn register_parquet_listing_table(
     );
     let table_url =
         ListingTableUrl::parse(&table_path).expect("test table url should parse");
-    let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+    let mut options = ListingOptions::new(Arc::new(ParquetFormat::default()))
         .with_output_partitioning(Some(output_partitioning));
+    if let Some(file_sort_order) = file_sort_order {
+        options = options.with_file_sort_order(file_sort_order);
+    }
     let config = ListingTableConfig::new(table_url)
         .with_listing_options(options)
         .with_schema(schema);
@@ -269,6 +302,48 @@ fn register_unbounded_range_stream_table(
     .expect("test stream table registration should succeed");
 }
 
+/// A finite source with more retained samples than effective range boundaries.
+/// The physical metadata is needed because logical listing tables currently
+/// describe only their effective split points.
+fn register_sampled_range_stream_table(ctx: &SessionContext, schema: Arc<Schema>) {
+    const PARTITIONS: [&[(i32, i32, i32)]; 3] = [
+        &[(1, 1, 10), (10, 1, 100)],
+        &[(20, 1, 200), (30, 1, 300)],
+        &[(40, 1, 400), (50, 1, 500)],
+    ];
+
+    let output_partitioning = PhysicalPartitioning::Range(
+        PhysicalRangePartitioning::try_new_with_samples(
+            [PhysicalSortExpr {
+                expr: physical_col("range_key", &schema)
+                    .expect("range key should exist in stream schema"),
+                options: SortOptions::default(),
+            }]
+            .into(),
+            [10, 20, 30, 40, 50]
+                .into_iter()
+                .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+                .collect(),
+            PARTITIONS.len(),
+        )
+        .expect("sampled range partitioning should be valid"),
+    );
+    let partitions = PARTITIONS
+        .into_iter()
+        .map(|rows| range_stream_partition(Arc::clone(&schema), rows))
+        .collect();
+
+    ctx.register_table(
+        "sampled_range_partitioned",
+        Arc::new(
+            StreamingTable::try_new(schema, partitions)
+                .expect("sampled range table should be valid")
+                .with_output_partitioning(output_partitioning),
+        ),
+    )
+    .expect("sampled range table registration should succeed");
+}
+
 fn range_stream_partition(
     schema: SchemaRef,
     rows: &[(i32, i32, i32)],
@@ -276,6 +351,16 @@ fn range_stream_partition(
     Arc::new(TestPartitionStream::new_with_batches(vec![range_batch(
         schema, rows,
     )]))
+}
+
+fn range_batches(
+    schema: &SchemaRef,
+    partitions: impl IntoIterator<Item = &'static [(i32, i32, i32)]>,
+) -> Vec<RecordBatch> {
+    partitions
+        .into_iter()
+        .map(|rows| range_batch(Arc::clone(schema), rows))
+        .collect()
 }
 
 fn range_batch(schema: SchemaRef, rows: &[(i32, i32, i32)]) -> RecordBatch {
@@ -291,4 +376,183 @@ fn range_batch(schema: SchemaRef, rows: &[(i32, i32, i32)]) -> RecordBatch {
         ],
     )
     .expect("range batch should be valid")
+}
+
+// ==============================================================================
+// Time-bin table: range-partitioned on timestamp, sorted on (key, timestamp)
+// ==============================================================================
+
+/// Unix nanoseconds for `2024-01-01 00:00:00 UTC`.
+const TIME_BIN_EPOCH_NS: i64 = 1_704_067_200_000_000_000;
+const NANOS_PER_SECOND: i64 = 1_000_000_000;
+const NANOS_PER_MINUTE: i64 = 60 * NANOS_PER_SECOND;
+
+/// Timestamp helper: minutes and seconds after `2024-01-01 00:00:00 UTC`.
+fn time_bin_ts(minutes: i64, seconds: i64) -> i64 {
+    TIME_BIN_EPOCH_NS + minutes * NANOS_PER_MINUTE + seconds * NANOS_PER_SECOND
+}
+
+/// Row: (key, col1, col2, col3, col4, timestamp_ns, value)
+type TimeBinRow = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    i64,
+    i64,
+);
+
+/// Registers `range_sorted_time_bin` for time-bin aggregation plan tests.
+///
+/// Two file groups, each covering a 60-minute timestamp range:
+/// - partition 0: `[2024-01-01 00:00, 01:00)`
+/// - partition 1: `[2024-01-01 01:00, 02:00)`
+///
+/// Files are range-partitioned on `timestamp` and sorted on `(key, timestamp)`.
+/// The hour split permits partition-local `date_trunc('hour')` and aligned
+/// `date_bin` aggregation, but daily bins straddle it.
+pub(super) fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Utf8, false),
+        Field::new("col1", DataType::Utf8, false),
+        Field::new("col2", DataType::Utf8, false),
+        Field::new("col3", DataType::Utf8, false),
+        Field::new("col4", DataType::Utf8, false),
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        ),
+        Field::new("value", DataType::Int64, false),
+    ]));
+
+    // Each partition covers 60 minutes. The split is aligned to the 60-second
+    // `date_bin` used by the test query, so time bins do not straddle files.
+    let hour_split = time_bin_ts(60, 0);
+    let output_partitioning = Partitioning::Range(
+        RangePartitioning::try_new(
+            vec![col("timestamp").sort(true, true)],
+            vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                Some(hour_split),
+                None,
+            )])],
+        )
+        .expect("time-bin range partitioning should be valid"),
+    );
+
+    // Within each 60-minute file, rows are sorted by (key, timestamp).
+    let partitions = [
+        vec![
+            ("k1", "x", "y", "z", "a", time_bin_ts(0, 10), 1),
+            ("k1", "x", "y", "z", "a", time_bin_ts(0, 40), 2),
+            ("k1", "x", "y", "z", "b", time_bin_ts(1, 10), 99),
+            ("k2", "x", "y", "z", "a", time_bin_ts(30, 0), 3),
+            ("k2", "x", "y", "z", "a", time_bin_ts(30, 30), 4),
+        ],
+        vec![
+            ("k1", "x", "y", "z", "a", time_bin_ts(60, 10), 10),
+            ("k1", "x", "y", "z", "a", time_bin_ts(60, 40), 20),
+            ("k2", "x", "y", "z", "a", time_bin_ts(90, 0), 30),
+            ("k2", "x", "y", "z", "a", time_bin_ts(105, 0), 5),
+        ],
+    ];
+
+    let table_dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("test_files/scratch_range_partitioning/range_sorted_time_bin");
+    let batches = partitions
+        .iter()
+        .map(|rows| time_bin_batch(Arc::clone(&schema), rows))
+        .collect();
+    register_parquet_listing_table(
+        ctx,
+        "range_sorted_time_bin",
+        &table_dir,
+        Arc::clone(&schema),
+        batches,
+        output_partitioning,
+        Some(vec![vec![
+            col("key").sort(true, true),
+            col("timestamp").sort(true, true),
+        ]]),
+    );
+}
+
+/// Registers `range_sorted_day_bin` with two timestamp ranges split at midnight.
+pub(super) fn register_range_sorted_day_bin_table(ctx: &SessionContext) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        ),
+        Field::new("value", DataType::Int64, false),
+    ]));
+    let partitions = [
+        (
+            vec![time_bin_ts(23 * 60, 0), time_bin_ts(23 * 60 + 30, 0)],
+            vec![1, 2],
+        ),
+        (
+            vec![time_bin_ts(24 * 60, 0), time_bin_ts(24 * 60 + 30, 0)],
+            vec![10, 20],
+        ),
+    ];
+    let batches = partitions
+        .into_iter()
+        .map(|(timestamps, values)| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(TimestampNanosecondArray::from(timestamps)) as ArrayRef,
+                    Arc::new(Int64Array::from(values)) as ArrayRef,
+                ],
+            )
+            .expect("daily time-bin batch should be valid")
+        })
+        .collect();
+    let output_partitioning = Partitioning::Range(
+        RangePartitioning::try_new(
+            vec![col("timestamp").sort(true, true)],
+            vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                Some(time_bin_ts(24 * 60, 0)),
+                None,
+            )])],
+        )
+        .expect("daily time-bin range partitioning should be valid"),
+    );
+    register_parquet_listing_table(
+        ctx,
+        "range_sorted_day_bin",
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_files/scratch_range_partitioning/range_sorted_day_bin"),
+        schema,
+        batches,
+        output_partitioning,
+        Some(vec![vec![col("timestamp").sort(true, true)]]),
+    );
+}
+
+fn time_bin_batch(schema: SchemaRef, rows: &[TimeBinRow]) -> RecordBatch {
+    RecordBatch::try_new(
+        schema,
+        vec![
+            Arc::new(StringArray::from_iter_values(rows.iter().map(|row| row.0)))
+                as ArrayRef,
+            Arc::new(StringArray::from_iter_values(rows.iter().map(|row| row.1)))
+                as ArrayRef,
+            Arc::new(StringArray::from_iter_values(rows.iter().map(|row| row.2)))
+                as ArrayRef,
+            Arc::new(StringArray::from_iter_values(rows.iter().map(|row| row.3)))
+                as ArrayRef,
+            Arc::new(StringArray::from_iter_values(rows.iter().map(|row| row.4)))
+                as ArrayRef,
+            Arc::new(TimestampNanosecondArray::from_iter_values(
+                rows.iter().map(|row| row.5),
+            )) as ArrayRef,
+            Arc::new(Int64Array::from_iter_values(rows.iter().map(|row| row.6)))
+                as ArrayRef,
+        ],
+    )
+    .expect("time-bin batch should be valid")
 }

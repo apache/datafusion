@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Physical exec for aggregate window function expressions.
 
@@ -38,6 +25,53 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::{Result, ScalarValue, exec_datafusion_err};
 use datafusion_expr::{Accumulator, WindowFrame, WindowFrameBound, WindowFrameUnits};
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+/// Reverses an aggregate-backed window expression.
+///
+/// Shared by [`PlainAggregateWindowExpr::get_reverse_expr`] and
+/// [`SlidingAggregateWindowExpr::get_reverse_expr`], which are otherwise
+/// identical. The reversed frame decides which of the two variants is produced:
+/// an ever-expanding frame can be evaluated by the plain (accumulating) variant,
+/// anything else needs the sliding variant.
+///
+/// The aggregate is reversed with
+/// [`AggregateFunctionExpr::reverse_expr_preserving_name`] so that the window's
+/// output field name is unchanged -- the window exec's schema is derived from
+/// [`WindowExpr::field`], and parent plan nodes reference those columns by name.
+pub(crate) fn reverse_aggregate_window_expr(
+    aggregate: &AggregateFunctionExpr,
+    partition_by: &[Arc<dyn PhysicalExpr>],
+    order_by: &[PhysicalSortExpr],
+    window_frame: &WindowFrame,
+    filter: Option<&Arc<dyn PhysicalExpr>>,
+) -> Option<Arc<dyn WindowExpr>> {
+    aggregate
+        .reverse_expr_preserving_name()
+        .map(|reverse_expr| {
+            let reverse_expr = Arc::new(reverse_expr);
+            let reverse_order_by =
+                order_by.iter().map(|e| e.reverse()).collect::<Vec<_>>();
+            let reverse_window_frame = Arc::new(window_frame.reverse());
+            let filter = filter.cloned();
+            if reverse_window_frame.is_ever_expanding() {
+                Arc::new(PlainAggregateWindowExpr::new(
+                    reverse_expr,
+                    partition_by,
+                    &reverse_order_by,
+                    reverse_window_frame,
+                    filter,
+                )) as _
+            } else {
+                Arc::new(SlidingAggregateWindowExpr::new(
+                    reverse_expr,
+                    partition_by,
+                    &reverse_order_by,
+                    reverse_window_frame,
+                    filter,
+                )) as _
+            }
+        })
+}
 
 /// A window expr that takes the form of an aggregate function.
 ///
@@ -185,34 +219,13 @@ impl WindowExpr for PlainAggregateWindowExpr {
     }
 
     fn get_reverse_expr(&self) -> Option<Arc<dyn WindowExpr>> {
-        self.aggregate.reverse_expr().map(|reverse_expr| {
-            let reverse_window_frame = self.window_frame.reverse();
-            if reverse_window_frame.is_ever_expanding() {
-                Arc::new(PlainAggregateWindowExpr::new(
-                    Arc::new(reverse_expr),
-                    &self.partition_by.clone(),
-                    &self
-                        .order_by
-                        .iter()
-                        .map(|e| e.reverse())
-                        .collect::<Vec<_>>(),
-                    Arc::new(self.window_frame.reverse()),
-                    self.filter.clone(),
-                )) as _
-            } else {
-                Arc::new(SlidingAggregateWindowExpr::new(
-                    Arc::new(reverse_expr),
-                    &self.partition_by.clone(),
-                    &self
-                        .order_by
-                        .iter()
-                        .map(|e| e.reverse())
-                        .collect::<Vec<_>>(),
-                    Arc::new(self.window_frame.reverse()),
-                    self.filter.clone(),
-                )) as _
-            }
-        })
+        reverse_aggregate_window_expr(
+            &self.aggregate,
+            &self.partition_by,
+            &self.order_by,
+            &self.window_frame,
+            self.filter.as_ref(),
+        )
     }
 
     fn uses_bounded_memory(&self) -> bool {

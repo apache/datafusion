@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Builder for creating arbitrary metrics
 
@@ -247,6 +234,53 @@ impl<'a> MetricBuilder<'a> {
             gauge: gauge.clone(),
         });
         gauge
+    }
+
+    /// Consumes self and creates a new [`Count`] for recording some
+    /// arbitrary byte-measured metric of an operator (e.g. `bytes_scanned`),
+    /// always displayed with byte units regardless of [`MetricCategory`].
+    pub fn bytes_counter(
+        self,
+        counter_name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> Count {
+        self.with_partition(partition)
+            .global_bytes_counter(counter_name)
+    }
+
+    /// Consumes self and creates a new [`Gauge`] for reporting some
+    /// arbitrary byte-measured metric of an operator (e.g.
+    /// `stream_memory_usage`), always displayed with byte units regardless
+    /// of [`MetricCategory`].
+    pub fn bytes_gauge(
+        self,
+        gauge_name: impl Into<Cow<'static, str>>,
+        partition: usize,
+    ) -> Gauge {
+        let gauge = Gauge::new();
+        self.with_category(MetricCategory::Bytes)
+            .with_partition(partition)
+            .build(MetricValue::Gauge {
+                name: gauge_name.into(),
+                gauge: gauge.clone(),
+            });
+        gauge
+    }
+
+    /// Consumes self and creates a new [`Count`] for recording a
+    /// byte-measured metric of an overall operator (not per partition),
+    /// always displayed with byte units regardless of [`MetricCategory`].
+    pub fn global_bytes_counter(
+        self,
+        counter_name: impl Into<Cow<'static, str>>,
+    ) -> Count {
+        let count = Count::new();
+        self.with_category(MetricCategory::Bytes)
+            .build(MetricValue::Count {
+                name: counter_name.into(),
+                count: count.clone(),
+            });
+        count
     }
 
     /// Consumes self and creates a new [`Gauge`] for recording peak memory

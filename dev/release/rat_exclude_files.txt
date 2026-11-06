@@ -61,6 +61,7 @@ datafusion/proto-common/src/generated/prost.rs
 .github/ISSUE_TEMPLATE/feature_request.yml
 .github/workflows/docs.yaml
 docs/source/llms.txt
+docs/source/robots.txt
 **/node_modules/*
 datafusion/wasmtest/pkg/*
 clippy.toml

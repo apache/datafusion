@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! View data source which uses a LogicalPlan as it's input.
 
@@ -30,6 +17,7 @@ use datafusion_expr::TableType;
 use datafusion_expr::{Expr, LogicalPlan};
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
 use datafusion_physical_plan::ExecutionPlan;
+use futures::future::BoxFuture;
 
 /// An implementation of `TableProvider` that uses another logical plan.
 #[derive(Debug)]
@@ -95,10 +83,41 @@ impl TableProvider for ViewTable {
         Ok(vec![TableProviderFilterPushDown::Exact; filters.len()])
     }
 
-    async fn scan(
+    // Hand-written `#[async_trait]` expansion to reduce compile time. See
+    // <https://github.com/apache/datafusion/issues/13814#issuecomment-5292709677>
+    fn scan<'life0, 'life1, 'life2, 'life3, 'async_trait>(
+        &'life0 self,
+        state: &'life1 dyn Session,
+        projection: Option<&'life2 [usize]>,
+        filters: &'life3 [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'async_trait, Result<Arc<dyn ExecutionPlan>>>
+    where
+        'life0: 'async_trait,
+        'life1: 'async_trait,
+        'life2: 'async_trait,
+        'life3: 'async_trait,
+        Self: 'async_trait,
+    {
+        self.scan_boxed(state, projection, filters, limit)
+    }
+}
+
+impl ViewTable {
+    fn scan_boxed<'a>(
+        &'a self,
+        state: &'a dyn Session,
+        projection: Option<&'a [usize]>,
+        filters: &'a [Expr],
+        limit: Option<usize>,
+    ) -> BoxFuture<'a, Result<Arc<dyn ExecutionPlan>>> {
+        Box::pin(self.scan_inner(state, projection, filters, limit))
+    }
+
+    async fn scan_inner(
         &self,
         state: &dyn Session,
-        projection: Option<&Vec<usize>>,
+        projection: Option<&[usize]>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
@@ -114,7 +133,7 @@ impl TableProvider for ViewTable {
             // avoiding adding a redundant projection (e.g. SELECT * FROM view)
             let current_projection =
                 (0..plan.schema().fields().len()).collect::<Vec<usize>>();
-            if projection == &current_projection {
+            if projection == current_projection {
                 plan
             } else {
                 let fields: Vec<Expr> = projection

@@ -78,6 +78,25 @@ In this example, we write the entire `source_table` out to a folder of Parquet f
 
 # Available Options
 
+## Arrow Format Options
+
+The following options are available when writing [Arrow IPC](https://arrow.apache.org/docs/format/Columnar.html#ipc-file-format) files. Note: If any unsupported option is specified, an error will be raised and the query will fail.
+
+| Option            | Description                                                                                                                                                            | Default Value |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------- |
+| COMPRESSION       | Sets the compression codec used for the record batch bodies within the Arrow IPC file. Supported values are UNCOMPRESSED, LZ4_FRAME, and ZSTD.                         | LZ4_FRAME     |
+| COMPRESSION_LEVEL | Sets the compression level to use with the `ZSTD` codec. Not supported by `LZ4_FRAME` or `UNCOMPRESSED`. If not specified, the default zstd compression level is used. | None          |
+| ALIGNMENT         | Sets the byte alignment used to pad buffers when writing the Arrow IPC file. Must be one of 8, 16, 32, or 64.                                                          | 64            |
+
+**Example:**
+
+```sql
+COPY source_table
+  TO '/tmp/foo.arrow'
+  STORED AS ARROW
+  OPTIONS('COMPRESSION' 'zstd', 'COMPRESSION_LEVEL' '15');
+```
+
 ## JSON Format Options
 
 The following options are available when reading or writing JSON files. Note: If any unsupported option is specified, an error will be raised and the query will fail.
@@ -135,7 +154,7 @@ The following options are available when reading or writing Parquet files. If an
 | Option                                     | Can be Column Specific? | Description                                                                                                                                                                                                                                                                                                                          | OPTIONS Key                                           | Default Value            |
 | ------------------------------------------ | ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------- | ------------------------ |
 | COMPRESSION                                | Yes                     | Sets the internal Parquet **compression codec** for data pages, optionally including the compression level. Applies globally if set without `::col`, or specifically to a column if set using `'compression::column_name'`. Valid values: `uncompressed`, `snappy`, `gzip(level)`, `brotli(level)`, `lz4`, `zstd(level)`, `lz4_raw`. | `'compression'` or `'compression::col'`               | zstd(3)                  |
-| ENCODING                                   | Yes                     | Sets the **encoding** scheme for data pages. Valid values: `plain`, `plain_dictionary`, `rle`, `bit_packed`, `delta_binary_packed`, `delta_length_byte_array`, `delta_byte_array`, `rle_dictionary`, `byte_stream_split`. Use key `'encoding'` or `'encoding::col'` in OPTIONS.                                                      | `'encoding'` or `'encoding::col'`                     | None                     |
+| ENCODING                                   | Yes                     | Sets the **encoding** scheme for data pages. Valid values: `plain`, `plain_dictionary`, `rle`, `bit_packed`, `delta_binary_packed`, `delta_length_byte_array`, `delta_byte_array`, `rle_dictionary`, `byte_stream_split`, `alp`. Use key `'encoding'` or `'encoding::col'` in OPTIONS.                                               | `'encoding'` or `'encoding::col'`                     | None                     |
 | DICTIONARY_ENABLED                         | Yes                     | Sets whether dictionary encoding should be enabled globally or for a specific column.                                                                                                                                                                                                                                                | `'dictionary_enabled'` or `'dictionary_enabled::col'` | true                     |
 | STATISTICS_ENABLED                         | Yes                     | Sets the level of statistics to write (`none`, `chunk`, `page`).                                                                                                                                                                                                                                                                     | `'statistics_enabled'` or `'statistics_enabled::col'` | page                     |
 | BLOOM_FILTER_ENABLED                       | Yes                     | Sets whether a bloom filter should be written for a specific column.                                                                                                                                                                                                                                                                 | `'bloom_filter_enabled::column_name'`                 | None                     |

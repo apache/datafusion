@@ -1,0 +1,14 @@
+template sql_benchmarks/sort_pushdown/sort_pushdown.benchmark.template
+QPAD=03
+VARIANT=inexact_overlap
+DATASET=sort_pushdown_inexact_overlap
+SETTINGS=inexact
+ORDERING=ordered
+
+run
+-- Overlapping RGs: wide projection + DESC LIMIT.
+-- Row-level filter benefit: tight threshold skips decoding non-sort columns.
+SELECT *
+FROM lineitem
+ORDER BY l_orderkey DESC
+LIMIT 100

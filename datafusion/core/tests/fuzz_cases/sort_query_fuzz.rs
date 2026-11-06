@@ -1,26 +1,16 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Fuzz Test for various corner cases sorting RecordBatches exceeds available memory and should spill
 
 use std::cmp::min;
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use arrow::array::RecordBatch;
+use arrow::compute::concat_batches;
+use arrow::util::pretty::pretty_format_batches;
 use arrow_schema::SchemaRef;
 use datafusion::datasource::MemTable;
 use datafusion::prelude::{SessionConfig, SessionContext};
@@ -35,8 +25,6 @@ use datafusion_execution::{memory_pool::FairSpillPool, runtime_env::RuntimeEnvBu
 use rand::Rng;
 use rand::prelude::IndexedRandom;
 use rand::{SeedableRng, rngs::StdRng};
-
-use crate::fuzz_cases::aggregation_fuzzer::check_equality_of_batches;
 
 use super::aggregation_fuzzer::ColumnDescr;
 use super::record_batch_generator::{RecordBatchGenerator, get_supported_types_columns};
@@ -198,7 +186,7 @@ impl SortQueryFuzzer {
             let init_seed = self.runner_rng.random();
             for query_i in 0..self.queries_per_round {
                 let query_seed = self.runner_rng.random();
-                let mut expected_results: Option<Vec<RecordBatch>> = None; // use first config's result as the expected result
+                let mut expected_results: Option<RecordBatch> = None; // use first config's result as the expected result
                 for config_i in 0..self.config_variations_per_query {
                     if self.should_stop_due_to_time_limit(start_time, round, query_i) {
                         return Ok(());
@@ -216,18 +204,14 @@ impl SortQueryFuzzer {
 
                     let results = self
                         .test_gen
-                        .fuzzer_run(init_seed, query_seed, config_seed)
+                        .fuzzer_run(init_seed, query_seed, config_seed, config_i == 0)
                         .await?;
                     println!("\n"); // Separator between tested runs
 
                     if expected_results.is_none() {
                         expected_results = Some(results);
                     } else if let Some(ref expected) = expected_results {
-                        // `fuzzer_run` might append `LIMIT k` to either the
-                        // expected or actual query. The number of results is
-                        // checked inside `fuzzer_run()`. Here we only check
-                        // that the first k rows of each result are consistent.
-                        check_equality_of_batches(expected, &results).unwrap();
+                        assert_batches_equal_in_order(expected, &results, "");
                     } else {
                         unreachable!();
                     }
@@ -416,6 +400,9 @@ impl SortFuzzerTestGenerator {
 
     /// Generates a random SQL query string and an optional limit value.
     /// Returns a tuple containing the query string and an optional limit.
+    ///
+    /// Every projected column is an ORDER BY key, so tied rows have identical
+    /// output and results can be compared in order, including with LIMIT.
     pub fn generate_random_query(&self, rng_seed: u64) -> (String, Option<usize>) {
         let mut rng = StdRng::seed_from_u64(rng_seed);
 
@@ -430,7 +417,7 @@ impl SortFuzzerTestGenerator {
             let mut clause = col.name.clone();
             if rng.random_bool(0.5) {
                 let order = if rng.random_bool(0.5) { "ASC" } else { "DESC" };
-                clause.push_str(&format!(" {order}"));
+                write!(clause, " {order}").ok();
             }
             if rng.random_bool(0.5) {
                 let nulls = if rng.random_bool(0.5) {
@@ -438,7 +425,7 @@ impl SortFuzzerTestGenerator {
                 } else {
                     "NULLS LAST"
                 };
-                clause.push_str(&format!(" {nulls}"));
+                write!(clause, " {nulls}").ok();
             }
             order_by_clauses.push(clause);
         }
@@ -479,6 +466,7 @@ impl SortFuzzerTestGenerator {
         &self,
         rng_seed: u64,
         with_memory_limit: bool,
+        sort_in_place_threshold_override: Option<usize>,
     ) -> Result<SessionContext> {
         let mut rng = StdRng::seed_from_u64(rng_seed);
         let init_state = self.dataset_state.as_ref().unwrap();
@@ -507,6 +495,8 @@ impl SortFuzzerTestGenerator {
             let dataset_size = self.dataset_state.as_ref().unwrap().dataset_size;
             rng.random_range(0..=dataset_size * 2_usize)
         };
+        let sort_in_place_threshold_bytes =
+            sort_in_place_threshold_override.unwrap_or(sort_in_place_threshold_bytes);
 
         // Set up strings for printing
         let memory_limit_str = if with_memory_limit {
@@ -538,6 +528,8 @@ impl SortFuzzerTestGenerator {
         let config = SessionConfig::new()
             .with_target_partitions(num_partitions)
             .with_batch_size(init_state.approx_batch_num_rows / 2)
+            // Keep small input batches separate when comparing the two sort paths.
+            .with_coalesce_batches(sort_in_place_threshold_override.is_none())
             .with_sort_spill_reservation_bytes(sort_spill_reservation_bytes)
             .with_sort_in_place_threshold_bytes(sort_in_place_threshold_bytes);
 
@@ -568,7 +560,8 @@ impl SortFuzzerTestGenerator {
         dataset_seed: u64,
         query_seed: u64,
         config_seed: u64,
-    ) -> Result<Vec<RecordBatch>> {
+        compare_sort_paths: bool,
+    ) -> Result<RecordBatch> {
         self.init_partitioned_staggered_batches(dataset_seed);
         let (query_str, limit) = self.generate_random_query(query_seed);
         println!("  Query:");
@@ -581,12 +574,13 @@ impl SortFuzzerTestGenerator {
         // 2. Memory limiting is enabled in the test generator config
         let with_mem_limit = !query_str.contains("LIMIT") && self.set_memory_limit;
 
-        let ctx = self.generate_random_config(config_seed, with_mem_limit)?;
+        let ctx = self.generate_random_config(config_seed, with_mem_limit, None)?;
         let df = ctx.sql(&query_str).await.unwrap();
-        let results = df.collect().await.unwrap();
+        let schema = Arc::clone(df.schema().inner());
+        let results = concat_batches(&schema, &df.collect().await?)?;
 
         // ==== Check the result size is consistent with the limit ====
-        let result_num_rows = results.iter().map(|batch| batch.num_rows()).sum::<usize>();
+        let result_num_rows = results.num_rows();
         let dataset_size = self.dataset_state.as_ref().unwrap().dataset_size;
 
         if let Some(limit) = limit {
@@ -594,13 +588,76 @@ impl SortFuzzerTestGenerator {
             assert_eq!(result_num_rows, expected_num_rows);
         }
 
+        if compare_sort_paths && limit.is_none() && !with_mem_limit {
+            // Run the same query inline and with bounded parallel preparation.
+            // An unbounded memory pool allows the inline path to concatenate all runs.
+            for threshold in [usize::MAX, 0] {
+                let ctx =
+                    self.generate_random_config(config_seed, false, Some(threshold))?;
+                let actual = ctx.sql(&query_str).await?.collect().await?;
+                assert_batches_equal_in_order(
+                    &results,
+                    &concat_batches(&schema, &actual)?,
+                    &format!("sort_in_place_threshold_bytes={threshold}"),
+                );
+            }
+        }
+
         Ok(results)
     }
+}
+
+/// Compares rows in order by their displayed values, so logically equal
+/// batches with different physical encodings (e.g. dictionaries) still match.
+#[track_caller]
+fn assert_batches_equal_in_order(
+    expected: &RecordBatch,
+    actual: &RecordBatch,
+    msg: &str,
+) {
+    let expected = pretty_format_batches(std::slice::from_ref(expected))
+        .unwrap()
+        .to_string();
+    let actual = pretty_format_batches(std::slice::from_ref(actual))
+        .unwrap()
+        .to_string();
+    assert_eq!(expected, actual, "{msg}");
 }
 
 #[cfg(test)]
 mod test {
     use super::*;
+
+    /// The sort query fuzzer uses the current time as its seed for each run.
+    /// This test replays seeds from previously failing cases.
+    ///
+    /// Regressions:
+    /// https://github.com/apache/datafusion/actions/runs/41196052207/job/124522323666
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_regression_sort_query_fuzz() {
+        // Regression seeds
+        let gen_seed = 1_793_445_468;
+
+        // Reproducing
+        let mut test_generator = SortFuzzerTestGenerator::new(
+            2000,
+            3,
+            "sort_fuzz_table".to_string(),
+            get_supported_types_columns(gen_seed),
+            false,
+            gen_seed,
+        );
+
+        test_generator
+            .fuzzer_run(
+                17_320_197_313_368_524_478,
+                16_774_755_103_655_697_964,
+                1_568_822_825_954_225_201,
+                true,
+            )
+            .await
+            .unwrap();
+    }
 
     /// Given the same seed, the result should be the same
     #[tokio::test]
@@ -615,8 +672,8 @@ mod test {
             gen_seed,
         );
 
-        let res1 = test_generator.fuzzer_run(1, 2, 3).await.unwrap();
-        let res2 = test_generator.fuzzer_run(1, 2, 3).await.unwrap();
-        check_equality_of_batches(&res1, &res2).unwrap();
+        let res1 = test_generator.fuzzer_run(1, 2, 3, false).await.unwrap();
+        let res2 = test_generator.fuzzer_run(1, 2, 3, false).await.unwrap();
+        assert_batches_equal_in_order(&res1, &res2, "");
     }
 }

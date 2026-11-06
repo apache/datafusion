@@ -1,31 +1,21 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::aggregates::group_values::multi_group_by::{
     GroupColumn, Nulls, nulls_equal_to,
 };
-use crate::aggregates::group_values::null_builder::MaybeNullBufferBuilder;
+use crate::aggregates::group_values::null_builder::NullBufferBuilderExt;
 use arrow::array::{
     Array, ArrayRef, AsArray, BooleanBufferBuilder, FixedSizeBinaryArray,
+    NullBufferBuilder,
 };
 use arrow::buffer::{Buffer, NullBuffer};
 use datafusion_common::utils::proxy::VecAllocExt;
 use datafusion_common::utils::split_vec_min_alloc;
 use datafusion_common::{Result, exec_datafusion_err};
+use datafusion_expr::GroupSelection;
+use std::mem::size_of;
 use std::sync::Arc;
 
 /// An implementation of [`GroupColumn`] for `FixedSizeBinary` values
@@ -50,7 +40,7 @@ pub struct FixedSizeBinaryGroupValueBuilder {
     /// `byte_width` may be `0`
     len: usize,
     /// Null state (null rows still occupy `byte_width` bytes in `buffer`)
-    nulls: MaybeNullBufferBuilder,
+    nulls: NullBufferBuilder,
 }
 
 impl FixedSizeBinaryGroupValueBuilder {
@@ -65,18 +55,18 @@ impl FixedSizeBinaryGroupValueBuilder {
             byte_width: byte_width as usize,
             buffer: Vec::new(),
             len: 0,
-            nulls: MaybeNullBufferBuilder::new(),
+            nulls: NullBufferBuilder::empty(),
         }
     }
 
     fn do_append_val_inner(&mut self, array: &FixedSizeBinaryArray, row: usize) {
         if array.is_null(row) {
-            self.nulls.append(true);
+            self.nulls.append_null();
             // Null rows still occupy `byte_width` (zeroed) bytes in the
             // buffer so the value offset stays a function of the row index
             self.buffer.resize(self.buffer.len() + self.byte_width, 0);
         } else {
-            self.nulls.append(false);
+            self.nulls.append_non_null();
             self.buffer.extend_from_slice(array.value(row));
         }
         self.len += 1;
@@ -138,7 +128,7 @@ impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
     }
 
     fn vectorized_equal_to(
-        &self,
+        &mut self,
         lhs_rows: &[usize],
         array: &ArrayRef,
         rhs_rows: &[usize],
@@ -187,7 +177,7 @@ impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
             }
 
             Nulls::None => {
-                self.nulls.append_n(rows.len(), false);
+                self.nulls.append_n_non_nulls(rows.len());
                 for &row in rows {
                     self.buffer.extend_from_slice(arr.value(row));
                 }
@@ -195,7 +185,7 @@ impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
             }
 
             Nulls::All => {
-                self.nulls.append_n(rows.len(), true);
+                self.nulls.append_n_nulls(rows.len());
                 self.buffer
                     .resize(self.buffer.len() + rows.len() * self.byte_width, 0);
                 self.len += rows.len();
@@ -210,7 +200,7 @@ impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
     }
 
     fn size(&self) -> usize {
-        self.buffer.allocated_size() + self.nulls.allocated_size()
+        size_of::<Self>() + self.buffer.allocated_size() + self.nulls.allocated_size()
     }
 
     fn build(self: Box<Self>) -> ArrayRef {
@@ -222,6 +212,23 @@ impl GroupColumn for FixedSizeBinaryGroupValueBuilder {
         } = *self;
 
         Self::build_array(byte_width, buffer, nulls.build(), len)
+    }
+
+    fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
+        selection.validate_num_groups(self.len)?;
+        let len = selection.len();
+        let mut values = Vec::with_capacity(len * self.byte_width);
+        let mut nulls = NullBufferBuilder::new(len);
+        for index in selection.iter() {
+            nulls.append(!self.nulls.is_null(index));
+            values.extend_from_slice(self.value(index));
+        }
+        Ok(Self::build_array(
+            self.byte_width,
+            values,
+            nulls.build(),
+            len,
+        ))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
@@ -241,6 +248,7 @@ mod tests {
 
     use crate::aggregates::group_values::multi_group_by::fixed_size_binary::FixedSizeBinaryGroupValueBuilder;
     use arrow::array::{ArrayRef, BooleanBufferBuilder, FixedSizeBinaryArray};
+    use datafusion_expr::GroupSelection;
 
     use super::GroupColumn;
 
@@ -275,7 +283,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &FixedSizeBinaryGroupValueBuilder,
+            |builder: &mut FixedSizeBinaryGroupValueBuilder,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -301,7 +309,7 @@ mod tests {
         };
 
         let equal_to =
-            |builder: &FixedSizeBinaryGroupValueBuilder,
+            |builder: &mut FixedSizeBinaryGroupValueBuilder,
              lhs_rows: &[usize],
              input_array: &ArrayRef,
              rhs_rows: &[usize],
@@ -321,7 +329,7 @@ mod tests {
     where
         A: FnMut(&mut FixedSizeBinaryGroupValueBuilder, &ArrayRef, &[usize]),
         E: FnMut(
-            &FixedSizeBinaryGroupValueBuilder,
+            &mut FixedSizeBinaryGroupValueBuilder,
             &[usize],
             &ArrayRef,
             &[usize],
@@ -368,7 +376,7 @@ mod tests {
         // Check
         let mut equal_to_results = make_true_buffer(builder.len());
         equal_to(
-            &builder,
+            &mut builder,
             &[0, 1, 2, 3, 4, 5],
             &input_array,
             &[0, 1, 2, 3, 4, 5],
@@ -472,6 +480,33 @@ mod tests {
         let output = builder.take_n(2);
         assert_eq!(&output, &expected);
         assert_eq!(builder.len(), 0);
+    }
+
+    #[test]
+    fn test_fixed_size_binary_values_preserving() {
+        let mut builder = FixedSizeBinaryGroupValueBuilder::new(2);
+        let input = make_array(
+            vec![Some(b"aa".as_slice()), None, Some(b"bb".as_slice())],
+            2,
+        );
+        builder.vectorized_append(&input, &[0, 1, 2]).unwrap();
+
+        let output = builder
+            .values_preserving(
+                GroupSelection::try_from_indices(&[2, 0, 1, 2], 3).unwrap(),
+            )
+            .unwrap();
+        let expected = make_array(
+            vec![
+                Some(b"bb".as_slice()),
+                Some(b"aa".as_slice()),
+                None,
+                Some(b"bb".as_slice()),
+            ],
+            2,
+        );
+        assert_eq!(&output, &expected);
+        assert_eq!(builder.len(), 3);
     }
 
     #[test]

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines the EXPLAIN operator
 
@@ -215,17 +202,26 @@ impl ExecutionPlan for ExplainExec {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
 
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `ExplainExec` is a compile error here until it is either serialized
+        // or explicitly documented as not needing to be.
+        let Self {
+            schema,
+            stringified_plans,
+            verbose,
+            // Derived from `schema`, recomputed on decode.
+            cache: _,
+        } = self;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Explain(
                     protobuf::ExplainExecNode {
-                        schema: Some(self.schema().as_ref().try_into()?),
-                        stringified_plans: self
-                            .stringified_plans()
+                        schema: Some(schema.as_ref().try_into()?),
+                        stringified_plans: stringified_plans
                             .iter()
                             .map(stringified_plan_to_proto)
                             .collect(),
-                        verbose: self.verbose(),
+                        verbose: *verbose,
                     },
                 ),
             ),
@@ -247,19 +243,25 @@ impl ExplainExec {
             protobuf::physical_plan_node::PhysicalPlanType::Explain,
             "ExplainExec",
         );
-        let schema = explain.schema.as_ref().ok_or_else(|| {
+        // Destructure exhaustively so that a new field on `ExplainExecNode` is
+        // a compile error here rather than a silently dropped field.
+        let protobuf::ExplainExecNode {
+            schema,
+            stringified_plans,
+            verbose,
+        } = explain;
+        let schema = schema.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "ExplainExec is missing required field 'schema'"
             )
         })?;
         Ok(Arc::new(ExplainExec::new(
             Arc::new(arrow::datatypes::Schema::try_from(schema)?),
-            explain
-                .stringified_plans
+            stringified_plans
                 .iter()
                 .map(stringified_plan_from_proto)
                 .collect(),
-            explain.verbose,
+            *verbose,
         )))
     }
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This is an example of an async table provider that will call functions on
 //! the tokio runtime of the library providing the function. Since we cannot
@@ -75,7 +62,7 @@ fn async_table_provider_thread(
 
     runtime.block_on(async move {
         let mut num_received = 0;
-        while let Some(true) = batch_request.recv().await {
+        while batch_request.recv().await == Some(true) {
             let record_batch = match num_received {
                 0 => Some(create_record_batch(1, 5)),
                 1 => Some(create_record_batch(6, 1)),
@@ -139,7 +126,7 @@ impl TableProvider for AsyncTableProvider {
     async fn scan(
         &self,
         state: &dyn Session,
-        _projection: Option<&Vec<usize>>,
+        _projection: Option<&[usize]>,
         _filters: &[Expr],
         _limit: Option<usize>,
     ) -> Result<Arc<dyn ExecutionPlan>> {

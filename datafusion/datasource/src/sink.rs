@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Execution plan for writing data to [`DataSink`]s
 
@@ -290,7 +277,7 @@ impl ExecutionPlan for DataSinkExec {
     fn required_input_ordering(&self) -> Vec<Option<OrderingRequirements>> {
         // The required input ordering is set externally (e.g. by a `ListingTable`).
         // Otherwise, there is no specific requirement (i.e. `sort_order` is `None`).
-        vec![self.sort_order.as_ref().cloned().map(Into::into)]
+        vec![self.sort_order.clone().map(Into::into)]
     }
 
     fn maintains_input_order(&self) -> Vec<bool> {
@@ -385,11 +372,11 @@ impl ExecutionPlan for DataSinkExec {
 /// Create a output record batch with a count
 ///
 /// ```text
-/// +-------+,
-/// | count |,
-/// +-------+,
-/// | 6     |,
-/// +-------+,
+/// +-------+
+/// | count |
+/// +-------+
+/// | 6     |
+/// +-------+
 /// ```
 fn make_count_batch(count: u64) -> RecordBatch {
     let array = Arc::new(UInt64Array::from(vec![count])) as ArrayRef;

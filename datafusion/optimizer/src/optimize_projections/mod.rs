@@ -1,33 +1,33 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`OptimizeProjections`] identifies and eliminates unused columns
+//!
+//! # Precedence over `PushDownLeafProjections`
+//!
+//! `OptimizeProjections` merges adjacent projections, including a recovery
+//! projection over an extraction projection that
+//! [`PushDownLeafProjections`] creates. To keep the two rules from undoing each
+//! other, `PushDownLeafProjections` only creates that pair when the extraction
+//! projection moves below the input. See the module documentation of
+//! [`extract_leaf_expressions`](crate::extract_leaf_expressions).
+//!
+//! [`PushDownLeafProjections`]: crate::extract_leaf_expressions::PushDownLeafProjections
 
 mod required_indices;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_expr::logical_plan::MaterializedCtePlan;
 use std::sync::Arc;
 
 use datafusion_common::{
-    Column, DFSchema, HashMap, JoinType, Result, assert_eq_or_internal_err,
+    Column, DFSchema, DFSchemaRef, HashMap, JoinType, Result, assert_eq_or_internal_err,
     get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
+use datafusion_expr::utils::passthrough_field_index;
 use datafusion_expr::{
     Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScanBuilder, Unnest,
     Window, logical_plan::LogicalPlan,
@@ -87,10 +87,6 @@ impl OptimizerRule for OptimizeProjections {
 
     fn apply_order(&self) -> Option<ApplyOrder> {
         None
-    }
-
-    fn supports_rewrite(&self) -> bool {
-        true
     }
 
     fn rewrite(
@@ -158,16 +154,18 @@ fn optimize_projections(
             {
                 aggregate.group_expr
             } else {
-                let group_by_expr_existing = aggregate
+                let group_by_input_indices = aggregate
                     .group_expr
                     .iter()
-                    .map(|group_by_expr| group_by_expr.schema_name().to_string())
+                    .map(|group_by_expr| {
+                        passthrough_field_index(group_by_expr, aggregate.input.schema())
+                    })
                     .collect::<Vec<_>>();
 
                 if let Some(simplest_groupby_indices) =
                     get_required_group_by_exprs_indices(
                         aggregate.input.schema(),
-                        &group_by_expr_existing,
+                        &group_by_input_indices,
                     )
                 {
                     // Some of the fields in the GROUP BY may be required by
@@ -282,7 +280,7 @@ fn optimize_projections(
         }
         // Other node types are handled below
         _ => {}
-    };
+    }
 
     // For other plan node types, calculate indices for columns they use and
     // try to rewrite their children
@@ -365,9 +363,19 @@ fn optimize_projections(
                     .collect()
             }
         }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+            // The scans are leaves whose schema is the schema of the body, so
+            // the body keeps every column. The output is the output of the
+            // continuation, so the continuation needs what the parent needs.
+            vec![
+                RequiredIndices::new_for_all_exprs(&cte.cte),
+                RequiredIndices::new_from_indices(indices.into_inner()),
+            ]
+        }
         LogicalPlan::EmptyRelation(_)
         | LogicalPlan::Values(_)
-        | LogicalPlan::DescribeTable(_) => {
+        | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
+        | LogicalPlan::Show(_) => {
             // These operators have no inputs, so stop the optimization process.
             return Ok(Transformed::no(plan));
         }
@@ -407,6 +415,26 @@ fn optimize_projections(
                 right_indices.with_projection_beneficial(),
             ]
         }
+        LogicalPlan::AsOfJoin(join) => {
+            let left_len = join.left.schema().fields().len();
+            let mut left_required = Vec::new();
+            let mut right_required = Vec::new();
+            for index in indices.indices() {
+                if *index < left_len {
+                    left_required.push(*index);
+                } else {
+                    right_required.push(*index - left_len);
+                }
+            }
+            let left_indices = RequiredIndices::new_from_indices(left_required)
+                .with_plan_exprs(&plan, join.left.schema())?;
+            let right_indices = RequiredIndices::new_from_indices(right_required)
+                .with_plan_exprs(&plan, join.right.schema())?;
+            vec![
+                left_indices.with_projection_beneficial(),
+                right_indices.with_projection_beneficial(),
+            ]
+        }
         // these nodes are explicitly rewritten in the match statement above
         LogicalPlan::Projection(_)
         | LogicalPlan::Aggregate(_)
@@ -426,7 +454,8 @@ fn optimize_projections(
                 RequiredIndices::new().with_plan_exprs(&plan, input.schema())?;
 
             // Add additional required indices from the parent
-            let mut additional_necessary_child_indices = Vec::new();
+            let mut additional_necessary_child_indices =
+                Vec::with_capacity(indices.indices().len());
             indices.indices().iter().for_each(|idx| {
                 if let Some(index) = dependency_indices.get(*idx) {
                     additional_necessary_child_indices.push(*index);
@@ -556,21 +585,11 @@ fn merge_consecutive_projections_one_level(
         return Projection::try_new_with_schema(expr, input, schema).map(Transformed::no);
     };
 
-    // A fast path: if the previous projection is same as the current projection
-    // we can directly remove the current projection and return child projection.
-    if prev_projection.expr == expr {
-        return Projection::try_new_with_schema(
-            expr,
-            Arc::clone(&prev_projection.input),
-            schema,
-        )
-        .map(Transformed::yes);
-    }
-
     // Count usages (referrals) of each projection expression in its input fields:
     let mut column_referral_map = HashMap::<&Column, usize>::new();
-    expr.iter()
-        .for_each(|expr| expr.add_column_ref_counts(&mut column_referral_map));
+    for expr in &expr {
+        expr.add_column_ref_counts(&mut column_referral_map);
+    }
 
     // If an expression is non-trivial (KeepInPlace) and appears more than once, do not merge
     // them as consecutive projections will benefit from a compute-once approach.
@@ -593,7 +612,7 @@ fn merge_consecutive_projections_one_level(
     // Try to rewrite the expressions in the current projection using the
     // previous projection as input:
     let name_preserver = NamePreserver::new_for_projection();
-    let mut original_names = vec![];
+    let mut original_names = Vec::with_capacity(expr.len());
     let new_exprs = expr.map_elements(|expr| {
         original_names.push(name_preserver.save(&expr));
 
@@ -842,12 +861,19 @@ fn rewrite_projection_given_requirements(
     config: &dyn OptimizerConfig,
     indices: &RequiredIndices,
 ) -> Result<Transformed<LogicalPlan>> {
-    let Projection { expr, input, .. } = proj;
+    let Projection {
+        expr,
+        input,
+        schema,
+        ..
+    } = proj;
 
     let exprs_used = indices.get_at_indices(&expr);
 
     let required_indices =
         RequiredIndices::new().with_exprs(input.schema(), exprs_used.iter());
+    let old_input_schema = Arc::clone(input.schema());
+    let read_indices = required_indices.indices().to_vec();
 
     // rewrite the children projection, and if they are changed rewrite the
     // projection down
@@ -855,12 +881,109 @@ fn rewrite_projection_given_requirements(
         .transform_data(|input| {
             if is_projection_unnecessary(&input, &exprs_used)? {
                 Ok(Transformed::yes(input))
-            } else {
+            } else if exprs_used.iter().any(contains_subquery)
+                || !read_fields_unchanged(
+                    &old_input_schema,
+                    input.schema(),
+                    &read_indices,
+                )
+            {
+                // A subquery is optimized on its own, and rewriting the input
+                // can change the fields this projection reads, so the stored
+                // schema may be stale. Recompute it rather than reuse it.
                 Projection::try_new(exprs_used, Arc::new(input))
                     .map(LogicalPlan::Projection)
                     .map(Transformed::yes)
+            } else {
+                // The retained expressions are a subset of the original ones and
+                // read unchanged input fields, so their output fields are
+                // unchanged too. Select them from the existing schema instead of
+                // recomputing each one via `Expr::to_field` (see
+                // `projection_schema`), which costs O(exprs * schema_width).
+                // `merge_consecutive_projections` reuses the schema the same way.
+                let projected_schema =
+                    project_schema_by_indices(&schema, indices.indices())?;
+                Projection::try_new_with_schema(
+                    exprs_used,
+                    Arc::new(input),
+                    projected_schema,
+                )
+                .map(LogicalPlan::Projection)
+                .map(Transformed::yes)
             }
         })
+}
+
+/// Returns true if the input fields at `read_indices` of `old` are unchanged in
+/// `new`, the input after it was rewritten for those indices.
+///
+/// The rewritten input either keeps every field of `old` or only the fields at
+/// `read_indices`, in order. Any other shape is treated as changed.
+fn read_fields_unchanged(old: &DFSchema, new: &DFSchema, read_indices: &[usize]) -> bool {
+    if new.fields().len() == old.fields().len() {
+        read_indices.iter().all(|&i| old.field(i) == new.field(i))
+    } else if new.fields().len() == read_indices.len() {
+        read_indices
+            .iter()
+            .enumerate()
+            .all(|(j, &i)| old.field(i) == new.field(j))
+    } else {
+        false
+    }
+}
+
+/// Returns true if `expr` contains a subquery expression.
+fn contains_subquery(expr: &Expr) -> bool {
+    expr.exists(|e| {
+        Ok(matches!(
+            e,
+            Expr::Exists(_)
+                | Expr::InSubquery(_)
+                | Expr::SetComparison(_)
+                | Expr::ScalarSubquery(_)
+        ))
+    })
+    .expect("exists closure is infallible")
+}
+
+/// Builds the output schema of a projection that keeps only the fields at
+/// `indices` (a sorted, deduplicated subset produced by [`RequiredIndices`]) of
+/// `schema`, reusing the already-computed fields instead of recomputing each
+/// field's type/nullability from the expressions.
+///
+/// Pruning unreferenced sibling columns cannot change the retained fields, so
+/// as long as `schema` is current for the projection's expressions and input,
+/// the sliced fields are identical to the ones [`projection_schema`] would
+/// recompute, at O(k) instead of O(exprs * schema_width). Functional
+/// dependencies can be weaker than recomputed ones, never stronger.
+///
+/// [`projection_schema`]: datafusion_expr::logical_plan::projection_schema
+fn project_schema_by_indices(
+    schema: &DFSchemaRef,
+    indices: &[usize],
+) -> Result<DFSchemaRef> {
+    // Nothing pruned: the output schema is unchanged, reuse it as-is.
+    if indices.len() == schema.fields().len() {
+        return Ok(Arc::clone(schema));
+    }
+
+    let qualified_fields = indices
+        .iter()
+        .map(|&i| {
+            let (qualifier, field) = schema.qualified_field(i);
+            (qualifier.cloned(), Arc::clone(field))
+        })
+        .collect::<Vec<_>>();
+
+    let func_deps = schema
+        .functional_dependencies()
+        .project_functional_dependencies(indices, indices.len());
+
+    let projected =
+        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
+            .with_functional_dependencies(func_deps)?;
+
+    Ok(Arc::new(projected))
 }
 
 /// Projection is unnecessary, when
@@ -896,15 +1019,16 @@ mod tests {
     use std::vec;
 
     use crate::optimize_projections::OptimizeProjections;
-    use crate::optimizer::Optimizer;
+    use crate::optimizer::{ApplyOrder, Optimizer};
     use crate::test::{
         assert_fields_eq, scan_empty, test_table_scan, test_table_scan_fields,
         test_table_scan_with_name,
     };
-    use crate::{OptimizerContext, OptimizerRule};
+    use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
     use datafusion_common::{
-        Column, DFSchema, DFSchemaRef, JoinType, Result, TableReference,
+        Column, DFSchema, DFSchemaRef, JoinType, Result, ScalarValue, TableReference,
     };
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::{
@@ -913,7 +1037,7 @@ mod tests {
         build_join_schema,
         builder::table_scan_with_filters,
         col,
-        expr::{self, Cast},
+        expr::{self, Alias, Cast},
         lit,
         logical_plan::{builder::LogicalPlanBuilder, table_scan},
         not, try_cast, when,
@@ -1174,6 +1298,107 @@ mod tests {
         }
     }
 
+    /// `project_schema_by_indices` must produce exactly the schema that
+    /// recomputing it from scratch (`projection_schema`) would, for every subset
+    /// of a projection's expressions. This is the correctness invariant that lets
+    /// `rewrite_projection_given_requirements` reuse the parent schema instead of
+    /// re-deriving each field's type via `Expr::to_field`.
+    #[test]
+    fn project_schema_by_indices_matches_recompute() -> Result<()> {
+        use super::project_schema_by_indices;
+        use datafusion_expr::logical_plan::projection_schema;
+
+        let input = Arc::new(test_table_scan()?); // columns: a, b, c (UInt32, NOT NULL)
+
+        // A deliberately mixed expression list: plain column, computed binary
+        // expr, alias, nullable literal, and a qualified column. Every input
+        // column is NOT NULL, so the NULL literal is what makes nullability
+        // actually vary across the schema.
+        let exprs = vec![
+            col("a"),
+            binary_expr(col("b"), Operator::Plus, col("c")),
+            col("c").alias("c_alias"),
+            lit(ScalarValue::Int64(None)).alias("null_one"),
+            Expr::Column(Column::new(Some(TableReference::bare("test")), "b")),
+        ];
+
+        let full_schema =
+            Arc::clone(&Projection::try_new(exprs.clone(), Arc::clone(&input))?.schema);
+
+        // Guard the premise above: if this ever stops holding, the subsets below
+        // would no longer exercise nullability propagation at all.
+        assert!(
+            full_schema.field(3).is_nullable(),
+            "the literal must be nullable for this test to cover nullability"
+        );
+        assert!(
+            !full_schema.field(0).is_nullable(),
+            "input columns are expected to be NOT NULL"
+        );
+
+        // A sample of the sorted, deduplicated subsets RequiredIndices can
+        // produce, including the "nothing pruned" identity case.
+        let subsets: Vec<Vec<usize>> = vec![
+            vec![0, 1, 2, 3, 4], // identity (SELECT * fast path)
+            vec![0],
+            vec![1], // computed expr only
+            vec![2], // alias only
+            vec![3], // literal only
+            vec![0, 2],
+            vec![1, 3],
+            vec![0, 1, 4],
+            vec![2, 3, 4],
+        ];
+
+        for indices in subsets {
+            let exprs_used: Vec<Expr> =
+                indices.iter().map(|&i| exprs[i].clone()).collect();
+
+            let reused = project_schema_by_indices(&full_schema, &indices)?;
+            let recomputed = projection_schema(input.as_ref(), &exprs_used)?;
+
+            // Output fields (name, data type, nullability, field metadata) must
+            // match the from-scratch computation exactly.
+            assert_eq!(
+                reused.fields(),
+                recomputed.fields(),
+                "fields differ for indices {indices:?}"
+            );
+
+            // Column qualifiers (table references) must be preserved too.
+            let reused_quals: Vec<_> = reused.iter().map(|(q, _)| q.cloned()).collect();
+            let recomputed_quals: Vec<_> =
+                recomputed.iter().map(|(q, _)| q.cloned()).collect();
+            assert_eq!(
+                reused_quals, recomputed_quals,
+                "qualifiers differ for indices {indices:?}"
+            );
+
+            // `project_schema_by_indices` also carries over schema-level
+            // metadata and projects functional dependencies through the kept
+            // indices, so both must match the from-scratch computation as well.
+            assert_eq!(
+                reused.metadata(),
+                recomputed.metadata(),
+                "schema metadata differs for indices {indices:?}"
+            );
+            assert_eq!(
+                reused.functional_dependencies(),
+                recomputed.functional_dependencies(),
+                "functional dependencies differ for indices {indices:?}"
+            );
+        }
+
+        // The identity subset must reuse the very same Arc, not rebuild it.
+        let identity = project_schema_by_indices(&full_schema, &[0, 1, 2, 3, 4])?;
+        assert!(
+            Arc::ptr_eq(&identity, &full_schema),
+            "identity projection should reuse the existing schema Arc"
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn merge_two_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -1207,6 +1432,69 @@ mod tests {
           TableScan: test projection=[a]
         "
         )
+    }
+
+    #[test]
+    fn merge_structurally_equal_non_idempotent_projections() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("i", DataType::Int32, false)]);
+        let projection = || col("i").add(lit(1)).alias("i");
+        let plan = table_scan(TableReference::none(), &schema, None)?
+            .project(vec![projection()])?
+            .project(vec![projection()])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: ?table?.i + Int32(1) + Int32(1) AS i
+          TableScan: ?table? projection=[i]
+        "
+        )
+    }
+
+    #[test]
+    fn merge_deep_projection_chain_in_one_pass() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("i", DataType::Int32, false)]);
+        let mut plan = table_scan(TableReference::none(), &schema, None)?
+            .project(vec![col("i").add(lit(1)).alias("i")])?
+            .build()?;
+        for _ in 1..12 {
+            plan = LogicalPlanBuilder::from(plan)
+                .project(vec![col("i").add(lit(1)).alias("i")])?
+                .build()?;
+        }
+
+        let optimizer = Optimizer::with_rules(vec![Arc::new(OptimizeProjections::new())]);
+        let optimized = optimizer.optimize(
+            plan,
+            &OptimizerContext::new().with_max_passes(1),
+            observe,
+        )?;
+        let plan_string = format!("{optimized}");
+        assert_eq!(12, plan_string.matches("Int32(1)").count());
+        assert_eq!(1, plan_string.matches("Projection:").count());
+        Ok(())
+    }
+
+    #[test]
+    fn merge_columns_and_metadata_alias() -> Result<()> {
+        let metadata =
+            datafusion_common::metadata::FieldMetadata::from(HashMap::from([(
+                "key".to_string(),
+                "value".to_string(),
+            )]));
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a")])?
+            .project(vec![col("a").alias_with_metadata("a", Some(metadata))])?
+            .build()?;
+
+        let optimized = optimize(plan)?;
+        assert_eq!(
+            "value",
+            optimized.schema().field(0).metadata().get("key").unwrap()
+        );
+        assert_eq!(1, format!("{optimized}").matches("Projection:").count());
+        Ok(())
     }
 
     #[test]
@@ -2452,6 +2740,193 @@ mod tests {
                 TableScan: s3 projection=[a]
         "
         )
+    }
+
+    /// Returns `schema` with the field called `name` marked nullable.
+    fn with_nullable_field(schema: &DFSchema, name: &str) -> Result<DFSchemaRef> {
+        let fields = schema
+            .iter()
+            .map(|(qualifier, field)| {
+                let field = if field.name() == name {
+                    Arc::new(field.as_ref().clone().with_nullable(true))
+                } else {
+                    Arc::clone(field)
+                };
+                (qualifier.cloned(), field)
+            })
+            .collect();
+        Ok(Arc::new(DFSchema::new_with_metadata(
+            fields,
+            HashMap::new(),
+        )?))
+    }
+
+    /// Asserts that `plan` is a projection whose schema is the one its
+    /// expressions derive.
+    fn assert_projection_schema_derived(plan: &LogicalPlan) -> Result<()> {
+        use datafusion_expr::logical_plan::projection_schema;
+
+        let LogicalPlan::Projection(projection) = plan else {
+            panic!("expected a projection, got {plan}");
+        };
+        let derived = projection_schema(&projection.input, &projection.expr)?;
+        assert_eq!(projection.schema.as_ref(), derived.as_ref());
+        Ok(())
+    }
+
+    /// When rewriting the input changes a field the projection reads, the
+    /// projection's schema is derived again instead of reused.
+    #[test]
+    fn projection_schema_follows_rewritten_input() -> Result<()> {
+        use datafusion_expr::Aggregate;
+
+        let table_scan = Arc::new(test_table_scan()?);
+        let group_expr = vec![lit(1u32).alias("g")];
+        let aggr_expr = vec![count(col("b")).alias("cnt")];
+        let aggregate = Aggregate::try_new(
+            Arc::clone(&table_scan),
+            group_expr.clone(),
+            aggr_expr.clone(),
+        )?;
+        // A non-null group column stored as nullable, as a rule that keeps a
+        // node's schema while folding its expressions can leave it.
+        let stale = with_nullable_field(&aggregate.schema, "g")?;
+        let aggregate =
+            Aggregate::try_new_with_schema(table_scan, group_expr, aggr_expr, stale)?;
+        let plan = LogicalPlanBuilder::from(LogicalPlan::Aggregate(aggregate))
+            .project(vec![col("g").alias("x")])?
+            .build()?;
+        assert!(plan.schema().field(0).is_nullable());
+
+        // Pruning `cnt` rebuilds the aggregate, which derives `g` as non-null.
+        let optimized = optimize(plan)?;
+        assert!(!optimized.schema().field(0).is_nullable());
+        assert_projection_schema_derived(&optimized)
+    }
+
+    /// A projection over a subquery derives its schema again instead of
+    /// reusing one that may be stale.
+    #[test]
+    fn projection_schema_follows_subquery() -> Result<()> {
+        let subquery = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a")])?
+            .limit(0, Some(1))?
+            .build()?;
+        let input = Arc::new(test_table_scan()?);
+        let exprs = vec![
+            col("b"),
+            datafusion_expr::scalar_subquery(Arc::new(subquery)).alias("s"),
+        ];
+        let derived = Projection::try_new(exprs.clone(), Arc::clone(&input))?;
+        // Mark `b` nullable so a reused schema would differ from the derived one.
+        let stale = with_nullable_field(&derived.schema, "b")?;
+        let plan = LogicalPlan::Projection(Projection::try_new_with_schema(
+            exprs, input, stale,
+        )?);
+
+        let optimized = optimize(plan)?;
+        assert_projection_schema_derived(&optimized)
+    }
+
+    /// A downstream rule that rewrites `a AS x` into
+    /// `CASE WHEN a > 0 THEN a END AS x` via `map_expressions`, so `x` becomes
+    /// nullable. With `transform` false it rewrites nothing.
+    #[derive(Debug)]
+    struct RewriteToCase {
+        transform: bool,
+    }
+
+    impl OptimizerRule for RewriteToCase {
+        fn name(&self) -> &str {
+            "rewrite_to_case"
+        }
+
+        fn apply_order(&self) -> Option<ApplyOrder> {
+            Some(ApplyOrder::BottomUp)
+        }
+
+        fn rewrite(
+            &self,
+            plan: LogicalPlan,
+            _config: &dyn OptimizerConfig,
+        ) -> Result<Transformed<LogicalPlan>> {
+            if !self.transform || !matches!(plan, LogicalPlan::Projection(_)) {
+                return Ok(Transformed::no(plan));
+            }
+            plan.map_expressions(|e| match e {
+                Expr::Alias(Alias {
+                    expr,
+                    relation,
+                    name,
+                    metadata,
+                }) if name == "x" && matches!(*expr, Expr::Column(_)) => {
+                    let new = when(expr.as_ref().clone().gt(lit(0u32)), *expr).end()?;
+                    Ok(Transformed::yes(Expr::Alias(Alias {
+                        expr: Box::new(new),
+                        relation,
+                        name,
+                        metadata,
+                    })))
+                }
+                e => Ok(Transformed::no(e)),
+            })
+        }
+    }
+
+    /// `SELECT DISTINCT x FROM (SELECT a AS x, b + 1 AS y FROM test)`
+    fn distinct_over_x_and_y() -> Result<LogicalPlan> {
+        LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a").alias("x"), (col("b") + lit(1u32)).alias("y")])?
+            .distinct()?
+            .project(vec![col("x")])?
+            .build()
+    }
+
+    /// A projection whose expressions a downstream rule rewrote carries the
+    /// schema the new expressions derive, even after `OptimizeProjections`
+    /// prunes it and reuses its schema.
+    #[test]
+    fn projection_schema_follows_rule_rewrite() -> Result<()> {
+        let plan = distinct_over_x_and_y()?;
+        assert!(!plan.schema().field(0).is_nullable());
+
+        let optimizer = Optimizer::with_rules(vec![
+            Arc::new(RewriteToCase { transform: true }),
+            Arc::new(OptimizeProjections::new()),
+        ]);
+        let optimized = optimizer.optimize(plan, &OptimizerContext::new(), observe)?;
+
+        let mut projections = 0;
+        optimized.apply(|plan| {
+            if let LogicalPlan::Projection(_) = plan {
+                assert_projection_schema_derived(plan)?;
+                projections += 1;
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+        assert!(projections > 0, "expected a projection in {optimized}");
+        assert!(optimized.schema().field(0).is_nullable());
+        Ok(())
+    }
+
+    /// A rule that rewrites nothing keeps the projection's schema as is.
+    #[test]
+    fn projection_schema_kept_without_rule_rewrite() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a").alias("x"), (col("b") + lit(1u32)).alias("y")])?
+            .build()?;
+        let schema = Arc::clone(plan.schema());
+
+        let rewritten =
+            RewriteToCase { transform: false }.rewrite(plan, &OptimizerContext::new())?;
+        assert!(!rewritten.transformed);
+        assert!(Arc::ptr_eq(&schema, rewritten.data.schema()));
+
+        // Expressions visited but left unchanged also keep the schema.
+        let rewritten = rewritten.data.map_expressions(|e| Ok(Transformed::no(e)))?;
+        assert!(!rewritten.transformed);
+        assert!(Arc::ptr_eq(&schema, rewritten.data.schema()));
+        Ok(())
     }
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}

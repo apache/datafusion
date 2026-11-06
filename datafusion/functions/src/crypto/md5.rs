@@ -1,27 +1,17 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::{array::StringViewArray, datatypes::DataType};
+use arrow::{
+    array::{Array, BinaryViewBuilder},
+    datatypes::DataType,
+};
 use datafusion_common::{
     Result, ScalarValue,
     cast::as_binary_array,
     internal_err,
     types::{logical_binary, logical_string},
-    utils::hex::{HexCase, encode_bytes},
+    utils::hex::{HexCase, encode_bytes_into},
     utils::take_function_args,
 };
 use datafusion_expr::{
@@ -107,15 +97,35 @@ fn md5(args: &[ColumnarValue]) -> Result<ColumnarValue> {
     Ok(match value {
         ColumnarValue::Array(array) => {
             let binary_array = as_binary_array(&array)?;
-            let string_array: StringViewArray = binary_array
-                .iter()
-                .map(|opt| opt.map(|b| encode_bytes(b, HexCase::Lower)))
-                .collect();
-            ColumnarValue::Array(Arc::new(string_array))
+            let mut byte_builder = BinaryViewBuilder::with_capacity(binary_array.len());
+            let mut hex_bytes = Vec::with_capacity(32);
+
+            for i in 0..binary_array.len() {
+                if binary_array.is_null(i) {
+                    byte_builder.append_null();
+                    continue;
+                }
+
+                hex_bytes.clear();
+                let digest = binary_array.value(i);
+                encode_bytes_into(digest, HexCase::Lower, &mut hex_bytes);
+                byte_builder.append_value(&hex_bytes);
+            }
+
+            let str_array = unsafe {
+                // Safe: `encode_bytes_into` only writes ASCII hex digits, so the bytes are valid UTF-8.
+                byte_builder.finish().to_string_view_unchecked()
+            };
+            ColumnarValue::Array(Arc::new(str_array))
         }
-        ColumnarValue::Scalar(ScalarValue::Binary(opt)) => ColumnarValue::Scalar(
-            ScalarValue::Utf8View(opt.map(|b| encode_bytes(&b, HexCase::Lower))),
-        ),
+        ColumnarValue::Scalar(ScalarValue::Binary(opt)) => {
+            ColumnarValue::Scalar(ScalarValue::Utf8View(opt.map(|b| {
+                let mut hex_bytes = Vec::with_capacity(b.len() * 2);
+                encode_bytes_into(&b, HexCase::Lower, &mut hex_bytes);
+                // Safe: `encode_bytes_into` only writes ASCII hex digits, so the bytes are valid UTF-8.
+                unsafe { String::from_utf8_unchecked(hex_bytes) }
+            })))
+        }
         _ => return internal_err!("Impossibly got invalid results from digest"),
     })
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 // Some of these functions reference the Postgres documentation
 // or implementation to ensure compatibility and are subject to
@@ -31,6 +18,7 @@ use super::{
     PlanProperties, RecordBatchStream, SendableRecordBatchStream, Statistics,
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
+use crate::execution_plan::LimitBehavior;
 use crate::execution_plan::{
     CardinalityEffect, InvariantLevel, boundedness_from_children,
     check_default_invariants, emission_type_from_children,
@@ -46,9 +34,10 @@ use crate::statistics::{ChildStats, StatisticsArgs};
 use crate::stream::ObservedStream;
 use crate::{ChildrenPropertiesMode, ReplaceChildrenOptions, validate_child_count};
 
-use arrow::datatypes::{Field, Schema, SchemaRef};
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::metadata::merge_metadata_for_union;
 use datafusion_common::stats::NdvFallback;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
@@ -462,6 +451,10 @@ impl ExecutionPlan for UnionExec {
         true
     }
 
+    fn limit_behavior(&self) -> LimitBehavior {
+        LimitBehavior::CopyToChildren
+    }
+
     /// Tries to push `projection` down through `union`. If possible, performs the
     /// pushdown and returns a new [`UnionExec`] as the top plan which has projections
     /// as its children. Otherwise, returns `None`.
@@ -574,7 +567,17 @@ impl ExecutionPlan for UnionExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let inputs = ctx.encode_children(self.inputs())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `UnionExec` is a compile error here until it is either serialized or
+        // explicitly documented as not needing to be.
+        let Self {
+            inputs,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let inputs = ctx.encode_children(inputs)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Union(
@@ -597,8 +600,10 @@ impl UnionExec {
             protobuf::physical_plan_node::PhysicalPlanType::Union,
             "UnionExec",
         );
-        let inputs = union
-            .inputs
+        // Destructure exhaustively so that a new field on `UnionExecNode` is a
+        // compile error here rather than a silently dropped field.
+        let protobuf::UnionExecNode { inputs } = union;
+        let inputs = inputs
             .iter()
             .map(|input| ctx.decode_child(input))
             .collect::<Result<Vec<_>>>()?;
@@ -658,6 +663,23 @@ impl InterleaveExec {
             can_interleave(inputs.iter()),
             "Not all InterleaveExec children have a consistent hash or range partitioning"
         );
+        Self::try_new_unchecked(inputs)
+    }
+
+    /// Like [`Self::try_new`], but does not require the inputs to be
+    /// interleavable.
+    ///
+    /// Optimizer rules rebuild every parent from its rewritten children while
+    /// walking the plan, so a rewrite that changes a child's partitioning
+    /// (join side swaps, removed repartitions, ...) hands this node children
+    /// that are no longer interleavable before any rule has had the chance to
+    /// repair it. Such a node reports [`Partitioning::UnknownPartitioning`],
+    /// so nothing downstream can rely on a hash layout it does not have, and
+    /// [`ExecutionPlan::check_invariants`] rejects it at
+    /// [`InvariantLevel::Executable`] if it is never repaired. This mirrors
+    /// how unmet distribution requirements are handled for every other
+    /// operator.
+    fn try_new_unchecked(inputs: Vec<Arc<dyn ExecutionPlan>>) -> Result<Self> {
         let schema = union_schema(&inputs)?;
         let inputs = inputs
             .into_iter()
@@ -682,8 +704,23 @@ impl InterleaveExec {
         schema: SchemaRef,
     ) -> Result<PlanProperties> {
         let eq_properties = EquivalenceProperties::new(schema);
-        // Get output partitioning:
-        let output_partitioning = inputs[0].output_partitioning().clone();
+        // Get output partitioning. Only claim the shared hash / range layout
+        // when every input actually has it (see `try_new_unchecked`).
+        let output_partitioning = if can_interleave(inputs.iter()) {
+            inputs[0].output_partitioning().clone()
+        } else {
+            // Non-interleavable inputs need not even agree on a partition
+            // count. Report the largest one: `execute` errors out for a
+            // partition that some input lacks, so an unrepaired node fails
+            // loudly instead of silently dropping the extra partitions of
+            // the widest input.
+            let partition_count = inputs
+                .iter()
+                .map(|input| input.output_partitioning().partition_count())
+                .max()
+                .unwrap_or(0);
+            Partitioning::UnknownPartitioning(partition_count)
+        };
         Ok(PlanProperties::new(
             eq_properties,
             output_partitioning,
@@ -746,14 +783,23 @@ impl ExecutionPlan for InterleaveExec {
                 ..Self::clone(&*self)
             })),
             ChildrenPropertiesMode::Recompute => {
-                // New children are no longer interleavable, which might be a bug of optimization rewrite.
-                assert_or_internal_err!(
-                    can_interleave(children.iter()),
-                    "Can not create InterleaveExec: new children can not be interleaved"
-                );
-                Ok(Arc::new(InterleaveExec::try_new(children)?))
+                // The new children may no longer be interleavable; see
+                // `try_new_unchecked` for why this is not rejected here.
+                Ok(Arc::new(InterleaveExec::try_new_unchecked(children)?))
             }
         }
+    }
+
+    fn check_invariants(&self, check: InvariantLevel) -> Result<()> {
+        check_default_invariants(self, check)?;
+
+        if matches!(check, InvariantLevel::Executable) {
+            assert_or_internal_err!(
+                can_interleave(self.inputs.iter()),
+                "Not all InterleaveExec children have a consistent hash or range partitioning"
+            );
+        }
+        Ok(())
     }
 
     fn with_new_children(
@@ -793,7 +839,7 @@ impl ExecutionPlan for InterleaveExec {
         let elapsed_compute = baseline_metrics.elapsed_compute().clone();
         let _timer = elapsed_compute.timer(); // record on drop
 
-        let mut input_stream_vec = vec![];
+        let mut input_stream_vec = Vec::with_capacity(self.inputs.len());
         for input in self.inputs.iter() {
             if partition < input.output_partitioning().partition_count() {
                 let stream = input.execute(partition, Arc::clone(&context))?;
@@ -854,7 +900,17 @@ impl ExecutionPlan for InterleaveExec {
         ctx: &crate::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         use datafusion_proto_models::protobuf;
-        let inputs = ctx.encode_children(self.inputs())?;
+        // Destructure exhaustively (no `..`) so that adding a field to
+        // `InterleaveExec` is a compile error here until it is either
+        // serialized or explicitly documented as not needing to be.
+        let Self {
+            inputs,
+            // Runtime metrics, not part of the plan shape.
+            metrics: _,
+            // Derived plan properties, recomputed on decode.
+            cache: _,
+        } = self;
+        let inputs = ctx.encode_children(inputs)?;
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(
                 protobuf::physical_plan_node::PhysicalPlanType::Interleave(
@@ -877,8 +933,10 @@ impl InterleaveExec {
             protobuf::physical_plan_node::PhysicalPlanType::Interleave,
             "InterleaveExec",
         );
-        let inputs = interleave
-            .inputs
+        // Destructure exhaustively so that a new field on `InterleaveExecNode`
+        // is a compile error here rather than a silently dropped field.
+        let protobuf::InterleaveExecNode { inputs } = interleave;
+        let inputs = inputs
             .iter()
             .map(|input| ctx.decode_child(input))
             .collect::<Result<Vec<_>>>()?;
@@ -916,6 +974,22 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
     }
 
     let first_schema = inputs[0].schema();
+
+    // Fast path: when every input already shares the first input's schema, the
+    // field-by-field metadata/nullability merge below is redundant work.
+    // This is common in practice: unions built from
+    // repartitioned copies of the same plan (e.g. observed in InfluxDB) hand us
+    // children that all carry the exact same schema. A pointer-equality check
+    // catches the shared-`Arc` case for free, and a content `==` comparison
+    // catches distinct-but-equal schemas; both let us return early and hand back
+    // the first schema unchanged.
+    if inputs[1..].iter().all(|input| {
+        let schema = input.schema();
+        Arc::ptr_eq(&schema, &first_schema) || schema == first_schema
+    }) {
+        return Ok(first_schema);
+    }
+
     let first_field_count = first_schema.fields().len();
 
     // validate that all inputs have the same number of fields
@@ -929,49 +1003,34 @@ fn union_schema(inputs: &[Arc<dyn ExecutionPlan>]) -> Result<SchemaRef> {
         }
     }
 
+    let schemas: Vec<SchemaRef> = inputs.iter().map(|input| input.schema()).collect();
     let fields = (0..first_field_count)
         .map(|i| {
             // We take the name from the left side of the union to match how names are coerced during logical planning,
             // which also uses the left side names.
             let base_field = first_schema.field(i).clone();
 
-            // Coerce metadata and nullability across all inputs
-
-            inputs
+            // Take the first nullable field, or the first field if none are
+            // nullable.
+            let field = schemas
                 .iter()
-                .enumerate()
-                .map(|(input_idx, input)| {
-                    let field = input.schema().field(i).clone();
-                    let mut metadata = field.metadata().clone();
-
-                    let other_metadatas = inputs
-                        .iter()
-                        .enumerate()
-                        .filter(|(other_idx, _)| *other_idx != input_idx)
-                        .flat_map(|(_, other_input)| {
-                            other_input.schema().field(i).metadata().clone().into_iter()
-                        });
-
-                    metadata.extend(other_metadatas);
-                    field.with_metadata(metadata)
-                })
-                .find_or_first(Field::is_nullable)
-                // We can unwrap this because if inputs was empty, this would've already panic'ed when we
-                // indexed into inputs[0].
+                .find_or_first(|schema| schema.field(i).is_nullable())
+                // Empty inputs are rejected above.
                 .unwrap()
-                .with_name(base_field.name())
+                .field(i)
+                .clone();
+
+            let metadata = merge_metadata_for_union(
+                schemas.iter().map(|schema| schema.field(i).metadata()),
+            );
+            field.with_metadata(metadata).with_name(base_field.name())
         })
         .collect::<Vec<_>>();
 
-    let all_metadata_merged = inputs
-        .iter()
-        .flat_map(|i| i.schema().metadata().clone().into_iter())
-        .collect();
+    let metadata =
+        merge_metadata_for_union(schemas.iter().map(|schema| schema.metadata()));
 
-    Ok(Arc::new(Schema::new_with_metadata(
-        fields,
-        all_metadata_merged,
-    )))
+    Ok(Arc::new(Schema::new_with_metadata(fields, metadata)))
 }
 
 /// CombinedRecordBatchStream can be used to combine a Vec of SendableRecordBatchStreams into one
@@ -1051,7 +1110,7 @@ mod tests {
     use crate::test::{self, TestMemoryExec};
 
     use arrow::compute::SortOptions;
-    use arrow::datatypes::DataType;
+    use arrow::datatypes::{DataType, Field, Metadata};
     use datafusion_common::SplitPoint;
     use datafusion_common::stats::Precision;
     use datafusion_common::{ColumnStatistics, ScalarValue};
@@ -1628,6 +1687,112 @@ mod tests {
     }
 
     #[test]
+    fn test_union_schema_fast_path_content_equal() -> Result<()> {
+        // Inputs whose schemas are pointer-distinct but structurally equal must
+        // take the content-equality (`==`) fast path and still produce a schema
+        // equal to the shared one, matching the slow-path merge exactly.
+        let schema = create_test_schema()?;
+        let distinct: SchemaRef = Arc::new((*schema).clone());
+        // Guard the branch under test: these must NOT be the same allocation, so
+        // the fast path is reached via `==` rather than `Arc::ptr_eq`.
+        assert!(!Arc::ptr_eq(&schema, &distinct));
+
+        let memory_exec1 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let memory_exec2 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&distinct), None)?);
+        let memory_exec3 =
+            Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&distinct), None)?);
+
+        // Capture the first child's schema before it is moved into the union.
+        let first_input_schema = memory_exec1.schema();
+        let union_plan =
+            UnionExec::try_new(vec![memory_exec1, memory_exec2, memory_exec3])?;
+
+        // The fast path returns the first child's schema Arc unchanged. Assert
+        // pointer equality (not just `==`): a slow-path merge would build a new,
+        // merely-equal Schema, so only ptr-eq proves the merge was skipped.
+        assert!(Arc::ptr_eq(&union_plan.schema(), &first_input_schema));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_union_schema_metadata_and_nullability() -> Result<()> {
+        use arrow::array::Int32Array;
+
+        // Field and schema metadata are merged in input order, so the last
+        // input wins regardless of which field supplies the nullability.
+        for nullability in [
+            [false, false, false],
+            [true, false, false],
+            [false, true, false],
+            [false, false, true],
+            [true, true, true],
+        ] {
+            let inputs = nullability
+                .iter()
+                .enumerate()
+                .map(|(i, &nullable)| {
+                    let metadata = Metadata::from([
+                        ("shared".to_owned(), format!("input{i}")),
+                        (format!("only{i}"), "kept".to_owned()),
+                    ]);
+                    let field =
+                        Field::new(format!("value{i}"), DataType::Int32, nullable)
+                            .with_metadata(metadata.clone());
+                    let schema =
+                        Arc::new(Schema::new_with_metadata(vec![field], metadata));
+                    let batch = RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![Arc::new(Int32Array::from(vec![i as i32]))],
+                    )?;
+                    let input: Arc<dyn ExecutionPlan> =
+                        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None)?;
+                    Ok(input)
+                })
+                .collect::<Result<Vec<_>>>()?;
+
+            let expected_metadata = Metadata::from([
+                ("shared".to_owned(), "input2".to_owned()),
+                ("only0".to_owned(), "kept".to_owned()),
+                ("only1".to_owned(), "kept".to_owned()),
+                ("only2".to_owned(), "kept".to_owned()),
+            ]);
+            let expected_schema = Arc::new(Schema::new_with_metadata(
+                vec![
+                    Field::new("value0", DataType::Int32, nullability.contains(&true))
+                        .with_metadata(expected_metadata.clone()),
+                ],
+                expected_metadata,
+            ));
+
+            let union = UnionExec::try_new(inputs)?;
+            assert_eq!(union.schema(), expected_schema, "{nullability:?}");
+            let batches = collect(union, Arc::new(TaskContext::default())).await?;
+            datafusion_common::assert_batches_sorted_eq!(
+                [
+                    "+--------+",
+                    "| value0 |",
+                    "+--------+",
+                    "| 0      |",
+                    "| 1      |",
+                    "| 2      |",
+                    "+--------+"
+                ],
+                &batches
+            );
+            for batch in batches {
+                assert_eq!(
+                    batch.schema().fields(),
+                    expected_schema.fields(),
+                    "{nullability:?}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_union_schema_mismatch() {
         // Test that UnionExec properly rejects inputs with different field counts
         let schema = create_test_schema().unwrap();
@@ -1679,6 +1844,117 @@ mod tests {
             base,
             Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?),
         )?))
+    }
+
+    #[test]
+    fn test_interleave_rebuild_defers_partitioning_invariant() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Int32, true)]));
+        let hash = || make_hash_exec(&schema, vec!["name"], 3);
+        let interleave: Arc<dyn ExecutionPlan> =
+            Arc::new(InterleaveExec::try_new(vec![hash()?, hash()?])?);
+        assert!(matches!(
+            interleave.output_partitioning(),
+            Partitioning::Hash(_, 3)
+        ));
+
+        // A rewrite that takes one child's hash partitioning away. The
+        // optimizer's tree walk rebuilds the parent from such children before
+        // any rule can repair it, so the rebuild itself must not fail.
+        let round_robin: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            hash()?,
+            Partitioning::RoundRobinBatch(3),
+        )?);
+        let rebuilt = interleave.replace_children(
+            vec![hash()?, round_robin],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+
+        // Explicit construction still requires interleavable inputs.
+        let children = rebuilt.children().into_iter().cloned().collect();
+        assert!(InterleaveExec::try_new(children).is_err());
+
+        // The rebuilt node no longer claims a hash layout, is structurally
+        // sound, but is not executable until a distribution pass repairs it.
+        assert!(matches!(
+            rebuilt.output_partitioning(),
+            Partitioning::UnknownPartitioning(3)
+        ));
+        rebuilt.check_invariants(InvariantLevel::Always)?;
+        let err = rebuilt
+            .check_invariants(InvariantLevel::Executable)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains(
+                "Not all InterleaveExec children have a consistent hash or range partitioning"
+            ),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_interleave_rebuild_reports_widest_partition_count() -> Result<()> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("name", DataType::Int32, true)]));
+        let interleave: Arc<dyn ExecutionPlan> =
+            Arc::new(InterleaveExec::try_new(vec![
+                make_hash_exec(&schema, vec!["name"], 3)?,
+                make_hash_exec(&schema, vec!["name"], 3)?,
+            ])?);
+
+        // A rewrite that leaves the children with different partition counts.
+        let rebuilt = interleave.replace_children(
+            vec![
+                make_hash_exec(&schema, vec!["name"], 3)?,
+                make_hash_exec(&schema, vec!["name"], 5)?,
+            ],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+
+        // The widest child decides the reported count, so the partitions only
+        // it has are still visible to callers instead of being dropped.
+        assert!(matches!(
+            rebuilt.output_partitioning(),
+            Partitioning::UnknownPartitioning(5)
+        ));
+        // Executing one of them fails loudly rather than returning no rows.
+        let Err(err) = rebuilt.execute(4, Arc::new(TaskContext::default())) else {
+            panic!("executing a partition the narrow child lacks must fail");
+        };
+        let err = err.to_string();
+        assert!(
+            err.contains("Partition 4 not found in InterleaveExec"),
+            "{err}"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_interleave_rejects_different_range_scaling_capacity() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
+        let ordering = [PhysicalSortExpr::new_default(col("a", &schema)?)].into();
+        let samples = (10..=90)
+            .step_by(10)
+            .map(|value| SplitPoint::new(vec![ScalarValue::Int32(Some(value))]))
+            .collect();
+        let sampled = RangePartitioning::try_new_with_samples(ordering, samples, 4)?;
+        let source = Arc::new(TestMemoryExec::try_new(&[], Arc::clone(&schema), None)?);
+        let sampled: Arc<dyn ExecutionPlan> = Arc::new(RepartitionExec::try_new(
+            source,
+            Partitioning::Range(sampled),
+        )?);
+        let exact = make_range_exec(&schema, vec![30, 50, 70], SortOptions::default())?;
+        assert!(can_interleave([&sampled, &sampled].into_iter()));
+        for inputs in [
+            vec![Arc::clone(&sampled), Arc::clone(&exact)],
+            vec![exact, sampled],
+        ] {
+            assert!(!can_interleave(inputs.iter()));
+            assert!(InterleaveExec::try_new(inputs).is_err());
+        }
+        Ok(())
     }
 
     #[test]

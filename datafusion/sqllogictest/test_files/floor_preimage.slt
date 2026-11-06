@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-
-#   http://www.apache.org/licenses/LICENSE-2.0
-
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ##########
 ## Floor Preimage Tests
@@ -59,7 +46,7 @@ SELECT id FROM test_data WHERE floor(int_val) = 100;
 
 # Decimal128: floor(x) = 100 matches values in [100.00, 101.00)
 query I rowsort
-SELECT id FROM test_data WHERE floor(decimal_val) = arrow_cast(100, 'Decimal128(10,2)');
+SELECT id FROM test_data WHERE floor(decimal_val) = arrow_cast(100, 'Decimal128(9,0)');
 ----
 1
 2
@@ -200,6 +187,22 @@ logical_plan
 01)Filter: test_data.float_val >= Float64(5) AND test_data.float_val < Float64(6) OR test_data.float_val >= Float64(7) AND test_data.float_val < Float64(8)
 02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
 
+# 10. Volatile arguments must not be duplicated due to SimplifyExpressions' preimage rewrites
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(random() * 10) = 3;
+----
+logical_plan
+01)Filter: floor(random() * Float64(10)) = Float64(3)
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
+# 11. Preimage rewrites must not duplicate IN-list as well.
+query TT
+EXPLAIN SELECT * FROM test_data WHERE floor(random() * 10) IN (3, 5);
+----
+logical_plan
+01)Filter: floor(random() * Float64(10)) IN ([Float64(3), Float64(5)])
+02)--TableScan: test_data projection=[id, float_val, int_val, decimal_val]
+
 # Data correctness: floor(col) = 2^53 returns no rows (no value in test_data has floor exactly 2^53)
 query I rowsort
 SELECT id FROM test_data WHERE floor(float_val) = 9007199254740992;
@@ -303,6 +306,16 @@ logical_plan
 # Config reset
 statement ok
 RESET datafusion.explain.logical_plan_only;
+
+## Test zero-scale interval for negative scale
+query I rowsort
+SELECT id FROM (VALUES
+    (1, arrow_cast(5000, 'Decimal128(10,-3)')),
+    (2, arrow_cast(6000, 'Decimal128(10,-3)'))
+) AS t(id, val)
+WHERE floor(val) = arrow_cast(5000, 'Decimal128(10,-3)');
+----
+1
 
 ##########
 ## Cleanup

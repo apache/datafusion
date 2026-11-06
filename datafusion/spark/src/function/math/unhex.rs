@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{Array, ArrayRef, BinaryBuilder};
 use arrow::datatypes::DataType;
@@ -21,7 +8,7 @@ use datafusion_common::cast::{
     as_large_string_array, as_string_array, as_string_view_array,
 };
 use datafusion_common::types::logical_string;
-use datafusion_common::utils::take_function_args;
+use datafusion_common::utils::{offset_span_len, take_function_args};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err,
 };
@@ -147,7 +134,7 @@ where
 }
 
 /// Convert a single hex string to binary
-fn unhex_scalar(s: &str) -> Option<Vec<u8>> {
+pub(crate) fn unhex_scalar(s: &str) -> Option<Vec<u8>> {
     let mut buffer = Vec::with_capacity(s.len().div_ceil(2));
     if unhex_common(s.as_bytes(), &mut buffer) {
         Some(buffer)
@@ -163,7 +150,7 @@ fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError>
         ColumnarValue::Array(array) => match array.data_type() {
             DataType::Utf8 => {
                 let array = as_string_array(array)?;
-                let capacity = array.values().len().div_ceil(2);
+                let capacity = offset_span_len(array.offsets()).div_ceil(2);
                 Ok(ColumnarValue::Array(unhex_array(
                     array.iter(),
                     array.len(),
@@ -182,7 +169,7 @@ fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError>
             }
             DataType::LargeUtf8 => {
                 let array = as_large_string_array(array)?;
-                let capacity = array.values().len().div_ceil(2);
+                let capacity = offset_span_len(array.offsets()).div_ceil(2);
                 Ok(ColumnarValue::Array(unhex_array(
                     array.iter(),
                     array.len(),
@@ -212,5 +199,19 @@ fn spark_unhex(args: &[ColumnarValue]) -> Result<ColumnarValue, DataFusionError>
                 )
             }
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::function::utils::test::check_sliced_string_capacity;
+
+    #[test]
+    fn test_sliced_capacity() -> Result<()> {
+        check_sliced_string_capacity("ab", |input| {
+            let len = input.len();
+            spark_unhex(&[ColumnarValue::Array(input)])?.into_array(len)
+        })
     }
 }

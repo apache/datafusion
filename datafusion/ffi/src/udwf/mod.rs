@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::ffi::c_void;
 use std::hash::{Hash, Hasher};
@@ -181,7 +168,8 @@ unsafe extern "C" fn coerce_types_fn_wrapper(
 unsafe extern "C" fn release_fn_wrapper(udwf: &mut FFI_WindowUDF) {
     unsafe {
         debug_assert!(!udwf.private_data.is_null());
-        let private_data = Box::from_raw(udwf.private_data as *mut WindowUDFPrivateData);
+        let private_data =
+            Box::from_raw(udwf.private_data.cast::<WindowUDFPrivateData>());
         drop(private_data);
         udwf.private_data = std::ptr::null_mut();
     }
@@ -209,7 +197,7 @@ unsafe extern "C" fn clone_fn_wrapper(udwf: &FFI_WindowUDF) -> FFI_WindowUDF {
             field: field_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }
@@ -244,7 +232,7 @@ impl From<Arc<WindowUDF>> for FFI_WindowUDF {
             field: field_fn_wrapper,
             clone: clone_fn_wrapper,
             release: release_fn_wrapper,
-            private_data: Box::into_raw(private_data) as *mut c_void,
+            private_data: Box::into_raw(private_data).cast::<c_void>(),
             library_marker_id: crate::get_library_marker_id,
         }
     }

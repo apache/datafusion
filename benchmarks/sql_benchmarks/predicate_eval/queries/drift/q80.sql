@@ -1,7 +1,5 @@
--- The non-obvious property: selectivity changes across the scan. Rows arrive in
--- `seq` order; `a_sel = 0` matches ~0.1% in the first 10% of rows and ~50%
--- after, `b_sel = 0` is the mirror -- so which predicate is more selective flips
--- partway through. cf. q81 (opposite order).
+-- Selectivity drifts across the scan: `a_sel = 0` matches ~0.1% over the first 2%
+-- of rows and ~50% after, and `b_sel = 0` is the mirror.
 SELECT count(*) FROM t
 WHERE a_sel = 0
   AND b_sel = 0;

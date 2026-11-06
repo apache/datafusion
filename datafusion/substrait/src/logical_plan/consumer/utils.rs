@@ -1,24 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::{DataType, Field, Schema, TimeUnit, UnionFields};
 use datafusion::common::{
-    DFSchema, DFSchemaRef, TableReference, exec_err, not_impl_err,
+    Column, DFSchema, DFSchemaRef, TableReference, exec_err, not_impl_err,
     substrait_datafusion_err, substrait_err,
 };
 use datafusion::logical_expr::expr::Sort;
@@ -424,6 +411,12 @@ impl NameTracker {
         }
     }
 
+    pub(super) fn reserve_schema(&mut self, schema: &DFSchema) {
+        for (qualifier, field) in schema.iter() {
+            self.insert(&Expr::Column(Column::from((qualifier, field))));
+        }
+    }
+
     /// Check if the expression would cause a conflict either in:
     /// 1. validate_unique_names (duplicate schema_name)
     /// 2. DFSchema::check_names (ambiguous reference)
@@ -505,7 +498,7 @@ pub async fn from_substrait_sorts(
     substrait_sorts: &Vec<SortField>,
     input_schema: &DFSchema,
 ) -> datafusion::common::Result<Vec<Sort>> {
-    let mut sorts: Vec<Sort> = vec![];
+    let mut sorts: Vec<Sort> = Vec::with_capacity(substrait_sorts.len());
     for s in substrait_sorts {
         let expr = consumer
             .consume_expression(s.expr.as_ref().unwrap(), input_schema)

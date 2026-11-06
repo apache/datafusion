@@ -1,3 +1,8 @@
+> [!IMPORTANT]
+>
+> **Fork CI setup:** For pull requests from a fork to `main`, enable workflows in your fork's **Actions** tab before you push.
+> See the [fork CI setup guide](https://datafusion.apache.org/contributor-guide/#pull-requests-from-forks).
+
 ## Which issue does this PR close?
 
 <!--
@@ -10,7 +15,7 @@ We generally require a GitHub issue to be filed for all bug fixes and enhancemen
 
 <!--
  Why are you proposing this change? If this is already explained clearly in the issue then this section is not needed.
- Explaining clearly why changes are proposed helps reviewers understand your changes and offer better suggestions for fixes.  
+ Explaining clearly why changes are proposed helps reviewers understand your changes and offer better suggestions for fixes.
 
 Please explain the problem you are trying to solve in terms of the user-visible
 behavior, rather than the implementation.
@@ -26,14 +31,18 @@ nulls" is the user-visible problem.
 There is no need to duplicate the description in the issue here, but it is sometimes worth providing a summary of the individual changes in this PR.
 -->
 
-## Are these changes tested?
+## What is the testing strategy for this PR?
 
 <!--
 We typically require tests for all PRs in order to:
 1. Prevent the code from being accidentally broken by subsequent changes
 2. Serve as another way to document the expected behavior of the code
 
-If tests are not included in your PR, please explain why (for example, are they covered by existing tests)?
+Briefly describe how this PR is tested, and point to the specific tests you added. For example: 'This new feature is covered by the `sqllogictest` cases added in `foo.slt`'.
+
+If this PR does not add tests, explain why. For example, if the change is already covered by existing tests, please mention it.
+
+You should also check the `codecov` bot reply on this PR to confirm the changed code is exercised.
 -->
 
 ## Are there any user-facing changes?
