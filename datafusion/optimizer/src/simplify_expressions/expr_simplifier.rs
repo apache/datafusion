@@ -4963,8 +4963,7 @@ mod tests {
             let right_list = literals(&[-0.0, 4.0, 5.0, 6.0])?;
             let retains_short_lists =
                 matches!(data_type, DataType::Float32 | DataType::Float64);
-            let schema =
-                Arc::new(Schema::new(vec![Field::new("x", data_type.clone(), false)]));
+            let schema = Arc::new(Schema::new(vec![Field::new("x", data_type, false)]));
             let batch = RecordBatch::try_new(schema, vec![values])?;
             let schema = batch.schema().to_dfschema_ref()?;
             let simplifier = ExprSimplifier::new(
@@ -4992,8 +4991,9 @@ mod tests {
                         // Floating-point literals must bypass structural set rewrites.
                         assert_eq!(simplified, expr);
                     }
-                    // Whether the list is kept as a membership filter or
-                    // rewritten to a comparison chain, `-0.0` matches `0.0`.
+                    
+                    // Regardless of the form the list takes (rewritten or not) 
+                    // it must correctly report that `-0.0` matches `0.0`.
                     let actual = create_physical_expr(
                         &simplified,
                         &schema,
@@ -5002,11 +5002,7 @@ mod tests {
                     )?
                     .evaluate(&batch)?
                     .into_array(batch.num_rows())?;
-                    assert_eq!(
-                        actual.as_boolean(),
-                        &BooleanArray::from(expected),
-                        "{data_type} list of {list_len}: {expr}"
-                    );
+                    assert_eq!(actual.as_boolean(), &BooleanArray::from(expected));
                 }
             }
         }
