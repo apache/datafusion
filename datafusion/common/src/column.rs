@@ -10,11 +10,106 @@ use crate::utils::quote_identifier;
 use crate::{DFSchema, Diagnostic, Result, SchemaError, Spans, TableReference};
 use arrow::datatypes::{Field, FieldRef};
 use itertools::Itertools;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 use std::fmt;
+use std::hash::{Hash, Hasher};
+use std::num::NonZeroU64;
+use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
+
+/// The identity of a column of a logical plan.
+///
+/// Two columns can have the same name, for example the outputs of two scans
+/// of the same table. A [`Column`] that carries a `ColumnId` refers to one of
+/// them, whatever its name, and a [`DFSchema`] records the id of each of its
+/// fields (see [`DFSchema::field_ids`]).
+///
+/// Displayed as `#n`.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct ColumnId(NonZeroU64);
+
+impl ColumnId {
+    /// Creates a column id from its number
+    pub fn new(id: NonZeroU64) -> Self {
+        Self(id)
+    }
+
+    /// The number of this column id
+    pub fn get(&self) -> NonZeroU64 {
+        self.0
+    }
+}
+
+impl fmt::Display for ColumnId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "#{}", self.0)
+    }
+}
+
+/// Allocates [`ColumnId`]s that are unique among the ids it allocates.
+///
+/// One generator is shared by every query of a session (it lives in the
+/// session's `ExecutionProps`), by the SQL planner, the DataFrame API, the
+/// `LogicalPlanBuilder` and the optimizer, so that the plans they build do
+/// not reuse an id. It is an atomic counter: cloning the `Arc` that holds it
+/// shares it.
+///
+/// # No generator, no ids
+///
+/// Code that builds plans without a generator produces columns and fields
+/// without ids (`None`), which resolve by qualifier and name as they always
+/// have. Ids therefore only come from a generator, and two plans built
+/// independently cannot have colliding ids unless they share a generator.
+#[derive(Debug)]
+pub struct ColumnIdGenerator {
+    /// The number of the last id allocated (0 if none)
+    last: AtomicU64,
+}
+
+impl Default for ColumnIdGenerator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl ColumnIdGenerator {
+    /// Creates a generator whose first id is `#1`
+    pub fn new() -> Self {
+        Self {
+            last: AtomicU64::new(0),
+        }
+    }
+
+    /// Allocates a new id, greater than every id allocated so far and than
+    /// every id passed to [`Self::advance_past`]
+    pub fn next(&self) -> ColumnId {
+        let id = self.last.fetch_add(1, AtomicOrdering::Relaxed) + 1;
+        // `last` starts at 0, so `id` is at least 1 unless the counter
+        // overflowed, which would take centuries of allocations
+        ColumnId(NonZeroU64::new(id).expect("column id overflow"))
+    }
+
+    /// Makes sure that later ids are greater than `id`, so that they do not
+    /// collide with the ids of a plan built elsewhere (decoded, or built with
+    /// another generator)
+    pub fn advance_past(&self, id: ColumnId) {
+        self.last.fetch_max(id.0.get(), AtomicOrdering::Relaxed);
+    }
+}
 
 /// A named reference to a qualified field in a schema.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+///
+/// # Equality
+///
+/// `PartialEq`, `Eq`, `Hash`, `PartialOrd` and `Ord` compare the relation and
+/// the name only: they ignore [`Self::spans`] (diagnostics) and [`Self::id`].
+/// Code that keys maps or compares expressions by `Column` builds its keys
+/// with [`Column::new`], without ids, and keeps working unchanged while ids
+/// are introduced. Equality is planned to include ids only once every
+/// producer of columns keeps them (phase 6 of the column identity plan).
+/// Until then, use [`Column::same_column`] to compare by id.
+#[derive(Clone)]
+#[non_exhaustive]
 pub struct Column {
     /// relation/table reference.
     pub relation: Option<TableReference>,
@@ -22,14 +117,56 @@ pub struct Column {
     pub name: String,
     /// Original source code location, if known
     pub spans: Spans,
+    /// The identity of the column this refers to, if known.
+    ///
+    /// When set and present in a schema, lookups in that schema find the field
+    /// with this id, whatever its qualifier and name; otherwise they use the
+    /// qualifier and name. Ignored by equality, see [`Column`].
+    pub id: Option<ColumnId>,
+}
+
+impl PartialEq for Column {
+    fn eq(&self, other: &Self) -> bool {
+        // ignores `spans` and `id`, see the documentation of `Column`
+        self.relation == other.relation && self.name == other.name
+    }
+}
+
+impl Eq for Column {}
+
+impl Hash for Column {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // consistent with `PartialEq`: ignores `spans` and `id`
+        self.relation.hash(state);
+        self.name.hash(state);
+    }
+}
+
+impl PartialOrd for Column {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for Column {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // consistent with `PartialEq`: ignores `spans` and `id`
+        self.relation
+            .cmp(&other.relation)
+            .then_with(|| self.name.cmp(&other.name))
+    }
 }
 
 impl fmt::Debug for Column {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Column")
-            .field("relation", &self.relation)
-            .field("name", &self.name)
-            .finish()
+        let mut s = f.debug_struct("Column");
+        s.field("relation", &self.relation)
+            .field("name", &self.name);
+        // shown only when set, so that the output is unchanged without ids
+        if let Some(id) = &self.id {
+            s.field("id", id);
+        }
+        s.finish()
     }
 }
 
@@ -48,6 +185,7 @@ impl Column {
             relation: relation.map(|r| r.into()),
             name: name.into(),
             spans: Spans::new(),
+            id: None,
         }
     }
 
@@ -57,6 +195,7 @@ impl Column {
             relation: None,
             name: name.into(),
             spans: Spans::new(),
+            id: None,
         }
     }
 
@@ -68,6 +207,7 @@ impl Column {
             relation: None,
             name: name.into(),
             spans: Spans::new(),
+            id: None,
         }
     }
 
@@ -107,6 +247,7 @@ impl Column {
             relation,
             name,
             spans: Spans::new(),
+            id: None,
         })
     }
 
@@ -122,6 +263,7 @@ impl Column {
                 relation: None,
                 name: flat_name,
                 spans: Spans::new(),
+                id: None,
             },
         )
     }
@@ -135,6 +277,7 @@ impl Column {
                 relation: None,
                 name: flat_name,
                 spans: Spans::new(),
+                id: None,
             },
         )
     }
@@ -307,6 +450,26 @@ impl Column {
         self
     }
 
+    /// Sets the identity of the column this refers to (see [`ColumnId`])
+    pub fn with_id(mut self, id: Option<ColumnId>) -> Self {
+        self.id = id;
+        self
+    }
+
+    /// Returns true if `self` and `other` refer to the same column: if both
+    /// have an id, the ids are equal; otherwise the relations and names are
+    /// equal.
+    ///
+    /// Unlike `==`, which ignores ids (see [`Column`]), this tells apart two
+    /// columns with the same name that have different ids, such as the
+    /// outputs of two scans of the same table.
+    pub fn same_column(&self, other: &Column) -> bool {
+        match (self.id, other.id) {
+            (Some(id), Some(other_id)) => id == other_id,
+            _ => self == other,
+        }
+    }
+
     /// Qualifies the column with the given table reference.
     pub fn with_relation(&self, relation: TableReference) -> Self {
         Self {
@@ -444,5 +607,94 @@ mod tests {
         assert_eq!(err.strip_backtrace(), expected);
 
         Ok(())
+    }
+
+    fn column_id(id: u64) -> ColumnId {
+        ColumnId::new(NonZeroU64::new(id).unwrap())
+    }
+
+    fn hash_of(col: &Column) -> u64 {
+        use std::hash::DefaultHasher;
+        let mut hasher = DefaultHasher::new();
+        col.hash(&mut hasher);
+        hasher.finish()
+    }
+
+    #[test]
+    fn column_id_generator() {
+        let generator = ColumnIdGenerator::new();
+        assert_eq!(generator.next(), column_id(1));
+        assert_eq!(generator.next(), column_id(2));
+
+        // advancing past a higher id skips to after it
+        generator.advance_past(column_id(10));
+        assert_eq!(generator.next(), column_id(11));
+
+        // advancing past a lower id does nothing
+        generator.advance_past(column_id(3));
+        assert_eq!(generator.next(), column_id(12));
+    }
+
+    #[test]
+    fn column_id_display() {
+        assert_eq!(column_id(7).to_string(), "#7");
+        assert_eq!(column_id(7).get().get(), 7);
+    }
+
+    #[test]
+    fn equality_ignores_id() {
+        let plain = Column::new(Some("t1"), "a");
+        let with_id = plain.clone().with_id(Some(column_id(1)));
+        let other_id = plain.clone().with_id(Some(column_id(2)));
+
+        assert_eq!(plain, with_id);
+        assert_eq!(with_id, other_id);
+        assert_eq!(hash_of(&plain), hash_of(&with_id));
+        assert_eq!(hash_of(&with_id), hash_of(&other_id));
+        assert_eq!(with_id.cmp(&other_id), Ordering::Equal);
+
+        // relation and name still matter
+        assert_ne!(
+            with_id,
+            Column::new(Some("t2"), "a").with_id(Some(column_id(1)))
+        );
+        assert_ne!(
+            with_id,
+            Column::new(Some("t1"), "b").with_id(Some(column_id(1)))
+        );
+        assert!(Column::new(Some("t1"), "a") < Column::new(Some("t1"), "b"));
+    }
+
+    #[test]
+    fn same_column() {
+        let a1 = Column::new(Some("t1"), "a").with_id(Some(column_id(1)));
+        let a2 = Column::new(Some("t1"), "a").with_id(Some(column_id(2)));
+        let b1 = Column::new(Some("t2"), "b").with_id(Some(column_id(1)));
+        let a = Column::new(Some("t1"), "a");
+
+        // both have ids: the ids decide, whatever the names
+        assert!(a1.same_column(&a1));
+        assert!(!a1.same_column(&a2));
+        assert!(a1.same_column(&b1));
+
+        // otherwise the relation and name decide
+        assert!(a.same_column(&a1));
+        assert!(a1.same_column(&a));
+        assert!(!a.same_column(&b1));
+        assert!(a.same_column(&Column::new(Some("t1"), "a")));
+    }
+
+    #[test]
+    fn debug_shows_id_only_if_set() {
+        let col = Column::new(Some("t1"), "a");
+        assert_eq!(
+            format!("{col:?}"),
+            r#"Column { relation: Some(Bare { table: "t1" }), name: "a" }"#
+        );
+        let col = col.with_id(Some(column_id(3)));
+        assert_eq!(
+            format!("{col:?}"),
+            r#"Column { relation: Some(Bare { table: "t1" }), name: "a", id: ColumnId(3) }"#
+        );
     }
 }

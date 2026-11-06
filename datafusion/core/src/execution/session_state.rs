@@ -27,6 +27,7 @@ use datafusion_catalog::information_schema::{
     INFORMATION_SCHEMA, InformationSchemaProvider,
 };
 use datafusion_catalog::{TableFunction, TableFunctionImpl};
+use datafusion_common::ColumnIdGenerator;
 use datafusion_common::alias::AliasGenerator;
 #[cfg(feature = "sql")]
 use datafusion_common::config::Dialect;
@@ -2238,6 +2239,10 @@ impl ContextProvider for SessionContextProvider<'_> {
         self.state.config_options()
     }
 
+    fn column_id_generator(&self) -> Option<Arc<ColumnIdGenerator>> {
+        Some(Arc::clone(&self.state.execution_props.column_id_generator))
+    }
+
     fn udf_names(&self) -> Vec<String> {
         self.state.scalar_functions().keys().cloned().collect()
     }
@@ -2469,6 +2474,10 @@ impl OptimizerConfig for SessionState {
 
     fn alias_generator(&self) -> &Arc<AliasGenerator> {
         &self.execution_props.alias_generator
+    }
+
+    fn column_id_generator(&self) -> Option<&Arc<ColumnIdGenerator>> {
+        Some(&self.execution_props.column_id_generator)
     }
 
     fn options(&self) -> Arc<ConfigOptions> {

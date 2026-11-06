@@ -138,6 +138,15 @@ impl Default for DataFrameWriteOptions {
     }
 }
 
+/// A [`LogicalPlanBuilder`] for `plan` that allocates column ids with the
+/// generator of `state` (shared by the session), so that the plans of the
+/// DataFrames of one session do not reuse ids
+fn plan_builder(state: &SessionState, plan: LogicalPlan) -> LogicalPlanBuilder {
+    LogicalPlanBuilder::from(plan).with_column_id_generator(Some(Arc::clone(
+        &state.execution_props().column_id_generator,
+    )))
+}
+
 /// Represents a logical set of rows with the same named columns.
 ///
 /// Similar to a [Pandas DataFrame] or [Spark DataFrame], a DataFusion DataFrame
@@ -570,7 +579,7 @@ impl DataFrame {
             let input = plan;
             let (aggr_with_alias, rewrite_map) =
                 alias_aggregate_exprs(aggr_exprs, &input)?;
-            plan = LogicalPlanBuilder::from(input.clone())
+            plan = plan_builder(&self.session_state, input.clone())
                 .aggregate(Vec::<Expr>::new(), aggr_with_alias)?
                 .build()?;
             expr_list = rewrite_select_aggs(expr_list, &input, &rewrite_map)?;
@@ -578,7 +587,9 @@ impl DataFrame {
 
         // 3. Project — columnize_expr maps window/aggregate exprs to columns
         //    and duplicate output names are rejected
-        let project_plan = LogicalPlanBuilder::from(plan).project(expr_list)?.build()?;
+        let project_plan = plan_builder(&self.session_state, plan)
+            .project(expr_list)?
+            .build()?;
 
         Ok(DataFrame {
             session_state: self.session_state,
@@ -700,7 +711,7 @@ impl DataFrame {
         options: UnnestOptions,
     ) -> Result<DataFrame> {
         let columns = columns.iter().map(|c| Column::from(*c)).collect();
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .unnest_columns_with_options(columns, options)?
             .build()?;
         Ok(DataFrame {
@@ -743,7 +754,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn filter(self, predicate: Expr) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .filter(predicate)?
             .build()?;
         Ok(DataFrame {
@@ -803,7 +814,7 @@ impl DataFrame {
         let aggr_expr_len = aggr_expr.len();
         let options =
             LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .with_options(options)
             .aggregate(group_expr, aggr_expr)?
             .build()?;
@@ -818,7 +829,9 @@ impl DataFrame {
                 .filter(|(idx, _)| *idx != grouping_id_pos)
                 .map(|(_, column)| Expr::Column(column))
                 .collect::<Vec<_>>();
-            LogicalPlanBuilder::from(plan).project(exprs)?.build()?
+            plan_builder(&self.session_state, plan)
+                .project(exprs)?
+                .build()?
         } else {
             plan
         };
@@ -832,7 +845,7 @@ impl DataFrame {
     /// Return a new DataFrame that adds the result of evaluating one or more
     /// window functions ([`Expr::WindowFunction`]) to the existing columns
     pub fn window(self, window_exprs: Vec<Expr>) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .window(window_exprs)?
             .build()?;
         Ok(DataFrame {
@@ -873,7 +886,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn limit(self, skip: usize, fetch: Option<usize>) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .limit(skip, fetch)?
             .build()?;
         Ok(DataFrame {
@@ -913,7 +926,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn union(self, dataframe: DataFrame) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .union(dataframe.plan)?
             .build()?;
         Ok(DataFrame {
@@ -958,7 +971,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn union_by_name(self, dataframe: DataFrame) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .union_by_name(dataframe.plan)?
             .build()?;
         Ok(DataFrame {
@@ -999,7 +1012,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn union_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .union_distinct(dataframe.plan)?
             .build()?;
         Ok(DataFrame {
@@ -1040,7 +1053,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn union_by_name_distinct(self, dataframe: DataFrame) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .union_by_name_distinct(dataframe.plan)?
             .build()?;
         Ok(DataFrame {
@@ -1076,7 +1089,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn distinct(self) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan).distinct()?.build()?;
+        let plan = plan_builder(&self.session_state, self.plan)
+            .distinct()?
+            .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
@@ -1118,7 +1133,7 @@ impl DataFrame {
         select_expr: Vec<Expr>,
         sort_expr: Option<Vec<SortExpr>>,
     ) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .distinct_on(on_expr, select_expr, sort_expr)?
             .build()?;
         Ok(DataFrame {
@@ -1392,7 +1407,9 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn sort(self, expr: Vec<SortExpr>) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan).sort(expr)?.build()?;
+        let plan = plan_builder(&self.session_state, self.plan)
+            .sort(expr)?
+            .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,
@@ -1457,7 +1474,7 @@ impl DataFrame {
         right_cols: &[&str],
         filter: Option<Expr>,
     ) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .join(
                 right.plan,
                 join_type,
@@ -1522,7 +1539,7 @@ impl DataFrame {
         join_type: JoinType,
         on_exprs: impl IntoIterator<Item = Expr>,
     ) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .join_on(right.plan, join_type, on_exprs)?
             .build()?;
         Ok(DataFrame {
@@ -1574,7 +1591,7 @@ impl DataFrame {
         on: Option<Expr>,
         match_condition: Expr,
     ) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .asof_join_on(right.plan, on, match_condition)?
             .build()?;
         Ok(DataFrame {
@@ -1623,7 +1640,7 @@ impl DataFrame {
         using_keys: Vec<Column>,
         match_condition: Expr,
     ) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .asof_join_using(right.plan, using_keys, match_condition)?
             .build()?;
         Ok(DataFrame {
@@ -1661,7 +1678,7 @@ impl DataFrame {
     /// # }
     /// ```
     pub fn repartition(self, partitioning_scheme: Partitioning) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .repartition(partitioning_scheme)?
             .build()?;
         Ok(DataFrame {
@@ -2053,7 +2070,7 @@ impl DataFrame {
         if matches!(self.plan, LogicalPlan::Explain(_)) {
             return plan_err!("Nested EXPLAINs are not supported");
         }
-        let plan = LogicalPlanBuilder::from(self.plan)
+        let plan = plan_builder(&self.session_state, self.plan)
             .explain_option_format(explain_option)?
             .build()?;
         Ok(DataFrame {
@@ -2257,7 +2274,7 @@ impl DataFrame {
         let plan = if write_options.sort_by.is_empty() {
             self.plan
         } else {
-            LogicalPlanBuilder::from(self.plan)
+            plan_builder(&self.session_state, self.plan)
                 .sort(write_options.sort_by)?
                 .build()?
         };
@@ -2339,7 +2356,7 @@ impl DataFrame {
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
-            LogicalPlanBuilder::from(self.plan)
+            plan_builder(&self.session_state, self.plan)
                 .sort(options.sort_by)?
                 .build()?
         };
@@ -2409,7 +2426,7 @@ impl DataFrame {
         let plan = if options.sort_by.is_empty() {
             self.plan
         } else {
-            LogicalPlanBuilder::from(self.plan)
+            plan_builder(&self.session_state, self.plan)
                 .sort(options.sort_by)?
                 .build()?
         };
@@ -2491,7 +2508,7 @@ impl DataFrame {
             fields.push((new_column, true));
         }
 
-        let project_plan = LogicalPlanBuilder::from(plan)
+        let project_plan = plan_builder(&self.session_state, plan)
             .project_with_validation(fields)?
             .build()?;
 
@@ -2568,7 +2585,7 @@ impl DataFrame {
                 }
             })
             .collect::<Vec<_>>();
-        let project_plan = LogicalPlanBuilder::from(self.plan)
+        let project_plan = plan_builder(&self.session_state, self.plan)
             .project_with_validation(projection)?
             .build()?;
         Ok(DataFrame {
@@ -2684,7 +2701,9 @@ impl DataFrame {
     ///
     /// This method replaces the qualifiers of output columns with the given alias.
     pub fn alias(self, alias: &str) -> Result<DataFrame> {
-        let plan = LogicalPlanBuilder::from(self.plan).alias(alias)?.build()?;
+        let plan = plan_builder(&self.session_state, self.plan)
+            .alias(alias)?
+            .build()?;
         Ok(DataFrame {
             session_state: self.session_state,
             plan,

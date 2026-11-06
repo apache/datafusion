@@ -4,6 +4,7 @@
 
 use crate::var_provider::{VarProvider, VarType};
 use chrono::{DateTime, Utc};
+use datafusion_common::ColumnIdGenerator;
 use datafusion_common::HashMap;
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::config::ConfigOptions;
@@ -42,6 +43,19 @@ pub struct ExecutionProps {
     pub query_execution_start_time: Option<DateTime<Utc>>,
     /// Alias generator used by subquery optimizer rules
     pub alias_generator: Arc<AliasGenerator>,
+    /// Allocates the [`ColumnId`]s of the plans built and optimized with
+    /// these props.
+    ///
+    /// Shared by the clones of these props (and so by the clones of a
+    /// session's state), and, unlike [`Self::alias_generator`], **not** reset
+    /// by [`Self::mark_start_execution`]: `SessionContext::table` and
+    /// `SessionContext::sql` each take a new snapshot of the session state,
+    /// and a counter reset per snapshot would give every DataFrame ids
+    /// starting at `#1`, so that two DataFrames of one session would collide
+    /// whenever they are combined (`a.join(b)`).
+    ///
+    /// [`ColumnId`]: datafusion_common::ColumnId
+    pub column_id_generator: Arc<ColumnIdGenerator>,
     /// Snapshot of config options when the query started
     pub config_options: Option<Arc<ConfigOptions>>,
     /// Providers for scalar variables
@@ -60,6 +74,7 @@ impl ExecutionProps {
         ExecutionProps {
             query_execution_start_time: None,
             alias_generator: Arc::new(AliasGenerator::new()),
+            column_id_generator: Arc::new(ColumnIdGenerator::new()),
             config_options: None,
             var_providers: None,
         }
@@ -75,7 +90,8 @@ impl ExecutionProps {
     }
 
     /// Marks the execution of query started timestamp.
-    /// This also instantiates a new alias generator.
+    /// This also instantiates a new alias generator. The column id generator
+    /// is kept (see [`Self::column_id_generator`]).
     pub fn mark_start_execution(&mut self, config_options: Arc<ConfigOptions>) -> &Self {
         self.query_execution_start_time = Some(Utc::now());
         self.alias_generator = Arc::new(AliasGenerator::new());
@@ -124,8 +140,24 @@ mod test {
     fn debug() {
         let props = ExecutionProps::new();
         assert_eq!(
-            "ExecutionProps { query_execution_start_time: None, alias_generator: AliasGenerator { next_id: 1 }, config_options: None, var_providers: None }",
+            "ExecutionProps { query_execution_start_time: None, alias_generator: AliasGenerator { next_id: 1 }, column_id_generator: ColumnIdGenerator { last: 0 }, config_options: None, var_providers: None }",
             format!("{props:?}")
         );
+    }
+
+    #[test]
+    fn column_id_generator_is_shared_and_kept() {
+        let mut props = ExecutionProps::new();
+        let first = props.column_id_generator.next();
+
+        // clones share the generator
+        let clone = props.clone();
+        let second = clone.column_id_generator.next();
+        assert!(second > first);
+
+        // marking the start of an execution keeps the generator
+        props.mark_start_execution(Arc::new(ConfigOptions::default()));
+        let third = props.column_id_generator.next();
+        assert!(third > second);
     }
 }

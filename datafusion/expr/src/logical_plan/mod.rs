@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 pub mod builder;
+mod column_ids;
 mod ddl;
 pub mod display;
 pub mod dml;
@@ -20,6 +21,7 @@ pub use builder::{
     build_asof_join_schema, build_join_schema, requalify_sides_if_needed, table_scan,
     union, wrap_projection_for_join_if_necessary,
 };
+pub use column_ids::{ColumnIdIssue, ColumnIdIssueKind};
 pub use ddl::{
     CreateCatalog, CreateCatalogSchema, CreateExternalCatalog, CreateExternalTable,
     CreateFunction, CreateFunctionBody, CreateIndex, CreateMemoryTable, CreateView,

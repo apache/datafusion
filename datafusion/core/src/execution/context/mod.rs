@@ -2465,6 +2465,23 @@ mod tests {
     use tempfile::TempDir;
 
     #[tokio::test]
+    async fn column_id_generator_is_shared_by_state_snapshots() -> Result<()> {
+        let ctx = SessionContext::new();
+        let first = ctx.state();
+        let mut second = ctx.state();
+        // every query marks its snapshot's start, which keeps the generator
+        second.mark_start_execution();
+        assert!(Arc::ptr_eq(
+            &first.execution_props().column_id_generator,
+            &second.execution_props().column_id_generator
+        ));
+        let id1 = first.execution_props().column_id_generator.next();
+        let id2 = second.execution_props().column_id_generator.next();
+        assert!(id2 > id1);
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn shared_memory_and_disk_manager() {
         // Demonstrate the ability to share DiskManager and
         // MemoryPool between two different executions.

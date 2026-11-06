@@ -11,10 +11,10 @@ use std::vec;
 use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
 use arrow_schema::extension::{Json, Uuid};
-use datafusion_common::TableReference;
 use datafusion_common::config::SqlParserOptions;
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
+use datafusion_common::{ColumnIdGenerator, TableReference};
 use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
 use datafusion_common::{
     DFSchemaRef, Diagnostic, SchemaError, field_not_found, internal_err,
@@ -264,6 +264,9 @@ pub struct PlannerContext {
     set_expr_left_schema: Option<DFSchemaRef>,
     /// The parameters of all lambdas seen so far
     lambda_parameters: HashMap<String, FieldRef>,
+    /// Allocates the column ids of the planned plans. An `Arc`, so that the
+    /// clones of this context made for each query block share it.
+    column_id_generator: Option<Arc<ColumnIdGenerator>>,
 }
 
 impl Default for PlannerContext {
@@ -283,7 +286,27 @@ impl PlannerContext {
             create_table_schema: None,
             set_expr_left_schema: None,
             lambda_parameters: HashMap::new(),
+            column_id_generator: None,
         }
+    }
+
+    /// Update the PlannerContext with the generator of the column ids of the
+    /// planned plans (see [`ContextProvider::column_id_generator`]).
+    ///
+    /// No generator, no ids: without one (the default), planning allocates
+    /// no ids. The entry points of [`SqlToRel`] use the generator of their
+    /// [`ContextProvider`] when the context has none.
+    pub fn with_column_id_generator(
+        mut self,
+        column_id_generator: Option<Arc<ColumnIdGenerator>>,
+    ) -> Self {
+        self.column_id_generator = column_id_generator;
+        self
+    }
+
+    /// The generator of the column ids of the planned plans, if any
+    pub fn column_id_generator(&self) -> Option<&Arc<ColumnIdGenerator>> {
+        self.column_id_generator.as_ref()
     }
 
     /// Update the PlannerContext with provided prepare_param_data_types
@@ -467,6 +490,23 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             options,
             ident_normalizer: IdentNormalizer::new(ident_normalize),
             warnings: Mutex::new(vec![]),
+        }
+    }
+
+    /// A new [`PlannerContext`], with the column id generator of the context
+    /// provider
+    pub(crate) fn new_planner_context(&self) -> PlannerContext {
+        PlannerContext::new()
+            .with_column_id_generator(self.context_provider.column_id_generator())
+    }
+
+    /// Gives `planner_context` the column id generator of the context
+    /// provider, if it has none (called by the entry points that take a
+    /// [`PlannerContext`] from the caller)
+    pub(crate) fn init_planner_context(&self, planner_context: &mut PlannerContext) {
+        if planner_context.column_id_generator.is_none() {
+            planner_context.column_id_generator =
+                self.context_provider.column_id_generator();
         }
     }
 

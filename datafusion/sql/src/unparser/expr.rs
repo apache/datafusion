@@ -1949,8 +1949,8 @@ mod tests {
     use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
+    use datafusion_common::TableReference;
     use datafusion_common::datatype::DataTypeExt;
-    use datafusion_common::{Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
         ColumnarValue, HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress,
@@ -2062,12 +2062,8 @@ mod tests {
         let tests: Vec<(Expr, &str)> = vec![
             ((col("a") + col("b")).gt(lit(4)), r#"((a + b) > 4)"#),
             (
-                Expr::Column(Column {
-                    relation: Some(TableReference::partial("a", "b")),
-                    name: "c".to_string(),
-                    spans: Spans::new(),
-                })
-                .gt(lit(4)),
+                Expr::Column(Column::new(Some(TableReference::partial("a", "b")), "c"))
+                    .gt(lit(4)),
                 r#"(b.c > 4)"#,
             ),
             (
@@ -2434,11 +2430,10 @@ mod tests {
             ),
             (
                 Expr::Unnest(Unnest {
-                    expr: Box::new(Expr::Column(Column {
-                        relation: Some(TableReference::partial("schema", "table")),
-                        name: "array_col".to_string(),
-                        spans: Spans::new(),
-                    })),
+                    expr: Box::new(Expr::Column(Column::new(
+                        Some(TableReference::partial("schema", "table")),
+                        "array_col",
+                    ))),
                     outer: false,
                 }),
                 r#"UNNEST("table".array_col)"#,

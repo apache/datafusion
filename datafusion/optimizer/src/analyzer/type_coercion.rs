@@ -1765,11 +1765,9 @@ fn project_with_column_index(
             Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
                 Ok(e.unalias().alias(schema.field(i).name()))
             }
-            Expr::Column(Column {
-                relation: _,
-                ref name,
-                spans: _,
-            }) if name != schema.field(i).name() => Ok(e.alias(schema.field(i).name())),
+            Expr::Column(Column { ref name, .. }) if name != schema.field(i).name() => {
+                Ok(e.alias(schema.field(i).name()))
+            }
             Expr::Alias { .. } | Expr::Column { .. } => Ok(e),
             #[expect(deprecated)]
             Expr::Wildcard { .. } => {

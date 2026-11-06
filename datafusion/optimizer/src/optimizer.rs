@@ -18,7 +18,9 @@ use datafusion_common::instant::Instant;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{DFSchema, DataFusionError, HashSet, Result, internal_err};
+use datafusion_common::{
+    ColumnIdGenerator, DFSchema, DataFusionError, HashSet, Result, internal_err,
+};
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{
@@ -28,6 +30,7 @@ use datafusion_expr::{
     Statement, Subquery, SubqueryAlias, Union, Unnest, Window,
 };
 
+use crate::column_id_check::ColumnIdCheck;
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
 use crate::decorrelate_lateral_join::DecorrelateLateralJoin;
 use crate::decorrelate_predicate_subquery::DecorrelatePredicateSubquery;
@@ -134,6 +137,19 @@ pub trait OptimizerConfig {
     /// Return alias generator used to generate unique aliases for subqueries
     fn alias_generator(&self) -> &Arc<AliasGenerator>;
 
+    /// Return the generator of the [`ColumnId`]s that rules allocate, if any.
+    ///
+    /// The optimizer moves it past the highest id of the plan before running
+    /// the rules (see [`LogicalPlan::max_column_id`]), so that the ids it
+    /// allocates do not collide with the ids of the plan.
+    ///
+    /// Defaults to `None`: no generator, no ids. Rules then allocate no ids.
+    ///
+    /// [`ColumnId`]: datafusion_common::ColumnId
+    fn column_id_generator(&self) -> Option<&Arc<ColumnIdGenerator>> {
+        None
+    }
+
     fn options(&self) -> Arc<ConfigOptions>;
 
     fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
@@ -153,6 +169,9 @@ pub struct OptimizerContext {
     /// Alias generator used to generate unique aliases for subqueries
     alias_generator: Arc<AliasGenerator>,
 
+    /// Generator of the column ids that rules allocate
+    column_id_generator: Arc<ColumnIdGenerator>,
+
     options: Arc<ConfigOptions>,
 }
 
@@ -170,8 +189,19 @@ impl OptimizerContext {
         Self {
             query_execution_start_time: Some(Utc::now()),
             alias_generator: Arc::new(AliasGenerator::new()),
+            column_id_generator: Arc::new(ColumnIdGenerator::new()),
             options,
         }
+    }
+
+    /// Use the given column id generator, for example the one of the session
+    /// that built the plan (by default, a new one)
+    pub fn with_column_id_generator(
+        mut self,
+        column_id_generator: Arc<ColumnIdGenerator>,
+    ) -> Self {
+        self.column_id_generator = column_id_generator;
+        self
     }
 
     /// Specify whether to enable the filter_null_keys rule
@@ -226,6 +256,10 @@ impl OptimizerConfig for OptimizerContext {
 
     fn alias_generator(&self) -> &Arc<AliasGenerator> {
         &self.alias_generator
+    }
+
+    fn column_id_generator(&self) -> Option<&Arc<ColumnIdGenerator>> {
+        Some(&self.column_id_generator)
     }
 
     fn options(&self) -> Arc<ConfigOptions> {
@@ -611,6 +645,17 @@ impl Optimizer {
         let options = config.options();
         let mut new_plan = plan;
 
+        // Ids that rules allocate must not collide with the ids of the plan,
+        // which may have been built elsewhere (decoded, or with another
+        // generator)
+        if let Some(generator) = config.column_id_generator()
+            && let Some(max_id) = new_plan.max_column_id()
+        {
+            generator.advance_past(max_id);
+        }
+
+        let mut column_id_check = ColumnIdCheck::new(&new_plan);
+
         let mut previous_plans = HashSet::with_capacity(16);
         previous_plans.insert(LogicalPlanSignature::new(&new_plan));
 
@@ -704,6 +749,7 @@ impl Optimizer {
                         new_plan = data;
                         observer(&new_plan, rule.as_ref());
                         if transformed {
+                            column_id_check.after_rule(rule.name(), &new_plan);
                             has_subqueries = plan_has_subqueries(&new_plan);
                             log_plan(rule.name(), &new_plan);
                         } else {
@@ -788,9 +834,11 @@ mod tests {
 
     use arrow::datatypes::Metadata;
 
+    use arrow::datatypes::{DataType, Field};
     use datafusion_common::tree_node::Transformed;
     use datafusion_common::{
-        Column, DFSchema, DFSchemaRef, DataFusionError, Result, assert_contains, plan_err,
+        Column, ColumnId, DFSchema, DFSchemaRef, DataFusionError, Result,
+        assert_contains, plan_err,
     };
     use datafusion_expr::logical_plan::EmptyRelation;
     use datafusion_expr::{
@@ -802,6 +850,27 @@ mod tests {
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
 
     use super::ApplyOrder;
+
+    #[test]
+    fn optimizer_advances_column_id_generator_past_the_plan() -> Result<()> {
+        let id = |n| ColumnId::new(std::num::NonZeroU64::new(n).unwrap());
+        // a plan with a field id built with another generator
+        let schema = DFSchema::from_unqualified_fields(
+            vec![Field::new("a", DataType::Int32, true)].into(),
+            std::collections::HashMap::new(),
+        )?
+        .with_field_ids(vec![Some(id(41))])?;
+        let plan = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::new(schema),
+        });
+
+        let config = OptimizerContext::new();
+        let opt = Optimizer::with_rules(vec![]);
+        opt.optimize(plan, &config, observe)?;
+        assert_eq!(config.column_id_generator().unwrap().next(), id(42));
+        Ok(())
+    }
 
     #[test]
     fn skip_failing_rule() {

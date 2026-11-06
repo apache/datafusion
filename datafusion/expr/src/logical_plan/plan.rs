@@ -5533,17 +5533,17 @@ mod tests {
     /// write, every owned `map_*` traversal). Its size is set by the largest
     /// variant, so an oversized variant balloons cost for every other variant.
     ///
-    /// Today the size-setter should be `Join` (~176 bytes); `DdlStatement` is
+    /// Today the size-setter should be `Join` (~192 bytes); `DdlStatement` is
     /// boxed precisely so it does not dominate. If you grow a variant, please
     /// box the new large fields rather than letting this number creep up —
     /// see the analogous `test_size_of_expr` in `expr.rs`.
     #[test]
     fn test_size_of_logical_plan() {
         // `LogicalPlan` enum on aarch64 / x86_64. Today this matches
-        // `Join`'s 176 bytes (the enum discriminant fits in `Join`'s
+        // `Join`'s 192 bytes (the enum discriminant fits in `Join`'s
         // alignment padding); if `Join` grows or another variant overtakes
         // it, this number will move with the new size-setter.
-        assert_eq!(size_of::<LogicalPlan>(), 176);
+        assert_eq!(size_of::<LogicalPlan>(), 192);
         // `DdlStatement` is `Ddl(DdlStatement)`'s payload; keep it below the
         // `Join` ceiling so it never re-becomes the size-setter.
         assert!(

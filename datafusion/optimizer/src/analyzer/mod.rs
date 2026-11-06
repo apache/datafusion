@@ -17,6 +17,7 @@ use datafusion_expr::{InvariantLevel, LogicalPlan};
 
 use crate::analyzer::resolve_grouping_function::ResolveGroupingFunction;
 use crate::analyzer::type_coercion::TypeCoercion;
+use crate::column_id_check::ColumnIdCheck;
 use crate::utils::log_plan;
 
 use self::function_rewrite::ApplyFunctionRewrites;
@@ -116,6 +117,7 @@ impl Analyzer {
             .map_err(|e| e.context("Invalid input plan passed to Analyzer"))?;
 
         let start_time = Instant::now();
+        let mut column_id_check = ColumnIdCheck::new(&plan);
         let mut new_plan = plan;
 
         // Create an analyzer pass that rewrites `Expr`s to function_calls, as
@@ -142,6 +144,7 @@ impl Analyzer {
             log_plan(rule.name(), &new_plan);
             observer(&new_plan, rule.as_ref());
         }
+        column_id_check.after_rule("analyzer", &new_plan);
 
         // verify at the end, after the last LP analyzer pass, that the plan is executable.
         new_plan

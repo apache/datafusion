@@ -44,10 +44,10 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{
-    Column, Constraints, DFSchema, DFSchemaRef, FunctionalDependencies, NullEquality,
-    Result, ScalarValue, TableReference, ToDFSchema, UnnestOptions, exec_err,
-    get_target_functional_dependencies, internal_datafusion_err, plan_datafusion_err,
-    plan_err,
+    Column, ColumnIdGenerator, Constraints, DFSchema, DFSchemaRef,
+    FunctionalDependencies, NullEquality, Result, ScalarValue, TableReference,
+    ToDFSchema, UnnestOptions, exec_err, get_target_functional_dependencies,
+    internal_datafusion_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::{
     type_union_coercion, type_union_resolution,
@@ -208,6 +208,9 @@ fn decimal_precision_scale(data_type: &DataType) -> Option<(i16, i16)> {
 pub struct LogicalPlanBuilder {
     plan: Arc<LogicalPlan>,
     options: LogicalPlanBuilderOptions,
+    /// Allocates the column ids of the plans built, see
+    /// [`Self::with_column_id_generator`]
+    column_id_generator: Option<Arc<ColumnIdGenerator>>,
 }
 
 impl LogicalPlanBuilder {
@@ -216,6 +219,7 @@ impl LogicalPlanBuilder {
         Self {
             plan: Arc::new(plan),
             options: LogicalPlanBuilderOptions::default(),
+            column_id_generator: None,
         }
     }
 
@@ -224,12 +228,46 @@ impl LogicalPlanBuilder {
         Self {
             plan,
             options: LogicalPlanBuilderOptions::default(),
+            column_id_generator: None,
         }
+    }
+
+    /// A builder of `plan` with the given column id generator: the chained
+    /// methods use it to keep the generator of `self`
+    fn chain(
+        column_id_generator: Option<Arc<ColumnIdGenerator>>,
+        plan: LogicalPlan,
+    ) -> Self {
+        Self::new(plan).with_column_id_generator(column_id_generator)
     }
 
     pub fn with_options(mut self, options: LogicalPlanBuilderOptions) -> Self {
         self.options = options;
         self
+    }
+
+    /// Sets the generator of the [`ColumnId`]s of the plans built by this
+    /// builder, kept by the chained calls (`filter`, `join`, ...).
+    ///
+    /// No generator, no ids: without one (the default), the builder does not
+    /// allocate ids. Pass the generator of the session (see
+    /// [`ExecutionProps::column_id_generator`]) to build plans whose ids do
+    /// not collide with the other plans of the session.
+    ///
+    /// [`ColumnId`]: datafusion_common::ColumnId
+    /// [`ExecutionProps::column_id_generator`]: crate::execution_props::ExecutionProps::column_id_generator
+    pub fn with_column_id_generator(
+        mut self,
+        column_id_generator: Option<Arc<ColumnIdGenerator>>,
+    ) -> Self {
+        self.column_id_generator = column_id_generator;
+        self
+    }
+
+    /// The generator of the column ids of the plans built by this builder,
+    /// if any (see [`Self::with_column_id_generator`])
+    pub fn column_id_generator(&self) -> Option<&Arc<ColumnIdGenerator>> {
+        self.column_id_generator.as_ref()
     }
 
     /// Return the output schema of the plan build so far
@@ -749,7 +787,8 @@ impl LogicalPlanBuilder {
         self,
         expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
     ) -> Result<Self> {
-        project(Arc::unwrap_or_clone(self.plan), expr).map(Self::new)
+        project(Arc::unwrap_or_clone(self.plan), expr)
+            .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Apply a projection without alias with optional validation
@@ -759,7 +798,7 @@ impl LogicalPlanBuilder {
         expr: Vec<(impl Into<SelectExpr>, bool)>,
     ) -> Result<Self> {
         project_with_validation(Arc::unwrap_or_clone(self.plan), expr, None)
-            .map(Self::new)
+            .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Apply a projection, aliasing non-Column/non-Alias expressions to
@@ -774,7 +813,7 @@ impl LogicalPlanBuilder {
             expr.into_iter().map(|e| (e, true)),
             Some(schema),
         )
-        .map(Self::new)
+        .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Select the given column indices
@@ -791,7 +830,7 @@ impl LogicalPlanBuilder {
         let expr = normalize_col(expr.into(), &self.plan)?;
         Filter::try_new(expr, self.plan)
             .map(LogicalPlan::Filter)
-            .map(Self::new)
+            .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Apply a filter which is used for a having clause
@@ -799,18 +838,19 @@ impl LogicalPlanBuilder {
         let expr = normalize_col(expr.into(), &self.plan)?;
         Filter::try_new(expr, self.plan)
             .map(LogicalPlan::Filter)
-            .map(Self::from)
+            .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Make a builder for a prepare logical plan from the builder's plan
     pub fn prepare(self, name: String, fields: Vec<FieldRef>) -> Result<Self> {
-        Ok(Self::new(LogicalPlan::Statement(Statement::Prepare(
-            Prepare {
+        Ok(Self::chain(
+            self.column_id_generator,
+            LogicalPlan::Statement(Statement::Prepare(Prepare {
                 name,
                 fields,
                 input: self.plan,
-            },
-        ))))
+            })),
+        ))
     }
 
     /// Limit the number of rows returned
@@ -833,16 +873,20 @@ impl LogicalPlanBuilder {
     ///
     /// Similar to `limit` but uses expressions for `skip` and `fetch`
     pub fn limit_by_expr(self, skip: Option<Expr>, fetch: Option<Expr>) -> Result<Self> {
-        Ok(Self::new(LogicalPlan::Limit(Limit {
-            skip: skip.map(Box::new),
-            fetch: fetch.map(Box::new),
-            input: self.plan,
-        })))
+        Ok(Self::chain(
+            self.column_id_generator,
+            LogicalPlan::Limit(Limit {
+                skip: skip.map(Box::new),
+                fetch: fetch.map(Box::new),
+                input: self.plan,
+            }),
+        ))
     }
 
     /// Apply an alias
     pub fn alias(self, alias: impl Into<TableReference>) -> Result<Self> {
-        subquery_alias(Arc::unwrap_or_clone(self.plan), alias).map(Self::new)
+        subquery_alias(Arc::unwrap_or_clone(self.plan), alias)
+            .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Add missing sort columns to all downstream projection
@@ -1002,11 +1046,14 @@ impl LogicalPlanBuilder {
         })?;
 
         if missing_cols.is_empty() {
-            return Ok(Self::new(LogicalPlan::Sort(Sort {
-                expr: normalize_sorts(sorts, &self.plan)?,
-                input: self.plan,
-                fetch,
-            })));
+            return Ok(Self::chain(
+                self.column_id_generator,
+                LogicalPlan::Sort(Sort {
+                    expr: normalize_sorts(sorts, &self.plan)?,
+                    input: self.plan,
+                    fetch,
+                }),
+            ));
         }
 
         // remove pushed down sort columns
@@ -1027,17 +1074,19 @@ impl LogicalPlanBuilder {
 
         Projection::try_new(new_expr, Arc::new(sort_plan))
             .map(LogicalPlan::Projection)
-            .map(Self::new)
+            .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Apply a union, preserving duplicate rows
     pub fn union(self, plan: LogicalPlan) -> Result<Self> {
-        union(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)
+        union(Arc::unwrap_or_clone(self.plan), plan)
+            .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Apply a union by name, preserving duplicate rows
     pub fn union_by_name(self, plan: LogicalPlan) -> Result<Self> {
-        union_by_name(Arc::unwrap_or_clone(self.plan), plan).map(Self::new)
+        union_by_name(Arc::unwrap_or_clone(self.plan), plan)
+            .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Apply a union by name, removing duplicate rows
@@ -1045,9 +1094,12 @@ impl LogicalPlanBuilder {
         let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
         let right_plan: LogicalPlan = plan;
 
-        Ok(Self::new(LogicalPlan::Distinct(Distinct::All(Arc::new(
-            union_by_name(left_plan, right_plan)?,
-        )))))
+        Ok(Self::chain(
+            self.column_id_generator,
+            LogicalPlan::Distinct(Distinct::All(Arc::new(union_by_name(
+                left_plan, right_plan,
+            )?))),
+        ))
     }
 
     /// Apply a union, removing duplicate rows
@@ -1055,14 +1107,18 @@ impl LogicalPlanBuilder {
         let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
         let right_plan: LogicalPlan = plan;
 
-        Ok(Self::new(LogicalPlan::Distinct(Distinct::All(Arc::new(
-            union(left_plan, right_plan)?,
-        )))))
+        Ok(Self::chain(
+            self.column_id_generator,
+            LogicalPlan::Distinct(Distinct::All(Arc::new(union(left_plan, right_plan)?))),
+        ))
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)
     pub fn distinct(self) -> Result<Self> {
-        Ok(Self::new(LogicalPlan::Distinct(Distinct::All(self.plan))))
+        Ok(Self::chain(
+            self.column_id_generator,
+            LogicalPlan::Distinct(Distinct::All(self.plan)),
+        ))
     }
 
     /// Project first values of the specified expression list according to the provided
@@ -1073,9 +1129,15 @@ impl LogicalPlanBuilder {
         select_expr: Vec<Expr>,
         sort_expr: Option<Vec<SortExpr>>,
     ) -> Result<Self> {
-        Ok(Self::new(LogicalPlan::Distinct(Distinct::On(
-            DistinctOn::try_new(on_expr, select_expr, sort_expr, self.plan)?,
-        ))))
+        Ok(Self::chain(
+            self.column_id_generator,
+            LogicalPlan::Distinct(Distinct::On(DistinctOn::try_new(
+                on_expr,
+                select_expr,
+                sort_expr,
+                self.plan,
+            )?)),
+        ))
     }
 
     /// Apply a join to `right` using explicitly specified columns and an
@@ -1277,13 +1339,16 @@ impl LogicalPlanBuilder {
             op: match_condition.op,
             right: normalize(match_condition.right, right.schema())?,
         };
-        Ok(Self::new(LogicalPlan::AsOfJoin(AsOfJoin::try_new(
-            self.plan,
-            Arc::new(right),
-            on,
-            match_condition,
-            join_constraint,
-        )?)))
+        Ok(Self::chain(
+            self.column_id_generator,
+            LogicalPlan::AsOfJoin(AsOfJoin::try_new(
+                self.plan,
+                Arc::new(right),
+                on,
+                match_condition,
+                join_constraint,
+            )?),
+        ))
     }
 
     pub(crate) fn normalize(plan: &LogicalPlan, column: Column) -> Result<Column> {
@@ -1430,18 +1495,21 @@ impl LogicalPlanBuilder {
             return plan_err!("join condition should not be empty");
         }
 
-        Ok(Self::new(LogicalPlan::Join(Join {
-            left: self.plan,
-            right: Arc::new(right),
-            on,
-            filter,
-            join_type,
-            join_constraint: JoinConstraint::On,
-            schema: DFSchemaRef::new(join_schema),
-            null_equality,
-            null_aware,
-            null_aware_value_keys: 1,
-        })))
+        Ok(Self::chain(
+            self.column_id_generator,
+            LogicalPlan::Join(Join {
+                left: self.plan,
+                right: Arc::new(right),
+                on,
+                filter,
+                join_type,
+                join_constraint: JoinConstraint::On,
+                schema: DFSchemaRef::new(join_schema),
+                null_equality,
+                null_aware,
+                null_aware_value_keys: 1,
+            }),
+        ))
     }
 
     /// Apply a join with using constraint, which duplicates all join columns in output schema.
@@ -1501,7 +1569,9 @@ impl LogicalPlanBuilder {
         }
 
         if join_on.is_empty() {
-            let join = Self::from(self.plan).cross_join(right)?;
+            let join = Self::new_from_arc(self.plan)
+                .with_column_id_generator(self.column_id_generator.clone())
+                .cross_join(right)?;
             join.filter(filters.ok_or_else(|| {
                 internal_datafusion_err!("filters should not be None here")
             })?)
@@ -1517,7 +1587,10 @@ impl LogicalPlanBuilder {
                 false, // null_aware
             )?;
 
-            Ok(Self::new(LogicalPlan::Join(join)))
+            Ok(Self::chain(
+                self.column_id_generator,
+                LogicalPlan::Join(join),
+            ))
         }
     }
 
@@ -1534,15 +1607,21 @@ impl LogicalPlanBuilder {
             false, // null_aware
         )?;
 
-        Ok(Self::new(LogicalPlan::Join(join)))
+        Ok(Self::chain(
+            self.column_id_generator,
+            LogicalPlan::Join(join),
+        ))
     }
 
     /// Repartition
     pub fn repartition(self, partitioning_scheme: Partitioning) -> Result<Self> {
-        Ok(Self::new(LogicalPlan::Repartition(Repartition {
-            input: self.plan,
-            partitioning_scheme,
-        })))
+        Ok(Self::chain(
+            self.column_id_generator,
+            LogicalPlan::Repartition(Repartition {
+                input: self.plan,
+                partitioning_scheme,
+            }),
+        ))
     }
 
     /// Apply a window functions to extend the schema
@@ -1552,10 +1631,10 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let window_expr = normalize_cols(window_expr, &self.plan)?;
         validate_unique_names("Windows", &window_expr)?;
-        Ok(Self::new(LogicalPlan::Window(Window::try_new(
-            window_expr,
-            self.plan,
-        )?)))
+        Ok(Self::chain(
+            self.column_id_generator,
+            LogicalPlan::Window(Window::try_new(window_expr, self.plan)?),
+        ))
     }
 
     /// Apply an aggregate: grouping on the `group_expr` expressions
@@ -1577,7 +1656,7 @@ impl LogicalPlanBuilder {
 
         Aggregate::try_new(self.plan, group_expr, aggr_expr)
             .map(LogicalPlan::Aggregate)
-            .map(Self::new)
+            .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Create an expression to represent the explanation of the plan
@@ -1603,27 +1682,33 @@ impl LogicalPlanBuilder {
         let schema = schema.to_dfschema_ref()?;
 
         if explain_option.analyze {
-            Ok(Self::new(LogicalPlan::Analyze(Analyze {
-                verbose: explain_option.verbose,
-                format: explain_option.format,
-                input: self.plan,
-                schema,
-                analyze_level: explain_option.analyze_level,
-                analyze_categories: explain_option.analyze_categories,
-            })))
+            Ok(Self::chain(
+                self.column_id_generator,
+                LogicalPlan::Analyze(Analyze {
+                    verbose: explain_option.verbose,
+                    format: explain_option.format,
+                    input: self.plan,
+                    schema,
+                    analyze_level: explain_option.analyze_level,
+                    analyze_categories: explain_option.analyze_categories,
+                }),
+            ))
         } else {
             let stringified_plans =
                 vec![self.plan.to_stringified(PlanType::InitialLogicalPlan)];
 
-            Ok(Self::new(LogicalPlan::Explain(Explain {
-                verbose: explain_option.verbose,
-                plan: self.plan,
-                explain_format: explain_option.format,
-                stringified_plans,
-                schema,
-                logical_optimization_succeeded: false,
-                show_statistics: explain_option.show_statistics,
-            })))
+            Ok(Self::chain(
+                self.column_id_generator,
+                LogicalPlan::Explain(Explain {
+                    verbose: explain_option.verbose,
+                    plan: self.plan,
+                    explain_format: explain_option.format,
+                    stringified_plans,
+                    schema,
+                    logical_optimization_succeeded: false,
+                    show_statistics: explain_option.show_statistics,
+                }),
+            ))
         }
     }
 
@@ -1784,12 +1869,16 @@ impl LogicalPlanBuilder {
             false, // null_aware
         )?;
 
-        Ok(Self::new(LogicalPlan::Join(join)))
+        Ok(Self::chain(
+            self.column_id_generator,
+            LogicalPlan::Join(join),
+        ))
     }
 
     /// Unnest the given column.
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
-        unnest(Arc::unwrap_or_clone(self.plan), vec![column.into()]).map(Self::new)
+        unnest(Arc::unwrap_or_clone(self.plan), vec![column.into()])
+            .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Unnest the given column given [`UnnestOptions`]
@@ -1803,7 +1892,7 @@ impl LogicalPlanBuilder {
             vec![column.into()],
             options,
         )
-        .map(Self::new)
+        .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 
     /// Unnest the given columns with the given [`UnnestOptions`]
@@ -1813,7 +1902,7 @@ impl LogicalPlanBuilder {
         options: UnnestOptions,
     ) -> Result<Self> {
         unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
-            .map(Self::new)
+            .map(|plan| Self::chain(self.column_id_generator, plan))
     }
 }
 
@@ -2839,11 +2928,7 @@ mod tests {
         match plan {
             Err(DataFusionError::SchemaError(err, _)) => {
                 if let SchemaError::AmbiguousReference { field } = *err {
-                    let Column {
-                        relation,
-                        name,
-                        spans: _,
-                    } = *field;
+                    let Column { relation, name, .. } = *field;
                     let Some(TableReference::Bare { table }) = relation else {
                         return plan_err!(
                             "wrong relation: {relation:?}, expected table name"

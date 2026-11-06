@@ -1676,11 +1676,9 @@ impl Expr {
     /// output schema. We can use this qualified name to reference the field.
     pub fn qualified_name(&self) -> (Option<TableReference>, String) {
         match self {
-            Expr::Column(Column {
-                relation,
-                name,
-                spans: _,
-            }) => (relation.clone(), name.clone()),
+            Expr::Column(Column { relation, name, .. }) => {
+                (relation.clone(), name.clone())
+            }
             Expr::Alias(Alias { relation, name, .. }) => (relation.clone(), name.clone()),
             _ => (None, self.schema_name().to_string()),
         }
@@ -4617,7 +4615,10 @@ mod test {
         // If this test fails when you change `Expr`, please try
         // `Box`ing the fields to make `Expr` smaller
         // See https://github.com/apache/datafusion/issues/16199 for details
-        assert_eq!(size_of::<Expr>(), 112);
+        assert_eq!(size_of::<Expr>(), 128);
+        // `Column` (with its 8-byte `Option<ColumnId>`) is the largest
+        // variant payload, so it sets the size of `Expr`
+        assert_eq!(size_of::<Column>(), 112);
         assert_eq!(size_of::<ScalarValue>(), 64);
         assert_eq!(size_of::<DataType>(), 24); // 3 ptrs
         assert_eq!(size_of::<Vec<Expr>>(), 24);

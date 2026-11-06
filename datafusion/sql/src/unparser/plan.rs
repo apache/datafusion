@@ -2795,14 +2795,10 @@ impl Unparser<'_> {
             match (left, right) {
                 (
                     Expr::Column(Column {
-                        relation: _,
-                        name: left_name,
-                        spans: _,
+                        name: left_name, ..
                     }),
                     Expr::Column(Column {
-                        relation: _,
-                        name: right_name,
-                        spans: _,
+                        name: right_name, ..
                     }),
                 ) if left_name == right_name => {
                     // For example, if the join condition `t1.id = t2.id`

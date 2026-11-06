@@ -235,7 +235,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     /// Generate a logical plan from an SQL statement
     pub fn sql_statement_to_plan(&self, statement: Statement) -> Result<LogicalPlan> {
-        self.sql_statement_to_plan_with_context(statement, &mut PlannerContext::new())
+        self.sql_statement_to_plan_with_context(
+            statement,
+            &mut self.new_planner_context(),
+        )
     }
 
     /// Generate a logical plan from an SQL statement
@@ -244,6 +247,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         statement: Statement,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
+        self.init_planner_context(planner_context);
         let plan =
             self.sql_statement_to_plan_with_context_impl(statement, planner_context)?;
         check_plan(&plan)?;
@@ -724,7 +728,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                let mut plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
+                let mut plan =
+                    self.query_to_plan(*query, &mut self.new_planner_context())?;
                 plan = self.apply_expr_alias(plan, columns)?;
 
                 Ok(LogicalPlan::Ddl(DdlStatement::CreateView(CreateView {
@@ -853,8 +858,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .collect::<Result<_>>()?;
 
                 // Create planner context with parameters
-                let mut planner_context = PlannerContext::new()
-                    .with_prepare_param_data_types(
+                let mut planner_context =
+                    self.new_planner_context().with_prepare_param_data_types(
                         fields.iter().cloned().map(Some).collect(),
                     );
 
@@ -1377,7 +1382,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     }
                     None => None,
                 };
-                let mut planner_context = PlannerContext::new();
+                let mut planner_context = self.new_planner_context();
                 let empty_schema = &DFSchema::empty();
 
                 let args = match args {
@@ -1452,8 +1457,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         );
                     }
                 }
-                let mut planner_context = PlannerContext::new()
-                    .with_prepare_param_data_types(
+                let mut planner_context =
+                    self.new_planner_context().with_prepare_param_data_types(
                         arg_types
                             .unwrap_or_default()
                             .into_iter()
@@ -1673,7 +1678,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 
     fn describe_query_to_plan(&self, query: Query) -> Result<LogicalPlan> {
-        let plan = self.query_to_plan(query, &mut PlannerContext::new())?;
+        let plan = self.query_to_plan(query, &mut self.new_planner_context())?;
 
         let schema = Arc::new(plan.schema().as_arrow().clone());
 
@@ -1695,7 +1700,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 (plan, input_schema, Some(table_ref))
             }
             CopyToSource::Query(query) => {
-                let plan = self.query_to_plan(*query, &mut PlannerContext::new())?;
+                let plan = self.query_to_plan(*query, &mut self.new_planner_context())?;
                 let input_schema = Arc::clone(plan.schema());
                 (plan, input_schema, None)
             }
@@ -1854,7 +1859,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             )?;
         }
 
-        let mut planner_context = PlannerContext::new();
+        let mut planner_context = self.new_planner_context();
 
         let column_defaults = self
             .build_column_defaults(&columns, &mut planner_context)?
@@ -2288,7 +2293,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let scan =
             LogicalPlanBuilder::scan(table_ref.clone(), Arc::clone(&table_source), None)?
                 .build()?;
-        let mut planner_context = PlannerContext::new();
+        let mut planner_context = self.new_planner_context();
 
         let source = match predicate_expr {
             None => scan,
@@ -2337,7 +2342,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )?);
 
         // Overwrite with assignment expressions
-        let mut planner_context = PlannerContext::new();
+        let mut planner_context = self.new_planner_context();
         let mut assign_map = assignments
             .iter()
             .map(|assign| {
@@ -2511,7 +2516,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         )?);
 
         // 2. Plan the source (USING clause) as a LogicalPlan
-        let mut planner_context = PlannerContext::new();
+        let mut planner_context = self.new_planner_context();
         let source_table_with_joins = TableWithJoins {
             relation: source,
             joins: vec![],
@@ -2836,8 +2841,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         // Projection
-        let mut planner_context =
-            PlannerContext::new().with_prepare_param_data_types(prepare_param_data_types);
+        let mut planner_context = self
+            .new_planner_context()
+            .with_prepare_param_data_types(prepare_param_data_types);
         planner_context.set_table_schema(Some(DFSchemaRef::new(
             DFSchema::from_unqualified_fields(fields.clone(), Metadata::new())?,
         )));

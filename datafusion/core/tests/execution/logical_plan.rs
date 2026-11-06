@@ -9,7 +9,7 @@ use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::{ViewTable, provider_as_source};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, ScalarValue, Spans};
+use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, ScalarValue};
 use datafusion_execution::TaskContext;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::logical_plan::{LogicalPlan, Values};
@@ -39,11 +39,7 @@ async fn count_only_nulls() -> Result<()> {
             vec![Expr::Literal(ScalarValue::Null, None)],
         ],
     }));
-    let input_col_ref = Expr::Column(Column {
-        relation: None,
-        name: "col".to_string(),
-        spans: Spans::new(),
-    });
+    let input_col_ref = Expr::Column(Column::new_unqualified("col"));
 
     // Aggregation: count(col) AS count
     let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(

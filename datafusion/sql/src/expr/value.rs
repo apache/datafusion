@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::planner::{ContextProvider, SqlToRel};
 use arrow::compute::kernels::cast_utils::{
     IntervalParseConfig, IntervalUnit, parse_interval_month_day_nano_config,
 };
@@ -161,7 +161,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let values = elements
             .into_iter()
             .map(|element| {
-                self.sql_expr_to_logical_expr(element, schema, &mut PlannerContext::new())
+                self.sql_expr_to_logical_expr(
+                    element,
+                    schema,
+                    &mut self.new_planner_context(),
+                )
             })
             .collect::<Result<Vec<_>>>()?;
 

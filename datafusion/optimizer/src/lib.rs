@@ -70,6 +70,7 @@ pub use optimizer::{
     ApplyOrder, Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule,
 };
 
+mod column_id_check;
 pub(crate) mod join_key_set;
 mod plan_signature;
 

@@ -17,7 +17,7 @@ use crate::{
 use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    DFSchema, Result, TableReference, config::ConfigOptions,
+    ColumnIdGenerator, DFSchema, Result, TableReference, config::ConfigOptions,
     file_options::file_type::FileType, not_impl_err,
 };
 #[cfg(feature = "sql")]
@@ -121,6 +121,20 @@ pub trait ContextProvider {
 
     /// Return overall configuration options
     fn options(&self) -> &ConfigOptions;
+
+    /// Return the generator of the [`ColumnId`]s of the planned plans, if any.
+    ///
+    /// The generator must be shared by every query planned with this
+    /// provider and by the optimizer (a session shares the one in its
+    /// `ExecutionProps`), so that the plans it builds do not reuse ids.
+    ///
+    /// Defaults to `None`: no generator, no ids. Plans are then built with
+    /// columns and fields without ids, which resolve by qualifier and name.
+    ///
+    /// [`ColumnId`]: datafusion_common::ColumnId
+    fn column_id_generator(&self) -> Option<Arc<ColumnIdGenerator>> {
+        None
+    }
 
     /// Return all scalar function names
     fn udf_names(&self) -> Vec<String>;
