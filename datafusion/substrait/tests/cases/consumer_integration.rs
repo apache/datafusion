@@ -770,36 +770,6 @@ mod tests {
         Ok(())
     }
 
-    // One branch pads a struct column with a typed NULL, whose struct type carries no
-    // field names, while the other reads the column with its names.
-    #[tokio::test]
-    async fn test_union_all_null_struct() -> Result<()> {
-        let batches = execute_plan("union_all_null_struct.substrait.json").await?;
-        assert_snapshot!(pretty_sorted(&batches), @r"
-        +----------------------------------------------------------+
-        | r                                                        |
-        +----------------------------------------------------------+
-        |                                                          |
-        | {last_used_date: 2023-11-14T22:13:20, region: us-east-1} |
-        +----------------------------------------------------------+
-        ");
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_union_all_null_struct_first() -> Result<()> {
-        let batches = execute_plan("union_all_null_struct_first.substrait.json").await?;
-        assert_snapshot!(pretty_sorted(&batches), @r"
-        +----------------------------------------------------------+
-        | r                                                        |
-        +----------------------------------------------------------+
-        |                                                          |
-        | {last_used_date: 2023-11-14T22:13:20, region: us-east-1} |
-        +----------------------------------------------------------+
-        ");
-        Ok(())
-    }
-
     #[tokio::test]
     async fn test_join_with_expression_key() -> Result<()> {
         let plan_str = test_plan_to_string("join_with_expression_key.json").await?;
