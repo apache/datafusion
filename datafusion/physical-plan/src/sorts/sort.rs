@@ -63,6 +63,7 @@ use datafusion_execution::memory_pool::{
     MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
@@ -1362,9 +1363,25 @@ impl SortExec {
     /// If `preserve_partitioning` is false, sorts and merges all
     /// input partitions producing a single, sorted partition.
     pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
+        let changed = self.preserve_partitioning != preserve_partitioning;
         self.preserve_partitioning = preserve_partitioning;
-        Arc::make_mut(&mut self.cache).partitioning =
-            Self::output_partitioning_helper(&self.input, self.preserve_partitioning);
+        let cache = Arc::make_mut(&mut self.cache);
+        // Whether the sort merges its input partitions decides which input facts
+        // survive, so recompute them. Emission type, boundedness and the common
+        // sort prefix do not depend on this flag, and the boundedness may have
+        // been adjusted by `with_fetch`, so they are left alone.
+        if changed {
+            cache.set_eq_properties(
+                Self::compute_eq_properties(
+                    &self.input,
+                    self.expr.clone(),
+                    preserve_partitioning,
+                )
+                .unwrap(),
+            );
+        }
+        cache.partitioning =
+            Self::output_partitioning_helper(&self.input, preserve_partitioning);
         if self.fetch.is_some() {
             self.rebuild_filter_for_current_partitioning();
         }
@@ -1534,6 +1551,28 @@ impl SortExec {
         }
     }
 
+    /// Calculates the equivalence properties of the sort's output; i.e. resets
+    /// the ordering equivalence class with the new ordering.
+    fn compute_eq_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        sort_exprs: LexOrdering,
+        preserve_partitioning: bool,
+    ) -> Result<EquivalenceProperties> {
+        let mut eq_properties = input.equivalence_properties().clone();
+        // A sort that does not preserve partitioning merges its input
+        // partitions into one. Constants whose value differs between
+        // partitions, and orderings that hold only within each partition, do
+        // not hold for the merged output, so they must not make `sort_exprs`
+        // look already satisfied.
+        if !preserve_partitioning && input.output_partitioning().partition_count() > 1 {
+            eq_properties.clear_orderings();
+            eq_properties.clear_groupings();
+            eq_properties.clear_per_partition_constants();
+        }
+        eq_properties.reorder(sort_exprs)?;
+        Ok(eq_properties)
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     /// It also returns the common sort prefix between the input and the sort expressions.
     fn compute_properties(
@@ -1570,10 +1609,8 @@ impl SortExec {
             }
         };
 
-        // Calculate equivalence properties; i.e. reset the ordering equivalence
-        // class with the new ordering:
-        let mut eq_properties = input.equivalence_properties().clone();
-        eq_properties.reorder(sort_exprs)?;
+        let eq_properties =
+            Self::compute_eq_properties(input, sort_exprs, preserve_partitioning)?;
 
         // Get output partitioning:
         let output_partitioning =
@@ -2495,6 +2532,7 @@ mod tests {
     use std::task::{Context, Poll};
 
     use super::*;
+    use crate::ExecutionPlanProperties;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::empty::EmptyExec;
     use crate::execution_plan::Boundedness;
@@ -2507,6 +2545,7 @@ mod tests {
         BlockingExec, TestStream, assert_strong_count_converges_to_zero,
     };
     use crate::test::{assert_is_pending, make_partition};
+    use crate::union::UnionExec;
     use crate::{collect, collect_partitioned};
 
     use arrow::array::*;
@@ -2530,7 +2569,9 @@ mod tests {
         AsyncSpillWriter, SpillFile, SpillWriter, TempFileFactory,
     };
     use datafusion_physical_expr::expressions::{Column, Literal};
-    use datafusion_physical_expr::{DynamicFilterTracking, EquivalenceProperties};
+    use datafusion_physical_expr::{
+        AcrossPartitions, DynamicFilterTracking, EquivalenceProperties,
+    };
 
     use datafusion_physical_expr_common::metrics::MetricValue;
     use futures::{FutureExt, Stream, TryStreamExt};
@@ -4901,6 +4942,108 @@ mod tests {
         let _reset = Arc::clone(&sort).reset_state()?;
         assert_snapshot!(pushed_down.to_string(), @"DynamicFilter [ true ]");
 
+        Ok(())
+    }
+
+    /// `UnionExec` over two inputs that are sorted on `ts` and select a different
+    /// literal as `id`: `id` is a `Heterogeneous` constant and `[ts]` holds only
+    /// within each of the two partitions.
+    fn union_of_literals_sorted_on_ts() -> Result<Arc<dyn ExecutionPlan>> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("ts", DataType::Int32, false)]));
+        let ts: Arc<dyn PhysicalExpr> = Arc::new(Column::new("ts", 0));
+        let arm = |id: &str| -> Result<Arc<dyn ExecutionPlan>> {
+            let scan = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![
+                    [PhysicalSortExpr::new_default(Arc::clone(&ts))].into(),
+                ])?;
+            let scan = Arc::new(TestMemoryExec::update_cache(&Arc::new(scan)));
+            let exprs: [(Arc<dyn PhysicalExpr>, String); 2] = [
+                (lit(id), "id".to_string()),
+                (Arc::clone(&ts), "ts".to_string()),
+            ];
+            Ok(Arc::new(ProjectionExec::try_new(exprs, scan)?))
+        };
+        let union = UnionExec::try_new(vec![arm("b")?, arm("a")?])?;
+        assert_eq!(union.output_partitioning().partition_count(), 2);
+        let id: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
+        assert_eq!(
+            union.equivalence_properties().is_expr_constant(&id),
+            Some(AcrossPartitions::Heterogeneous)
+        );
+        Ok(union)
+    }
+
+    /// The ordering `[id, ts]` over the output of [`union_of_literals_sorted_on_ts`].
+    fn id_ts_ordering() -> LexOrdering {
+        [
+            PhysicalSortExpr::new_default(Arc::new(Column::new("id", 0))),
+            PhysicalSortExpr::new_default(Arc::new(Column::new("ts", 1))),
+        ]
+        .into()
+    }
+
+    /// A sort that merges partitions must not treat a per-partition constant or a
+    /// per-partition ordering as if it held for the merged output.
+    #[test]
+    fn merging_sort_drops_per_partition_facts() -> Result<()> {
+        let input = union_of_literals_sorted_on_ts()?;
+        let ordering = id_ts_ordering();
+
+        let sort = SortExec::new(ordering.clone(), input);
+
+        assert_eq!(sort.properties().output_ordering(), Some(&ordering));
+        let id: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
+        assert_eq!(
+            sort.properties()
+                .equivalence_properties()
+                .is_expr_constant(&id),
+            None
+        );
+        Ok(())
+    }
+
+    /// Changing `preserve_partitioning` must give the same properties as building
+    /// the sort with that value, in either direction.
+    #[test]
+    fn with_preserve_partitioning_recomputes_equivalence_properties() -> Result<()> {
+        let input = union_of_literals_sorted_on_ts()?;
+        let ordering = id_ts_ordering();
+        let expected = |preserve_partitioning| -> Result<String> {
+            let (properties, _) = SortExec::compute_properties(
+                &input,
+                ordering.clone(),
+                preserve_partitioning,
+            )?;
+            Ok(properties.eq_properties.to_string())
+        };
+
+        // Within each partition `id` is constant, so the sort reports `[ts]`.
+        let sort = SortExec::new(ordering.clone(), Arc::clone(&input))
+            .with_preserve_partitioning(true);
+        assert_eq!(
+            sort.properties().equivalence_properties().to_string(),
+            expected(true)?
+        );
+        let ts_ordering: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(
+            Column::new("ts", 1),
+        ))]
+        .into();
+        assert_eq!(sort.properties().output_ordering(), Some(&ts_ordering));
+        let id: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
+        assert_eq!(
+            sort.properties()
+                .equivalence_properties()
+                .is_expr_constant(&id),
+            Some(AcrossPartitions::Heterogeneous)
+        );
+
+        let sort = sort.with_preserve_partitioning(false);
+        assert_eq!(
+            sort.properties().equivalence_properties().to_string(),
+            expected(false)?
+        );
+        assert_eq!(sort.properties().output_ordering(), Some(&ordering));
         Ok(())
     }
 }
