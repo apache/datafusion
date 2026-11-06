@@ -34,6 +34,10 @@ use std::sync::Arc;
 /// Trait to allow expr to typable with respect to a schema
 pub trait ExprSchemable {
     /// Given a schema, return the type of the expr
+    ///
+    /// `CASE` expressions infer a common type from all `THEN` and `ELSE`
+    /// branches without inserting casts. Incompatible branches retain a
+    /// provisional type until analysis.
     fn get_type(&self, schema: &dyn ExprSchema) -> Result<DataType>;
 
     /// Given a schema, return the nullability of the expr
@@ -190,16 +194,16 @@ impl ExprSchemable for Expr {
                     .transpose()?;
                 // If the branches have no common type, keep the old provisional
                 // type. The analyzer reports the error.
-                Ok(
-                    get_coerce_type_for_case_expression(&then_types, else_type.as_ref())
-                        .unwrap_or_else(|| {
-                            then_types
-                                .into_iter()
-                                .find(|t| !t.is_null())
-                                .or(else_type)
-                                .unwrap_or(DataType::Null)
-                        }),
-                )
+                let common_type =
+                    get_coerce_type_for_case_expression(&then_types, else_type.as_ref());
+                let result_type = common_type.unwrap_or_else(|| {
+                    then_types
+                        .into_iter()
+                        .find(|t| !t.is_null())
+                        .or(else_type)
+                        .unwrap_or(DataType::Null)
+                });
+                Ok(result_type)
             }
             Expr::Cast(Cast { field, .. }) | Expr::TryCast(TryCast { field, .. }) => {
                 Ok(field.data_type().clone())

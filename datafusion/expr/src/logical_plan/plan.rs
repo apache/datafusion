@@ -3555,6 +3555,11 @@ impl Union {
     /// Constructs a new Union instance that combines rows from different tables by name,
     /// instead of by position. This means that the specified inputs need not have schemas
     /// that are all the same width.
+    ///
+    /// Like [`Self::try_new_with_loose_types`], this infers common output types
+    /// without inserting casts. Missing columns contribute `NULL` at their input
+    /// position. For example, a missing `Dictionary(Int32, Utf8)` column and a
+    /// present one produce `Utf8` in either input order.
     pub fn try_new_by_name(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, true, true)?;
         let inputs = Self::rewrite_inputs_from_schema(&schema, inputs)?;
