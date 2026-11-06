@@ -21,6 +21,7 @@ docker_cache
 *.pending-snap
 
 venv/*
+__pycache__/
 
 # macOS
 .DS_Store
