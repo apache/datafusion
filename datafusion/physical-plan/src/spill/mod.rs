@@ -21,8 +21,8 @@ use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 
 use arrow::array::{
-    Array, ArrayRef, BinaryViewArray, BufferSpec, GenericByteViewArray, StringViewArray,
-    layout, make_array,
+    Array, ArrayRef, AsArray, BinaryViewArray, BufferSpec, GenericByteViewArray,
+    StringViewArray, layout, make_array,
 };
 use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::DataType;
@@ -37,6 +37,7 @@ use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 #[cfg(test)]
 use arrow_ipc::writer::StreamWriter;
 use arrow_ipc::{CompressionType, root_as_message};
+use arrow_select::dictionary::garbage_collect_any_dictionary;
 
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{Result, internal_datafusion_err};
@@ -736,7 +737,7 @@ fn get_max_alignment_for_schema(schema: &Schema) -> usize {
 #[cfg(test)]
 const VIEW_SIZE_BYTES: usize = 16;
 
-/// Performs garbage collection on StringView and BinaryView arrays before spilling to reduce memory usage.
+/// Compacts view buffers and oversized dictionaries before spilling.
 ///
 /// # Why GC is needed
 ///
@@ -757,19 +758,25 @@ const VIEW_SIZE_BYTES: usize = 16;
 ///    containing only the data referenced by the current views
 /// 4. Returns a new batch with GC'd arrays (or original arrays if GC not needed)
 ///
+/// Dictionary arrays with more values than keys are also compacted using Arrow's
+/// dictionary garbage collector before visiting their children. This avoids spilling
+/// whole value tables retained by sliced or merged dictionaries.
+///
 /// # When GC is triggered
 ///
-/// GC is only performed when data buffers exceed a threshold (currently 10KB).
+/// View GC is only performed when data buffers exceed a threshold (currently 10KB).
 /// This balances memory savings against the CPU overhead of garbage collection.
-/// Small arrays are passed through unchanged since the GC overhead would exceed
+/// Small view buffers are passed through unchanged since the GC overhead would exceed
 /// any memory savings.
 ///
 /// # Performance considerations
 ///
-/// - If no view arrays need compaction, the original batch is cloned cheaply
-/// - GC is skipped for small buffers to avoid unnecessary CPU overhead
+/// - If no arrays need compaction, the original batch is cloned cheaply
+/// - View GC is skipped for small buffers to avoid unnecessary CPU overhead
 /// - Nested container types are traversed recursively so view arrays inside
 ///   `List`, `Map`, `Union`, `Dictionary`, and other child-bearing arrays are compacted too
+/// - Traversal uses physical children, not logical reachability. For example,
+///   unused ListView child entries can still retain dictionary values
 /// - The Arrow `gc()` method itself is optimized and only copies referenced data
 pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
     let mut mutated = false;
@@ -809,6 +816,15 @@ fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
                 Some(compacted) => (Arc::new(compacted) as ArrayRef, true),
                 None => (Arc::clone(array), false),
             })
+        }
+        DataType::Dictionary(_, _)
+            if array.as_any_dictionary().values().len() > array.len() =>
+        {
+            // Struct-valued merge dictionaries can concatenate whole value tables.
+            // Prune the outer dictionary before compacting its retained children.
+            let compacted = garbage_collect_any_dictionary(array.as_any_dictionary())?;
+            let (compacted, _) = gc_array_children(&compacted)?;
+            Ok((compacted, true))
         }
         _ => gc_array_children(array),
     }
@@ -992,9 +1008,12 @@ mod tests {
     use crate::metrics::SpillMetrics;
     use crate::spill::spill_manager::SpillManager;
     use crate::test::build_table_i32;
-    use arrow::array::{ArrayRef, Int32Array, StringArray};
+    use arrow::array::{
+        ArrayRef, DictionaryArray, Int32Array, ListArray, StringArray, StructArray,
+    };
+    use arrow::buffer::OffsetBuffer;
     use arrow::compute::cast;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Int32Type};
     use arrow::ipc::reader::StreamReader;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::StreamExt as _;
@@ -2690,6 +2709,64 @@ mod tests {
             "GC should compact nested Dictionary values"
         );
 
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case(SpillCompression::Uncompressed)]
+    #[case(SpillCompression::Lz4Frame)]
+    #[case(SpillCompression::Zstd)]
+    #[tokio::test]
+    async fn test_spill_prunes_unused_nested_dictionary_values(
+        #[case] compression: SpillCompression,
+    ) -> Result<()> {
+        let values = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new("id", DataType::Int32, false)),
+                Arc::new(Int32Array::from_iter_values(0..1024)) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("name", DataType::Utf8View, false)),
+                Arc::new(StringViewArray::from_iter_values(
+                    (0..1024).map(|id| format!("{id}:{}", "x".repeat(256))),
+                )) as ArrayRef,
+            ),
+        ])) as ArrayRef;
+        let batch = |keys, values| -> Result<RecordBatch> {
+            let dictionary = DictionaryArray::<Int32Type>::try_new(keys, values)?;
+            let list = ListArray::new(
+                Arc::new(Field::new_list_field(dictionary.data_type().clone(), true)),
+                OffsetBuffer::new(vec![0_i32, 1, 3, 4].into()),
+                Arc::new(dictionary),
+                None,
+            );
+            Ok(RecordBatch::try_from_iter([(
+                "stacktrace",
+                Arc::new(list) as ArrayRef,
+            )])?)
+        };
+        let input = batch(
+            Int32Array::from(vec![Some(1023), None, Some(17), Some(1023)]),
+            Arc::clone(&values),
+        )?;
+        let expected = batch(
+            Int32Array::from(vec![Some(1), None, Some(0), Some(1)]),
+            arrow::compute::take(&values, &Int32Array::from(vec![17, 1023]), None)?,
+        )?;
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let manager =
+            SpillManager::new(Arc::new(RuntimeEnv::default()), metrics, input.schema())
+                .with_compression_type(compression);
+        let file = manager
+            .spill_record_batch_and_finish(&[input], "nested dictionary GC")?
+            .unwrap();
+        let size = file.size().unwrap();
+        assert!(
+            size < 16 * 1024,
+            "unused dictionary values spilled: {size} bytes"
+        );
+        let actual = collect(manager.read_spill_as_stream(file, None)?).await?;
+        assert_eq!(actual, vec![expected]);
         Ok(())
     }
 
