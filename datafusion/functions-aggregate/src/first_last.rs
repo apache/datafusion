@@ -3383,4 +3383,38 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_first_value_unordered_groups_accumulator() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", DataType::Int64, true)]);
+        let exprs = [col("a", &schema)?];
+        let expr_fields = [Arc::new(Field::new("a", DataType::Int64, true))];
+        let args = || AccumulatorArgs {
+            return_field: Arc::new(Field::new("f", DataType::Int64, true)),
+            schema: &schema,
+            expr_fields: &expr_fields,
+            ignore_nulls: false,
+            order_bys: &[],
+            is_reversed: false,
+            name: "first_value(a)",
+            is_distinct: false,
+            exprs: &exprs,
+        };
+
+        // Without ORDER BY, FIRST_VALUE uses its own grouped accumulator
+        // rather than falling back to `GroupsAccumulatorAdapter`.
+        let first_value = FirstValue::new();
+        assert!(first_value.groups_accumulator_supported(args()));
+        let group_acc = first_value.create_groups_accumulator(args())?;
+        let group_acc: &dyn std::any::Any = group_acc.as_ref();
+        assert!(
+            group_acc
+                .is::<UnorderedFirstValueGroupsAccumulator<PrimitiveValueState<Int64Type>>>()
+        );
+
+        // LAST_VALUE still requires an ordering.
+        assert!(!LastValue::new().groups_accumulator_supported(args()));
+
+        Ok(())
+    }
 }
