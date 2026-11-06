@@ -17,8 +17,8 @@
 //! down that the operators with the heaviest view-array spill traffic (hash
 //! aggregation and sort) actually route their spill writes through that
 //! compaction: each test runs a spilling query over `Utf8View` / `BinaryView`
-//! data and asserts the total `spilled_bytes` stays proportional to the
-//! logical data size. If an operator's spill path stops compacting (or a new
+//! data and checks `spilled_bytes` against the logical size of the rows
+//! actually written, including rows rewritten in intermediate merge passes. If an operator's spill path stops compacting (or a new
 //! write path bypasses `append_batch`), the duplicated buffers either trip
 //! that bound (sort) or blow up the merge memory estimates and fail the query
 //! outright (aggregation); see `assert_compact_spill` for the measurements
@@ -118,8 +118,11 @@ fn logical_size(batches: &[RecordBatch]) -> usize {
 /// `batch_size` is a sensitivity knob rather than a realistic setting: the
 /// amplification a missing compaction produces is proportional to the number
 /// of sliced batches sharing one parent buffer, so smaller batches make the
-/// regression easier to assert on. Measured amplification for the sort query
-/// below with `gc_view_arrays` disabled, at an 8 MB pool:
+/// regression easier to assert on. The following historical measurements
+/// predate recursive construction accounting and its two-input merge limit.
+/// They compare cumulative spill bytes to one logical copy, not bytes per
+/// written row; they do not describe the current candidate. With GC disabled,
+/// at an 8 MB pool:
 ///
 /// | batch_size | 256   | 512   | 1024  | 4096  | 8192  |
 /// |------------|-------|-------|-------|-------|-------|
@@ -151,16 +154,30 @@ async fn run_spilling_query(
     Ok(plan)
 }
 
-/// Assert the query spilled, and that the spilled bytes stayed proportional
-/// to the logical data size instead of being amplified by duplicated view
-/// buffers.
+/// Assert each written row remains compact, independently of the number of
+/// intermediate merge passes. This fixture has equal logical bytes per row.
 fn assert_compact_spill(plan: &dyn ExecutionPlan, context: &str) {
     let logical_bytes = logical_size(&view_batches());
     let spill_count = plan_spill_count(plan);
     let spilled_bytes = plan_spilled_bytes(plan);
+    fn spilled_rows(plan: &dyn ExecutionPlan) -> usize {
+        plan.metrics().and_then(|m| m.spilled_rows()).unwrap_or(0)
+            + plan
+                .children()
+                .into_iter()
+                .map(|child| spilled_rows(child.as_ref()))
+                .sum::<usize>()
+    }
+    let written_rows = spilled_rows(plan);
+    let input_rows = NUM_BATCHES * ROWS_PER_BATCH;
+    let written_logical_bytes = logical_bytes
+        .checked_mul(written_rows)
+        .expect("fixture accounting fits usize")
+        / input_rows;
     println!(
         "{context}: spill_count={spill_count}, spilled_bytes={spilled_bytes}, \
-         logical_bytes={logical_bytes}"
+         logical_bytes={logical_bytes}, spilled_rows={written_rows}, \
+         written_logical_bytes={written_logical_bytes}"
     );
 
     assert!(spill_count > 0, "{context}: expected the query to spill");
@@ -174,31 +191,21 @@ fn assert_compact_spill(plan: &dyn ExecutionPlan, context: &str) {
         "{context}: expected a meaningful share of the data to spill, got \
          {spilled_bytes} of {logical_bytes} logical bytes"
     );
-    // The regression bound. Compacted spill files hold each spilled row once,
-    // so the total stays just above the logical size (IPC framing and
-    // re-spilling during multi-pass merges are the only slack). Bounds were
-    // picked from a sweep over pool size and batch size with `gc_view_arrays`
-    // disabled; the sort configuration below separates cleanly:
-    //
-    //   compacted 1.0152x  vs  regressed 9.3384x
-    //
-    // 2x therefore sits ~97% above the compacted ratio and ~4.7x below the
-    // regressed one. Both are exactly reproducible, so the headroom is for
-    // portability, not run-to-run noise. The bound also holds its margin if
-    // the pool drifts: every pool >= 8 MB measured <= 1.0152x compacted and
-    // >= 4.14x regressed.
-    //
-    // The aggregation path cannot be caught this way. Across pools of 2-24 MB,
-    // batch sizes of 256 and 1024, and 4.4 MB and 13.2 MB of data, there is no
-    // configuration where the regressed aggregation both completes and spills:
-    // the inflated buffer sizes flow into the merge memory estimates and it
-    // fails with ResourcesExhausted, which is what makes its test fail. The
-    // bound below is a cheap consistency check there rather than the detector.
+    // Each row in this fixed-length fixture has the same logical size.
+    // Normalize by actual spilled rows so additional intermediate merge passes
+    // do not look like duplicated backing buffers. A missing GC must still fail
+    // the per-written-row bound; increasing the number of passes cannot hide it.
+    // At this fixed sort configuration (8 MiB, 256 rows), the two-input policy
+    // writes 148,000 rows: compacted 16,522,256 / 16,280,000 = 1.015x;
+    // disabling GC gives 63,768,560 / 16,280,000 = 3.917x. This is a calibration
+    // for these parameters, not a claim about every pool/batch-size combination.
+    // The aggregation mutation instead fails with ResourcesExhausted, so this
+    // byte bound is only a consistency check for that path.
+    assert!(written_rows > 0, "{context}: expected spilled rows");
     assert!(
-        spilled_bytes < logical_bytes * 2,
-        "{context}: spilled {spilled_bytes} bytes for {logical_bytes} logical \
-         bytes; view array buffers are being duplicated into the spill files \
-         instead of compacted"
+        spilled_bytes < written_logical_bytes * 2,
+        "{context}: spilled {spilled_bytes} bytes for {written_rows} written rows \
+         ({written_logical_bytes} logical bytes); view backing buffers are not compacted"
     );
 }
 

@@ -533,7 +533,8 @@ struct RunTestWithLimitedMemoryArgs {
         Pin<Box<dyn Fn(usize) -> usize + Send + 'static>>,
     memory_behavior: MemoryBehavior,
 
-    /// When true we would `assert_eq(the number of output_rows metric / output_batches metric == task_ctx.batch_size)`
+    /// When true, assert the configured row batch size determines the exact
+    /// output batch count. Spill byte targeting may intentionally make this false.
     assert_all_output_batches_roughly_match_batch_size_conf: bool,
 }
 
@@ -907,10 +908,12 @@ async fn run_test(
 ) -> Result<MetricsSet> {
     let number_of_record_batches = args.number_of_record_batches;
 
-    consume_stream_and_simulate_other_running_memory_consumers(args, result_stream)
-        .await?;
+    let emitted_batches =
+        consume_stream_and_simulate_other_running_memory_consumers(args, result_stream)
+            .await?;
 
     let metrics = plan.metrics().expect("must have metrics");
+    assert_eq!(get_output_batches_from_metrics(&metrics), emitted_batches);
     let spill_count = assert_spill_count_metric(true, plan);
 
     assert!(
@@ -925,7 +928,7 @@ async fn run_test(
 async fn consume_stream_and_simulate_other_running_memory_consumers(
     args: RunTestWithLimitedMemoryArgs,
     mut result_stream: SendableRecordBatchStream,
-) -> Result<()> {
+) -> Result<usize> {
     let mut number_of_rows = 0;
     let record_batch_size = args.task_ctx.session_config().batch_size() as u64;
 
@@ -972,7 +975,7 @@ async fn consume_stream_and_simulate_other_running_memory_consumers(
         args.number_of_record_batches * record_batch_size as usize
     );
 
-    Ok(())
+    Ok(index)
 }
 
 /// Assert baseline metrics are as expected or around that

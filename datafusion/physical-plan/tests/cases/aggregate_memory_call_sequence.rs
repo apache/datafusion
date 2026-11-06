@@ -12,7 +12,9 @@
 //! Each test runs one single-partition `AggregateExec` under a
 //! [`RecordingPool`] and snapshots every pool call in order, then the query
 //! outcome. The merge and replay of a spill reuse the stream's consumer, so
-//! every call carries the stream's name. Limits were chosen by experiment so
+//! every call carries the stream's name. Spill merge output is reserved before
+//! interleave and returned between final replay batches; these calls are part
+//! of the snapshots as well. Limits were chosen by experiment so
 //! that each test really takes its path, which the test also asserts through
 //! metrics or the output batch sizes.
 //!
@@ -521,23 +523,35 @@ async fn spills_twice_then_replays() -> Result<()> {
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes] -> refused
+    FinalHashAggregateStream[0] try_grow [bytes] -> refused
+    FinalHashAggregateStream[0] shrink [bytes]
+    FinalHashAggregateStream[0] try_grow [bytes]
+    FinalHashAggregateStream[0] try_grow [bytes]
+    FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
+    FinalHashAggregateStream[0] shrink [bytes]
+    FinalHashAggregateStream[0] try_grow [bytes]
+    FinalHashAggregateStream[0] try_grow [bytes]
+    FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
-    FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
+    FinalHashAggregateStream[0] shrink [bytes]
+    FinalHashAggregateStream[0] try_grow [bytes]
+    FinalHashAggregateStream[0] try_grow [bytes]
+    FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] shrink [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
@@ -785,16 +799,24 @@ async fn clustered_spills_then_replays() -> Result<()> {
     ClusteredFinalAggregateStream[0] shrink [bytes]
     ClusteredFinalAggregateStream[0] try_grow [bytes]
     ClusteredFinalAggregateStream[0] try_grow [bytes] -> refused
+    ClusteredFinalAggregateStream[0] try_grow [bytes] -> refused
     ClusteredFinalAggregateStream[0] try_grow [bytes]
+    ClusteredFinalAggregateStream[0] try_grow [bytes]
+    ClusteredFinalAggregateStream[0] shrink [bytes]
+    ClusteredFinalAggregateStream[0] shrink [bytes]
+    ClusteredFinalAggregateStream[0] try_grow [bytes]
+    ClusteredFinalAggregateStream[0] try_grow [bytes]
+    ClusteredFinalAggregateStream[0] shrink [bytes]
     ClusteredFinalAggregateStream[0] try_grow [bytes]
     ClusteredFinalAggregateStream[0] shrink [bytes]
     ClusteredFinalAggregateStream[0] try_grow [bytes]
     ClusteredFinalAggregateStream[0] try_grow [bytes]
     ClusteredFinalAggregateStream[0] shrink [bytes]
     ClusteredFinalAggregateStream[0] try_grow [bytes]
-    ClusteredFinalAggregateStream[0] try_grow [bytes]
     ClusteredFinalAggregateStream[0] shrink [bytes]
     ClusteredFinalAggregateStream[0] try_grow [bytes]
+    ClusteredFinalAggregateStream[0] try_grow [bytes]
+    ClusteredFinalAggregateStream[0] shrink [bytes]
     ClusteredFinalAggregateStream[0] try_grow [bytes]
     ClusteredFinalAggregateStream[0] shrink [bytes]
     ClusteredFinalAggregateStream[0] try_grow [bytes]

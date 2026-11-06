@@ -103,11 +103,20 @@ pub(crate) struct SortPreservingMergeStream<C: CursorValues> {
 }
 
 impl<C: CursorValues> SortPreservingMergeStream<C> {
+    pub(super) fn with_reserved_shared_input_buffers(mut self, covered: bool) -> Self {
+        self.in_progress = self.in_progress.with_reserved_shared_input_buffers(covered);
+        self
+    }
+
+    #[expect(clippy::too_many_arguments)]
     pub(crate) fn new(
         streams: CursorStream<C>,
         schema: SchemaRef,
         metrics: BaselineMetrics,
         batch_size: usize,
+        target_batch_bytes: Option<usize>,
+        output_construction_reservation: Option<MemoryReservation>,
+        retain_output_construction_reservation: bool,
         fetch: Option<usize>,
         reservation: MemoryReservation,
         enable_round_robin_tie_breaker: bool,
@@ -117,8 +126,22 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
         let stream_count = streams.partitions();
 
+        let in_progress = BatchBuilder::new(
+            schema,
+            stream_count,
+            batch_size,
+            reservation,
+            output_construction_reservation,
+            target_batch_bytes,
+        );
+        let in_progress = if retain_output_construction_reservation {
+            in_progress.retain_output_construction_reservation()
+        } else {
+            in_progress
+        };
+
         Self {
-            in_progress: BatchBuilder::new(schema, stream_count, batch_size, reservation),
+            in_progress,
             streams,
             metrics,
             cursors: (0..stream_count).map(|_| None).collect(),
@@ -185,7 +208,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
 
     async fn flush_in_progress(
         &mut self,
-        mut emitter: TryEmitter<RecordBatch, DataFusionError>,
+        emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         if self.in_progress.is_empty() {
             return Ok(());
@@ -271,6 +294,12 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
                         );
 
                         drop(timer);
+                        // Drain selected rows before replacing an exhausted input batch.
+                        // Otherwise the mock input pool can retain arbitrarily many
+                        // batches outside the fixed spill-read admission grant.
+                        if self.in_progress.drain_before_next_input() {
+                            self.flush_in_progress(&mut emitter).await?;
+                        }
                         poll_fn(|cx| self.maybe_poll_stream(cx, winner_stream)).await?;
                         timer = elapsed_compute.timer();
                     }
@@ -281,7 +310,7 @@ impl<C: CursorValues> SortPreservingMergeStream<C> {
             }
 
             // 4. Flush any remaining rows in `self.in_progress`
-            self.flush_in_progress(emitter).await?;
+            self.flush_in_progress(&mut emitter).await?;
 
             Ok(())
         })
@@ -729,6 +758,9 @@ mod tests {
             Arc::clone(&schema),
             BaselineMetrics::new(&metrics, 0),
             16,
+            None,
+            None,
+            false,
             Some(1),
             reservation,
             true,
