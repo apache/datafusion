@@ -19,6 +19,7 @@ use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{FunctionArg, FunctionArgExpr, Spanned, TableFactor};
 
 mod join;
+pub(crate) use join::check_join_side_names;
 
 struct SqlToRelRelationContext<'a, 'b, S: ContextProvider> {
     planner: &'a SqlToRel<'b, S>,

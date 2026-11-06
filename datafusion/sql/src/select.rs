@@ -9,6 +9,7 @@ use std::sync::Arc;
 use crate::expr::{QUALIFY_HELP, reject_window_functions};
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use crate::query::to_order_by_exprs_with_select;
+use crate::relation::check_join_side_names;
 use crate::utils::{
     CheckColumnsMustReferenceAggregatePurpose, CheckColumnsSatisfyExprsPurpose,
     DedupedProjection, check_columns_satisfy_exprs, extract_aliases, rebase_expr,
@@ -1172,6 +1173,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 for input in from {
                     // Join `input` with the current result (`left`).
                     let right = self.plan_table_with_joins(input, planner_context)?;
+                    check_join_side_names(left.schema(), right.schema())?;
                     left = left.cross_join(right)?;
                     // Update the outer FROM schema.
                     let left_schema = Some(Arc::clone(left.schema()));

@@ -5,7 +5,8 @@
 use crate::expr::reject_window_functions;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    Column, HashMap, Result, not_impl_err, plan_datafusion_err, plan_err,
+    Column, DFSchema, HashMap, Result, SchemaError, TableReference, not_impl_err,
+    plan_datafusion_err, plan_err, schema_err,
 };
 use datafusion_expr::{JoinType, LogicalPlan};
 use sqlparser::ast::{
@@ -47,6 +48,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             self.create_relation(join.relation, planner_context)?
         };
+        check_join_side_names(left.schema(), right.schema())?;
         match join.join_operator {
             JoinOperator::LeftOuter(constraint) | JoinOperator::Left(constraint) => {
                 self.parse_join(left, right, constraint, JoinType::Left, planner_context)
@@ -244,6 +246,60 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .build(),
         }
     }
+}
+
+/// Returns an error if `left` and `right`, the sides of a join in a FROM
+/// clause, both have a column with some qualifier and name (`FROM t1 JOIN t1`),
+/// or with some name where one side is unqualified: SQL refers to the columns
+/// of the sides by name only, so it could not refer to either (PostgreSQL:
+/// table name "t1" specified more than once). The column ids of the sides tell
+/// them apart in the plan, which `LogicalPlanBuilder` and the DataFrame API
+/// allow; the errors are those of `DFSchema::check_names` for fields without
+/// ids.
+pub(crate) fn check_join_side_names(left: &DFSchema, right: &DFSchema) -> Result<()> {
+    let mut left_qualifiers: HashMap<&str, Vec<Option<&TableReference>>> = HashMap::new();
+    for (qualifier, field) in left.iter() {
+        left_qualifiers
+            .entry(field.name().as_str())
+            .or_default()
+            .push(qualifier);
+    }
+    let matches = || {
+        right.iter().flat_map(|(right_qualifier, field)| {
+            left_qualifiers
+                .get(field.name().as_str())
+                .into_iter()
+                .flatten()
+                .map(move |left_qualifier| (*left_qualifier, right_qualifier, field))
+        })
+    };
+    // the duplicates first, then the ambiguous names, as `check_names`
+    for (left_qualifier, right_qualifier, field) in matches() {
+        match (left_qualifier, right_qualifier) {
+            (Some(l), Some(r)) if l == r => {
+                return schema_err!(SchemaError::DuplicateQualifiedField {
+                    qualifier: Box::new(l.clone()),
+                    name: field.name().to_string(),
+                });
+            }
+            (None, None) => {
+                return schema_err!(SchemaError::DuplicateUnqualifiedField {
+                    name: field.name().to_string(),
+                });
+            }
+            _ => {}
+        }
+    }
+    for (left_qualifier, right_qualifier, field) in matches() {
+        if let (Some(qualifier), None) | (None, Some(qualifier)) =
+            (left_qualifier, right_qualifier)
+        {
+            return schema_err!(SchemaError::AmbiguousReference {
+                field: Box::new(Column::new(Some(qualifier.clone()), field.name())),
+            });
+        }
+    }
+    Ok(())
 }
 
 /// Returns `true` if the given [`TableFactor`] is lateral.

@@ -398,7 +398,9 @@ impl DataFrame {
     }
 
     /// Creates logical expression from a SQL query text.
-    /// The expression is created and processed against the current schema.
+    /// The expression is created and processed against the current schema:
+    /// its column references are bound to the columns of this `DataFrame`
+    /// (they have column ids, see [`Column`]).
     ///
     /// # Example: Parsing SQL queries
     /// ```
@@ -417,7 +419,9 @@ impl DataFrame {
     ///     .read_csv("tests/data/example.csv", CsvReadOptions::new())
     ///     .await?;
     /// let expr = df.parse_sql_expr(sql)?;
-    /// assert_eq!(expected, expr);
+    /// // the columns of `expr` are bound to the columns of `df`: they have
+    /// // column ids, which `==` compares, and `col` gives none
+    /// assert_eq!(expected, expr.without_column_ids());
     /// # Ok(())
     /// # }
     /// ```
@@ -688,9 +692,15 @@ impl DataFrame {
             .fields()
             .into_iter()
             .enumerate()
-            .map(|(idx, _)| self.plan.schema().qualified_field(idx))
-            .filter(|(qualifier, f)| !fields_to_drop.contains(&(*qualifier, f)))
-            .map(|(qualifier, field)| Expr::Column(Column::from((qualifier, field))))
+            .map(|(idx, _)| {
+                let (qualifier, field) = self.plan.schema().qualified_field(idx);
+                (qualifier, field, self.plan.schema().field_id(idx))
+            })
+            .filter(|(qualifier, f, _)| !fields_to_drop.contains(&(*qualifier, f)))
+            // the kept columns are read by id: their names may repeat
+            .map(|(qualifier, field, id)| {
+                Expr::Column(Column::from((qualifier, field)).with_id(id))
+            })
             .collect();
         self.select(expr)
     }
@@ -2521,10 +2531,12 @@ impl DataFrame {
         let new_column = expr.alias(name);
         let mut col_exists = false;
 
+        // the other columns are read by id: their names may repeat
         let mut fields: Vec<(Expr, bool)> = plan
             .schema()
             .iter()
-            .filter_map(|(qualifier, field)| {
+            .zip(plan.schema().field_ids())
+            .filter_map(|((qualifier, field), id)| {
                 // Skip new fields introduced by window_plan
                 if !original_names.contains(field.name()) {
                     return None;
@@ -2534,7 +2546,7 @@ impl DataFrame {
                     col_exists = true;
                     Some((new_column.clone(), true))
                 } else {
-                    let e = col(Column::from((qualifier, field)));
+                    let e = col(Column::from((qualifier, field)).with_id(*id));
                     Some((e, self.projection_requires_validation))
                 }
             })
@@ -2605,19 +2617,18 @@ impl DataFrame {
                 }
                 Err(err) => return Err(err),
             };
+        // the columns are read by id: their names may repeat
         let projection = self
             .plan
             .schema()
             .iter()
-            .map(|(qualifier, field)| {
+            .zip(self.plan.schema().field_ids())
+            .map(|((qualifier, field), id)| {
+                let column = col(Column::from((qualifier, field)).with_id(*id));
                 if qualifier.eq(&qualifier_rename) && field == field_rename {
-                    (
-                        col(Column::from((qualifier, field)))
-                            .alias_qualified(qualifier.cloned(), new_name),
-                        false,
-                    )
+                    (column.alias_qualified(qualifier.cloned(), new_name), false)
                 } else {
-                    (col(Column::from((qualifier, field))), false)
+                    (column, false)
                 }
             })
             .collect::<Vec<_>>();
@@ -2847,8 +2858,10 @@ impl DataFrame {
             .logical_plan()
             .schema()
             .iter()
-            .map(|(qualifier, field)| {
-                let column = Expr::Column(Column::from((qualifier, field)));
+            .zip(self.logical_plan().schema().field_ids())
+            .map(|((qualifier, field), id)| {
+                // read by id: the names of the columns may repeat
+                let column = Expr::Column(Column::from((qualifier, field)).with_id(*id));
                 if cols.contains(field) && applies(field) {
                     // Try to cast fill value to column type. If the cast fails, fallback to the original column.
                     match value.clone().cast_to(field.data_type()) {

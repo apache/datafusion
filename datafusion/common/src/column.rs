@@ -441,19 +441,20 @@ impl Column {
     }
 
     /// Returns this qualified column with the id of the field it resolves to
-    /// in `schemas` (searched in order), if it has no id yet. Returned as is
-    /// if it has an id, or if no field has its qualifier and name (the lookup
-    /// then uses the qualifier and name). An error if the first schema that
-    /// has fields with its qualifier and name has several, with different
-    /// ids: the reference is ambiguous.
+    /// in `schemas` (searched level by level), if it has no id yet. Returned
+    /// as is if it has an id, or if no field has its qualifier and name (the
+    /// lookup then uses the qualifier and name). An error if the first level
+    /// that has fields with its qualifier and name has several, with
+    /// different ids, in one schema or across its schemas (the two sides of
+    /// a join): the reference is ambiguous.
     fn bind_qualified(self, schemas: &[&[&DFSchema]]) -> Result<Self> {
         if self.id.is_some() {
             return Ok(self);
         }
-        for schema in schemas.iter().flat_map(|level| level.iter()) {
-            let mut ids = schema
+        for level in schemas {
+            let mut ids = level
                 .iter()
-                .zip(schema.field_ids())
+                .flat_map(|schema| schema.iter().zip(schema.field_ids()))
                 .filter(|((qualifier, field), _)| {
                     field.name() == &self.name
                         && qualifier.is_some_and(|q| {

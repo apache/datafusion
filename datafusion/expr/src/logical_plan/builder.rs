@@ -2496,10 +2496,11 @@ pub fn build_join_schema(
         JoinType::RightMark => right_ids.chain(once(None)).collect(),
     };
 
-    let dfschema = DFSchema::new_with_metadata(qualified_fields, metadata)?;
-    dfschema
-        .with_functional_dependencies(func_dependencies)?
-        .with_field_ids(field_ids)
+    // built with the ids at once: the sides may have columns with the same
+    // qualifier and name (two unnamed `?table?` inputs), which the ids tell
+    // apart (see `DFSchema::check_names`)
+    DFSchema::new_with_field_ids(qualified_fields, field_ids, metadata)?
+        .with_functional_dependencies(func_dependencies)
 }
 
 /// Creates the schema for a left-preserving ASOF join.

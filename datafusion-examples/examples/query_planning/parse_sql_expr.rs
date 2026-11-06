@@ -76,7 +76,9 @@ async fn simple_dataframe_parse_sql_expr_demo() -> Result<()> {
 
     let parsed_expr = df.parse_sql_expr(sql)?;
 
-    assert_eq!(parsed_expr, expr);
+    // the parsed columns are bound to the columns of `df`: they have column
+    // ids, which `==` compares, and `col` gives none
+    assert_eq!(parsed_expr.without_column_ids(), expr);
 
     Ok(())
 }

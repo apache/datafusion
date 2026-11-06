@@ -37,8 +37,11 @@ use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_catalog::memory::MemorySchemaProvider;
 use datafusion_catalog::{CatalogProvider, MemoryCatalogProvider, SchemaProvider};
 use datafusion_common::Column;
+use datafusion_common::test_util::batches_to_sort_string;
 use datafusion_expr::Expr;
-use datafusion_sql::unparser::dialect::{DefaultDialect, DuckDBDialect, MySqlDialect};
+use datafusion_sql::unparser::dialect::{
+    DefaultDialect, DuckDBDialect, MySqlDialect, PostgreSqlDialect,
+};
 use datafusion_sql::unparser::{Unparser, plan_to_sql};
 use itertools::Itertools;
 use recursive::{set_minimum_stack_size, set_stack_allocation_size};
@@ -755,6 +758,48 @@ async fn optimized_filter_with_subquery_alias() -> Result<()> {
     assert_eq!(
         sql,
         "SELECT * FROM (SELECT t.a FROM t WHERE (t.a = 1)) AS t2"
+    );
+    Ok(())
+}
+
+// https://github.com/apache/datafusion/issues/21066
+//
+// CSE factors `sum(salary) > 0` out of the two CASE expressions into a
+// projection below the aggregate's consumers. Before column ids it was named
+// `__common_expr_1`, a reserved name, so the unparsed SQL could not be planned
+// again (earlier also `No field named base.name`, as the PostgreSQL dialect
+// requires an alias on the derived table). The common expression is now named
+// after itself and the unparsed SQL plans and returns the original rows.
+#[tokio::test]
+async fn optimized_postgres_unparse_cse_projection_roundtrip() -> Result<()> {
+    let ctx = SessionContext::new();
+    ctx.sql("CREATE TABLE t (name TEXT, salary DOUBLE) AS VALUES ('a', 1.0), ('b', 2.0)")
+        .await?
+        .collect()
+        .await?;
+
+    let sql = "WITH base AS (SELECT name, salary FROM t) \
+        SELECT name, \
+            CASE WHEN SUM(salary) > 0 THEN 1 ELSE 0 END AS x, \
+            CASE WHEN SUM(salary) > 0 THEN SUM(salary) ELSE 0 END AS y \
+        FROM base GROUP BY name";
+
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let dialect = PostgreSqlDialect {};
+    let unparsed = Unparser::new(&dialect).plan_to_sql(&plan)?.to_string();
+    assert!(!unparsed.contains("__common_expr"), "{unparsed}");
+
+    let expected = ctx.sql(sql).await?.collect().await?;
+    let actual = ctx
+        .sql(&unparsed)
+        .await
+        .unwrap_or_else(|e| panic!("unparsed SQL does not plan: {e}\n{unparsed}"))
+        .collect()
+        .await?;
+    assert_eq!(
+        batches_to_sort_string(&expected),
+        batches_to_sort_string(&actual),
+        "{unparsed}"
     );
     Ok(())
 }

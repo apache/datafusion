@@ -1643,6 +1643,153 @@ async fn join_asof() -> Result<()> {
     Ok(())
 }
 
+/// Regression test for <https://github.com/apache/datafusion/issues/14147>:
+/// joining two unnamed DataFrames (both qualified `?table?`) whose columns
+/// have the same names
+#[tokio::test]
+async fn join_unnamed_same_column_names() -> Result<()> {
+    let ctx = SessionContext::new();
+    let left = ctx.read_batch(record_batch!(
+        ("id1", Int32, [1, 2, 3]),
+        ("val1", Utf8, ["a", "b", "c"])
+    )?)?;
+    let right = ctx.read_batch(record_batch!(
+        ("id1", Int32, [2, 3, 4]),
+        ("val1", Utf8, ["b", "c", "d"])
+    )?)?;
+
+    // a self join: the builder renumbers the right side
+    let self_joined =
+        left.clone()
+            .join(left.clone(), JoinType::Inner, &["id1"], &["id1"], None)?;
+    assert_eq!(self_joined.count().await?, 3);
+
+    let joined =
+        left.clone()
+            .join(right.clone(), JoinType::Inner, &["id1"], &["id1"], None)?;
+    let results = joined.clone().collect().await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +-----+------+-----+------+
+    | id1 | val1 | id1 | val1 |
+    +-----+------+-----+------+
+    | 2   | b    | 2   | b    |
+    | 3   | c    | 3   | c    |
+    +-----+------+-----+------+
+    "
+    );
+
+    // `id1` and `?table?.id1` name a column of each side: ambiguous, as in
+    // Postgres
+    let err = joined.clone().select(vec![col("id1")]).unwrap_err();
+    assert_contains!(
+        err.to_string(),
+        "Ambiguous reference to unqualified field id1"
+    );
+    let qualified = datafusion_common::Column::new(Some("?table?"), "id1");
+    let err = joined
+        .clone()
+        .select(vec![Expr::Column(qualified.clone())])
+        .unwrap_err();
+    assert_contains!(err.to_string(), "would be ambiguous");
+    // in a join condition, the qualified name matches a column of each side
+    let err = left
+        .join_on(right, JoinType::Inner, [Expr::Column(qualified).eq(lit(2))])
+        .unwrap_err();
+    assert_contains!(err.to_string(), "would be ambiguous");
+
+    // the columns of the schema read each side by position
+    let columns = joined.schema().columns();
+    let results = joined
+        .select(vec![
+            Expr::Column(columns[1].clone()),
+            Expr::Column(columns[3].clone()),
+        ])?
+        .collect()
+        .await?;
+    assert_snapshot!(
+        batches_to_sort_string(&results),
+        @r"
+    +------+------+
+    | val1 | val1 |
+    +------+------+
+    | b    | b    |
+    | c    | c    |
+    +------+------+
+    "
+    );
+    Ok(())
+}
+
+/// The DataFrame methods that rebuild every column of a DataFrame keep
+/// working when columns have the same qualifier and name (the join of
+/// <https://github.com/apache/datafusion/issues/14147>)
+#[tokio::test]
+async fn dataframe_methods_with_repeated_column_names() -> Result<()> {
+    let ctx = SessionContext::new();
+    let left = ctx.read_batch(record_batch!(
+        ("id1", Int32, [1, 2, 3]),
+        ("val1", Utf8, [Some("a"), None, Some("c")])
+    )?)?;
+    let right = ctx.read_batch(record_batch!(
+        ("id1", Int32, [2, 3, 4]),
+        ("val1", Utf8, [Some("b"), None, Some("d")])
+    )?)?;
+    let joined = left.join(right, JoinType::Inner, &["id1"], &["id1"], None)?;
+
+    let df = joined
+        .clone()
+        .with_column("one", lit(1))?
+        .with_column_renamed("one", "uno")?
+        .fill_null(&ScalarValue::from("-"), &[])?;
+    assert_snapshot!(
+        batches_to_sort_string(&df.collect().await?),
+        @r"
+    +-----+------+-----+------+-----+
+    | id1 | val1 | id1 | val1 | uno |
+    +-----+------+-----+------+-----+
+    | 2   | -    | 2   | b    | 1   |
+    | 3   | c    | 3   | -    | 1   |
+    +-----+------+-----+------+-----+
+    "
+    );
+
+    let df = joined
+        .clone()
+        .with_column("l", make_array(vec![lit(1), lit(2)]))?
+        .unnest_columns(&["l"])?
+        .drop_columns(&["val1"])?;
+    assert_snapshot!(
+        batches_to_sort_string(&df.collect().await?),
+        @r"
+    +-----+-----+---+
+    | id1 | id1 | l |
+    +-----+-----+---+
+    | 2   | 2   | 1 |
+    | 2   | 2   | 2 |
+    | 3   | 3   | 1 |
+    | 3   | 3   | 2 |
+    +-----+-----+---+
+    "
+    );
+
+    // an unqualified name drops the column of each side
+    let df = joined.drop_columns(&["val1"])?;
+    assert_snapshot!(
+        batches_to_sort_string(&df.collect().await?),
+        @r"
+    +-----+-----+
+    | id1 | id1 |
+    +-----+-----+
+    | 2   | 2   |
+    | 3   | 3   |
+    +-----+-----+
+    "
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn join_coercion_unnamed() -> Result<()> {
     let ctx = SessionContext::new();

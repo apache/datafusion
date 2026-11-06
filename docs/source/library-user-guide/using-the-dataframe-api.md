@@ -259,8 +259,9 @@ async fn main() -> Result<()>{
         .project(vec![col("a"), col("b")])?
         .sort_by(vec![col("a")])?
         .build()?;
-    // prove they are the same
-    assert_eq!(new_df.logical_plan(), &plan);
+    // prove they are the same. Each `read_csv` gives the columns it reads
+    // new column ids, which `==` compares, so compare the plans up to them
+    assert!(new_df.logical_plan().is_equivalent_up_to_column_ids(&plan));
     Ok(())
 }
 ```

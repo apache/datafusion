@@ -94,6 +94,49 @@ WHERE EXISTS (
 1
 
 ##########
+# #26033: correlated IN subquery whose column is cast
+# before column ids: Schema error: No field named __correlated_sq_1.y (the
+# issue reported "Projections require unique expression names"): the pulled
+# up `i.y` was not added to the subquery's outputs, because the cast
+# `CAST(i.y AS Int64)` is also named `i.y`
+##########
+
+statement ok
+CREATE TABLE o26033 (k INT, b BIGINT) AS VALUES (1, 1), (2, 2), (3, 30);
+
+statement ok
+CREATE TABLE i26033 (y INT) AS VALUES (1), (2), (3);
+
+query I
+SELECT o26033.k FROM o26033
+WHERE o26033.b IN (SELECT i26033.y FROM i26033 WHERE i26033.y = o26033.k)
+ORDER BY o26033.k;
+----
+1
+2
+
+query I
+SELECT o26033.k FROM o26033
+WHERE o26033.b IN (SELECT CAST(i26033.y AS BIGINT) FROM i26033 WHERE i26033.y = o26033.k)
+ORDER BY o26033.k;
+----
+1
+2
+
+# The projection branch of #26619 (push_down_filter), which #26033 masked
+statement ok
+CREATE TABLE t0_26619 (c0 BIGINT) AS VALUES (1);
+
+statement ok
+CREATE TABLE t1_26619 (c0 BIGINT) AS VALUES (0);
+
+query I
+SELECT c0 FROM t1_26619
+WHERE '1' IN (SELECT CAST(t0_26619.c0 AS VARCHAR) FROM t0_26619 WHERE t0_26619.c0 > t1_26619.c0);
+----
+0
+
+##########
 # #26221: aggregates of x and CAST(x AS ...) share a name
 # before column ids: duplicate unqualified field name "sum(t.x)" (aliased),
 # Projections require unique expression names (unaliased)
@@ -227,6 +270,94 @@ SELECT s['a'] FROM (SELECT s, v FROM t25447 WHERE v > 0) WHERE s['a'] > 0 ORDER 
 20
 
 ##########
+# #26234: correlated subquery confuses same-named columns of two of its relations
+# before column ids: wrong rows for all four queries (both pulled up
+# references were renamed to the first `__correlated_sq_1.k`)
+##########
+
+statement ok
+CREATE TABLE test26234 (k INT) AS VALUES (1), (2);
+
+query I
+SELECT o.k FROM test26234 o
+WHERE EXISTS (SELECT 1 FROM test26234 one, test26234 two WHERE one.k = o.k AND two.k = o.k + 1);
+----
+1
+
+query I
+SELECT o.k FROM test26234 o
+WHERE NOT EXISTS (SELECT 1 FROM test26234 one, test26234 two WHERE one.k = o.k AND two.k = o.k + 1);
+----
+2
+
+query I
+SELECT o.k FROM test26234 o
+WHERE o.k IN (SELECT one.k FROM test26234 one, test26234 two WHERE one.k = o.k AND two.k = o.k + 1);
+----
+1
+
+query II
+SELECT o.k, (SELECT count(*) FROM test26234 one, test26234 two WHERE one.k = o.k AND two.k = o.k + 1) AS c
+FROM test26234 o ORDER BY o.k;
+----
+1 1
+2 0
+
+##########
+# #25024: NOT IN with an expression key under IS NULL (a null-aware mark join)
+# before column ids: correct (`z`); a regression of the column ids gave
+# `could not cast array of type Utf8View to ... BooleanArray`: the projection
+# of the expression join key reused the id of the mark column
+##########
+
+statement ok
+CREATE TABLE outer25024 (id VARCHAR NOT NULL) AS VALUES ('z');
+
+statement ok
+CREATE TABLE inner25024 (id VARCHAR NOT NULL) AS VALUES ('a');
+
+query T
+SELECT id FROM outer25024 WHERE (NULLIF(id, 'z') NOT IN (SELECT id FROM inner25024)) IS NULL;
+----
+z
+
+##########
+# #13476: SELECT ts, id, * repeats columns of the table
+# before column ids: Projections require unique expression names
+##########
+
+statement ok
+CREATE TABLE users13476 (id INT, name VARCHAR, ts INT) AS VALUES (1, 'a', 10), (2, 'b', 20);
+
+query IIITI
+SELECT ts, id, * FROM users13476 ORDER BY 2;
+----
+10 1 1 a 10
+20 2 2 b 20
+
+query ITII
+SELECT *, id FROM users13476 ORDER BY 1;
+----
+1 a 10 1
+2 b 20 2
+
+##########
+# #26620: two window functions share ORDER BY a + 1, one argument is constant folded
+# before column ids: panic in debug builds (all window expressions shall have
+# the same sort keys): CSE named the common `t.a + Int64(1)` differently in the
+# two sort keys (`__common_expr_1` and `__common_expr_1 AS t.a + Int64(1)`)
+##########
+
+statement ok
+CREATE TABLE t26620 (a BIGINT, b BIGINT) AS VALUES (1, 10), (2, 20);
+
+query II rowsort
+SELECT sum(1 + 1) OVER (ORDER BY a + 1), sum(b) OVER (ORDER BY a + 1) FROM t26620;
+----
+2 10
+4 30
+
+##########
 # Clean up
 ##########
 
@@ -246,6 +377,18 @@ statement ok
 DROP TABLE t2_26692;
 
 statement ok
+DROP TABLE o26033;
+
+statement ok
+DROP TABLE i26033;
+
+statement ok
+DROP TABLE t0_26619;
+
+statement ok
+DROP TABLE t1_26619;
+
+statement ok
 DROP TABLE t3353;
 
 statement ok
@@ -262,3 +405,43 @@ DROP TABLE employees26462;
 
 statement ok
 DROP TABLE t25447;
+
+statement ok
+DROP TABLE test26234;
+
+statement ok
+DROP TABLE outer25024;
+
+statement ok
+DROP TABLE inner25024;
+
+statement ok
+DROP TABLE users13476;
+
+statement ok
+DROP TABLE t26620;
+
+##########
+# Outputs with the same name next to UNNEST: the select list is planned as an
+# inner projection read by name, which kept one expression per name, so both
+# `x` read the first (a wrong result; on main the duplicate names are an
+# error)
+##########
+
+query III
+SELECT 1 AS x, 2 AS x, unnest([1, 2]) AS u;
+----
+1 2 1
+1 2 2
+
+query II
+SELECT x, x2 FROM (SELECT 1 AS x, 2 AS x, unnest([1, 2]) AS u) AS t(x, x2, u);
+----
+1 2
+1 2
+
+# the same expression under the same name is one inner column
+query III
+SELECT 1 AS x, 1 AS x, unnest([3]) AS u;
+----
+1 1 3

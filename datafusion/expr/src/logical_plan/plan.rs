@@ -6416,8 +6416,9 @@ impl Unnest {
                 }
             })
             .collect();
-        let df_schema =
-            DFSchema::new_with_metadata(fields, metadata)?.with_field_ids(field_ids)?;
+        // built with the ids at once: the input may have columns with the same
+        // qualifier and name, which the ids tell apart
+        let df_schema = DFSchema::new_with_field_ids(fields, field_ids, metadata)?;
         let list_indices: HashSet<_> =
             list_columns.iter().map(|(index, _)| *index).collect();
         // Struct unnest may replace one input column with several output columns,

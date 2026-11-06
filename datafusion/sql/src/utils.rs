@@ -13,7 +13,7 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    Column, DFSchemaRef, Diagnostic, HashMap, HashSet, Result, ScalarValue,
+    Column, DFSchemaRef, Diagnostic, HashMap, Result, ScalarValue,
     assert_or_internal_err, exec_datafusion_err, exec_err, internal_err, plan_err,
 };
 use datafusion_expr::builder::get_struct_unnested_columns;
@@ -674,29 +674,64 @@ impl TreeNodeRewriter for RecursiveUnnestRewriter<'_> {
 /// schema name too. Each pushed expression is rendered once and its name
 /// cached, making an `n` expression projection cost `n` renders rather than
 /// the `O(n^2)` renders a pairwise comparison would need.
+///
+/// The exception is an alias whose name is already taken by another
+/// expression (`SELECT 1 AS x, 2 AS x, unnest(...)`): it is pushed under a new
+/// name (see [`Self::push_returning_reference`]).
 #[derive(Debug, Default)]
 pub(crate) struct DedupedProjection {
     exprs: Vec<Expr>,
-    names: HashSet<String>,
+    /// the index in `exprs` of the expression with each name
+    names: HashMap<String, usize>,
 }
 
 impl DedupedProjection {
     /// Pushes `expr` unless an expression with the same schema name is already
     /// present.
     fn push(&mut self, expr: Expr) {
-        if self.names.insert(expr.schema_name().to_string()) {
+        let name = expr.schema_name().to_string();
+        if !self.names.contains_key(&name) {
+            self.names.insert(name, self.exprs.len());
             self.exprs.push(expr);
         }
     }
 
-    /// Like [`Self::push`], but returns the schema name of `expr`, which the
-    /// caller needs in order to reference the field from the outer projection.
-    fn push_returning_name(&mut self, expr: Expr) -> String {
+    /// Like [`Self::push`], but returns the expression with which the outer
+    /// projection reads `expr`: a column named after it.
+    ///
+    /// An alias whose name another expression already has is pushed under a
+    /// new name, and read back as that column aliased to its own name. The
+    /// outer projection can output the same name twice (the outputs have
+    /// different column ids); reading the field by the shared name would read
+    /// the first expression for both.
+    fn push_returning_reference(&mut self, expr: Expr) -> Expr {
         let name = expr.schema_name().to_string();
-        if self.names.insert(name.clone()) {
-            self.exprs.push(expr);
+        let taken_by_another = match self.names.get(&name) {
+            None => {
+                self.names.insert(name.clone(), self.exprs.len());
+                self.exprs.push(expr);
+                return Expr::Column(Column::from_name(name));
+            }
+            Some(&index) => self.exprs[index] != expr,
+        };
+        let Expr::Alias(mut alias) = expr else {
+            return Expr::Column(Column::from_name(name));
+        };
+        if !taken_by_another {
+            return Expr::Column(Column::from_name(name));
         }
-        name
+        // one of `len + 1` candidates is not among the `len` names
+        let unique_name = (1..=self.exprs.len() + 1)
+            .map(|n| format!("{name}:{n}"))
+            .find(|candidate| !self.names.contains_key(candidate))
+            .expect("an unused name");
+        let aliased = std::mem::replace(
+            &mut alias.expr,
+            Box::new(Expr::Column(Column::from_name(&unique_name))),
+        );
+        self.names.insert(unique_name.clone(), self.exprs.len());
+        self.exprs.push(aliased.alias(unique_name));
+        Expr::Alias(alias)
     }
 
     /// The expressions pushed so far, in push order. Only the tests need to
@@ -762,9 +797,9 @@ pub(crate) fn rewrite_recursive_unnest_bottom_up(
         } else {
             // We need to evaluate the expr in the inner projection,
             // outer projection just select its name
-            let column_name =
-                inner_projection_exprs.push_returning_name(transformed_expr);
-            Ok(vec![Expr::Column(Column::from_name(column_name))])
+            Ok(vec![
+                inner_projection_exprs.push_returning_reference(transformed_expr),
+            ])
         }
     } else {
         if let Some(transformed_root_exprs) = rewriter.transformed_root_exprs {
@@ -823,23 +858,39 @@ mod tests {
         assert_eq!(names, vec!["a", "t.a", "n", "a + Int32(1)", "a + Int32(2)"]);
     }
 
-    /// The name a caller gets back from `push_returning_name` must be the
-    /// schema name of the pushed expression, whether or not it was retained,
-    /// since the outer projection references the inner field by that name.
+    /// The outer projection reads a pushed expression by the schema name of
+    /// the expression, whether or not it was retained; an alias whose name
+    /// another expression has is pushed under a new name and read back as
+    /// its own.
     #[test]
-    fn test_deduped_projection_push_returning_name() {
+    fn test_deduped_projection_push_returning_reference() {
         let mut projection = DedupedProjection::default();
         assert_eq!(
-            projection.push_returning_name(col("a").add(lit(1))),
-            "a + Int32(1)"
+            projection.push_returning_reference(col("a").add(lit(1))),
+            col("a + Int32(1)")
         );
         // dropped as a duplicate, but the name is still the one to reference
         assert_eq!(
-            projection
-                .push_returning_name(cast(col("a"), ArrowDataType::Int64).add(lit(1))),
-            "a + Int32(1)"
+            projection.push_returning_reference(
+                cast(col("a"), ArrowDataType::Int64).add(lit(1))
+            ),
+            col("a + Int32(1)")
         );
         assert_eq!(projection.exprs().len(), 1);
+
+        // the same alias twice is one field
+        let x = datafusion_expr::Expr::Column(Column::from_name("x"));
+        assert_eq!(projection.push_returning_reference(lit(1).alias("x")), x);
+        assert_eq!(projection.push_returning_reference(lit(1).alias("x")), x);
+        // another expression with the same alias is another field
+        assert_eq!(
+            projection.push_returning_reference(lit(2).alias("x")),
+            datafusion_expr::Expr::Column(Column::from_name("x:1")).alias("x")
+        );
+        assert_eq!(
+            projection.exprs(),
+            &[col("a").add(lit(1)), lit(1).alias("x"), lit(2).alias("x:1")]
+        );
     }
 
     fn column_unnests_eq(

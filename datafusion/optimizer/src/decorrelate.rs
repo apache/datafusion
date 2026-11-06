@@ -167,11 +167,23 @@ impl PullUpCorrelatedExpr {
         let generator = match &self.column_id_generator {
             Some(generator) => generator.as_ref(),
             None => {
+                // after the ids of the input, of the entries, and of the
+                // outputs of the projection that do not rebuild an entry
+                // (they keep their ids)
                 own_generator = ColumnIdGenerator::new_after(
                     projection
                         .input
                         .max_column_id()
-                        .max(entries.iter().map(|e| e.id).max()),
+                        .max(entries.iter().map(|e| e.id).max())
+                        .max(
+                            projection
+                                .schema
+                                .field_ids()
+                                .iter()
+                                .flatten()
+                                .max()
+                                .copied(),
+                        ),
                 );
                 &own_generator
             }
@@ -1196,10 +1208,26 @@ fn partitions_by_all(expr: &Expr, cols: &BTreeSet<Column>) -> bool {
     })
 }
 
-/// True if `candidate` collides with an existing entry's schema name,
-/// e.g. a bare column already wrapped in an equally-named `CAST`.
-/// Colliding means `LogicalPlanBuilder::project` would reject it as a duplicate.
+/// True if `candidate` is already among `exprs`, so that adding it would add
+/// an output twice.
+///
+/// A column with an id is there only if an entry is that column (same id, or
+/// same qualifier and name). An entry that merely has its schema name, such
+/// as the column wrapped in a `CAST` (`CAST(i.y AS Int64)` is named `i.y`),
+/// computes another column with its own id: the outputs may share a name,
+/// and the pulled up reference needs the column itself (#26033).
+///
+/// Otherwise, `candidate` collides with an entry that has its schema name
+/// (`LogicalPlanBuilder::project` would reject it as a duplicate).
 fn collides_with_existing(exprs: &[Expr], candidate: &Expr) -> bool {
+    if let Expr::Column(col) = candidate
+        && col.id.is_some()
+    {
+        return exprs.iter().any(|expr| {
+            matches!(expr, Expr::Column(c)
+                if c.id == col.id || (c.relation == col.relation && c.name == col.name))
+        });
+    }
     let candidate_name = candidate.schema_name().to_string();
     exprs
         .iter()
@@ -1310,10 +1338,14 @@ pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
 ///
 /// Aliasing must precede stripping outer references so inner and outer columns
 /// with the same qualified name remain distinguishable.
+///
+/// An inner column is found by id among the outputs of the subquery's alias,
+/// whose schema is `alias_schema` (see [`replace_qualified_name`]).
 pub(crate) fn build_join_filter<'a>(
     join_filters: Vec<Expr>,
     correlated_cols: impl IntoIterator<Item = &'a Column>,
     subquery_alias: &str,
+    alias_schema: &DFSchema,
 ) -> Result<Option<Expr>> {
     let correlated_cols = correlated_cols
         .into_iter()
@@ -1321,7 +1353,7 @@ pub(crate) fn build_join_filter<'a>(
         .collect::<BTreeSet<_>>();
     conjunction(join_filters)
         .map(|filter| {
-            replace_qualified_name(filter, &correlated_cols, subquery_alias)
+            replace_qualified_name(filter, &correlated_cols, subquery_alias, alias_schema)
                 .map(strip_outer_reference)
         })
         .transpose()
@@ -1530,16 +1562,47 @@ mod tests {
 
     #[test]
     fn test_build_join_filter() -> Result<()> {
-        assert_eq!(build_join_filter(vec![], [], "sq")?, None);
+        let empty = DFSchema::empty();
+        assert_eq!(build_join_filter(vec![], [], "sq", &empty)?, None);
 
         let column = Column::from("t.a");
         let outer = out_ref_col(DataType::Int32, "t.a");
         let filters = vec![col("t.a").eq(outer.clone()), outer.gt(lit(1))];
 
         assert_eq!(
-            build_join_filter(filters, [&column, &column], "sq")?,
+            build_join_filter(filters, [&column, &column], "sq", &empty)?,
             Some(col("sq.a").eq(col("t.a")).and(col("t.a").gt(lit(1))))
         );
+        Ok(())
+    }
+
+    /// Without a generator, an entry that passed a column through and is
+    /// rebuilt by an expression gets an id after the ids of the projection
+    /// too: its other outputs keep their ids
+    #[test]
+    fn output_ids_of_does_not_reuse_an_id_of_the_projection() -> Result<()> {
+        let scan = crate::test::test_table_scan()?;
+        let column = |i: usize| {
+            Expr::Column(
+                Column::new_unqualified(scan.schema().field(i).name())
+                    .with_id(scan.schema().field_id(i)),
+            )
+        };
+        let entry = NamedExpr::new(column(0), scan.schema().field_id(0).unwrap());
+        // ids that follow the scan: the output that does not rebuild the
+        // entry has the first one
+        let generator = ColumnIdGenerator::new_after(scan.max_column_id());
+        let other = NamedExpr::new(column(1) * lit(2u32), generator.next());
+        let rebuilt = NamedExpr::new(column(0) + lit(1u32), generator.next());
+        let projection = LogicalPlan::Projection(Projection::try_new(
+            vec![rebuilt, other],
+            Arc::new(scan),
+        )?);
+
+        let plan =
+            PullUpCorrelatedExpr::new().with_output_ids_of(projection, &[entry])?;
+
+        assert_eq!(plan.column_id_issues(), vec![]);
         Ok(())
     }
 }

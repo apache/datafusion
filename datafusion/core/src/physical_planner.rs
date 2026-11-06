@@ -1489,12 +1489,11 @@ impl DefaultPhysicalPlanner {
                         keys.iter().cloned().unzip();
 
                     // the projections define columns: their ids must not
-                    // collide with the ids of either side
-                    let generator = Arc::new(ColumnIdGenerator::new_after(
-                        original_left
-                            .max_column_id()
-                            .max(original_right.max_column_id()),
-                    ));
+                    // collide with the ids of either side, nor with the ids
+                    // the join itself defines (the mark column of a mark
+                    // join), which the projection above the join keeps
+                    let generator =
+                        Arc::new(ColumnIdGenerator::new_after(node.max_column_id()));
                     let (left, left_col_keys, left_projected) =
                         wrap_projection_for_join_if_necessary(
                             &left_keys,

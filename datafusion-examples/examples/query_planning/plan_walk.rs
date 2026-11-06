@@ -154,6 +154,9 @@ pub fn plan_walk() -> Result<()> {
 #[derive(Debug, Default)]
 struct PlanSummary {
     tables: BTreeSet<String>,
+    /// The predicates without their column ids: the plan binds the columns
+    /// they read (`==` compares the ids), and this example compares them with
+    /// predicates written by name
     filters: Vec<Expr>,
 }
 
@@ -163,10 +166,14 @@ fn summarize(plan: &LogicalPlan) -> Result<PlanSummary> {
         match node {
             LogicalPlan::TableScan(scan) => {
                 summary.tables.insert(scan.table_name.to_string());
-                summary.filters.extend(scan.filters.iter().cloned());
+                summary
+                    .filters
+                    .extend(scan.filters.iter().cloned().map(Expr::without_column_ids));
             }
             LogicalPlan::Filter(filter) => {
-                summary.filters.push(filter.predicate.clone());
+                summary
+                    .filters
+                    .push(filter.predicate.clone().without_column_ids());
             }
             _ => {}
         }

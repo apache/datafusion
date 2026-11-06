@@ -1005,6 +1005,7 @@ fn build_join(
         pull_up.join_filters,
         pull_up.correlated_subquery_cols_map.values().flatten(),
         alias,
+        sub_query_alias.schema(),
     )?;
 
     if let Some(expr_map) = count_bug_compensation

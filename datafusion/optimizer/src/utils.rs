@@ -368,14 +368,29 @@ fn visit_referenced_indices(
     Ok(())
 }
 
+/// Returns `expr` with each column of `cols` (columns of a subquery) replaced
+/// by the output of the subquery's alias that reads it: found by id in
+/// `alias_schema`, the schema of the [`SubqueryAlias`] over the subquery,
+/// which passes the ids of the subquery's outputs through (and renames
+/// duplicate names: `one.k`, `two.k` are `k`, `k:1`). A column without an id,
+/// or whose id the alias does not output, is renamed to `subquery_alias` by
+/// its name, as before column ids.
+///
+/// [`SubqueryAlias`]: datafusion_expr::SubqueryAlias
 pub(crate) fn replace_qualified_name(
     expr: Expr,
     cols: &BTreeSet<Column>,
     subquery_alias: &str,
+    alias_schema: &DFSchema,
 ) -> Result<Expr> {
     let alias_cols: Vec<Column> = cols
         .iter()
-        .map(|col| Column::new(Some(subquery_alias), &col.name))
+        .map(
+            |col| match col.id.and_then(|id| alias_schema.index_of_column_id(id)) {
+                Some(i) => Column::from(alias_schema.qualified_field(i)).with_id(col.id),
+                None => Column::new(Some(subquery_alias), &col.name),
+            },
+        )
         .collect();
     let replace_map: HashMap<&Column, &Column> =
         cols.iter().zip(alias_cols.iter()).collect();

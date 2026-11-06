@@ -375,6 +375,7 @@ fn build_join(
         pull_up.join_filters,
         pull_up.correlated_subquery_cols_map.values().flatten(),
         subquery_alias,
+        aliased_subquery.schema(),
     )?;
 
     // When pull-up did not extract any usable join keys (a correlated subquery

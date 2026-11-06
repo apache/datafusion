@@ -373,12 +373,13 @@ impl<'a> TypeCoercionRewriter<'a> {
         match plan {
             LogicalPlan::Join(join) => self.coerce_join(join),
             LogicalPlan::AsOfJoin(join) => self.coerce_asof_join(join),
-            LogicalPlan::Union(union) => {
-                let generator = match self.column_id_generator {
-                    Some(generator) => GeneratorRef::Borrowed(generator),
-                    None => GeneratorRef::Owned(ColumnIdGenerator::new_after(
-                        union.inputs.iter().filter_map(|i| i.max_column_id()).max(),
-                    )),
+            plan @ LogicalPlan::Union(_) => {
+                // without a generator, the casts below the union get ids
+                // after the ids of the union itself: it defines its outputs,
+                // which keep their ids
+                let generator = self.generator_for(&plan);
+                let LogicalPlan::Union(union) = plan else {
+                    unreachable!()
                 };
                 Self::coerce_union(union, &generator)
             }
@@ -2117,6 +2118,41 @@ mod test {
             EmptyRelation: rows=0
         "
         )
+    }
+
+    /// Without a generator, the casts that coercion adds below a union get
+    /// ids after the ids of the union, not only of its inputs: the union
+    /// defines its outputs, and keeps their ids
+    #[test]
+    fn coerce_union_without_generator_does_not_reuse_union_output_ids() -> Result<()> {
+        let generator = datafusion_common::ColumnIdGenerator::new();
+        let relation = |data_type: DataType| -> Result<Arc<LogicalPlan>> {
+            Ok(Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
+                produce_one_row: false,
+                schema: Arc::new(
+                    DFSchema::try_from_qualified_schema(
+                        TableReference::full("datafusion", "test", "foo"),
+                        &Schema::new(vec![Field::new("a", data_type, false)]),
+                    )?
+                    .with_field_ids(vec![Some(generator.next())])?,
+                ),
+            })))
+        };
+        let union = LogicalPlan::Union(Union::try_new_with_loose_types(
+            vec![relation(DataType::Int32)?, relation(DataType::Int64)?],
+            &generator,
+        )?);
+        let schema = Arc::clone(union.schema());
+        let coerced = TypeCoercionRewriter::new(&schema).coerce_plan(union)?;
+
+        assert_snapshot!(coerced, @r"
+        Union
+          Projection: CAST(datafusion.test.foo.a AS Int64) AS a
+            EmptyRelation: rows=0
+          EmptyRelation: rows=0
+        ");
+        assert_eq!(coerced.column_id_issues(), vec![]);
+        Ok(())
     }
 
     #[test]
