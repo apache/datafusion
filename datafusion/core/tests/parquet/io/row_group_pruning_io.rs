@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Tests tracking I/O events during Parquet row group pruning
+//! Tests tracking I/O events during Parquet row group pruning.
 //!
 //! All tests filter on `id`, whose values are sorted across row groups so the
 //! row group statistics are disjoint and can prune:
@@ -38,12 +38,20 @@ use super::ParquetIoTest;
 #[tokio::test]
 async fn test_row_group_pruning_io_no_predicate() {
     let test = row_group_pruning_test().await;
+    // Note: in practice, the default 512 KiB metadata size hint would fetch
+    // the page index of a small file like this along with the footer.
     let traces = test.capture_traces();
     test.query("SELECT * FROM t").await.unwrap();
     assert_snapshot!(traces.render(), @"
     Query (sql=SELECT * FROM t, rows=9)
         ObjectStore::head (location=table.parquet)
-        Metadata cache hit (has_page_index=true)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=489..1402)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=489..1402, parquet=footer)
+        Read page index (range=286..489)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=286..489, parquet=ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2))
         Open Parquet file (file=table.parquet, size=1402)
         Load Parquet metadata
             Metadata cache hit (has_page_index=true)
@@ -79,7 +87,13 @@ async fn test_row_group_pruning_io_one_row_group() {
     assert_snapshot!(traces.render(), @"
     Query (sql=SELECT * FROM t WHERE id = 5, rows=1)
         ObjectStore::head (location=table.parquet)
-        Metadata cache hit (has_page_index=true)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=489..1402)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=489..1402, parquet=footer)
+        Read page index (range=286..489)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=286..489, parquet=ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2))
         Open Parquet file (file=table.parquet, size=1402)
         Load Parquet metadata
             Metadata cache hit (has_page_index=true)
@@ -109,7 +123,13 @@ async fn test_row_group_pruning_io_two_row_groups() {
     assert_snapshot!(traces.render(), @"
     Query (sql=SELECT * FROM t WHERE id > 5, rows=4)
         ObjectStore::head (location=table.parquet)
-        Metadata cache hit (has_page_index=true)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=489..1402)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=489..1402, parquet=footer)
+        Read page index (range=286..489)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=286..489, parquet=ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2))
         Open Parquet file (file=table.parquet, size=1402)
         Load Parquet metadata
             Metadata cache hit (has_page_index=true)
@@ -133,7 +153,8 @@ async fn test_row_group_pruning_io_two_row_groups() {
     ");
 }
 
-/// No row group can contain `id > 100`, so only the footer is read.
+/// No row group can contain `id > 100`, so only the footer and page index
+/// are read.
 #[tokio::test]
 async fn test_row_group_pruning_io_all_pruned() {
     let test = row_group_pruning_test().await;
@@ -142,11 +163,18 @@ async fn test_row_group_pruning_io_all_pruned() {
     assert_snapshot!(traces.render(), @"
     Query (sql=SELECT * FROM t WHERE id > 100, rows=0)
         ObjectStore::head (location=table.parquet)
-        Metadata cache hit (has_page_index=true)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=489..1402)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=489..1402, parquet=footer)
+        Read page index (range=286..489)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=286..489, parquet=ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2))
         Open Parquet file (file=table.parquet, size=1402)
     ");
 }
 
+/// Returns a [`ParquetIoTest`] for the file described in the module docs
 async fn row_group_pruning_test() -> ParquetIoTest {
     let config = SessionConfig::new()
         .with_target_partitions(1)

@@ -36,16 +36,25 @@ use parquet::file::properties::WriterProperties;
 
 use super::ParquetIoTest;
 
-/// Without filter pushdown, the scan fetches every column of every row group
+/// Without filter pushdown, the scan fetches every column of every row group.
 #[tokio::test]
 async fn test_filter_pushdown_io_disabled() {
     let test = filter_pushdown_test(false).await;
+    // Note: in practice, the default 512 KiB metadata size hint often covers
+    // the OffsetIndex and Bloom filters for small files, so they wouldn't
+    // need separate requests.
     let traces = test.capture_traces();
     test.query("SELECT * FROM t WHERE val = 7").await.unwrap();
     assert_snapshot!(traces.render(), @"
     Query (sql=SELECT * FROM t WHERE val = 7, rows=1)
         ObjectStore::head (location=table.parquet)
-        Metadata cache hit (has_page_index=true)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=489..1402)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=489..1402, parquet=footer)
+        Read page index (range=286..489)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=286..489, parquet=ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2))
         Open Parquet file (file=table.parquet, size=1402)
         Load Parquet metadata
             Metadata cache hit (has_page_index=true)
@@ -84,7 +93,13 @@ async fn test_filter_pushdown_io_enabled() {
     assert_snapshot!(traces.render(), @"
     Query (sql=SELECT * FROM t WHERE val = 7, rows=1)
         ObjectStore::head (location=table.parquet)
-        Metadata cache hit (has_page_index=true)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=489..1402)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=489..1402, parquet=footer)
+        Read page index (range=286..489)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=286..489, parquet=ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0, 1, 2))
         Open Parquet file (file=table.parquet, size=1402)
         Load Parquet metadata
             Metadata cache hit (has_page_index=true)
@@ -116,6 +131,7 @@ async fn test_filter_pushdown_io_enabled() {
     ");
 }
 
+/// Returns a [`ParquetIoTest`] for the file described in the module docs
 async fn filter_pushdown_test(pushdown_filters: bool) -> ParquetIoTest {
     let mut config = SessionConfig::new().with_target_partitions(1);
     config.options_mut().execution.parquet.pushdown_filters = pushdown_filters;

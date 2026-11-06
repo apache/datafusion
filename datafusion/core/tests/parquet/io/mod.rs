@@ -26,6 +26,8 @@ use object_store::{
     GetOptions, GetRange, GetResult, ListResult, MultipartUpload, ObjectMeta,
     ObjectStore, PutMultipartOptions, PutOptions, PutPayload, PutResult,
 };
+use parquet::file::FOOTER_SIZE;
+use parquet::file::metadata::FooterTail;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::file::serialized_reader::ReadOptionsBuilder;
 use tracing::Instrument;
@@ -41,10 +43,85 @@ mod trace_capture;
 
 use trace_capture::TraceCapture;
 
+/// Kind of per column chunk metadata structure stored outside the footer
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum MetadataKind {
+    BloomFilter,
+    ColumnIndex,
+    OffsetIndex,
+}
+
+impl std::fmt::Display for MetadataKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BloomFilter => write!(f, "Bloom filter"),
+            Self::ColumnIndex => write!(f, "ColumnIndex"),
+            Self::OffsetIndex => write!(f, "OffsetIndex"),
+        }
+    }
+}
+
+/// Byte range of a Bloom filter, ColumnIndex, or OffsetIndex of one column chunk
 #[derive(Debug, Clone)]
 struct ByteRangeDescriptor {
     range: Range<u64>,
-    description: String,
+    kind: MetadataKind,
+    col_name: String,
+    rg_idx: usize,
+}
+
+/// Describes the Bloom filters / page indexes in `descriptors` as
+/// `<kinds> for column(s) '<a>', '<b>' (rg <x>, <y>)`.
+///
+/// Kinds that cover the same columns and row groups are merged into one
+/// clause (for example `ColumnIndex and OffsetIndex for columns 'id', 'val'
+/// (rg 0, 1, 2)`).
+fn describe_descriptors(descriptors: &[&ByteRangeDescriptor]) -> Vec<String> {
+    // (columns and row groups covered) -> kinds, in order of first appearance
+    let mut groups: Vec<(String, Vec<MetadataKind>)> = vec![];
+    for kind in [
+        MetadataKind::BloomFilter,
+        MetadataKind::ColumnIndex,
+        MetadataKind::OffsetIndex,
+    ] {
+        let of_kind: Vec<&ByteRangeDescriptor> = descriptors
+            .iter()
+            .copied()
+            .filter(|d| d.kind == kind)
+            .collect();
+        if of_kind.is_empty() {
+            continue;
+        }
+        // Column names in file order, without repeating them for each row group
+        let mut col_names: Vec<&str> = vec![];
+        for d in &of_kind {
+            if !col_names.contains(&d.col_name.as_str()) {
+                col_names.push(&d.col_name);
+            }
+        }
+        let mut rg_idxs: Vec<usize> = of_kind.iter().map(|d| d.rg_idx).collect();
+        rg_idxs.sort_unstable();
+        rg_idxs.dedup();
+        let columns: Vec<String> = col_names.iter().map(|c| format!("'{c}'")).collect();
+        let rgs: Vec<String> = rg_idxs.iter().map(|rg| rg.to_string()).collect();
+        let covered = format!(
+            "for column{} {} (rg {})",
+            if columns.len() == 1 { "" } else { "s" },
+            columns.join(", "),
+            rgs.join(", ")
+        );
+        match groups.iter_mut().find(|(c, _)| *c == covered) {
+            Some((_, kinds)) => kinds.push(kind),
+            None => groups.push((covered, vec![kind])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(covered, kinds)| {
+            let kinds: Vec<String> = kinds.iter().map(|k| k.to_string()).collect();
+            format!("{} {covered}", kinds.join(" and "))
+        })
+        .collect()
 }
 
 /// Byte ranges of one column chunk:
@@ -130,9 +207,9 @@ impl ParquetFileLayout {
                     let end = start + bf_len as u64;
                     descriptors.push(ByteRangeDescriptor {
                         range: start..end,
-                        description: format!(
-                            "Bloom filter for column '{col_name}' (rg {rg_idx})"
-                        ),
+                        kind: MetadataKind::BloomFilter,
+                        col_name: col_name.to_string(),
+                        rg_idx,
                     });
                 }
 
@@ -140,17 +217,17 @@ impl ParquetFileLayout {
                 if let Some(r) = col.column_index_range() {
                     descriptors.push(ByteRangeDescriptor {
                         range: r,
-                        description: format!(
-                            "ColumnIndex for column '{col_name}' (rg {rg_idx})"
-                        ),
+                        kind: MetadataKind::ColumnIndex,
+                        col_name: col_name.to_string(),
+                        rg_idx,
                     });
                 }
                 if let Some(r) = col.offset_index_range() {
                     descriptors.push(ByteRangeDescriptor {
                         range: r,
-                        description: format!(
-                            "OffsetIndex for column '{col_name}' (rg {rg_idx})"
-                        ),
+                        kind: MetadataKind::OffsetIndex,
+                        col_name: col_name.to_string(),
+                        rg_idx,
                     });
                 }
 
@@ -197,19 +274,33 @@ impl ParquetFileLayout {
         }
     }
 
-    /// Names the Parquet structure that `range` covers.
+    /// Describes `range` in terms of the parts of the Parquet file it covers.
+    ///
+    /// A single request may span several items (for example, a coalesced read
+    /// of adjacent column chunks), so all overlapping items are listed.
     fn describe_range(&self, range: &Range<u64>, file_size: u64) -> String {
+        // The footer is read as a suffix of the file (see `footer_size`)
         if range.end >= file_size && (file_size.saturating_sub(range.start)) <= 8192 {
             return "footer".to_string();
         }
         let overlaps = |r: &Range<u64>| range.start < r.end && range.end > r.start;
-        if let Some(desc) = self.descriptors.iter().find(|d| overlaps(&d.range)) {
-            return desc.description.clone();
+        // Describe the overlapping Bloom filters / page indexes
+        let descriptors: Vec<&ByteRangeDescriptor> = self
+            .descriptors
+            .iter()
+            .filter(|desc| overlaps(&desc.range))
+            .collect();
+        let mut parts = describe_descriptors(&descriptors);
+        parts.extend(
+            self.column_chunks
+                .iter()
+                .filter(|chunk| overlaps(&chunk.range))
+                .map(|chunk| chunk.describe(range)),
+        );
+        if parts.is_empty() {
+            parts.push("unknown".to_string());
         }
-        if let Some(chunk) = self.column_chunks.iter().find(|c| overlaps(&c.range)) {
-            return chunk.describe(range);
-        }
-        "unknown".to_string()
+        parts.join(", ")
     }
 }
 
@@ -399,9 +490,16 @@ pub(crate) struct ParquetIoTest {
 impl ParquetIoTest {
     /// Stores `file_bytes` as `mem:///table.parquet` and registers it as table
     /// `t` in a new [`SessionContext`] created with `config`.
-    pub(crate) async fn new(file_bytes: Bytes, config: SessionConfig) -> Self {
+    ///
+    /// Note: sets the metadata size hint to the exact size of the footer so
+    /// the first request reads only the footer metadata. Otherwise the default
+    /// hint (512 KiB) covers the (small) test files entirely, hiding requests
+    /// for the page index and Bloom filters.
+    pub(crate) async fn new(file_bytes: Bytes, mut config: SessionConfig) -> Self {
         let file_size = file_bytes.len() as u64;
         let layout = ParquetFileLayout::new(&file_bytes);
+        config.options_mut().execution.parquet.metadata_size_hint =
+            Some(footer_size(&file_bytes));
 
         let memory_store = Arc::new(InMemory::new());
         memory_store
@@ -436,7 +534,15 @@ impl ParquetIoTest {
 
     /// Runs `sql` to completion inside a `query` span and returns the number
     /// of output rows. Emits a `Produce batch` event for each output batch.
+    ///
+    /// The file metadata cache is cleared first so each query shows the I/O
+    /// of a cold read, including the footer and page index.
     pub(crate) async fn query(&self, sql: &str) -> Result<usize> {
+        self.ctx
+            .runtime_env()
+            .cache_manager
+            .get_file_metadata_cache()
+            .clear();
         let span = tracing::debug_span!(
             target: TEST_TARGET,
             "Query",
@@ -459,4 +565,13 @@ impl ParquetIoTest {
         span.record("rows", row_count);
         Ok(row_count)
     }
+}
+
+/// Returns the size in bytes of the Parquet footer (the serialized file
+/// metadata plus the 8 byte footer tail) of `file_bytes`
+fn footer_size(file_bytes: &Bytes) -> usize {
+    let tail: &[u8; FOOTER_SIZE] = file_bytes[file_bytes.len() - FOOTER_SIZE..]
+        .try_into()
+        .unwrap();
+    FooterTail::try_new(tail).unwrap().metadata_length() + FOOTER_SIZE
 }

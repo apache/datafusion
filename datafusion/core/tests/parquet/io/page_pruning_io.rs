@@ -44,12 +44,20 @@ use super::ParquetIoTest;
 #[tokio::test]
 async fn test_page_pruning_io_no_predicate() {
     let test = page_pruning_test(true).await;
+    // Note: in practice, the default 512 KiB metadata size hint would fetch
+    // the page index of a small file like this along with the footer.
     let traces = test.capture_traces();
     test.query("SELECT * FROM t").await.unwrap();
     assert_snapshot!(traces.render(), @"
     Query (sql=SELECT * FROM t, rows=9)
         ObjectStore::head (location=table.parquet)
-        Metadata cache hit (has_page_index=true)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=323..838)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=323..838, parquet=footer)
+        Read page index (range=178..323)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=178..323, parquet=ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0))
         Open Parquet file (file=table.parquet, size=838)
         Load Parquet metadata
             Metadata cache hit (has_page_index=true)
@@ -75,7 +83,13 @@ async fn test_page_pruning_io_one_page() {
     assert_snapshot!(traces.render(), @"
     Query (sql=SELECT * FROM t WHERE id = 5, rows=1)
         ObjectStore::head (location=table.parquet)
-        Metadata cache hit (has_page_index=true)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=323..838)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=323..838, parquet=footer)
+        Read page index (range=178..323)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=178..323, parquet=ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0))
         Open Parquet file (file=table.parquet, size=838)
         Load Parquet metadata
             Metadata cache hit (has_page_index=true)
@@ -105,7 +119,13 @@ async fn test_page_pruning_io_two_pages() {
     assert_snapshot!(traces.render(), @"
     Query (sql=SELECT * FROM t WHERE id > 3, rows=6)
         ObjectStore::head (location=table.parquet)
-        Metadata cache hit (has_page_index=true)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=323..838)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=323..838, parquet=footer)
+        Read page index (range=178..323)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=178..323, parquet=ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0))
         Open Parquet file (file=table.parquet, size=838)
         Load Parquet metadata
             Metadata cache hit (has_page_index=true)
@@ -128,7 +148,8 @@ async fn test_page_pruning_io_two_pages() {
 }
 
 /// With page index pruning disabled, the whole column chunk of every column
-/// is read even though only page 1 can match.
+/// is read even though only page 1 can match. Note the page index itself is
+/// still read, it is just not used to prune.
 #[tokio::test]
 async fn test_page_pruning_io_disabled() {
     let test = page_pruning_test(false).await;
@@ -137,7 +158,13 @@ async fn test_page_pruning_io_disabled() {
     assert_snapshot!(traces.render(), @"
     Query (sql=SELECT * FROM t WHERE id = 5, rows=1)
         ObjectStore::head (location=table.parquet)
-        Metadata cache hit (has_page_index=true)
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=323..838)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=323..838, parquet=footer)
+        Read page index (range=178..323)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=178..323, parquet=ColumnIndex and OffsetIndex for columns 'id', 'val' (rg 0))
         Open Parquet file (file=table.parquet, size=838)
         Load Parquet metadata
             Metadata cache hit (has_page_index=true)

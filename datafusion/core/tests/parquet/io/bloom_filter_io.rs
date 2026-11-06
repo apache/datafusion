@@ -37,20 +37,26 @@ use super::ParquetIoTest;
 #[tokio::test]
 async fn test_parquet_bloom_filter_io_matching() {
     let test = bloom_filter_test().await;
-    let traces = test.capture_traces();
     // Loads the Bloom filters, finds a match, then reads the data pages and
     // produces a batch.
+    //
+    // Note: in practice, the default 512 KiB metadata size hint often covers
+    // the OffsetIndex and Bloom filters for small files, so they wouldn't
+    // need separate requests.
+    let traces = test.capture_traces();
     test.query("SELECT * FROM t WHERE a = 10 AND b = 100")
         .await
         .unwrap();
     assert_snapshot!(traces.render(), @"
     Query (sql=SELECT * FROM t WHERE a = 10 AND b = 100, rows=1)
         ObjectStore::head (location=table.parquet)
-        Metadata cache hit (has_page_index=false)
-        Load page index into cached metadata
-            Read Parquet metadata (range=192..213)
-            ObjectStore::get (location=table.parquet)
-                Read byte range (range=192..213, parquet=OffsetIndex for column 'a' (rg 0))
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=213..678)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=213..678, parquet=footer)
+        Read page index (range=192..213)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=192..213, parquet=OffsetIndex for columns 'a', 'b' (rg 0))
         Open Parquet file (file=table.parquet, size=678)
         Load Parquet metadata
             Metadata cache hit (has_page_index=false)
@@ -79,22 +85,24 @@ async fn test_parquet_bloom_filter_io_matching() {
 #[tokio::test]
 async fn test_parquet_bloom_filter_io_pruned() {
     let test = bloom_filter_test().await;
-    let traces = test.capture_traces();
     // Currently the Bloom filters for all candidate columns (`a` and `b`) are
     // loaded upfront. With incremental pruning
     // (https://github.com/apache/datafusion/issues/25811), `a` would be
     // evaluated first and the Bloom filter for `b` would not be loaded.
+    let traces = test.capture_traces();
     test.query("SELECT * FROM t WHERE a = 999 AND b = 100")
         .await
         .unwrap();
     assert_snapshot!(traces.render(), @"
     Query (sql=SELECT * FROM t WHERE a = 999 AND b = 100, rows=0)
         ObjectStore::head (location=table.parquet)
-        Metadata cache hit (has_page_index=false)
-        Load page index into cached metadata
-            Read Parquet metadata (range=192..213)
-            ObjectStore::get (location=table.parquet)
-                Read byte range (range=192..213, parquet=OffsetIndex for column 'a' (rg 0))
+        Metadata cache miss (cache_enabled=true)
+        Prefetch Parquet footer (range=213..678)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=213..678, parquet=footer)
+        Read page index (range=192..213)
+        ObjectStore::get_ranges (location=table.parquet, ranges=1)
+            Read byte range (range=192..213, parquet=OffsetIndex for columns 'a', 'b' (rg 0))
         Open Parquet file (file=table.parquet, size=678)
         Load Parquet metadata
             Metadata cache hit (has_page_index=false)
