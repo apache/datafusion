@@ -1145,6 +1145,16 @@ UNION ALL
 ----
 2
 
+# Coercing same-named columns from different join inputs must retain their qualifiers.
+query II rowsort
+SELECT 1::BIGINT AS a, 2::BIGINT AS b
+UNION ALL
+SELECT x.a, y.a
+FROM (VALUES (3::INT)) AS x(a) CROSS JOIN (VALUES (4::INT)) AS y(a);
+----
+1 2
+3 4
+
 # Config reset
 statement ok
 RESET datafusion.execution.batch_size;

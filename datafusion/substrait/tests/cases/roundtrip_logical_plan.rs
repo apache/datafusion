@@ -1464,6 +1464,98 @@ async fn roundtrip_union2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_union_join_duplicate_column_names() -> Result<()> {
+    use datafusion::arrow::array::{Int64Array, ListBuilder, MapBuilder, StringBuilder};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::common::test_util::batches_to_sort_string;
+
+    // Non-nullable list items expose type coercion after consumption widens the
+    // typed NULL's list items to nullable. Both joined columns need that cast.
+    let mut tags = MapBuilder::new(
+        None,
+        StringBuilder::new(),
+        ListBuilder::new(StringBuilder::new()).with_field(Field::new(
+            "item",
+            DataType::Utf8,
+            false,
+        )),
+    );
+    tags.keys().append_value("env");
+    tags.values().values().append_value("test");
+    tags.values().append(true);
+    tags.append(true)?;
+    let batch = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef),
+        ("_tags", Arc::new(tags.finish()) as ArrayRef),
+    ])?;
+    let ctx = SessionContext::new();
+    for table in ["t1", "t2", "t3"] {
+        ctx.register_batch(table, batch.clone())?;
+    }
+    let df = ctx
+        .sql(
+            "SELECT NULL AS a, NULL AS b FROM t1 \
+             UNION ALL \
+             SELECT x._tags AS a, y._tags AS b \
+             FROM t2 AS x INNER JOIN t3 AS y ON x.id = y.id",
+        )
+        .await?;
+    let expected = df.clone().collect().await?;
+    assert_eq!(expected.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+
+    let plan = df.into_optimized_plan()?;
+    let restored = substrait_roundtrip(&plan, &ctx).await?;
+    let actual = DataFrame::new(ctx.state(), restored).collect().await?;
+    assert_eq!(
+        batches_to_sort_string(&actual),
+        batches_to_sort_string(&expected)
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn roundtrip_union_join_duplicate_struct_column_names() -> Result<()> {
+    use datafusion::arrow::array::{Int64Array, StructArray};
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::common::test_util::batches_to_sort_string;
+
+    let ctx = SessionContext::new();
+    for (table, value) in [("t1", 10), ("t2", 20), ("t3", 30)] {
+        // UNION must reconcile nullable and non-nullable struct fields.
+        let tags = StructArray::new(
+            vec![Field::new("env", DataType::Int64, table == "t1")].into(),
+            vec![Arc::new(Int64Array::from(vec![value]))],
+            None,
+        );
+        let batch = RecordBatch::try_from_iter(vec![
+            ("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef),
+            ("_tags", Arc::new(tags) as ArrayRef),
+        ])?;
+        ctx.register_batch(table, batch)?;
+    }
+    let df = ctx
+        .sql(
+            "SELECT z._tags AS a, z._tags AS b FROM t1 AS z \
+             UNION ALL \
+             SELECT x._tags AS a, y._tags AS b \
+             FROM t2 AS x INNER JOIN t3 AS y ON x.id = y.id",
+        )
+        .await?;
+    let expected = df.clone().collect().await?;
+    assert_eq!(expected.iter().map(RecordBatch::num_rows).sum::<usize>(), 2);
+
+    // Leave UNION coercion to the consumer's analyzer.
+    let plan = df.into_unoptimized_plan();
+    let restored = substrait_roundtrip(&plan, &ctx).await?;
+    let actual = DataFrame::new(ctx.state(), restored).collect().await?;
+    assert_eq!(
+        batches_to_sort_string(&actual),
+        batches_to_sort_string(&expected)
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_union_all() -> Result<()> {
     roundtrip("SELECT a, e FROM data UNION ALL SELECT a, e FROM data").await
 }
