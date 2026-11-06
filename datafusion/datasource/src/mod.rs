@@ -25,6 +25,7 @@ pub mod file_groups;
 pub mod file_scan_config;
 pub mod file_sink_config;
 pub mod file_stream;
+pub mod instrumentation;
 pub mod memory;
 pub mod morsel;
 pub mod projection;
