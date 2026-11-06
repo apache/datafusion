@@ -81,6 +81,37 @@ SELECT count(*) FROM lineitem WHERE l_discount * 2 > 0.1;
 statement ok
 DROP TABLE lineitem;
 
+# Equality on a decimal column keeps the default selectivity. Like TPC-DS's
+# ca_gmt_offset, this column holds whole numbers from -10 to -5, so counting
+# the 501 values in [-10.00, -5.00] would estimate 2 rows for `= -5`.
+
+query I
+COPY (SELECT CAST(-5 - value % 6 AS DECIMAL(5, 2)) AS ca_gmt_offset FROM range(600))
+TO 'test_files/scratch/filter_statistics_decimal/customer_address.parquet'
+STORED AS PARQUET;
+----
+600
+
+statement ok
+CREATE EXTERNAL TABLE customer_address
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_statistics_decimal/customer_address.parquet';
+
+query TT
+EXPLAIN SELECT ca_gmt_offset FROM customer_address WHERE ca_gmt_offset = -5;
+----
+physical_plan
+01)FilterExec: ca_gmt_offset@0 = -5.00, statistics=[Rows=Inexact(120), Bytes=Inexact(1920), [(Col[0]: Min=Inexact(Decimal128(-10.00,5,2)) Max=Inexact(Decimal128(-5.00,5,2)) Null=Exact(0) Distinct=Inexact(1) ScanBytes=Inexact(1920))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/customer_address.parquet]]}, projection=[ca_gmt_offset], file_type=parquet, predicate=ca_gmt_offset@0 = -5.00, pruning_predicate=ca_gmt_offset_null_count@2 != row_count@3 AND ca_gmt_offset_min@0 <= -5.00 AND -5.00 <= ca_gmt_offset_max@1, required_guarantees=[ca_gmt_offset in (-5.00)], statistics=[Rows=Inexact(600), Bytes=Inexact(9600), [(Col[0]: Min=Inexact(Decimal128(-10.00,5,2)) Max=Inexact(Decimal128(-5.00,5,2)) Null=Inexact(0) ScanBytes=Inexact(9600))]]
+
+query I
+SELECT count(*) FROM customer_address WHERE ca_gmt_offset = -5;
+----
+100
+
+statement ok
+DROP TABLE customer_address;
+
 # TPC-H Q18 plan check (https://github.com/apache/datafusion/issues/27108).
 #
 # The tables follow the TPC-H shape: 10 orders per customer and 4 lineitems

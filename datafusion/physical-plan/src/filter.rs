@@ -42,7 +42,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::tree_node::TreeNodeRecursion;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, internal_datafusion_err, internal_err,
     plan_err, project_schema,
@@ -395,6 +395,7 @@ impl FilterExec {
                     schema,
                     &input_stats.column_statistics,
                 )
+                && !has_decimal_equality(predicate, schema)
             {
                 let input_analysis_ctx = AnalysisContext::try_from_statistics(
                     schema,
@@ -1280,6 +1281,29 @@ fn decimal_columns_have_bounds(
                     && stats.max_value.get_value().is_some()
             })
     })
+}
+
+/// Returns true if `predicate` compares a decimal value with `=`.
+///
+/// Interval analysis estimates an equality from the number of values in the
+/// column's range, and for a decimal that counts every step of its scale.
+/// Decimal columns often hold far fewer distinct values. For example, TPC-DS
+/// stores whole-hour time zone offsets in `ca_gmt_offset DECIMAL(5, 2)`:
+/// `ca_gmt_offset = -5` matches over a third of the rows, but the range
+/// [-10.00, -5.00] holds 501 values. These predicates keep the estimate they
+/// had before interval analysis supported decimals.
+fn has_decimal_equality(predicate: &Arc<dyn PhysicalExpr>, schema: &SchemaRef) -> bool {
+    predicate
+        .exists(|expr| {
+            Ok(expr.downcast_ref::<BinaryExpr>().is_some_and(|binary| {
+                *binary.op() == Operator::Eq
+                    && [binary.left(), binary.right()].iter().any(|side| {
+                        side.data_type(schema)
+                            .is_ok_and(|data_type| data_type.is_decimal())
+                    })
+            }))
+        })
+        .unwrap_or(false)
 }
 
 /// Extracts the NDV from a [`Column`] reference, if the expression is a bare
@@ -2435,6 +2459,75 @@ mod tests {
                     .compute(filter.as_ref(), &StatisticsArgs::new())?;
                 assert_eq!(statistics.num_rows, Precision::Inexact(200), "{predicate}");
             }
+        }
+
+        Ok(())
+    }
+
+    /// Equality on a decimal column keeps the estimate it had before decimals
+    /// were analyzed: 1 / NDV when the distinct count is known, otherwise the
+    /// default selectivity. Ranges on the same column still use interval
+    /// analysis.
+    #[tokio::test]
+    async fn test_filter_statistics_decimal_equality() -> Result<()> {
+        // Table:
+        //      a: Decimal128(5, 2), min=-10.00, max=-5.00
+        let decimal = |v: i128| ScalarValue::Decimal128(Some(v), 5, 2);
+        let schema =
+            Schema::new(vec![Field::new("a", DataType::Decimal128(5, 2), false)]);
+        let a_stats = ColumnStatistics {
+            min_value: Precision::Inexact(decimal(-1000)),
+            max_value: Precision::Inexact(decimal(-500)),
+            ..Default::default()
+        };
+        // a = -5.00
+        let a_eq = binary(
+            col("a", &schema)?,
+            Operator::Eq,
+            lit(decimal(-500)),
+            &schema,
+        )?;
+        // a >= -6.00
+        let a_gt_eq = binary(
+            col("a", &schema)?,
+            Operator::GtEq,
+            lit(decimal(-600)),
+            &schema,
+        )?;
+
+        let cases = [
+            // The default 20%, not 1 of the 501 values in [-10.00, -5.00]
+            (a_stats.clone(), Arc::clone(&a_eq), 200),
+            // 1 of 6 distinct values, rounded up
+            (
+                ColumnStatistics {
+                    distinct_count: Precision::Inexact(6),
+                    ..a_stats.clone()
+                },
+                Arc::clone(&a_eq),
+                167,
+            ),
+            // 101 of the 501 values in the range, rounded up
+            (a_stats, a_gt_eq, 202),
+        ];
+        for (a_stats, predicate, expected_rows) in cases {
+            let input = Arc::new(StatisticsExec::new(
+                Statistics {
+                    num_rows: Precision::Inexact(1000),
+                    total_byte_size: Precision::Absent,
+                    column_statistics: vec![a_stats],
+                },
+                schema.clone(),
+            ));
+            let filter: Arc<dyn ExecutionPlan> =
+                Arc::new(FilterExec::try_new(Arc::clone(&predicate), input)?);
+            let statistics = StatisticsContext::new()
+                .compute(filter.as_ref(), &StatisticsArgs::new())?;
+            assert_eq!(
+                statistics.num_rows,
+                Precision::Inexact(expected_rows),
+                "{predicate}"
+            );
         }
 
         Ok(())
