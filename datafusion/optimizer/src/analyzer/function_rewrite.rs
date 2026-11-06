@@ -9,7 +9,7 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{DFSchema, Result};
 
-use crate::utils::{NamePreserver, merge_into_schema};
+use crate::utils::merge_into_schema;
 use datafusion_expr::LogicalPlan;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::utils::merge_schema;
@@ -52,11 +52,9 @@ impl ApplyFunctionRewrites {
             schema = merge_schema;
         }
 
-        let name_preserver = NamePreserver::new(&plan);
-
+        // a rewritten output keeps its id and is named after its expression:
+        // the analyzer restores the names of the root
         plan.map_expressions(|expr| {
-            let original_name = name_preserver.save(&expr);
-
             // recursively transform the expression, applying the rewrites at each step
             let transformed_expr = expr.transform_up(|expr| {
                 let mut result = Transformed::no(expr);
@@ -68,7 +66,7 @@ impl ApplyFunctionRewrites {
                 Ok(result)
             })?;
 
-            Ok(transformed_expr.update_data(|expr| original_name.restore(expr)))
+            Ok(transformed_expr)
         })
     }
 }

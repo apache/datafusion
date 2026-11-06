@@ -1,0 +1,264 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+##########
+# Regression tests for bugs caused by identifying columns by name
+# (qualifier + name) instead of by their column ids.
+#
+# Each block holds the correct result. Other regression tests of the column
+# ids are in subquery.slt (#26573) and aggregates_topk.slt (#26691).
+##########
+
+##########
+# #26621: GROUP BY CAST(a AS VARCHAR), a with a common subexpression
+# before column ids: Optimizer rule 'optimize_projections' failed ... No field named t.a
+# (the second variant panicked)
+##########
+
+statement ok
+CREATE TABLE t26621 (a INT) AS VALUES (1);
+
+query III
+SELECT a, a + 1, (a + 1) * 2 FROM t26621 GROUP BY CAST(a AS VARCHAR), a;
+----
+1 2 4
+
+# the second variant (before column ids: a panic or the schema error, depending on
+# HashMap order)
+query IIT
+SELECT a, a + 1, COALESCE(min('x'), CAST(a AS VARCHAR)) FROM t26621 GROUP BY CAST(a AS VARCHAR), a;
+----
+1 2 x
+
+##########
+# #25837: LATERAL over a derived table whose alias differs from the table name
+# before column ids: Schema error: No field named l.id
+##########
+
+statement ok
+CREATE TABLE o25837 (k INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE l25837 (id INT, v INT) AS VALUES (1, 10), (2, 20);
+
+query II
+SELECT o25837.k, s.v
+FROM o25837, LATERAL (
+  SELECT l2.v FROM (SELECT * FROM l25837 WHERE l25837.id = o25837.k) AS l2
+) AS s
+ORDER BY o25837.k;
+----
+1 10
+2 20
+
+##########
+# #26692: decorrelation loses correlated columns when a subquery contains
+# two equal subplans
+# before column ids: Q1 wrong rows (one row instead of two), Q2 No field named s.a,
+# Q3 No field named l.a
+##########
+
+statement ok
+CREATE TABLE t26692 (a INT, b INT) AS VALUES (1, 1), (2, 2);
+
+statement ok
+CREATE TABLE t2_26692 (a INT, b INT) AS VALUES (1, 1), (3, 30);
+
+query I
+SELECT t26692.a FROM t26692, t2_26692 AS s
+WHERE EXISTS (
+    SELECT 1 FROM (SELECT * FROM t2_26692 AS s WHERE s.a = t26692.a) x
+    CROSS JOIN t2_26692 AS s
+);
+----
+1
+1
+
+query I
+SELECT t26692.a FROM t26692
+WHERE EXISTS (
+    SELECT 1 FROM (SELECT * FROM t2_26692 AS s WHERE s.a = t26692.a) x
+    CROSS JOIN t2_26692 AS s
+);
+----
+1
+
+query I
+SELECT t26692.a FROM t26692
+WHERE EXISTS (
+    SELECT 1 FROM (SELECT a FROM t2_26692 WHERE t2_26692.a = t26692.a) x
+    CROSS JOIN LATERAL (SELECT b FROM t2_26692 WHERE t2_26692.b = x.a) l
+);
+----
+1
+
+##########
+# #26221: aggregates of x and CAST(x AS ...) share a name
+# before column ids: duplicate unqualified field name "sum(t.x)" (aliased),
+# Projections require unique expression names (unaliased)
+##########
+
+query RR
+SELECT sum(x) AS a, sum(CAST(x AS FLOAT)) AS b FROM (VALUES (1.0), (2.0)) AS t(x);
+----
+3 3
+
+query II
+SELECT count(x) AS a, count(CAST(x AS BIGINT)) AS b FROM (VALUES (1.0), (2.0)) AS t(x);
+----
+2 2
+
+query II
+SELECT count(DISTINCT x) AS a, count(DISTINCT CAST(x AS BIGINT)) AS b FROM (VALUES (1.0), (2.0)) AS t(x);
+----
+2 2
+
+# unaliased form
+query RR
+SELECT sum(x), sum(CAST(x AS FLOAT)) FROM (VALUES (1.0), (2.0)) AS t(x);
+----
+3 3
+
+# window form (no separate issue; before column ids: Windows require unique expression names)
+query IR
+SELECT sum(x) OVER () AS a, sum(CAST(x AS DOUBLE)) OVER () AS b FROM (VALUES (1), (2)) AS t(x);
+----
+3 3
+3 3
+
+##########
+# #3353: approx_distinct(c) and approx_distinct(CAST(c AS VARCHAR)), aliased
+# before column ids: duplicate unqualified field name "approx_distinct(t.c)"
+##########
+
+statement ok
+CREATE TABLE t3353 (c BIGINT) AS SELECT value % 99 FROM generate_series(1, 100);
+
+query II
+SELECT approx_distinct(c) AS count_c, approx_distinct(CAST(c AS VARCHAR)) AS count_c_str FROM t3353;
+----
+99 99
+
+##########
+# #6543: two outputs with the same alias
+# before column ids: Projections require unique expression names
+##########
+
+statement ok
+CREATE TABLE t6543 (ts INT, inc_col INT) AS VALUES (1, 10), (2, 20);
+
+query II
+SELECT ts AS c1, inc_col AS c1 FROM t6543 ORDER BY ts;
+----
+1 10
+2 20
+
+##########
+# #4478: SELECT a, CAST(a AS INT)
+# before column ids: Projections require unique expression names
+##########
+
+statement ok
+CREATE TABLE t4478 (a BIGINT) AS VALUES (1);
+
+query II
+SELECT a, CAST(a AS INT) FROM t4478;
+----
+1 1
+
+##########
+# #13558: SELECT CAST(col AS TEXT) ... ORDER BY col
+# before column ids: Projections require unique expression names
+##########
+
+statement ok
+CREATE TABLE foo13558 AS VALUES (1, 2), (3, 4), (5, 6);
+
+query T
+SELECT CAST(column1 AS TEXT) FROM foo13558 ORDER BY column1;
+----
+1
+3
+5
+
+##########
+# #26462: ORDER BY a source column when a select item is aliased to its name
+# before column ids: Schema contains qualified field name e.email and unqualified field name email which would be ambiguous
+##########
+
+statement ok
+CREATE TABLE employees26462 (id INT, email VARCHAR) AS VALUES (1, 'B@x'), (2, 'a@y');
+
+query T
+SELECT lower(e.email) AS email FROM employees26462 e ORDER BY e.email;
+----
+b@x
+a@y
+
+##########
+# #25447: leaf extraction computes the same get_field twice in one projection
+# before column ids: correct rows, but get_field(t.s, "a") was extracted under
+# two generated names in the bottom projection
+##########
+
+statement ok
+CREATE TABLE t25447 (v INT, s STRUCT<a INT, b INT>) AS VALUES (1, {a: 10, b: 1}), (2, {a: 20, b: 2});
+
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT s['a'] FROM (SELECT s, v FROM t25447 WHERE v > 0) WHERE s['a'] > 0;
+----
+logical_plan
+01)Projection: t25447.s[a]
+02)--Filter: t25447.v > Int32(0) AND t25447.s[a] > Int32(0)
+03)----Projection: get_field(t25447.s, Utf8("a")), t25447.v
+04)------TableScan: t25447 projection=[v, s]
+
+statement ok
+set datafusion.explain.logical_plan_only = false;
+
+query I
+SELECT s['a'] FROM (SELECT s, v FROM t25447 WHERE v > 0) WHERE s['a'] > 0 ORDER BY 1;
+----
+10
+20
+
+##########
+# Clean up
+##########
+
+statement ok
+DROP TABLE t26621;
+
+statement ok
+DROP TABLE o25837;
+
+statement ok
+DROP TABLE l25837;
+
+statement ok
+DROP TABLE t26692;
+
+statement ok
+DROP TABLE t2_26692;
+
+statement ok
+DROP TABLE t3353;
+
+statement ok
+DROP TABLE t6543;
+
+statement ok
+DROP TABLE t4478;
+
+statement ok
+DROP TABLE foo13558;
+
+statement ok
+DROP TABLE employees26462;
+
+statement ok
+DROP TABLE t25447;

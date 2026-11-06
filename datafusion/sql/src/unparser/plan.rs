@@ -163,6 +163,10 @@ struct DerivedInputScope<'a> {
 
 impl Unparser<'_> {
     pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
+        // A reference reads its column by id, and its label can be out of
+        // date in an optimized plan (an expression moved below a
+        // `SubqueryAlias`): emit the qualifier and name of the field it reads
+        let plan = plan.clone().with_relabeled_columns()?.data;
         let mut plan = normalize_union_schema(plan)?;
         if !self.dialect.supports_qualify() {
             plan = rewrite_qualify(plan)?;
@@ -2687,13 +2691,51 @@ impl Unparser<'_> {
                     if alias.is_some() && matches!(plan, LogicalPlan::Projection(_)) {
                         let generator =
                             ColumnIdGenerator::new_after(plan.max_column_id());
+                        // `plan` rebuilds the input of the projection, with
+                        // the same outputs in the same order: a column of the
+                        // projection reads the output at the same index of
+                        // `plan` (its name can differ: it can be named after
+                        // an expression that the alias rewrite requalified)
+                        let old_schema = projection.input.schema();
+                        let new_schema = Arc::clone(plan.schema());
+                        let same_width =
+                            old_schema.fields().len() == new_schema.fields().len();
                         let exprs = projection
                             .expr
                             .iter()
                             .map(|e| {
-                                let expr = Self::strip_column_qualifiers(
-                                    without_column_ids(e.expr.clone())?,
-                                )?;
+                                let expr = if same_width {
+                                    e.expr
+                                        .clone()
+                                        .transform(|x| match x {
+                                            Expr::Column(c) => match c
+                                                .id
+                                                .and_then(|id| {
+                                                    old_schema.index_of_column_id(id)
+                                                })
+                                                .or_else(|| {
+                                                    old_schema.maybe_index_of_column(&c)
+                                                }) {
+                                                Some(i) => {
+                                                    Ok(Transformed::yes(Expr::Column(
+                                                        Column::new_unqualified(
+                                                            new_schema.field(i).name(),
+                                                        )
+                                                        .with_id(new_schema.field_id(i)),
+                                                    )))
+                                                }
+                                                None => Ok(Transformed::no(
+                                                    Expr::Column(c.with_id(None)),
+                                                )),
+                                            },
+                                            x => Ok(Transformed::no(x)),
+                                        })
+                                        .data()?
+                                } else {
+                                    Self::strip_column_qualifiers(without_column_ids(
+                                        e.expr.clone(),
+                                    )?)?
+                                };
                                 Ok(NamedExpr::allocate(expr, plan.schema(), &generator))
                             })
                             .collect::<Result<Vec<_>>>()?;

@@ -212,21 +212,21 @@ query TT
 explain SELECT t1_id, (SELECT sum(t2_int * 1.0) + 1 FROM t2 WHERE t2.t2_id = t1.t1_id) as t2_sum from t1
 ----
 logical_plan
-01)Projection: t1.t1_id, __scalar_sq_1.sum(t2.t2_int * Float64(1)) + Int64(1) AS t2_sum
+01)Projection: t1.t1_id, __scalar_sq_1.sum(t2.t2_int) + Float64(1) AS t2_sum
 02)--Left Join: t1.t1_id = __scalar_sq_1.t2_id
 03)----TableScan: t1 projection=[t1_id]
 04)----SubqueryAlias: __scalar_sq_1
-05)------Projection: sum(t2.t2_int * Float64(1)) + Float64(1) AS sum(t2.t2_int * Float64(1)) + Int64(1), t2.t2_id
-06)--------Aggregate: groupBy=[[t2.t2_id]], aggr=[[sum(CAST(t2.t2_int AS Float64)) AS sum(t2.t2_int * Float64(1))]]
+05)------Projection: sum(t2.t2_int) + Float64(1), t2.t2_id
+06)--------Aggregate: groupBy=[[t2.t2_id]], aggr=[[sum(CAST(t2.t2_int AS Float64))]]
 07)----------TableScan: t2 projection=[t2_id, t2_int]
 physical_plan
-01)ProjectionExec: expr=[t1_id@0 as t1_id, sum(t2.t2_int * Float64(1)) + Int64(1)@1 as t2_sum]
-02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(t2_id@1, t1_id@0)], projection=[t1_id@2, sum(t2.t2_int * Float64(1)) + Int64(1)@0]
+01)ProjectionExec: expr=[t1_id@0 as t1_id, sum(t2.t2_int) + Float64(1)@1 as t2_sum]
+02)--HashJoinExec: mode=CollectLeft, join_type=Right, on=[(t2_id@1, t1_id@0)], projection=[t1_id@2, sum(t2.t2_int) + Float64(1)@0]
 03)----CoalescePartitionsExec
-04)------ProjectionExec: expr=[sum(t2.t2_int * Float64(1))@1 + 1 as sum(t2.t2_int * Float64(1)) + Int64(1), t2_id@0 as t2_id]
-05)--------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int) as sum(t2.t2_int * Float64(1))]
+04)------ProjectionExec: expr=[sum(t2.t2_int)@1 + 1 as sum(t2.t2_int) + Float64(1), t2_id@0 as t2_id]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
 06)----------RepartitionExec: partitioning=Hash([t2_id@0], 4), input_partitions=4
-07)------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int) as sum(t2.t2_int * Float64(1))]
+07)------------AggregateExec: mode=Partial, gby=[t2_id@0 as t2_id], aggr=[sum(t2.t2_int)]
 08)--------------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 09)----------------DataSourceExec: partitions=1, partition_sizes=[2]
 10)----RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
@@ -1817,8 +1817,8 @@ query TT
 explain select a/2, a/2 + 1 from t
 ----
 logical_plan
-01)Projection: __common_expr_1 AS t.a / Int64(2), __common_expr_1 AS t.a / Int64(2) + Int64(1)
-02)--Projection: t.a / Int64(2) AS __common_expr_1
+01)Projection: t.a / Int64(2), t.a / Int64(2) + Int64(1)
+02)--Projection: t.a / Int64(2)
 03)----TableScan: t projection=[a]
 
 statement ok
@@ -1828,8 +1828,8 @@ query TT
 explain select a/2, a/2 + 1 from t
 ----
 logical_plan
-01)Projection: __common_expr_1 AS t.a / Int64(2), __common_expr_1 AS t.a / Int64(2) + Int64(1)
-02)--Projection: t.a / Int64(2) AS __common_expr_1
+01)Projection: t.a / Int64(2), t.a / Int64(2) + Int64(1)
+02)--Projection: t.a / Int64(2)
 03)----TableScan: t projection=[a]
 
 ###
@@ -2353,6 +2353,28 @@ select id from set_cmp_self where age <> all(select age from set_cmp_self);
 statement count 0
 drop table set_cmp_self;
 
+# `= ANY` in a JOIN ON over an aliased table: the decorrelated join filter
+# reads the alias's column below the alias, by id
+# (https://github.com/apache/datafusion/issues/26573)
+statement ok
+create table set_cmp_join_t(a int) as values (1), (2);
+
+statement ok
+create table set_cmp_join_s(b int) as values (1);
+
+query II
+select * from set_cmp_join_t as x join set_cmp_join_t as y
+on x.a = any (select b from set_cmp_join_s) order by x.a, y.a;
+----
+1 1
+1 2
+
+statement count 0
+drop table set_cmp_join_t;
+
+statement count 0
+drop table set_cmp_join_s;
+
 # correlated_recursive_scalar_subquery_with_level_3_exists_subquery_referencing_level1_relation
 query TT
 explain select c_custkey from customer
@@ -2747,16 +2769,16 @@ query TT
 explain SELECT (SELECT max(v) FROM sq_values) + (SELECT max(v) FROM sq_values) AS doubled;
 ----
 logical_plan
-01)Projection: __common_expr_1 + __common_expr_1 AS doubled
-02)--Projection: (<subquery>) AS __common_expr_1
+01)Projection: max(sq_values.v) + max(sq_values.v) AS doubled
+02)--Projection: (<subquery>)
 03)----Subquery:
 04)------Aggregate: groupBy=[[]], aggr=[[max(sq_values.v)]]
 05)--------TableScan: sq_values projection=[v]
 06)----EmptyRelation: rows=1
 physical_plan
 01)ScalarSubqueryExec: subqueries=1
-02)--ProjectionExec: expr=[__common_expr_1@0 + __common_expr_1@0 as doubled]
-03)----ProjectionExec: expr=[scalar_subquery(<pending>) as __common_expr_1]
+02)--ProjectionExec: expr=[max(sq_values.v)@0 + max(sq_values.v)@0 as doubled]
+03)----ProjectionExec: expr=[scalar_subquery(<pending>) as max(sq_values.v)]
 04)------PlaceholderRowExec
 05)--AggregateExec: mode=Single, gby=[], aggr=[max(sq_values.v)]
 06)----DataSourceExec: partitions=1, partition_sizes=[1]
@@ -4034,9 +4056,9 @@ logical_plan
 03)--SubqueryAlias: __correlated_sq_1
 04)----SubqueryAlias: w
 05)------Projection: b.y
-06)--------Filter: row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(1)
-07)----------Projection: b.y, row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
-08)------------WindowAggr: windowExpr=[[row_number() PARTITION BY [b.y] ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS row_number() ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+06)--------Filter: row_number() PARTITION BY [b.y] ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW = UInt64(1)
+07)----------Projection: b.y, row_number() PARTITION BY [b.y] ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+08)------------WindowAggr: windowExpr=[[row_number() PARTITION BY [b.y] ORDER BY [b.id ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
 09)--------------SubqueryAlias: b
 10)----------------TableScan: win_inner projection=[id, y]
 

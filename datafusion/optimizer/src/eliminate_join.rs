@@ -786,8 +786,8 @@ mod tests {
                 .project(vec![col("l.x"), col("mark")])?
                 .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
-        Projection: l.x, mark
+        assert_optimized_plan_equal!(plan, @"
+        Projection: l.x, r.mark AS mark
           LeftMark Join: l.id = r.id
             TableScan: l
             TableScan: r
@@ -892,7 +892,12 @@ mod tests {
                 let LogicalPlan::Aggregate(aggregate) = result.data else {
                     panic!("expected aggregate");
                 };
-                assert_eq!(aggregate.aggr_expr, aggr_expr);
+                let actual = aggregate
+                    .aggr_expr
+                    .iter()
+                    .map(|e| e.expr.clone().without_column_ids())
+                    .collect::<Vec<_>>();
+                assert_eq!(actual, aggr_expr);
                 let LogicalPlan::Join(join) = aggregate.input.as_ref() else {
                     panic!("expected join");
                 };
@@ -928,7 +933,11 @@ mod tests {
             )?)
             .aggregate(Vec::<Expr>::new(), vec![min(col(column))])?
             .build()?;
-            assert_eq!(optimized, expected);
+            // (the plans give their columns different ids)
+            assert_eq!(
+                optimized.display_indent_schema().to_string(),
+                expected.display_indent_schema().to_string()
+            );
         }
         Ok(())
     }

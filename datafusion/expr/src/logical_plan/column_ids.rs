@@ -118,6 +118,7 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::{
     Column, ColumnId, ColumnIdGenerator, DFSchema, DFSchemaRef, JoinType, Result,
+    TableReference,
 };
 
 /// Calls `f` on every column read by the expressions of `plan` (not of its
@@ -199,14 +200,9 @@ impl LogicalPlan {
 pub enum ColumnIdIssueKind {
     /// A reference without an id
     Missing,
-    /// A reference whose id is not in its input, and whose name resolves to a
-    /// field without an id, or to nothing: it resolves by name as without
-    /// an id
+    /// A reference whose id is not in its input: it does not resolve (a
+    /// reference with an id is never resolved by name)
     Stale,
-    /// A reference whose id is not in its input, and whose name resolves to a
-    /// field with a *different* id: it resolves by name to a column that is
-    /// not the one it meant
-    Misresolved,
     /// A reference whose id is found in its input, but whose name resolves to
     /// another field (a name that resolves to nothing is fine)
     Disagree,
@@ -216,10 +212,9 @@ pub enum ColumnIdIssueKind {
 
 impl ColumnIdIssueKind {
     /// All the kinds, in order
-    pub const ALL: [ColumnIdIssueKind; 5] = [
+    pub const ALL: [ColumnIdIssueKind; 4] = [
         Self::Missing,
         Self::Stale,
-        Self::Misresolved,
         Self::Disagree,
         Self::DuplicateDefinition,
     ];
@@ -229,7 +224,6 @@ impl ColumnIdIssueKind {
         match self {
             Self::Missing => "missing",
             Self::Stale => "stale",
-            Self::Misresolved => "misresolved",
             Self::Disagree => "disagree",
             Self::DuplicateDefinition => "duplicate_definition",
         }
@@ -477,6 +471,36 @@ impl LogicalPlan {
         self.renumber(generator, &HashSet::new())
     }
 
+    /// Whether this plan and `other` compute the same columns in the same
+    /// way, up to the ids of the columns they define: two scans of the same
+    /// table, or two plans of the same subquery, are equivalent although
+    /// `==` tells them apart (it compares ids, see [`Column`]).
+    ///
+    /// References to columns that the plans do not define (outer references)
+    /// must have the same ids. Used where "computes the same rows" is meant
+    /// (common subexpressions, merging union branches, subquery equality).
+    ///
+    /// [`Column`]: datafusion_common::Column
+    pub fn is_equivalent_up_to_column_ids(&self, other: &LogicalPlan) -> bool {
+        if self == other {
+            return true;
+        }
+        if self.schema().fields().len() != other.schema().fields().len() {
+            return false;
+        }
+        // both plans renumbered from the same id, in the order in which they
+        // define their columns
+        let after = self.max_column_id().max(other.max_column_id());
+        let canonical = |plan: &LogicalPlan| {
+            plan.clone()
+                .with_fresh_column_ids(&ColumnIdGenerator::new_after(after))
+        };
+        match (canonical(self), canonical(other)) {
+            (Ok(mine), Ok(theirs)) => mine == theirs,
+            _ => false,
+        }
+    }
+
     /// The id that `other` defines in place of each id this plan defines, if
     /// both plans define the same number of columns: for two plans equal up
     /// to their ids (`==` ignores them), the definitions are found in the
@@ -537,16 +561,14 @@ impl LogicalPlan {
         if renames.is_empty() {
             return Ok(Transformed::no(self));
         }
-        let renames = Renames {
-            ids: renames,
-            strip_outer: &HashSet::new(),
-        };
+        let renames = Renames { ids: renames };
         self.transform_up_with_subqueries(|plan| rename_node_column_ids(plan, &renames))
             .map(|transformed| Transformed::yes(transformed.data))
     }
 
-    /// [`Self::with_fresh_column_ids`], where the outer references to the
-    /// ids in `strip_outer` lose their id instead of being renamed
+    /// [`Self::with_fresh_column_ids`], where the outer references of this
+    /// plan (not those of its subqueries, which can refer to this plan) to
+    /// the ids in `strip_outer` lose their id instead of being renamed
     fn renumber(
         self,
         generator: &ColumnIdGenerator,
@@ -556,14 +578,33 @@ impl LogicalPlan {
         if defined.is_empty() {
             return Ok(self);
         }
+        let plan = if strip_outer.is_empty() {
+            self
+        } else {
+            self.transform_up(|plan| {
+                plan.map_expressions(|expr| {
+                    expr.transform(|expr| match expr {
+                        Expr::OuterReferenceColumn(field, col)
+                            if col.id.is_some_and(|id| strip_outer.contains(&id)) =>
+                        {
+                            Ok(Transformed::yes(Expr::OuterReferenceColumn(
+                                field,
+                                col.with_id(None),
+                            )))
+                        }
+                        expr => Ok(Transformed::no(expr)),
+                    })
+                })
+            })?
+            .data
+        };
         let renames = Renames {
             ids: defined
                 .into_iter()
                 .map(|id| (id, generator.next()))
                 .collect(),
-            strip_outer,
         };
-        self.transform_up_with_subqueries(|plan| rename_node_column_ids(plan, &renames))
+        plan.transform_up_with_subqueries(|plan| rename_node_column_ids(plan, &renames))
             .map(|transformed| transformed.data)
     }
 
@@ -886,6 +927,77 @@ fn subquery_mut(expr: &mut Expr) -> Option<&mut Subquery> {
     }
 }
 
+/// Returns `expr` where, if it is a subquery expression, the outer
+/// references of its subquery (nested subqueries included) that have no id
+/// and resolve by qualifier and name in `outer` (the schema of the input of
+/// the node that holds `expr`) get the id of the field they resolve to.
+///
+/// This binds the outer references of a subquery built by name (with
+/// `out_ref_col`) where it is placed in its outer query, as normalizing binds
+/// the other columns of an expression.
+pub(crate) fn bind_outer_references(
+    mut expr: Expr,
+    outer: &DFSchema,
+) -> Result<Transformed<Expr>> {
+    let Some(subquery) = subquery_mut(&mut expr) else {
+        return Ok(Transformed::no(expr));
+    };
+    if !outer.field_ids().iter().any(Option::is_some) {
+        return Ok(Transformed::no(expr));
+    }
+    let bind = |expr: Expr| match expr {
+        Expr::OuterReferenceColumn(field, col) if col.id.is_none() => {
+            match outer.maybe_index_of_column(&col) {
+                Some(i) if outer.field_id(i).is_some() => {
+                    let id = outer.field_id(i);
+                    Ok(Transformed::yes(Expr::OuterReferenceColumn(
+                        field,
+                        col.with_id(id),
+                    )))
+                }
+                _ => Ok(Transformed::no(Expr::OuterReferenceColumn(field, col))),
+            }
+        }
+        expr => Ok(Transformed::no(expr)),
+    };
+    let plan = Arc::unwrap_or_clone(Arc::clone(&subquery.subquery))
+        .transform_up_with_subqueries(|plan| {
+            plan.map_expressions(|expr| expr.transform(bind))
+        })?;
+    let outer_ref_columns = std::mem::take(&mut subquery.outer_ref_columns)
+        .into_iter()
+        .map(|expr| expr.transform(bind))
+        .collect::<Result<Vec<_>>>()?;
+    let transformed = plan.transformed || outer_ref_columns.iter().any(|t| t.transformed);
+    subquery.outer_ref_columns = outer_ref_columns.into_iter().map(|t| t.data).collect();
+    if plan.transformed {
+        subquery.subquery = Arc::new(plan.data);
+    }
+    Ok(Transformed::new_transformed(expr, transformed))
+}
+
+impl Expr {
+    /// Returns this expression where no column reference (outer references
+    /// included, but not the plans of subqueries) has an id.
+    ///
+    /// Equality includes ids (see [`Column`]): this compares an expression
+    /// with one written by name, as tests do. Inside a plan, a column without
+    /// an id does not refer to anything.
+    pub fn without_column_ids(self) -> Expr {
+        self.transform(|expr| match expr {
+            Expr::Column(col) if col.id.is_some() => {
+                Ok(Transformed::yes(Expr::Column(col.with_id(None))))
+            }
+            Expr::OuterReferenceColumn(field, col) if col.id.is_some() => Ok(
+                Transformed::yes(Expr::OuterReferenceColumn(field, col.with_id(None))),
+            ),
+            _ => Ok(Transformed::no(expr)),
+        })
+        .map(|transformed| transformed.data)
+        .expect("the closure never fails")
+    }
+}
+
 /// Returns `expr` where the column references (outer references included)
 /// to the ids in `ids` have no id, so that they resolve by qualifier and name
 pub(crate) fn strip_column_ids(expr: Expr, ids: &HashSet<ColumnId>) -> Result<Expr> {
@@ -917,30 +1029,21 @@ pub(crate) fn strip_column_ids(expr: Expr, ids: &HashSet<ColumnId>) -> Result<Ex
 }
 
 /// The renames of [`LogicalPlan::renumber`]
-struct Renames<'a> {
+struct Renames {
     /// The new id of each id that the plan defines
     ids: HashMap<ColumnId, ColumnId>,
-    /// The ids whose outer references lose their id instead
-    strip_outer: &'a HashSet<ColumnId>,
 }
 
-impl Renames<'_> {
-    /// Renames the id of `col` (an outer reference if `is_outer`), returning
-    /// true if it changed
-    fn rename(&self, col: &mut Column, is_outer: bool) -> bool {
-        let Some(id) = col.id else {
-            return false;
-        };
-        let new_id = if is_outer && self.strip_outer.contains(&id) {
-            None
-        } else {
-            match self.ids.get(&id) {
-                Some(new_id) => Some(*new_id),
-                None => return false,
+impl Renames {
+    /// Renames the id of `col`, returning true if it changed
+    fn rename(&self, col: &mut Column) -> bool {
+        match col.id.and_then(|id| self.ids.get(&id)) {
+            Some(new_id) => {
+                col.id = Some(*new_id);
+                true
             }
-        };
-        col.id = new_id;
-        true
+            None => false,
+        }
     }
 
     /// Renames the column references in `expr`, including the outer
@@ -948,8 +1051,8 @@ impl Renames<'_> {
     fn rename_expr(&self, expr: Expr) -> Result<Transformed<Expr>> {
         expr.transform(|mut expr| {
             let transformed = match &mut expr {
-                Expr::Column(col) => self.rename(col, false),
-                Expr::OuterReferenceColumn(_, col) => self.rename(col, true),
+                Expr::Column(col) => self.rename(col),
+                Expr::OuterReferenceColumn(_, col) => self.rename(col),
                 _ => match subquery_mut(&mut expr) {
                     Some(subquery) => {
                         let mut transformed = false;
@@ -957,7 +1060,7 @@ impl Renames<'_> {
                             if let Expr::Column(col)
                             | Expr::OuterReferenceColumn(_, col) = expr
                             {
-                                transformed |= self.rename(col, true);
+                                transformed |= self.rename(col);
                             }
                         }
                         transformed
@@ -1059,13 +1162,13 @@ fn rename_node_column_ids(
         }) => {
             for expr in outer_ref_columns {
                 if let Expr::Column(col) | Expr::OuterReferenceColumn(_, col) = expr {
-                    transformed |= renames.rename(col, true);
+                    transformed |= renames.rename(col);
                 }
             }
         }
         LogicalPlan::Unnest(unnest) => {
             for (_, list) in &mut unnest.list_type_columns {
-                transformed |= renames.rename(&mut list.output_column, false);
+                transformed |= renames.rename(&mut list.output_column);
             }
         }
         _ => {}
@@ -1146,36 +1249,7 @@ impl Verifier {
         });
 
         let inputs = plan.inputs();
-        let merge_schema = match plan {
-            // the expressions of a MERGE INTO read the columns of its target
-            // and of its source (its input)
-            LogicalPlan::Dml(
-                dml @ DmlStatement {
-                    op: WriteOp::MergeInto(_),
-                    ..
-                },
-            ) => dml.merge_schema().ok(),
-            _ => None,
-        };
-        let scopes: Vec<DFSchemaRef> = if let LogicalPlan::TableScan(scan) = plan {
-            // the filters of a scan read the columns of its source
-            match scan.filters.is_empty() {
-                true => vec![Arc::clone(plan.schema())],
-                false => vec![
-                    scan.source_schema()
-                        .unwrap_or_else(|_| Arc::clone(plan.schema())),
-                ],
-            }
-        } else if let Some(merge_schema) = merge_schema {
-            vec![Arc::new(merge_schema)]
-        } else if inputs.is_empty() {
-            vec![Arc::clone(plan.schema())]
-        } else {
-            inputs
-                .iter()
-                .map(|input| Arc::clone(input.schema()))
-                .collect()
-        };
+        let scopes = expression_scopes(plan);
 
         // the expressions of an extension node that does not support column
         // ids are not checked: its inputs are boundaries
@@ -1216,6 +1290,338 @@ impl Verifier {
             self.check(input, outer_scopes);
         }
     }
+}
+
+/// The schemas in which the column references of the expressions of `plan`
+/// (not its outer references) resolve, searched in order: its inputs', the
+/// source of a scan for its filters, the target and source of a MERGE INTO,
+/// or its own schema for another leaf
+fn expression_scopes(plan: &LogicalPlan) -> Vec<DFSchemaRef> {
+    // the expressions of a MERGE INTO read the columns of its target and of
+    // its source (its input)
+    if let LogicalPlan::Dml(
+        dml @ DmlStatement {
+            op: WriteOp::MergeInto(_),
+            ..
+        },
+    ) = plan
+        && let Ok(merge_schema) = dml.merge_schema()
+    {
+        return vec![Arc::new(merge_schema)];
+    }
+    match plan {
+        // the filters of a scan read the columns of its source
+        LogicalPlan::TableScan(scan) => match scan.filters.is_empty() {
+            true => vec![Arc::clone(plan.schema())],
+            false => vec![
+                scan.source_schema()
+                    .unwrap_or_else(|_| Arc::clone(plan.schema())),
+            ],
+        },
+        _ => {
+            let inputs = plan.inputs();
+            if inputs.is_empty() {
+                vec![Arc::clone(plan.schema())]
+            } else {
+                inputs
+                    .iter()
+                    .map(|input| Arc::clone(input.schema()))
+                    .collect()
+            }
+        }
+    }
+}
+
+/// Labels `col` with the qualifier and name of the field it reads by id, in
+/// the first of `schemas` that has its id. Returns true if the label changed.
+fn relabel_column<'a>(
+    col: &mut Column,
+    schemas: impl IntoIterator<Item = &'a DFSchema>,
+) -> bool {
+    let Some(id) = col.id else {
+        return false;
+    };
+    let Some((qualifier, field)) = schemas.into_iter().find_map(|schema| {
+        schema
+            .index_of_column_id(id)
+            .map(|i| schema.qualified_field(i))
+    }) else {
+        return false;
+    };
+    if col.relation.as_ref() == qualifier && col.name == *field.name() {
+        return false;
+    }
+    col.relation = qualifier.cloned();
+    col.name.clone_from(field.name());
+    true
+}
+
+impl Expr {
+    /// Returns this expression where each column reference with an id that
+    /// one of `schemas` has (searched in order) is labelled with the
+    /// qualifier and name of the field with that id.
+    ///
+    /// A reference reads its column by id, and its label (qualifier and
+    /// name) is only display. This makes the label match the definition, for
+    /// code that reads labels: display, the unparser, and the filters handed
+    /// to a table provider. Outer references and references without an id
+    /// (or whose id `schemas` do not have) are left alone.
+    pub fn with_relabeled_columns(
+        self,
+        schemas: &[&DFSchema],
+    ) -> Result<Transformed<Expr>> {
+        self.transform(|expr| match expr {
+            Expr::Column(mut col) => {
+                let relabeled = relabel_column(&mut col, schemas.iter().copied());
+                Ok(Transformed::new_transformed(Expr::Column(col), relabeled))
+            }
+            _ => Ok(Transformed::no(expr)),
+        })
+    }
+}
+
+impl LogicalPlan {
+    /// Returns this plan where the label (qualifier and name) of every
+    /// column reference with an id, outer references included, is the
+    /// qualifier and name of the field it reads (see
+    /// [`Expr::with_relabeled_columns`]).
+    ///
+    /// Rules move expressions between scopes and rename outputs; references
+    /// keep resolving by id, but their labels can go out of date. The
+    /// optimizer relabels the plan once when it ends, so that plans display
+    /// what they read. An output computed by an expression without an alias
+    /// is named after the expression (`t.a + Int64(1)`), so relabeling can
+    /// rename it: the schemas of the nodes are recomputed (keeping their
+    /// ids), bottom up, and the references above follow.
+    pub fn with_relabeled_columns(self) -> Result<Transformed<LogicalPlan>> {
+        relabel_plan(self, &mut vec![])
+    }
+}
+
+impl LogicalPlan {
+    /// Returns this plan where every column reference without an id (outer
+    /// references included) gets the id of the field it resolves to by
+    /// qualifier and name in the scope of its node, if that field has one.
+    ///
+    /// This binds the references of a plan whose definitions have ids but
+    /// whose references were written by name, such as a plan encoded before
+    /// column ids existed: a reference with an id is only looked up by id.
+    pub fn with_bound_column_references(self) -> Result<Transformed<LogicalPlan>> {
+        bind_plan(self, &mut vec![])
+    }
+}
+
+/// See [`LogicalPlan::with_bound_column_references`]
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+fn bind_plan(
+    plan: LogicalPlan,
+    outer_scopes: &mut Vec<Vec<DFSchemaRef>>,
+) -> Result<Transformed<LogicalPlan>> {
+    plan.map_children(|input| bind_plan(input, outer_scopes))?
+        .transform_data(|plan| {
+            let scopes = expression_scopes(&plan);
+            outer_scopes.push(scopes);
+            let plan = plan.map_subqueries(|subquery| bind_plan(subquery, outer_scopes));
+            let scopes = outer_scopes.pop().unwrap_or_default();
+            plan?.transform_data(|plan| {
+                // only a node with a reference without an id is rebuilt (not
+                // an unnest, whose columns are rebuilt with it)
+                if matches!(plan, LogicalPlan::Unnest(_)) {
+                    return Ok(Transformed::no(plan));
+                }
+                let mut unbound = false;
+                plan.apply_expressions(|expr| {
+                    expr.apply(|expr| {
+                        unbound = matches!(
+                            expr,
+                            Expr::Column(col) | Expr::OuterReferenceColumn(_, col)
+                                if col.id.is_none()
+                        );
+                        Ok(if unbound {
+                            TreeNodeRecursion::Stop
+                        } else {
+                            TreeNodeRecursion::Continue
+                        })
+                    })
+                })?;
+                if !unbound {
+                    return Ok(Transformed::no(plan));
+                }
+                map_expressions_keeping_schema(plan, |expr| {
+                    expr.transform(|expr| match expr {
+                        Expr::Column(mut col) if col.id.is_none() => {
+                            let bound =
+                                bind_by_name(&mut col, scopes.iter().map(|s| s.as_ref()));
+                            Ok(Transformed::new_transformed(Expr::Column(col), bound))
+                        }
+                        Expr::OuterReferenceColumn(field, mut col)
+                            if col.id.is_none() =>
+                        {
+                            let bound = bind_by_name(
+                                &mut col,
+                                outer_scopes.iter().rev().flatten().map(|s| s.as_ref()),
+                            );
+                            Ok(Transformed::new_transformed(
+                                Expr::OuterReferenceColumn(field, col),
+                                bound,
+                            ))
+                        }
+                        expr => Ok(Transformed::no(expr)),
+                    })
+                })
+            })
+        })
+}
+
+/// Gives `col` the id of the field it resolves to by qualifier and name in
+/// the first of `schemas` that has it, if that field has an id. Returns true
+/// if it got one.
+fn bind_by_name<'a>(
+    col: &mut Column,
+    schemas: impl IntoIterator<Item = &'a DFSchema>,
+) -> bool {
+    let id = schemas.into_iter().find_map(|schema| {
+        schema
+            .maybe_index_of_column(col)
+            .map(|i| schema.field_id(i))
+    });
+    match id {
+        Some(Some(id)) => {
+            col.id = Some(id);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// See [`LogicalPlan::with_relabeled_columns`]. `outer_scopes` are the
+/// scopes of the enclosing nodes of a subquery, innermost last.
+#[cfg_attr(feature = "recursive_protection", recursive::recursive)]
+fn relabel_plan(
+    plan: LogicalPlan,
+    outer_scopes: &mut Vec<Vec<DFSchemaRef>>,
+) -> Result<Transformed<LogicalPlan>> {
+    plan.map_children(|input| relabel_plan(input, outer_scopes))?
+        .transform_data(|plan| {
+            let scopes = expression_scopes(&plan);
+            // the subqueries of the expressions are enclosed by this node
+            outer_scopes.push(scopes);
+            let plan =
+                plan.map_subqueries(|subquery| relabel_plan(subquery, outer_scopes));
+            let scopes = outer_scopes.pop().unwrap_or_default();
+            plan?.transform_data(|plan| relabel_node(plan, &scopes, outer_scopes))
+        })
+        .and_then(|plan| {
+            if !plan.transformed {
+                return Ok(plan);
+            }
+            // the names of the outputs may follow the new labels (or the
+            // renamed outputs of the inputs); the ids do not change
+            plan.map_data(|plan| {
+                let ids = plan.schema().field_ids().to_vec();
+                let plan = keep_names_that_would_collide(plan)?;
+                let mut plan = plan.recompute_schema()?;
+                if let Some(schema) = plan.stored_schema_mut()
+                    && schema.fields().len() == ids.len()
+                    && schema.field_ids() != ids.as_slice()
+                {
+                    let old = std::mem::replace(schema, Arc::new(DFSchema::empty()));
+                    *schema = Arc::new(Arc::unwrap_or_clone(old).with_field_ids(ids)?);
+                }
+                Ok(plan)
+            })
+        })
+}
+
+/// A projection whose relabeled outputs would have the same name (two
+/// expressions that read the same column under different labels, `x.a + 1`
+/// and `t.a + 1`) keeps the previous names of those outputs, as an alias:
+/// names are unique in a schema
+fn keep_names_that_would_collide(plan: LogicalPlan) -> Result<LogicalPlan> {
+    let LogicalPlan::Projection(mut projection) = plan else {
+        return Ok(plan);
+    };
+    let names = projection
+        .expr
+        .iter()
+        .map(|entry| entry.expr.qualified_name())
+        .collect::<Vec<_>>();
+    let mut counts: HashMap<&(Option<TableReference>, String), usize> = HashMap::new();
+    for name in &names {
+        *counts.entry(name).or_default() += 1;
+    }
+    if counts.values().all(|count| *count == 1) {
+        return Ok(LogicalPlan::Projection(projection));
+    }
+    let collides = names
+        .iter()
+        .map(|name| counts[name] > 1)
+        .collect::<Vec<_>>();
+    for (((entry, collides), name), (qualifier, field)) in projection
+        .expr
+        .iter_mut()
+        .zip(collides)
+        .zip(&names)
+        .zip(projection.schema.iter())
+    {
+        // a renamed output (a column is named after the field it reads,
+        // which relabeling does not change)
+        let renamed = name.0.as_ref() != qualifier || name.1 != *field.name();
+        if collides && renamed {
+            let expr = std::mem::take(&mut entry.expr);
+            entry.expr = expr.alias_qualified(qualifier.cloned(), field.name());
+        }
+    }
+    Ok(LogicalPlan::Projection(projection))
+}
+
+/// Relabels the column references of the expressions of `plan` (not of its
+/// inputs or subqueries): in `scopes`, or for outer references in
+/// `outer_scopes`, innermost first
+fn relabel_node(
+    mut plan: LogicalPlan,
+    scopes: &[DFSchemaRef],
+    outer_scopes: &[Vec<DFSchemaRef>],
+) -> Result<Transformed<LogicalPlan>> {
+    let outer = || outer_scopes.iter().rev().flatten().map(|s| s.as_ref());
+    let mut transformed = false;
+    // the outer references a subquery lists, stored outside of expressions
+    if let LogicalPlan::Subquery(Subquery {
+        outer_ref_columns, ..
+    }) = &mut plan
+    {
+        for expr in outer_ref_columns {
+            if let Expr::Column(col) | Expr::OuterReferenceColumn(_, col) = expr {
+                transformed |= relabel_column(col, outer());
+            }
+        }
+    }
+    // the expressions of an extension node that does not support column
+    // ids may read its inputs by name
+    if let LogicalPlan::Extension(extension) = &plan
+        && !extension.node.supports_column_ids()
+    {
+        return Ok(Transformed::new_transformed(plan, transformed));
+    }
+    let mut result = map_expressions_keeping_schema(plan, |expr| {
+        expr.transform(|expr| match expr {
+            Expr::Column(mut col) => {
+                let relabeled =
+                    relabel_column(&mut col, scopes.iter().map(|s| s.as_ref()));
+                Ok(Transformed::new_transformed(Expr::Column(col), relabeled))
+            }
+            Expr::OuterReferenceColumn(field, mut col) => {
+                let relabeled = relabel_column(&mut col, outer());
+                Ok(Transformed::new_transformed(
+                    Expr::OuterReferenceColumn(field, col),
+                    relabeled,
+                ))
+            }
+            _ => Ok(Transformed::no(expr)),
+        })
+    })?;
+    result.transformed |= transformed;
+    Ok(result)
 }
 
 /// The column that `plan` defines at index `i` (see
@@ -1304,38 +1710,40 @@ fn is_extension_column_without_id(plan: &LogicalPlan, i: usize) -> bool {
 /// Returns `None` if it is consistent.
 fn classify<'a>(
     col: &Column,
-    schemas: impl Iterator<Item = &'a DFSchema> + Clone,
+    mut schemas: impl Iterator<Item = &'a DFSchema>,
 ) -> Option<ColumnIdIssueKind> {
     let Some(id) = col.id else {
         return Some(ColumnIdIssueKind::Missing);
     };
-    // the id of the field the name resolves to in `schema`, if it resolves
-    let id_by_name = |schema: &DFSchema| {
+    // the ids of the fields the name resolves to in `schema` (several fields
+    // can have the same name if they have ids)
+    let ids_by_name = |schema: &DFSchema| {
         schema
-            .index_of_column_by_name(col.relation.as_ref(), &col.name)
-            .map(|i| schema.field_id(i))
+            .iter()
+            .zip(schema.field_ids())
+            .filter(|((qualifier, field), _)| {
+                field.name() == &col.name
+                    && match (&col.relation, qualifier) {
+                        (Some(r), Some(q)) => r.resolved_eq(q),
+                        (Some(_), None) => false,
+                        (None, _) => true,
+                    }
+            })
+            .map(|(_, id)| *id)
+            .collect::<Vec<_>>()
     };
     // A reference found by id must agree with its name in the schema where
     // it is found: the inputs of a join can both have a field with the same
     // qualified name (a join of two unnamed tables), and each join key
-    // resolves in its own side
-    if let Some(schema) = schemas
-        .clone()
-        .find(|schema| schema.index_of_column_id(id).is_some())
-    {
-        return match id_by_name(schema) {
-            Some(id_by_name) if id_by_name != Some(id) => {
-                Some(ColumnIdIssueKind::Disagree)
-            }
-            _ => None,
-        };
+    // resolves in its own side. The name agrees if it does not resolve, or
+    // if one of the fields it resolves to has the id.
+    if let Some(schema) = schemas.find(|schema| schema.index_of_column_id(id).is_some()) {
+        let ids = ids_by_name(schema);
+        return (!ids.is_empty() && !ids.contains(&Some(id)))
+            .then_some(ColumnIdIssueKind::Disagree);
     }
-    match schemas.into_iter().find_map(id_by_name) {
-        Some(Some(id_by_name)) if id_by_name != id => {
-            Some(ColumnIdIssueKind::Misresolved)
-        }
-        _ => Some(ColumnIdIssueKind::Stale),
-    }
+    // not found by id: it does not resolve (not by name either)
+    Some(ColumnIdIssueKind::Stale)
 }
 
 #[cfg(test)]
@@ -1433,6 +1841,65 @@ mod tests {
     }
 
     #[test]
+    fn relabel_names_references_after_their_fields() -> Result<()> {
+        // `x.a` reads `t.a` by id, below the alias `x`
+        let scan = scan_with_ids("t", [Some(1), Some(2)])?;
+        let input = filter(scan, col_with_id("x", "a", Some(1)))?;
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![
+                NamedExpr::new(col_with_id("x", "a", Some(1)) + lit(1), id(3)),
+                NamedExpr::new(col_with_id("x", "b", Some(2)), id(2)),
+            ],
+            Arc::new(input),
+        )?);
+        let plan =
+            LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(Arc::new(plan), "x")?);
+        // above the alias, the label is right
+        let plan = filter(plan, col_with_id("x", "b", Some(2)))?;
+        let relabeled = plan.clone().with_relabeled_columns()?;
+        assert!(relabeled.transformed);
+        let relabeled = relabeled.data;
+        // the computed output is named after the new label
+        assert_eq!(
+            relabeled.display_indent().to_string(),
+            "Filter: x.b = Int32(1)\
+            \n  SubqueryAlias: x\
+            \n    Projection: t.a + Int32(1), t.b\
+            \n      Filter: t.a = Int32(1)\
+            \n        TableScan: t"
+        );
+        assert_eq!(output_ids(&relabeled), output_ids(&plan));
+        assert_eq!(kinds(&relabeled), vec![]);
+        // relabeling again changes nothing
+        assert!(!relabeled.with_relabeled_columns()?.transformed);
+        Ok(())
+    }
+
+    #[test]
+    fn relabel_keeps_names_that_would_collide() -> Result<()> {
+        let scan = scan_with_ids("t", [Some(1), Some(2)])?;
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![
+                NamedExpr::new(col_with_id("x", "a", Some(1)) + lit(1), id(3)),
+                NamedExpr::new(col_with_id("t", "a", Some(1)) + lit(1), id(4)),
+            ],
+            Arc::new(scan),
+        )?);
+        let relabeled = plan.clone().with_relabeled_columns()?.data;
+        assert_eq!(
+            relabeled.display_indent().to_string(),
+            "Projection: t.a + Int32(1) AS x.a + Int32(1), t.a + Int32(1)\
+            \n  TableScan: t"
+        );
+        assert_eq!(output_ids(&relabeled), output_ids(&plan));
+        assert_eq!(
+            relabeled.schema().field_names(),
+            plan.schema().field_names()
+        );
+        Ok(())
+    }
+
+    #[test]
     fn missing() -> Result<()> {
         let scan = scan_with_ids("t", [Some(1), Some(2)])?;
         let plan = filter(scan, col("t.a"))?;
@@ -1456,16 +1923,17 @@ mod tests {
     }
 
     #[test]
-    fn misresolved() -> Result<()> {
-        // the name resolves to a field with another id
+    fn stale_whatever_the_name() -> Result<()> {
+        // the name resolves to a field with another id: a reference with an
+        // id is not resolved by name
         let scan = scan_with_ids("t", [Some(1), Some(2)])?;
         let plan = filter(scan, col_with_id("t", "a", Some(7)))?;
         let issues = plan.column_id_issues();
         assert_eq!(issues.len(), 1);
-        assert_eq!(issues[0].kind, ColumnIdIssueKind::Misresolved);
+        assert_eq!(issues[0].kind, ColumnIdIssueKind::Stale);
         assert_eq!(
             issues[0].to_string(),
-            "misresolved: t.a#7 in Filter: t.a = Int32(1)"
+            "stale: t.a#7 in Filter: t.a = Int32(1)"
         );
         Ok(())
     }
@@ -1540,7 +2008,7 @@ mod tests {
         let plan = LogicalPlanBuilder::from(plan)
             .filter(exists(Arc::new(subquery_plan(9)?)))?
             .build()?;
-        assert_eq!(kinds(&plan), vec![ColumnIdIssueKind::Misresolved]);
+        assert_eq!(kinds(&plan), vec![ColumnIdIssueKind::Stale]);
         Ok(())
     }
 
@@ -1628,15 +2096,16 @@ mod tests {
         // an alias requalifies and keeps the ids
         let plan = LogicalPlanBuilder::from(t()?).alias("u")?.build()?;
         assert_eq!(output_ids(&plan), ids(&[Some(1), Some(2)]));
-        // when it has to rename duplicate names, the renamed columns are
-        // defined by the projection it adds, with new ids from the builder
+        // when it has to rename duplicate names, the projection it adds
+        // passes the renamed columns through under their new names, with
+        // their ids
         let plan = LogicalPlanBuilder::from(t()?)
             .cross_join(s()?)?
             .alias("u")?
             .build()?;
         assert_eq!(
             output_ids(&plan),
-            ids(&[Some(1), Some(2), Some(5), Some(6)])
+            ids(&[Some(1), Some(2), Some(3), Some(4)])
         );
         assert_eq!(kinds(&plan), vec![]);
 
@@ -1915,6 +2384,28 @@ mod tests {
             plan.with_new_exprs(vec![], plan.inputs().into_iter().cloned().collect())?;
         assert_eq!(output_ids(&rebuilt), output_ids(&plan));
         assert_eq!(output_ids(&rebuilt.recompute_schema()?), output_ids(&plan));
+
+        // the query owns the names of its outputs: a static term with other
+        // names does not rename them
+        let names = plan.schema().field_names();
+        let inputs = plan.inputs();
+        let renamed_static_term = LogicalPlanBuilder::from(inputs[0].clone())
+            .with_column_id_generator(Some(Arc::clone(&generator)))
+            .project(vec![col("a").alias("x"), col("b").alias("y")])?
+            .build()?;
+        let rebuilt = plan.with_new_exprs(
+            vec![],
+            vec![renamed_static_term.clone(), inputs[1].clone()],
+        )?;
+        assert_eq!(rebuilt.schema().field_names(), names);
+        assert_eq!(output_ids(&rebuilt), output_ids(&plan));
+        let LogicalPlan::RecursiveQuery(mut query) = plan.clone() else {
+            unreachable!()
+        };
+        query.static_term = Arc::new(renamed_static_term);
+        let recomputed = LogicalPlan::RecursiveQuery(query).recompute_schema()?;
+        assert_eq!(recomputed.schema().field_names(), names);
+        assert_eq!(output_ids(&recomputed), output_ids(&plan));
 
         // a recursive term that repeats the static term is renumbered
         let static_term = scan_from("t", &generator)?;
@@ -2422,8 +2913,8 @@ mod tests {
     }
 
     #[test]
-    fn subquery_built_from_the_outer_plan_strips_ambiguous_outer_references() -> Result<()>
-    {
+    fn subquery_built_from_the_outer_plan_binds_ambiguous_outer_references_by_name()
+    -> Result<()> {
         let generator = Arc::new(ColumnIdGenerator::new());
         let scan = LogicalPlanBuilder::scan_with_column_id_generator(
             "t",
@@ -2455,7 +2946,12 @@ mod tests {
             })?;
             Ok(TreeNodeRecursion::Continue)
         })?;
-        assert_eq!(refs, vec![None]);
+        // the subquery was renumbered, and the outer reference, which could
+        // not tell the outer column from the subquery's, was bound again by
+        // name to the outer column
+        let outer_a = plan.inputs()[0].schema().field_id(0);
+        assert_eq!(outer_a, Some(id(1)));
+        assert_eq!(refs, vec![outer_a]);
         Ok(())
     }
 

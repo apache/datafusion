@@ -59,7 +59,9 @@ use datafusion_common::HashMap as DFHashMap;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeCategories;
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     ColumnIdGenerator, DFSchema, DFSchemaRef, ScalarValue, Statistics, exec_err,
     internal_datafusion_err, internal_err, not_impl_err, plan_err,
@@ -806,10 +808,21 @@ impl DefaultPhysicalPlanner {
                 } = scan;
 
                 if let Ok(source) = source_as_provider(source) {
-                    // Remove all qualifiers from the scan as the provider
-                    // doesn't know (nor should care) how the relation was
-                    // referred to in the query
-                    let filters = unnormalize_cols(filters.iter().cloned());
+                    // Name each column after the column of the source it
+                    // reads (by id), then remove all qualifiers from the scan
+                    // as the provider doesn't know (nor should care) how the
+                    // relation was referred to in the query
+                    let source_schema = scan.source_schema()?;
+                    let filters = filters
+                        .iter()
+                        .map(|filter| {
+                            filter
+                                .clone()
+                                .with_relabeled_columns(&[source_schema.as_ref()])
+                                .data()
+                        })
+                        .collect::<Result<Vec<_>>>()?;
+                    let filters = unnormalize_cols(filters);
                     let filters_vec = filters.into_iter().collect::<Vec<_>>();
                     let stats_requests =
                         statistics_requests.iter().cloned().collect::<Vec<_>>();
@@ -1660,19 +1673,21 @@ impl DefaultPhysicalPlanner {
                         }
 
                         // Extract columns from filter expression and saved in a HashSet
-                        let cols = expr.column_refs();
+                        // (every column: two columns with the same name can
+                        // be different columns)
+                        let mut cols = vec![];
+                        expr.apply(|e| {
+                            if let Expr::Column(col) = e {
+                                cols.push(col);
+                            }
+                            Ok(TreeNodeRecursion::Continue)
+                        })?;
 
                         // Collect left & right field indices, the field indices are sorted in ascending order
-                        let left_field_indices = cols
-                            .iter()
-                            .filter_map(|c| left_df_schema.index_of_column(c).ok())
-                            .sorted()
-                            .collect::<Vec<_>>();
-                        let right_field_indices = cols
-                            .iter()
-                            .filter_map(|c| right_df_schema.index_of_column(c).ok())
-                            .sorted()
-                            .collect::<Vec<_>>();
+                        let left_field_indices =
+                            join_filter_side_indices(&cols, left_df_schema);
+                        let right_field_indices =
+                            join_filter_side_indices(&cols, right_df_schema);
 
                         // Collect DFFields and Fields required for intermediate schemas
                         let (filter_df_fields, filter_fields): (Vec<_>, Vec<_>) =
@@ -1708,10 +1723,22 @@ impl DefaultPhysicalPlanner {
 
                         // Construct intermediate schemas used for filtering data and
                         // convert logical expression to physical according to filter schema
+                        // with the ids of the fields: the filter's columns
+                        // resolve by id, as in the join's inputs
+                        let filter_df_ids = left_field_indices
+                            .iter()
+                            .map(|i| left_df_schema.field_id(*i))
+                            .chain(
+                                right_field_indices
+                                    .iter()
+                                    .map(|i| right_df_schema.field_id(*i)),
+                            )
+                            .collect();
                         let filter_df_schema = DFSchema::new_with_metadata(
                             filter_df_fields,
                             metadata.clone(),
-                        )?;
+                        )?
+                        .with_field_ids(filter_df_ids)?;
                         let filter_schema =
                             Schema::new_with_metadata(filter_fields, metadata);
 
@@ -2049,7 +2076,16 @@ impl DefaultPhysicalPlanner {
             }
 
             // N Children
-            LogicalPlan::Union(_) => UnionExec::try_new(children.vec())?,
+            LogicalPlan::Union(union) => {
+                // a union owns the names of its outputs, and the physical
+                // union takes them from its first input: rename it if a
+                // rewrite renamed its outputs
+                let mut children = children.vec();
+                if let Some(first) = children.first_mut() {
+                    *first = with_output_names(Arc::clone(first), &union.schema)?;
+                }
+                UnionExec::try_new(children)?
+            }
             LogicalPlan::Extension(Extension { node }) => {
                 let mut maybe_plan = None;
                 let children = children.vec();
@@ -2365,7 +2401,7 @@ impl DefaultPhysicalPlanner {
                         execution_props,
                         planning_ctx,
                     ),
-                    physical_name(expr),
+                    physical_output_name(expr, input_dfschema),
                 ))?])),
             }
         } else if group_expr.is_empty() {
@@ -2384,7 +2420,7 @@ impl DefaultPhysicalPlanner {
                                 execution_props,
                                 planning_ctx,
                             ),
-                            physical_name(e),
+                            physical_output_name(e, input_dfschema),
                         ))
                     })
                     .collect::<Result<Vec<_>>>()?,
@@ -2579,7 +2615,7 @@ fn get_null_physical_expr_pair(
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
     let physical_expr =
         create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?;
-    let physical_name = physical_name(&expr.clone())?;
+    let physical_name = physical_output_name(expr, input_dfschema)?;
 
     let data_type = physical_expr.data_type(input_schema)?;
     let null_value: ScalarValue = (&data_type).try_into()?;
@@ -2644,6 +2680,49 @@ fn qualify_join_schema_sides(
     join_schema.with_field_specific_qualified_schema(qualifiers)
 }
 
+/// `plan`, with its outputs renamed by a projection to the names of the
+/// fields of `schema` if they differ (by position)
+fn with_output_names(
+    plan: Arc<dyn ExecutionPlan>,
+    schema: &DFSchema,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let physical = plan.schema();
+    let same = physical.fields().len() == schema.fields().len()
+        && physical
+            .fields()
+            .iter()
+            .zip(schema.fields())
+            .all(|(p, l)| p.name() == l.name());
+    if same {
+        return Ok(plan);
+    }
+    let exprs = physical
+        .fields()
+        .iter()
+        .zip(schema.fields())
+        .enumerate()
+        .map(|(i, (field, logical))| ProjectionExpr {
+            expr: Arc::new(datafusion_physical_expr::expressions::Column::new(
+                field.name(),
+                i,
+            )) as Arc<dyn PhysicalExpr>,
+            alias: logical.name().clone(),
+        })
+        .collect::<Vec<_>>();
+    Ok(Arc::new(ProjectionExec::try_new(exprs, plan)?))
+}
+
+/// The sorted indexes in `side` of the columns of a join filter (`cols`)
+/// that read it: by id (a column with an id is found in its own side only),
+/// or else by qualifier and name
+fn join_filter_side_indices(cols: &[&Column], side: &DFSchema) -> Vec<usize> {
+    cols.iter()
+        .filter_map(|c| side.index_of_column(c).ok())
+        .sorted()
+        .dedup()
+        .collect()
+}
+
 fn get_physical_expr_pair(
     expr: &Expr,
     input_dfschema: &DFSchema,
@@ -2652,8 +2731,21 @@ fn get_physical_expr_pair(
 ) -> Result<(Arc<dyn PhysicalExpr>, String)> {
     let physical_expr =
         create_physical_expr(expr, input_dfschema, execution_props, planning_ctx)?;
-    let physical_name = physical_name(expr)?;
+    let physical_name = physical_output_name(expr, input_dfschema)?;
     Ok((physical_expr, physical_name))
+}
+
+/// The name of the physical output that computes `expr` over `input`: a
+/// column read by id is named after the field it reads (its label is only
+/// display), any other expression as [`physical_name`] names it
+fn physical_output_name(expr: &Expr, input: &DFSchema) -> Result<String> {
+    if let Expr::Column(col) = expr
+        && let Some((_, field)) =
+            datafusion_common::ExprSchema::qualified_field_from_column_id(input, col)
+    {
+        return Ok(field.name().clone());
+    }
+    physical_name(expr)
 }
 
 /// How a DELETE or an UPDATE reaches its target table.

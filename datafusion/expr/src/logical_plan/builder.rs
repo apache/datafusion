@@ -1966,7 +1966,6 @@ impl LogicalPlanBuilder {
     ) -> Result<Self> {
         let window_expr = self.blend_subqueries(window_expr)?;
         let window_expr = normalize_cols(window_expr, &self.plan)?;
-        validate_unique_names("Windows", &window_expr)?;
         let generator = self.generator();
         let window_expr = window_expr
             .into_iter()
@@ -2636,6 +2635,14 @@ pub fn add_group_by_exprs_from_dependencies(
 }
 
 /// Errors if one or more expressions have equal names.
+///
+/// The outputs of a node no longer need unique names: each has a column id,
+/// and outputs with the same name are told apart by their ids (a lookup by
+/// that name is ambiguous).
+#[deprecated(
+    since = "56.0.0",
+    note = "outputs with the same name are allowed: they have different column ids"
+)]
 pub fn validate_unique_names<'a>(
     node_name: &str,
     expressions: impl IntoIterator<Item = &'a Expr>,
@@ -2794,8 +2801,6 @@ fn validated_projection_exprs(
             }
         }
     }
-
-    validate_unique_names("Projections", projected_expr.iter())?;
 
     Ok(projected_expr)
 }
@@ -3132,7 +3137,7 @@ mod tests {
     use crate::test::function_stub::sum;
     use datafusion_common::{
         Constraint, DataFusionError, Dependency, FunctionalDependence,
-        FunctionalDependencies, RecursionUnnestOption, SchemaError,
+        FunctionalDependencies, RecursionUnnestOption,
     };
     use insta::assert_snapshot;
 
@@ -3365,27 +3370,12 @@ mod tests {
             // project id and first_name by column index
             Some(vec![0, 1]),
         )?
-        // two columns with the same name => error
-        .project(vec![col("id"), col("first_name").alias("id")]);
-
-        match plan {
-            Err(DataFusionError::SchemaError(err, _)) => {
-                if let SchemaError::AmbiguousReference { field } = *err {
-                    let Column { relation, name, .. } = *field;
-                    let Some(TableReference::Bare { table }) = relation else {
-                        return plan_err!(
-                            "wrong relation: {relation:?}, expected table name"
-                        );
-                    };
-                    assert_eq!(*"employee_csv", *table);
-                    assert_eq!("id", &name);
-                    Ok(())
-                } else {
-                    plan_err!("Plan should have returned an DataFusionError::SchemaError")
-                }
-            }
-            _ => plan_err!("Plan should have returned an DataFusionError::SchemaError"),
-        }
+        // two columns with the same name: allowed, they are different columns
+        .project(vec![col("id"), col("first_name").alias("id")])?
+        .build()?;
+        let ids = plan.schema().field_ids();
+        assert!(ids[0].is_some() && ids[1].is_some() && ids[0] != ids[1]);
+        Ok(())
     }
 
     fn employee_schema() -> Schema {
@@ -3681,16 +3671,31 @@ mod tests {
         let LogicalPlan::AsOfJoin(join) = plan else {
             panic!("expected ASOF join")
         };
+        let on = join
+            .on
+            .iter()
+            .map(|(l, r)| {
+                (
+                    l.clone().without_column_ids(),
+                    r.clone().without_column_ids(),
+                )
+            })
+            .collect::<Vec<_>>();
         assert_eq!(
-            join.on,
+            on,
             vec![
                 (col("l.column1"), col("r.column1")),
                 (col("l.column2"), col("r.column2")),
             ]
         );
+        let condition = join.match_condition.as_ref();
         assert_eq!(
-            join.match_condition.as_ref(),
-            &AsOfMatch::new(col("l.column2"), Operator::GtEq, col("r.column2"))
+            AsOfMatch::new(
+                condition.left.clone().without_column_ids(),
+                condition.op,
+                condition.right.clone().without_column_ids()
+            ),
+            AsOfMatch::new(col("l.column2"), Operator::GtEq, col("r.column2"))
         );
 
         let invalid_on = LogicalPlanBuilder::from(left.clone())

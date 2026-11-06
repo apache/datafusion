@@ -22,7 +22,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 
 use datafusion_common::tree_node::TreeNodeRecursion;
-use datafusion_common::{DFSchemaRef, Result};
+use datafusion_common::{DFSchema, DFSchemaRef, Result, plan_err};
 
 use crate::LogicalPlan;
 
@@ -87,7 +87,9 @@ impl MaterializedCte {
     /// Create a new node.
     ///
     /// Returns an error if a scan of this CTE in `continuation` (also in a
-    /// subquery expression) does not have the column names and types of `cte`.
+    /// subquery expression) does not have the column types of `cte`, by
+    /// position. Each scan owns the names (and ids) of its columns: a rule
+    /// may rename the outputs of `cte`.
     pub fn try_new(
         id: MaterializedCteId,
         name: impl Into<String>,
@@ -96,13 +98,22 @@ impl MaterializedCte {
     ) -> Result<Self> {
         let name = name.into();
         for scan in MaterializedCteScan::find_in(&continuation, id)? {
-            scan.schema
-                .has_equivalent_names_and_types(cte.schema())
-                .map_err(|e| {
-                    e.context(format!(
-                        "A scan of the materialized CTE {name} does not have the schema of the CTE"
-                    ))
-                })?;
+            let (scan_fields, cte_fields) = (scan.schema.fields(), cte.schema().fields());
+            let same_types = scan_fields.len() == cte_fields.len()
+                && scan_fields.iter().zip(cte_fields).all(|(f1, f2)| {
+                    DFSchema::datatype_is_semantically_equal(
+                        f1.data_type(),
+                        f2.data_type(),
+                    )
+                });
+            if !same_types {
+                return plan_err!(
+                    "A scan of the materialized CTE {name} does not have the schema of the CTE: \
+                    expected the types of {:?}, got {:?}",
+                    cte.schema(),
+                    scan.schema
+                );
+            }
         }
         Ok(Self {
             id,
@@ -177,8 +188,9 @@ impl PartialOrd for MaterializedCte {
 
 /// Reads the buffered output of the [`MaterializedCte`] with the same `id`.
 ///
-/// This is a leaf. Its schema is the schema of the CTE body and is fixed when
-/// the scan is created.
+/// This is a leaf. Its schema is the schema of the CTE body when the scan is
+/// created, and is fixed: the scan owns the names and ids of its columns,
+/// and reads the columns of the CTE by position.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct MaterializedCteScan {
     /// The id of the [`MaterializedCte`] that this scan reads
@@ -265,7 +277,6 @@ mod tests {
     use crate::logical_plan::builder::LogicalPlanBuilder;
     use crate::{EmptyRelation, exists};
     use arrow::datatypes::{DataType, Field, Schema};
-    use datafusion_common::DFSchema;
 
     fn empty(produce_one_row: bool) -> Arc<LogicalPlan> {
         Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -351,6 +362,18 @@ mod tests {
             ),
             "{err}"
         );
+
+        // A scan owns the names of its columns: only the types must match
+        let renamed = Schema::new(vec![Field::new("b", DataType::Int32, true)]);
+        let renamed = Arc::new(DFSchema::try_from_qualified_schema("d", &renamed)?);
+        MaterializedCte::try_new(
+            id,
+            "c",
+            body(DataType::Int32),
+            Arc::new(LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+                MaterializedCteScan::new(id, "c", renamed),
+            ))),
+        )?;
 
         // A scan of another CTE is not checked.
         MaterializedCte::try_new(

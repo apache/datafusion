@@ -228,7 +228,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             DFStatement::Reset(statement) => self.reset_statement_to_plan(statement)?,
         };
-        check_plan(&plan)?;
         Ok(plan)
     }
 
@@ -249,7 +248,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         self.init_planner_context(planner_context);
         let plan =
             self.sql_statement_to_plan_with_context_impl(statement, planner_context)?;
-        check_plan(&plan)?;
         Ok(plan)
     }
 
@@ -2988,21 +2986,4 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
         }
     }
-}
-
-fn check_plan(plan: &LogicalPlan) -> Result<()> {
-    use datafusion_common::plan_err;
-    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
-    plan.apply(|node| {
-        for field in node.schema().fields() {
-            if field.name().starts_with("__common_expr") {
-                return plan_err!(
-                    "{} is a reserved DataFusion column name, please use another name",
-                    field.name()
-                );
-            }
-        }
-        Ok(TreeNodeRecursion::Continue)
-    })
-    .map(|_| ())
 }

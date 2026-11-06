@@ -9,7 +9,7 @@ use crate::expr_rewriter::normalize_col;
 use crate::{Cast, Expr, LogicalPlan, TryCast, expr::Sort};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, DFSchema, Result};
 
 /// Rewrite sort on aggregate expressions to sort on the column of aggregate output
 /// For example, `max(x)` is written to `col("max(x)")`
@@ -23,12 +23,16 @@ pub fn rewrite_sort_cols_by_aggs(
     } else {
         vec![]
     };
+    // the outputs of `plan`, by position in `proj_exprs` (a projection's
+    // expressions are its outputs)
+    let outputs = (proj_exprs.len() == plan.schema().fields().len())
+        .then(|| plan.schema().as_ref());
     sorts
         .into_iter()
         .map(|e| {
             let sort = e.into();
             Ok(Sort::new(
-                rewrite_sort_col_by_aggs(sort.expr, &plan_inputs, &proj_exprs)?,
+                rewrite_sort_col_by_aggs(sort.expr, &plan_inputs, &proj_exprs, outputs)?,
                 sort.asc,
                 sort.nulls_first,
             ))
@@ -40,11 +44,12 @@ fn rewrite_sort_col_by_aggs(
     expr: Expr,
     plan_inputs: &[&LogicalPlan],
     proj_exprs: &[Expr],
+    outputs: Option<&DFSchema>,
 ) -> Result<Expr> {
     // Joins, and Unions are not yet handled (should have a projection
     // on top of them)
     if plan_inputs.len() == 1 {
-        rewrite_in_terms_of_projection(expr, proj_exprs, plan_inputs[0])
+        rewrite_in_terms_of_projection(expr, proj_exprs, plan_inputs[0], outputs)
     } else {
         Ok(expr)
     }
@@ -65,16 +70,27 @@ fn rewrite_in_terms_of_projection(
     expr: Expr,
     proj_exprs: &[Expr],
     input: &LogicalPlan,
+    outputs: Option<&DFSchema>,
 ) -> Result<Expr> {
+    // the column of the output `i` (the expression `found`): with the id of
+    // the output if the outputs are known (several can have its name)
+    let output_column = |i: usize, found: &Expr| match outputs {
+        Some(schema) => {
+            Column::from(schema.qualified_field(i)).with_id(schema.field_id(i))
+        }
+        None => {
+            let (qualifier, field_name) = found.qualified_name();
+            Column::new(qualifier, field_name)
+        }
+    };
     // assumption is that each item in exprs, such as "b + c" is
     // available as an output column named "b + c"
     expr.transform(|expr| {
         // search for unnormalized names first such as "c1" (such as aliases).
         // Also look inside aliases so e.g. `count(Int64(1))` matches
         // `count(Int64(1)) AS count(*)`.
-        if let Some(found) = proj_exprs.iter().find(|a| expr_match(&expr, a)) {
-            let (qualifier, field_name) = found.qualified_name();
-            let col = Expr::Column(Column::new(qualifier, field_name));
+        if let Some(i) = proj_exprs.iter().position(|a| expr_match(&expr, a)) {
+            let col = Expr::Column(output_column(i, &proj_exprs[i]));
             return Ok(Transformed::yes(col));
         }
 
@@ -92,7 +108,11 @@ fn rewrite_in_terms_of_projection(
         // for a column with the same "MIN(C2)", so translate there
         let name = normalized_expr.schema_name().to_string();
 
-        let search_col = Expr::Column(Column::new_unqualified(name));
+        // bound to the output of the input it reads (by name: this is where
+        // the sort expression is bound), as the projection's expressions are
+        let search_col =
+            normalize_col(Expr::Column(Column::new_unqualified(&name)), input)
+                .unwrap_or_else(|_| Expr::Column(Column::new_unqualified(name)));
 
         // Search only top-level projection expressions for a match.
         // We intentionally avoid a recursive search (e.g. `apply`) to
@@ -100,11 +120,10 @@ fn rewrite_in_terms_of_projection(
         // `min(c2) + max(c3)` when the ORDER BY is just `min(c2)`.
         let found = proj_exprs
             .iter()
-            .find(|proj_expr| expr_match(&search_col, proj_expr));
+            .position(|proj_expr| expr_match(&search_col, proj_expr));
 
-        if let Some(found) = found {
-            let (qualifier, field_name) = found.qualified_name();
-            let col = Expr::Column(Column::new(qualifier, field_name));
+        if let Some(i) = found {
+            let col = Expr::Column(output_column(i, &proj_exprs[i]));
             return Ok(Transformed::yes(match normalized_expr {
                 Expr::Cast(Cast { expr: _, field }) => Expr::Cast(Cast {
                     expr: Box::new(col),
@@ -493,7 +512,10 @@ mod test {
                 rewrite_sort_cols_by_aggs(vec![input.clone()], input_plan).unwrap();
 
             assert_eq!(exprs.len(), 1);
+            // (compared with the expected sort, written by name)
             let rewritten = exprs.pop().unwrap();
+            let rewritten =
+                rewritten.with_expr(rewritten.expr.clone().without_column_ids());
 
             assert_eq!(
                 rewritten, expected,

@@ -194,7 +194,14 @@ impl RequiredIndices {
     pub fn get_required_exprs(&self, input_schema: &DFSchemaRef) -> Vec<Expr> {
         self.indices
             .iter()
-            .map(|&idx| Expr::from(Column::from(input_schema.qualified_field(idx))))
+            // with the ids of the fields: a rewrite of the input may rename
+            // them
+            .map(|&idx| {
+                Expr::from(
+                    Column::from(input_schema.qualified_field(idx))
+                        .with_id(input_schema.field_id(idx)),
+                )
+            })
             .collect()
     }
 

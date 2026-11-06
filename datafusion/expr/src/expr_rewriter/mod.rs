@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
+use crate::logical_plan::column_ids::bind_outer_references;
 use crate::{Expr, ExprSchemable, LogicalPlan, NamedExpr};
 
 use datafusion_common::TableReference;
@@ -90,6 +91,22 @@ impl<'a> ColumnNormalizer<'a> {
                     .any(|schema| schema.field_ids().iter().any(Option::is_some));
                 (fallback_schemas, has_ids)
             });
+        // an unqualified column with an id that one of the schemas has is
+        // already bound: it gets the qualifier of that field (two fields can
+        // have its name)
+        if column.relation.is_none()
+            && let Some(id) = column.id
+            && let Some(schema) = std::iter::once(plan.schema().as_ref())
+                .chain(fallback_schemas.iter().copied())
+                .find(|schema| schema.index_of_column_id(id).is_some())
+        {
+            let i = schema.index_of_column_id(id).expect("found above");
+            let (qualifier, field) = schema.qualified_field(i);
+            let mut column = column;
+            column.relation = qualifier.cloned();
+            column.name.clone_from(field.name());
+            return Ok(column);
+        }
         if column.relation.is_some() {
             // only binds a column that has no id yet, if there are ids
             if column.id.is_some() || !*has_ids {
@@ -112,11 +129,14 @@ impl<'a> ColumnNormalizer<'a> {
     }
 
     pub(crate) fn normalize(&mut self, expr: Expr) -> Result<Expr> {
+        let plan = self.plan;
         expr.transform(|expr| match expr {
             Expr::Column(column) => self
                 .normalize_column(column)
                 .map(|column| Transformed::yes(Expr::Column(column))),
-            _ => Ok(Transformed::no(expr)),
+            // the outer references of a subquery read the input of the node
+            // the expression is in
+            expr => bind_outer_references(expr, plan.schema()),
         })
         .data()
     }
@@ -556,6 +576,21 @@ mod test {
         assert_eq!(error, expected);
     }
 
+    /// `exprs` without column ids, to compare with expressions written by name
+    fn strip(exprs: Vec<Expr>) -> Vec<Expr> {
+        exprs.into_iter().map(Expr::without_column_ids).collect()
+    }
+
+    fn strip_sorts(sorts: Vec<Sort>) -> Vec<Sort> {
+        sorts
+            .into_iter()
+            .map(|s| {
+                let expr = s.expr.clone().without_column_ids();
+                s.with_expr(expr)
+            })
+            .collect()
+    }
+
     #[test]
     fn normalize_batch_schema_precedence() -> Result<()> {
         let schema = Schema::new(vec![
@@ -567,11 +602,17 @@ mod test {
             .build()?;
         let exprs = vec![col("b") + col("a"), col("other.missing"), lit(1)];
         let expected = vec![col("b") + col("t.a"), col("other.missing"), lit(1)];
-        assert_eq!(super::normalize_cols(exprs.clone(), &plan)?, expected);
-        assert_eq!(normalize_col(exprs[0].clone(), &plan)?, expected[0]);
+        assert_eq!(
+            strip(super::normalize_cols(exprs.clone(), &plan)?),
+            expected
+        );
+        assert_eq!(
+            normalize_col(exprs[0].clone(), &plan)?.without_column_ids(),
+            expected[0]
+        );
         let sorts = exprs.into_iter().map(|e| e.sort(false, true));
         assert_eq!(
-            normalize_sorts(sorts, &plan)?,
+            strip_sorts(normalize_sorts(sorts, &plan)?),
             expected
                 .into_iter()
                 .map(|e| e.sort(false, true))
@@ -592,14 +633,17 @@ mod test {
             .join_using(right, crate::JoinType::Inner, vec![Column::from_name("a")])?
             .build()?;
         assert_eq!(
-            super::normalize_cols([col("a"), col("a") + col("right.a")], &plan)?,
+            strip(super::normalize_cols(
+                [col("a"), col("a") + col("right.a")],
+                &plan
+            )?),
             vec![col("left.a"), col("left.a") + col("right.a")]
         );
         let projected = LogicalPlanBuilder::from(plan.clone())
             .project([col("a").alias("key"), col("left.b").alias("value")])?
             .build()?;
         assert_eq!(
-            projected.expressions(),
+            strip(projected.expressions()),
             vec![col("left.a").alias("key"), col("left.b").alias("value")]
         );
         let err = super::normalize_cols([col("a"), col("b"), col("missing")], &plan)
@@ -628,17 +672,20 @@ mod test {
         assert!(plan.using_columns().is_err());
         assert!(super::normalize_cols(Vec::<Expr>::new(), &plan)?.is_empty());
         let exprs = vec![lit(1), col("left.a"), col("other.missing")];
-        assert_eq!(super::normalize_cols(exprs.clone(), &plan)?, exprs);
-        assert_eq!(normalize_col(col("left.a"), &plan)?, col("left.a"));
+        assert_eq!(strip(super::normalize_cols(exprs.clone(), &plan)?), exprs);
         assert_eq!(
-            normalize_sorts([col("left.a").sort(true, false)], &plan)?,
+            normalize_col(col("left.a"), &plan)?.without_column_ids(),
+            col("left.a")
+        );
+        assert_eq!(
+            strip_sorts(normalize_sorts([col("left.a").sort(true, false)], &plan)?),
             vec![col("left.a").sort(true, false)]
         );
         assert!(super::normalize_cols([col("left.a"), col("a")], &plan).is_err());
         let projected = LogicalPlanBuilder::from(plan.clone())
             .project([col("left.a")])?
             .build()?;
-        assert_eq!(projected.expressions(), vec![col("left.a")]);
+        assert_eq!(strip(projected.expressions()), vec![col("left.a")]);
         assert!(LogicalPlanBuilder::from(plan).project([col("a")]).is_err());
         Ok(())
     }

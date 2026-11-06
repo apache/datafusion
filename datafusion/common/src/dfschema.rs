@@ -5,7 +5,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet, btree_map};
 use std::fmt::Write as _;
 use std::fmt::{Display, Formatter};
 use std::hash::{BuildHasher, Hash};
@@ -103,12 +103,15 @@ pub type DFSchemaRef = Arc<DFSchema>;
 ///
 /// Each field can have the [`ColumnId`] of the column it is (see
 /// [`Self::field_ids`]). Lookups of a [`Column`] that has an id find the field
-/// with that id first, whatever its qualifier and name, and fall back to the
-/// qualifier and name when the schema has no field with that id (or the
-/// column has no id). Equality (`PartialEq`, `Eq`) and `Hash` ignore the
-/// field ids, as [`Column`]'s equality ignores [`Column::id`]: they are
-/// planned to include ids only once every producer of columns keeps them
-/// (phase 6 of the column identity plan).
+/// with that id, whatever its qualifier and name, or nothing; a column
+/// without an id is found by qualifier and name (that is how references are
+/// bound), and so is every column in a schema without ids (such as the
+/// schema of a table). Several fields can have the same name if they have
+/// ids (see [`Self::check_names`]). Equality (`PartialEq`, `Eq`) includes the field ids, as
+/// [`Column`]'s equality includes [`Column::id`]: two schemas with the same
+/// names and types are different if their fields are different columns. Use
+/// [`Self::has_equivalent_names_and_types`] and related methods to compare the
+/// names and types only.
 #[derive(Clone)]
 pub struct DFSchema {
     /// Inner Arrow schema reference.
@@ -128,6 +131,14 @@ pub struct DFSchema {
     /// be reset whenever `inner` changes. It takes no part in equality,
     /// hashing or `Debug` output.
     name_index: OnceLock<Arc<NameIndex>>,
+}
+
+/// How a column is looked up in a schema (see [`DFSchema::maybe_index_of_column`])
+enum Lookup {
+    /// By id: the index of the field with the column's id, if any
+    ById(Option<usize>),
+    /// By qualifier and name
+    ByName,
 }
 
 impl DFSchema {
@@ -176,6 +187,40 @@ impl DFSchema {
         let dfschema = Self {
             inner: schema,
             field_ids: vec![None; qualifiers.len()],
+            field_qualifiers: qualifiers,
+            functional_dependencies: FunctionalDependencies::empty(),
+            name_index: OnceLock::new(),
+        };
+        dfschema.check_names()?;
+        Ok(dfschema)
+    }
+
+    /// Create a `DFSchema` from qualified fields that have the column ids
+    /// `field_ids` (in the same order, see [`Self::field_ids`]).
+    ///
+    /// Unlike [`Self::new_with_metadata`] followed by
+    /// [`Self::with_field_ids`], this accepts fields with the same name that
+    /// have ids (see [`Self::check_names`]).
+    pub fn new_with_field_ids(
+        qualified_fields: Vec<(Option<TableReference>, Arc<Field>)>,
+        field_ids: Vec<Option<ColumnId>>,
+        metadata: impl Into<Metadata>,
+    ) -> Result<Self> {
+        if field_ids.len() != qualified_fields.len() {
+            return _plan_err!(
+                "Number of column ids must match number of fields. Expected {}, got {}",
+                qualified_fields.len(),
+                field_ids.len()
+            );
+        }
+        let (qualifiers, fields): (Vec<Option<TableReference>>, Vec<Arc<Field>>) =
+            qualified_fields.into_iter().unzip();
+
+        let schema = Arc::new(Schema::new_with_metadata(fields, metadata));
+
+        let dfschema = Self {
+            inner: schema,
+            field_ids,
             field_qualifiers: qualifiers,
             functional_dependencies: FunctionalDependencies::empty(),
             name_index: OnceLock::new(),
@@ -272,31 +317,77 @@ impl DFSchema {
             );
         }
         self.field_ids = ids;
+        self.check_names()?;
         Ok(self)
     }
 
-    /// Check if the schema have some fields with the same name
-    pub fn check_names(&self) -> Result<()> {
-        let mut qualified_names = BTreeSet::new();
-        let mut unqualified_names = BTreeSet::new();
+    /// Whether this schema and `other` are equal up to the ids of their fields
+    /// (`==` compares them): the same fields, qualifiers and functional
+    /// dependencies, as the schemas of two plans that compute the same rows
+    /// but give the columns different ids
+    pub fn is_equivalent_up_to_column_ids(&self, other: &DFSchema) -> bool {
+        self.inner == other.inner
+            && self.field_qualifiers == other.field_qualifiers
+            && self.functional_dependencies == other.functional_dependencies
+    }
 
-        for (field, qualifier) in self.inner.fields().iter().zip(&self.field_qualifiers) {
+    /// Check if the schema have some fields with the same name.
+    ///
+    /// Two fields with the same qualifier and name (or a qualified and an
+    /// unqualified field with the same name) are allowed if both have column
+    /// ids (see [`Self::field_ids`]): they are told apart by their ids, and a
+    /// lookup by that name is ambiguous. Fields without ids must have unique
+    /// names.
+    pub fn check_names(&self) -> Result<()> {
+        // for each name, whether every field with it has an id
+        let mut qualified_names: BTreeMap<(&TableReference, &String), bool> =
+            BTreeMap::new();
+        let mut unqualified_names: BTreeMap<&String, bool> = BTreeMap::new();
+
+        for ((field, qualifier), id) in self
+            .inner
+            .fields()
+            .iter()
+            .zip(&self.field_qualifiers)
+            .zip(&self.field_ids)
+        {
+            let has_id = id.is_some();
             if let Some(qualifier) = qualifier {
-                if !qualified_names.insert((qualifier, field.name())) {
-                    return _schema_err!(SchemaError::DuplicateQualifiedField {
-                        qualifier: Box::new(qualifier.clone()),
-                        name: field.name().to_string(),
-                    });
+                match qualified_names.entry((qualifier, field.name())) {
+                    btree_map::Entry::Occupied(entry) => {
+                        if !(*entry.get() && has_id) {
+                            return _schema_err!(SchemaError::DuplicateQualifiedField {
+                                qualifier: Box::new(qualifier.clone()),
+                                name: field.name().to_string(),
+                            });
+                        }
+                    }
+                    btree_map::Entry::Vacant(entry) => {
+                        entry.insert(has_id);
+                    }
                 }
-            } else if !unqualified_names.insert(field.name()) {
-                return _schema_err!(SchemaError::DuplicateUnqualifiedField {
-                    name: field.name().to_string()
-                });
+            } else {
+                match unqualified_names.entry(field.name()) {
+                    btree_map::Entry::Occupied(entry) => {
+                        if !(*entry.get() && has_id) {
+                            return _schema_err!(
+                                SchemaError::DuplicateUnqualifiedField {
+                                    name: field.name().to_string()
+                                }
+                            );
+                        }
+                    }
+                    btree_map::Entry::Vacant(entry) => {
+                        entry.insert(has_id);
+                    }
+                }
             }
         }
 
-        for (qualifier, name) in qualified_names {
-            if unqualified_names.contains(name) {
+        for ((qualifier, name), has_ids) in qualified_names {
+            if let Some(unqualified_has_ids) = unqualified_names.get(name)
+                && !(has_ids && *unqualified_has_ids)
+            {
                 return _schema_err!(SchemaError::AmbiguousReference {
                     field: Box::new(Column::new(Some(qualifier.clone()), name))
                 });
@@ -486,6 +577,20 @@ impl DFSchema {
         )
     }
 
+    /// How `col` is looked up: by id if it has an id and this schema has ids
+    /// (a schema without ids, such as the schema of a table, is outside of
+    /// the plan, and columns resolve by name there), otherwise by qualifier
+    /// and name.
+    fn lookup_by_id(&self, col: &Column) -> Lookup {
+        let Some(id) = col.id else {
+            return Lookup::ByName;
+        };
+        if !self.field_ids.iter().any(Option::is_some) {
+            return Lookup::ByName;
+        }
+        Lookup::ById(self.index_of_column_id(id))
+    }
+
     pub fn index_of_column_by_name(
         &self,
         qualifier: Option<&TableReference>,
@@ -505,19 +610,25 @@ impl DFSchema {
         })
     }
 
-    /// Find the index of the column: the field with the column's id if it has
-    /// one and the schema has a field with that id, otherwise the field with
-    /// its qualifier and name. Returns `None` if not found.
+    /// Find the index of the column: a column with an id is the field with
+    /// that id (it is not found if the schema has no field with it), a
+    /// column without an id the field with its qualifier and name. In a
+    /// schema without ids (such as the schema of a table), every column is
+    /// found by qualifier and name. Returns `None` if not found.
     ///
     /// See [Self::index_of_column] for a version that returns an error if the
     /// column is not found
     pub fn maybe_index_of_column(&self, col: &Column) -> Option<usize> {
-        self.index_of_column_by_id(col)
-            .or_else(|| self.index_of_column_by_name(col.relation.as_ref(), &col.name))
+        match self.lookup_by_id(col) {
+            Lookup::ById(found) => found,
+            Lookup::ByName => {
+                self.index_of_column_by_name(col.relation.as_ref(), &col.name)
+            }
+        }
     }
 
-    /// Find the index of the column (by id first, then by qualifier and name,
-    /// see [Self::maybe_index_of_column]), returning `Err` if not found
+    /// Find the index of the column (by id if it has one, see
+    /// [Self::maybe_index_of_column]), returning `Err` if not found
     ///
     /// See [Self::maybe_index_of_column] for a version that returns `None` if
     /// the column is not found
@@ -599,7 +710,11 @@ impl DFSchema {
     /// Find all fields that match the given name and convert to column, with
     /// the ids of the fields
     pub fn columns_with_unqualified_name(&self, name: &str) -> Vec<Column> {
+        // fields with the same id are the same column (`SELECT a, a`): the
+        // first one stands for them
+        let mut seen_ids = HashSet::new();
         self.indices_of_name(name)
+            .filter(|&idx| self.field_ids[idx].is_none_or(|id| seen_ids.insert(id)))
             .map(|idx| {
                 let (qualifier, field) = self.qualified_field(idx);
                 Column::new(qualifier.cloned(), field.name()).with_id(self.field_ids[idx])
@@ -622,7 +737,17 @@ impl DFSchema {
         &self,
         name: &str,
     ) -> Result<(Option<&TableReference>, &FieldRef)> {
-        let matches = self.qualified_fields_with_unqualified_name(name);
+        // fields with the same id are the same column (`SELECT a, a`): the
+        // first one stands for them
+        let mut seen_ids = HashSet::new();
+        let matches = self
+            .iter()
+            .zip(&self.field_ids)
+            .filter(|((_, field), id)| {
+                field.name() == name && id.is_none_or(|id| seen_ids.insert(id))
+            })
+            .map(|(qualified, _)| qualified)
+            .collect::<Vec<_>>();
         match matches.len() {
             0 => Err(unqualified_field_not_found(name, self)),
             1 => Ok((matches[0].0, matches[0].1)),
@@ -675,9 +800,12 @@ impl DFSchema {
         &self,
         column: &Column,
     ) -> Result<(Option<&TableReference>, &FieldRef)> {
-        match self.index_of_column_by_id(column) {
-            Some(i) => Ok(self.qualified_field(i)),
-            None => {
+        match self.lookup_by_id(column) {
+            Lookup::ById(Some(i)) => Ok(self.qualified_field(i)),
+            Lookup::ById(None) => {
+                Err(field_not_found(column.relation.clone(), &column.name, self))
+            }
+            Lookup::ByName => {
                 self.qualified_field_with_name(column.relation.as_ref(), &column.name)
             }
         }
@@ -704,8 +832,8 @@ impl DFSchema {
     /// Find if the field of the given column exists, by id first, then by
     /// qualifier and name
     pub fn has_column(&self, column: &Column) -> bool {
-        if self.index_of_column_by_id(column).is_some() {
-            return true;
+        if let Lookup::ById(found) = self.lookup_by_id(column) {
+            return found.is_some();
         }
         match &column.relation {
             Some(r) => self.has_column_with_qualified_name(r, &column.name),
@@ -1286,11 +1414,12 @@ impl Hash for DFSchema {
 }
 
 // `name_index` is derived state, so it is left out of equality and `Debug`.
-// Ignores `field_ids`, see "Column ids" in the documentation of `DFSchema`
+// Includes `field_ids`, see "Column ids" in the documentation of `DFSchema`
 impl PartialEq for DFSchema {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
             && self.field_qualifiers == other.field_qualifiers
+            && self.field_ids == other.field_ids
             && self.functional_dependencies == other.functional_dependencies
     }
 }
@@ -1485,6 +1614,20 @@ pub trait ExprSchema: std::fmt::Debug {
 
     // Return the column's field
     fn field_from_column(&self, col: &Column) -> Result<&FieldRef>;
+
+    /// The qualifier and field of the column that `col` refers to by its id,
+    /// if it has an id and this schema has a field with it.
+    ///
+    /// A column read by id is named after the field it reads, not after its
+    /// label (`col.relation`, `col.name`), see [`Column::id`]. The default
+    /// returns `None` (no ids): references then resolve and are named by
+    /// their label.
+    fn qualified_field_from_column_id(
+        &self,
+        _col: &Column,
+    ) -> Option<(Option<&TableReference>, &FieldRef)> {
+        None
+    }
 }
 
 // Implement `ExprSchema` for `Arc<DFSchema>`
@@ -1508,17 +1651,36 @@ impl<P: AsRef<DFSchema> + std::fmt::Debug> ExprSchema for P {
     fn field_from_column(&self, col: &Column) -> Result<&FieldRef> {
         self.as_ref().field_from_column(col)
     }
+
+    fn qualified_field_from_column_id(
+        &self,
+        col: &Column,
+    ) -> Option<(Option<&TableReference>, &FieldRef)> {
+        self.as_ref().qualified_field_from_column_id(col)
+    }
 }
 
 impl ExprSchema for DFSchema {
     fn field_from_column(&self, col: &Column) -> Result<&FieldRef> {
-        if let Some(i) = self.index_of_column_by_id(col) {
-            return Ok(self.field(i));
+        match self.lookup_by_id(col) {
+            Lookup::ById(Some(i)) => return Ok(self.field(i)),
+            Lookup::ById(None) => {
+                return Err(field_not_found(col.relation.clone(), &col.name, self));
+            }
+            Lookup::ByName => {}
         }
         match &col.relation {
             Some(r) => self.field_with_qualified_name(r, &col.name),
             None => self.field_with_unqualified_name(&col.name),
         }
+    }
+
+    fn qualified_field_from_column_id(
+        &self,
+        col: &Column,
+    ) -> Option<(Option<&TableReference>, &FieldRef)> {
+        self.index_of_column_by_id(col)
+            .map(|i| self.qualified_field(i))
     }
 }
 
@@ -1842,23 +2004,28 @@ mod tests {
         assert_eq!(schema.field_from_column(&x(2))?.name(), "c1");
         assert!(schema.has_column(&x(2)));
 
-        // a stale id (not in the schema) falls back to the qualifier and name
+        // a stale id (not in the schema) is not found, whatever its name
         assert_eq!(schema.index_of_column_id(column_id(3)), None);
-        assert_eq!(schema.maybe_index_of_column(&c1(3)), Some(1));
-        assert_eq!(schema.qualified_field_from_column(&c1(3))?.1.name(), "c1");
-        assert_eq!(schema.field_from_column(&c1(3))?.name(), "c1");
-        assert!(schema.has_column(&c1(3)));
+        assert_eq!(schema.maybe_index_of_column(&c1(3)), None);
+        assert!(schema.qualified_field_from_column(&c1(3)).is_err());
+        assert!(schema.field_from_column(&c1(3)).is_err());
+        assert!(!schema.has_column(&c1(3)));
         assert_eq!(schema.maybe_index_of_column(&x(3)), None);
         assert!(schema.index_of_column(&x(3)).is_err());
         assert!(schema.field_from_column(&x(3)).is_err());
         assert!(!schema.has_column(&x(3)));
         assert!(!schema.is_column_from_schema(&x(3)));
 
-        // so does a column without an id
+        // a column without an id is found by qualifier and name
         assert_eq!(
             schema.maybe_index_of_column(&Column::from_name("c1")),
             Some(1)
         );
+
+        // in a schema without ids, a column with an id is found by name
+        let without_ids = schema.clone().with_field_ids(vec![None, None])?;
+        assert_eq!(without_ids.maybe_index_of_column(&c1(3)), Some(1));
+        assert_eq!(without_ids.field_from_column(&c1(3))?.name(), "c1");
 
         // columns built from the schema carry the ids of the fields
         let column_ids: Vec<_> = schema.columns().iter().map(|c| c.id).collect();
@@ -1923,12 +2090,60 @@ mod tests {
     }
 
     #[test]
-    fn equality_ignores_column_ids() -> Result<()> {
+    fn duplicate_names_are_allowed_with_column_ids() -> Result<()> {
+        let field = |name: &str| Arc::new(Field::new(name, DataType::Int32, true));
+        let fields = || {
+            vec![
+                (Some(TableReference::bare("t")), field("a")),
+                (Some(TableReference::bare("t")), field("a")),
+                (None, field("a")),
+            ]
+        };
+        // without ids, the names must be unique
+        assert!(DFSchema::new_with_metadata(fields(), HashMap::new()).is_err());
+        assert!(
+            DFSchema::new_with_field_ids(
+                fields(),
+                ids(&[Some(1), None, Some(3)]),
+                HashMap::new()
+            )
+            .is_err()
+        );
+        // with ids they can repeat (also with the same id: `SELECT a, a`)
+        let schema = DFSchema::new_with_field_ids(
+            fields(),
+            ids(&[Some(1), Some(2), Some(1)]),
+            HashMap::new(),
+        )?;
+        // removing the ids makes it invalid again
+        assert!(schema.clone().with_field_ids(vec![None; 3]).is_err());
+        // a lookup by id finds the field, one by name is ambiguous
+        let a2 = Column::new(Some("t"), "a").with_id(ids(&[Some(2)])[0]);
+        assert_eq!(schema.index_of_column(&a2)?, 1);
+        let err = Column::new(Some("t"), "a")
+            .normalize_with_schemas_and_ambiguity_check(&[&[&schema]], &[])
+            .unwrap_err();
+        assert!(err.strip_backtrace().contains("ambiguous"), "{err}");
+        // fields with the same id are the same column
+        let a = schema.qualified_field_with_unqualified_name("a");
+        assert!(a.is_err());
+        let same = DFSchema::new_with_field_ids(
+            vec![(None, field("a")), (None, field("a"))],
+            ids(&[Some(1), Some(1)]),
+            HashMap::new(),
+        )?;
+        assert!(same.qualified_field_with_unqualified_name("a").is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn equality_includes_column_ids() -> Result<()> {
         let schema = DFSchema::try_from_qualified_schema("t1", &test_schema_1())?;
         let with_ids = schema.clone().with_field_ids(ids(&[Some(1), Some(2)]))?;
         let other_ids = schema.clone().with_field_ids(ids(&[Some(3), None]))?;
-        assert_eq!(schema, with_ids);
-        assert_eq!(with_ids, other_ids);
+        assert_ne!(schema, with_ids);
+        assert_ne!(with_ids, other_ids);
+        assert!(with_ids.logically_equivalent_names_and_types(&other_ids));
 
         let hash_of = |schema: &DFSchema| {
             let mut hasher = std::hash::DefaultHasher::new();

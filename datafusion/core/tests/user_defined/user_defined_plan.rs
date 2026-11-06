@@ -177,15 +177,17 @@ async fn run_and_compare_query_with_analyzer_rule(
     let s = exec_sql(&ctx, QUERY2).await?;
     let actual = s.lines().collect::<Vec<_>>().join("\n");
 
+    // The rule rewrites the literal, but the outputs keep the names the query
+    // was planned with: the analyzer restores the names of the root
     insta::with_settings!({
         description => description,
     }, {
         insta::assert_snapshot!(actual, @r"
-        +------------+--------------------------+
-        | UInt64(42) | arrow_typeof(UInt64(42)) |
-        +------------+--------------------------+
-        | 42         | UInt64                   |
-        +------------+--------------------------+
+        +-----------+-------------------------+
+        | Int64(42) | arrow_typeof(Int64(42)) |
+        +-----------+-------------------------+
+        | 42        | UInt64                  |
+        +-----------+-------------------------+
         ");
     });
 

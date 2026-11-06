@@ -59,11 +59,12 @@ query TT
 EXPLAIN SELECT MIN(l.x) FILTER (WHERE r.y > 250) FROM l JOIN r ON l.id = r.id;
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[min(l.x) FILTER (WHERE r.y > Int32(250)) AS min(l.x) FILTER (WHERE r.y > Int64(250))]]
-02)--Projection: l.x, r.y
-03)----Inner Join: l.id = r.id
-04)------TableScan: l projection=[id, x]
-05)------TableScan: r projection=[id, y]
+01)Projection: min(l.x) FILTER (WHERE r.y > Int32(250)) AS min(l.x) FILTER (WHERE r.y > Int64(250))
+02)--Aggregate: groupBy=[[]], aggr=[[min(l.x) FILTER (WHERE r.y > Int32(250))]]
+03)----Projection: l.x, r.y
+04)------Inner Join: l.id = r.id
+05)--------TableScan: l projection=[id, x]
+06)--------TableScan: r projection=[id, y]
 
 query I
 SELECT MIN(l.x) FILTER (WHERE r.y > 250) FROM l JOIN r ON l.id = r.id;
@@ -142,11 +143,12 @@ query TT
 EXPLAIN SELECT COUNT(DISTINCT l.x) FILTER (WHERE l.g = 0), MIN(l.x) FROM l JOIN r ON l.id = r.id;
 ----
 logical_plan
-01)Aggregate: groupBy=[[]], aggr=[[count(DISTINCT l.x) FILTER (WHERE l.g = Int32(0)) AS count(DISTINCT l.x) FILTER (WHERE l.g = Int64(0)), min(l.x)]]
-02)--Projection: l.g, l.x
-03)----LeftSemi Join: l.id = r.id
-04)------TableScan: l projection=[id, g, x]
-05)------TableScan: r projection=[id]
+01)Projection: count(DISTINCT l.x) FILTER (WHERE l.g = Int32(0)) AS count(DISTINCT l.x) FILTER (WHERE l.g = Int64(0)), min(l.x)
+02)--Aggregate: groupBy=[[]], aggr=[[count(DISTINCT l.x) FILTER (WHERE l.g = Int32(0)), min(l.x)]]
+03)----Projection: l.g, l.x
+04)------LeftSemi Join: l.id = r.id
+05)--------TableScan: l projection=[id, g, x]
+06)--------TableScan: r projection=[id]
 
 query II
 SELECT COUNT(DISTINCT l.x) FILTER (WHERE l.g = 0), MIN(l.x) FROM l JOIN r ON l.id = r.id;

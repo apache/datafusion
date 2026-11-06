@@ -8196,34 +8196,25 @@ async fn test_dataframe_api_select_semantics() -> Result<()> {
     );
 
     // ----------------------------------------------------------------------
-    // Duplicate output names are rejected, like any other projection
+    // Duplicate output names are allowed: the outputs are told apart by
+    // their column ids
     // ----------------------------------------------------------------------
     // SQL:
     // SELECT COUNT(c9) AS count_c9, COUNT(c9) AS count_c9 FROM t
-    let err = df
-        .clone()
-        .select(vec![
-            count(col("c9")).alias("count_c9"),
-            count(col("c9")).alias("count_c9"),
-        ])
-        .unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("require unique expression names"),
-        "duplicate aliases must be rejected at planning time, got: {msg}"
-    );
-
-    // SQL:
     // SELECT COUNT(c9), COUNT(c9) FROM t
-    let err = df
-        .clone()
-        .select(vec![count(col("c9")), count(col("c9"))])
-        .unwrap_err();
-    let msg = err.to_string();
-    assert!(
-        msg.contains("require unique expression names"),
-        "duplicate unaliased aggregates must be rejected at planning time, got: {msg}"
-    );
+    for exprs in [
+        vec![
+            count(col("c9")).alias("count_c9"),
+            count(col("c9")).alias("count_c9"),
+        ],
+        vec![count(col("c9")), count(col("c9"))],
+    ] {
+        let batches = df.clone().select(exprs)?.collect().await?;
+        let batch = &batches[0];
+        let schema = batch.schema();
+        assert_eq!(schema.field(0).name(), schema.field(1).name());
+        assert_eq!(batch.column(0), batch.column(1));
+    }
 
     // ----------------------------------------------------------------------
     // Mixed column + aggregate (no implicit GROUP BY)

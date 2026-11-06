@@ -34,11 +34,13 @@ pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
         .transform_up(|nested_expr| {
             match nested_expr {
                 Expr::Column(col) => {
-                    let (qualifier, field) =
-                        plan.schema().qualified_field_from_column(&col)?;
-                    Ok(Transformed::yes(Expr::Column(Column::from((
-                        qualifier, field,
-                    )))))
+                    // the field the column refers to, with its id
+                    let schema = plan.schema();
+                    let i = schema.index_of_column(&col)?;
+                    Ok(Transformed::yes(Expr::Column(
+                        Column::from(schema.qualified_field(i))
+                            .with_id(schema.field_id(i)),
+                    )))
                 }
                 _ => {
                     // keep recursing

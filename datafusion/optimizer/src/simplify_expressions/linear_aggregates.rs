@@ -104,9 +104,17 @@ pub(super) fn rewrite_multiple_linear_aggregates(
 
     // Otherwise replace the aggregate expressions
     drop(common_args); // release borrow
+    // the outputs keep their ids (the caller's entries), and may be renamed
     for (idx, new_agg) in new_aggs {
-        let orig_name = agg_expr[idx].name_for_alias()?;
-        agg_expr[idx] = new_agg.alias_if_changed(orig_name)?
+        // an alias names the output: the rewritten aggregate keeps it
+        agg_expr[idx] = match &agg_expr[idx] {
+            Expr::Alias(alias) => new_agg.unalias().alias_qualified_with_metadata(
+                alias.relation.clone(),
+                alias.name.clone(),
+                alias.metadata.clone(),
+            ),
+            _ => new_agg,
+        };
     }
 
     Ok(true)

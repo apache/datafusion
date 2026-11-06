@@ -9,15 +9,16 @@ use std::sync::Arc;
 
 use log::debug;
 
-use datafusion_common::Result;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::instant::Instant;
+use datafusion_common::{ColumnIdGenerator, Result};
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::{InvariantLevel, LogicalPlan};
 
 use crate::analyzer::resolve_grouping_function::ResolveGroupingFunction;
 use crate::analyzer::type_coercion::TypeCoercion;
 use crate::column_id_check::ColumnIdCheck;
+use crate::optimizer::RootNames;
 use crate::utils::log_plan;
 
 use self::function_rewrite::ApplyFunctionRewrites;
@@ -117,7 +118,22 @@ impl Analyzer {
             .map_err(|e| e.context("Invalid input plan passed to Analyzer"))?;
 
         let start_time = Instant::now();
+        // References written by name (a plan built with node constructors,
+        // or by a planner that does not bind) are bound once, here: they get
+        // the id of the field they resolve to by name in the scope of their
+        // node. From here on, a reference with an id is looked up by id only.
+        // A reference to a field without an id (a scan built without a
+        // generator, an extension node that does not support column ids)
+        // keeps resolving by name.
+        let plan = plan
+            .with_bound_column_references()
+            .map_err(|e| e.context("Binding the column references before the analyzer"))?
+            .data;
         let mut column_id_check = ColumnIdCheck::new(&plan);
+        // Rules may rename the outputs they rewrite (names come from the
+        // definitions); the names of the root (and of the input of a write)
+        // are restored once, at the end
+        let output_names = RootNames::of(&plan);
         let mut new_plan = plan;
 
         // Create an analyzer pass that rewrites `Expr`s to function_calls, as
@@ -144,6 +160,20 @@ impl Analyzer {
             log_plan(rule.name(), &new_plan);
             observer(&new_plan, rule.as_ref());
         }
+
+        // the root keeps the names it started with (analyzer rules have no
+        // generator: a renamed output that stops being a pass-through gets
+        // an id after the plan's)
+        let generator = ColumnIdGenerator::new_after(new_plan.max_column_id());
+        let restored = output_names
+            .restore(new_plan, &generator)
+            .map_err(|e| e.context("Restoring the output names after the analyzer"))?;
+        new_plan = restored.data;
+        if restored.transformed {
+            // the references to renamed outputs (the expressions of a MERGE
+            // INTO read the input of the write) follow
+            new_plan = new_plan.with_relabeled_columns()?.data;
+        }
         column_id_check.after_analyzer(&new_plan)?;
 
         // verify at the end, after the last LP analyzer pass, that the plan is executable.
@@ -154,5 +184,37 @@ impl Analyzer {
         log_plan("Final analyzed plan", &new_plan);
         debug!("Analyzer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test::test_table_scan;
+    use datafusion_expr::logical_plan::Filter;
+    use datafusion_expr::{col, lit};
+
+    /// A reference written by name in a plan built with a node constructor
+    /// gets the id of the column it reads when the analyzer starts
+    #[test]
+    fn binds_references_written_by_name() -> Result<()> {
+        let scan = test_table_scan()?;
+        let a_id = scan.schema().field_id(0);
+        assert!(a_id.is_some(), "the test scan has ids");
+        let plan =
+            LogicalPlan::Filter(Filter::try_new(col("a").eq(lit(1u32)), Arc::new(scan))?);
+        let analyzed =
+            Analyzer::new().execute_and_check(plan, &ConfigOptions::new(), |_, _| {})?;
+        let LogicalPlan::Filter(filter) = analyzed else {
+            panic!("not a filter: {analyzed}");
+        };
+        let ids: Vec<_> = filter
+            .predicate
+            .column_refs()
+            .into_iter()
+            .map(|col| col.id)
+            .collect();
+        assert_eq!(ids, vec![a_id]);
+        Ok(())
     }
 }

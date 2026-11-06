@@ -140,9 +140,9 @@ fn case_when_aggregate() -> Result<()> {
 
     assert_snapshot!(
     format!("{plan}"),
-    @r"
-    Projection: test.col_utf8, sum(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END) AS n
-      Aggregate: groupBy=[[test.col_utf8]], aggr=[[sum(CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END) AS sum(CASE WHEN test.col_int32 > Int64(0) THEN Int64(1) ELSE Int64(0) END)]]
+    @"
+    Projection: test.col_utf8, sum(CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END) AS n
+      Aggregate: groupBy=[[test.col_utf8]], aggr=[[sum(CASE WHEN test.col_int32 > Int32(0) THEN Int64(1) ELSE Int64(0) END)]]
         TableScan: test projection=[col_int32, col_utf8]
     "
     );
@@ -848,8 +848,8 @@ fn extension_node_does_not_block_projection_pruning() -> Result<()> {
     OpaqueRequirementsExtension
       Sort: t.a ASC NULLS FIRST, t.ts ASC NULLS FIRST
         Projection: t.a, CAST(t.ts AS Timestamp(ms, "UTC")) AS ts
-          Filter: __common_expr_3 > TimestampMillisecond(1000, Some("UTC")) AND __common_expr_3 < TimestampMillisecond(2000, Some("UTC"))
-            Projection: CAST(t.ts AS Timestamp(ms, "UTC")) AS __common_expr_3, t.a, t.ts
+          Filter: t.ts > TimestampMillisecond(1000, Some("UTC")) AND t.ts < TimestampMillisecond(2000, Some("UTC"))
+            Projection: CAST(t.ts AS Timestamp(ms, "UTC")), t.a, t.ts
               TableScan: t projection=[a, ts], partial_filters=[CAST(t.ts AS Timestamp(ms, "UTC")) > TimestampMillisecond(1000, Some("UTC")), CAST(t.ts AS Timestamp(ms, "UTC")) < TimestampMillisecond(2000, Some("UTC"))]
     "#,
     );

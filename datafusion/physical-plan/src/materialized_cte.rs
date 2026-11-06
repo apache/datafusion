@@ -37,7 +37,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use arrow::datatypes::SchemaRef;
-use arrow::record_batch::RecordBatch;
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, Statistics, internal_err};
@@ -417,6 +417,23 @@ async fn buffer_partition(
 
 /// Stream the buffered partitions `partition, partition + n, ...` of `output`,
 /// where `n` is the number of output partitions of the scan.
+/// `batch` with the schema `schema`, whose fields have the types of the
+/// columns of `batch` by position (but maybe other names)
+fn with_schema_by_position(
+    batch: RecordBatch,
+    schema: &SchemaRef,
+) -> Result<RecordBatch> {
+    if batch.schema_ref() == schema {
+        return Ok(batch);
+    }
+    let options = RecordBatchOptions::new().with_row_count(Some(batch.num_rows()));
+    Ok(RecordBatch::try_new_with_options(
+        Arc::clone(schema),
+        batch.columns().to_vec(),
+        &options,
+    )?)
+}
+
 fn replay(
     output: Arc<MaterializedOutput>,
     partition: usize,
@@ -805,11 +822,18 @@ impl ExecutionPlan for MaterializedCteScanExec {
         let mut output = buffer.materialize(context)?;
         let output_partitions = self.cache.partitioning.partition_count();
         let baseline = BaselineMetrics::new(&self.metrics, partition);
+        // The scan reads the columns of the body by position, under its own
+        // names (a rule may rename the outputs of the body)
+        let schema = Arc::clone(&self.schema);
         let stream = futures::stream::once(async move {
             let output = std::future::poll_fn(|cx| output.get_shared(cx)).await?;
             replay(output, partition, output_partitions)
         })
         .try_flatten()
+        .and_then(move |batch| {
+            let batch = with_schema_by_position(batch, &schema);
+            futures::future::ready(batch)
+        })
         .inspect_ok(move |batch| baseline.record_output(batch.num_rows()));
         // The replay of in-memory batches never returns `Pending`, so it must
         // consume the Tokio budget explicitly.

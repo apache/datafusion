@@ -105,7 +105,8 @@ use datafusion_expr::{
 ///
 /// * `e` - The logical expression
 /// * `input_dfschema` - The DataFusion schema for the input, used to resolve `Column` references
-///   to qualified or unqualified fields by name.
+///   to fields (by id, else by qualifier and name). A physical column is
+///   named after the field it reads.
 /// * `execution_props` - Per-execution properties such as the query start time.
 /// * `planning_ctx` - The [`PhysicalPlanningContext`] used to resolve
 ///   `Expr::ScalarSubquery` and `Expr::LambdaVariable` nodes. The physical
@@ -146,8 +147,9 @@ pub fn create_physical_expr(
             }
         }
         Expr::Column(c) => {
+            // named after the input field it reads, not after its label
             let idx = input_dfschema.index_of_column(c)?;
-            Ok(Arc::new(Column::new(&c.name, idx)))
+            Ok(Arc::new(Column::new(input_dfschema.field(idx).name(), idx)))
         }
         Expr::Literal(value, metadata) => Ok(Arc::new(Literal::new_with_metadata(
             value.clone(),

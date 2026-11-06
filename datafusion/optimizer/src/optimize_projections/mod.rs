@@ -23,19 +23,17 @@ use datafusion_expr::logical_plan::MaterializedCtePlan;
 use std::sync::Arc;
 
 use datafusion_common::{
-    Column, ColumnId, DFSchema, DFSchemaRef, HashMap, JoinType, Result,
-    assert_eq_or_internal_err, get_required_group_by_exprs_indices,
-    internal_datafusion_err, internal_err,
+    Column, DFSchema, DFSchemaRef, HashMap, JoinType, Result, assert_eq_or_internal_err,
+    get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::utils::passthrough_field_index;
 use datafusion_expr::{
     Aggregate, Distinct, EmptyRelation, Expr, NamedExpr, Projection, TableScanBuilder,
-    Unnest, Window, logical_plan::LogicalPlan,
+    Union, Unnest, Window, logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
-use crate::utils::NamePreserver;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeContainer};
 
 /// Optimizer rule to prune unnecessary columns from intermediate schemas
@@ -298,16 +296,11 @@ fn optimize_projections(
         _ => {}
     }
 
-    // The ids of the outputs of a union that remain if its inputs are pruned
-    // (the rebuilt union does not know which ones remain)
-    let remaining_union_ids = match &plan {
-        LogicalPlan::Union(union) => Some(
-            indices
-                .indices()
-                .iter()
-                .map(|i| union.schema.field_id(*i))
-                .collect::<Vec<_>>(),
-        ),
+    // The outputs of a union that remain if its inputs are pruned: a union
+    // owns its outputs (names and ids), and the rebuilt union does not know
+    // which ones remain (it would derive them from its first input)
+    let remaining_union_schema = match &plan {
+        LogicalPlan::Union(union) => Some(remaining_union_schema(union, &indices)?),
         _ => None,
     };
 
@@ -530,32 +523,40 @@ fn optimize_projections(
 
     // If any of the children are transformed, we need to potentially update the plan's schema
     if transformed_plan.transformed {
-        transformed_plan.map_data(|plan| {
-            let plan = plan.recompute_schema()?;
-            with_remaining_union_ids(plan, remaining_union_ids)
+        transformed_plan.map_data(|plan| match (plan, remaining_union_schema) {
+            (LogicalPlan::Union(union), Some(schema)) => {
+                Union::try_new_with_schema(union.inputs, schema).map(LogicalPlan::Union)
+            }
+            (plan, _) => plan.recompute_schema(),
         })
     } else {
         Ok(transformed_plan)
     }
 }
 
-/// Returns `plan`, where a union whose inputs were pruned gives its outputs
-/// the ids they had (`ids`, the ids of the outputs that remain)
-fn with_remaining_union_ids(
-    plan: LogicalPlan,
-    ids: Option<Vec<Option<ColumnId>>>,
-) -> Result<LogicalPlan> {
-    match (plan, ids) {
-        (LogicalPlan::Union(mut union), Some(ids))
-            if union.schema.fields().len() == ids.len()
-                && union.schema.field_ids() != ids.as_slice() =>
-        {
-            union.schema =
-                Arc::new(Arc::unwrap_or_clone(union.schema).with_field_ids(ids)?);
-            Ok(LogicalPlan::Union(union))
-        }
-        (plan, _) => Ok(plan),
-    }
+/// The schema of `union` pruned to the outputs at `indices`
+fn remaining_union_schema(
+    union: &Union,
+    indices: &RequiredIndices,
+) -> Result<DFSchemaRef> {
+    let schema = &union.schema;
+    let fields = indices
+        .indices()
+        .iter()
+        .map(|i| {
+            let (qualifier, field) = schema.qualified_field(*i);
+            (qualifier.cloned(), Arc::clone(field))
+        })
+        .collect();
+    let ids = indices
+        .indices()
+        .iter()
+        .map(|i| schema.field_id(*i))
+        .collect();
+    Ok(Arc::new(
+        DFSchema::new_with_metadata(fields, schema.metadata().clone())?
+            .with_field_ids(ids)?,
+    ))
 }
 
 /// Optimizes uncorrelated subquery plans embedded in expressions of the given
@@ -668,11 +669,7 @@ fn merge_consecutive_projections_one_level(
 
     // Try to rewrite the expressions in the current projection using the
     // previous projection as input:
-    let name_preserver = NamePreserver::new_for_projection();
-    let mut original_names = Vec::with_capacity(expr.len());
     let new_exprs = expr.map_elements(|expr| {
-        original_names.push(name_preserver.save(&expr));
-
         // do not rewrite top level Aliases (rewriter will remove all aliases within exprs)
         match expr {
             Expr::Alias(Alias {
@@ -717,18 +714,40 @@ fn merge_consecutive_projections_one_level(
         // upper output that passed through a column defined elsewhere
         // (further below, or not at all) defines a new column: it gets a new
         // id.
+        //
+        // A merged output that the upper projection computed is named after
+        // its expression (it keeps its id, so nothing refers to it by name).
+        // An upper output that was a bare column, which the merge replaced by
+        // the lower definition it passed through, keeps the name it had (the
+        // name of that definition): the merged expression is not aliased.
         let new_exprs = new_exprs
             .data
             .into_iter()
-            .zip(original_names)
             .zip(upper_entries)
-            .map(|((entry, original_name), upper)| {
-                let expr = original_name.restore(entry.expr);
-                let defined_by_lower = prev_projection
+            .enumerate()
+            .map(|(i, (entry, upper))| {
+                let (qualifier, field) = schema.qualified_field(i);
+                let expr = match entry.expr {
+                    Expr::Column(col) if col.id == Some(upper.id) => Expr::Column(col),
+                    expr if matches!(upper.expr, Expr::Column(_))
+                        && expr.qualified_name()
+                            != (qualifier.cloned(), field.name().clone()) =>
+                    {
+                        expr.alias_qualified(qualifier.cloned(), field.name())
+                    }
+                    expr => expr,
+                };
+                let lower_definition = prev_projection
                     .expr
                     .iter()
-                    .any(|lower| lower.id == upper.id && !lower.is_pass_through());
-                let merged = NamedExpr::new(expr, upper.id);
+                    .find(|lower| lower.id == upper.id && !lower.is_pass_through());
+                let defined_by_lower = lower_definition.is_some();
+                // an output that the upper projection extracted, or that
+                // passed an extracted output of the lower one through, stays
+                // extracted (see `NamedExpr::extracted`)
+                let extracted = upper.is_extracted()
+                    || lower_definition.is_some_and(NamedExpr::is_extracted);
+                let merged = NamedExpr::new(expr, upper.id).with_extracted(extracted);
                 if !upper.is_pass_through()
                     || defined_by_lower
                     || merged.is_pass_through()
@@ -1076,9 +1095,14 @@ fn project_schema_by_indices(
         .functional_dependencies()
         .project_functional_dependencies(indices, indices.len());
 
-    let projected =
-        DFSchema::new_with_metadata(qualified_fields, schema.metadata().clone())?
-            .with_functional_dependencies(func_deps)?;
+    // with their ids: outputs may share a name
+    let field_ids = indices.iter().map(|&i| schema.field_id(i)).collect();
+    let projected = DFSchema::new_with_field_ids(
+        qualified_fields,
+        field_ids,
+        schema.metadata().clone(),
+    )?
+    .with_functional_dependencies(func_deps)?;
 
     Ok(Arc::new(projected))
 }
@@ -2229,6 +2253,13 @@ mod tests {
         )
     }
 
+    /// `schema` without the ids of its fields, to compare with a schema
+    /// built by hand
+    fn without_column_ids(schema: &DFSchema) -> Result<DFSchema> {
+        let ids = vec![None; schema.fields().len()];
+        schema.clone().with_field_ids(ids)
+    }
+
     #[test]
     fn join_schema_trim_full_join_column_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
@@ -2256,7 +2287,7 @@ mod tests {
         // make sure schema for join node include both join columns
         let optimized_join = optimized_plan;
         assert_eq!(
-            **optimized_join.schema(),
+            without_column_ids(optimized_join.schema())?,
             DFSchema::new_with_metadata(
                 vec![
                     (
@@ -2311,7 +2342,7 @@ mod tests {
         // make sure schema for join node include both join columns
         let optimized_join = optimized_plan.inputs()[0];
         assert_eq!(
-            **optimized_join.schema(),
+            without_column_ids(optimized_join.schema())?,
             DFSchema::new_with_metadata(
                 vec![
                     (
@@ -2364,7 +2395,7 @@ mod tests {
         // make sure schema for join node include both join columns
         let optimized_join = optimized_plan.inputs()[0];
         assert_eq!(
-            **optimized_join.schema(),
+            without_column_ids(optimized_join.schema())?,
             DFSchema::new_with_metadata(
                 vec![
                     (
@@ -2570,9 +2601,9 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: Int32(1) AS a
-          TableScan: test projection=[], full_filters=[b = Int32(1)]
+          TableScan: test projection=[], full_filters=[test.b = Int32(1)]
         "
         )
     }
@@ -3066,6 +3097,51 @@ mod tests {
         ");
         crate::test::assert_no_new_column_id_issues(&input, &optimized);
         assert_eq!(optimized.schema().field_ids(), ids.as_slice());
+        Ok(())
+    }
+
+    /// A union owns its outputs: pruning keeps the names (and ids) of the
+    /// outputs that remain, rather than deriving them from its first input
+    #[test]
+    fn pruned_union_keeps_the_names_of_its_outputs() -> Result<()> {
+        // `a` and `a_1`: the union deduplicates the names of its first input
+        let left = LogicalPlanBuilder::from(test_table_scan_with_name("test1")?)
+            .join(
+                test_table_scan_with_name("test2")?,
+                JoinType::Inner,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .project(vec![col("test1.a"), col("test2.a")])?
+            .build()?;
+        let right = LogicalPlanBuilder::from(test_table_scan_with_name("test3")?)
+            .project(vec![col("a"), col("b")])?
+            .build()?;
+        let union = LogicalPlanBuilder::from(left).union(right)?.build()?;
+        let second = Column::from(union.schema().qualified_field(1))
+            .with_id(union.schema().field_id(1));
+        let plan = LogicalPlanBuilder::from(union)
+            .project(vec![Expr::Column(second)])?
+            .build()?;
+        let union_ids = plan.inputs()[0].schema().field_ids().to_vec();
+
+        let config = OptimizerContext::new();
+        if let Some(max) = plan.max_column_id() {
+            config.column_id_generator().advance_past(max);
+        }
+        let optimized = OptimizeProjections::new().rewrite(plan, &config)?.data;
+        // the projection is dropped: the union passes its column through
+        assert_snapshot!(optimized, @r"
+        Union
+          Projection: test2.a
+            Inner Join: test1.a = test2.a
+              TableScan: test1 projection=[a]
+              TableScan: test2 projection=[a]
+          TableScan: test3 projection=[b]
+        ");
+        let union = &optimized;
+        assert_eq!(union.schema().field_names(), vec!["a_1".to_string()]);
+        assert_eq!(union.schema().field_ids(), &union_ids[1..]);
         Ok(())
     }
 

@@ -1092,8 +1092,13 @@ impl Display for Sort {
 ///
 /// Dereferences to its expression, so that code reading the expressions of a
 /// node keeps working. [`Display`] and [`Debug`](fmt::Debug) show the
-/// expression only, and equality, hashing and ordering ignore the id, as
-/// they ignore the ids of [`Column`]s.
+/// expression only. Equality, hashing and ordering include the id, as they
+/// include the ids of [`Column`]s.
+///
+/// An entry can be marked as *extracted* (see [`Self::extracted`]): the
+/// optimizer computes it in a projection of its own to move it towards the
+/// leaves. The mark does not change what the entry computes, and is not part
+/// of equality, hashing or ordering.
 ///
 /// [`Projection`]: crate::logical_plan::Projection
 #[derive(Clone)]
@@ -1102,12 +1107,49 @@ pub struct NamedExpr {
     pub expr: Expr,
     /// The id of the output column
     pub id: ColumnId,
+    /// Whether the optimizer extracted this output (see [`Self::extracted`])
+    extracted: bool,
 }
 
 impl NamedExpr {
     /// Creates an entry computing `expr` as the column `id`
     pub fn new(expr: Expr, id: ColumnId) -> Self {
-        Self { expr, id }
+        Self {
+            expr,
+            id,
+            extracted: false,
+        }
+    }
+
+    /// Creates an entry computing `expr` as the column `id`, marked as
+    /// *extracted*: the optimizer (`ExtractLeafExpressions` and
+    /// `PushDownLeafProjections`) moved `expr`, a sub-expression of a node
+    /// above, into a projection of its own so that it can move towards the
+    /// leaves.
+    ///
+    /// A projection whose entries are extracted entries and bare columns is
+    /// an *extraction projection*: `PushDownLeafProjections` pushes it
+    /// towards the scan, and `PushDownFilter` does not push a filter below
+    /// it. The mark is the only way to recognize one: an extracted entry is
+    /// named like any other output (after its expression).
+    pub fn extracted(expr: Expr, id: ColumnId) -> Self {
+        Self {
+            expr,
+            id,
+            extracted: true,
+        }
+    }
+
+    /// Whether this entry is marked as extracted (see [`Self::extracted`])
+    pub fn is_extracted(&self) -> bool {
+        self.extracted
+    }
+
+    /// Returns this entry, marked as extracted or not (see
+    /// [`Self::extracted`])
+    pub fn with_extracted(mut self, extracted: bool) -> Self {
+        self.extracted = extracted;
+        self
     }
 
     /// An entry for `expr`, an output computed over a node whose input
@@ -1133,15 +1175,16 @@ impl NamedExpr {
     }
 
     /// Whether this entry passes a column through: its expression is a bare
-    /// column with the id of the entry, or such a column under an alias that
-    /// only changes its qualifier (`t.a AS a`, as merging projections leaves
-    /// a pass-through that dropped the qualifier)
+    /// column with the id of the entry, or such a column under an alias (`t.a
+    /// AS a`, as merging projections leaves a pass-through that dropped the
+    /// qualifier, or `t.a AS b`, an output renamed by a rewrite). Only the ids
+    /// are compared: the name of the output is not the label of the column
     pub fn is_pass_through(&self) -> bool {
         match &self.expr {
             Expr::Column(col) => col.id == Some(self.id),
-            Expr::Alias(Alias { expr, name, .. }) => matches!(
+            Expr::Alias(Alias { expr, .. }) => matches!(
                 expr.as_ref(),
-                Expr::Column(col) if col.id == Some(self.id) && col.name == *name
+                Expr::Column(col) if col.id == Some(self.id)
             ),
             _ => false,
         }
@@ -1158,11 +1201,16 @@ impl NamedExpr {
     /// `expr` does not pass the same column through (casting a passed through
     /// column defines a new column), in which case it gets a new id from
     /// `generator`
+    ///
+    /// The entry keeps its mark (see [`Self::extracted`]).
     pub fn with_rewritten_expr(self, expr: Expr, generator: &ColumnIdGenerator) -> Self {
         let was_pass_through = self.is_pass_through();
-        let entry = Self::new(expr, self.id);
+        let entry = self.with_expr(expr);
         if was_pass_through && !entry.is_pass_through() {
-            Self::new(entry.expr, generator.next())
+            Self {
+                id: generator.next(),
+                ..entry
+            }
         } else {
             entry
         }
@@ -1174,9 +1222,9 @@ impl NamedExpr {
     }
 
     /// Returns this entry with its expression replaced by `expr`, keeping
-    /// its id
+    /// its id and its mark (see [`Self::extracted`])
     pub fn with_expr(self, expr: Expr) -> Self {
-        Self { expr, id: self.id }
+        Self { expr, ..self }
     }
 }
 
@@ -1216,8 +1264,7 @@ impl fmt::Debug for NamedExpr {
 
 impl PartialEq for NamedExpr {
     fn eq(&self, other: &Self) -> bool {
-        // ignores the id, see the documentation of `NamedExpr`
-        self.expr == other.expr
+        self.id == other.id && self.expr == other.expr
     }
 }
 
@@ -1231,13 +1278,17 @@ impl PartialEq<Expr> for NamedExpr {
 
 impl Hash for NamedExpr {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        self.expr.hash(state)
+        self.expr.hash(state);
+        self.id.hash(state);
     }
 }
 
 impl PartialOrd for NamedExpr {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.expr.partial_cmp(&other.expr)
+        match self.expr.partial_cmp(&other.expr) {
+            Some(Ordering::Equal) => self.id.partial_cmp(&other.id),
+            cmp => cmp,
+        }
     }
 }
 
@@ -1253,10 +1304,18 @@ impl<'a> TreeNodeContainer<'a, Expr> for NamedExpr {
         self,
         f: F,
     ) -> Result<Transformed<Self>> {
-        let id = self.id;
-        self.expr
-            .map_elements(f)?
-            .map_data(|expr| Ok(Self { expr, id }))
+        let Self {
+            expr,
+            id,
+            extracted,
+        } = self;
+        expr.map_elements(f)?.map_data(|expr| {
+            Ok(Self {
+                expr,
+                id,
+                extracted,
+            })
+        })
     }
 }
 

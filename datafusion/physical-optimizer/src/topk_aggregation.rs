@@ -51,6 +51,12 @@ impl TopKAggregation {
         let order = order.iter().exactly_one().ok()?;
         let sort_options = order.options;
         let order = order.expr.downcast_ref::<Column>()?;
+        // The sort column is followed by its index in the output of each node
+        // down to the first aggregate: two columns can have the same name (a
+        // projection can compute `-max(v) AS "max(v)"` over the aggregate's
+        // `max(v)`). Below an aggregate (to its partial aggregate) the name of
+        // the aggregate output identifies it.
+        let mut sort_col_index = Some(order.index());
         let mut sort_col_name = order.name().to_string();
         let limit = sort.fetch()?;
 
@@ -60,21 +66,56 @@ impl TopKAggregation {
                 return Ok(Transformed::no(plan));
             }
             if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
-                match aggr
-                    .clone()
-                    .try_optimize_topk(limit, &sort_col_name, sort_options)
+                // the column at the index must be the only one with its name
+                let identified = sort_col_index.is_none_or(|i| {
+                    let schema = aggr.schema();
+                    schema.field(i).name() == &sort_col_name
+                        && schema
+                            .fields()
+                            .iter()
+                            .filter(|field| field.name() == &sort_col_name)
+                            .count()
+                            == 1
+                });
+                sort_col_index = None;
+                match identified
+                    .then(|| {
+                        aggr.clone().try_optimize_topk(
+                            limit,
+                            &sort_col_name,
+                            sort_options,
+                        )
+                    })
+                    .flatten()
                 {
                     None => cardinality_preserved = false,
                     Some(aggr) => return Ok(Transformed::yes(Arc::new(aggr.data))),
                 }
             } else if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
-                // track renames due to successive projections
-                for proj_expr in proj.expr() {
-                    let Some(src_col) = proj_expr.expr.downcast_ref::<Column>() else {
-                        continue;
-                    };
-                    if proj_expr.alias == sort_col_name {
-                        sort_col_name = src_col.name().to_string();
+                match sort_col_index {
+                    // follow the sort column through the projection: it must
+                    // be a column of the projection's input
+                    Some(i) => match proj.expr()[i].expr.downcast_ref::<Column>() {
+                        Some(src_col) => {
+                            sort_col_index = Some(src_col.index());
+                            sort_col_name = src_col.name().to_string();
+                        }
+                        None => cardinality_preserved = false,
+                    },
+                    // track renames due to successive projections
+                    None => {
+                        for proj_expr in proj.expr() {
+                            if proj_expr.alias != sort_col_name {
+                                continue;
+                            }
+                            match proj_expr.expr.downcast_ref::<Column>() {
+                                Some(src_col) => {
+                                    sort_col_name = src_col.name().to_string()
+                                }
+                                None => cardinality_preserved = false,
+                            }
+                            break;
+                        }
                     }
                 }
             } else {
@@ -82,6 +123,20 @@ impl TopKAggregation {
                 match plan.cardinality_effect() {
                     CardinalityEffect::Equal | CardinalityEffect::GreaterEqual => {}
                     CardinalityEffect::Unknown | CardinalityEffect::LowerEqual => {
+                        cardinality_preserved = false;
+                    }
+                }
+                // the column keeps its index if the node passes it through
+                if let Some(i) = sort_col_index {
+                    let passes_through = match plan.children().as_slice() {
+                        [child] => {
+                            let child_schema = child.schema();
+                            i < child_schema.fields().len()
+                                && plan.schema().field(i) == child_schema.field(i)
+                        }
+                        _ => false,
+                    };
+                    if !passes_through {
                         cardinality_preserved = false;
                     }
                 }

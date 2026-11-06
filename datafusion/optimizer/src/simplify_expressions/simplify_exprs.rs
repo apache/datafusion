@@ -21,7 +21,7 @@ use datafusion_expr::{Expr, NamedExpr};
 use super::ExprSimplifier;
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::linear_aggregates::rewrite_multiple_linear_aggregates;
-use crate::utils::{NamePreserver, merge_into_schema};
+use crate::utils::{merge_into_schema, with_recomputed_output_names};
 use crate::{OptimizerConfig, OptimizerRule};
 
 /// Optimizer Pass that simplifies [`LogicalPlan`]s by rewriting
@@ -110,14 +110,33 @@ impl SimplifyExpressions {
             simplifier
         };
 
-        // Preserve expression names to avoid changing the schema of the plan.
-        let name_preserver = NamePreserver::new(&plan);
+        // A simplified output keeps its id, and may change its name: nothing
+        // refers to it by name (see `with_recomputed_output_names`).
         // A simplification can repeat a subquery (`coalesce(x, y)` into a
         // `CASE` that repeats `x`): the repeated one gets new ids.
         let mut subquery_ids = HashSet::new();
         let mut rewrite_expr = |expr: Expr| {
-            let name = name_preserver.save(&expr);
+            // an alias names a definition: the simplified expression keeps it
+            let alias = match &expr {
+                Expr::Alias(alias) => Some((
+                    alias.relation.clone(),
+                    alias.name.clone(),
+                    alias.metadata.clone(),
+                )),
+                _ => None,
+            };
             let expr = simplifier.simplify_with_cycle_count_transformed(expr)?.0;
+            let expr = match (alias, expr.data) {
+                (Some((relation, name, metadata)), data) if !matches!(&data, Expr::Alias(a) if a.name == name && a.relation == relation) => {
+                    Transformed::new(
+                        data.unalias()
+                            .alias_qualified_with_metadata(relation, name, metadata),
+                        expr.transformed,
+                        expr.tnr,
+                    )
+                }
+                (_, data) => Transformed::new(data, expr.transformed, expr.tnr),
+            };
             let transformed = expr.transformed;
             let expr = expr
                 .data
@@ -126,10 +145,7 @@ impl SimplifyExpressions {
                     config.column_id_generator(),
                 )?
                 .data;
-            Ok(Transformed::new_transformed(
-                name.restore(expr),
-                transformed,
-            ))
+            Ok(Transformed::new_transformed(expr, transformed))
         };
 
         plan.map_expressions(|expr| {
@@ -139,7 +155,8 @@ impl SimplifyExpressions {
             } else {
                 rewrite_expr(expr)
             }
-        })?
+        })
+        .and_then(with_recomputed_output_names)?
         .transform_data(|plan| {
             rewrite_aggregate_non_aggregate_aggr_expr(plan, config.column_id_generator())
         })
@@ -207,17 +224,19 @@ fn rewrite_aggregate_non_aggregate_aggr_expr(
 
     // Ensure that all Aggregate arguments are AggregateExpr
     if aggr_expr.iter().all(|e| is_top_level_aggregate_expr(e)) {
-        let new_plan = LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-            input,
-            group_expr,
-            grouping_sets,
-            aggr_expr,
-            schema,
-        )?);
         return if !rewrote_aggs {
-            Ok(Transformed::no(new_plan))
+            Aggregate::try_new_with_schema(
+                input,
+                group_expr,
+                grouping_sets,
+                aggr_expr,
+                schema,
+            )
+            .map(|agg| Transformed::no(LogicalPlan::Aggregate(agg)))
         } else {
-            Ok(Transformed::yes(new_plan))
+            // the rewritten outputs keep their ids, and may be renamed
+            Aggregate::try_new(input, group_expr, grouping_sets, aggr_expr)
+                .map(|agg| Transformed::yes(LogicalPlan::Aggregate(agg)))
         };
     }
 
@@ -614,7 +633,7 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Aggregate: groupBy=[[test.a, test.c]], aggr=[[max(test.b) AS max(test.b = Boolean(true)), min(test.b)]]
           Projection: test.a, test.c, test.b
             TableScan: test
@@ -639,7 +658,7 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @ "Values: (Int32(3) AS Int32(1) + Int32(2), Int32(1) AS Int32(2) - Int32(1))"
+            @ "Values: (Int32(3), Int32(1))"
         )
     }
 
@@ -662,7 +681,9 @@ mod tests {
             .project(proj)?
             .build()?;
 
-        let expected = "Projection: Int32(0) AS Utf8(\"0\")\
+        // the rule renames the output (it keeps its id); the optimizer
+        // restores the names of the root
+        let expected = "Projection: Int32(0)\
             \n  TableScan: test";
         let actual = get_optimized_plan_formatted(plan, &Utc::now());
         assert_eq!(expected, actual);
@@ -682,7 +703,7 @@ mod tests {
             .build()?;
 
         let actual = get_optimized_plan_formatted(plan, &time);
-        let expected = "Projection: NOT test.a AS Boolean(true) OR Boolean(false) != test.a\
+        let expected = "Projection: NOT test.a\
                         \n  TableScan: test";
 
         assert_eq!(expected, actual);
@@ -1046,9 +1067,10 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Aggregate: groupBy=[[GROUPING SETS ((Int32(43) AS age, test.a), (Boolean(false) AS cond), (test.d AS e, Int32(3) AS Int32(1) + Int32(2)))]], aggr=[[]]
-          TableScan: test
+            @ "
+        Projection: age, test.a, cond, e, Int32(3) AS Int32(1) + Int32(2), __grouping_id
+          Aggregate: groupBy=[[GROUPING SETS ((Int32(43) AS age, test.a), (Boolean(false) AS cond), (test.d AS e, Int32(3)))]], aggr=[[]]
+            TableScan: test
         "
         )
     }

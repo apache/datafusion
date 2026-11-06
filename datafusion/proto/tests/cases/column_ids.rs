@@ -299,16 +299,10 @@ async fn decode_plan_without_column_ids() -> Result<()> {
             // the projection of the work table scan is not encoded
             assert_eq!(format!("{plan}"), format!("{decoded}"));
         }
-        // the decoded plan defines its columns once, but its references
-        // have no ids
+        // the decoded plan defines its columns once, and its references are
+        // bound to them by name
         let issues = decoded.column_id_issues();
-        assert!(
-            issues
-                .iter()
-                .all(|issue| issue.kind == ColumnIdIssueKind::Missing),
-            "{sql}: {issues:?}"
-        );
-        assert_ne!(column_ids(&plan), column_ids(&decoded));
+        assert!(issues.is_empty(), "{sql}: {issues:?}");
         assert_eq!(
             sorted_results(&ctx, plan).await?,
             sorted_results(&ctx, decoded).await?

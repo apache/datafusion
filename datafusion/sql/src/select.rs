@@ -20,7 +20,9 @@ use crate::utils::{
 
 use arrow::datatypes::DataType;
 use datafusion_common::error::DataFusionErrorBuilder;
-use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, HashMap, Result, not_impl_err,
     plan_err,
@@ -157,6 +159,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             Some(base_plan.schema().as_ref()),
         )?;
         let order_by_rex = normalize_sorts(order_by_rex, &projected_plan)?;
+        // The final projection is planned again (with new column ids): the
+        // references to the outputs that `projected_plan` defines (to
+        // resolve SELECT aliases) lose their ids, and are bound again by name
+        // where they are planned
+        let order_by_rex = order_by_rex
+            .into_iter()
+            .map(|sort| {
+                let expr = without_projection_ids(sort.expr.clone(), &projected_plan)?;
+                Ok(sort.with_expr(expr))
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         // This alias map is resolved and looked up in both having exprs and group by exprs
         let alias_map = extract_aliases(&select_exprs);
@@ -664,6 +677,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let Some(expr) = filter_expr else {
             return Ok(plan);
         };
+        // the aliases were bound to a projection that was planned again: a
+        // column that `plan` does not have by id is bound again by name
+        let expr = expr
+            .transform(|e| match e {
+                Expr::Column(c)
+                    if c.id.is_some_and(|id| {
+                        plan.schema().index_of_column_id(id).is_none()
+                    }) =>
+                {
+                    Ok(Transformed::yes(Expr::Column(c.with_id(None))))
+                }
+                e => Ok(Transformed::no(e)),
+            })
+            .data()?;
         if !find_aggregate_exprs(std::iter::once(&expr)).is_empty()
             || !find_window_exprs(std::iter::once(&expr)).is_empty()
         {
@@ -1445,7 +1472,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // an output column from the aggregate schema
         let column_exprs_post_aggr = aggr_projection_exprs
             .iter()
-            .map(|expr| expr_as_column_expr(expr, input))
+            .map(|expr| expr_as_column_expr(expr, &plan))
             .collect::<Result<Vec<Expr>>>()?;
 
         // next we re-write the projection: the rewritten references bind to
@@ -1508,11 +1535,45 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // aggregation. If an ORDER BY expression matches a SELECT expression
         // (ignoring aliases), use the SELECT's output column name to avoid
         // duplication when the SELECT expression has an alias.
+        // A reference to an output of the SELECT list is bound to the output
+        // of a projection that is planned again over the aggregate: a SELECT
+        // alias is matched by name here (and bound again when the sort is
+        // built), any other output is bound again to the aggregate's output
+        // of that name
+        let alias_names: HashSet<&String> = select_exprs_post_aggr
+            .iter()
+            .filter_map(|e| match e {
+                Expr::Alias(alias) => Some(&alias.name),
+                _ => None,
+            })
+            .collect();
+        let rebind = |c: Column| {
+            if c.relation.is_none() && alias_names.contains(&c.name) {
+                return c.with_id(None);
+            }
+            let c = c.with_id(None);
+            let schema = plan.schema();
+            let id = schema
+                .maybe_index_of_column(&c)
+                .and_then(|i| schema.field_id(i));
+            c.with_id(id)
+        };
         let order_by_post_aggr = order_by_exprs
             .iter()
             .map(|sort_expr| {
                 let rewritten_expr =
-                    rebase_expr(&sort_expr.expr, &aggr_projection_exprs, &plan)?;
+                    rebase_expr(&sort_expr.expr, &aggr_projection_exprs, &plan)?
+                        .transform(|e| match e {
+                            Expr::Column(c)
+                                if c.id.is_none_or(|id| {
+                                    plan.schema().index_of_column_id(id).is_none()
+                                }) =>
+                            {
+                                Ok(Transformed::yes(Expr::Column(rebind(c))))
+                            }
+                            e => Ok(Transformed::no(e)),
+                        })
+                        .data()?;
 
                 // Check if this ORDER BY expression matches any aliased SELECT expression
                 // If so, use the SELECT's alias instead of the raw expression
@@ -1798,4 +1859,28 @@ fn collect_unnest_null_handling(expr_groups: &[Vec<Expr>]) -> Result<NullHandlin
     } else {
         NullHandling::Drop
     })
+}
+
+/// `expr`, where the columns that read an output that `projection` defines
+/// (not a column it passes through) have no id: they are bound again by name
+/// to the projection that is planned again
+fn without_projection_ids(expr: Expr, projection: &LogicalPlan) -> Result<Expr> {
+    let LogicalPlan::Projection(projection) = projection else {
+        return Ok(expr);
+    };
+    let defined: HashSet<_> = projection
+        .expr
+        .iter()
+        .filter_map(|entry| entry.defined_id())
+        .collect();
+    if defined.is_empty() {
+        return Ok(expr);
+    }
+    expr.transform(|e| match e {
+        Expr::Column(c) if c.id.is_some_and(|id| defined.contains(&id)) => {
+            Ok(Transformed::yes(Expr::Column(c.with_id(None))))
+        }
+        e => Ok(Transformed::no(e)),
+    })
+    .data()
 }

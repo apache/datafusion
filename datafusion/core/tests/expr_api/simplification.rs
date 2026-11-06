@@ -649,7 +649,7 @@ fn simplify_scan_predicate() -> Result<()> {
     // after simplify:  t.g = t.f"
     let formatted = get_optimized_plan_formatted(plan, &Utc::now());
     let actual = formatted.trim();
-    assert_snapshot!(actual, @"TableScan: test, full_filters=[g = f]");
+    assert_snapshot!(actual, @"TableScan: test, full_filters=[test.g = test.f]");
     Ok(())
 }
 

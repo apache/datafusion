@@ -964,8 +964,13 @@ impl PullUpCorrelatedExpr {
         // above the aggregate by `ResolveGroupingFunction` before this rule
         // runs, so `aggregate.aggr_expr` never holds a `GROUPING` call by the
         // time this is reached; adding a column shifts those bits instead.
+        // (by qualifier and name: a grouping column that is not in every set
+        // is a new column above the aggregate, with an id of its own)
         let unsafe_read = self.column_refs_above.iter().flatten().any(|col| {
-            col.name == Aggregate::INTERNAL_GROUPING_ID || required_cols.contains(col)
+            col.name == Aggregate::INTERNAL_GROUPING_ID
+                || required_cols
+                    .iter()
+                    .any(|r| r.relation == col.relation && r.name == col.name)
         });
 
         if has_empty_set || unsafe_read {
@@ -1140,12 +1145,9 @@ fn partition_window_by(window: &Window, cols: &BTreeSet<Column>) -> Result<Logic
     let window_expr = window
         .window_expr
         .iter()
-        .map(|entry| {
-            add_partition_by(entry, cols)
-                .alias_if_changed(entry.schema_name().to_string())
-                .map(|expr| NamedExpr::new(expr, entry.id))
-        })
-        .collect::<Result<Vec<_>>>()?;
+        // each output keeps its id, and may be renamed
+        .map(|entry| NamedExpr::new(add_partition_by(entry, cols), entry.id))
+        .collect::<Vec<_>>();
     Window::try_new(window_expr, Arc::clone(&window.input)).map(LogicalPlan::Window)
 }
 
@@ -1339,10 +1341,13 @@ fn remove_duplicated_filter(
         "in_predicate must use a commutative operator"
     );
 
+    // compared by qualifier and name, as before column ids: the IN value is
+    // an output of the subquery, which a grouping set can define again
+    let in_predicate = &in_predicate.clone().without_column_ids();
     Ok(filters
         .into_iter()
         .filter(|filter| {
-            let filter = &strip_outer_reference(filter.clone());
+            let filter = &strip_outer_reference(filter.clone()).without_column_ids();
             if filter == in_predicate {
                 return false;
             }

@@ -40,9 +40,7 @@ use sqlparser::ast::Ident;
 /// ```
 ///
 /// Which would result in a SQL error, as `table1.foo` is not a valid reference in the context of the UNION.
-pub(super) fn normalize_union_schema(plan: &LogicalPlan) -> Result<LogicalPlan> {
-    let plan = plan.clone();
-
+pub(super) fn normalize_union_schema(plan: LogicalPlan) -> Result<LogicalPlan> {
     let transformed_plan = plan.transform_up(|plan| match plan {
         LogicalPlan::Union(mut union) => {
             let schema = Arc::unwrap_or_clone(union.schema);
@@ -234,11 +232,27 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         let mut sort = sort.clone();
         let mut inner_p = inner_p.clone();
 
-        // the outer projection's outputs, with their ids
+        // the outer projection's outputs, with their ids: a column that reads
+        // an output of the inner projection (by id, or else by name) is
+        // replaced by the expression that computes it
+        let inner_expr = |e: &Expr| {
+            if let Expr::Column(col) = e
+                && let Some(i) =
+                    col.id.and_then(|id| inner_p.schema.index_of_column_id(id))
+            {
+                return Some(inner_p.expr[i].expr.clone());
+            }
+            map.get(e).cloned()
+        };
         let new_exprs = p
             .expr
             .iter()
-            .map(|e| NamedExpr::new(map.get(&e.expr).unwrap_or(&e.expr).clone(), e.id))
+            .map(|e| {
+                NamedExpr::new(
+                    inner_expr(&e.expr).unwrap_or_else(|| e.expr.clone()),
+                    e.id,
+                )
+            })
             .collect::<Vec<_>>();
 
         // The inner Projection may define aliases that the Sort references

@@ -113,13 +113,11 @@ impl ColumnIdGenerator {
 ///
 /// # Equality
 ///
-/// `PartialEq`, `Eq`, `Hash`, `PartialOrd` and `Ord` compare the relation and
-/// the name only: they ignore [`Self::spans`] (diagnostics) and [`Self::id`].
-/// Code that keys maps or compares expressions by `Column` builds its keys
-/// with [`Column::new`], without ids, and keeps working unchanged while ids
-/// are introduced. Equality is planned to include ids only once every
-/// producer of columns keeps them (phase 6 of the column identity plan).
-/// Until then, use [`Column::same_column`] to compare by id.
+/// `PartialEq`, `Eq`, `Hash`, `PartialOrd` and `Ord` compare the relation,
+/// the name and the [`Self::id`]: two references to columns with the same
+/// name but different ids (the outputs of two scans of the same table) are
+/// different, and so are a reference with an id and one without. They ignore
+/// [`Self::spans`] (diagnostics).
 #[derive(Clone)]
 #[non_exhaustive]
 pub struct Column {
@@ -131,16 +129,16 @@ pub struct Column {
     pub spans: Spans,
     /// The identity of the column this refers to, if known.
     ///
-    /// When set and present in a schema, lookups in that schema find the field
-    /// with this id, whatever its qualifier and name; otherwise they use the
-    /// qualifier and name. Ignored by equality, see [`Column`].
+    /// When set, lookups in a schema with ids find the field with this id,
+    /// whatever its qualifier and name, or nothing; without it they use the
+    /// qualifier and name (binding). Part of equality, see [`Column`].
     pub id: Option<ColumnId>,
 }
 
 impl PartialEq for Column {
     fn eq(&self, other: &Self) -> bool {
-        // ignores `spans` and `id`, see the documentation of `Column`
-        self.relation == other.relation && self.name == other.name
+        // ignores `spans`, see the documentation of `Column`
+        self.id == other.id && self.relation == other.relation && self.name == other.name
     }
 }
 
@@ -148,9 +146,10 @@ impl Eq for Column {}
 
 impl Hash for Column {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // consistent with `PartialEq`: ignores `spans` and `id`
+        // consistent with `PartialEq`: ignores `spans`
         self.relation.hash(state);
         self.name.hash(state);
+        self.id.hash(state);
     }
 }
 
@@ -162,10 +161,11 @@ impl PartialOrd for Column {
 
 impl Ord for Column {
     fn cmp(&self, other: &Self) -> Ordering {
-        // consistent with `PartialEq`: ignores `spans` and `id`
+        // consistent with `PartialEq`: ignores `spans`
         self.relation
             .cmp(&other.relation)
             .then_with(|| self.name.cmp(&other.name))
+            .then_with(|| self.id.cmp(&other.id))
     }
 }
 
@@ -370,7 +370,7 @@ impl Column {
         using_columns: &[HashSet<Column>],
     ) -> Result<Self> {
         if self.relation.is_some() {
-            return Ok(self.bind_qualified(schemas));
+            return self.bind_qualified(schemas);
         }
 
         for schema_level in schemas {
@@ -442,24 +442,36 @@ impl Column {
 
     /// Returns this qualified column with the id of the field it resolves to
     /// in `schemas` (searched in order), if it has no id yet. Returned as is
-    /// if it has an id, or if no field has its qualifier and name: binding
-    /// never fails, the lookup then uses the qualifier and name.
-    fn bind_qualified(self, schemas: &[&[&DFSchema]]) -> Self {
+    /// if it has an id, or if no field has its qualifier and name (the lookup
+    /// then uses the qualifier and name). An error if the first schema that
+    /// has fields with its qualifier and name has several, with different
+    /// ids: the reference is ambiguous.
+    fn bind_qualified(self, schemas: &[&[&DFSchema]]) -> Result<Self> {
         if self.id.is_some() {
-            return self;
+            return Ok(self);
         }
-        let id = schemas
-            .iter()
-            .flat_map(|level| level.iter())
-            .find_map(|schema| {
-                schema
-                    .index_of_column_by_name(self.relation.as_ref(), &self.name)
-                    .map(|i| schema.field_id(i))
-            });
-        match id {
-            Some(id) => self.with_id(id),
-            None => self,
+        for schema in schemas.iter().flat_map(|level| level.iter()) {
+            let mut ids = schema
+                .iter()
+                .zip(schema.field_ids())
+                .filter(|((qualifier, field), _)| {
+                    field.name() == &self.name
+                        && qualifier.is_some_and(|q| {
+                            self.relation.as_ref().is_some_and(|r| r.resolved_eq(q))
+                        })
+                })
+                .map(|(_, id)| *id);
+            let Some(id) = ids.next() else {
+                continue;
+            };
+            if ids.any(|other| other != id) {
+                return _schema_err!(SchemaError::AmbiguousReference {
+                    field: Box::new(Column::new(self.relation.clone(), &self.name)),
+                });
+            }
+            return Ok(self.with_id(id));
         }
+        Ok(self)
     }
 
     /// Returns a reference to the set of locations in the SQL query where this
@@ -488,16 +500,12 @@ impl Column {
     }
 
     /// Returns true if `self` and `other` refer to the same column: if both
-    /// have an id, the ids are equal; otherwise the relations and names are
-    /// equal.
-    ///
-    /// Unlike `==`, which ignores ids (see [`Column`]), this tells apart two
-    /// columns with the same name that have different ids, such as the
-    /// outputs of two scans of the same table.
+    /// have an id, the ids are equal (whatever their labels); otherwise the
+    /// relations and names are equal.
     pub fn same_column(&self, other: &Column) -> bool {
         match (self.id, other.id) {
             (Some(id), Some(other_id)) => id == other_id,
-            _ => self == other,
+            _ => self.relation == other.relation && self.name == other.name,
         }
     }
 
@@ -673,16 +681,19 @@ mod tests {
     }
 
     #[test]
-    fn equality_ignores_id() {
+    fn equality_includes_id() {
         let plain = Column::new(Some("t1"), "a");
         let with_id = plain.clone().with_id(Some(column_id(1)));
         let other_id = plain.clone().with_id(Some(column_id(2)));
 
-        assert_eq!(plain, with_id);
-        assert_eq!(with_id, other_id);
-        assert_eq!(hash_of(&plain), hash_of(&with_id));
-        assert_eq!(hash_of(&with_id), hash_of(&other_id));
-        assert_eq!(with_id.cmp(&other_id), Ordering::Equal);
+        assert_ne!(plain, with_id);
+        assert_ne!(with_id, other_id);
+        assert_eq!(with_id, plain.clone().with_id(Some(column_id(1))));
+        assert_eq!(
+            hash_of(&with_id),
+            hash_of(&plain.clone().with_id(Some(column_id(1))))
+        );
+        assert_ne!(with_id.cmp(&other_id), Ordering::Equal);
 
         // relation and name still matter
         assert_ne!(

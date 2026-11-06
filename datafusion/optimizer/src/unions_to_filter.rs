@@ -110,9 +110,11 @@ fn try_rewrite_distinct_union(
         };
 
         let table_sources = collect_table_sources(&branch.source)?;
+        let shape = wrap_branch(branch.source.clone(), &branch.wrappers, ids)?;
         let key = GroupKey {
             source: branch.source,
             wrappers: branch.wrappers,
+            shape,
             table_sources,
         };
         if let Some((kept, conds)) = grouped.iter_mut().find(|(k, _)| k == &key) {
@@ -246,6 +248,10 @@ fn extract_branch(plan: LogicalPlan) -> Result<Option<UnionBranch>> {
 struct GroupKey {
     source: LogicalPlan,
     wrappers: Vec<Wrapper>,
+    /// The branch without its predicate (`wrappers` over `source`): two
+    /// branches can be merged if these compute the same rows, up to the ids
+    /// of the columns they define (two scans of a table have different ids)
+    shape: LogicalPlan,
     // LogicalPlan equality deliberately ignores TableScan::source. Retain the
     // corresponding Arcs so structurally identical scans over different data
     // cannot be grouped together.
@@ -254,8 +260,7 @@ struct GroupKey {
 
 impl PartialEq for GroupKey {
     fn eq(&self, other: &Self) -> bool {
-        self.source == other.source
-            && self.wrappers == other.wrappers
+        self.shape.is_equivalent_up_to_column_ids(&other.shape)
             && self.table_sources.len() == other.table_sources.len()
             && self
                 .table_sources
@@ -341,7 +346,15 @@ fn align_plan_to_schema(
     schema: datafusion_common::DFSchemaRef,
     ids: &ColumnIdGenerator,
 ) -> Result<LogicalPlan> {
-    if plan.schema() == &schema {
+    // the same outputs up to their ids (the union above takes its own)
+    let same_up_to_ids = plan.schema().fields().len() == schema.fields().len()
+        && plan
+            .schema()
+            .as_ref()
+            .clone()
+            .with_field_ids(schema.field_ids().to_vec())?
+            == *schema;
+    if same_up_to_ids {
         return Ok(plan);
     }
 

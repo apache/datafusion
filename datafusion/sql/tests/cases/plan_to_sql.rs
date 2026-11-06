@@ -285,9 +285,14 @@ fn roundtrip_statement() -> Result<()> {
             .unwrap();
 
         // Explicit output names can add unqualified self-aliases without changing the plan's meaning.
+        // (each planning gives the columns new ids, and may pass a column
+        // through where the other defines it again: compare the plans as
+        // they display, with their schemas)
+        let plan = remove_column_self_aliases(plan)?;
+        let plan_roundtrip = remove_column_self_aliases(plan_roundtrip)?;
         assert_eq!(
-            remove_column_self_aliases(plan)?,
-            remove_column_self_aliases(plan_roundtrip)?,
+            plan.display_indent_schema().to_string(),
+            plan_roundtrip.display_indent_schema().to_string(),
         );
     }
 
@@ -1607,6 +1612,33 @@ where
     plan_to_sql(&plan).unwrap()
 }
 
+/// A reference reads its column by id: the unparser emits the qualifier and
+/// name of the field it reads, not its label (which a rule that moves an
+/// expression below a `SubqueryAlias` can leave out of date)
+#[test]
+fn test_unparse_reference_by_id() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+    let scan = table_scan(Some("t1"), &schema, None)?.build()?;
+    let id = scan.schema().field_id(0);
+    assert!(id.is_some());
+    // labelled `a.id`, reads `t1.id`
+    let column = Expr::Column(Column::new(Some("a"), "id").with_id(id));
+    let plan = LogicalPlan::Filter(datafusion_expr::Filter::try_new(
+        column.gt(lit(5)),
+        Arc::new(scan),
+    )?);
+    let plan = LogicalPlanBuilder::from(plan).alias("a")?.build()?;
+    let sql = plan_to_sql(&plan)?;
+    assert_snapshot!(
+        sql,
+        @"SELECT * FROM (SELECT * FROM t1 WHERE (t1.id > 5)) AS a"
+    );
+    Ok(())
+}
+
 #[test]
 fn test_table_scan_alias() -> Result<()> {
     let schema = Schema::new(vec![
@@ -1995,7 +2027,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
     let sql = plan_to_sql(&join_plan_with_filter)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id AND ("left".id > 5) WHERE "left"."name" LIKE 'some_name' AND (age > 10)"#
+        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id AND ("left".id > 5) WHERE "left"."name" LIKE 'some_name' AND (right_table.age > 10)"#
     );
 
     let join_plan_no_filter = LogicalPlanBuilder::from(left_plan.clone())
@@ -2010,7 +2042,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
     let sql = plan_to_sql(&join_plan_no_filter)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id WHERE "left"."name" LIKE 'some_name' AND (age > 10)"#
+        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id WHERE "left"."name" LIKE 'some_name' AND (right_table.age > 10)"#
     );
 
     let right_plan_with_filter = table_scan_with_filters(
@@ -2035,7 +2067,7 @@ fn test_join_with_table_scan_filters() -> Result<()> {
     let sql = plan_to_sql(&join_plan_multiple_filters)?;
     assert_snapshot!(
         sql,
-        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id AND ("left".id > 5) WHERE ("left"."name" = 'after_join_filter_val') AND "left"."name" LIKE 'some_name' AND (right_table."name" = 'before_join_filter_val') AND (age > 10)"#
+        @r#"SELECT * FROM left_table AS "left" INNER JOIN right_table ON "left".id = right_table.id AND ("left".id > 5) WHERE ("left"."name" = 'after_join_filter_val') AND "left"."name" LIKE 'some_name' AND (right_table."name" = 'before_join_filter_val') AND (right_table.age > 10)"#
     );
 
     let right_plan_with_filter_schema = table_scan_with_filters(

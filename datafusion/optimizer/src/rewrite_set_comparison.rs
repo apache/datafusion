@@ -6,7 +6,7 @@
 //! `> ALL`) into boolean expressions built from `EXISTS` subqueries
 //! that capture SQL three-valued logic.
 
-use crate::utils::{NamePreserver, merge_into_schema};
+use crate::utils::{merge_into_schema, with_recomputed_output_names};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
@@ -44,20 +44,13 @@ impl RewriteSetComparison {
         if let Some(merge_schema) = merge_into_schema(&plan)? {
             schema = merge_schema;
         }
-        // This rule replaces `x > ALL (…)` with a `CASE WHEN EXISTS …`, whose display
-        // name is not the name of the field it produces. Rewriting an expression
-        // without preserving its name therefore changes the output schema, and the
-        // optimizer's "the schema is invariant under optimization" check fails with an
-        // internal error rather than returning the answer. `simplify_exprs` and
-        // `type_coercion` preserve names around `map_expressions` for the same reason;
-        // doing it here also stops this rule leaving mismatched names in `Aggregate`
-        // and `Window` nodes, which a projection-only fix could not reach.
-        let name_preserver = NamePreserver::new(&plan);
+        // This rule replaces `x > ALL (…)` with a `CASE WHEN EXISTS …`, whose
+        // name is not the name of the field it replaces: the output keeps its
+        // id, and the node is renamed (see `with_recomputed_output_names`).
         plan.map_expressions(|expr| {
-            let original_name = name_preserver.save(&expr);
             expr.transform_up(|expr| rewrite_set_comparison(expr, &schema, config))
-                .map(|t| t.update_data(|expr| original_name.restore(expr)))
         })
+        .and_then(with_recomputed_output_names)
     }
 }
 

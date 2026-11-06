@@ -5,16 +5,15 @@
 //! [`EliminateOuterJoin`] rewrites outer joins to simpler join types when
 //! filters make the outer rows unnecessary (e.g. `LEFT`/`RIGHT` to `INNER`,
 //! and `FULL` to `LEFT`/`RIGHT`/`INNER`).
-use crate::push_down_filter::replace_cols_by_name;
+use crate::utils::OutputColumns;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::{Column, DFSchema, Result, qualified_name};
+use datafusion_common::{Column, DFSchema, Result};
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan, Projection};
 use datafusion_expr::{Expr, Filter, Operator};
 
 use crate::optimizer::ApplyOrder;
 use datafusion_common::tree_node::Transformed;
 use datafusion_expr::expr::{BinaryExpr, Cast, InList, Like, TryCast};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Attempt to simplify outer joins when filters make their null-padded
@@ -177,14 +176,8 @@ fn try_simplify_join(join: &Join, predicate: &Expr) -> Option<LogicalPlan> {
 /// purposes). Therefore, function volatility and `MoveTowardsLeafNodes`
 /// placement can be ignored here.
 fn inline_through_projection(predicate: Expr, p: &Projection) -> Result<Expr> {
-    let mut map: HashMap<String, Expr> = HashMap::with_capacity(p.expr.len());
-    for ((qualifier, field), expr) in p.schema.iter().zip(p.expr.iter()) {
-        map.insert(
-            qualified_name(qualifier, field.name()),
-            unalias(expr).clone(),
-        );
-    }
-    replace_cols_by_name(predicate, &map)
+    OutputColumns::new(&p.schema)
+        .replace(predicate, |i| p.expr.get(i).map(|e| unalias(e).clone()))
 }
 
 /// Re-attach a stack of projections above `new_inner`, restoring the original

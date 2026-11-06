@@ -6,12 +6,12 @@
 //! functions that report [`DistinctHandling::Insensitive`]
 
 use crate::optimizer::ApplyOrder;
+use crate::utils::with_recomputed_output_names;
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::Result;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_expr::expr::AggregateFunction;
-use datafusion_expr::expr_rewriter::NamePreserver;
 use datafusion_expr::{DistinctHandling, Expr, LogicalPlan};
 
 /// Optimizer rule that removes a `DISTINCT` modifier that cannot change the
@@ -71,15 +71,12 @@ impl OptimizerRule for EliminateAggregateDistinct {
         }
 
         // Dropping `DISTINCT` changes `Expr::schema_name`, and with it the
-        // output schema of the Aggregate, so restore the original name. The
-        // aggregate may sit under an alias that type coercion added, so walk
-        // the expression rather than matching only its root.
-        let name_preserver = NamePreserver::new(&plan);
-        plan.map_expressions(|expr| {
-            let saved_name = name_preserver.save(&expr);
-            expr.transform_down(strip_insensitive_distinct)
-                .map(|t| t.update_data(|e| saved_name.restore(e)))
-        })
+        // name of the output, which keeps its id (see
+        // `with_recomputed_output_names`). The aggregate may sit under an
+        // alias that type coercion added, so walk the expression rather than
+        // matching only its root.
+        plan.map_expressions(|expr| expr.transform_down(strip_insensitive_distinct))
+            .and_then(with_recomputed_output_names)
     }
 }
 
@@ -192,7 +189,7 @@ mod tests {
             .aggregate(vec![col("a")], vec![min(col("b")).distinct().build()?])?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
+        assert_optimized_plan_equal!(plan, @"
         Aggregate: groupBy=[[test.a]], aggr=[[min(test.b) AS min(DISTINCT test.b)]]
           TableScan: test
         ")
@@ -261,7 +258,7 @@ mod tests {
             )?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
+        assert_optimized_plan_equal!(plan, @"
         Aggregate: groupBy=[[test.a]], aggr=[[min(test.b) AS min(DISTINCT test.b), max(test.c) AS max(DISTINCT test.c)]]
           TableScan: test
         ")
@@ -278,7 +275,7 @@ mod tests {
             )?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
+        assert_optimized_plan_equal!(plan, @"
         Aggregate: groupBy=[[test.a]], aggr=[[min(test.b) AS min(DISTINCT test.b), sum(test.c)]]
           TableScan: test
         ")
@@ -296,7 +293,7 @@ mod tests {
             )?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
+        assert_optimized_plan_equal!(plan, @"
         Aggregate: groupBy=[[sum(DISTINCT test.c)]], aggr=[[min(test.b) AS min(DISTINCT test.b)]]
           TableScan: test
         ")
@@ -318,7 +315,7 @@ mod tests {
             )?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
+        assert_optimized_plan_equal!(plan, @"
         Aggregate: groupBy=[[test.a]], aggr=[[min(test.b) FILTER (WHERE test.c > UInt32(0)) AS min(DISTINCT test.b) FILTER (WHERE test.c > UInt32(0))]]
           TableScan: test
         ")
@@ -376,7 +373,7 @@ mod tests {
             )?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
+        assert_optimized_plan_equal!(plan, @"
         Aggregate: groupBy=[[test.a]], aggr=[[first_seen(test.b) FILTER (WHERE test.c > UInt32(0)) ORDER BY [test.b ASC NULLS LAST] AS first_seen(DISTINCT test.b) FILTER (WHERE test.c > UInt32(0)) ORDER BY [test.b ASC NULLS LAST]]]
           TableScan: test
         ")
@@ -494,7 +491,7 @@ mod tests {
             )?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
+        assert_optimized_plan_equal!(plan, @"
         Aggregate: groupBy=[[test.a]], aggr=[[first_seen(test.b) AS first_seen(DISTINCT test.b)]]
           TableScan: test
         ")

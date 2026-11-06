@@ -35,6 +35,30 @@ use std::sync::Arc;
 /// as it was initially placed here and then moved elsewhere.
 pub use datafusion_expr::expr_rewriter::NamePreserver;
 
+/// Returns `plan`, whose expressions a rule rewrote, with its schema
+/// recomputed if its outputs are named after its expressions (a projection,
+/// an aggregate, a window or a `DISTINCT ON`).
+///
+/// A rewrite keeps the ids of the outputs, and may rename them: nothing in
+/// the plan refers to an output by name. The optimizer restores the names of
+/// the root's outputs, and relabels the references when it ends.
+pub(crate) fn with_recomputed_output_names(
+    plan: Transformed<LogicalPlan>,
+) -> Result<Transformed<LogicalPlan>> {
+    if !plan.transformed {
+        return Ok(plan);
+    }
+    plan.map_data(|plan| match plan {
+        LogicalPlan::Projection(_)
+        | LogicalPlan::Aggregate(_)
+        | LogicalPlan::Window(_)
+        | LogicalPlan::Distinct(datafusion_expr::Distinct::On(_)) => {
+            plan.recompute_schema()
+        }
+        plan => Ok(plan),
+    })
+}
+
 /// Whether an expression is free of volatile functions and subqueries.
 /// Subqueries are conservative barriers because their plans may contain
 /// volatile expressions that [`Expr::is_volatile`] does not visit.
@@ -360,8 +384,8 @@ pub(crate) fn replace_qualified_name(
 }
 
 /// Finds the output column of a node that a reference reads, as a lookup in
-/// the node's schema does: by id when the node has an output with the
-/// reference's id, otherwise by qualifier and name. Unlike
+/// the node's schema does: by id when the reference has one (and the node's
+/// outputs have ids), otherwise by qualifier and name. Unlike
 /// [`DFSchema::maybe_index_of_column`], the name must match exactly (as
 /// [`Column`] equality): an unqualified reference does not find a qualified
 /// output, so that rules that substitute the outputs they find keep the
@@ -384,17 +408,20 @@ impl OutputColumns {
             if let Some(id) = col.id {
                 by_id.entry(id).or_insert(i);
             }
-            by_column.entry(col).or_insert(i);
+            // by qualifier and name only
+            by_column.entry(col.with_id(None)).or_insert(i);
         }
         Self { by_id, by_column }
     }
 
     /// The index of the output that `col` reads, if any
     pub(crate) fn index_of(&self, col: &Column) -> Option<usize> {
-        col.id
-            .and_then(|id| self.by_id.get(&id))
-            .or_else(|| self.by_column.get(col))
-            .copied()
+        match col.id {
+            // by id only (when the outputs have ids)
+            Some(id) if !self.by_id.is_empty() => self.by_id.get(&id).copied(),
+            Some(_) => self.by_column.get(&col.clone().with_id(None)).copied(),
+            None => self.by_column.get(col).copied(),
+        }
     }
 
     /// Returns `expr` with each column that reads an output `i` for which

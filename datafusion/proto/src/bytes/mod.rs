@@ -186,7 +186,9 @@ pub fn logical_plan_from_bytes_with_extension_codec(
 ) -> Result<LogicalPlan> {
     let protobuf = protobuf::LogicalPlanNode::decode(bytes)
         .map_err(|e| plan_datafusion_err!("Error decoding expr as protobuf: {e}"))?;
-    protobuf.try_into_logical_plan(ctx, extension_codec)
+    let plan = protobuf.try_into_logical_plan(ctx, extension_codec)?;
+    // a plan encoded before column ids existed: its references are bound
+    Ok(plan.with_bound_column_references()?.data)
 }
 
 /// Deserialize a LogicalPlan from JSON
@@ -198,7 +200,9 @@ pub fn logical_plan_from_json_with_extension_codec(
 ) -> Result<LogicalPlan> {
     let back: protobuf::LogicalPlanNode = serde_json::from_str(json)
         .map_err(|e| plan_datafusion_err!("Error deserializing plan: {e}"))?;
-    back.try_into_logical_plan(ctx, extension_codec)
+    let plan = back.try_into_logical_plan(ctx, extension_codec)?;
+    // a plan encoded before column ids existed: its references are bound
+    Ok(plan.with_bound_column_references()?.data)
 }
 
 /// Serialize a PhysicalPlan as bytes

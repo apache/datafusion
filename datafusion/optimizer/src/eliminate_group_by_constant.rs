@@ -210,7 +210,8 @@ fn is_redundant_group_expr(expr: &Expr, group_by_columns: &HashSet<&Column>) -> 
 fn is_deterministic_of(expr: &Expr, known_columns: &HashSet<&Column>) -> bool {
     match expr {
         Expr::Alias(e) => is_deterministic_of(&e.expr, known_columns),
-        Expr::Column(c) => known_columns.contains(c),
+        // by id (a reference's label can differ from the grouping column's)
+        Expr::Column(c) => known_columns.iter().any(|known| known.same_column(c)),
         Expr::Literal(_, _) => true,
         Expr::BinaryExpr(e) => {
             is_deterministic_of(&e.left, known_columns)

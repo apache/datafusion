@@ -479,7 +479,7 @@ async fn aggregate_distinct_with_having_rewritten() -> Result<()> {
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     let plan2 = ctx.state().optimize(&plan2)?;
 
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
 
     let results = DataFrame::new(ctx.state(), plan2).collect().await?;
     datafusion::assert_batches_sorted_eq!(
@@ -729,7 +729,7 @@ async fn test_substrait_to_df_name_mapping(
     let plan2str = format!("{plan2}");
     assert_eq!(plan1str, plan2str);
 
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
 
     Ok(())
 }
@@ -804,9 +804,10 @@ async fn aggregate_case() -> Result<()> {
 
     assert_snapshot!(
     plan,
-    @r"
-    Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END) AS sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE NULL END)]]
-      TableScan: data projection=[a]
+    @"
+    Projection: sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END) AS sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE NULL END)
+      Aggregate: groupBy=[[]], aggr=[[sum(CASE WHEN data.a > Int64(0) THEN Int64(1) ELSE Int64(NULL) END)]]
+        TableScan: data projection=[a]
     "
     );
     Ok(())
@@ -1061,7 +1062,7 @@ async fn roundtrip_correlated_exists() -> Result<()> {
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     // outer references read the ids of the enclosing query's columns
     assert!(plan2.column_id_issues().is_empty(), "{plan2}");
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
     assert_snapshot!(
     plan2,
     @r"
@@ -1091,7 +1092,7 @@ async fn roundtrip_correlated_in_subquery() -> Result<()> {
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     // outer references read the ids of the enclosing query's columns
     assert!(plan2.column_id_issues().is_empty(), "{plan2}");
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
     assert_snapshot!(
     plan2,
     @r"
@@ -1121,7 +1122,7 @@ async fn roundtrip_correlated_scalar_subquery() -> Result<()> {
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     // outer references read the ids of the enclosing query's columns
     assert!(plan2.column_id_issues().is_empty(), "{plan2}");
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
     assert_snapshot!(
     plan2,
     @r"
@@ -1158,7 +1159,7 @@ async fn roundtrip_nested_correlated_subquery() -> Result<()> {
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     // outer references read the ids of the enclosing query's columns
     assert!(plan2.column_id_issues().is_empty(), "{plan2}");
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
     assert_snapshot!(
     plan2,
     @r"
@@ -1201,7 +1202,7 @@ async fn roundtrip_correlated_subquery_shadowed_outer_column() -> Result<()> {
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
     // outer references read the ids of the enclosing query's columns
     assert!(plan2.column_id_issues().is_empty(), "{plan2}");
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
     assert_snapshot!(
     plan2,
     @r"
@@ -1330,7 +1331,7 @@ async fn roundtrip_self_join() -> Result<()> {
     let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     // Verify schemas are equivalent
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
 
     // Execute to ensure plan validity
     DataFrame::new(ctx.state(), plan2).show().await?;
@@ -1340,7 +1341,11 @@ async fn roundtrip_self_join() -> Result<()> {
     let df2 = ctx.sql(sql2).await?;
     let plan3 = df2.into_optimized_plan()?;
     let plan4 = substrait_roundtrip(&plan3, &ctx).await?;
-    assert_eq!(plan3.schema(), plan4.schema());
+    assert!(
+        plan3
+            .schema()
+            .is_equivalent_up_to_column_ids(plan4.schema())
+    );
     DataFrame::new(ctx.state(), plan4).show().await?;
 
     Ok(())
@@ -1402,7 +1407,7 @@ async fn roundtrip_self_implicit_cross_join() -> Result<()> {
     let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     // Verify schemas are equivalent
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
 
     // Execute to ensure plan validity
     DataFrame::new(ctx.state(), plan2).show().await?;
@@ -1558,13 +1563,38 @@ async fn simple_intersect() -> Result<()> {
         ).await
     }
 
+    async fn check_renamed_constant(
+        sql_syntax: &str,
+        root_expr: &str,
+        plan_expr: &str,
+    ) -> Result<()> {
+        let expected_plan_str = format!(
+            "Projection: {root_expr}\
+        \n  Aggregate: groupBy=[[]], aggr=[[{plan_expr}]]\
+        \n    Projection:\
+        \n      LeftSemi Join: data.a = data2.a\
+        \n        Aggregate: groupBy=[[data.a]], aggr=[[]]\
+        \n          TableScan: data projection=[a]\
+        \n        TableScan: data2 projection=[a]"
+        );
+
+        assert_expected_plan(
+            &format!("SELECT {sql_syntax} FROM (SELECT data.a FROM data INTERSECT SELECT data2.a FROM data2);"),
+            &expected_plan_str,
+            true
+        ).await
+    }
+
     check_wildcard("count(*)").await?;
     check_wildcard("count()").await?;
     check_constant("count(1)", "count(Int64(1))").await?;
     check_constant("count(2)", "count(Int64(2))").await?;
-    check_constant(
+    // the simplified aggregate is renamed (it keeps its id); the root
+    // projection that the consumer adds to name the outputs restores it
+    check_renamed_constant(
         "count(1 + 2)",
         "count(Int64(3)) AS count(Int64(1) + Int64(2))",
+        "count(Int64(3))",
     )
     .await?;
     Ok(())
@@ -1648,9 +1678,9 @@ async fn aggregate_identical_measures() -> Result<()> {
     let plan = generate_plan_from_substrait(proto_plan).await?;
     assert_snapshot!(
         plan,
-        @r"
-    Projection: __common_expr_1 AS sum_a_1, __common_expr_1 AS sum(data.a)__temp__0 AS sum_a_2
-      Aggregate: groupBy=[[]], aggr=[[sum(data.a) AS __common_expr_1]]
+        @"
+    Projection: sum(data.a) AS sum_a_1, sum(data.a) AS sum(data.a)__temp__0 AS sum_a_2
+      Aggregate: groupBy=[[]], aggr=[[sum(data.a)]]
         TableScan: data projection=[a]
     "
     );
@@ -1780,13 +1810,40 @@ async fn simple_intersect_table_reuse() -> Result<()> {
         ).await
     }
 
+    async fn check_renamed_constant(
+        sql_syntax: &str,
+        root_expr: &str,
+        plan_expr: &str,
+    ) -> Result<()> {
+        let expected_plan_str = format!(
+            "Projection: {root_expr}\
+        \n  Aggregate: groupBy=[[]], aggr=[[{plan_expr}]]\
+        \n    Projection:\
+        \n      LeftSemi Join: left.a = right.a\
+        \n        SubqueryAlias: left\
+        \n          Aggregate: groupBy=[[data.a]], aggr=[[]]\
+        \n            TableScan: data projection=[a]\
+        \n        SubqueryAlias: right\
+        \n          TableScan: data projection=[a]"
+        );
+
+        assert_expected_plan(
+            &format!("SELECT {sql_syntax} FROM (SELECT left.a FROM data AS left INTERSECT SELECT right.a FROM data AS right);"),
+            &expected_plan_str,
+            true
+        ).await
+    }
+
     check_wildcard("count(*)").await?;
     check_wildcard("count()").await?;
     check_constant("count(1)", "count(Int64(1))").await?;
     check_constant("count(2)", "count(Int64(2))").await?;
-    check_constant(
+    // the simplified aggregate is renamed (it keeps its id); the root
+    // projection that the consumer adds to name the outputs restores it
+    check_renamed_constant(
         "count(1 + 2)",
         "count(Int64(3)) AS count(Int64(1) + Int64(2))",
+        "count(Int64(3))",
     )
     .await?;
 
@@ -2203,7 +2260,11 @@ async fn roundtrip_values_with_scalar_function() -> Result<()> {
         format!("{normalized_expected}"),
         format!("{normalized_actual}")
     );
-    assert_eq!(normalized_expected.schema(), normalized_actual.schema());
+    assert!(
+        normalized_expected
+            .schema()
+            .is_equivalent_up_to_column_ids(normalized_actual.schema())
+    );
     Ok(())
 }
 
@@ -2230,7 +2291,7 @@ async fn roundtrip_values_duplicate_column_join() -> Result<()> {
     let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     // Verify schemas are equivalent
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
 
     // Execute to ensure plan validity
     DataFrame::new(ctx.state(), plan2).show().await?;
@@ -2268,7 +2329,7 @@ async fn roundtrip_preserves_field_nullability() -> Result<()> {
     let proto = to_substrait_plan(&plan, &ctx.state())?;
     let plan2 = from_substrait_plan(&ctx.state(), &proto).await?;
 
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
     Ok(())
 }
 
@@ -2527,7 +2588,7 @@ async fn roundtrip_placeholder_typed_int64() -> Result<()> {
     "
     );
 
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
     Ok(())
 }
 
@@ -2561,7 +2622,7 @@ async fn roundtrip_placeholder_multiple_typed() -> Result<()> {
     "
     );
 
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
     Ok(())
 }
 
@@ -2590,7 +2651,7 @@ async fn roundtrip_placeholder_typed_utf8() -> Result<()> {
     "
     );
 
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
     Ok(())
 }
 
@@ -2991,7 +3052,7 @@ async fn generate_plan_from_sql_with_ctx(
     };
 
     if assert_schema {
-        assert_eq!(plan.schema(), plan2.schema());
+        assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
     }
 
     Ok(plan2)
@@ -3008,7 +3069,7 @@ async fn assert_expected_plan(
     let plan2 = substrait_roundtrip(&plan, &ctx).await?;
 
     if assert_schema {
-        assert_eq!(plan.schema(), plan2.schema());
+        assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
     }
 
     let plan2str = format!("{plan2}");
@@ -3240,7 +3301,7 @@ async fn roundtrip_fill_na(sql: &str) -> Result<()> {
 
     assert_eq!(plan1str, plan2str);
 
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
     Ok(())
 }
 
@@ -3277,7 +3338,11 @@ async fn test_alias(sql_with_alias: &str, sql_no_alias: &str) -> Result<()> {
     let plan2str = format!("{plan}");
     assert_eq!(plan1str, plan2str);
 
-    assert_eq!(plan_with_alias.schema(), plan.schema());
+    assert!(
+        plan_with_alias
+            .schema()
+            .is_equivalent_up_to_column_ids(plan.schema())
+    );
     Ok(())
 }
 
@@ -3292,7 +3357,7 @@ async fn roundtrip_logical_plan_with_ctx(
     let plan2str = format!("{plan2}");
     assert_eq!(plan1str, plan2str);
 
-    assert_eq!(plan.schema(), plan2.schema());
+    assert!(plan.schema().is_equivalent_up_to_column_ids(plan2.schema()));
 
     DataFrame::new(ctx.state(), plan2).show().await?;
     Ok(proto)

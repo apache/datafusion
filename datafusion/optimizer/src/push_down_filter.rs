@@ -7,7 +7,8 @@
 //! # Precedence: pure extraction projections win
 //!
 //! [`PushDownLeafProjections`] moves a *pure extraction projection* towards the
-//! leaves. Such a projection has only `__datafusion_extracted_N` aliases and
+//! leaves. Such a projection has only extracted entries (marked with
+//! [`NamedExpr::extracted`](datafusion_expr::NamedExpr::extracted)) and
 //! pass-through columns. [`PushDownFilter`] moves filters towards the leaves
 //! too. For an adjacent filter and pure extraction projection the two rules
 //! want the opposite order, so they undo each other on every optimizer pass.
@@ -1326,10 +1327,25 @@ impl OptimizerRule for PushDownFilter {
                         .into_iter()
                         .partition(|pred| pred.is_volatile());
 
+                // The filters handed to the source read the columns of its
+                // schema, by name: label each reference with the column it
+                // reads (a scan's fields are never renamed)
+                let source_schema = scan.source_schema()?;
+                let relabel = |pred: &Expr| {
+                    pred.clone()
+                        .with_relabeled_columns(&[source_schema.as_ref()])
+                        .data()
+                };
+                let provider_filters = non_volatile_filters
+                    .iter()
+                    .map(|pred| relabel(pred))
+                    .collect::<Result<Vec<_>>>()?;
+                let provider_filter_refs = provider_filters.iter().collect::<Vec<_>>();
+
                 // Check which non-volatile filters are supported by source
                 let supported_filters = scan
                     .source
-                    .supports_filters_pushdown(non_volatile_filters.as_slice())?;
+                    .supports_filters_pushdown(provider_filter_refs.as_slice())?;
                 assert_eq_or_internal_err!(
                     non_volatile_filters.len(),
                     supported_filters.len(),
@@ -1353,14 +1369,19 @@ impl OptimizerRule for PushDownFilter {
                 // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
                 let zip = non_volatile_filters.iter().zip(supported_filters.iter());
 
-                let new_scan_filters = zip
-                    .clone()
+                let new_scan_filters = provider_filters
+                    .iter()
+                    .zip(supported_filters.iter())
                     .filter(|(_, res)| *res != &TableProviderFilterPushDown::Unsupported)
-                    .map(|(&pred, _)| pred);
+                    .map(|(pred, _)| pred);
 
-                // Add new scan filters
-                let new_scan_filters: Vec<Expr> = scan
+                // Add new scan filters (labelled as the new ones are)
+                let scan_filters = scan
                     .filters
+                    .iter()
+                    .map(relabel)
+                    .collect::<Result<Vec<_>>>()?;
+                let new_scan_filters: Vec<Expr> = scan_filters
                     .iter()
                     .chain(new_scan_filters)
                     .unique()
@@ -1544,7 +1565,7 @@ fn rewrite_projection(
     //
     // See the module documentation of `extract_leaf_expressions` for the
     // full statement of the invariant.
-    if is_pure_extraction_projection(projection.expr.iter().map(|e| &e.expr)) {
+    if is_pure_extraction_projection(&projection.expr) {
         return Ok((
             Transformed::no(LogicalPlan::Projection(projection)),
             predicates,
@@ -1634,6 +1655,10 @@ where
 }
 
 /// replaces columns by its name on the projection.
+#[deprecated(
+    since = "56.0.0",
+    note = "columns are identified by their ids: find the outputs a column reads in the schema (`DFSchema::index_of_column`) and replace by index"
+)]
 pub fn replace_cols_by_name(
     e: Expr,
     replace_map: &HashMap<String, impl AsRef<Expr>>,
@@ -3477,6 +3502,22 @@ mod tests {
             .collect();
         let projected_schema = projected_schema
             .with_field_ids(source_column_ids.iter().copied().map(Some).collect())?;
+        // the filters read the columns of the scan, by id
+        let filters = filters
+            .into_iter()
+            .map(|filter| {
+                filter
+                    .transform(|expr| match expr {
+                        Expr::Column(col) => {
+                            let i = projected_schema.index_of_column(&col)?;
+                            let id = projected_schema.field_id(i);
+                            Ok(Transformed::yes(Expr::Column(col.with_id(id))))
+                        }
+                        _ => Ok(Transformed::no(expr)),
+                    })
+                    .data()
+            })
+            .collect::<Result<Vec<_>>>()?;
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
@@ -3507,7 +3548,7 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @"TableScan: test, full_filters=[a = Int64(1)]"
+            @"TableScan: test, full_filters=[test.a = Int64(1)]"
         )
     }
 
@@ -3518,9 +3559,9 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Filter: a = Int64(1)
-          TableScan: test, partial_filters=[a = Int64(1)]
+          TableScan: test, partial_filters=[test.a = Int64(1)]
         "
         )
     }
@@ -3540,9 +3581,9 @@ mod tests {
         // each time.
         assert_optimized_plan_equal!(
             optimized.data,
-            @r"
+            @"
         Filter: a = Int64(1)
-          TableScan: test, partial_filters=[a = Int64(1)]
+          TableScan: test, partial_filters=[test.a = Int64(1)]
         "
         )
     }
@@ -3575,10 +3616,10 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: a, b
           Filter: a = Int64(10) AND b > Int64(11)
-            TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]
+            TableScan: test projection=[a], partial_filters=[test.a = Int64(10), test.b > Int64(11)]
         "
         )
     }
@@ -3597,10 +3638,10 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: a, b
           Filter: a = Int64(10) AND b > Int64(11)
-            TableScan: test projection=[a], partial_filters=[a = Int64(10), b > Int64(11)]
+            TableScan: test projection=[a], partial_filters=[test.a = Int64(10), test.b > Int64(11)]
         "
         )
     }
@@ -3618,9 +3659,9 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: a, b
-          TableScan: test projection=[a], full_filters=[a = Int64(10), b > Int64(11)]
+          TableScan: test projection=[a], full_filters=[test.a = Int64(10), test.b > Int64(11)]
         "
         )
     }
@@ -3639,9 +3680,9 @@ mod tests {
 
         assert_optimized_plan_equal!(
             plan,
-            @r"
+            @"
         Projection: a, b
-          TableScan: test projection=[a], full_filters=[a = Int64(10), b > Int64(11)]
+          TableScan: test projection=[a], full_filters=[test.a = Int64(10), test.b > Int64(11)]
         "
         )
     }
@@ -4816,15 +4857,13 @@ mod tests {
     fn filter_not_pushed_through_pure_extraction_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        // The shape `ExtractLeafExpressions` produces: one extraction alias
+        // The shape `ExtractLeafExpressions` produces: one extracted entry
         // plus pass-through columns.
-        let proj = LogicalPlanBuilder::from(table_scan)
-            .project(vec![
-                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
-                col("b"),
-                col("c"),
-            ])?
-            .build()?;
+        let proj = with_first_entry_extracted(
+            LogicalPlanBuilder::from(table_scan)
+                .project(vec![leaf_udf_expr(col("a")), col("b"), col("c")])?
+                .build()?,
+        )?;
 
         // `b` is a plain pass-through column, so without the precedence rule
         // this predicate would reach the scan as a `full_filters` entry.
@@ -4836,8 +4875,47 @@ mod tests {
             plan,
             @r"
         Filter: test.b > Int64(5)
-          Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b, test.c
+          Projection: leaf_udf(test.a), test.b, test.c
             TableScan: test
+        "
+        )
+    }
+
+    /// `plan`, a projection, with its first entry marked as extracted (see
+    /// `NamedExpr::extracted`), as `ExtractLeafExpressions` marks it
+    fn with_first_entry_extracted(plan: LogicalPlan) -> Result<LogicalPlan> {
+        let LogicalPlan::Projection(projection) = plan else {
+            return internal_err!("not a projection: {plan}");
+        };
+        let mut entries = projection.expr;
+        entries[0] = entries[0].clone().with_extracted(true);
+        Projection::try_new_with_schema(entries, projection.input, projection.schema)
+            .map(LogicalPlan::Projection)
+    }
+
+    /// A projection is an extraction projection only if its entries are
+    /// marked as such: a user alias that looks like the names extraction
+    /// used to generate (`__datafusion_extracted_N`) does not keep the filter
+    /// above the projection.
+    #[test]
+    fn filter_pushed_through_projection_with_extraction_like_alias() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let proj = LogicalPlanBuilder::from(table_scan)
+            .project(vec![
+                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+                col("b"),
+                col("c"),
+            ])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("b").gt(lit(5i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b, test.c
+          TableScan: test, full_filters=[test.b > Int64(5)]
         "
         )
     }
@@ -4916,19 +4994,21 @@ mod tests {
         Ok(())
     }
 
-    /// A projection that mixes an extraction alias with a computed expression is
+    /// A projection that mixes an extracted entry with a computed expression is
     /// not a pure extraction projection, so the filter still moves below it.
     #[test]
     fn filter_pushed_through_mixed_extraction_projection() -> Result<()> {
         let table_scan = test_table_scan()?;
 
-        let proj = LogicalPlanBuilder::from(table_scan)
-            .project(vec![
-                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
-                (col("b") + lit(1i64)).alias("b_plus"),
-                col("c"),
-            ])?
-            .build()?;
+        let proj = with_first_entry_extracted(
+            LogicalPlanBuilder::from(table_scan)
+                .project(vec![
+                    leaf_udf_expr(col("a")),
+                    (col("b") + lit(1i64)).alias("b_plus"),
+                    col("c"),
+                ])?
+                .build()?,
+        )?;
 
         let plan = LogicalPlanBuilder::from(proj)
             .filter(col("c").gt(lit(5i64)))?
@@ -4937,7 +5017,7 @@ mod tests {
         assert_optimized_plan_equal!(
             plan,
             @r"
-        Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b + Int64(1) AS b_plus, test.c
+        Projection: leaf_udf(test.a), test.b + Int64(1) AS b_plus, test.c
           TableScan: test, full_filters=[test.c > Int64(5)]
         "
         )

@@ -923,7 +923,14 @@ fn build_join(
                 .with_in_predicate_opt(in_predicate_opt.cloned())
                 .with_exists_sub_query(exists_sub_query)
                 .with_need_handle_count_bug(handle_count_bug);
-            let new_plan = subquery.clone().rewrite(&mut pull_up).data()?;
+            let new_plan = match subquery.clone().rewrite(&mut pull_up).data() {
+                Ok(plan) => plan,
+                // a rewrite that cannot be pulled up is dropped by the
+                // caller, also one that fails on the way (the columns it
+                // adds above a grouping set do not exist)
+                Err(_) if !pull_up.can_pull_up => subquery.clone(),
+                Err(e) => return Err(e),
+            };
             Ok((new_plan, pull_up))
         };
     let (mut new_plan, mut pull_up) = rewrite(exists_sub_query)?;

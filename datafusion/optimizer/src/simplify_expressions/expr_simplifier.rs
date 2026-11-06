@@ -195,15 +195,20 @@ impl ExprSimplifier {
         let guarantees_map: HashMap<&Expr, &NullableInterval> =
             self.guarantees.iter().map(|(k, v)| (k, v)).collect();
 
+        // A rewrite can change the name of the expression, which the output
+        // of a projection takes (see `with_recomputed_output_names`), so
+        // every step counts as a transformation.
+        let mut has_transformed = false;
         if self.canonicalize {
-            expr = expr.rewrite(&mut Canonicalizer::new()).data()?
+            let canonicalized = expr.rewrite(&mut Canonicalizer::new())?;
+            expr = canonicalized.data;
+            has_transformed = canonicalized.transformed;
         }
 
         // Evaluating constants can enable new simplifications and
         // simplifications can enable new constant evaluation
         // see `Self::with_max_cycles`
         let mut num_cycles = 0;
-        let mut has_transformed = false;
         loop {
             let Transformed {
                 data, transformed, ..
@@ -222,7 +227,9 @@ impl ExprSimplifier {
             }
         }
         // shorten inlist should be started after other inlist rules are applied
-        expr = expr.rewrite(&mut shorten_in_list_simplifier).data()?;
+        let shortened = expr.rewrite(&mut shorten_in_list_simplifier)?;
+        expr = shortened.data;
+        has_transformed |= shortened.transformed;
         Ok((
             Transformed::new_transformed(expr, has_transformed),
             num_cycles,

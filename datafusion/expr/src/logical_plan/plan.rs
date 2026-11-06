@@ -135,9 +135,10 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 ///   if let LogicalPlan::TableScan(scan) = node {
 ///     table_names.insert(scan.table_name.to_string());
 ///   }
-///   // collect all expressions in the plan
+///   // collect all expressions in the plan (without the ids of their
+///   // columns, to compare them with expressions written by name)
 ///   node.apply_expressions(|expr| {
-///    expressions.insert(expr.clone());
+///    expressions.insert(expr.clone().without_column_ids());
 ///    Ok(TreeNodeRecursion::Continue) // control walk of expressions
 ///   })?;
 ///   Ok(TreeNodeRecursion::Continue) // control walk of plan nodes
@@ -830,25 +831,11 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Union(Union { inputs, schema }) => {
-                let first_input_schema = inputs[0].schema();
-                if schema.fields().len() == first_input_schema.fields().len() {
-                    // If inputs are not pruned do not change schema
-                    Ok(LogicalPlan::Union(Union { inputs, schema }))
-                } else {
-                    // A note on `Union`s constructed via `try_new_by_name`:
-                    //
-                    // At this point, the schema for each input should have
-                    // the same width. Thus, we do not need to save whether a
-                    // `Union` was created `BY NAME`, and can safely rely on the
-                    // `try_new` initializer to derive the new schema based on
-                    // column positions.
-                    //
-                    // The outputs that remain are not known here: they have no
-                    // ids (the caller that pruned the inputs can give them the
-                    // ids of the outputs they were).
-                    let schema = Union::derive_schema_from_inputs(&inputs, false, false)?;
-                    Ok(LogicalPlan::Union(Union { inputs, schema }))
-                }
+                // A union owns its outputs (names and ids): if the width of
+                // its inputs changed, the outputs that remain are not known
+                // here, and the caller must rebuild it with
+                // `Union::try_new_with_schema`
+                Union::try_new_with_schema(inputs, schema).map(LogicalPlan::Union)
             }
             LogicalPlan::Distinct(distinct) => {
                 let distinct = match distinct {
@@ -874,12 +861,12 @@ impl LogicalPlan {
                 recursive_term,
                 is_distinct,
                 schema,
-            }) => RecursiveQuery::try_new_with_field_ids(
+            }) => RecursiveQuery::try_new_keeping_outputs(
                 name,
                 static_term,
                 recursive_term,
                 is_distinct,
-                schema.field_ids(),
+                &schema,
             )
             .map(LogicalPlan::RecursiveQuery),
             LogicalPlan::Analyze(_) => Ok(self),
@@ -1281,25 +1268,13 @@ impl LogicalPlan {
             }
             LogicalPlan::Union(Union { schema, .. }) => {
                 self.assert_no_expressions(expr)?;
-                let input_schema = inputs[0].schema();
-                // If inputs are not pruned do not change schema.
-                let schema = if schema.fields().len() == input_schema.fields().len() {
-                    Arc::clone(schema)
-                } else if input_schema.field_ids().iter().any(Option::is_some) {
-                    // the outputs of a union are not the columns of its first
-                    // input: they do not take their ids. The outputs that
-                    // remain are not known here: they have no ids (the caller
-                    // that pruned the inputs can give them the ids of the
-                    // outputs they were)
-                    let ids = vec![None; input_schema.fields().len()];
-                    Arc::new(input_schema.as_ref().clone().with_field_ids(ids)?)
-                } else {
-                    Arc::clone(input_schema)
-                };
-                Ok(LogicalPlan::Union(Union {
-                    inputs: inputs.into_iter().map(Arc::new).collect(),
-                    schema,
-                }))
+                // A union owns its outputs: a rebuild that changes the width
+                // of its inputs must give them (`Union::try_new_with_schema`)
+                Union::try_new_with_schema(
+                    inputs.into_iter().map(Arc::new).collect(),
+                    Arc::clone(schema),
+                )
+                .map(LogicalPlan::Union)
             }
             LogicalPlan::Distinct(distinct) => {
                 let distinct = match distinct {
@@ -1340,13 +1315,13 @@ impl LogicalPlan {
             }) => {
                 self.assert_no_expressions(expr)?;
                 let (static_term, recursive_term) = self.only_two_inputs(inputs)?;
-                // the outputs keep their ids
-                RecursiveQuery::try_new_with_field_ids(
+                // the outputs keep their names and ids
+                RecursiveQuery::try_new_keeping_outputs(
                     name.clone(),
                     Arc::new(static_term),
                     Arc::new(recursive_term),
                     *is_distinct,
-                    schema.field_ids(),
+                    schema,
                 )
                 .map(LogicalPlan::RecursiveQuery)
             }
@@ -2798,19 +2773,36 @@ impl RecursiveQuery {
         })
     }
 
-    /// [`Self::try_new`], where the outputs have the ids `ids` (a rebuild
-    /// of a recursive query whose outputs had these ids)
-    fn try_new_with_field_ids(
+    /// [`Self::try_new`], for a rebuild of a recursive query whose outputs
+    /// were `previous`: the query owns its outputs, which keep their
+    /// qualifiers, names and ids (by position); their types and nullability
+    /// are derived from the terms again
+    fn try_new_keeping_outputs(
         name: String,
         static_term: Arc<LogicalPlan>,
         recursive_term: Arc<LogicalPlan>,
         is_distinct: bool,
-        ids: &[Option<ColumnId>],
+        previous: &DFSchema,
     ) -> Result<Self> {
         let schema =
             recursive_query_output_schema(static_term.schema(), recursive_term.schema())?;
-        let schema = if ids.len() == schema.fields().len() {
-            Arc::new(Arc::unwrap_or_clone(schema).with_field_ids(ids.to_vec())?)
+        let schema = if previous.fields().len() == schema.fields().len() {
+            let fields = previous
+                .iter()
+                .zip(schema.fields())
+                .map(|((qualifier, previous_field), field)| {
+                    let field = if field.name() == previous_field.name() {
+                        Arc::clone(field)
+                    } else {
+                        Arc::new(field.as_ref().clone().with_name(previous_field.name()))
+                    };
+                    (qualifier.cloned(), field)
+                })
+                .collect();
+            Arc::new(
+                DFSchema::new_with_metadata(fields, schema.metadata().clone())?
+                    .with_field_ids(previous.field_ids().to_vec())?,
+            )
         } else {
             schema
         };
@@ -3003,7 +2995,7 @@ pub(crate) fn with_entry_ids(
     Ok(entries
         .iter()
         .zip(exprs)
-        .map(|(entry, expr)| NamedExpr::new(expr, entry.id))
+        .map(|(entry, expr)| entry.clone().with_expr(expr))
         .collect())
 }
 
@@ -3039,16 +3031,14 @@ pub fn projection_schema(
     let has_wildcard = exprs
         .iter()
         .any(|e| matches!(e.expr, Expr::Wildcard { .. }));
-    let schema = DFSchema::new_with_metadata(fields, metadata)?
-        .with_functional_dependencies(calc_func_dependencies_for_project(
-            exprs, input,
-        )?)?;
     // the fields take the ids of the outputs
     let schema = if has_wildcard {
-        schema
+        DFSchema::new_with_metadata(fields, metadata)?
     } else {
-        schema.with_field_ids(exprs.iter().map(|e| Some(e.id)).collect())?
-    };
+        let ids = exprs.iter().map(|e| Some(e.id)).collect();
+        DFSchema::new_with_field_ids(fields, ids, metadata)?
+    }
+    .with_functional_dependencies(calc_func_dependencies_for_project(exprs, input)?)?;
 
     Ok(Arc::new(schema))
 }
@@ -3070,11 +3060,12 @@ impl SubqueryAlias {
     /// Creates an alias of `plan`.
     ///
     /// If several fields of `plan` have the same name, a projection that
-    /// renames them is added below the alias. Its renamed outputs define
-    /// columns, with new ids from a generator advanced past the ids of
-    /// `plan`, which may collide with ids defined elsewhere in a larger
-    /// plan: use [`Self::try_new_with_column_id_generator`] when building
-    /// within one.
+    /// renames them is added below the alias. A renamed field with an id
+    /// keeps it (the projection passes it through under the new name). A
+    /// renamed field without an id defines a column, with a new id from a
+    /// generator advanced past the ids of `plan`, which may collide with ids
+    /// defined elsewhere in a larger plan: use
+    /// [`Self::try_new_with_column_id_generator`] when building within one.
     pub fn try_new(
         plan: Arc<LogicalPlan>,
         alias: impl Into<TableReference>,
@@ -3082,8 +3073,8 @@ impl SubqueryAlias {
         Self::try_new_inner(plan, alias.into(), None)
     }
 
-    /// [`Self::try_new`], where the outputs of the projection that renames
-    /// duplicate names get new ids from `generator`
+    /// [`Self::try_new`], where the renamed outputs without ids of the
+    /// projection that renames duplicate names get new ids from `generator`
     pub fn try_new_with_column_id_generator(
         plan: Arc<LogicalPlan>,
         alias: impl Into<TableReference>,
@@ -3125,9 +3116,13 @@ impl SubqueryAlias {
                     );
                     match alias {
                         None => NamedExpr::allocate(column, plan.schema(), generator),
+                        // a renamed column with an id passes it through under
+                        // the new name, so that the references above it (by
+                        // id) still find it when a rewrite of the input gave
+                        // two outputs the same name
                         Some(alias) => NamedExpr::new(
                             Expr::Alias(Alias::new(column, qualifier.cloned(), alias)),
-                            generator.next(),
+                            id.unwrap_or_else(|| generator.next()),
                         ),
                     }
                 })
@@ -3453,9 +3448,8 @@ impl Window {
             window_expr,
             input,
             Arc::new(
-                DFSchema::new_with_metadata(window_fields, metadata)?
-                    .with_functional_dependencies(window_func_dependencies)?
-                    .with_field_ids(field_ids)?,
+                DFSchema::new_with_field_ids(window_fields, field_ids, metadata)?
+                    .with_functional_dependencies(window_func_dependencies)?,
             ),
         )
     }
@@ -4021,6 +4015,29 @@ impl Union {
         let inputs = Self::rewrite_inputs_from_schema(&schema, inputs, generator)?;
         let schema = with_new_field_ids(schema, generator)?;
 
+        Ok(Union { inputs, schema })
+    }
+
+    /// Constructs a Union of `inputs` whose outputs are `schema`: the names,
+    /// types and [`ColumnId`]s of its outputs, which a union owns.
+    ///
+    /// This is how a rule that changes the width of a union's inputs (pruning
+    /// or adding columns) rebuilds it: the union's outputs are not the columns
+    /// of its first input, and only the caller knows which outputs remain.
+    /// Every input must have as many columns as `schema`.
+    pub fn try_new_with_schema(
+        inputs: Vec<Arc<LogicalPlan>>,
+        schema: DFSchemaRef,
+    ) -> Result<Self> {
+        let width = schema.fields().len();
+        for input in &inputs {
+            if input.schema().fields().len() != width {
+                return plan_err!(
+                    "UNION input has {} columns whereas its schema has {width}",
+                    input.schema().fields().len()
+                );
+            }
+        }
         Ok(Union { inputs, schema })
     }
 
@@ -4663,11 +4680,11 @@ impl DistinctOn {
                 .collect();
 
         // the fields take the ids of the outputs
-        let dfschema = DFSchema::new_with_metadata(
+        let dfschema = DFSchema::new_with_field_ids(
             qualified_fields,
+            select_expr.iter().map(|e| Some(e.id)).collect(),
             input.schema().metadata().clone(),
-        )?
-        .with_field_ids(select_expr.iter().map(|e| Some(e.id)).collect())?;
+        )?;
 
         let mut distinct_on = DistinctOn {
             on_expr,
@@ -4979,11 +4996,11 @@ impl Aggregate {
 
         let field_ids =
             aggregate_output_ids(&group_expr, grouping_sets.as_ref(), &aggr_expr);
-        let schema = DFSchema::new_with_metadata(
+        let schema = DFSchema::new_with_field_ids(
             qualified_fields,
+            field_ids,
             input.schema().metadata().clone(),
-        )?
-        .with_field_ids(field_ids)?;
+        )?;
 
         Self::try_new_with_schema(
             input,
@@ -5885,7 +5902,12 @@ impl PartialOrd for Join {
 }
 
 /// Subquery
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash)]
+///
+/// Two subqueries are equal if they compute the same rows from the same
+/// outer references, even if their plans give the columns they define
+/// different ids (see [`LogicalPlan::is_equivalent_up_to_column_ids`]): the
+/// same subquery written twice in a query is planned twice.
+#[derive(Clone)]
 pub struct Subquery {
     /// The subquery
     pub subquery: Arc<LogicalPlan>,
@@ -5893,6 +5915,37 @@ pub struct Subquery {
     pub outer_ref_columns: Vec<Expr>,
     /// Span information for subquery projection columns
     pub spans: Spans,
+}
+
+impl PartialEq for Subquery {
+    fn eq(&self, other: &Self) -> bool {
+        self.outer_ref_columns == other.outer_ref_columns
+            && self
+                .subquery
+                .is_equivalent_up_to_column_ids(&other.subquery)
+    }
+}
+
+impl Eq for Subquery {}
+
+// Consistent with `PartialEq`: hashes what does not depend on the ids the
+// subquery defines
+impl Hash for Subquery {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.outer_ref_columns.hash(state);
+        self.subquery.schema().inner().fields().hash(state);
+    }
+}
+
+impl PartialOrd for Subquery {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        if self == other {
+            return Some(Ordering::Equal);
+        }
+        (&self.subquery, &self.outer_ref_columns)
+            .partial_cmp(&(&other.subquery, &other.outer_ref_columns))
+            .filter(|cmp| *cmp != Ordering::Equal)
+    }
 }
 
 impl Normalizeable for Subquery {
@@ -5904,7 +5957,8 @@ impl Normalizeable for Subquery {
 impl NormalizeEq for Subquery {
     fn normalize_eq(&self, other: &Self) -> bool {
         // TODO: may be implement NormalizeEq for LogicalPlan?
-        *self.subquery == *other.subquery
+        self.subquery
+            .is_equivalent_up_to_column_ids(&other.subquery)
             && self.outer_ref_columns.len() == other.outer_ref_columns.len()
             && self
                 .outer_ref_columns

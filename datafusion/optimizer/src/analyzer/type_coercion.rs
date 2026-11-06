@@ -10,7 +10,7 @@ use itertools::{Itertools as _, izip};
 use std::sync::{Arc, LazyLock};
 
 use crate::analyzer::AnalyzerRule;
-use crate::utils::{NamePreserver, merge_into_schema};
+use crate::utils::merge_into_schema;
 
 use arrow::datatypes::{DataType, Field, IntervalUnit, Schema, TimeUnit};
 use arrow::temporal_conversions::SECONDS_IN_DAY;
@@ -267,10 +267,9 @@ fn analyze_internal(
         .with_session_time_zone(session_time_zone)
         .with_column_id_generator(generator);
 
-    let name_preserver = NamePreserver::new(&plan);
+    // a coerced output keeps its id and is named after its expression: the
+    // analyzer restores the names of the root
     let mut coerce_expr = |expr: Expr| {
-        let original_name = name_preserver.save(&expr);
-
         // A lambda variable carries the field recorded when the plan was built, which
         // need not be the one its function derives from the arguments. Resolve them
         // before coercing, so lambda bodies are coerced against the types they receive.
@@ -281,7 +280,6 @@ fn analyze_internal(
         };
 
         expr.rewrite(&mut expr_rewrite)
-            .map(|transformed| transformed.update_data(|e| original_name.restore(e)))
     };
 
     // apply coercion rewrite all expressions in the plan individually
@@ -2564,12 +2562,13 @@ mod test {
             )?
             .build()?;
 
-        // Each renamed member is aliased to its original name, not the grouping set
+        // Each member is coerced, and named after its expression (the
+        // grouping set itself is not aliased)
         let analyzed = TypeCoercion::new().analyze(plan, &ConfigOptions::default())?;
         assert_snapshot!(
             analyzed,
             @r#"
-        Aggregate: groupBy=[[GROUPING SETS ((t.a, TestScalarUDF(Float32(123)) AS TestScalarUDF(Int32(123))), (TestScalarUDF(Float32(123)) AS TestScalarUDF(Int32(123))), ())]], aggr=[[]]
+        Aggregate: groupBy=[[GROUPING SETS ((t.a, TestScalarUDF(Float32(123))), (TestScalarUDF(Float32(123))), ())]], aggr=[[]]
           TableScan: t
         "#
         );

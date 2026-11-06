@@ -519,6 +519,9 @@ impl ExprSchemable for Expr {
     /// ## Table Reference Scoping
     /// - Establishes proper qualified field references when columns belong to specific tables
     /// - Maintains table context for accurate field resolution in multi-table scenarios
+    /// - A column reference with an id the schema has takes the qualifier and
+    ///   name of the field with that id, whatever its label; other references
+    ///   take their label
     ///
     /// So for example, a projected expression `col(c1) + col(c2)` is
     /// placed in an output field **named** col("c1 + c2")
@@ -529,6 +532,13 @@ impl ExprSchemable for Expr {
         &self,
         schema: &dyn ExprSchema,
     ) -> Result<(Option<TableReference>, Arc<Field>)> {
+        // A column read by id is named after the field it reads: its label
+        // (qualifier and name) is only display
+        if let Expr::Column(c) = self
+            && let Some((qualifier, field)) = schema.qualified_field_from_column_id(c)
+        {
+            return Ok((qualifier.cloned(), Arc::clone(field)));
+        }
         let (relation, schema_name) = self.qualified_name();
         #[expect(deprecated)]
         let field = match self {

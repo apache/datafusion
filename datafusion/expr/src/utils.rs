@@ -378,11 +378,16 @@ fn get_exprs_except_skipped(
     if columns_to_skip.is_empty() {
         schema.iter().map(Expr::from).collect::<Vec<Expr>>()
     } else {
+        // skipped by qualifier and name (`EXCLUDE` and `EXCEPT` name them)
+        let columns_to_skip: HashSet<Column> = columns_to_skip
+            .iter()
+            .map(|c| c.clone().with_id(None))
+            .collect();
         schema
             .columns()
             .iter()
             .filter_map(|c| {
-                if !columns_to_skip.contains(c) {
+                if !columns_to_skip.contains(&c.clone().with_id(None)) {
                     Some(Expr::Column(c.clone()))
                 } else {
                     None
@@ -1058,20 +1063,57 @@ pub fn expr_as_column_expr(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
     let schema = plan.schema();
     match expr {
         Expr::Column(col) => {
-            let (qualifier, field) = schema.qualified_field_from_column(col)?;
-            let column = Column::from((qualifier, field));
-            let id = schema
-                .maybe_index_of_column(&column)
-                .and_then(|i| schema.field_id(i));
-            Ok(Expr::from(column.with_id(id)))
+            // a grouping column that is not in every grouping set is a new
+            // column of the aggregate: found by expression
+            let i = match output_index_of_expr(plan, expr) {
+                Some(i) => i,
+                None => schema.index_of_column(col)?,
+            };
+            let column = Column::from(schema.qualified_field(i));
+            Ok(Expr::from(column.with_id(schema.field_id(i))))
         }
         _ => {
+            // the output that computes `expr`, if the node computes it (two
+            // outputs can have the same name), otherwise the output named
+            // after it
+            if let Some(i) = output_index_of_expr(plan, expr) {
+                let column = Column::from(schema.qualified_field(i));
+                return Ok(Expr::Column(column.with_id(schema.field_id(i))));
+            }
             let col = Column::from_name(expr.schema_name().to_string());
             let id = schema
                 .maybe_index_of_column(&col)
                 .and_then(|i| schema.field_id(i));
             Ok(Expr::Column(col.with_id(id)))
         }
+    }
+}
+
+/// The index of the output of `plan` that computes `expr`, if `plan` is an
+/// aggregate or a window that computes it
+fn output_index_of_expr(plan: &LogicalPlan, expr: &Expr) -> Option<usize> {
+    let matches = |e: &Expr| e == expr || matches!(e, Expr::Alias(a) if *a.expr == *expr);
+    match plan {
+        LogicalPlan::Aggregate(aggregate) => {
+            let entries = aggregate.group_output_entries();
+            let group_len = aggregate.group_expr_len().ok()?;
+            entries.iter().position(|e| matches(&e.expr)).or_else(|| {
+                aggregate
+                    .aggr_expr
+                    .iter()
+                    .position(|e| matches(&e.expr))
+                    .map(|i| group_len + i)
+            })
+        }
+        LogicalPlan::Window(window) => {
+            let input_len = window.input.schema().fields().len();
+            window
+                .window_expr
+                .iter()
+                .position(|e| matches(&e.expr))
+                .map(|i| input_len + i)
+        }
+        _ => None,
     }
 }
 

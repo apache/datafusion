@@ -69,8 +69,8 @@ query TT
 EXPLAIN SELECT g, count(*) FILTER (WHERE v > 1) AS records, count(DISTINCT x) AS distinct_x FROM t GROUP BY g;
 ----
 logical_plan
-01)Projection: t.g, count(Int64(1)) FILTER (WHERE t.v > Int64(1)) AS count(*) FILTER (WHERE t.v > Int64(1)) AS records, count(DISTINCT t.x) AS distinct_x
-02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)) FILTER (WHERE t.v > Int32(1)) AS count(Int64(1)) FILTER (WHERE t.v > Int64(1)), count(DISTINCT t.x)]]
+01)Projection: t.g, count(Int64(1)) FILTER (WHERE t.v > Int32(1)) AS count(*) FILTER (WHERE t.v > Int64(1)) AS records, count(DISTINCT t.x) AS distinct_x
+02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)) FILTER (WHERE t.v > Int32(1)), count(DISTINCT t.x)]]
 03)----TableScan: t projection=[g, x, v]
 
 # An unsupported non-distinct aggregate still blocks the rewrite
@@ -119,8 +119,8 @@ query TT
 EXPLAIN SELECT g, count(*) AS records, min(DISTINCT v) AS distinct_min_v FROM t GROUP BY g;
 ----
 logical_plan
-01)Projection: t.g, count(Int64(1)) AS count(*) AS records, min(DISTINCT t.v) AS distinct_min_v
-02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)), min(t.v) AS min(DISTINCT t.v)]]
+01)Projection: t.g, count(Int64(1)) AS count(*) AS records, min(t.v) AS distinct_min_v
+02)--Aggregate: groupBy=[[t.g]], aggr=[[count(Int64(1)), min(t.v)]]
 03)----TableScan: t projection=[g, v]
 
 # The gate covers only the count. A plan that already qualified through sum,

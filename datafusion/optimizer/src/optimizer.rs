@@ -19,15 +19,16 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    ColumnIdGenerator, DFSchema, DataFusionError, HashSet, Result, internal_err,
+    ColumnIdGenerator, DFSchema, DataFusionError, HashSet, Result, TableReference,
+    assert_or_internal_err, internal_err,
 };
 use datafusion_expr::dml::CopyTo;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
     DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit,
-    MaterializedCte, MaterializedCtePlan, Projection, RecursiveQuery, Repartition, Sort,
-    Statement, Subquery, SubqueryAlias, Union, Unnest, Window,
+    MaterializedCte, MaterializedCtePlan, NamedExpr, Projection, RecursiveQuery,
+    Repartition, Sort, Statement, Subquery, SubqueryAlias, Union, Unnest, Window,
 };
 
 use crate::column_id_check::ColumnIdCheck;
@@ -656,6 +657,10 @@ impl Optimizer {
         previous_plans.insert(LogicalPlanSignature::new(&new_plan));
 
         let starting_schema = Arc::clone(new_plan.schema());
+        // Rules may rename the outputs of the root (names come from the
+        // definitions, and a rewrite renames what it rewrites); they are
+        // restored once, at the end
+        let output_names = RootNames::of(&new_plan);
 
         let mut i = 0;
         while i < options.optimizer.max_passes {
@@ -721,8 +726,9 @@ impl Optimizer {
                     },
                 }
                 .and_then(|tnr| {
-                    // run checks optimizer invariant checks, per optimizer rule applied
-                    assert_valid_optimization(&tnr.data, &starting_schema)
+                    // run checks optimizer invariant checks, per optimizer rule
+                    // applied (names are restored at the end)
+                    assert_valid_optimization_up_to_names(&tnr.data, &starting_schema)
                         .map_err(|e| e.context(format!("Check optimizer-specific invariants after optimizer rule: {}", rule.name())))?;
 
                     // run LP invariant checks only in debug mode for performance reasons
@@ -796,6 +802,29 @@ impl Optimizer {
             i += 1;
         }
 
+        // References read by id, and rules leave their labels out of date:
+        // label each with the column it reads, so that the plan displays what
+        // it reads (outputs named after an expression follow)
+        let relabeled = new_plan
+            .with_relabeled_columns()
+            .map_err(|e| e.context("Relabeling the columns after all passes"))?;
+        let mut new_plan = relabeled.data;
+        if relabeled.transformed {
+            column_id_check.after_rule("relabel columns", &new_plan)?;
+        }
+
+        // the root keeps the names it started with
+        let restored = output_names
+            .restore(new_plan, config.column_id_generator())
+            .map_err(|e| e.context("Restoring the output names after all passes"))?;
+        new_plan = restored.data;
+        if restored.transformed {
+            // the references to renamed outputs (the expressions of a MERGE
+            // INTO read the input of the write) follow
+            new_plan = new_plan.with_relabeled_columns()?.data;
+            column_id_check.after_rule("restore output names", &new_plan)?;
+        }
+
         // verify that the optimizer passes only mutated what was permitted.
         assert_valid_optimization(&new_plan, &starting_schema).map_err(|e| {
             e.context("Check optimizer-specific invariants after all passes")
@@ -829,6 +858,238 @@ fn assert_valid_optimization(
     Ok(())
 }
 
+/// [`assert_valid_optimization`] for the plan after one rule: the outputs
+/// keep their number and types, but may be renamed (see [`OutputNames`])
+fn assert_valid_optimization_up_to_names(
+    plan: &LogicalPlan,
+    prev_schema: &Arc<DFSchema>,
+) -> Result<()> {
+    let schema = plan.schema();
+    let compatible = schema.fields().len() == prev_schema.fields().len()
+        && schema
+            .fields()
+            .iter()
+            .zip(prev_schema.fields())
+            .all(|(f1, f2)| {
+                DFSchema::datatype_is_logically_equal(f1.data_type(), f2.data_type())
+            });
+    assert_or_internal_err!(
+        compatible,
+        "Failed due to a difference in schemas: original schema: {:?}, new schema: {:?}",
+        prev_schema,
+        schema
+    );
+    Ok(())
+}
+
+/// The names of the outputs of the root of the plan being optimized, and of
+/// the input of a root that writes it (`Dml`, `Copy`): the input of a write
+/// is a second root, whose names the table provider (`insert_into`, `update`,
+/// `merge_into`) or the file writer reads. See [`OutputNames`].
+///
+/// The analyzer records and restores them too: its rules (type coercion,
+/// function rewrites) rename the outputs they rewrite.
+pub(crate) struct RootNames {
+    root: OutputNames,
+    written: Option<OutputNames>,
+}
+
+impl RootNames {
+    pub(crate) fn of(plan: &LogicalPlan) -> Self {
+        let written = match plan {
+            LogicalPlan::Dml(DmlStatement { input, .. })
+            | LogicalPlan::Copy(CopyTo { input, .. }) => Some(OutputNames::of(input)),
+            _ => None,
+        };
+        Self {
+            root: OutputNames::of(plan),
+            written,
+        }
+    }
+
+    /// `plan` with the outputs of its root, and of the input of a write,
+    /// renamed back to the recorded names
+    pub(crate) fn restore(
+        &self,
+        plan: LogicalPlan,
+        generator: &ColumnIdGenerator,
+    ) -> Result<Transformed<LogicalPlan>> {
+        let plan = match (&self.written, plan) {
+            (Some(names), LogicalPlan::Dml(mut dml)) => {
+                let input = names.restore(Arc::unwrap_or_clone(dml.input), generator)?;
+                dml.input = Arc::new(input.data);
+                Transformed::new_transformed(LogicalPlan::Dml(dml), input.transformed)
+            }
+            (Some(names), LogicalPlan::Copy(mut copy)) => {
+                let input = names.restore(Arc::unwrap_or_clone(copy.input), generator)?;
+                copy.input = Arc::new(input.data);
+                Transformed::new_transformed(LogicalPlan::Copy(copy), input.transformed)
+            }
+            (_, plan) => Transformed::no(plan),
+        };
+        plan.transform_data(|plan| self.root.restore(plan, generator))
+    }
+}
+
+/// The names (qualifier and name) of the outputs of a plan being optimized.
+///
+/// Names come from the definitions: a rule that rewrites an output may rename
+/// it, which breaks nothing inside the plan (references resolve by id), but
+/// the outputs of the root are user visible. The optimizer records them when
+/// it starts and restores them once when it ends, renaming the outputs of a
+/// root projection in place, or adding a projection only if another root
+/// renamed them.
+struct OutputNames(Vec<(Option<TableReference>, String)>);
+
+impl OutputNames {
+    fn of(plan: &LogicalPlan) -> Self {
+        Self(
+            plan.schema()
+                .iter()
+                .map(|(qualifier, field)| (qualifier.cloned(), field.name().clone()))
+                .collect(),
+        )
+    }
+
+    /// The indexes of the outputs of `plan` that were renamed
+    fn renamed(&self, plan: &LogicalPlan) -> Vec<usize> {
+        let schema = plan.schema();
+        if schema.fields().len() != self.0.len() {
+            // the per-rule check reports this
+            return vec![];
+        }
+        schema
+            .iter()
+            .zip(&self.0)
+            .enumerate()
+            .filter(|(_, ((qualifier, field), (old_qualifier, old_name)))| {
+                *qualifier != old_qualifier.as_ref() || field.name() != old_name
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    /// `expr` renamed to the output name `i`
+    fn rename(&self, expr: Expr, i: usize) -> Expr {
+        let (qualifier, name) = &self.0[i];
+        match expr {
+            // keep the alias's metadata
+            Expr::Alias(mut alias) => {
+                alias.relation.clone_from(qualifier);
+                alias.name.clone_from(name);
+                Expr::Alias(alias)
+            }
+            expr => expr.alias_qualified(qualifier.clone(), name),
+        }
+    }
+
+    /// `plan` with the outputs renamed back to the recorded names
+    fn restore(
+        &self,
+        plan: LogicalPlan,
+        generator: &ColumnIdGenerator,
+    ) -> Result<Transformed<LogicalPlan>> {
+        let renamed = self.renamed(&plan);
+        if renamed.is_empty() {
+            return Ok(Transformed::no(plan));
+        }
+        // a node that passes its input's columns through (a sort, a limit, a
+        // filter) over a projection: the projection is renamed in place
+        if matches!(
+            plan,
+            LogicalPlan::Sort(_) | LogicalPlan::Limit(_) | LogicalPlan::Filter(_)
+        ) && reaches_projection(&plan)
+        {
+            let input = plan.inputs()[0].clone();
+            let input = self.restore(input, generator)?.data;
+            let plan = plan.with_new_exprs(plan.expressions(), vec![input])?;
+            return Ok(Transformed::yes(plan));
+        }
+        // an aggregate without grouping sets whose renamed outputs are its
+        // aggregate expressions: they are renamed in place
+        if let LogicalPlan::Aggregate(aggregate) = &plan
+            && aggregate.grouping_sets.is_none()
+            && let group_len = aggregate.group_expr_len()?
+            && renamed.iter().all(|i| *i >= group_len)
+        {
+            let LogicalPlan::Aggregate(aggregate) = plan else {
+                unreachable!()
+            };
+            let aggr_expr = aggregate
+                .aggr_expr
+                .into_iter()
+                .enumerate()
+                .map(|(i, entry)| {
+                    if renamed.contains(&(group_len + i)) {
+                        let expr = self.rename(entry.expr.clone(), group_len + i);
+                        entry.with_expr(expr)
+                    } else {
+                        entry
+                    }
+                })
+                .collect();
+            let aggregate = Aggregate::try_new(
+                aggregate.input,
+                aggregate.group_expr,
+                aggregate.grouping_sets,
+                aggr_expr,
+            )?;
+            return Ok(Transformed::yes(LogicalPlan::Aggregate(aggregate)));
+        }
+        let plan = match plan {
+            LogicalPlan::Projection(Projection { expr, input, .. }) => {
+                let expr = expr
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, entry)| {
+                        if renamed.contains(&i) {
+                            let expr = self.rename(entry.expr.clone(), i);
+                            // a renamed pass-through still passes its
+                            // column through, with its id
+                            entry.with_rewritten_expr(expr, generator)
+                        } else {
+                            entry
+                        }
+                    })
+                    .collect();
+                Projection::try_new(expr, input)?
+            }
+            plan => {
+                let schema = Arc::clone(plan.schema());
+                let expr = schema
+                    .columns()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, column)| {
+                        let entry =
+                            NamedExpr::allocate(Expr::Column(column), &schema, generator);
+                        if renamed.contains(&i) {
+                            let expr = self.rename(entry.expr.clone(), i);
+                            entry.with_rewritten_expr(expr, generator)
+                        } else {
+                            entry
+                        }
+                    })
+                    .collect();
+                Projection::try_new(expr, Arc::new(plan))?
+            }
+        };
+        Ok(Transformed::yes(LogicalPlan::Projection(plan)))
+    }
+}
+
+/// Whether `plan` is a projection, or passes the columns of one through
+/// sorts, limits and filters
+fn reaches_projection(plan: &LogicalPlan) -> bool {
+    match plan {
+        LogicalPlan::Projection(_) => true,
+        LogicalPlan::Sort(_) | LogicalPlan::Limit(_) | LogicalPlan::Filter(_) => {
+            reaches_projection(plan.inputs()[0])
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::{Arc, Mutex};
@@ -841,10 +1102,13 @@ mod tests {
         Column, ColumnId, DFSchema, DFSchemaRef, DataFusionError, Result,
         assert_contains, plan_err,
     };
+    use datafusion_expr::dml::InsertOp;
     use datafusion_expr::logical_plan::EmptyRelation;
+    use datafusion_expr::logical_plan::builder::LogicalTableSource;
     use datafusion_expr::{
-        Expr, JoinType, LogicalPlan, LogicalPlanBuilder, Projection, col, lit,
+        Expr, JoinType, LogicalPlan, LogicalPlanBuilder, NamedExpr, Projection, col, lit,
     };
+    use insta::assert_snapshot;
 
     use crate::optimizer::Optimizer;
     use crate::test::{test_table_scan, test_table_scan_with_name};
@@ -870,6 +1134,70 @@ mod tests {
         let opt = Optimizer::with_rules(vec![]);
         opt.optimize(plan, &config, observe)?;
         assert_eq!(config.column_id_generator().next(), id(42));
+        Ok(())
+    }
+
+    #[test]
+    fn restores_the_renamed_outputs_of_a_root_projection() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a").alias("x"), col("b")])?
+            .build()?;
+        let ids = plan.schema().field_ids().to_vec();
+        let config = OptimizerContext::new();
+        let opt = Optimizer::with_rules(vec![Arc::new(RenameXToYRule {})]);
+        let optimized = opt.optimize(plan, &config, observe)?;
+        // renamed in place, keeping the ids of the outputs
+        assert_snapshot!(optimized, @r"
+        Projection: test.a AS x, test.b
+          TableScan: test
+        ");
+        assert_eq!(optimized.schema().field_ids(), ids.as_slice());
+        Ok(())
+    }
+
+    #[test]
+    fn restores_the_renamed_outputs_below_the_root() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a").alias("x"), col("b")])?
+            .limit(0, Some(1))?
+            .build()?;
+        let config = OptimizerContext::new();
+        let opt = Optimizer::with_rules(vec![Arc::new(RenameXToYRule {})]);
+        let optimized = opt.optimize(plan, &config, observe)?;
+        // a projection over the root renames them back
+        assert_snapshot!(optimized, @"
+        Limit: skip=0, fetch=1
+          Projection: test.a AS x, test.b
+            TableScan: test
+        ");
+        assert_eq!(
+            optimized.schema().field_names(),
+            vec!["x".to_string(), "test.b".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn restores_the_renamed_outputs_of_the_input_of_a_write() -> Result<()> {
+        let input = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![col("a").alias("x"), col("b")])?
+            .limit(0, Some(1))?
+            .build()?;
+        let target = Arc::new(LogicalTableSource::new(Arc::new(
+            input.schema().as_arrow().clone(),
+        )));
+        let plan = LogicalPlanBuilder::insert_into(input, "t", target, InsertOp::Append)?
+            .build()?;
+        let config = OptimizerContext::new();
+        let opt = Optimizer::with_rules(vec![Arc::new(RenameXToYRule {})]);
+        let optimized = opt.optimize(plan, &config, observe)?;
+        // the table provider reads the names of the input of an INSERT
+        assert_snapshot!(optimized, @"
+        Dml: op=[Insert Into] table=[t]
+          Limit: skip=0, fetch=1
+            Projection: test.a AS x, test.b
+              TableScan: test
+        ");
         Ok(())
     }
 
@@ -1085,6 +1413,47 @@ mod tests {
             Ok(Transformed::yes(
                 LogicalPlanBuilder::from(table_scan).build()?,
             ))
+        }
+    }
+
+    /// Renames the projection outputs aliased `x` to `y`, keeping their ids,
+    /// as a rewrite that does not preserve names does
+    #[derive(Default, Debug)]
+    struct RenameXToYRule {}
+
+    impl OptimizerRule for RenameXToYRule {
+        fn name(&self) -> &str {
+            "rename_x_to_y"
+        }
+
+        fn apply_order(&self) -> Option<ApplyOrder> {
+            Some(ApplyOrder::TopDown)
+        }
+
+        fn rewrite(
+            &self,
+            plan: LogicalPlan,
+            _config: &dyn OptimizerConfig,
+        ) -> Result<Transformed<LogicalPlan>> {
+            let LogicalPlan::Projection(projection) = plan else {
+                return Ok(Transformed::no(plan));
+            };
+            let mut transformed = false;
+            let expr = projection
+                .expr
+                .into_iter()
+                .map(|entry| match entry.expr {
+                    Expr::Alias(mut alias) if alias.name == "x" => {
+                        transformed = true;
+                        alias.name = "y".to_string();
+                        NamedExpr::new(Expr::Alias(alias), entry.id)
+                    }
+                    _ => entry,
+                })
+                .collect();
+            let plan =
+                LogicalPlan::Projection(Projection::try_new(expr, projection.input)?);
+            Ok(Transformed::new_transformed(plan, transformed))
         }
     }
 

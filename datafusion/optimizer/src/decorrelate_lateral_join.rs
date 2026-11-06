@@ -99,7 +99,15 @@ fn rewrite_internal(
     let mut pull_up = PullUpCorrelatedExpr::new()
         .with_need_handle_count_bug(true)
         .with_column_id_generator(Arc::clone(ids));
-    let rewritten_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
+    let rewritten_subquery = match subquery_plan.clone().rewrite(&mut pull_up).data() {
+        Ok(plan) => plan,
+        // a rewrite that cannot be pulled up is dropped, also one that fails
+        // on the way
+        Err(_) if !pull_up.can_pull_up => {
+            return Ok(Transformed::no(LogicalPlan::Join(join)));
+        }
+        Err(e) => return Err(e),
+    };
     if !pull_up.can_pull_up {
         return Ok(Transformed::no(LogicalPlan::Join(join)));
     }
@@ -246,8 +254,13 @@ fn rewrite_internal(
             {
                 // Column whose aggregate doesn't naturally return NULL
                 // on empty input (e.g., COUNT returns 0). Wrap it.
+                // bound to the indicator output of the join
                 let indicator_col =
                     Column::new(alias_qualifier.cloned(), UN_MATCHED_ROW_INDICATOR);
+                let indicator_id = join_schema
+                    .maybe_index_of_column(&indicator_col)
+                    .and_then(|i| join_schema.field_id(i));
+                let indicator_col = indicator_col.with_id(indicator_id);
                 let case_expr = Expr::Case(expr::Case {
                     expr: None,
                     when_then_expr: vec![(

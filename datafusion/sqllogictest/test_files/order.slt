@@ -2244,7 +2244,7 @@ query TT
 EXPLAIN SELECT i FROM negative_stream ORDER BY -(-i) ASC;
 ----
 logical_plan
-01)Sort: negative_stream.i AS (- (- negative_stream.i)) ASC NULLS LAST
+01)Sort: negative_stream.i ASC NULLS LAST
 02)--TableScan: negative_stream projection=[i]
 physical_plan StreamingTableExec: partition_sizes=1, projection=[i], infinite_source=true, output_ordering=[i@0 ASC NULLS LAST]
 

@@ -4,25 +4,24 @@
 
 //! [`CommonSubexprEliminate`] to avoid redundant computation of common sub-expressions
 
-use std::collections::{BTreeSet, HashMap};
+use std::cell::Cell;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::{OptimizerConfig, OptimizerRule};
 
 use crate::optimizer::ApplyOrder;
-use crate::utils::NamePreserver;
-use datafusion_common::alias::AliasGenerator;
 
 use datafusion_common::cse::{CSE, CSEController, FoundCommonNodes};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
     Column, ColumnId, ColumnIdGenerator, DFSchema, DFSchemaRef, Result,
-    assert_eq_or_internal_err, qualified_name,
+    assert_eq_or_internal_err,
 };
 use datafusion_expr::expr::{
-    AggregateFunction, AggregateFunctionParams, Alias, HigherOrderFunction,
-    ScalarFunction, WindowFunction, WindowFunctionParams,
+    AggregateFunction, AggregateFunctionParams, HigherOrderFunction, ScalarFunction,
+    WindowFunction, WindowFunctionParams,
 };
 use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
@@ -30,8 +29,6 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::{
     BinaryExpr, Case, Expr, ExpressionPlacement, NamedExpr, Operator, SortExpr,
 };
-
-const CSE_PREFIX: &str = "__common_expr";
 
 /// Performs Common Sub-expression Elimination optimization.
 ///
@@ -204,48 +201,24 @@ impl CommonSubexprEliminate {
         })?
         // Rebuild the consecutive window nodes.
         .map_data(|(new_window_expr_list, new_input, window_expr_list)| {
-            // If there were common expressions extracted, then we need to make sure
-            // we restore the original column names.
-            // TODO: Although `find_common_exprs()` inserts aliases around extracted
-            //  common expressions this doesn't mean that the original column names
-            //  (schema) are preserved due to the inserted aliases are not always at
-            //  the top of the expression.
-            //  Let's consider improving `find_common_exprs()` to always keep column
-            //  names and get rid of additional name preserving logic here.
-            if let Some(window_expr_list) = window_expr_list {
-                let name_preserver = NamePreserver::new_for_projection();
-                let saved_names = window_expr_list
-                    .iter()
-                    .map(|exprs| {
-                        exprs
-                            .iter()
-                            .map(|expr| name_preserver.save(expr))
-                            .collect::<Vec<_>>()
-                    })
-                    .collect::<Vec<_>>();
-                // each window expression keeps the id of its entry
-                new_window_expr_list
-                    .into_iter()
-                    .zip(saved_names)
-                    .zip(window_ids)
-                    .try_rfold(
-                        new_input,
-                        |plan, ((new_window_expr, saved_names), ids)| {
-                            let new_window_expr = new_window_expr
-                                .into_iter()
-                                .zip(saved_names)
-                                .zip(ids)
-                                .map(|((new_window_expr, saved_name), id)| {
-                                    NamedExpr::new(
-                                        saved_name.restore(new_window_expr),
-                                        id,
-                                    )
-                                })
-                                .collect::<Vec<_>>();
-                            Window::try_new(new_window_expr, Arc::new(plan))
-                                .map(LogicalPlan::Window)
-                        },
-                    )
+            // If there were common expressions extracted, the window
+            // expressions are rewritten: each keeps the id of its entry, and
+            // may be renamed (`Window::try_new` names the outputs again)
+            if window_expr_list.is_some() {
+                new_window_expr_list.into_iter().zip(window_ids).try_rfold(
+                    new_input,
+                    |plan, (new_window_expr, ids)| {
+                        let new_window_expr = new_window_expr
+                            .into_iter()
+                            .zip(ids)
+                            .map(|(new_window_expr, id)| {
+                                NamedExpr::new(new_window_expr, id)
+                            })
+                            .collect::<Vec<_>>();
+                        Window::try_new(new_window_expr, Arc::new(plan))
+                            .map(LogicalPlan::Window)
+                    },
+                )
             } else {
                 new_window_expr_list
                     .into_iter()
@@ -395,89 +368,39 @@ impl CommonSubexprEliminate {
                     } => {
                         let rewritten_aggr_expr = new_exprs_list.pop().unwrap();
                         let new_aggr_expr = original_exprs_list.pop().unwrap();
-                        let saved_names = if let Some(aggr_expr) = aggr_expr {
-                            let name_preserver = NamePreserver::new_for_projection();
-                            aggr_expr
-                                .iter()
-                                .map(|expr| Some(name_preserver.save(expr)))
-                                .collect::<Vec<_>>()
-                        } else {
-                            (0..new_aggr_expr.len()).map(|_| None).collect()
-                        };
-
                         // the common aggregates define the columns that the
                         // rewritten aggregates reference
                         let mut agg_exprs = common_exprs
                             .into_iter()
-                            .map(|(expr, expr_alias)| {
-                                let id = common_ids.id(&expr_alias, ids);
-                                NamedExpr::new(expr.alias(expr_alias), id)
+                            .map(|(expr, key)| {
+                                let id = common_ids.id(&key, ids);
+                                NamedExpr::new(expr, id)
                             })
                             .collect::<Vec<_>>();
 
-                        // the outputs of the projection, with the ids of the
-                        // aggregate outputs they replace (the others pass the
-                        // outputs of the new aggregate through)
                         // the outputs of the projection that replace the
-                        // aggregate expressions, with the ids of the
-                        // aggregate outputs they replace (the grouping
-                        // outputs are passed through, below)
+                        // aggregate expressions keep the ids of the aggregate
+                        // outputs they replace (the grouping outputs are
+                        // passed through, below). An aggregate expression
+                        // that was not rewritten stays in the aggregate, with
+                        // its id, and the projection passes it through.
                         let mut proj_exprs: Vec<NamedExpr> =
                             Vec::with_capacity(rewritten_aggr_expr.len());
-                        for (((expr_rewritten, expr_orig), saved_name), entry) in
-                            rewritten_aggr_expr
-                                .into_iter()
-                                .zip(new_aggr_expr)
-                                .zip(saved_names)
-                                .zip(&aggr_entries)
+                        for ((expr_rewritten, expr_orig), entry) in rewritten_aggr_expr
+                            .into_iter()
+                            .zip(new_aggr_expr)
+                            .zip(&aggr_entries)
                         {
                             if expr_rewritten == expr_orig {
-                                let expr_rewritten = if let Some(saved_name) = saved_name
-                                {
-                                    saved_name.restore(expr_rewritten)
-                                } else {
-                                    expr_rewritten
-                                };
-                                if let Expr::Alias(Alias { expr, name, .. }) =
-                                    expr_rewritten
-                                {
-                                    // the aggregate keeps the output, the
-                                    // projection passes it through
-                                    agg_exprs.push(NamedExpr::new(
-                                        expr.alias(&name),
-                                        entry.id,
-                                    ));
-                                    proj_exprs.push(NamedExpr::new(
-                                        Expr::Column(
-                                            Column::from_name(name)
-                                                .with_id(Some(entry.id)),
-                                        ),
-                                        entry.id,
-                                    ));
-                                } else {
-                                    let expr_alias =
-                                        config.alias_generator().next(CSE_PREFIX);
-                                    let (qualifier, field_name) =
-                                        expr_rewritten.qualified_name();
-                                    let out_name =
-                                        qualified_name(qualifier.as_ref(), &field_name);
-
-                                    // the renamed output of the
-                                    // projection replaces it
-                                    let id = ids.next();
-                                    agg_exprs.push(NamedExpr::new(
-                                        expr_rewritten.alias(&expr_alias),
-                                        id,
-                                    ));
-                                    proj_exprs.push(NamedExpr::new(
-                                        Expr::Column(
-                                            Column::from_name(expr_alias)
-                                                .with_id(Some(id)),
-                                        )
-                                        .alias(out_name),
-                                        entry.id,
-                                    ));
-                                }
+                                let (qualifier, name) = expr_orig.qualified_name();
+                                agg_exprs.push(NamedExpr::new(expr_orig, entry.id));
+                                proj_exprs.push(NamedExpr::new(
+                                    Expr::Column(
+                                        Column::new(qualifier, name)
+                                            .with_id(Some(entry.id)),
+                                    ),
+                                    entry.id,
+                                ));
                             } else {
                                 proj_exprs.push(NamedExpr::new(expr_rewritten, entry.id));
                             }
@@ -516,37 +439,17 @@ impl CommonSubexprEliminate {
                     } => {
                         let rewritten_aggr_expr = original_exprs_list.pop().unwrap();
 
-                        // If there were common expressions extracted, then we need to
-                        // make sure we restore the original column names.
-                        // TODO: Although `find_common_exprs()` inserts aliases around
-                        //  extracted common expressions this doesn't mean that the
-                        //  original column names (schema) are preserved due to the
-                        //  inserted aliases are not always at the top of the
-                        //  expression.
-                        //  Let's consider improving `find_common_exprs()` to always
-                        //  keep column names and get rid of additional name
-                        //  preserving logic here.
-                        if let Some(aggr_expr) = aggr_expr {
-                            let name_preserver = NamePreserver::new_for_projection();
-                            let saved_names = aggr_expr
-                                .iter()
-                                .map(|expr| name_preserver.save(expr))
-                                .collect::<Vec<_>>();
-                            let new_aggr_expr = rewritten_aggr_expr
-                                .into_iter()
-                                .zip(saved_names)
-                                .map(|(new_expr, saved_name)| {
-                                    saved_name.restore(new_expr)
-                                })
-                                .collect::<Vec<Expr>>();
-
+                        // If there were common expressions extracted, the
+                        // aggregate expressions are rewritten: each keeps the
+                        // id of its entry, and may be renamed
+                        if aggr_expr.is_some() {
                             // Since `group_expr` may have changed, schema may also.
                             // Use `try_new()` method.
                             Aggregate::try_new(
                                 new_input,
                                 rebuild_group(new_group_expr)?,
                                 grouping_sets.clone(),
-                                rebuild(&aggr_entries, new_aggr_expr),
+                                rebuild(&aggr_entries, rewritten_aggr_expr),
                             )
                             .map(LogicalPlan::Aggregate)
                             .map(Transformed::no)
@@ -706,6 +609,7 @@ impl OptimizerRule for CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         let original_schema = Arc::clone(plan.schema());
+        let is_projection = matches!(plan, LogicalPlan::Projection(_));
 
         let optimized_plan = match plan {
             LogicalPlan::Projection(proj) => self.try_optimize_proj(proj, config)?,
@@ -745,6 +649,14 @@ impl OptimizerRule for CommonSubexprEliminate {
             }
         };
 
+        // A projection keeps its outputs (their ids): their names and fields
+        // follow the rewritten expressions, see `try_optimize_proj`.
+        if is_projection
+            && optimized_plan.data.schema().field_ids() == original_schema.field_ids()
+        {
+            return Ok(optimized_plan);
+        }
+
         // If we rewrote the plan, ensure the schema stays the same
         if optimized_plan.transformed && optimized_plan.data.schema() != &original_schema
         {
@@ -779,15 +691,11 @@ enum ExprMask {
 }
 
 struct ExprCSEController<'a> {
-    alias_generator: &'a AliasGenerator,
     column_id_generator: &'a ColumnIdGenerator,
     mask: ExprMask,
     /// The ids of the columns of the common expressions, which the references
     /// that replace them take
     common_ids: &'a mut CommonExprIds,
-
-    // how many aliases have we seen so far
-    alias_counter: usize,
 }
 
 impl<'a> ExprCSEController<'a> {
@@ -797,11 +705,9 @@ impl<'a> ExprCSEController<'a> {
         common_ids: &'a mut CommonExprIds,
     ) -> Self {
         Self {
-            alias_generator: config.alias_generator().as_ref(),
             column_id_generator: config.column_id_generator(),
             mask,
             common_ids,
-            alias_counter: 0,
         }
     }
 }
@@ -810,16 +716,29 @@ impl<'a> ExprCSEController<'a> {
 /// [`extract_common_exprs`], by alias: the references that replace the
 /// expressions, and the entries that compute them below, take the same id
 #[derive(Debug, Default)]
-struct CommonExprIds(HashMap<String, ColumnId>);
+struct CommonExprIds {
+    ids: HashMap<String, ColumnId>,
+    /// The number of keys handed out (see [`Self::next_key`])
+    keys: Cell<usize>,
+}
 
 impl CommonExprIds {
-    /// The id of the column of the common expression `alias`, allocated from
+    /// The id of the column of the common expression `key`, allocated from
     /// `generator` when it is first asked for
-    fn id(&mut self, alias: &str, generator: &ColumnIdGenerator) -> ColumnId {
+    fn id(&mut self, key: &str, generator: &ColumnIdGenerator) -> ColumnId {
         *self
-            .0
-            .entry(alias.to_owned())
+            .ids
+            .entry(key.to_owned())
             .or_insert_with(|| generator.next())
+    }
+
+    /// A new key for a common expression. It only identifies the expression
+    /// within the rule: the column that computes it is named after the
+    /// expression, and referred to by id.
+    fn next_key(&self) -> String {
+        let n = self.keys.get() + 1;
+        self.keys.set(n);
+        format!("#{n}")
     }
 }
 
@@ -969,7 +888,7 @@ impl CSEController for ExprCSEController<'_> {
             // maybe using `Expr::placemement().should_push_to_leaves()` instead
             // so that we extract common literals and don't broadcast them to num_batch_rows multiple times.
             // However that currently breaks things like `percentile_cont()` which expect literal arguments
-            // (and would instead be getting `col(__common_expr_n)`).
+            // (and would instead be getting a column of a common expression).
             Expr::Literal(..)
                 | Expr::Column(..)
                 | Expr::ScalarVariable(..)
@@ -989,31 +908,15 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn generate_alias(&self) -> String {
-        self.alias_generator.next(CSE_PREFIX)
+        self.common_ids.next_key()
     }
 
-    fn rewrite(&mut self, node: &Self::Node, alias: &str) -> Self::Node {
-        // a reference to the column that computes the common expression
-        let id = self.common_ids.id(alias, self.column_id_generator);
-        let reference = Expr::Column(Column::from_name(alias).with_id(Some(id)));
-        // alias the expressions without an `Alias` ancestor node
-        if self.alias_counter > 0 {
-            reference
-        } else {
-            self.alias_counter += 1;
-            reference.alias(node.schema_name().to_string())
-        }
-    }
-
-    fn rewrite_f_down(&mut self, node: &Expr) {
-        if matches!(node, Expr::Alias(_)) {
-            self.alias_counter += 1;
-        }
-    }
-    fn rewrite_f_up(&mut self, node: &Expr) {
-        if matches!(node, Expr::Alias(_)) {
-            self.alias_counter -= 1
-        }
+    fn rewrite(&mut self, node: &Self::Node, key: &str) -> Self::Node {
+        // a reference to the column that computes the common expression: it
+        // is named after the expression, and read by id (an expression that
+        // contains it is renamed, and keeps its id)
+        let id = self.common_ids.id(key, self.column_id_generator);
+        Expr::Column(Column::from_name(node.schema_name().to_string()).with_id(Some(id)))
     }
 }
 
@@ -1039,31 +942,24 @@ fn build_common_expr_project_plan(
     common_ids: &mut CommonExprIds,
     config: &dyn OptimizerConfig,
 ) -> Result<LogicalPlan> {
-    let mut fields_set = BTreeSet::new();
     // the common expressions define the columns their references read
+    // (named after the expressions)
     let mut project_exprs = common_exprs
         .into_iter()
-        .map(|(expr, expr_alias)| {
-            fields_set.insert(expr_alias.clone());
-            let id = common_ids.id(&expr_alias, config.column_id_generator());
-            NamedExpr::new(expr.alias(expr_alias), id)
+        .map(|(expr, key)| {
+            let id = common_ids.id(&key, config.column_id_generator());
+            NamedExpr::new(expr, id)
         })
         .collect::<Vec<_>>();
 
-    // the input columns pass through
-    for (col, (qualifier, field)) in input
-        .schema()
-        .columns()
-        .into_iter()
-        .zip(input.schema().iter())
-    {
-        if fields_set.insert(qualified_name(qualifier, field.name())) {
-            project_exprs.push(NamedExpr::allocate(
-                Expr::Column(col),
-                input.schema(),
-                config.column_id_generator(),
-            ));
-        }
+    // the input columns pass through, with their ids (also one with the
+    // name of a common expression: they are told apart by their ids)
+    for col in input.schema().columns() {
+        project_exprs.push(NamedExpr::allocate(
+            Expr::Column(col),
+            input.schema(),
+            config.column_id_generator(),
+        ));
     }
 
     Projection::try_new(project_exprs, Arc::new(input)).map(LogicalPlan::Projection)
@@ -1097,9 +993,11 @@ fn build_recover_project_plan(
 #[cfg(test)]
 mod test {
 
+    use std::collections::HashSet;
     use std::iter;
 
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_expr::expr_rewriter::normalize_col;
     use datafusion_expr::logical_plan::{JoinType, projection_schema, table_scan};
     use datafusion_expr::{
         AccumulatorFactoryFunction, AggregateUDF, ColumnarValue, ExprFunctionExt,
@@ -1170,9 +1068,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a * Int32(1) - test.b), sum(__common_expr_1 AS test.a * Int32(1) - test.b * (Int32(1) + test.c))]]
-          Projection: test.a * (Int32(1) - test.b) AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Aggregate: groupBy=[[]], aggr=[[sum(test.a * Int32(1) - test.b), sum(test.a * Int32(1) - test.b * (Int32(1) + test.c))]]
+          Projection: test.a * (Int32(1) - test.b), test.a, test.b, test.c
             TableScan: test
         "
         )
@@ -1191,9 +1089,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 - test.c AS alias1 * __common_expr_1 AS test.a + test.b, __common_expr_1 AS test.a + test.b
-          Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Projection: test.a + test.b - test.c AS alias1 * test.a + test.b, test.a + test.b
+          Projection: test.a + test.b, test.a, test.b, test.c
             TableScan: test
         "
         )
@@ -1245,9 +1143,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 AS col1, __common_expr_1 AS col2, col3, __common_expr_3 AS avg(test.c), __common_expr_2 AS col4, __common_expr_2 AS col5, col6, __common_expr_4 AS my_agg(test.c)
-          Aggregate: groupBy=[[]], aggr=[[avg(test.a) AS __common_expr_1, my_agg(test.a) AS __common_expr_2, avg(test.b) AS col3, avg(test.c) AS __common_expr_3, my_agg(test.b) AS col6, my_agg(test.c) AS __common_expr_4]]
+            @ "
+        Projection: avg(test.a) AS col1, avg(test.a) AS col2, col3, avg(test.c), my_agg(test.a) AS col4, my_agg(test.a) AS col5, col6, my_agg(test.c)
+          Aggregate: groupBy=[[]], aggr=[[avg(test.a), my_agg(test.a), avg(test.b) AS col3, avg(test.c), my_agg(test.b) AS col6, my_agg(test.c)]]
             TableScan: test
         "
         )?;
@@ -1267,9 +1165,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: Int32(1) + __common_expr_1 AS avg(test.a), Int32(1) - __common_expr_1 AS avg(test.a), Int32(1) + __common_expr_2 AS my_agg(test.a), Int32(1) - __common_expr_2 AS my_agg(test.a)
-          Aggregate: groupBy=[[]], aggr=[[avg(test.a) AS __common_expr_1, my_agg(test.a) AS __common_expr_2]]
+            @ "
+        Projection: Int32(1) + avg(test.a), Int32(1) - avg(test.a), Int32(1) + my_agg(test.a), Int32(1) - my_agg(test.a)
+          Aggregate: groupBy=[[]], aggr=[[avg(test.a), my_agg(test.a)]]
             TableScan: test
         "
         )?;
@@ -1287,9 +1185,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Aggregate: groupBy=[[]], aggr=[[avg(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]
-          Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Aggregate: groupBy=[[]], aggr=[[avg(UInt32(1) + test.a) AS col1, my_agg(UInt32(1) + test.a) AS col2]]
+          Projection: UInt32(1) + test.a, test.a, test.b, test.c
             TableScan: test
         "
         )?;
@@ -1307,9 +1205,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Aggregate: groupBy=[[__common_expr_1 AS UInt32(1) + test.a]], aggr=[[avg(__common_expr_1) AS col1, my_agg(__common_expr_1) AS col2]]
-          Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Aggregate: groupBy=[[UInt32(1) + test.a]], aggr=[[avg(UInt32(1) + test.a) AS col1, my_agg(UInt32(1) + test.a) AS col2]]
+          Projection: UInt32(1) + test.a, test.a, test.b, test.c
             TableScan: test
         "
         )?;
@@ -1331,10 +1229,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: UInt32(1) + test.a, UInt32(1) + __common_expr_2 AS col1, UInt32(1) - __common_expr_2 AS col2, __common_expr_4 AS avg(UInt32(1) + test.a), UInt32(1) + __common_expr_3 AS col3, UInt32(1) - __common_expr_3 AS col4, __common_expr_5 AS my_agg(UInt32(1) + test.a)
-          Aggregate: groupBy=[[__common_expr_1 AS UInt32(1) + test.a]], aggr=[[avg(__common_expr_1) AS __common_expr_2, my_agg(__common_expr_1) AS __common_expr_3, avg(__common_expr_1 AS UInt32(1) + test.a) AS __common_expr_4, my_agg(__common_expr_1 AS UInt32(1) + test.a) AS __common_expr_5]]
-            Projection: UInt32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Projection: UInt32(1) + test.a, UInt32(1) + avg(UInt32(1) + test.a) AS col1, UInt32(1) - avg(UInt32(1) + test.a) AS col2, avg(UInt32(1) + test.a), UInt32(1) + my_agg(UInt32(1) + test.a) AS col3, UInt32(1) - my_agg(UInt32(1) + test.a) AS col4, my_agg(UInt32(1) + test.a)
+          Aggregate: groupBy=[[UInt32(1) + test.a]], aggr=[[avg(UInt32(1) + test.a), my_agg(UInt32(1) + test.a)]]
+            Projection: UInt32(1) + test.a, test.a, test.b, test.c
               TableScan: test
         "
         )
@@ -1359,10 +1257,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: table.test.col.a, UInt32(1) + __common_expr_2 AS avg(UInt32(1) + table.test.col.a), __common_expr_2 AS avg(UInt32(1) + table.test.col.a)
-          Aggregate: groupBy=[[table.test.col.a]], aggr=[[avg(__common_expr_1 AS UInt32(1) + table.test.col.a) AS __common_expr_2]]
-            Projection: UInt32(1) + table.test.col.a AS __common_expr_1, table.test.col.a
+            @ "
+        Projection: table.test.col.a, UInt32(1) + avg(UInt32(1) + table.test.col.a), avg(UInt32(1) + table.test.col.a)
+          Aggregate: groupBy=[[table.test.col.a]], aggr=[[avg(UInt32(1) + table.test.col.a)]]
+            Projection: UInt32(1) + table.test.col.a, table.test.col.a
               TableScan: table.test
         "
         )
@@ -1380,10 +1278,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Filter: __grouping_id = UInt8(0)
-          Projection: test.a, __grouping_id, __common_expr_1 AS first, __common_expr_1 AS second
-            Aggregate: groupBy=[[GROUPING SETS ((test.a))]], aggr=[[avg(test.b) AS __common_expr_1]]
+          Projection: test.a, __grouping_id, avg(test.b) AS first, avg(test.b) AS second
+            Aggregate: groupBy=[[GROUPING SETS ((test.a))]], aggr=[[avg(test.b)]]
               TableScan: test
         "
         )
@@ -1402,9 +1300,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 AS first, __common_expr_1 AS second
-          Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Projection: Int32(1) + test.a AS first, Int32(1) + test.a AS second
+          Projection: Int32(1) + test.a, test.a, test.b, test.c
             TableScan: test
         "
         )
@@ -1420,9 +1318,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 AS Int32(1) + test.a, __common_expr_1 AS test.a + Int32(1)
-          Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Projection: Int32(1) + test.a, Int32(1) + test.a AS test.a + Int32(1)
+          Projection: Int32(1) + test.a, test.a, test.b, test.c
             TableScan: test
         "
         )
@@ -1447,44 +1345,12 @@ mod test {
         )
     }
 
+    /// The columns of the common expressions are named after the
+    /// expressions, beside the input columns (also ones with the same name):
+    /// they are told apart by their ids
     #[test]
-    fn redundant_project_fields() {
+    fn common_expr_project_fields_have_distinct_ids() {
         let table_scan = test_table_scan().unwrap();
-        let c_plus_a = col("c") + col("a");
-        let b_plus_a = col("b") + col("a");
-        let common_exprs_1 = vec![
-            (c_plus_a, format!("{CSE_PREFIX}_1")),
-            (b_plus_a, format!("{CSE_PREFIX}_2")),
-        ];
-        let c_plus_a_2 = col(format!("{CSE_PREFIX}_1"));
-        let b_plus_a_2 = col(format!("{CSE_PREFIX}_2"));
-        let common_exprs_2 = vec![
-            (c_plus_a_2, format!("{CSE_PREFIX}_3")),
-            (b_plus_a_2, format!("{CSE_PREFIX}_4")),
-        ];
-        let project = build_common_expr_project_plan(
-            table_scan,
-            common_exprs_1,
-            &mut CommonExprIds::default(),
-            &OptimizerContext::new(),
-        )
-        .unwrap();
-        let project_2 = build_common_expr_project_plan(
-            project,
-            common_exprs_2,
-            &mut CommonExprIds::default(),
-            &OptimizerContext::new(),
-        )
-        .unwrap();
-
-        let mut field_set = BTreeSet::new();
-        for name in project_2.schema().field_names() {
-            assert!(field_set.insert(name));
-        }
-    }
-
-    #[test]
-    fn redundant_project_fields_join_input() {
         let table_scan_1 = test_table_scan_with_name("test1").unwrap();
         let table_scan_2 = test_table_scan_with_name("test2").unwrap();
         let join = LogicalPlanBuilder::from(table_scan_1)
@@ -1492,36 +1358,40 @@ mod test {
             .unwrap()
             .build()
             .unwrap();
-        let c_plus_a = col("test1.c") + col("test1.a");
-        let b_plus_a = col("test1.b") + col("test1.a");
-        let common_exprs_1 = vec![
-            (c_plus_a, format!("{CSE_PREFIX}_1")),
-            (b_plus_a, format!("{CSE_PREFIX}_2")),
-        ];
-        let c_plus_a_2 = col(format!("{CSE_PREFIX}_1"));
-        let b_plus_a_2 = col(format!("{CSE_PREFIX}_2"));
-        let common_exprs_2 = vec![
-            (c_plus_a_2, format!("{CSE_PREFIX}_3")),
-            (b_plus_a_2, format!("{CSE_PREFIX}_4")),
-        ];
-        let project = build_common_expr_project_plan(
-            join,
-            common_exprs_1,
-            &mut CommonExprIds::default(),
-            &OptimizerContext::new(),
-        )
-        .unwrap();
-        let project_2 = build_common_expr_project_plan(
-            project,
-            common_exprs_2,
-            &mut CommonExprIds::default(),
-            &OptimizerContext::new(),
-        )
-        .unwrap();
-
-        let mut field_set = BTreeSet::new();
-        for name in project_2.schema().field_names() {
-            assert!(field_set.insert(name));
+        for (input, c_plus_a, b_plus_a) in [
+            (table_scan, col("c") + col("a"), col("b") + col("a")),
+            (
+                join,
+                col("test1.c") + col("test1.a"),
+                col("test1.b") + col("test1.a"),
+            ),
+        ] {
+            let c_plus_a = normalize_col(c_plus_a, &input).unwrap();
+            let b_plus_a = normalize_col(b_plus_a, &input).unwrap();
+            let common_exprs = vec![
+                (c_plus_a.clone(), "#1".to_string()),
+                (b_plus_a.clone(), "#2".to_string()),
+            ];
+            // one generator, past the plan: the common expressions must not
+            // reuse the ids of the scan
+            let config = OptimizerContext::new();
+            if let Some(max) = input.max_column_id() {
+                config.column_id_generator().advance_past(max);
+            }
+            let input_width = input.schema().fields().len();
+            let project = build_common_expr_project_plan(
+                input,
+                common_exprs,
+                &mut CommonExprIds::default(),
+                &config,
+            )
+            .unwrap();
+            let schema = project.schema();
+            assert_eq!(schema.fields().len(), input_width + 2);
+            assert_eq!(schema.field(0).name(), &c_plus_a.schema_name().to_string());
+            assert_eq!(schema.field(1).name(), &b_plus_a.schema_name().to_string());
+            let ids = schema.field_ids().iter().flatten().collect::<HashSet<_>>();
+            assert_eq!(ids.len(), schema.fields().len());
         }
     }
 
@@ -1590,10 +1460,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 - Int32(10) > __common_expr_1
-            Projection: Int32(1) + test.a AS __common_expr_1, test.a, test.b, test.c
+          Filter: Int32(1) + test.a - Int32(10) > Int32(1) + test.a
+            Projection: Int32(1) + test.a, test.a, test.b, test.c
               TableScan: test
         "
         )
@@ -1603,8 +1473,9 @@ mod test {
     fn test_alias_collision() -> Result<()> {
         let table_scan = test_table_scan()?;
 
+        // user columns named like the old generated names
         let config = OptimizerContext::new();
-        let common_expr_1 = config.alias_generator().next(CSE_PREFIX);
+        let common_expr_1 = "__common_expr_1".to_string();
         let plan = LogicalPlanBuilder::from(table_scan.clone())
             .project(vec![
                 (col("a") + col("b")).alias(common_expr_1.clone()),
@@ -1621,17 +1492,16 @@ mod test {
         assert_optimized_plan_equal!(
             config,
             plan,
-            @ r"
-        Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 AS c3, __common_expr_2 AS c4
-          Projection: test.c + Int32(2) AS __common_expr_2, __common_expr_1, test.c
+            @ "
+        Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, test.c + Int32(2) AS c3, test.c + Int32(2) AS c4
+          Projection: test.c + Int32(2), __common_expr_1, test.c
             Projection: test.a + test.b AS __common_expr_1, test.c
               TableScan: test
         "
         )?;
 
         let config = OptimizerContext::new();
-        let _common_expr_1 = config.alias_generator().next(CSE_PREFIX);
-        let common_expr_2 = config.alias_generator().next(CSE_PREFIX);
+        let common_expr_2 = "__common_expr_2".to_string();
         let plan = LogicalPlanBuilder::from(table_scan)
             .project(vec![
                 (col("a") + col("b")).alias(common_expr_2.clone()),
@@ -1648,9 +1518,9 @@ mod test {
         assert_optimized_plan_equal!(
             config,
             plan,
-            @ r"
-        Projection: __common_expr_2 AS c1, __common_expr_2 AS c2, __common_expr_3 AS c3, __common_expr_3 AS c4
-          Projection: test.c + Int32(2) AS __common_expr_3, __common_expr_2, test.c
+            @ "
+        Projection: __common_expr_2 AS c1, __common_expr_2 AS c2, test.c + Int32(2) AS c3, test.c + Int32(2) AS c4
+          Projection: test.c + Int32(2), __common_expr_2, test.c
             Projection: test.a + test.b AS __common_expr_2, test.c
               TableScan: test
         "
@@ -1687,9 +1557,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 AS c1, __common_expr_1 AS c2, __common_expr_2 OR test.a - test.b = Int32(0) AS c3, __common_expr_2 AND test.a - test.b = Int32(0) AS c4, __common_expr_3 OR __common_expr_3 AS c5
-          Projection: test.a = Int32(0) OR test.b = Int32(0) AS __common_expr_1, test.a + test.b = Int32(0) AS __common_expr_2, test.a * test.b = Int32(0) AS __common_expr_3, test.a, test.b, test.c
+            @ "
+        Projection: test.a = Int32(0) OR test.b = Int32(0) AS c1, test.a = Int32(0) OR test.b = Int32(0) AS c2, test.a + test.b = Int32(0) OR test.a - test.b = Int32(0) AS c3, test.a + test.b = Int32(0) AND test.a - test.b = Int32(0) AS c4, test.a * test.b = Int32(0) OR test.a * test.b = Int32(0) AS c5
+          Projection: test.a = Int32(0) OR test.b = Int32(0), test.a + test.b = Int32(0), test.a * test.b = Int32(0), test.a, test.b, test.c
             TableScan: test
         "
         )
@@ -1711,9 +1581,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 + random() AS c1, __common_expr_1 + random() AS c2
-          Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Projection: test.a + test.b + random() AS c1, test.a + test.b + random() AS c2
+          Projection: test.a + test.b, test.a, test.b, test.c
             TableScan: test
         "
         )
@@ -1741,9 +1611,9 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 OR random() = Int32(0) AS c1, __common_expr_1 OR random() = Int32(0) AS c2, random() = Int32(0) OR test.b = Int32(0) AS c3, random() = Int32(0) OR test.b = Int32(0) AS c4
-          Projection: test.a = Int32(0) AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Projection: test.a = Int32(0) OR random() = Int32(0) AS c1, test.a = Int32(0) OR random() = Int32(0) AS c2, random() = Int32(0) OR test.b = Int32(0) AS c3, random() = Int32(0) OR test.b = Int32(0) AS c4
+          Projection: test.a = Int32(0), test.a, test.b, test.c
             TableScan: test
         "
         )
@@ -1764,10 +1634,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: c1, c2
-          Projection: __common_expr_1 AS c1, __common_expr_1 AS c2
-            Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
+          Projection: test.a + test.b AS c1, test.a + test.b AS c2
+            Projection: test.a + test.b, test.a, test.b, test.c
               TableScan: test
         "
         )
@@ -1788,10 +1658,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 AS c1, __common_expr_1 AS c2
-          Projection: __common_expr_2 * __common_expr_2 AS __common_expr_1, test.a, test.b, test.c
-            Projection: test.a + test.b AS __common_expr_2, test.a, test.b, test.c
+            @ "
+        Projection: test.a + test.b * test.a + test.b AS c1, test.a + test.b * test.a + test.b AS c2
+          Projection: test.a + test.b * test.a + test.b, test.a, test.b, test.c
+            Projection: test.a + test.b, test.a, test.b, test.c
               TableScan: test
         "
         )
@@ -1806,10 +1676,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 * __common_expr_1 = Int32(30)
-            Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
+          Filter: test.a + test.b * test.a + test.b = Int32(30)
+            Projection: test.a + test.b, test.a, test.b, test.c
               TableScan: test
         "
         )
@@ -1824,10 +1694,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 + __common_expr_1 = Int32(30)
-            Projection: test.a * test.b AS __common_expr_1, test.a, test.b, test.c
+          Filter: test.a * test.b + test.a * test.b = Int32(30)
+            Projection: test.a * test.b, test.a, test.b, test.c
               TableScan: test
         "
         )
@@ -1842,10 +1712,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 + __common_expr_1 = Int32(30)
-            Projection: test.a & test.b AS __common_expr_1, test.a, test.b, test.c
+          Filter: test.a & test.b + test.a & test.b = Int32(30)
+            Projection: test.a & test.b, test.a, test.b, test.c
               TableScan: test
         "
         )
@@ -1860,10 +1730,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 + __common_expr_1 = Int32(30)
-            Projection: test.a | test.b AS __common_expr_1, test.a, test.b, test.c
+          Filter: test.a | test.b + test.a | test.b = Int32(30)
+            Projection: test.a | test.b, test.a, test.b, test.c
               TableScan: test
         "
         )
@@ -1878,10 +1748,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 + __common_expr_1 = Int32(30)
-            Projection: test.a BIT_XOR test.b AS __common_expr_1, test.a, test.b, test.c
+          Filter: test.a BIT_XOR test.b + test.a BIT_XOR test.b = Int32(30)
+            Projection: test.a BIT_XOR test.b, test.a, test.b, test.c
               TableScan: test
         "
         )
@@ -1896,10 +1766,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 AND __common_expr_1
-            Projection: test.a = test.b AS __common_expr_1, test.a, test.b, test.c
+          Filter: test.a = test.b AND test.a = test.b
+            Projection: test.a = test.b, test.a, test.b, test.c
               TableScan: test
         "
         )
@@ -1914,10 +1784,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 AND __common_expr_1
-            Projection: test.a != test.b AS __common_expr_1, test.a, test.b, test.c
+          Filter: test.a != test.b AND test.a != test.b
+            Projection: test.a != test.b, test.a, test.b, test.c
               TableScan: test
         "
         )
@@ -1933,10 +1803,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 - __common_expr_1 = Int32(30)
-            Projection: test.a + test.b * test.c AS __common_expr_1, test.a, test.b, test.c
+          Filter: test.a + test.b * test.c - test.a + test.b * test.c = Int32(30)
+            Projection: test.a + test.b * test.c, test.a, test.b, test.c
               TableScan: test
         "
         )?;
@@ -1951,10 +1821,10 @@ mod test {
 
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 / __common_expr_1 + test.a = Int32(30)
-            Projection: (test.a + test.b / test.c) * test.c AS __common_expr_1, test.a, test.b, test.c
+          Filter: test.a + test.b / test.c * test.c / test.a + test.b / test.c * test.c + test.a = Int32(30)
+            Projection: (test.a + test.b / test.c) * test.c, test.a, test.b, test.c
               TableScan: test
         "
         )?;
@@ -1967,10 +1837,10 @@ mod test {
         let plan = LogicalPlanBuilder::from(table_scan).filter(expr)?.build()?;
         assert_optimized_plan_equal!(
             plan,
-            @ r"
+            @ "
         Projection: test.a, test.b, test.c
-          Filter: __common_expr_1 * __common_expr_1 = Int32(30)
-            Projection: test.b / (test.a + test.c) AS __common_expr_1, test.a, test.b, test.c
+          Filter: test.b / test.a + test.c * test.b / test.a + test.c = Int32(30)
+            Projection: test.b / (test.a + test.c), test.a, test.b, test.c
               TableScan: test
         "
         )?;
@@ -2020,9 +1890,9 @@ mod test {
             .build()?;
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 AS NOT test.a = test.b, __common_expr_1 AS NOT test.b = test.a
-          Projection: NOT test.a = test.b AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Projection: NOT test.a = test.b, NOT test.a = test.b AS NOT test.b = test.a
+          Projection: NOT test.a = test.b, test.a, test.b, test.c
             TableScan: test
         "
         )?;
@@ -2036,9 +1906,9 @@ mod test {
             .build()?;
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 AS test.a = test.b IS NULL, __common_expr_1 AS test.b = test.a IS NULL
-          Projection: test.a = test.b IS NULL AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Projection: test.a = test.b IS NULL, test.a = test.b IS NULL AS test.b = test.a IS NULL
+          Projection: test.a = test.b IS NULL, test.a, test.b, test.c
             TableScan: test
         "
         )?;
@@ -2052,9 +1922,9 @@ mod test {
             .build()?;
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 AS test.a + test.b BETWEEN Int32(0) AND Int32(10), __common_expr_1 AS test.b + test.a BETWEEN Int32(0) AND Int32(10)
-          Projection: test.a + test.b BETWEEN Int32(0) AND Int32(10) AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Projection: test.a + test.b BETWEEN Int32(0) AND Int32(10), test.a + test.b BETWEEN Int32(0) AND Int32(10) AS test.b + test.a BETWEEN Int32(0) AND Int32(10)
+          Projection: test.a + test.b BETWEEN Int32(0) AND Int32(10), test.a, test.b, test.c
             TableScan: test
         "
         )?;
@@ -2068,9 +1938,9 @@ mod test {
             .build()?;
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 AS test.c BETWEEN test.a + test.b AND Int32(10), __common_expr_1 AS test.c BETWEEN test.b + test.a AND Int32(10)
-          Projection: test.c BETWEEN test.a + test.b AND Int32(10) AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Projection: test.c BETWEEN test.a + test.b AND Int32(10), test.c BETWEEN test.a + test.b AND Int32(10) AS test.c BETWEEN test.b + test.a AND Int32(10)
+          Projection: test.c BETWEEN test.a + test.b AND Int32(10), test.a, test.b, test.c
             TableScan: test
         "
         )?;
@@ -2085,9 +1955,9 @@ mod test {
             .build()?;
         assert_optimized_plan_equal!(
             plan,
-            @ r"
-        Projection: __common_expr_1 AS my_udf(test.a + test.b), __common_expr_1 AS my_udf(test.b + test.a)
-          Projection: my_udf(test.a + test.b) AS __common_expr_1, test.a, test.b, test.c
+            @ "
+        Projection: my_udf(test.a + test.b), my_udf(test.a + test.b) AS my_udf(test.b + test.a)
+          Projection: my_udf(test.a + test.b), test.a, test.b, test.c
             TableScan: test
         "
         )
@@ -2147,7 +2017,7 @@ mod test {
             .project(vec![leaf.clone().alias("c1"), leaf.alias("c2")])?
             .build()?;
 
-        // Plan should be unchanged — no __common_expr introduced
+        // Plan should be unchanged — no common expression extracted
         assert_optimized_plan_equal!(
             plan,
             @r"
@@ -2172,13 +2042,13 @@ mod test {
             .project(vec![common.clone().alias("c1"), common.alias("c2")])?
             .build()?;
 
-        // The whole `leaf_udf(a) + b` gets deduplicated as __common_expr_1,
+        // The whole `leaf_udf(a) + b` gets deduplicated into one common column,
         // but leaf_udf(a) alone is NOT pulled out.
         assert_optimized_plan_equal!(
             plan,
-            @r"
-        Projection: __common_expr_1 AS c1, __common_expr_1 AS c2
-          Projection: leaf_udf(test.a) + test.b AS __common_expr_1, test.a, test.b, test.c
+            @"
+        Projection: leaf_udf(test.a) + test.b AS c1, leaf_udf(test.a) + test.b AS c2
+          Projection: leaf_udf(test.a) + test.b, test.a, test.b, test.c
             TableScan: test
         "
         )
@@ -2222,8 +2092,8 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ "
-        Aggregate: groupBy=[[]], aggr=[[sum(test.a + test.b) FILTER (WHERE __common_expr_1 AS test.c > Int32(0)) AS sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)), COUNT(test.a + test.b) FILTER (WHERE __common_expr_1 AS test.c > Int32(0)) AS COUNT(test.a + test.b) FILTER (WHERE test.c > Int32(0))]]
-          Projection: test.c > Int32(0) AS __common_expr_1, test.a, test.b, test.c
+        Aggregate: groupBy=[[]], aggr=[[sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)), COUNT(test.a + test.b) FILTER (WHERE test.c > Int32(0))]]
+          Projection: test.c > Int32(0), test.a, test.b, test.c
             TableScan: test
         "
         )?;
@@ -2243,8 +2113,8 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ "
-        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a + test.b) FILTER (WHERE test.c > Int32(0)), COUNT(__common_expr_1 AS test.a + test.b)]]
-          Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
+        Aggregate: groupBy=[[]], aggr=[[sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)), COUNT(test.a + test.b)]]
+          Projection: test.a + test.b, test.a, test.b, test.c
             TableScan: test
         "
         )?;
@@ -2264,8 +2134,8 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ "
-        Aggregate: groupBy=[[]], aggr=[[sum(__common_expr_1 AS test.a + test.b) FILTER (WHERE __common_expr_1 AS test.a + test.b > Int32(0)) AS sum(test.a + test.b) FILTER (WHERE test.a + test.b > Int32(0))]]
-          Projection: test.a + test.b AS __common_expr_1, test.a, test.b, test.c
+        Aggregate: groupBy=[[]], aggr=[[sum(test.a + test.b) FILTER (WHERE test.a + test.b > Int32(0))]]
+          Projection: test.a + test.b, test.a, test.b, test.c
             TableScan: test
         "
         )?;
@@ -2287,9 +2157,9 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ "
-        Projection: __common_expr_2 AS s1, __common_expr_2 AS s2
-          Aggregate: groupBy=[[]], aggr=[[sum(test.a + test.b) FILTER (WHERE __common_expr_1) AS __common_expr_2]]
-            Projection: test.c > Int32(0) AS __common_expr_1, test.a, test.b, test.c
+        Projection: sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)) AS s1, sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)) AS s2
+          Aggregate: groupBy=[[]], aggr=[[sum(test.a + test.b) FILTER (WHERE test.c > Int32(0))]]
+            Projection: test.c > Int32(0), test.a, test.b, test.c
               TableScan: test
         "
         )
@@ -2319,8 +2189,8 @@ mod test {
         assert_optimized_plan_equal!(
             plan,
             @ "
-        Aggregate: groupBy=[[]], aggr=[[sum(test.a) FILTER (WHERE __common_expr_1 AS test.c > Int32(0)) ORDER BY [test.a + test.b ASC NULLS LAST] AS sum(test.a) FILTER (WHERE test.c > Int32(0)) ORDER BY [test.a + test.b ASC NULLS LAST], sum(test.b) FILTER (WHERE __common_expr_1 AS test.c > Int32(0)) ORDER BY [test.a + test.b ASC NULLS LAST] AS sum(test.b) FILTER (WHERE test.c > Int32(0)) ORDER BY [test.a + test.b ASC NULLS LAST]]]
-          Projection: test.c > Int32(0) AS __common_expr_1, test.a, test.b, test.c
+        Aggregate: groupBy=[[]], aggr=[[sum(test.a) FILTER (WHERE test.c > Int32(0)) ORDER BY [test.a + test.b ASC NULLS LAST], sum(test.b) FILTER (WHERE test.c > Int32(0)) ORDER BY [test.a + test.b ASC NULLS LAST]]]
+          Projection: test.c > Int32(0), test.a, test.b, test.c
             TableScan: test
         "
         )
@@ -2354,8 +2224,8 @@ mod test {
             plan,
             @ "
         Projection: test.a, test.b, test.c, sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, sum(test.a + test.b * Int32(2)) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING
-          WindowAggr: windowExpr=[[sum(test.a + test.b) FILTER (WHERE __common_expr_2 AS test.c > Int32(0)) PARTITION BY [__common_expr_1 AS test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, sum((test.a + test.b) * Int32(2)) FILTER (WHERE __common_expr_2 AS test.c > Int32(0)) PARTITION BY [__common_expr_1 AS test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS sum(test.a + test.b * Int32(2)) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
-            Projection: test.a * test.b AS __common_expr_1, test.c > Int32(0) AS __common_expr_2, test.a, test.b, test.c
+          WindowAggr: windowExpr=[[sum(test.a + test.b) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING, sum((test.a + test.b) * Int32(2)) FILTER (WHERE test.c > Int32(0)) PARTITION BY [test.a * test.b] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING]]
+            Projection: test.a * test.b, test.c > Int32(0), test.a, test.b, test.c
               TableScan: test
         "
         )

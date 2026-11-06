@@ -127,7 +127,7 @@ explain merge into target using source on target.id = source.id
 when not matched then insert values (source.id, source.val, 0);
 ----
 logical_plan
-01)Dml: op=[MergeInto] table=[target] on=[target.id = source.id] clauses=[WHEN NOT MATCHED THEN INSERT VALUES (source.id, source.val, Int32(0) AS Int64(0))]
+01)Dml: op=[MergeInto] table=[target] on=[target.id = source.id] clauses=[WHEN NOT MATCHED THEN INSERT VALUES (source.id, source.val, Int32(0))]
 02)--TableScan: source projection=[id, val, is_active]
 physical_plan_error
 01)MERGE INTO operation on table 'target'

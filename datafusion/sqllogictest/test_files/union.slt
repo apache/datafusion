@@ -351,9 +351,10 @@ query TT
 EXPLAIN SELECT id, name FROM t1 WHERE id = 1 UNION SELECT id, name FROM t1 WHERE id = 2
 ----
 logical_plan
-01)Aggregate: groupBy=[[id, name]], aggr=[[]]
-02)--Filter: t1.id IN ([Int32(1), Int32(2)])
-03)----TableScan: t1 projection=[id, name]
+01)Projection: t1.id AS id, t1.name AS name
+02)--Aggregate: groupBy=[[t1.id, t1.name]], aggr=[[]]
+03)----Filter: t1.id IN ([Int32(1), Int32(2)])
+04)------TableScan: t1 projection=[id, name]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id, name@1 as name], aggr=[]
 02)--RepartitionExec: partitioning=Hash([id@0, name@1], 4), input_partitions=4
@@ -400,10 +401,11 @@ UNION
 SELECT x.id FROM t1 AS x WHERE x.id = 2
 ----
 logical_plan
-01)Aggregate: groupBy=[[id]], aggr=[[]]
-02)--SubqueryAlias: x
-03)----Filter: t1.id IN ([Int32(1), Int32(2)])
-04)------TableScan: t1 projection=[id]
+01)Projection: x.id AS id
+02)--Aggregate: groupBy=[[x.id]], aggr=[[]]
+03)----SubqueryAlias: x
+04)------Filter: t1.id IN ([Int32(1), Int32(2)])
+05)--------TableScan: t1 projection=[id]
 physical_plan
 01)AggregateExec: mode=FinalPartitioned, gby=[id@0 as id], aggr=[]
 02)--RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=4

@@ -417,11 +417,11 @@ mod tests {
             .union(plan_builder.build()?)?
             .build()?;
 
-        assert_optimized_plan_equal!(plan, @r"
+        assert_optimized_plan_equal!(plan, @"
         Union
-          Projection: id AS table_id, key, value
+          Projection: table.id AS table_id, table.key, table.value
             TableScan: table
-          Projection: id AS table_id, key, value
+          Projection: table.id AS table_id, table.key, table.value
             TableScan: table
           TableScan: table
         ")

@@ -352,7 +352,13 @@ fn build_join(
     let mut pull_up = PullUpCorrelatedExpr::new()
         .with_need_handle_count_bug(true)
         .with_column_id_generator(Arc::clone(ids));
-    let decorrelated_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
+    let decorrelated_subquery = match subquery_plan.clone().rewrite(&mut pull_up).data() {
+        Ok(plan) => plan,
+        // a rewrite that cannot be pulled up is dropped, also one that fails
+        // on the way (the columns it adds above a grouping set do not exist)
+        Err(_) if !pull_up.can_pull_up => return Ok(None),
+        Err(e) => return Err(e),
+    };
     if !pull_up.can_pull_up {
         return Ok(None);
     }
@@ -407,11 +413,21 @@ fn build_join(
                 continue;
             }
 
+            // bound to the outputs of the join (the alias passes the ids of
+            // the subquery's outputs through, which the references to the
+            // subquery read)
+            let bind = |col: Column| {
+                let schema = new_plan.schema();
+                let id = schema
+                    .maybe_index_of_column(&col)
+                    .and_then(|i| schema.field_id(i));
+                col.with_id(id)
+            };
             let indicator_col =
-                Column::new(Some(subquery_alias), UN_MATCHED_ROW_INDICATOR);
+                bind(Column::new(Some(subquery_alias), UN_MATCHED_ROW_INDICATOR));
             // Qualify with the subquery alias to avoid ambiguity when the
             // outer table has a column with the same name as the aggregate.
-            let value_col = Column::new(Some(subquery_alias), name);
+            let value_col = bind(Column::new(Some(subquery_alias), name));
 
             let mut builder = when(Expr::Column(indicator_col).is_null(), result);
             if let Some((when_expr, then_expr)) = &having_arm {

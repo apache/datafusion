@@ -1534,10 +1534,11 @@ fn new_columns_for_join_on(
                         let new_column = projection_exprs
                             .iter()
                             .enumerate()
+                            // by index: a column is its position, its name
+                            // only displays it
                             .find(|(_, (proj_column, _))| {
-                                column.name() == proj_column.name()
-                                    && column.index() + column_index_offset
-                                        == proj_column.index()
+                                column.index() + column_index_offset
+                                    == proj_column.index()
                             })
                             .map(|(index, (_, alias))| Column::new(alias, index));
                         if let Some(new_column) = new_column {

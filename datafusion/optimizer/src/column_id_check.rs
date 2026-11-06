@@ -22,9 +22,8 @@
 //!   - after the analyzer, if the plan has any
 //!     [`DuplicateDefinition`](ColumnIdIssueKind::DuplicateDefinition) or
 //!     [`Disagree`](ColumnIdIssueKind::Disagree) issue, or more
-//!     [`Missing`](ColumnIdIssueKind::Missing),
-//!     [`Stale`](ColumnIdIssueKind::Stale) or
-//!     [`Misresolved`](ColumnIdIssueKind::Misresolved) references than its
+//!     [`Missing`](ColumnIdIssueKind::Missing) or
+//!     [`Stale`](ColumnIdIssueKind::Stale) references than its
 //!     input (which is the output of the planner, or a plan optimized before
 //!     for a prepared statement);
 //!   - after an optimizer rule, if it introduced issues of a kind it may not
@@ -124,11 +123,8 @@ const AFTER_ANALYZER_FORBIDDEN: [ColumnIdIssueKind; 2] = [
 /// The kinds of issues that the analyzer may not introduce: a plan may have
 /// them after the analyzer only if its input had them (the output of the
 /// planner, or a plan optimized before for a prepared statement)
-const ANALYZER_MAY_NOT_INTRODUCE: [ColumnIdIssueKind; 3] = [
-    ColumnIdIssueKind::Missing,
-    ColumnIdIssueKind::Stale,
-    ColumnIdIssueKind::Misresolved,
-];
+const ANALYZER_MAY_NOT_INTRODUCE: [ColumnIdIssueKind; 2] =
+    [ColumnIdIssueKind::Missing, ColumnIdIssueKind::Stale];
 
 /// Compares the column id issues of a plan before and after each rule.
 /// Holds nothing and does nothing when no switch is on.
@@ -471,7 +467,7 @@ mod tests {
         let err = check
             .after_analyzer(&filter(scan(true)?, Some(9))?)
             .unwrap_err();
-        assert!(err.to_string().contains("misresolved: t.a#9"), "{err}");
+        assert!(err.to_string().contains("stale: t.a#9"), "{err}");
 
         // nor missing references
         let mut check = ColumnIdCheck::new(&plan);
