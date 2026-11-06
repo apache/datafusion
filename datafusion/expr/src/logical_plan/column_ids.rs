@@ -104,7 +104,7 @@
 //! [`DFSchema::field_ids`]: datafusion_common::DFSchema::field_ids
 //! [`ColumnIdGenerator`]: datafusion_common::ColumnIdGenerator
 
-use std::collections::{HashMap, HashSet};
+use datafusion_common::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
@@ -149,11 +149,7 @@ pub(crate) fn with_new_field_ids(
     if schema.field_ids().iter().any(Option::is_some) {
         return Ok(schema);
     }
-    let ids = schema
-        .fields()
-        .iter()
-        .map(|_| Some(generator.next()))
-        .collect();
+    let ids = generator.next_n(schema.fields().len()).map(Some).collect();
     Ok(Arc::new(Arc::unwrap_or_clone(schema).with_field_ids(ids)?))
 }
 
@@ -406,23 +402,47 @@ impl LogicalPlan {
     /// (see the [module documentation](self)). The ids it only passes through
     /// or refers to from an outer query are not included.
     pub fn defined_column_ids(&self) -> HashSet<ColumnId> {
-        self.defined_column_ids_in_order().into_iter().collect()
+        let mut ids = HashSet::new();
+        // the closure never fails
+        let _ = self.apply_with_subqueries(|plan| {
+            plan.for_each_node_defined_column_id(|_, id| {
+                ids.insert(id);
+            });
+            Ok(TreeNodeRecursion::Continue)
+        });
+        ids
+    }
+
+    /// The lowest and the highest id of the columns this plan defines (see
+    /// [`Self::defined_column_ids`]), `None` if it defines none. Cheaper than
+    /// collecting them: nothing is hashed.
+    fn defined_column_id_range(&self) -> Option<(ColumnId, ColumnId)> {
+        let mut range: Option<(ColumnId, ColumnId)> = None;
+        // the closure never fails
+        let _ = self.apply_with_subqueries(|plan| {
+            plan.for_each_node_defined_column_id(|_, id| {
+                range = Some(match range {
+                    Some((min, max)) => (min.min(id), max.max(id)),
+                    None => (id, id),
+                });
+            });
+            Ok(TreeNodeRecursion::Continue)
+        });
+        range
     }
 
     /// [`Self::defined_column_ids`], in the order in which they are found,
     /// without duplicates, so that renumbering is deterministic
     fn defined_column_ids_in_order(&self) -> Vec<ColumnId> {
-        let mut seen = HashSet::new();
         let mut ids = vec![];
         // the closure never fails
         let _ = self.apply_with_subqueries(|plan| {
-            plan.for_each_node_defined_column_id(|_, id| {
-                if seen.insert(id) {
-                    ids.push(id);
-                }
-            });
+            plan.for_each_node_defined_column_id(|_, id| ids.push(id));
             Ok(TreeNodeRecursion::Continue)
         });
+        // without the duplicates (an id defined twice), sized once
+        let mut seen = HashSet::with_capacity(ids.len());
+        ids.retain(|id| seen.insert(*id));
         ids
     }
 
@@ -598,11 +618,10 @@ impl LogicalPlan {
             })?
             .data
         };
+        // the new ids in one block: as many as `next` would give, in order
+        let fresh = generator.next_n(defined.len());
         let renames = Renames {
-            ids: defined
-                .into_iter()
-                .map(|id| (id, generator.next()))
-                .collect(),
+            ids: defined.into_iter().zip(fresh).collect(),
         };
         plan.transform_up_with_subqueries(|plan| rename_node_column_ids(plan, &renames))
             .map(|transformed| transformed.data)
@@ -632,11 +651,20 @@ impl LogicalPlan {
         existing: &LogicalPlan,
         generator: &ColumnIdGenerator,
     ) -> Result<(Self, HashSet<ColumnId>)> {
+        // the ids that two plans built with one generator define are usually
+        // in disjoint ranges (one side of a join was built before the other):
+        // compare the ranges before collecting and looking up the ids, which
+        // costs a hash per column of each side
+        let Some((incoming_min, incoming_max)) = self.defined_column_id_range() else {
+            return Ok((self, HashSet::new()));
+        };
+        match existing.defined_column_id_range() {
+            Some((existing_min, existing_max))
+                if incoming_max >= existing_min && existing_max >= incoming_min => {}
+            _ => return Ok((self, HashSet::new())),
+        }
         // the incoming plan is usually the smaller one: look at it first
         let defined = self.defined_column_ids();
-        if defined.is_empty() {
-            return Ok((self, HashSet::new()));
-        }
         let mut overlap = HashSet::new();
         // the closure never fails
         let _ = existing.apply_with_subqueries(|plan| {
@@ -674,7 +702,34 @@ impl LogicalPlan {
         self,
         generator: &ColumnIdGenerator,
     ) -> Result<Transformed<Self>> {
-        let mut counts = self.defined_column_id_counts();
+        // only the outputs that the top projection of a subquery defines are
+        // given new ids: count the definitions of these ids only, if there
+        // are any (counting every definition costs a hash per column of each
+        // scan)
+        let mut outputs = HashSet::new();
+        // the closure never fails
+        let _ = self.apply_with_subqueries(|plan| {
+            if let LogicalPlan::Subquery(subquery) = plan
+                && let LogicalPlan::Projection(projection) = subquery.subquery.as_ref()
+            {
+                outputs.extend(projection.expr.iter().filter_map(|e| e.defined_id()));
+            }
+            Ok(TreeNodeRecursion::Continue)
+        });
+        let (Some(min), Some(max)) = (outputs.iter().min(), outputs.iter().max()) else {
+            return Ok(Transformed::no(self));
+        };
+        let (min, max) = (*min, *max);
+        let mut counts: HashMap<ColumnId, usize> = HashMap::new();
+        // the closure never fails
+        let _ = self.apply_with_subqueries(|plan| {
+            plan.for_each_node_defined_column_id(|_, id| {
+                if (min..=max).contains(&id) && outputs.contains(&id) {
+                    *counts.entry(id).or_default() += 1;
+                }
+            });
+            Ok(TreeNodeRecursion::Continue)
+        });
         if counts.values().all(|count| *count < 2) {
             return Ok(Transformed::no(self));
         }
@@ -712,20 +767,6 @@ impl LogicalPlan {
             )?));
             Ok(Transformed::yes(LogicalPlan::Subquery(subquery)))
         })
-    }
-
-    /// The number of times each id is defined in this plan, subqueries
-    /// included
-    fn defined_column_id_counts(&self) -> HashMap<ColumnId, usize> {
-        let mut counts: HashMap<ColumnId, usize> = HashMap::new();
-        // the closure never fails
-        let _ = self.apply_with_subqueries(|plan| {
-            plan.for_each_node_defined_column_id(|_, id| {
-                *counts.entry(id).or_default() += 1;
-            });
-            Ok(TreeNodeRecursion::Continue)
-        });
-        counts
     }
 
     /// The schema stored in this node, if it stores one (other nodes return
@@ -788,8 +829,13 @@ pub(crate) struct SubqueryBlender<'a> {
     outer: &'a LogicalPlan,
     generator: &'a mut Option<Arc<ColumnIdGenerator>>,
     /// The ids defined by `outer` and the subqueries seen so far, computed
-    /// when the first subquery that defines ids is seen
+    /// when a subquery that defines ids may overlap them
     taken: Option<HashSet<ColumnId>>,
+    /// Until `taken` is computed: the ranges of the ids defined by `outer`
+    /// (computed when the first subquery that defines ids is seen) and by
+    /// the subqueries seen so far, which are kept in `seen`
+    taken_ranges: Option<Vec<(ColumnId, ColumnId)>>,
+    seen: Vec<Arc<LogicalPlan>>,
 }
 
 impl<'a> SubqueryBlender<'a> {
@@ -801,6 +847,8 @@ impl<'a> SubqueryBlender<'a> {
             outer,
             generator,
             taken: None,
+            taken_ranges: None,
+            seen: vec![],
         }
     }
 
@@ -813,10 +861,9 @@ impl<'a> SubqueryBlender<'a> {
             let Some(subquery) = subquery_mut(&mut expr) else {
                 return Ok(Transformed::no(expr));
             };
-            let defined = subquery.subquery.defined_column_ids();
-            if defined.is_empty() {
+            let Some((min, max)) = subquery.subquery.defined_column_id_range() else {
                 return Ok(Transformed::no(expr));
-            }
+            };
             let outer = self.outer;
             let generator = self
                 .generator
@@ -824,9 +871,27 @@ impl<'a> SubqueryBlender<'a> {
             if let Some(max) = subquery.subquery.max_column_id() {
                 generator.advance_past(max);
             }
-            let taken = self
-                .taken
-                .get_or_insert_with(|| self.outer.defined_column_ids());
+            // a subquery built with the generator of the outer plan defines
+            // ids in a range of its own: compare the ranges before collecting
+            // the ids, which costs a hash per column of each plan
+            if self.taken.is_none() {
+                let ranges = self.taken_ranges.get_or_insert_with(|| {
+                    outer.defined_column_id_range().into_iter().collect()
+                });
+                if ranges.iter().all(|(lo, hi)| max < *lo || *hi < min) {
+                    ranges.push((min, max));
+                    self.seen.push(Arc::clone(&subquery.subquery));
+                    return Ok(Transformed::no(expr));
+                }
+            }
+            let taken = self.taken.get_or_insert_with(|| {
+                let mut taken = outer.defined_column_ids();
+                for plan in &self.seen {
+                    taken.extend(plan.defined_column_ids());
+                }
+                taken
+            });
+            let defined = subquery.subquery.defined_column_ids();
             let overlap: HashSet<ColumnId> =
                 defined.intersection(taken).copied().collect();
             let transformed = !overlap.is_empty();
@@ -885,6 +950,10 @@ impl Expr {
         seen: &mut HashSet<ColumnId>,
         generator: &ColumnIdGenerator,
     ) -> Result<Transformed<Expr>> {
+        // most expressions have no subquery: look before rebuilding
+        if !self.exists(|expr| Ok(subquery_of(expr).is_some()))? {
+            return Ok(Transformed::no(self));
+        }
         self.transform_down(|mut expr| {
             let Some(subquery) = subquery_mut(&mut expr) else {
                 return Ok(Transformed::no(expr));
@@ -3064,7 +3133,7 @@ mod tests {
     ) -> Result<LogicalPlan> {
         let x = DFSchema::from_unqualified_fields(
             vec![Field::new("x", DataType::Int32, false)].into(),
-            HashMap::new(),
+            std::collections::HashMap::new(),
         )?;
         let schema = Arc::new(input.schema().join(&x)?);
         Ok(LogicalPlan::Extension(crate::Extension {

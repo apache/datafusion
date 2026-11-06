@@ -5,8 +5,8 @@
 use crate::expr::reject_window_functions;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
-    Column, DFSchema, HashMap, Result, SchemaError, TableReference, not_impl_err,
-    plan_datafusion_err, plan_err, schema_err,
+    Column, DFSchema, HashMap, Result, SchemaError, not_impl_err, plan_datafusion_err,
+    plan_err, schema_err,
 };
 use datafusion_expr::{JoinType, LogicalPlan};
 use sqlparser::ast::{
@@ -257,20 +257,32 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 /// allow; the errors are those of `DFSchema::check_names` for fields without
 /// ids.
 pub(crate) fn check_join_side_names(left: &DFSchema, right: &DFSchema) -> Result<()> {
-    let mut left_qualifiers: HashMap<&str, Vec<Option<&TableReference>>> = HashMap::new();
-    for (qualifier, field) in left.iter() {
-        left_qualifiers
-            .entry(field.name().as_str())
-            .or_default()
-            .push(qualifier);
+    // the fields of `left` with each name, in order, as a chain of indexes
+    // (the first one in `first_with_name`, the next ones in `next_with_name`):
+    // no allocation per name, the sides of a join can be wide
+    let left_len = left.fields().len();
+    let mut first_with_name: HashMap<&str, usize> = HashMap::with_capacity(left_len);
+    let mut next_with_name = vec![usize::MAX; left_len];
+    for (i, field) in left.fields().iter().enumerate().rev() {
+        if let Some(next) = first_with_name.insert(field.name().as_str(), i) {
+            next_with_name[i] = next;
+        }
     }
+    let (first_with_name, next_with_name) = (&first_with_name, &next_with_name);
+    let left_qualifiers = |name: &str| {
+        let mut i = first_with_name.get(name).copied().unwrap_or(usize::MAX);
+        std::iter::from_fn(move || {
+            (i != usize::MAX).then(|| {
+                let qualifier = left.qualified_field(i).0;
+                i = next_with_name[i];
+                qualifier
+            })
+        })
+    };
     let matches = || {
         right.iter().flat_map(|(right_qualifier, field)| {
-            left_qualifiers
-                .get(field.name().as_str())
-                .into_iter()
-                .flatten()
-                .map(move |left_qualifier| (*left_qualifier, right_qualifier, field))
+            left_qualifiers(field.name().as_str())
+                .map(move |left_qualifier| (left_qualifier, right_qualifier, field))
         })
     };
     // the duplicates first, then the ambiguous names, as `check_names`

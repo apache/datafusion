@@ -3645,11 +3645,8 @@ impl TableScan {
             return Ok(self);
         }
         let source_schema = self.source.schema();
-        let ids: Arc<[ColumnId]> = source_schema
-            .fields()
-            .iter()
-            .map(|_| generator.next())
-            .collect();
+        let ids: Arc<[ColumnId]> =
+            generator.next_n(source_schema.fields().len()).collect();
         let projected_ids = match &self.projection {
             Some(p) => p.iter().map(|i| ids.get(*i).copied()).collect(),
             None => ids.iter().copied().map(Some).collect(),
@@ -3681,11 +3678,20 @@ impl TableScan {
 
     /// The schema of the source, qualified by the table name, with `ids`
     fn source_dfschema_with(&self, ids: &[ColumnId]) -> Result<DFSchema> {
-        DFSchema::try_from_qualified_schema(
-            self.table_name.clone(),
-            &self.source.schema(),
-        )?
-        .with_field_ids(ids.iter().copied().map(Some).collect())
+        // built with the ids directly: fields that all have ids need no
+        // check of their names (see `DFSchema::check_names`), which costs
+        // O(n log n) string comparisons on a wide source
+        let source = self.source.schema();
+        let fields = source
+            .fields()
+            .iter()
+            .map(|field| (Some(self.table_name.clone()), Arc::clone(field)))
+            .collect();
+        DFSchema::new_with_field_ids(
+            fields,
+            ids.iter().copied().map(Some).collect(),
+            source.metadata().clone(),
+        )
     }
 
     /// Initialize TableScan with appropriate schema from the given

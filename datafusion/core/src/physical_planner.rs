@@ -811,17 +811,23 @@ impl DefaultPhysicalPlanner {
                     // Name each column after the column of the source it
                     // reads (by id), then remove all qualifiers from the scan
                     // as the provider doesn't know (nor should care) how the
-                    // relation was referred to in the query
-                    let source_schema = scan.source_schema()?;
-                    let filters = filters
-                        .iter()
-                        .map(|filter| {
-                            filter
-                                .clone()
-                                .with_relabeled_columns(&[source_schema.as_ref()])
-                                .data()
-                        })
-                        .collect::<Result<Vec<_>>>()?;
+                    // relation was referred to in the query. The source
+                    // schema costs the width of the source: only built if
+                    // there are filters to relabel.
+                    let filters = if filters.is_empty() {
+                        vec![]
+                    } else {
+                        let source_schema = scan.source_schema()?;
+                        filters
+                            .iter()
+                            .map(|filter| {
+                                filter
+                                    .clone()
+                                    .with_relabeled_columns(&[source_schema.as_ref()])
+                                    .data()
+                            })
+                            .collect::<Result<Vec<_>>>()?
+                    };
                     let filters = unnormalize_cols(filters);
                     let filters_vec = filters.into_iter().collect::<Vec<_>>();
                     let stats_requests =

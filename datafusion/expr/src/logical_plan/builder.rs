@@ -306,7 +306,7 @@ impl LogicalPlanBuilder {
     fn blend_join(
         &mut self,
         incoming: LogicalPlan,
-    ) -> Result<(LogicalPlan, HashSet<ColumnId>)> {
+    ) -> Result<(LogicalPlan, datafusion_common::HashSet<ColumnId>)> {
         // `incoming` may have been built with another generator: the ids
         // allocated from now on must not collide with its ids either
         let generator = self.generator();

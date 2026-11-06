@@ -4016,6 +4016,24 @@ fn plan_merge_into_preserves_target_qualifier_and_quoted_columns() {
     );
 }
 
+/// The first reference to a CTE uses its plan with its ids, the next ones
+/// renumber it: no id is defined twice, whether the CTE is referenced twice
+/// in a FROM clause, from another CTE and the query, or from a subquery
+#[test]
+fn cte_references_define_their_own_column_ids() {
+    for sql in [
+        "WITH c AS (SELECT id FROM person) \
+         SELECT * FROM c AS a JOIN c AS b ON a.id = b.id",
+        "WITH c AS (SELECT id FROM person), d AS (SELECT id FROM c) \
+         SELECT * FROM d JOIN c ON d.id = c.id",
+        "WITH c AS (SELECT id FROM person) \
+         SELECT id FROM c WHERE id IN (SELECT id FROM c)",
+    ] {
+        let plan = logical_plan(sql).unwrap();
+        assert_eq!(plan.column_id_issues(), vec![], "{sql}");
+    }
+}
+
 /// The target of a MERGE INTO is not an input of the `Dml` node: the
 /// operation defines the ids of its columns, which the references to the
 /// target read, also from a subquery

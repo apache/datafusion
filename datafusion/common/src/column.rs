@@ -101,6 +101,16 @@ impl ColumnIdGenerator {
         ColumnId(NonZeroU64::new(id).expect("column id overflow"))
     }
 
+    /// Allocates `n` new ids at once, in increasing order: the ids that `n`
+    /// calls to [`Self::next`] would allocate with no other allocation in
+    /// between, for the cost of one (the columns of a wide scan)
+    pub fn next_n(&self, n: usize) -> impl Iterator<Item = ColumnId> + use<> {
+        let n = n as u64;
+        let first = self.last.fetch_add(n, AtomicOrdering::Relaxed) + 1;
+        (first..first + n)
+            .map(|id| ColumnId(NonZeroU64::new(id).expect("column id overflow")))
+    }
+
     /// Makes sure that later ids are greater than `id`, so that they do not
     /// collide with the ids of a plan built elsewhere (decoded, or built with
     /// another generator)
@@ -673,6 +683,12 @@ mod tests {
         // advancing past a lower id does nothing
         generator.advance_past(column_id(3));
         assert_eq!(generator.next(), column_id(12));
+
+        // a block of ids is what as many calls to `next` would give
+        let block: Vec<_> = generator.next_n(3).collect();
+        assert_eq!(block, vec![column_id(13), column_id(14), column_id(15)]);
+        assert_eq!(generator.next_n(0).count(), 0);
+        assert_eq!(generator.next(), column_id(16));
     }
 
     #[test]

@@ -204,7 +204,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             cte,
                             self.context_provider.get_table_source(table_ref.clone()),
                         ) {
-                            // each reference to a CTE gets its own column ids
+                            // each reference to a CTE gets its own column ids:
+                            // the first one those of the plan of the CTE
+                            (Some(cte_plan), _)
+                                if planner_context
+                                    .is_first_cte_reference(&table_ref.to_string()) =>
+                            {
+                                Ok(cte_plan.clone())
+                            }
                             (Some(cte_plan), _) => {
                                 match planner_context.column_id_generator() {
                                     Some(generator) => {

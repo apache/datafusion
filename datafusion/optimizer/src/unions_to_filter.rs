@@ -7,6 +7,7 @@
 
 use crate::utils::{ids_builder, is_repeatable};
 use crate::{OptimizerConfig, OptimizerRule};
+use datafusion_common::HashMap;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
@@ -19,7 +20,6 @@ use datafusion_expr::{
     TableSource, Union,
 };
 use log::debug;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Default, Debug)]

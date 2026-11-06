@@ -4,7 +4,7 @@
 
 //! Simplify expressions optimizer rule and implementation
 
-use std::collections::HashSet;
+use datafusion_common::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -137,7 +137,12 @@ impl SimplifyExpressions {
                 }
                 (_, data) => Transformed::new(data, expr.transformed, expr.tnr),
             };
-            let transformed = expr.transformed;
+            // only an expression that was simplified can repeat a subquery:
+            // the others are left as they are (finding the ids that their
+            // subqueries define costs a hash per column)
+            if !expr.transformed {
+                return Ok(Transformed::no(expr.data));
+            }
             let expr = expr
                 .data
                 .with_fresh_column_ids_in_repeated_subqueries(
@@ -145,7 +150,7 @@ impl SimplifyExpressions {
                     config.column_id_generator(),
                 )?
                 .data;
-            Ok(Transformed::new_transformed(expr, transformed))
+            Ok(Transformed::yes(expr))
         };
 
         plan.map_expressions(|expr| {

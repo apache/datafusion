@@ -5,7 +5,7 @@
 //! DFSchema is an extended schema struct that DataFusion uses to provide support for
 //! fields with optional relation names.
 
-use std::collections::{BTreeMap, HashSet, btree_map};
+use std::collections::{BTreeMap, BTreeSet, HashSet, btree_map};
 use std::fmt::Write as _;
 use std::fmt::{Display, Formatter};
 use std::hash::{BuildHasher, Hash};
@@ -339,6 +339,17 @@ impl DFSchema {
     /// lookup by that name is ambiguous. Fields without ids must have unique
     /// names.
     pub fn check_names(&self) -> Result<()> {
+        // when every field has an id, every name is allowed: skip building
+        // the maps, which costs O(n log n) string comparisons on the wide
+        // schemas of scans (each scan gives ids to all its columns)
+        if self.field_ids.iter().all(Option::is_some) {
+            return Ok(());
+        }
+        // no field has an id (the schema of a table): every name must be
+        // unique, a set is enough
+        if self.field_ids.iter().all(Option::is_none) {
+            return self.check_unique_names();
+        }
         // for each name, whether every field with it has an id
         let mut qualified_names: BTreeMap<(&TableReference, &String), bool> =
             BTreeMap::new();
@@ -388,6 +399,37 @@ impl DFSchema {
             if let Some(unqualified_has_ids) = unqualified_names.get(name)
                 && !(has_ids && *unqualified_has_ids)
             {
+                return _schema_err!(SchemaError::AmbiguousReference {
+                    field: Box::new(Column::new(Some(qualifier.clone()), name))
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// [`Self::check_names`] for a schema whose fields have no ids: the same
+    /// errors, with sets instead of maps
+    fn check_unique_names(&self) -> Result<()> {
+        let mut qualified_names = BTreeSet::new();
+        let mut unqualified_names = BTreeSet::new();
+
+        for (field, qualifier) in self.inner.fields().iter().zip(&self.field_qualifiers) {
+            if let Some(qualifier) = qualifier {
+                if !qualified_names.insert((qualifier, field.name())) {
+                    return _schema_err!(SchemaError::DuplicateQualifiedField {
+                        qualifier: Box::new(qualifier.clone()),
+                        name: field.name().to_string(),
+                    });
+                }
+            } else if !unqualified_names.insert(field.name()) {
+                return _schema_err!(SchemaError::DuplicateUnqualifiedField {
+                    name: field.name().to_string()
+                });
+            }
+        }
+
+        for (qualifier, name) in qualified_names {
+            if unqualified_names.contains(name) {
                 return _schema_err!(SchemaError::AmbiguousReference {
                     field: Box::new(Column::new(Some(qualifier.clone()), name))
                 });

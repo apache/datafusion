@@ -3,7 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`SqlToRel`]: SQL Query Planner (produces [`LogicalPlan`] from SQL AST)
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::vec;
@@ -267,6 +267,10 @@ pub struct PlannerContext {
     /// Allocates the column ids of the planned plans. An `Arc`, so that the
     /// clones of this context made for each query block share it.
     column_id_generator: Option<Arc<ColumnIdGenerator>>,
+    /// The CTE plans (of `ctes`, by address) that a reference has used as
+    /// they are, with their column ids: the next references renumber them.
+    /// Shared by the clones of this context, like the generator.
+    referenced_ctes: Arc<Mutex<HashSet<usize>>>,
 }
 
 impl Default for PlannerContext {
@@ -287,6 +291,7 @@ impl PlannerContext {
             set_expr_left_schema: None,
             lambda_parameters: HashMap::new(),
             column_id_generator: None,
+            referenced_ctes: Arc::default(),
         }
     }
 
@@ -412,6 +417,22 @@ impl PlannerContext {
     /// specified name
     pub fn get_cte(&self, cte_name: &str) -> Option<&LogicalPlan> {
         self.ctes.get(cte_name).map(|cte| cte.as_ref())
+    }
+
+    /// Whether this is the first reference to the plan of the CTE `cte_name`
+    /// (in this context or a clone of it), which is then marked referenced.
+    ///
+    /// The first reference uses the plan as it is; the next ones renumber it
+    /// (see `LogicalPlan::with_fresh_column_ids`), so that no id is defined
+    /// twice in the plan of the statement.
+    pub(crate) fn is_first_cte_reference(&self, cte_name: &str) -> bool {
+        let Some(cte) = self.ctes.get(cte_name) else {
+            return false;
+        };
+        // a poisoned lock only means a panic elsewhere: renumber
+        self.referenced_ctes
+            .lock()
+            .is_ok_and(|mut referenced| referenced.insert(Arc::as_ptr(cte) as usize))
     }
 
     pub fn lambda_parameters(&self) -> &HashMap<String, FieldRef> {
