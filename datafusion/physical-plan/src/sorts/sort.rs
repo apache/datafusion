@@ -786,8 +786,7 @@ impl ExternalSorter {
                 .enumerate()
                 .map(move |(index, (batch, size))| {
                     let reservation = self.reservation.split(size);
-                    let sort =
-                        self.sort_run(batch, reservation, shared_input.clone(), true)?;
+                    let sort = self.sort_run(batch, reservation, shared_input.clone())?;
                     let permits = Arc::clone(&concurrency.permits);
                     Ok::<_, DataFusionError>(async move {
                         let stream = Self::prepare_sort_run(sort, permits).await?;
@@ -837,7 +836,19 @@ impl ExternalSorter {
         .join_unwind()
         .await
         .map_err(|e| DataFusionError::ExecutionJoin(Box::new(e)))??;
-        Ok(stream)
+        Ok(Self::with_lookahead(stream))
+    }
+
+    /// [`Self::sort_run`] materializes all output and releases each batch's
+    /// reservation when that batch is pulled. Reading one batch ahead returns
+    /// extra spill workspace for the merge's current batch and cursor.
+    /// Each run can hold one prefetched batch whose reservation is already released.
+    fn with_lookahead(stream: SendableRecordBatchStream) -> SendableRecordBatchStream {
+        let schema = stream.schema();
+        // Buffer the current batch and one ahead to return borrowed spill workspace
+        // before the merge processes the current batch.
+        let batches = stream.map(std::future::ready).buffered(2);
+        Box::pin(RecordBatchStreamAdapter::new(schema, batches))
     }
 
     /// Concatenates `batches` into fewer, larger runs, each bounded by
@@ -986,19 +997,14 @@ impl ExternalSorter {
         shared_input: Option<Arc<MemoryReservation>>,
     ) -> Result<SendableRecordBatchStream> {
         let schema = batch.schema();
-        let stream = futures::stream::once(self.sort_run(
-            batch,
-            reservation,
-            shared_input,
-            false,
-        )?)
-        .try_flatten();
+        let stream =
+            futures::stream::once(self.sort_run(batch, reservation, shared_input)?)
+                .try_flatten();
         Ok(Box::pin(RecordBatchStreamAdapter::new(schema, stream)))
     }
 
     /// Sorts a batch and reserves its complete output before returning a stream.
-    /// Reservations release as output is read; parallel preparation reads one
-    /// batch ahead to return spill workspace before the merge builds its cursor.
+    /// The stream releases reservations as its consumer takes each output batch.
     /// If present, `shared_input` covers the runs' shared buffers and is held
     /// until sorting finishes; `reservation` covers this run's sorting and output.
     fn sort_run(
@@ -1006,7 +1012,6 @@ impl ExternalSorter {
         batch: RecordBatch,
         reservation: MemoryReservation,
         shared_input: Option<Arc<MemoryReservation>>,
-        read_ahead: bool,
     ) -> Result<impl Future<Output = Result<SendableRecordBatchStream>> + Send + use<>>
     {
         let reserved_bytes = get_reserved_bytes_for_record_batch(&batch)?;
@@ -1039,39 +1044,20 @@ impl ExternalSorter {
                 .iter()
                 .map(get_record_batch_memory_size)
                 .sum();
-            let workspace =
+            let mut workspace =
                 merge_pool.borrow(total_sorted_size.saturating_sub(reservation.size()));
             reservation
                 .try_resize(total_sorted_size - workspace.size())
                 .map_err(Self::err_with_oom_context)?;
 
-            // An empty loan must not keep unused merge workspace alive.
-            let mut workspace = (workspace.size() != 0).then_some(workspace);
-            let mut batches = Some(
-                sorted_batches
-                    .into_iter()
-                    .inspect(move |batch| {
-                        let size = get_record_batch_memory_size(batch);
-                        let borrowed = workspace.as_mut().map_or(0, |workspace| {
-                            let borrowed = size.min(workspace.size());
-                            workspace.shrink(borrowed);
-                            borrowed
-                        });
-                        reservation.shrink(size - borrowed);
-                    })
-                    .peekable(),
-            );
-            // Output is already in memory. Peeking releases the next batch's
-            // reservation before the merge allocates its current cursor.
-            let batches = std::iter::from_fn(move || {
-                let iter = batches.as_mut()?;
-                let batch = iter.next()?;
-                if read_ahead && iter.peek().is_none() {
-                    // Release the exhausted iterator's workspace loan now, so it
-                    // cannot keep unused merge memory reserved until another poll.
-                    drop(batches.take());
-                }
-                Some(Ok(batch))
+            // Return borrowed workspace first so the merge's cursors can reuse
+            // it immediately. Both reservations also release on stream drop.
+            let batches = sorted_batches.into_iter().map(move |batch| {
+                let size = get_record_batch_memory_size(&batch);
+                let borrowed = size.min(workspace.size());
+                workspace.shrink(borrowed);
+                reservation.shrink(size - borrowed);
+                Ok(batch)
             });
             Result::<_, DataFusionError>::Ok(Box::pin(RecordBatchStreamAdapter::new(
                 Arc::clone(&schema),
@@ -2559,7 +2545,7 @@ mod tests {
             let reservation = sorter.reservation.new_empty();
             reservation.try_grow(get_reserved_bytes_for_record_batch(&batch)?)?;
             let before = elapsed_compute.value();
-            let sort = sorter.sort_run(batch.clone(), reservation, None, spawned)?;
+            let sort = sorter.sort_run(batch.clone(), reservation, None)?;
             assert_eq!(elapsed_compute.value(), before);
 
             let stream = if spawned {
