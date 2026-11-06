@@ -153,6 +153,21 @@ pub fn normalize_floats(array: &ArrayRef) -> ArrayRef {
     }
 }
 
+/// Like [`normalize_floats`], but takes ownership of the array.
+///
+/// When nothing needs to change the array is returned as is, and when it
+/// does, the values are rewritten in place if nothing else refers to them.
+/// Only nested arrays and shared buffers pay for a copy.
+pub fn normalize_floats_owned(array: ArrayRef) -> ArrayRef {
+    match array.data_type() {
+        DataType::Float16 => normalize_primitive_owned::<Float16Type>(array),
+        DataType::Float32 => normalize_primitive_owned::<Float32Type>(array),
+        DataType::Float64 => normalize_primitive_owned::<Float64Type>(array),
+        dt if has_float_leaf(dt) => normalize_floats(&array),
+        _ => array,
+    }
+}
+
 fn normalize_primitive<T>(array: &ArrayRef) -> ArrayRef
 where
     T: ArrowPrimitiveType,
@@ -163,6 +178,26 @@ where
         return Arc::clone(array);
     }
     Arc::new(arr.unary::<_, T>(normalize_float))
+}
+
+fn normalize_primitive_owned<T>(array: ArrayRef) -> ArrayRef
+where
+    T: ArrowPrimitiveType,
+    T::Native: FloatSemantics,
+{
+    let arr = array.as_primitive::<T>();
+    if !arr.values().iter().any(|v| v.needs_normalization()) {
+        return array;
+    }
+    // Drop the `ArrayRef` so the values buffer is uniquely owned (when nothing
+    // else refers to it) and can be rewritten in place.
+    let arr = arr.clone();
+    drop(array);
+    let normalized = match arr.unary_mut(normalize_float) {
+        Ok(normalized) => normalized,
+        Err(arr) => arr.unary::<_, T>(normalize_float),
+    };
+    Arc::new(normalized)
 }
 
 /// Whether `data_type` is a float or contains a float at any depth of its
@@ -272,6 +307,37 @@ mod tests {
 
         let array: ArrayRef = Arc::new(Int32Array::from(vec![1, 2]));
         assert!(Arc::ptr_eq(&normalize_floats(&array), &array));
+    }
+
+    #[test]
+    fn normalize_floats_owned_rewrites_in_place_when_unique() {
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![-0.0, 1.0]));
+        let values_ptr = array.as_primitive::<Float64Type>().values().as_ptr();
+        let result = normalize_floats_owned(array);
+        let result = result.as_primitive::<Float64Type>();
+        assert_eq!(result.values().as_ptr(), values_ptr);
+        assert_eq!(result.value(0).to_bits(), 0.0_f64.to_bits());
+
+        // A shared buffer is copied and the original is left as it is
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![-0.0, 1.0]));
+        let result = normalize_floats_owned(Arc::clone(&array));
+        let result = result.as_primitive::<Float64Type>();
+        assert_ne!(
+            result.values().as_ptr(),
+            array.as_primitive::<Float64Type>().values().as_ptr()
+        );
+        assert_eq!(result.value(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(
+            array.as_primitive::<Float64Type>().value(0).to_bits(),
+            (-0.0_f64).to_bits()
+        );
+
+        // Nothing to normalize: the input is returned as is
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![0.0, 1.0]));
+        assert!(Arc::ptr_eq(
+            &normalize_floats_owned(Arc::clone(&array)),
+            &array
+        ));
     }
 
     #[test]

@@ -4991,8 +4991,8 @@ mod tests {
                         // Floating-point literals must bypass structural set rewrites.
                         assert_eq!(simplified, expr);
                     }
-                    
-                    // Regardless of the form the list takes (rewritten or not) 
+
+                    // Regardless of the form the list takes (rewritten or not)
                     // it must correctly report that `-0.0` matches `0.0`.
                     let actual = create_physical_expr(
                         &simplified,

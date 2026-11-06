@@ -8,7 +8,7 @@ use arrow::array::{ArrayRef, AsArray};
 use arrow::compute::take;
 use arrow::datatypes::DataType;
 use datafusion_common::Result;
-use datafusion_common::float_semantics::normalize_floats;
+use datafusion_common::float_semantics::normalize_floats_owned;
 
 use super::array_static_filter::ArrayStaticFilter;
 use super::byte_view_filter::instantiate_byte_view_filter;
@@ -22,10 +22,7 @@ pub(super) fn instantiate_static_filter(
     needle_data_type: &DataType,
 ) -> Result<StaticFilterRef> {
     let in_array = flatten_dictionary_haystack(in_array)?;
-    // Normalize the list so `-0.0` and `+0.0` match, as they do for `=`. The
-    // filters compare bit patterns; `InListExpr::evaluate` normalizes the
-    // input the same way (see `datafusion_common::float_semantics`).
-    let in_array = normalize_floats(&in_array);
+    let in_array = normalize_floats_owned(in_array);
 
     let filter = if view_types_match(needle_data_type, in_array.data_type())
         && let Some(filter) = instantiate_byte_view_filter(&in_array)?

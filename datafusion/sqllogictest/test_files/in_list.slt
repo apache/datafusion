@@ -1148,9 +1148,7 @@ true
 statement ok
 DROP TABLE in_list_nulls;
 
-# IN must agree with = on signed zeros: -0.0 and +0.0 are equal on every
-# evaluation path (comparison chain, branchless, bitmap and hash set filters,
-# and runtime comparison when the list holds a column)
+# IN must agree with = on signed zeros: -0.0 and +0.0 are equal
 # https://github.com/apache/datafusion/issues/27121
 statement ok
 CREATE TABLE signed_zeros AS

@@ -321,8 +321,8 @@ where
 
 /// Wrapper for f32 that implements Hash and Eq using bit comparison.
 /// This treats NaN values as equal to each other when they have the same bit pattern.
-/// `InListExpr` normalizes `-0.0` to `+0.0` before values reach the filter,
-/// so signed zeros compare equal (see `datafusion_common::float_semantics`).
+///
+/// Note: `InListExpr` must have normalized via `datafusion_common::float_semantics`
 #[derive(Clone, Copy)]
 struct OrderedFloat32(f32);
 
@@ -348,8 +348,8 @@ impl From<f32> for OrderedFloat32 {
 
 /// Wrapper for f64 that implements Hash and Eq using bit comparison.
 /// This treats NaN values as equal to each other when they have the same bit pattern.
-/// `InListExpr` normalizes `-0.0` to `+0.0` before values reach the filter,
-/// so signed zeros compare equal (see `datafusion_common::float_semantics`).
+///
+/// Note: `InListExpr` must have normalized via `datafusion_common::float_semantics`
 #[derive(Clone, Copy)]
 struct OrderedFloat64(f64);
 

@@ -13,6 +13,7 @@ use arrow::{
     datatypes::{DataType, TimeUnit},
     util::pretty::pretty_format_columns,
 };
+use datafusion_common::float_semantics::normalize_floats_owned;
 use datafusion_common::internal_datafusion_err;
 use datafusion_common::{
     Result, ScalarValue,
@@ -110,6 +111,24 @@ impl ColumnarValue {
         match self {
             ColumnarValue::Array(array_value) => array_value.data_type().clone(),
             ColumnarValue::Scalar(scalar_value) => scalar_value.data_type(),
+        }
+    }
+
+    /// Applies DataFusion's float equality semantics to this value: `-0.0`
+    /// becomes `+0.0`, so that comparing bit patterns afterwards treats the
+    /// two zeros as equal. Arrays are normalized at any nesting depth and
+    /// returned as they are when they contain no `-0.0`; scalars are
+    /// normalized when they are plain floats.
+    ///
+    /// See [`normalize_floats_owned`] and [`ScalarValue::normalize`].
+    ///
+    /// [`normalize_floats_owned`]: datafusion_common::float_semantics::normalize_floats_owned
+    pub fn normalize_floats(self) -> Self {
+        match self {
+            ColumnarValue::Array(array) => {
+                ColumnarValue::Array(normalize_floats_owned(array))
+            }
+            ColumnarValue::Scalar(scalar) => ColumnarValue::Scalar(scalar.normalize()),
         }
     }
 

@@ -19,7 +19,6 @@ use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq as arrow_eq;
 use arrow::datatypes::*;
 
-use datafusion_common::float_semantics::{has_float_leaf, normalize_floats};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
@@ -125,33 +124,6 @@ fn try_evaluate_constant_list(
             Ok(None)
         }
     }
-}
-
-/// Applies DataFusion's float equality semantics to a value before it is
-/// compared: `-0.0` becomes `+0.0`, so it matches `+0.0` in the list.
-///
-/// The static filters and Arrow's `eq` kernel compare floats by bit pattern
-/// (IEEE 754 totalOrder), while SQL and the `=` operator treat the two zeros
-/// as equal. Normalizing both the list (in `instantiate_static_filter`) and
-/// the input (on every evaluation) keeps `IN` consistent with `=`. This is a
-/// no-op for non-float types and allocation-free when nothing needs to change.
-/// See [`datafusion_common::float_semantics`].
-fn normalize_value(value: ColumnarValue) -> Result<ColumnarValue> {
-    Ok(match value {
-        ColumnarValue::Array(array) => ColumnarValue::Array(normalize_floats(&array)),
-        ColumnarValue::Scalar(scalar) => match scalar {
-            ScalarValue::Float16(_)
-            | ScalarValue::Float32(_)
-            | ScalarValue::Float64(_) => ColumnarValue::Scalar(scalar.normalize()),
-            // Floats nested in dictionaries, lists or structs: normalize the
-            // array form, which handles every nesting
-            scalar if has_float_leaf(&scalar.data_type()) => {
-                let array = normalize_floats(&scalar.to_array()?);
-                ColumnarValue::Scalar(ScalarValue::try_from_array(&array, 0)?)
-            }
-            scalar => ColumnarValue::Scalar(scalar),
-        },
-    })
 }
 
 /// Asserts that the InList expression's data type matches a list element's
@@ -351,7 +323,8 @@ impl PhysicalExpr for InListExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let num_rows = batch.num_rows();
-        let value = normalize_value(self.expr.evaluate(batch)?)?;
+        let value = self.expr.evaluate(batch)?;
+        let value = value.normalize_floats(); // so 0.0 == -0.0
         let r = match &self.static_filter {
             Some(filter) => {
                 match value {
@@ -401,7 +374,8 @@ impl PhysicalExpr for InListExpr {
 
                 // Helper: compare value against a single list expression
                 let compare_one = |expr: &Arc<dyn PhysicalExpr>| -> Result<BooleanArray> {
-                    match normalize_value(expr.evaluate(batch)?)? {
+                    let list_value = expr.evaluate(batch)?.normalize_floats(); // 0.0 == -0.0
+                    match list_value {
                         ColumnarValue::Array(array) => {
                             if lhs_supports_arrow_eq
                                 && supports_arrow_eq(array.data_type())
