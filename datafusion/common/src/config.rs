@@ -1525,7 +1525,7 @@ config_namespace! {
         /// (writing)  Sets default encoding for any column.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
-        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         pub encoding: Option<DFParquetEncoding>, default = None
@@ -3534,7 +3534,7 @@ config_namespace_with_hashmap! {
         /// Sets encoding for the column path.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
-        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
         pub encoding: Option<String>, default = None
