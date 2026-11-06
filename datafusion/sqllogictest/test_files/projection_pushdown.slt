@@ -2689,15 +2689,17 @@ DROP TABLE duplicate_alias;
 # `RESET` puts back the global default instead of the harness value, and the
 # harness rejects a file that leaves configuration modified.
 
+# `arr` and `tags` are only read by the lambda queries further down. They are
+# appended after `s` so the `get_field(s@1, ...)` indices below do not move.
 statement ok
 COPY (
-    SELECT column1 AS id, column2 AS s
+    SELECT column1 AS id, column2 AS s, column3 AS arr, column4 AS tags
     FROM VALUES
-        (1, {value: 100, label: 'alpha'}),
-        (2, {value: 200, label: 'beta'}),
-        (3, {value: 150, label: 'gamma'}),
-        (4, {value: 300, label: 'delta'}),
-        (5, {value: 250, label: 'epsilon'})
+        (1, {value: 100, label: 'alpha'},   [1, 2, 3], ['a', 'b']),
+        (2, {value: 200, label: 'beta'},    [4, 5],    ['c']),
+        (3, {value: 150, label: 'gamma'},   [6],       ['d', 'e', 'f']),
+        (4, {value: 300, label: 'delta'},   [7, 8, 9], ['g']),
+        (5, {value: 250, label: 'epsilon'}, [10],      ['h', 'i'])
 ) TO 'test_files/scratch/projection_pushdown/leaf_split.parquet'
 STORED AS PARQUET;
 
@@ -2778,6 +2780,53 @@ SELECT s['value'] + 1 AS v FROM leaf_split ORDER BY v;
 201
 251
 301
+
+# A lambda parameter is indexed after the input columns, so the split moves it;
+# see `rewrite_outer_expr`. These are value queries because an index left behind
+# is only sometimes an error, see the third one.
+
+statement ok
+SET datafusion.sql_parser.dialect = databricks;
+
+query ?IT
+SELECT array_transform(arr, x -> x + 1) AS a, s['value'] AS v, s['label'] AS l
+FROM leaf_split ORDER BY v;
+----
+[2, 3, 4] 100 alpha
+[7] 150 gamma
+[5, 6] 200 beta
+[11] 250 epsilon
+[8, 9, 10] 300 delta
+
+# Nested lambdas need two leaves: with one the split is width-neutral, the
+# parameter does not move, and the query passes against broken code.
+query ?IT
+SELECT array_transform(arr, x -> x + array_length(array_transform(arr, y -> y * 2))) AS a,
+       s['value'] AS v, s['label'] AS l
+FROM leaf_split ORDER BY v;
+----
+[4, 5, 6] 100 alpha
+[7] 150 gamma
+[6, 7] 200 beta
+[11] 250 epsilon
+[10, 11, 12] 300 delta
+
+# Naming the parameter after the column a stale index would land on makes
+# `LambdaVariable`'s field check match, so the wrong column is read with no
+# error at all. The name has to track `leaf_column_name` to stay adversarial.
+query ?ITI
+SELECT array_transform(tags, __datafusion_leaf_1 -> concat(__datafusion_leaf_1, '!')) AS a,
+       s['value'] AS v, s['label'] AS l, id
+FROM leaf_split ORDER BY v;
+----
+[a!, b!] 100 alpha 1
+[d!, e!, f!] 150 gamma 3
+[c!] 200 beta 2
+[h!, i!] 250 epsilon 5
+[g!] 300 delta 4
+
+statement ok
+SET datafusion.sql_parser.dialect = generic;
 
 statement ok
 SET datafusion.execution.batch_size = 8192;

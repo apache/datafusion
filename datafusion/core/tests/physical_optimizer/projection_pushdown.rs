@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::compute::SortOptions;
@@ -10,7 +11,9 @@ use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemorySourceConfig;
 use datafusion::datasource::physical_plan::CsvSource;
 use datafusion::datasource::source::DataSourceExec;
+use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::config::{ConfigOptions, CsvOptions};
+use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::{JoinSide, JoinType, NullEquality, Result, ScalarValue};
 use datafusion_datasource::TableSchemaBuilder;
 use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
@@ -20,6 +23,7 @@ use datafusion_expr::{
     Operator, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, Volatility,
 };
 use datafusion_expr_common::columnar_value::ColumnarValue;
+use datafusion_functions::core::expr_fn::get_field;
 use datafusion_physical_expr::expressions::{
     BinaryExpr, CaseExpr, CastExpr, Column, Literal, NegativeExpr, binary, cast, col,
 };
@@ -1901,6 +1905,54 @@ fn test_sort_merge_join_interleaved_projection_embeds() -> Result<()> {
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
         DataSourceExec: file_groups={1 group: [[x]]}, projection=[a, b, c, d, e], file_type=csv, has_header=false
     "
+    );
+
+    Ok(())
+}
+
+/// Splitting a projection rebuilds it, so it has to carry over the metadata the
+/// planner attached; otherwise the rule's schema check fails the whole query.
+/// Mirrors `keeps_metadata_of_constant_input` in `eliminate_constant_join`, but
+/// over Parquet, because only a source that absorbs the leaf projection makes
+/// the split fire at all.
+#[tokio::test]
+async fn split_keeps_field_metadata() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().join("leaf_split_metadata.parquet");
+    let path = path.to_str().expect("temp path is not utf-8");
+
+    let ctx = SessionContext::new();
+    // Below the five rows, so `EnsureRequirements` inserts the repartition that
+    // the split needs.
+    ctx.sql("SET datafusion.execution.batch_size = 2").await?;
+    ctx.sql("SET datafusion.execution.target_partitions = 4")
+        .await?;
+    ctx.sql(&format!(
+        "COPY (SELECT column1 AS id, column2 AS s FROM VALUES \
+           (1, {{value: 100}}), (2, {{value: 200}}), (3, {{value: 150}}), \
+           (4, {{value: 300}}), (5, {{value: 250}})) \
+         TO '{path}' STORED AS PARQUET"
+    ))
+    .await?
+    .collect()
+    .await?;
+    ctx.register_parquet("t", path, ParquetReadOptions::default())
+        .await?;
+
+    let metadata =
+        FieldMetadata::from(HashMap::from([("k".to_string(), "v".to_string())]));
+    let df = ctx.table("t").await?.select(vec![
+        get_field(datafusion_expr::col("s"), "value")
+            .alias_with_metadata("v", Some(metadata)),
+        (datafusion_expr::col("id") + datafusion_expr::lit(1i64)).alias("w"),
+    ])?;
+
+    // The physical plan is what the rule rewrites, so the assertion has to come
+    // from it rather than from the DataFrame's logical schema.
+    let plan = df.create_physical_plan().await?;
+    assert_eq!(
+        plan.schema().field(0).metadata().get("k"),
+        Some(&"v".to_string())
     );
 
     Ok(())
