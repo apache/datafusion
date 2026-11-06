@@ -68,7 +68,27 @@ RUST_BACKTRACE=1 cargo test --profile ci \
     --features avro,json,backtrace,extended_tests,recursive_protection,parquet_encryption
 ```
 
-For modified code identify local benchmarks(if any) and run them against `main`. See [Benchmarks](benchmarks/README.md).
+For modified code identify local benchmarks(if any) and run them against `main`, covering both well-predicted
+and poorly predicted input, plus one case the change does not touch. See [Benchmarks](benchmarks/README.md)
+and [Review the Performance](docs/source/contributor-guide/pr_review.md#review-the-performance).
+
+## Code Guidelines
+
+- A PR merges as one squashed commit titled with the PR title, so it should do only what that title says. Put unrelated renames, reformatting, refactors, and drive-by fixes in a
+  separate PR.
+- Default to no comment. Comment only what the code cannot say: invariants, non-obvious constraints, and why
+  a choice that looks wrong is right. Do not restate the code or describe how it changed. New public items get
+  a rustdoc comment with a doctest example where appropriate, and refer to other items with intra-doc
+  links such as `` [`SessionContext`] `` instead of plain names. See
+  [Review the Code Comments](docs/source/contributor-guide/pr_review.md#review-the-code-comments).
+
+### Public API
+
+Before adding, changing, or removing a `pub` item, read the
+[API health policy](docs/source/contributor-guide/api-health.md). Keep new items private unless the change
+needs them. If an item is public only for use inside the workspace, follow the
+[internal public APIs](docs/source/contributor-guide/api-health.md#internal-public-apis) section. In a review,
+name every new or changed public item.
 
 ## Agent Skills
 

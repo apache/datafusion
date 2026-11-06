@@ -185,6 +185,15 @@ When reviewing:
 3. If the PR claims a performance improvement, check that the reported
    results are reproducible and that the benchmark exercises the changed
    code path.
+4. Check which part of the change produces the gain, for example by removing
+   it and rerunning. A benchmark can improve for reasons other than the
+   change's core idea, such as inputs that happen to defeat the branch
+   predictor or a shift in code layout, so check that the benchmark covers
+   both well-predicted input (constant lengths, all valid) and poorly
+   predicted input (random).
+5. Ask which inputs get slower and whether real workloads are likely to hit
+   them, and whether the generated code holds up on another architecture
+   and under the build settings downstream projects use.
 
 [system-level sql benchmarks]: https://github.com/apache/datafusion/tree/main/benchmarks
 [benchmarks readme]: https://github.com/apache/datafusion/blob/main/benchmarks/README.md
@@ -214,6 +223,12 @@ without scope creep.
 Similarly, when a PR mixes refactoring with behavior changes or fixes a narrow
 problem with a broad mechanism, ask for it to be split or scoped down rather
 than reviewing it as-is.
+
+### Back Each Claim with Evidence
+
+Support a claim about how code behaves with what you checked: a permalink to
+the code, a test or command and its output, generated code, or benchmark
+results. A claim without evidence leaves the author to redo the investigation.
 
 ### Narrate What You Verified When Approving
 
