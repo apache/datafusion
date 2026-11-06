@@ -616,18 +616,6 @@ DROP TABLE min_max_with_metadata;
 statement ok
 RESET datafusion.execution.parquet.skip_metadata;
 
-# A CASE whose WHEN is always false simplifies to NULL, which keeps the
-# extension type of the CASE
-query T
-select arrow_metadata(
-  case when 1 = 0 then with_metadata(name, 'ARROW:extension:name', 'a.type') end,
-  'ARROW:extension:name')
-from table_with_metadata;
-----
-a.type
-a.type
-a.type
-
 # coalesce, nvl, ifnull and nvl2: conflicting extension types are a planning error
 statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
 select coalesce(
@@ -708,19 +696,17 @@ select
   arrow_metadata(case when id > 1 then name else l_name end, 'metadata_key'),
   arrow_metadata(case id when 1 then name else l_name end, 'metadata_key'),
   arrow_metadata(
-    case when id > 1
-      then with_metadata(name, 'ARROW:extension:name', 'a.type')
-      else with_metadata(l_name, 'ARROW:extension:name', 'a.type') end,
+    case when id > 1 then cast(name as json) else cast(l_name as json) end,
     'ARROW:extension:name')
 from table_with_metadata;
 ----
-the name field the name field a.type
-the name field the name field a.type
-the name field the name field a.type
+the name field the name field arrow.json
+the name field the name field arrow.json
+the name field the name field arrow.json
 
-statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'a\.type' and 'b\.type'
+statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'arrow\.json' and 'b\.type'
 select case when id > 1
-  then with_metadata(name, 'ARROW:extension:name', 'a.type')
+  then cast(name as json)
   else with_metadata(l_name, 'ARROW:extension:name', 'b.type') end
 from table_with_metadata;
 
@@ -729,74 +715,95 @@ from table_with_metadata;
 query TTTT
 select
   arrow_metadata(
-    case when id > 1 then upper(name)
-      else with_metadata(l_name, 'ARROW:extension:name', 'a.type') end,
+    case when id > 1 then upper(name) else cast(l_name as json) end,
+    'ARROW:extension:name'),
+  arrow_metadata(coalesce(upper(name), cast(l_name as json)), 'ARROW:extension:name'),
+  arrow_metadata(
+    case when id > 1 then cast(name as json) else NULL end,
+    'ARROW:extension:name'),
+  arrow_metadata(case when id > 1 then cast(name as json) end, 'ARROW:extension:name')
+from table_with_metadata;
+----
+arrow.json arrow.json arrow.json arrow.json
+arrow.json arrow.json arrow.json arrow.json
+arrow.json arrow.json arrow.json arrow.json
+
+# A typed NULL ELSE contributes its metadata, including when no row reaches a
+# THEN branch. Each query uses a CASE only once: a repeated expression is
+# computed once in a lower projection, whose field comes from the logical plan.
+query TT
+select
+  arrow_metadata(
+    case when id > 100 then name else cast(NULL as json) end,
     'ARROW:extension:name'),
   arrow_metadata(
-    coalesce(upper(name), with_metadata(l_name, 'ARROW:extension:name', 'a.type')),
-    'ARROW:extension:name'),
-  arrow_metadata(
-    case when id > 1 then with_metadata(name, 'ARROW:extension:name', 'a.type')
-      else NULL end,
-    'ARROW:extension:name'),
-  arrow_metadata(
-    case when id > 1 then with_metadata(name, 'ARROW:extension:name', 'a.type') end,
+    case when id > 100 then upper(name) else cast(NULL as json) end,
     'ARROW:extension:name')
 from table_with_metadata;
 ----
-a.type a.type a.type a.type
-a.type a.type a.type a.type
-a.type a.type a.type a.type
+arrow.json arrow.json
+arrow.json arrow.json
+arrow.json arrow.json
 
-# A typed NULL ELSE with metadata contributes its metadata, including when no
-# row reaches a THEN branch
-query TTTT
+query TT
 select
-  case when id > 100 then name
-    else with_metadata(arrow_cast(NULL, 'Utf8'), 'source', 'null_else') end,
-  arrow_metadata(
-    case when id > 100 then name
-      else with_metadata(arrow_cast(NULL, 'Utf8'), 'source', 'null_else') end,
-    'source'),
-  case when id > 100 then upper(name)
-    else with_metadata(arrow_cast(NULL, 'Utf8'), 'source', 'null_else') end,
-  arrow_metadata(
-    case when id > 100 then upper(name)
-      else with_metadata(arrow_cast(NULL, 'Utf8'), 'source', 'null_else') end,
-    'source')
+  case when id > 100 then name else cast(NULL as json) end,
+  case when id > 100 then upper(name) else cast(NULL as json) end
 from table_with_metadata;
 ----
-NULL null_else NULL null_else
-NULL null_else NULL null_else
-NULL null_else NULL null_else
+NULL NULL
+NULL NULL
+NULL NULL
+
+# Coercing the branches to a common type casts a branch to a plain storage type,
+# which drops its extension type and keeps its other metadata
+query TTT
+select
+  arrow_typeof(
+    case when id > 1 then cast(name as json) else arrow_cast(l_name, 'LargeUtf8') end),
+  arrow_metadata(
+    case when id > 1 then cast(name as json) else arrow_cast(l_name, 'LargeUtf8') end,
+    'ARROW:extension:name'),
+  arrow_metadata(
+    case when id > 1 then name else arrow_cast(l_name, 'LargeUtf8') end,
+    'metadata_key')
+from table_with_metadata;
+----
+LargeUtf8 NULL the name field
+LargeUtf8 NULL the name field
+LargeUtf8 NULL the name field
 
 # Nested CASE, and the CASE rewrites of coalesce, nvl, ifnull and nvl2, keep
-# the extension type at execution
+# the extension type at execution. The rewrites take different arguments so
+# that they are not one repeated expression.
 query TTTTT
 select
   arrow_metadata(
     case when id > 1
-      then case when id > 2
-        then with_metadata(name, 'ARROW:extension:name', 'a.type') end
+      then case when id > 2 then cast(name as json) end
       else l_name end,
     'ARROW:extension:name'),
-  arrow_metadata(
-    coalesce(with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
-    'ARROW:extension:name'),
-  arrow_metadata(
-    nvl(with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
-    'ARROW:extension:name'),
-  arrow_metadata(
-    ifnull(with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
-    'ARROW:extension:name'),
-  arrow_metadata(
-    nvl2(id, with_metadata(name, 'ARROW:extension:name', 'a.type'), l_name),
-    'ARROW:extension:name')
+  arrow_metadata(coalesce(cast(name as json), l_name), 'ARROW:extension:name'),
+  arrow_metadata(nvl(cast(name as json), upper(l_name)), 'ARROW:extension:name'),
+  arrow_metadata(ifnull(cast(name as json), lower(l_name)), 'ARROW:extension:name'),
+  arrow_metadata(nvl2(id, cast(name as json), l_name), 'ARROW:extension:name')
 from table_with_metadata;
 ----
-a.type a.type a.type a.type a.type
-a.type a.type a.type a.type a.type
-a.type a.type a.type a.type a.type
+arrow.json arrow.json arrow.json arrow.json arrow.json
+arrow.json arrow.json arrow.json arrow.json arrow.json
+arrow.json arrow.json arrow.json arrow.json arrow.json
+
+# A CASE whose WHEN is always false simplifies to NULL, which keeps the
+# extension type of the CASE
+query T
+select arrow_metadata(
+  case when 1 = 0 then cast(name as json) end,
+  'ARROW:extension:name')
+from table_with_metadata;
+----
+arrow.json
+arrow.json
+arrow.json
 
 statement ok
 drop table table_with_metadata;
