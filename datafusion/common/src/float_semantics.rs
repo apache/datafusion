@@ -155,9 +155,8 @@ pub fn normalize_floats(array: &ArrayRef) -> ArrayRef {
 
 /// Like [`normalize_floats`], but takes ownership of the array.
 ///
-/// When nothing needs to change the array is returned as is, and when it
-/// does, the values are rewritten in place if nothing else refers to them.
-/// Only nested arrays and shared buffers pay for a copy.
+/// This avoids any copying (including arc ref counts) if there is nothing, and
+/// will reuse the underlying allocation if possible
 pub fn normalize_floats_owned(array: ArrayRef) -> ArrayRef {
     match array.data_type() {
         DataType::Float16 => normalize_primitive_owned::<Float16Type>(array),
@@ -180,6 +179,8 @@ where
     Arc::new(arr.unary::<_, T>(normalize_float))
 }
 
+/// Like [`normalize_primitive`] except it takes an owned array
+/// and tries to reuse the allocation when possible;
 fn normalize_primitive_owned<T>(array: ArrayRef) -> ArrayRef
 where
     T: ArrowPrimitiveType,
@@ -194,8 +195,8 @@ where
     let arr = arr.clone();
     drop(array);
     let normalized = match arr.unary_mut(normalize_float) {
-        Ok(normalized) => normalized,
-        Err(arr) => arr.unary::<_, T>(normalize_float),
+        Ok(normalized) => normalized, // updated in place
+        Err(arr) => arr.unary::<_, T>(normalize_float), // needed to copy
     };
     Arc::new(normalized)
 }

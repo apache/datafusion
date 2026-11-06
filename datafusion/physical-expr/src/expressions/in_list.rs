@@ -324,7 +324,7 @@ impl PhysicalExpr for InListExpr {
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let num_rows = batch.num_rows();
         let value = self.expr.evaluate(batch)?;
-        let value = value.normalize_floats(); // so 0.0 == -0.0
+        let value = value.normalize(); // so 0.0 == -0.0
         let r = match &self.static_filter {
             Some(filter) => {
                 match value {
@@ -374,7 +374,7 @@ impl PhysicalExpr for InListExpr {
 
                 // Helper: compare value against a single list expression
                 let compare_one = |expr: &Arc<dyn PhysicalExpr>| -> Result<BooleanArray> {
-                    let list_value = expr.evaluate(batch)?.normalize_floats(); // 0.0 == -0.0
+                    let list_value = expr.evaluate(batch)?.normalize(); // 0.0 == -0.0
                     match list_value {
                         ColumnarValue::Array(array) => {
                             if lhs_supports_arrow_eq

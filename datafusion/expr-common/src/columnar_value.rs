@@ -114,16 +114,11 @@ impl ColumnarValue {
         }
     }
 
-    /// Applies DataFusion's float equality semantics to this value: `-0.0`
-    /// becomes `+0.0`, so that comparing bit patterns afterwards treats the
-    /// two zeros as equal. Arrays are normalized at any nesting depth and
-    /// returned as they are when they contain no `-0.0`; scalars are
-    /// normalized when they are plain floats.
+    /// Applies DataFusion's [float equality semantics] to this value (e.g.
+    /// `-0.0` becomes `+0.0`)
     ///
-    /// See [`normalize_floats_owned`] and [`ScalarValue::normalize`].
-    ///
-    /// [`normalize_floats_owned`]: datafusion_common::float_semantics::normalize_floats_owned
-    pub fn normalize_floats(self) -> Self {
+    /// [float equality semantics]: datafusion_common::float_semantics
+    pub fn normalize(self) -> Self {
         match self {
             ColumnarValue::Array(array) => {
                 ColumnarValue::Array(normalize_floats_owned(array))

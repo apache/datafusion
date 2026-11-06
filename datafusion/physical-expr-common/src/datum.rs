@@ -76,9 +76,16 @@ pub fn apply_cmp(
         // floats, which treats `-0.0` and `+0.0` as distinct. Normalize float
         // operands so SQL semantics (`+0.0 == -0.0`) hold. No-op for
         // non-float types.
-        let lhs = lhs.clone().normalize_floats();
-        let rhs = rhs.clone().normalize_floats();
+        let lhs = normalize_cmp_input(lhs);
+        let rhs = normalize_cmp_input(rhs);
         apply(&lhs, &rhs, |l, r| Ok(Arc::new(f(l, r)?)))
+    }
+}
+
+fn normalize_cmp_input(cv: &ColumnarValue) -> ColumnarValue {
+    match cv {
+        ColumnarValue::Array(a) => ColumnarValue::Array(normalize_floats(a)),
+        ColumnarValue::Scalar(s) => ColumnarValue::Scalar(s.clone().normalize()),
     }
 }
 
