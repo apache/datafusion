@@ -47,6 +47,7 @@ tempfile = { workspace = true }
 [[bench]]
 harness = false
 name = "consume_wide_read"
+required-features = ["protoc"]
 
 [features]
 default = ["physical"]
