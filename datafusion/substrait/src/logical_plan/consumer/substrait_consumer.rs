@@ -36,8 +36,6 @@ use datafusion::common::{
 use datafusion::execution::{FunctionRegistry, SessionState};
 use datafusion::logical_expr::expr::LambdaVariable;
 use datafusion::logical_expr::{Expr, Extension, LogicalPlan};
-use futures::TryStreamExt;
-use futures::stream::FuturesUnordered;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use substrait::proto::expression as substrait_expression;
@@ -57,9 +55,8 @@ use substrait::proto::{
 /// It can be implemented by users to allow for custom handling of relations, expressions, etc.
 ///
 /// Relation and expression callbacks receive their lexical scope explicitly.
-/// Independent inputs may invoke callbacks concurrently on the same consumer.
-/// Keep traversal scopes in the context and make shared services concurrency-safe,
-/// or override [`Self::consume_rel_inputs`] to consume inputs sequentially.
+/// Inputs are consumed sequentially by default. Custom consumers may override
+/// [`Self::consume_rel_inputs`] to choose a different scheduling policy.
 ///
 /// Combined with the [crate::logical_plan::producer::SubstraitProducer] this allows for fully
 /// customizable Substrait serde.
@@ -206,24 +203,19 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
     /// Implementations must return exactly one plan per input, in the same order.
     /// On error, implementations must drop any unfinished input futures.
     ///
-    /// The default consumes inputs concurrently using the same immutable context.
-    /// Overrides can provide a different scheduling policy.
+    /// The default consumes inputs sequentially, stopping at the first error.
+    /// Overrides can provide a different scheduling policy, but must account for
+    /// any additional mutable traversal state in the custom consumer.
     async fn consume_rel_inputs(
         &self,
         rels: &[&Rel],
         context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<Vec<LogicalPlan>> {
-        let pending = FuturesUnordered::new();
-        for (index, rel) in rels.iter().enumerate() {
-            pending.push(async move {
-                self.consume_rel(rel, context)
-                    .await
-                    .map(|plan| (index, plan))
-            });
+        let mut plans = Vec::with_capacity(rels.len());
+        for rel in rels {
+            plans.push(self.consume_rel(rel, context).await?);
         }
-        let mut completed = pending.try_collect::<Vec<_>>().await?;
-        completed.sort_unstable_by_key(|(index, _)| *index);
-        Ok(completed.into_iter().map(|(_, plan)| plan).collect())
+        Ok(plans)
     }
 
     async fn consume_read(
@@ -780,11 +772,7 @@ mod tests {
     use super::*;
     use crate::logical_plan::consumer::utils::tests::test_consumer;
     use datafusion::arrow::datatypes::{Field, Schema};
-    use datafusion::common::assert_contains;
     use datafusion::logical_expr::ExprSchemable;
-    use datafusion::logical_expr::logical_plan::builder::table_scan;
-    use futures::poll;
-    use tokio::sync::Semaphore;
 
     fn schema(name: &str, data_type: DataType) -> Arc<DFSchema> {
         Arc::new(
@@ -858,143 +846,5 @@ mod tests {
         assert!(a.lambda_variable(1, 0).is_err());
         assert!(b.lambda_variable(1, 0).is_err());
         assert!(nested.lambda_variable(0, 1).is_err());
-    }
-
-    // Only input completion is controlled; JOIN/UNION conversion and batch
-    // scheduling use the standard consumer implementations.
-    struct GatedConsumer {
-        consumer: DefaultSubstraitConsumer<'static>,
-        a_ready: Semaphore,
-        b_ready: Semaphore,
-        // Held permits count pending inputs and are released even on cancellation.
-        pending: Semaphore,
-    }
-
-    impl GatedConsumer {
-        fn new(inputs: usize) -> Self {
-            Self {
-                consumer: test_consumer(),
-                a_ready: Semaphore::new(0),
-                b_ready: Semaphore::new(0),
-                pending: Semaphore::new(inputs),
-            }
-        }
-    }
-
-    #[async_trait]
-    impl SubstraitConsumer for GatedConsumer {
-        fn get_extensions(&self) -> &Extensions {
-            self.consumer.get_extensions()
-        }
-        fn get_function_registry(&self) -> &impl FunctionRegistry {
-            self.consumer.get_function_registry()
-        }
-        async fn resolve_table_ref(
-            &self,
-            _: &TableReference,
-        ) -> datafusion::common::Result<Option<Arc<dyn TableProvider>>> {
-            unreachable!("test consumes reads directly")
-        }
-        async fn consume_rel(
-            &self,
-            rel: &Rel,
-            _context: &SubstraitConsumerContext,
-        ) -> datafusion::common::Result<LogicalPlan> {
-            let Some(proto::rel::RelType::Read(read)) = &rel.rel_type else {
-                panic!("expected read")
-            };
-            let Some(proto::read_rel::ReadType::NamedTable(table)) = &read.read_type
-            else {
-                panic!("expected named table")
-            };
-            let name = table.names[0].as_str();
-            let _pending = self.pending.acquire().await.unwrap();
-            let gate = if name == "a" {
-                &self.a_ready
-            } else {
-                &self.b_ready
-            };
-            gate.acquire().await.unwrap().forget();
-            if name == "fail" {
-                return substrait_err!("input failed");
-            }
-            table_scan(
-                Some(name),
-                &Schema::new(vec![Field::new("x", DataType::Int64, false)]),
-                None,
-            )?
-            .build()
-        }
-    }
-
-    fn read(name: &str) -> Rel {
-        Rel {
-            rel_type: Some(proto::rel::RelType::Read(Box::new(ReadRel {
-                read_type: Some(proto::read_rel::ReadType::NamedTable(
-                    proto::read_rel::NamedTable {
-                        names: vec![name.into()],
-                        ..Default::default()
-                    },
-                )),
-                ..Default::default()
-            }))),
-        }
-    }
-
-    #[tokio::test]
-    async fn join_and_unions_consume_concurrently_in_input_order() {
-        let relations = [
-            proto::rel::RelType::Join(Box::new(JoinRel {
-                left: Some(Box::new(read("a"))),
-                right: Some(Box::new(read("b"))),
-                r#type: proto::join_rel::JoinType::Inner as i32,
-                ..Default::default()
-            })),
-            proto::rel::RelType::Set(SetRel {
-                inputs: vec![read("a"), read("b")],
-                op: proto::set_rel::SetOp::UnionAll as i32,
-                ..Default::default()
-            }),
-            proto::rel::RelType::Set(SetRel {
-                inputs: vec![read("a"), read("b")],
-                op: proto::set_rel::SetOp::UnionDistinct as i32,
-                ..Default::default()
-            }),
-        ];
-        for rel_type in relations {
-            let consumer = GatedConsumer::new(2);
-            let context = SubstraitConsumerContext::default();
-            let rel = Rel {
-                rel_type: Some(rel_type),
-            };
-            let mut result = Box::pin(from_substrait_rel(&consumer, &rel, &context));
-            assert!(poll!(result.as_mut()).is_pending());
-            assert_eq!(consumer.pending.available_permits(), 0);
-            consumer.b_ready.add_permits(1); // B finishes first.
-            assert!(poll!(result.as_mut()).is_pending());
-            assert_eq!(consumer.pending.available_permits(), 1);
-            consumer.a_ready.add_permits(1);
-            let plan = result.await.unwrap().display_indent().to_string();
-            assert!(
-                plan.find("TableScan: a").unwrap() < plan.find("TableScan: b").unwrap()
-            );
-            assert_eq!(consumer.pending.available_permits(), 2);
-        }
-    }
-
-    #[tokio::test]
-    async fn input_failure_cancels_pending_siblings() {
-        let consumer = GatedConsumer::new(41);
-        // A later failure must not wait for earlier pending inputs, even in a wide UNION.
-        let mut inputs = vec![read("a"); 40];
-        inputs.push(read("fail"));
-        let inputs = inputs.iter().collect::<Vec<_>>();
-        let context = SubstraitConsumerContext::default();
-        let mut result = Box::pin(consumer.consume_rel_inputs(&inputs, &context));
-        assert!(poll!(result.as_mut()).is_pending());
-        assert_eq!(consumer.pending.available_permits(), 0);
-        consumer.b_ready.add_permits(1);
-        assert_contains!(result.await.unwrap_err().to_string(), "input failed");
-        assert_eq!(consumer.pending.available_permits(), 41);
     }
 }
