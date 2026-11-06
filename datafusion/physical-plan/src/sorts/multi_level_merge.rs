@@ -1534,11 +1534,11 @@ mod tests {
     }
 
     /// Headroom for others sharing `pool`, with or without sibling partitions.
-    fn headroom(pool: &Arc<dyn MemoryPool>, siblings: bool) -> Option<FanInHeadroom> {
-        Some(FanInHeadroom {
+    fn headroom(pool: &Arc<dyn MemoryPool>, siblings: bool) -> FanInHeadroom {
+        FanInHeadroom {
             pool: Arc::clone(pool),
             siblings,
-        })
+        }
     }
 
     #[rstest::rstest]
@@ -1564,9 +1564,7 @@ mod tests {
             Arc::new(GreedyMemoryPool::new(13 * batch_memory));
         let other = others.then(|| hold(&pool, 1)).transpose()?;
         let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 1)
-            .with_fan_in_headroom(
-                with_headroom.then(|| headroom(&pool, siblings).unwrap()),
-            );
+            .with_fan_in_headroom(with_headroom.then(|| headroom(&pool, siblings)));
         let mut reservation = builder.reservation.new_empty();
         let SpillFilesToMerge::Ready(spills, buffer_len) =
             builder.get_sorted_spill_files_to_merge(1, 2, &mut reservation, false)?
@@ -1599,7 +1597,7 @@ mod tests {
         let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(5 * batch_memory));
         let other = hold(&pool, 1)?;
         let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 1)
-            .with_fan_in_headroom(headroom(&pool, false));
+            .with_fan_in_headroom(Some(headroom(&pool, false)));
         let mut reservation = builder.reservation.new_empty();
         let SpillFilesToMerge::Ready(spills, _) =
             builder.get_sorted_spill_files_to_merge(1, 2, &mut reservation, false)?
@@ -1651,7 +1649,7 @@ mod tests {
         let pool: Arc<dyn MemoryPool> = Arc::clone(&merge_pool) as Arc<dyn MemoryPool>;
         let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 1)
             .with_merge_pool(Some(Arc::clone(&merge_pool)))
-            .with_fan_in_headroom(headroom(&parent, false));
+            .with_fan_in_headroom(Some(headroom(&parent, false)));
         builder.reservation.try_grow(workspace)?;
         merge_pool.retain(workspace);
         builder.reservation.free();
@@ -1692,7 +1690,7 @@ mod tests {
         let pool: Arc<dyn MemoryPool> = Arc::new(UnboundedMemoryPool::default());
         let other = hold(&pool, 1)?;
         let mut builder = build_merge_builder(spill_manager, schema, spills, &pool, 1)
-            .with_fan_in_headroom(headroom(&pool, false));
+            .with_fan_in_headroom(Some(headroom(&pool, false)));
         let mut reservation = builder.reservation.new_empty();
         let SpillFilesToMerge::Ready(spills, _) =
             builder.get_sorted_spill_files_to_merge(1, 2, &mut reservation, false)?
