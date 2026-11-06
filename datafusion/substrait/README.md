@@ -28,6 +28,3 @@ plans. See [API Docs] for details and examples.
 [apache datafusion]: https://datafusion.apache.org/
 [substrait]: https://substrait.io
 [api docs]: https://docs.rs/datafusion-substrait/latest
-
-For custom consumer migration instructions, see the
-[DataFusion 56.0.0 upgrade guide](../../docs/source/library-user-guide/upgrading/56.0.0.md#substrait-consumers-use-explicit-scope-context).
