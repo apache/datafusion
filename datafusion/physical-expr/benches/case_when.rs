@@ -94,65 +94,71 @@ fn criterion_benchmark(c: &mut Criterion) {
 
 fn benchmark_literal_when_selection(c: &mut Criterion, row_count: usize) {
     let mut group = c.benchmark_group("literal_when_selection");
-    for branches in [1, 4, 16] {
-        for first_only in [false, true] {
-            if branches == 1 && first_only {
-                continue;
-            }
-            let batch = RecordBatch::try_from_iter(vec![
-                (
-                    "partition",
-                    Arc::new(Int32Array::from_iter_values(
-                        (0..row_count)
-                            .map(|i| if first_only { 0 } else { (i % branches) as i32 }),
-                    )) as ArrayRef,
-                ),
-                (
-                    "left_key",
-                    Arc::new(StringArray::from_iter_values(
-                        (0..row_count).map(|i| format!("{i:032x}")),
-                    )) as ArrayRef,
-                ),
-                (
-                    "right_key",
-                    Arc::new(StringArray::from_iter_values((0..row_count).map(|i| {
-                        let value = if i % 3 == 0 { i } else { i + 1 };
-                        format!("{value:032x}")
-                    }))) as ArrayRef,
-                ),
-            ])
+    for (distribution, branches) in [
+        ("uniform", 1),
+        ("uniform", 4),
+        ("first_only", 4),
+        ("uniform", 16),
+        ("first_only", 16),
+        ("half_match_with_else", 1),
+    ] {
+        let first_only = distribution == "first_only";
+        let with_else = distribution == "half_match_with_else";
+        let partitions = if with_else { 2 } else { branches };
+        let batch = RecordBatch::try_from_iter(vec![
+            (
+                "partition",
+                Arc::new(Int32Array::from_iter_values((0..row_count).map(|i| {
+                    if first_only {
+                        0
+                    } else {
+                        (i % partitions) as i32
+                    }
+                }))) as ArrayRef,
+            ),
+            (
+                "left_key",
+                Arc::new(StringArray::from_iter_values(
+                    (0..row_count).map(|i| format!("{i:032x}")),
+                )) as ArrayRef,
+            ),
+            (
+                "right_key",
+                Arc::new(StringArray::from_iter_values((0..row_count).map(|i| {
+                    let value = if i % 3 == 0 { i } else { i + 1 };
+                    format!("{value:032x}")
+                }))) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let schema = batch.schema();
+        let then: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            col("left_key", &schema).unwrap(),
+            Operator::Eq,
+            col("right_key", &schema).unwrap(),
+        ));
+        let expr = case(
+            Some(col("partition", &schema).unwrap()),
+            (0..branches)
+                .map(|i| (lit(i as i32), Arc::clone(&then)))
+                .collect(),
+            with_else.then(|| Arc::clone(&then)),
+        )
+        .unwrap();
+        let expected =
+            BooleanArray::from((0..row_count).map(|i| i % 3 == 0).collect::<Vec<_>>());
+        let result = expr
+            .evaluate(&batch)
+            .unwrap()
+            .into_array(row_count)
             .unwrap();
-            let schema = batch.schema();
-            let then: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
-                col("left_key", &schema).unwrap(),
-                Operator::Eq,
-                col("right_key", &schema).unwrap(),
-            ));
-            let expr = case(
-                Some(col("partition", &schema).unwrap()),
-                (0..branches)
-                    .map(|i| (lit(i as i32), Arc::clone(&then)))
-                    .collect(),
-                None,
-            )
-            .unwrap();
-            let expected = BooleanArray::from(
-                (0..row_count).map(|i| i % 3 == 0).collect::<Vec<_>>(),
-            );
-            let result = expr
-                .evaluate(&batch)
-                .unwrap()
-                .into_array(row_count)
-                .unwrap();
-            assert_eq!(
-                result.as_any().downcast_ref::<BooleanArray>().unwrap(),
-                &expected
-            );
-            let distribution = if first_only { "first_only" } else { "uniform" };
-            group.bench_function(BenchmarkId::new(distribution, branches), |b| {
-                b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
-            });
-        }
+        assert_eq!(
+            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            &expected
+        );
+        group.bench_function(BenchmarkId::new(distribution, branches), |b| {
+            b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap()))
+        });
     }
     group.finish();
 }
