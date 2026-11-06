@@ -74,7 +74,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 == Some(CteAsMaterialized::Materialized)
                 && cte_plan.all_out_ref_exprs().is_empty();
             let final_plan = if is_recursive {
-                LogicalPlanBuilder::from(cte_plan)
+                self.plan_builder(cte_plan)
                     .alias(TableReference::bare(
                         self.ident_normalizer.normalize(cte.alias.name),
                     ))?
@@ -247,7 +247,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // ---------- Step 4: Create the final plan ------------------
         // Step 4.1: Compile the final plan
         let distinct = !Self::is_union_all(set_quantifier)?;
-        LogicalPlanBuilder::from(static_plan)
+        self.plan_builder(static_plan)
             .to_recursive_query(name, recursive_plan, distinct)?
             .build()
     }

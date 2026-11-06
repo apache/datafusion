@@ -61,8 +61,8 @@ use datafusion_common::display::ToStringifiedPlan;
 use datafusion_common::format::ExplainAnalyzeCategories;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::{
-    DFSchema, DFSchemaRef, ScalarValue, Statistics, exec_err, internal_datafusion_err,
-    internal_err, not_impl_err, plan_err,
+    ColumnIdGenerator, DFSchema, DFSchemaRef, ScalarValue, Statistics, exec_err,
+    internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_common::{
     NullEquality, TableReference, assert_eq_or_internal_err, assert_or_internal_err,
@@ -84,7 +84,7 @@ use datafusion_expr::utils::{expr_to_columns, split_conjunction};
 use datafusion_expr::{
     Analyze, BinaryExpr, DmlStatement, Explain, ExplainFormat, Extension, FetchType,
     Filter, JoinType, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
-    MaterializedCteScan, Operator, RecursiveQuery, Show, ShowKind, SkipType,
+    MaterializedCteScan, NamedExpr, Operator, RecursiveQuery, Show, ShowKind, SkipType,
     StringifiedPlan, WindowFrame, WindowFrameBound, WriteOp,
 };
 use datafusion_physical_expr::aggregate::{
@@ -1475,15 +1475,24 @@ impl DefaultPhysicalPlanner {
                     let (left_keys, right_keys): (Vec<_>, Vec<_>) =
                         keys.iter().cloned().unzip();
 
+                    // the projections define columns: their ids must not
+                    // collide with the ids of either side
+                    let generator = Arc::new(ColumnIdGenerator::new_after(
+                        original_left
+                            .max_column_id()
+                            .max(original_right.max_column_id()),
+                    ));
                     let (left, left_col_keys, left_projected) =
                         wrap_projection_for_join_if_necessary(
                             &left_keys,
                             original_left.as_ref().clone(),
+                            &generator,
                         )?;
                     let (right, right_col_keys, right_projected) =
                         wrap_projection_for_join_if_necessary(
                             &right_keys,
                             original_right.as_ref().clone(),
+                            &generator,
                         )?;
                     let column_on = (left_col_keys, right_col_keys);
 
@@ -1547,9 +1556,16 @@ impl DefaultPhysicalPlanner {
                             Arc::clone(join_schema)
                         };
 
+                        // the columns of the join pass through
                         let final_join_result = qualified_join_schema
                             .iter()
-                            .map(Expr::from)
+                            .map(|field| {
+                                NamedExpr::allocate(
+                                    Expr::from(field),
+                                    new_join.schema(),
+                                    &generator,
+                                )
+                            })
                             .collect::<Vec<_>>();
                         let projection = LogicalPlan::Projection(Projection::try_new(
                             final_join_result,
@@ -2116,11 +2132,11 @@ impl DefaultPhysicalPlanner {
         children: ChildrenContainer,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let Aggregate {
-            input,
-            group_expr,
-            aggr_expr,
-            ..
+            input, aggr_expr, ..
         } = aggregate;
+        // grouping sets are planned as they are written (ROLLUP, CUBE or
+        // GROUPING SETS)
+        let group_expr = &aggregate.group_by_exprs();
         let options = session_state.config().options();
         // Initially need to perform the aggregate and then merge the partitions
         let input_exec = children.one()?;
@@ -2958,7 +2974,7 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
     // Find the top-level projection
     if let LogicalPlan::Projection(projection) = input.as_ref() {
         for expr in &projection.expr {
-            if let Expr::Alias(alias) = expr {
+            if let Expr::Alias(alias) = &expr.expr {
                 // The alias name is the column name being updated
                 // The inner expression is the new value
                 let column_name = alias.name.clone();
@@ -2976,7 +2992,7 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
         input.apply(|node| {
             if let LogicalPlan::Projection(projection) = node {
                 for expr in &projection.expr {
-                    if let Expr::Alias(alias) = expr {
+                    if let Expr::Alias(alias) = &expr.expr {
                         let column_name = alias.name.clone();
                         if !is_identity_assignment(&alias.expr, &column_name) {
                             let stripped_expr =
@@ -3579,13 +3595,14 @@ impl DefaultPhysicalPlanner {
         planning_ctx: &PhysicalPlanningContext,
         input_exec: Arc<dyn ExecutionPlan>,
         input: &Arc<LogicalPlan>,
-        expr: &[Expr],
+        expr: &[NamedExpr],
         output_schema: &DFSchema,
     ) -> Result<Arc<dyn ExecutionPlan>> {
         let input_logical_schema = input.as_ref().schema();
         let input_physical_schema = input_exec.schema();
         let physical_exprs = expr
             .iter()
+            .map(|e| &e.expr)
             .map(|e| {
                 // For projections, SQL planner and logical plan builder may convert user
                 // provided expressions into logical Column expressions if their results
@@ -4388,20 +4405,28 @@ mod tests {
         let metadata =
             FieldMetadata::from(HashMap::from([("foo".to_string(), "bar".to_string())]));
         let projection = LogicalPlan::Projection(Projection::try_new(
-            vec![col("value").alias_with_metadata("value", Some(metadata))],
+            vec![NamedExpr::new(
+                col("value").alias_with_metadata("value", Some(metadata)),
+                ColumnIdGenerator::new().next(),
+            )],
             Arc::new(input),
         )?);
         let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
             Arc::new(projection),
             vec![],
-            vec![Expr::AggregateFunction(AggregateFunction::new_udf(
-                max_udaf(),
-                vec![col("value")],
-                false,
-                None,
-                vec![],
-                None,
-            ))],
+            None,
+            vec![NamedExpr::new(
+                Expr::AggregateFunction(AggregateFunction::new_udf(
+                    max_udaf(),
+                    vec![col("value")],
+                    false,
+                    None,
+                    vec![],
+                    None,
+                )),
+                ColumnIdGenerator::new_after(Some(ColumnIdGenerator::new().next()))
+                    .next(),
+            )],
         )?);
 
         DefaultPhysicalPlanner::default()

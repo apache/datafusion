@@ -7,17 +7,17 @@
 use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
+use crate::utils::{plan_builder, with_output_ids_of};
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
     DFSchema, DataFusionError, HashSet, Result, assert_or_internal_err,
     tree_node::Transformed,
 };
-use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::expr_schema::ExprSchemable;
 use datafusion_expr::{
-    AggregateUDF, Expr, cast, col,
+    AggregateUDF, Expr, NamedExpr, cast, col,
     expr::AggregateFunction,
     lit,
     logical_plan::{Aggregate, LogicalPlan},
@@ -108,8 +108,9 @@ impl CountRollup {
 }
 
 /// Check whether all aggregate exprs are distinct on a single field.
-fn is_single_distinct_agg(
-    aggr_expr: &[Expr],
+fn is_single_distinct_agg<'a>(
+    aggr_expr: impl IntoIterator<Item = &'a Expr>,
+    aggr_expr_len: usize,
     input_schema: &DFSchema,
     count_rollup: Option<&CountRollup>,
 ) -> Result<bool> {
@@ -151,7 +152,7 @@ fn is_single_distinct_agg(
             return Ok(false);
         }
     }
-    if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
+    if aggregate_count != aggr_expr_len || fields_set.len() != 1 {
         return Ok(false);
     }
     if has_count_rollup && !rewrite_pays_for_count(&distinct_aggs, input_schema)? {
@@ -197,11 +198,6 @@ fn rewrite_pays_for_count(
     Ok(false)
 }
 
-/// Check if the first expr is [Expr::GroupingSet].
-fn contains_grouping_set(expr: &[Expr]) -> bool {
-    matches!(expr.first(), Some(Expr::GroupingSet(_)))
-}
-
 impl OptimizerRule for SingleDistinctToGroupBy {
     fn name(&self) -> &str {
         "single_distinct_aggregation_to_group_by"
@@ -226,14 +222,25 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 aggr_expr,
                 schema,
                 group_expr,
+                grouping_sets: None,
                 ..
             }) if is_single_distinct_agg(
-                &aggr_expr,
+                aggr_expr.iter().map(|e| &e.expr),
+                aggr_expr.len(),
                 input.schema(),
                 count_rollup.as_ref(),
-            )? && !contains_grouping_set(&group_expr) =>
+            )? =>
             {
                 let group_size = group_expr.len();
+                // the projection on top rebuilds the outputs: they keep
+                // their ids
+                let entries = group_expr
+                    .iter()
+                    .chain(&aggr_expr)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                let group_expr = group_expr.into_iter().map(NamedExpr::into_expr);
+                let aggr_expr = aggr_expr.into_iter().map(NamedExpr::into_expr);
                 // alias all original group_by exprs
                 let (mut inner_group_exprs, out_group_expr_with_alias): (
                     Vec<Expr>,
@@ -377,21 +384,39 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .into_iter()
                     .unzip();
 
-                // construct the inner AggrPlan
+                // construct the inner AggrPlan: the bare grouping columns
+                // pass through, the other outputs are new columns
+                let ids = config.column_id_generator();
+                let inner_group_exprs = inner_group_exprs
+                    .into_iter()
+                    .map(|e| NamedExpr::allocate(e, input.schema(), ids))
+                    .collect();
+                let inner_aggr_exprs = inner_aggr_exprs
+                    .into_iter()
+                    .map(|e| NamedExpr::new(e, ids.next()))
+                    .collect();
                 let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
                     input,
                     inner_group_exprs,
+                    None,
                     inner_aggr_exprs,
                 )?);
 
                 let outer_group_exprs = out_group_expr_with_alias
                     .iter()
-                    .map(|(expr, _)| expr.clone())
+                    .map(|(expr, _)| {
+                        NamedExpr::allocate(expr.clone(), inner_agg.schema(), ids)
+                    })
+                    .collect();
+                let outer_aggr_exprs = outer_aggr_exprs
+                    .into_iter()
+                    .map(|e| NamedExpr::new(e, ids.next()))
                     .collect();
 
                 let outer_aggr = LogicalPlan::Aggregate(Aggregate::try_new(
                     Arc::new(inner_agg),
                     outer_group_exprs,
+                    None,
                     outer_aggr_exprs,
                 )?);
 
@@ -420,7 +445,12 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     }))
                     .collect();
 
-                Ok(Transformed::yes(project(outer_aggr, alias_expr)?))
+                let plan = plan_builder(outer_aggr, config)
+                    .project(alias_expr)?
+                    .build()?;
+                Ok(Transformed::yes(with_output_ids_of(
+                    plan, &entries, config,
+                )?))
             }
             _ => Ok(Transformed::no(plan)),
         }
@@ -435,6 +465,7 @@ mod tests {
     use crate::{Optimizer, OptimizerContext};
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{DateTime, Utc};
+    use datafusion_common::ColumnIdGenerator;
     use datafusion_common::alias::AliasGenerator;
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::ExprFunctionExt;
@@ -586,6 +617,10 @@ mod tests {
 
         fn alias_generator(&self) -> &Arc<AliasGenerator> {
             self.inner.alias_generator()
+        }
+
+        fn column_id_generator(&self) -> &Arc<ColumnIdGenerator> {
+            self.inner.column_id_generator()
         }
 
         fn options(&self) -> Arc<ConfigOptions> {

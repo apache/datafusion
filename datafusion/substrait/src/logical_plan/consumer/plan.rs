@@ -5,9 +5,11 @@
 use super::utils::{make_renamed_schema, rename_expressions};
 use super::{DefaultSubstraitConsumer, SubstraitConsumer};
 use crate::extensions::Extensions;
-use datafusion::common::{not_impl_err, plan_err};
+use datafusion::common::{ColumnIdGenerator, not_impl_err, plan_err};
 use datafusion::execution::SessionState;
-use datafusion::logical_expr::{Aggregate, LogicalPlan, Projection, col};
+use datafusion::logical_expr::{
+    Aggregate, Expr, LogicalPlan, NamedExpr, Projection, col,
+};
 use std::sync::Arc;
 use substrait::proto::{Plan, plan_rel};
 
@@ -52,51 +54,94 @@ pub async fn from_substrait_plan_with_consumer(
                             // Nothing to do if the schema is already equivalent
                             return Ok(plan);
                         }
+                        // the renamed outputs that define columns get ids after
+                        // the ids of the plan
+                        let generator =
+                            ColumnIdGenerator::new_after(plan.max_column_id());
                         match plan {
                             // If the last node of the plan produces expressions, bake the renames into those expressions.
                             // This isn't necessary for correctness, but helps with roundtrip tests.
                             LogicalPlan::Projection(p) => {
+                                // the outputs keep their ids (a renamed
+                                // pass-through defines a new column)
+                                let exprs = rename_expressions(
+                                    p.expr.iter().map(|e| e.expr.clone()),
+                                    p.input.schema(),
+                                    renamed_schema.fields(),
+                                )?
+                                .into_iter()
+                                .zip(&p.expr)
+                                .map(|(expr, entry)| {
+                                    entry.clone().with_rewritten_expr(expr, &generator)
+                                })
+                                .collect();
                                 Ok(LogicalPlan::Projection(Projection::try_new(
-                                    rename_expressions(
-                                        p.expr,
-                                        p.input.schema(),
-                                        renamed_schema.fields(),
-                                    )?,
-                                    p.input,
+                                    exprs, p.input,
                                 )?))
                             }
-                            LogicalPlan::Aggregate(a) => {
+                            // (grouping sets get the projection below: their
+                            // outputs include the grouping id)
+                            LogicalPlan::Aggregate(a) if a.grouping_sets.is_none() => {
                                 let (group_fields, expr_fields) =
                                     renamed_schema.fields().split_at(a.group_expr.len());
-                                let new_group_exprs = rename_expressions(
-                                    a.group_expr,
-                                    a.input.schema(),
-                                    group_fields,
-                                )?;
-                                let new_aggr_exprs = rename_expressions(
-                                    a.aggr_expr,
-                                    a.input.schema(),
-                                    expr_fields,
-                                )?;
+                                // the outputs keep their ids (a renamed
+                                // pass-through defines a new column)
+                                let keep_ids =
+                                    |entries: &[NamedExpr], exprs: Vec<Expr>| {
+                                        entries
+                                            .iter()
+                                            .zip(exprs)
+                                            .map(|(entry, expr)| {
+                                                entry
+                                                    .clone()
+                                                    .with_rewritten_expr(expr, &generator)
+                                            })
+                                            .collect::<Vec<_>>()
+                                    };
+                                let new_group_exprs = keep_ids(
+                                    &a.group_expr,
+                                    rename_expressions(
+                                        a.group_expr.iter().map(|e| e.expr.clone()),
+                                        a.input.schema(),
+                                        group_fields,
+                                    )?,
+                                );
+                                let new_aggr_exprs = keep_ids(
+                                    &a.aggr_expr,
+                                    rename_expressions(
+                                        a.aggr_expr.iter().map(|e| e.expr.clone()),
+                                        a.input.schema(),
+                                        expr_fields,
+                                    )?,
+                                );
                                 Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                                     a.input,
                                     new_group_exprs,
+                                    None,
                                     new_aggr_exprs,
                                 )?))
                             }
                             // There are probably more plans where we could bake things in, can add them later as needed.
                             // Otherwise, add a new Project to handle the renaming.
-                            _ => Ok(LogicalPlan::Projection(Projection::try_new(
-                                rename_expressions(
+                            _ => {
+                                let exprs = rename_expressions(
                                     plan.schema()
                                         .columns()
                                         .iter()
                                         .map(|c| col(c.to_owned())),
                                     plan.schema(),
                                     renamed_schema.fields(),
-                                )?,
-                                Arc::new(plan),
-                            )?)),
+                                )?
+                                .into_iter()
+                                .map(|e| {
+                                    NamedExpr::allocate(e, plan.schema(), &generator)
+                                })
+                                .collect();
+                                Ok(LogicalPlan::Projection(Projection::try_new(
+                                    exprs,
+                                    Arc::new(plan),
+                                )?))
+                            }
                         }
                     }
                 },

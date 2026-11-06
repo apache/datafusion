@@ -13,6 +13,7 @@ use crate::decorrelate::{
 };
 use crate::extract_equijoin_predicate::split_eq_and_noneq_join_predicate;
 use crate::optimizer::ApplyOrder;
+use crate::utils::{ids_builder, plan_builder, with_output_ids_of};
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::alias::AliasGenerator;
@@ -20,8 +21,9 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, DFSchema, NullEquality, Result, ScalarValue, assert_or_internal_err,
-    internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    Column, ColumnIdGenerator, DFSchema, NullEquality, Result, ScalarValue,
+    assert_or_internal_err, internal_datafusion_err, internal_err, not_impl_err,
+    plan_err,
 };
 use datafusion_expr::expr::{Exists, InSubquery, in_subquery_tuple_values};
 use datafusion_expr::expr_rewriter::{
@@ -30,8 +32,8 @@ use datafusion_expr::expr_rewriter::{
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::{conjunction, expr_to_columns, split_conjunction_owned};
 use datafusion_expr::{
-    BinaryExpr, Expr, ExprSchemable, Filter, LogicalPlan, LogicalPlanBuilder, Operator,
-    exists, in_subquery, lit, not, not_exists, not_in_subquery, when,
+    BinaryExpr, Expr, ExprSchemable, Filter, LogicalPlan, Operator, exists, in_subquery,
+    lit, not, not_exists, not_in_subquery, when,
 };
 
 use arrow::datatypes::DataType;
@@ -61,14 +63,14 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
             .data;
 
         if let LogicalPlan::Projection(projection) = plan {
-            if !projection.expr.iter().any(has_subquery) {
+            if !projection.expr.iter().any(|e| has_subquery(e)) {
                 return Ok(Transformed::no(LogicalPlan::Projection(projection)));
             }
 
             let original_projection = projection.clone();
             let mut cur_input = Arc::unwrap_or_clone(projection.input);
             let mut rewritten_exprs = Vec::with_capacity(projection.expr.len());
-            for expr in projection.expr {
+            for expr in projection.expr.iter().map(|e| e.expr.clone()) {
                 let original_name = expr.schema_name().to_string();
                 let (new_input, mut rewritten_expr) =
                     rewrite_inner_subqueries(cur_input, expr, config, true, true)?;
@@ -85,9 +87,12 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
                 rewritten_exprs.push(rewritten_expr);
             }
 
-            let new_plan = LogicalPlanBuilder::from(cur_input)
+            // the outputs keep their ids
+            let new_plan = plan_builder(cur_input, config)
                 .project(rewritten_exprs)?
                 .build()?;
+            let new_plan =
+                with_output_ids_of(new_plan, &original_projection.expr, config)?;
             return Ok(Transformed::yes(new_plan));
         }
 
@@ -116,8 +121,12 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
             match extract_subquery_info(subquery_expr) {
                 // The subquery expression is at the top level of the filter
                 SubqueryPredicate::Top(subquery) => {
-                    match build_join_top(&subquery, &cur_input, config.alias_generator())?
-                    {
+                    match build_join_top(
+                        &subquery,
+                        &cur_input,
+                        config.alias_generator(),
+                        config.column_id_generator(),
+                    )? {
                         Some(plan) => cur_input = plan,
                         // The subquery cannot become a semi or anti join. A
                         // `NOT IN` may still become mark joins that
@@ -155,7 +164,7 @@ impl OptimizerRule for DecorrelatePredicateSubquery {
         }
 
         if cur_input.schema().fields().len() != original_schema.len() {
-            cur_input = LogicalPlanBuilder::from(cur_input)
+            cur_input = plan_builder(cur_input, config)
                 .project(original_schema.into_iter().map(Expr::from))?
                 .build()?;
         }
@@ -230,6 +239,7 @@ fn rewrite_inner_subqueries(
 ) -> Result<(LogicalPlan, Expr)> {
     let mut cur_input = outer;
     let alias = config.alias_generator();
+    let ids = config.column_id_generator();
     let expr_without_subqueries = expr.transform(|e| match e {
         Expr::Exists(Exists {
             subquery: Subquery { subquery, .. },
@@ -241,6 +251,7 @@ fn rewrite_inner_subqueries(
             negated,
             alias,
             needs_null_aware_mark,
+            ids,
         )? {
             Some(MarkJoin {
                 plan,
@@ -265,6 +276,7 @@ fn rewrite_inner_subqueries(
                     *expr.clone(),
                     negated,
                     alias,
+                    ids,
                 )?
             } else {
                 let in_predicate = subquery
@@ -279,6 +291,7 @@ fn rewrite_inner_subqueries(
                     negated,
                     alias,
                     needs_null_aware_mark,
+                    ids,
                 )?
                 .map(|join| (join.plan, join.mark))
             };
@@ -317,6 +330,7 @@ fn in_subquery_value_mark_join(
     expr: Expr,
     negated: bool,
     alias: &Arc<AliasGenerator>,
+    ids: &Arc<ColumnIdGenerator>,
 ) -> Result<Option<(LogicalPlan, Expr)>> {
     let output_expr = subquery
         .head_output_expr()?
@@ -326,7 +340,7 @@ fn in_subquery_value_mark_join(
         plan: matched_plan,
         mark: matched,
         three_valued_exact,
-    }) = mark_join(left, subquery, Some(&in_predicate), false, alias, true)?
+    }) = mark_join(left, subquery, Some(&in_predicate), false, alias, true, ids)?
     else {
         return Ok(None);
     };
@@ -349,14 +363,14 @@ fn in_subquery_value_mark_join(
         );
     }
     // SQL IN needs three facts per outer row to distinguish FALSE from UNKNOWN.
-    let null_subquery = LogicalPlanBuilder::from(subquery.clone())
+    let null_subquery = ids_builder(ids, subquery.clone())
         .filter(output_expr.is_null())?
         .build()?;
     let Some(MarkJoin {
         plan: null_plan,
         mark: subquery_has_null,
         ..
-    }) = mark_join(&matched_plan, &null_subquery, None, false, alias, true)?
+    }) = mark_join(&matched_plan, &null_subquery, None, false, alias, true, ids)?
     else {
         return Ok(None);
     };
@@ -364,7 +378,7 @@ fn in_subquery_value_mark_join(
         plan: final_plan,
         mark: subquery_non_empty,
         ..
-    }) = mark_join(&null_plan, subquery, None, false, alias, true)?
+    }) = mark_join(&null_plan, subquery, None, false, alias, true, ids)?
     else {
         return Ok(None);
     };
@@ -459,6 +473,7 @@ fn build_join_top(
     query_info: &SubqueryInfo,
     left: &LogicalPlan,
     alias: &Arc<AliasGenerator>,
+    ids: &Arc<ColumnIdGenerator>,
 ) -> Result<Option<LogicalPlan>> {
     let where_in_expr_opt = &query_info.where_in_expr;
     let in_predicate_opt = where_in_expr_opt
@@ -487,6 +502,7 @@ fn build_join_top(
         join_type,
         &subquery_alias,
         true,
+        ids,
     )?
     .map(|join| join.plan))
 }
@@ -513,11 +529,9 @@ fn mark_join(
     negated: bool,
     alias_generator: &Arc<AliasGenerator>,
     needs_null_aware_mark: bool,
+    ids: &Arc<ColumnIdGenerator>,
 ) -> Result<Option<MarkJoin>> {
     let alias = alias_generator.next("__correlated_sq");
-
-    let exists_col = Expr::Column(Column::new(Some(alias.clone()), "mark"));
-    let exists_expr = if negated { !exists_col } else { exists_col };
 
     Ok(build_join(
         left,
@@ -526,11 +540,22 @@ fn mark_join(
         JoinType::LeftMark,
         &alias,
         needs_null_aware_mark,
+        ids,
     )?
-    .map(|join| MarkJoin {
-        plan: join.plan,
-        mark: exists_expr,
-        three_valued_exact: join.mark_is_three_valued_exact,
+    .map(|join| {
+        // the reference to the mark column has its id
+        let mark_id = match &join.plan {
+            LogicalPlan::Join(join) => join.mark_column_id(),
+            _ => None,
+        };
+        let exists_col =
+            Expr::Column(Column::new(Some(alias.clone()), "mark").with_id(mark_id));
+        let exists_expr = if negated { !exists_col } else { exists_col };
+        MarkJoin {
+            plan: join.plan,
+            mark: exists_expr,
+            three_valued_exact: join.mark_is_three_valued_exact,
+        }
     }))
 }
 
@@ -802,7 +827,7 @@ fn subquery_output_expr(subquery: &LogicalPlan, i: usize) -> Result<Expr> {
         _ if i == 0 => subquery
             .head_output_expr()?
             .ok_or_else(|| internal_datafusion_err!("subquery has no output expression")),
-        LogicalPlan::Projection(projection) => Ok(projection.expr[i].clone()),
+        LogicalPlan::Projection(projection) => Ok(projection.expr[i].expr.clone()),
         _ => Ok(Expr::Column(Column::from(
             subquery.schema().qualified_field(i),
         ))),
@@ -867,11 +892,13 @@ fn build_join(
     join_type: JoinType,
     alias: &str,
     needs_null_aware_mark: bool,
+    ids: &Arc<ColumnIdGenerator>,
 ) -> Result<Option<BuiltJoin>> {
     let exists_sub_query = in_predicate_opt.is_none();
     let rewrite =
         |handle_count_bug: bool| -> Result<(LogicalPlan, PullUpCorrelatedExpr)> {
             let mut pull_up = PullUpCorrelatedExpr::new()
+                .with_column_id_generator(Arc::clone(ids))
                 .with_in_predicate_opt(in_predicate_opt.cloned())
                 .with_exists_sub_query(exists_sub_query)
                 .with_need_handle_count_bug(handle_count_bug);
@@ -943,7 +970,7 @@ fn build_join(
         }
     }
 
-    let sub_query_alias = LogicalPlanBuilder::from(new_plan)
+    let sub_query_alias = ids_builder(ids, new_plan)
         .alias(alias.to_string())?
         .build()?;
     let join_filter_opt = build_join_filter(
@@ -963,6 +990,7 @@ fn build_join(
             alias,
             &expr_map,
             pull_up.pull_up_having_expr.as_ref(),
+            ids,
         )
         .map(|plan| {
             Some(BuiltJoin {
@@ -1092,7 +1120,7 @@ fn build_join(
             projections.push(constant.alias(value_col.name()));
         }
         projected_left = Some(
-            LogicalPlanBuilder::from(left.clone())
+            ids_builder(ids, left.clone())
                 .project(projections)?
                 .build()?,
         );
@@ -1208,7 +1236,7 @@ fn build_join(
             .collect();
 
         let right_projected = if !right_proj_exprs.is_empty() {
-            LogicalPlanBuilder::from(sub_query_alias.clone())
+            ids_builder(ids, sub_query_alias.clone())
                 .project(right_proj_exprs)?
                 .build()?
         } else {
@@ -1224,7 +1252,7 @@ fn build_join(
             && (!value_may_be_null || (null_aware && value_is_first_key));
 
         let new_plan = with_null_aware_value_keys(
-            LogicalPlanBuilder::from(left.clone())
+            ids_builder(ids, left.clone())
                 .join_detailed_with_options(
                     right_projected,
                     join_type,
@@ -1252,7 +1280,7 @@ fn build_join(
     let new_plan = if null_aware {
         // Use join_detailed_with_options to set null_aware flag
         with_null_aware_value_keys(
-            LogicalPlanBuilder::from(left.clone())
+            ids_builder(ids, left.clone())
                 .join_detailed_with_options(
                     sub_query_alias,
                     join_type,
@@ -1265,7 +1293,7 @@ fn build_join(
             null_aware_value_keys,
         )?
     } else {
-        LogicalPlanBuilder::from(left.clone())
+        ids_builder(ids, left.clone())
             .join_on(sub_query_alias, join_type, Some(join_filter))?
             .build()?
     };
@@ -1281,6 +1309,10 @@ fn build_join(
 
 /// Builds the join for a correlated `EXISTS` subquery whose groupless
 /// aggregate requires count-bug compensation.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the rule is to be replaced; its helpers thread the generators"
+)]
 fn build_join_with_count_bug(
     left: &LogicalPlan,
     sub_query_alias: LogicalPlan,
@@ -1289,6 +1321,7 @@ fn build_join_with_count_bug(
     alias: &str,
     expr_map: &crate::decorrelate::ExprResultMap,
     pull_up_having_expr: Option<&Expr>,
+    ids: &Arc<ColumnIdGenerator>,
 ) -> Result<LogicalPlan> {
     let pull_up_having_expr = pull_up_having_expr
         .map(|f| {
@@ -1305,7 +1338,7 @@ fn build_join_with_count_bug(
         .transpose()?;
     let pull_up_having_expr = pull_up_having_expr.as_ref();
 
-    let joined = LogicalPlanBuilder::from(left.clone())
+    let joined = ids_builder(ids, left.clone())
         .join_on(sub_query_alias, JoinType::Left, join_filter_opt)?
         .build()?;
 
@@ -1364,15 +1397,13 @@ fn build_join_with_count_bug(
         JoinType::LeftMark | JoinType::RightMark => {
             let mut proj_exprs = left_projection;
             proj_exprs.push(exists_expr.alias_qualified(Some(alias), "mark"));
-            LogicalPlanBuilder::from(joined)
-                .project(proj_exprs)?
-                .build()?
+            ids_builder(ids, joined).project(proj_exprs)?.build()?
         }
-        JoinType::LeftAnti => LogicalPlanBuilder::from(joined)
+        JoinType::LeftAnti => ids_builder(ids, joined)
             .filter(not(exists_expr))?
             .project(left_projection)?
             .build()?,
-        JoinType::LeftSemi => LogicalPlanBuilder::from(joined)
+        JoinType::LeftSemi => ids_builder(ids, joined)
             .filter(exists_expr)?
             .project(left_projection)?
             .build()?,
@@ -1429,6 +1460,7 @@ impl SubqueryInfo {
 
 #[cfg(test)]
 mod tests {
+    use datafusion_expr::LogicalPlanBuilder;
     use std::ops::Add;
 
     use super::*;

@@ -5,17 +5,18 @@
 //! Rewrites `UNION DISTINCT` branches that differ only by filter predicates
 //! into a single filtered branch plus `DISTINCT`.
 
-use crate::utils::is_repeatable;
+use crate::utils::{ids_builder, is_repeatable};
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Result;
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
+use datafusion_common::{ColumnIdGenerator, Result};
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::utils::disjunction;
 use datafusion_expr::{
-    Distinct, Expr, Filter, LogicalPlan, Projection, SubqueryAlias, TableSource, Union,
+    Distinct, Expr, Filter, LogicalPlan, NamedExpr, Projection, SubqueryAlias,
+    TableSource, Union,
 };
 use log::debug;
 use std::sync::Arc;
@@ -52,19 +53,24 @@ impl OptimizerRule for UnionsToFilter {
             return Ok(Transformed::no(plan));
         }
 
-        plan.rewrite_with_subqueries(&mut UnionsToFilterRewriter)
+        plan.rewrite_with_subqueries(&mut UnionsToFilterRewriter {
+            ids: config.column_id_generator(),
+        })
     }
 }
 
-struct UnionsToFilterRewriter;
+struct UnionsToFilterRewriter<'a> {
+    /// Allocates the ids of the columns the rewrite defines
+    ids: &'a Arc<ColumnIdGenerator>,
+}
 
-impl TreeNodeRewriter for UnionsToFilterRewriter {
+impl TreeNodeRewriter for UnionsToFilterRewriter<'_> {
     type Node = LogicalPlan;
 
     fn f_up(&mut self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
         match &plan {
             LogicalPlan::Distinct(Distinct::All(input)) => {
-                match try_rewrite_distinct_union(input.as_ref().clone())? {
+                match try_rewrite_distinct_union(input.as_ref().clone(), self.ids)? {
                     Some(rewritten) => Ok(Transformed::yes(rewritten)),
                     None => Ok(Transformed::no(plan)),
                 }
@@ -74,7 +80,10 @@ impl TreeNodeRewriter for UnionsToFilterRewriter {
     }
 }
 
-fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> {
+fn try_rewrite_distinct_union(
+    plan: LogicalPlan,
+    ids: &Arc<ColumnIdGenerator>,
+) -> Result<Option<LogicalPlan>> {
     let LogicalPlan::Union(Union { inputs, schema }) = plan else {
         debug!("unions_to_filter skipped: input is not a UNION");
         return Ok(None);
@@ -122,14 +131,12 @@ fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> 
     for (key, predicates) in grouped {
         let combined =
             disjunction(predicates).expect("union branches always provide predicates");
-        let branch = LogicalPlanBuilder::from(key.source)
-            .filter(combined)?
-            .build()?;
-        let branch = wrap_branch(branch, &key.wrappers)?;
-        let branch = coerce_plan_expr_for_schema(branch, &schema)?;
-        let branch = align_plan_to_schema(branch, Arc::clone(&schema))?;
+        let branch = ids_builder(ids, key.source).filter(combined)?.build()?;
+        let branch = wrap_branch(branch, &key.wrappers, ids)?;
+        let branch = coerce_plan_expr_for_schema(branch, &schema, ids)?;
+        let branch = align_plan_to_schema(branch, Arc::clone(&schema), ids)?;
         builder = Some(match builder {
-            None => LogicalPlanBuilder::from(branch),
+            None => ids_builder(ids, branch),
             Some(builder) => builder.union(branch)?,
         });
     }
@@ -137,6 +144,9 @@ fn try_rewrite_distinct_union(plan: LogicalPlan) -> Result<Option<LogicalPlan>> 
     let union = builder
         .expect("at least one branch after rewrite")
         .build()?;
+    // the new union (or the only branch left) takes the ids of the outputs of
+    // the union it replaces, which the plan above refers to
+    let union = union.with_output_column_ids(schema.field_ids())?.data;
     Ok(Some(LogicalPlan::Distinct(Distinct::All(Arc::new(union)))))
 }
 
@@ -234,7 +244,7 @@ impl Eq for GroupKey {}
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Wrapper {
     Projection {
-        expr: Vec<Expr>,
+        expr: Vec<NamedExpr>,
         schema: datafusion_common::DFSchemaRef,
     },
     SubqueryAlias {
@@ -270,7 +280,11 @@ fn peel_wrappers(mut plan: LogicalPlan) -> (Vec<Wrapper>, LogicalPlan) {
     }
 }
 
-fn wrap_branch(mut plan: LogicalPlan, wrappers: &[Wrapper]) -> Result<LogicalPlan> {
+fn wrap_branch(
+    mut plan: LogicalPlan,
+    wrappers: &[Wrapper],
+    ids: &ColumnIdGenerator,
+) -> Result<LogicalPlan> {
     for wrapper in wrappers.iter().rev() {
         plan = match wrapper {
             Wrapper::Projection { expr, schema } => {
@@ -285,7 +299,11 @@ fn wrap_branch(mut plan: LogicalPlan, wrappers: &[Wrapper]) -> Result<LogicalPla
             // filter predicate differs, so the recomputed schema matches the
             // original one stored in peel_wrappers.
             Wrapper::SubqueryAlias { alias, .. } => LogicalPlan::SubqueryAlias(
-                SubqueryAlias::try_new(Arc::new(plan), alias.clone())?,
+                SubqueryAlias::try_new_with_column_id_generator(
+                    Arc::new(plan),
+                    alias.clone(),
+                    ids,
+                )?,
             ),
         };
     }
@@ -295,6 +313,7 @@ fn wrap_branch(mut plan: LogicalPlan, wrappers: &[Wrapper]) -> Result<LogicalPla
 fn align_plan_to_schema(
     plan: LogicalPlan,
     schema: datafusion_common::DFSchemaRef,
+    ids: &ColumnIdGenerator,
 ) -> Result<LogicalPlan> {
     if plan.schema() == &schema {
         return Ok(plan);
@@ -305,9 +324,11 @@ fn align_plan_to_schema(
         .iter()
         .enumerate()
         .map(|(i, _)| {
-            Expr::Column(datafusion_common::Column::from(
-                plan.schema().qualified_field(i),
-            ))
+            let column = Expr::Column(
+                datafusion_common::Column::from(plan.schema().qualified_field(i))
+                    .with_id(plan.schema().field_id(i)),
+            );
+            NamedExpr::allocate(column, plan.schema(), ids)
         })
         .collect::<Vec<_>>();
 
@@ -356,7 +377,7 @@ fn collect_table_sources(source: &LogicalPlan) -> Result<Vec<Arc<dyn TableSource
 /// once per combined row, which can change the set of output rows.
 fn wrapper_projections_are_safe(wrappers: &[Wrapper]) -> bool {
     wrappers.iter().all(|w| match w {
-        Wrapper::Projection { expr, .. } => expr.iter().all(is_repeatable),
+        Wrapper::Projection { expr, .. } => expr.iter().all(|e| is_repeatable(e)),
         Wrapper::SubqueryAlias { .. } => true,
     })
 }

@@ -191,10 +191,16 @@ pub fn check_subquery_expr(
                 }) => Ok(()),
                 LogicalPlan::Aggregate(Aggregate {
                     group_expr,
+                    grouping_sets,
                     aggr_expr,
                     ..
                 }) => {
-                    if group_expr.contains(expr) && !aggr_expr.contains(expr) {
+                    // (a grouping set is not checked, as when it was one
+                    // expression)
+                    if grouping_sets.is_none()
+                        && group_expr.iter().any(|e| e == expr)
+                        && !aggr_expr.iter().any(|e| e == expr)
+                    {
                         // TODO revisit this validation logic
                         plan_err!(
                             "Correlated scalar subquery in the GROUP BY clause must \

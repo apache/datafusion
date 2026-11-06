@@ -150,20 +150,19 @@ impl TableProvider for SimpleCsvTable {
 
 impl SimpleCsvTable {
     async fn interpreter_expr(&self, state: &dyn Session) -> Result<i64> {
+        use datafusion::common::ColumnIdGenerator;
+        use datafusion::logical_expr::NamedExpr;
         use datafusion::logical_expr::expr_rewriter::normalize_col;
         use datafusion::logical_expr::utils::columnize_expr;
         let plan = LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: true,
             schema: Arc::new(DFSchema::empty()),
         });
-        let logical_plan = Projection::try_new(
-            vec![columnize_expr(
-                normalize_col(self.exprs[0].clone(), &plan)?,
-                &plan,
-            )?],
-            Arc::new(plan),
-        )
-        .map(LogicalPlan::Projection)?;
+        let expr = columnize_expr(normalize_col(self.exprs[0].clone(), &plan)?, &plan)?;
+        // the output defines a column, with a new id
+        let expr = NamedExpr::new(expr, ColumnIdGenerator::new().next());
+        let logical_plan = Projection::try_new(vec![expr], Arc::new(plan))
+            .map(LogicalPlan::Projection)?;
         let rbs = collect(
             state.create_physical_plan(&logical_plan).await?,
             Arc::new(TaskContext::from(state)),

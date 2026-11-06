@@ -39,8 +39,8 @@ pub use datafusion_common::utils::expr::COUNT_STAR_EXPANSION;
 
 /// Count the number of distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
-pub fn grouping_set_expr_count(group_expr: &[Expr]) -> Result<usize> {
-    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
+pub fn grouping_set_expr_count<E: AsRef<Expr>>(group_expr: &[E]) -> Result<usize> {
+    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first().map(AsRef::as_ref) {
         if group_expr.len() > 1 {
             return plan_err!(
                 "Invalid group by expressions, GroupingSet must be the only expression"
@@ -239,8 +239,8 @@ pub fn enumerate_grouping_sets(group_expr: Vec<Expr>) -> Result<Vec<Expr>> {
 
 /// Find all distinct exprs in a list of group by expressions. If the
 /// first element is a `GroupingSet` expression then it must be the only expr.
-pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<&Expr>> {
-    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first() {
+pub fn grouping_set_to_exprlist<E: AsRef<Expr>>(group_expr: &[E]) -> Result<Vec<&Expr>> {
+    if let Some(Expr::GroupingSet(grouping_set)) = group_expr.first().map(AsRef::as_ref) {
         if group_expr.len() > 1 {
             return plan_err!(
                 "Invalid group by expressions, GroupingSet must be the only expression"
@@ -250,6 +250,7 @@ pub fn grouping_set_to_exprlist(group_expr: &[Expr]) -> Result<Vec<&Expr>> {
     } else {
         Ok(group_expr
             .iter()
+            .map(AsRef::as_ref)
             .collect::<IndexSet<_>>()
             .into_iter()
             .collect())

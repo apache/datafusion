@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use crate::push_down_filter::lr_is_preserved;
 use crate::simplify_expressions::ExprSimplifier;
-use crate::utils::replace_qualified_name;
+use crate::utils::{replace_qualified_name, with_aggregate_ids_of};
 
 use datafusion_common::nested_struct::is_injective_cast;
 use datafusion_common::tree_node::{
@@ -17,8 +17,8 @@ use datafusion_common::tree_node::{
 };
 use datafusion_common::utils::has_float_leaf;
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, HashMap, Result, ScalarValue, assert_or_internal_err,
-    plan_err,
+    Column, ColumnIdGenerator, DFSchema, DFSchemaRef, HashMap, Result, ScalarValue,
+    assert_or_internal_err, plan_err,
 };
 use datafusion_expr::expr::{Alias, GroupingSet};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
@@ -27,8 +27,8 @@ use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{collect_subquery_cols, conjunction, split_conjunction};
 use datafusion_expr::{
     Aggregate, BinaryExpr, Cast, Distinct, EmptyRelation, Expr, ExprSchemable, FetchType,
-    LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCtePlan, Operator,
-    SkipType, Window, expr, lit,
+    LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCtePlan, NamedExpr,
+    Operator, Projection, SkipType, Window, expr, lit,
 };
 
 /// This struct rewrite the sub query plan by pull up the correlated
@@ -103,6 +103,9 @@ pub struct PullUpCorrelatedExpr {
     /// `f_down`'s `Limit` arm reads it: a `Limit` is only dropped from an
     /// `EXISTS` subquery when this holds for every node above it.
     depends_only_on_input_having_rows_above: Vec<bool>,
+    /// Allocates the ids of the columns that the pull up defines (see
+    /// [`Self::with_column_id_generator`])
+    column_id_generator: Option<Arc<ColumnIdGenerator>>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -128,7 +131,84 @@ impl PullUpCorrelatedExpr {
             correlated_filters: Vec::new(),
             column_refs_above: Vec::new(),
             depends_only_on_input_having_rows_above: Vec::new(),
+            column_id_generator: None,
         }
+    }
+
+    /// Use `generator` (the generator of the optimizer config) for the ids of
+    /// the columns that the pull up defines. Without one, the plans it builds
+    /// allocate ids after the highest id of the subquery, which may collide
+    /// with the ids of the rest of the plan.
+    pub fn with_column_id_generator(mut self, generator: Arc<ColumnIdGenerator>) -> Self {
+        self.column_id_generator = Some(generator);
+        self
+    }
+
+    /// A builder of `plan` with the column id generator of this pull up
+    fn builder(&self, plan: LogicalPlan) -> LogicalPlanBuilder {
+        LogicalPlanBuilder::from(plan)
+            .with_column_id_generator(self.column_id_generator.clone())
+    }
+
+    /// Returns `plan`, a projection whose first outputs rebuild the outputs
+    /// `entries`, where those outputs keep the ids of their entries
+    fn with_output_ids_of(
+        &self,
+        plan: LogicalPlan,
+        entries: &[NamedExpr],
+    ) -> Result<LogicalPlan> {
+        let LogicalPlan::Projection(projection) = plan else {
+            return Ok(plan);
+        };
+        if projection.expr.len() < entries.len() {
+            return Ok(LogicalPlan::Projection(projection));
+        }
+        let own_generator;
+        let generator = match &self.column_id_generator {
+            Some(generator) => generator.as_ref(),
+            None => {
+                own_generator = ColumnIdGenerator::new_after(
+                    projection
+                        .input
+                        .max_column_id()
+                        .max(entries.iter().map(|e| e.id).max()),
+                );
+                &own_generator
+            }
+        };
+        let mut entries = entries.iter();
+        let expr = projection
+            .expr
+            .into_iter()
+            .map(|new| match entries.next() {
+                Some(entry) => entry.clone().with_rewritten_expr(new.expr, generator),
+                None => new,
+            })
+            .collect();
+        Projection::try_new_with_schema(expr, projection.input, projection.schema)
+            .map(LogicalPlan::Projection)
+    }
+
+    /// Returns `plan`, an aggregate that rebuilds `aggregate` with more
+    /// grouping expressions, where the outputs it keeps keep their ids (see
+    /// [`with_aggregate_ids_of`])
+    fn with_aggregate_ids_of(
+        &self,
+        plan: LogicalPlan,
+        aggregate: &Aggregate,
+    ) -> Result<LogicalPlan> {
+        let own_generator;
+        let generator = match &self.column_id_generator {
+            Some(generator) => generator.as_ref(),
+            None => {
+                own_generator =
+                    ColumnIdGenerator::new_after(plan.max_column_id().max(
+                        aggregate.schema.field_ids().iter().flatten().max().copied(),
+                    ));
+                &own_generator
+            }
+        };
+        with_aggregate_ids_of(plan, aggregate, generator)
     }
 
     /// Set if we need to handle [the count bug] during the pull up process
@@ -461,8 +541,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         None => unqualified_expr,
                     };
                     self.pull_up_having_expr = Some(combined);
-                    let new_plan =
-                        LogicalPlanBuilder::from((*plan_filter.input).clone()).build()?;
+                    let new_plan = self.builder((*plan_filter.input).clone()).build()?;
                     let mut carried_correlated_cols = correlated_subquery_cols;
                     if let Some(existing) =
                         self.correlated_subquery_cols_map.get(&*plan_filter.input)
@@ -493,8 +572,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     (Some(_), None) => {
                         self.pull_up_having_expr = pull_up_expr_opt;
                         let new_plan =
-                            LogicalPlanBuilder::from((*plan_filter.input).clone())
-                                .build()?;
+                            self.builder((*plan_filter.input).clone()).build()?;
                         self.correlated_subquery_cols_map
                             .entry(new_plan.clone())
                             .or_default()
@@ -503,8 +581,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     }
                     (None, _) => {
                         // if the subquery still has filter expressions, restore them.
-                        let mut plan =
-                            LogicalPlanBuilder::from((*plan_filter.input).clone());
+                        let mut plan = self.builder((*plan_filter.input).clone());
                         if let Some(expr) = conjunction(subquery_filters) {
                             plan = plan.filter(expr)?
                         }
@@ -527,8 +604,13 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     &mut local_correlated_cols,
                 );
                 // add missing columns to Projection
+                let projection_exprs = projection
+                    .expr
+                    .iter()
+                    .map(|e| e.expr.clone())
+                    .collect::<Vec<_>>();
                 let mut missing_exprs = self.collect_missing_exprs(
-                    &projection.expr,
+                    &projection_exprs,
                     &local_correlated_cols,
                     projection.input.schema(),
                 )?;
@@ -553,9 +635,12 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                     }
                 }
 
-                let new_plan = LogicalPlanBuilder::from((*projection.input).clone())
+                let new_plan = self
+                    .builder((*projection.input).clone())
                     .project(missing_exprs)?
                     .build()?;
+                // the outputs of the projection come first: they keep their ids
+                let new_plan = self.with_output_ids_of(new_plan, &projection.expr)?;
                 if !expr_result_map_for_count_bug.is_empty() {
                     self.collected_count_expr_map
                         .insert(new_plan.clone(), expr_result_map_for_count_bug);
@@ -595,8 +680,11 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 // correlated filter matches nothing, so it is only safe when
                 // no set is empty and nothing reads the column the fill
                 // changes from `NULL` to the correlated value.
-                let mut missing_exprs = if aggregate
-                    .group_expr
+                // (as written: grouping sets as one `Expr::GroupingSet`)
+                let group_exprs = aggregate.group_by_exprs();
+                let is_ungrouped =
+                    aggregate.group_expr.is_empty() && aggregate.grouping_sets.is_none();
+                let mut missing_exprs = if group_exprs
                     .iter()
                     .any(|expr| matches!(expr, Expr::GroupingSet(_)))
                 {
@@ -607,7 +695,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                             // Every set already groups by them, so the sets stay as
                             // they are. Adding the columns again would repeat them
                             // inside every set.
-                            aggregate.group_expr.to_vec()
+                            group_exprs
                         }
                         GroupingSetsPullUp::SafeToExtend => {
                             // No set is empty and nothing reads the columns the
@@ -615,7 +703,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                             // so extending every set is invisible to the rest of
                             // the query.
                             self.collect_missing_exprs(
-                                &aggregate.group_expr,
+                                &group_exprs,
                                 &local_correlated_cols,
                                 aggregate.input.schema(),
                             )?
@@ -630,7 +718,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                             // would fail the rewrite with a schema error instead. They
                             // drop this plan and keep the correlated subquery.
                             self.collect_missing_exprs(
-                                &aggregate.group_expr,
+                                &group_exprs,
                                 &local_correlated_cols,
                                 aggregate.input.schema(),
                             )?
@@ -639,7 +727,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 } else {
                     // add missing columns to Aggregation's group expressions
                     self.collect_missing_exprs(
-                        &aggregate.group_expr,
+                        &group_exprs,
                         &local_correlated_cols,
                         aggregate.input.schema(),
                     )?
@@ -647,12 +735,10 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
 
                 // if the original group expressions are empty, need to handle the Count bug
                 let mut expr_result_map_for_count_bug = HashMap::new();
-                if self.need_handle_count_bug
-                    && aggregate.group_expr.is_empty()
-                    && !missing_exprs.is_empty()
+                if self.need_handle_count_bug && is_ungrouped && !missing_exprs.is_empty()
                 {
                     agg_exprs_evaluation_result_on_empty_batch(
-                        &aggregate.aggr_expr,
+                        aggregate.aggr_expr.iter().map(|e| &e.expr),
                         aggregate.input.schema(),
                         &mut expr_result_map_for_count_bug,
                     )?;
@@ -663,12 +749,18 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         missing_exprs.push(un_matched_row);
                     }
                 }
-                if aggregate.group_expr.is_empty() {
+                if is_ungrouped {
                     self.pulled_up_scalar_agg = true;
                 }
-                let new_plan = LogicalPlanBuilder::from((*aggregate.input).clone())
-                    .aggregate(missing_exprs, aggregate.aggr_expr.to_vec())?
+                let new_plan = self
+                    .builder((*aggregate.input).clone())
+                    .aggregate(
+                        missing_exprs,
+                        aggregate.aggr_expr.iter().map(|e| e.expr.clone()),
+                    )?
                     .build()?;
+                // the grouping expressions and aggregates it keeps keep their ids
+                let new_plan = self.with_aggregate_ids_of(new_plan, aggregate)?;
                 if !expr_result_map_for_count_bug.is_empty() {
                     self.collected_count_expr_map
                         .insert(new_plan.clone(), expr_result_map_for_count_bug);
@@ -691,7 +783,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 let new_plan = if alias.input.schema().fields().len()
                     != alias.schema.fields().len()
                 {
-                    LogicalPlanBuilder::from((*alias.input).clone())
+                    self.builder((*alias.input).clone())
                         .alias(alias.alias.clone())?
                         .build()?
                 } else {
@@ -822,7 +914,7 @@ impl PullUpCorrelatedExpr {
         aggregate: &Aggregate,
         correlated_subquery_cols: &BTreeSet<Column>,
     ) -> GroupingSetsPullUp {
-        let group_expr = &aggregate.group_expr;
+        let group_expr = &aggregate.group_by_exprs();
         let grouping_sets = group_expr
             .iter()
             .filter_map(|expr| match expr {
@@ -971,10 +1063,7 @@ fn may_reintroduce_nulls(plan: &LogicalPlan) -> bool {
             )
         }
         LogicalPlan::Union(_) => true,
-        LogicalPlan::Aggregate(aggregate) => aggregate
-            .group_expr
-            .iter()
-            .any(|expr| matches!(expr, Expr::GroupingSet(_))),
+        LogicalPlan::Aggregate(aggregate) => aggregate.grouping_sets.is_some(),
         _ => false,
     }
 }
@@ -1033,13 +1122,16 @@ fn correlated_filter_columns(plan: &LogicalPlan) -> Vec<Column> {
 }
 
 /// Adds `cols` to the `PARTITION BY` of every window function of `window`. Each
-/// window expression keeps its old output name, so nothing above sees a change.
+/// window expression keeps its old output name and id, so nothing above sees a
+/// change.
 fn partition_window_by(window: &Window, cols: &BTreeSet<Column>) -> Result<LogicalPlan> {
     let window_expr = window
         .window_expr
         .iter()
-        .map(|expr| {
-            add_partition_by(expr, cols).alias_if_changed(expr.schema_name().to_string())
+        .map(|entry| {
+            add_partition_by(entry, cols)
+                .alias_if_changed(entry.schema_name().to_string())
+                .map(|expr| NamedExpr::new(expr, entry.id))
         })
         .collect::<Result<Vec<_>>>()?;
     Window::try_new(window_expr, Arc::clone(&window.input)).map(LogicalPlan::Window)
@@ -1257,8 +1349,8 @@ fn remove_duplicated_filter(
         .collect::<Vec<_>>())
 }
 
-fn agg_exprs_evaluation_result_on_empty_batch(
-    agg_expr: &[Expr],
+fn agg_exprs_evaluation_result_on_empty_batch<'a>(
+    agg_expr: impl IntoIterator<Item = &'a Expr>,
     schema: &DFSchemaRef,
     expr_result_map_for_count_bug: &mut ExprResultMap,
 ) -> Result<()> {
@@ -1266,7 +1358,7 @@ fn agg_exprs_evaluation_result_on_empty_batch(
         .with_schema(Arc::clone(schema))
         .build();
     let simplifier = ExprSimplifier::new(info);
-    for e in agg_expr.iter() {
+    for e in agg_expr {
         let result_expr = e
             .clone()
             .transform_up(|expr| {

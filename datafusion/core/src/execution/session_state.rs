@@ -2476,8 +2476,8 @@ impl OptimizerConfig for SessionState {
         &self.execution_props.alias_generator
     }
 
-    fn column_id_generator(&self) -> Option<&Arc<ColumnIdGenerator>> {
-        Some(&self.execution_props.column_id_generator)
+    fn column_id_generator(&self) -> &Arc<ColumnIdGenerator> {
+        &self.execution_props.column_id_generator
     }
 
     fn options(&self) -> Arc<ConfigOptions> {

@@ -1100,6 +1100,12 @@ impl OptimizerRule for PushDownFilter {
                 union.inputs = inputs;
                 Ok(Transformed::yes(LogicalPlan::Union(union)))
             }
+            // Nothing is pushed below grouping sets: a grouping column is NULL
+            // in the rows of the sets that omit it
+            LogicalPlan::Aggregate(agg) if agg.grouping_sets.is_some() => {
+                filter.input = Arc::new(LogicalPlan::Aggregate(agg));
+                Ok(Transformed::no(LogicalPlan::Filter(filter)))
+            }
             LogicalPlan::Aggregate(mut agg) => {
                 // We can push down Predicate which in groupby_expr.
                 // Volatile group keys are excluded: below the aggregate, the
@@ -1109,7 +1115,7 @@ impl OptimizerRule for PushDownFilter {
                     .group_expr
                     .iter()
                     .filter(|expr| !expr.is_volatile())
-                    .cloned()
+                    .map(|expr| expr.expr.clone())
                     .collect();
                 let group_expr_columns = expr_columns(&non_volatile_group_exprs);
 
@@ -1180,7 +1186,7 @@ impl OptimizerRule for PushDownFilter {
                     .window_expr
                     .iter()
                     .map(|e| {
-                        match e {
+                        match &e.expr {
                             Expr::WindowFunction(window_func) => {
                                 extract_partition_keys(window_func)
                             }
@@ -1537,7 +1543,7 @@ fn rewrite_projection(
     //
     // See the module documentation of `extract_leaf_expressions` for the
     // full statement of the invariant.
-    if is_pure_extraction_projection(&projection.expr) {
+    if is_pure_extraction_projection(projection.expr.iter().map(|e| &e.expr)) {
         return Ok((
             Transformed::no(LogicalPlan::Projection(projection)),
             predicates,

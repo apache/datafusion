@@ -137,18 +137,16 @@ pub trait OptimizerConfig {
     /// Return alias generator used to generate unique aliases for subqueries
     fn alias_generator(&self) -> &Arc<AliasGenerator>;
 
-    /// Return the generator of the [`ColumnId`]s that rules allocate, if any.
+    /// Return the generator of the [`ColumnId`]s that rules allocate (for
+    /// example, the generator of the session that built the plan, or a new
+    /// one, as [`OptimizerContext`] does by default).
     ///
     /// The optimizer moves it past the highest id of the plan before running
     /// the rules (see [`LogicalPlan::max_column_id`]), so that the ids it
     /// allocates do not collide with the ids of the plan.
     ///
-    /// Defaults to `None`: no generator, no ids. Rules then allocate no ids.
-    ///
     /// [`ColumnId`]: datafusion_common::ColumnId
-    fn column_id_generator(&self) -> Option<&Arc<ColumnIdGenerator>> {
-        None
-    }
+    fn column_id_generator(&self) -> &Arc<ColumnIdGenerator>;
 
     fn options(&self) -> Arc<ConfigOptions>;
 
@@ -258,8 +256,8 @@ impl OptimizerConfig for OptimizerContext {
         &self.alias_generator
     }
 
-    fn column_id_generator(&self) -> Option<&Arc<ColumnIdGenerator>> {
-        Some(&self.column_id_generator)
+    fn column_id_generator(&self) -> &Arc<ColumnIdGenerator> {
+        &self.column_id_generator
     }
 
     fn options(&self) -> Arc<ConfigOptions> {
@@ -648,10 +646,8 @@ impl Optimizer {
         // Ids that rules allocate must not collide with the ids of the plan,
         // which may have been built elsewhere (decoded, or with another
         // generator)
-        if let Some(generator) = config.column_id_generator()
-            && let Some(max_id) = new_plan.max_column_id()
-        {
-            generator.advance_past(max_id);
+        if let Some(max_id) = new_plan.max_column_id() {
+            config.column_id_generator().advance_past(max_id);
         }
 
         let mut column_id_check = ColumnIdCheck::new(&new_plan);
@@ -879,7 +875,7 @@ mod tests {
         let config = OptimizerContext::new();
         let opt = Optimizer::with_rules(vec![]);
         opt.optimize(plan, &config, observe)?;
-        assert_eq!(config.column_id_generator().unwrap().next(), id(42));
+        assert_eq!(config.column_id_generator().next(), id(42));
         Ok(())
     }
 
@@ -949,7 +945,7 @@ mod tests {
         let input_schema = Arc::clone(input.schema());
 
         let plan = LogicalPlan::Projection(Projection::try_new_with_schema(
-            vec![col("a"), col("b"), col("c")],
+            crate::test::named_exprs(vec![col("a"), col("b"), col("c")], &input),
             input,
             add_metadata_to_fields(input_schema.as_ref()),
         )?);
@@ -1122,7 +1118,7 @@ mod tests {
             let expr = Expr::from(Column::from(projection.schema.qualified_field(0)));
 
             Ok(Transformed::yes(LogicalPlan::Projection(
-                Projection::try_new(vec![expr], Arc::clone(&projection.input))?,
+                crate::test::new_projection(vec![expr], Arc::clone(&projection.input))?,
             )))
         }
     }

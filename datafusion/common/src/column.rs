@@ -54,12 +54,13 @@ impl fmt::Display for ColumnId {
 /// not reuse an id. It is an atomic counter: cloning the `Arc` that holds it
 /// shares it.
 ///
-/// # No generator, no ids
+/// # Every builder has a generator
 ///
-/// Code that builds plans without a generator produces columns and fields
-/// without ids (`None`), which resolve by qualifier and name as they always
-/// have. Ids therefore only come from a generator, and two plans built
-/// independently cannot have colliding ids unless they share a generator.
+/// A `LogicalPlanBuilder` that is not given a generator creates its own,
+/// whose ids follow the highest id of its inputs. Two plans built with
+/// different generators can therefore have the same ids: the builder
+/// renumbers the plans it combines (joins, set operations, subqueries) where
+/// they overlap, and code that combines plans by hand must do the same.
 #[derive(Debug)]
 pub struct ColumnIdGenerator {
     /// The number of the last id allocated (0 if none)
@@ -78,6 +79,17 @@ impl ColumnIdGenerator {
         Self {
             last: AtomicU64::new(0),
         }
+    }
+
+    /// Creates a generator whose ids are greater than `id` (all ids if
+    /// `None`): pass the highest id of a plan (`LogicalPlan::max_column_id`)
+    /// to allocate ids that do not collide with the ids of that plan
+    pub fn new_after(id: Option<ColumnId>) -> Self {
+        let generator = Self::new();
+        if let Some(id) = id {
+            generator.advance_past(id);
+        }
+        generator
     }
 
     /// Allocates a new id, greater than every id allocated so far and than

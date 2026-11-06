@@ -5,10 +5,10 @@
 //! [`OptimizeUnions`]: removes `Union` nodes in the logical plan.
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
-use datafusion_common::Result;
-use datafusion_common::tree_node::Transformed;
+use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::{ColumnId, ColumnIdGenerator, HashMap, Result};
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
-use datafusion_expr::{Distinct, LogicalPlan, Projection, Union};
+use datafusion_expr::{Distinct, Expr, LogicalPlan, NamedExpr, Projection, Union};
 use itertools::Itertools;
 use std::sync::Arc;
 
@@ -37,17 +37,26 @@ impl OptimizerRule for OptimizeUnions {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        let ids = config.column_id_generator();
         match plan {
-            LogicalPlan::Union(Union { mut inputs, .. }) if inputs.len() == 1 => Ok(
-                Transformed::yes(Arc::unwrap_or_clone(inputs.pop().unwrap())),
-            ),
+            // the input takes the ids of the outputs of the union, which the
+            // plan above refers to
+            LogicalPlan::Union(Union { mut inputs, schema }) if inputs.len() == 1 => {
+                Ok(Transformed::yes(
+                    Arc::unwrap_or_clone(inputs.pop().unwrap())
+                        .with_output_column_ids(schema.field_ids())?
+                        .data,
+                ))
+            }
             LogicalPlan::Union(Union { inputs, schema }) => {
                 let inputs = inputs
                     .into_iter()
-                    .flat_map(extract_plans_from_union)
-                    .map(|plan| Ok(Arc::new(coerce_plan_expr_for_schema(plan, &schema)?)))
+                    .flat_map(|plan| extract_plans_from_union(plan, ids))
+                    .map(|plan| {
+                        Ok(Arc::new(coerce_plan_expr_for_schema(plan, &schema, ids)?))
+                    })
                     .collect::<Result<Vec<_>>>()?;
 
                 Ok(Transformed::yes(LogicalPlan::Union(Union {
@@ -61,8 +70,8 @@ impl OptimizerRule for OptimizeUnions {
                         let inputs = inputs
                             .into_iter()
                             .map(extract_plan_from_distinct)
-                            .flat_map(extract_plans_from_union)
-                            .map(|plan| coerce_plan_expr_for_schema(plan, &schema))
+                            .flat_map(|plan| extract_plans_from_union(plan, ids))
+                            .map(|plan| coerce_plan_expr_for_schema(plan, &schema, ids))
                             .collect::<Result<Vec<_>>>()?;
 
                         Ok(Transformed::yes(LogicalPlan::Distinct(Distinct::All(
@@ -82,7 +91,12 @@ impl OptimizerRule for OptimizeUnions {
     }
 }
 
-fn extract_plans_from_union(plan: Arc<LogicalPlan>) -> Vec<LogicalPlan> {
+/// A projection pushed onto several inputs of a union is copied: the copies
+/// after the first define their columns again, with new ids from `ids`.
+fn extract_plans_from_union(
+    plan: Arc<LogicalPlan>,
+    ids: &ColumnIdGenerator,
+) -> Vec<LogicalPlan> {
     match Arc::unwrap_or_clone(plan) {
         LogicalPlan::Union(Union { inputs, .. }) => inputs
             .into_iter()
@@ -101,13 +115,38 @@ fn extract_plans_from_union(plan: Arc<LogicalPlan>) -> Vec<LogicalPlan> {
             schema,
             ..
         }) => match Arc::unwrap_or_clone(input) {
-            LogicalPlan::Union(Union { inputs, .. }) => inputs
+            LogicalPlan::Union(Union {
+                inputs,
+                schema: union_schema,
+            }) => inputs
                 .into_iter()
                 .map(Arc::unwrap_or_clone)
-                .map(|plan| {
+                .enumerate()
+                .map(|(i, plan)| {
+                    // the projection now reads the input of the union: its
+                    // references to the outputs of the union read the columns
+                    // of the input at the same positions
+                    let renames: HashMap<ColumnId, Option<ColumnId>> = union_schema
+                        .field_ids()
+                        .iter()
+                        .zip(plan.schema().field_ids())
+                        .filter_map(|(old, new)| Some(((*old)?, *new)))
+                        .collect();
+                    let expr = expr.iter().map(|e| {
+                        NamedExpr::new(rename_column_refs(&e.expr, &renames), e.id)
+                    });
+                    let expr = if i == 0 {
+                        expr.collect()
+                    } else {
+                        expr.map(|e| match e.defined_id() {
+                            Some(_) => NamedExpr::new(e.expr, ids.next()),
+                            None => e,
+                        })
+                        .collect()
+                    };
                     LogicalPlan::Projection(
                         Projection::try_new_with_schema(
-                            expr.clone(),
+                            expr,
                             Arc::new(plan),
                             Arc::clone(&schema),
                         )
@@ -122,6 +161,27 @@ fn extract_plans_from_union(plan: Arc<LogicalPlan>) -> Vec<LogicalPlan> {
         },
         plan => vec![plan],
     }
+}
+
+/// Returns `expr` where the column references to the ids that are keys of
+/// `renames` have the id they map to (none for `None`)
+fn rename_column_refs(
+    expr: &Expr,
+    renames: &HashMap<ColumnId, Option<ColumnId>>,
+) -> Expr {
+    if renames.is_empty() {
+        return expr.clone();
+    }
+    expr.clone()
+        .transform(|expr| match expr {
+            Expr::Column(col) => match col.id.and_then(|id| renames.get(&id)) {
+                Some(new_id) => Ok(Transformed::yes(Expr::Column(col.with_id(*new_id)))),
+                None => Ok(Transformed::no(Expr::Column(col))),
+            },
+            _ => Ok(Transformed::no(expr)),
+        })
+        .data()
+        .expect("renaming column references is infallible")
 }
 
 fn extract_plan_from_distinct(plan: Arc<LogicalPlan>) -> Arc<LogicalPlan> {

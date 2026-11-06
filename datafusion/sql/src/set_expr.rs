@@ -128,24 +128,21 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<LogicalPlan> {
         match (op, set_quantifier) {
             (SetOperator::Union, SetQuantifier::All) => {
-                LogicalPlanBuilder::from(left_plan)
-                    .union(right_plan)?
-                    .build()
+                self.plan_builder(left_plan).union(right_plan)?.build()
             }
-            (SetOperator::Union, SetQuantifier::AllByName) => {
-                LogicalPlanBuilder::from(left_plan)
-                    .union_by_name(right_plan)?
-                    .build()
-            }
-            (SetOperator::Union, SetQuantifier::Distinct | SetQuantifier::None) => {
-                LogicalPlanBuilder::from(left_plan)
-                    .union_distinct(right_plan)?
-                    .build()
-            }
+            (SetOperator::Union, SetQuantifier::AllByName) => self
+                .plan_builder(left_plan)
+                .union_by_name(right_plan)?
+                .build(),
+            (SetOperator::Union, SetQuantifier::Distinct | SetQuantifier::None) => self
+                .plan_builder(left_plan)
+                .union_distinct(right_plan)?
+                .build(),
             (
                 SetOperator::Union,
                 SetQuantifier::ByName | SetQuantifier::DistinctByName,
-            ) => LogicalPlanBuilder::from(left_plan)
+            ) => self
+                .plan_builder(left_plan)
                 .union_by_name_distinct(right_plan)?
                 .build(),
             (SetOperator::Intersect, SetQuantifier::All) => {

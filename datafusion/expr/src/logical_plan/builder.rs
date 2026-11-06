@@ -31,14 +31,14 @@ use crate::utils::{
     passthrough_field_index, split_conjunction_owned,
 };
 use crate::{
-    BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, Operator,
+    BinaryExpr, DmlStatement, ExplainOption, Expr, ExprSchemable, NamedExpr, Operator,
     RecursiveQuery, Statement, TableProviderFilterPushDown, TableScan, TableSource,
     WriteOp, and, binary_expr, lit,
 };
 
 use super::dml::InsertOp;
 use crate::logical_plan::column_ids::{
-    SubqueryBlender, strip_column_ids, with_new_field_ids,
+    SubqueryBlender, own_column_id_generator, strip_column_ids, with_new_field_ids,
 };
 use crate::logical_plan::information_schema::ColumnsDetail;
 use arrow::compute::can_cast_types;
@@ -252,10 +252,14 @@ impl LogicalPlanBuilder {
     /// Sets the generator of the [`ColumnId`]s of the plans built by this
     /// builder, kept by the chained calls (`filter`, `join`, ...).
     ///
-    /// No generator, no ids: without one (the default), the builder does not
-    /// allocate ids. Pass the generator of the session (see
+    /// Every builder has a generator: pass the generator of the session (see
     /// [`ExecutionProps::column_id_generator`]) to build plans whose ids do
-    /// not collide with the other plans of the session.
+    /// not collide with the other plans of the session. Without one (`None`,
+    /// the default), the builder creates its own when it first allocates an
+    /// id, whose ids follow the highest id of the plan built so far (see
+    /// [`LogicalPlan::max_column_id`]). Plans built with different
+    /// generators can have the same ids: the builder renumbers the plans it
+    /// blends in (joins, set operations, subqueries) where they overlap.
     ///
     /// [`ColumnId`]: datafusion_common::ColumnId
     /// [`ExecutionProps::column_id_generator`]: crate::execution_props::ExecutionProps::column_id_generator
@@ -267,17 +271,29 @@ impl LogicalPlanBuilder {
         self
     }
 
-    /// The generator of the column ids of the plans built by this builder,
-    /// if any (see [`Self::with_column_id_generator`])
+    /// The generator of the column ids of the plans built by this builder:
+    /// the one it was given (see [`Self::with_column_id_generator`]), or the
+    /// one it created. `None` if it was given none and has not allocated an
+    /// id yet.
     pub fn column_id_generator(&self) -> Option<&Arc<ColumnIdGenerator>> {
         self.column_id_generator.as_ref()
+    }
+
+    /// The generator of this builder, created if it has none yet (see
+    /// [`Self::with_column_id_generator`])
+    fn generator(&mut self) -> Arc<ColumnIdGenerator> {
+        let plan = &self.plan;
+        Arc::clone(
+            self.column_id_generator
+                .get_or_insert_with(|| own_column_id_generator([plan.as_ref()])),
+        )
     }
 
     /// Returns `incoming`, about to be combined with the plan of this builder
     /// (the right side of a join or set operation), with fresh column ids if
     /// it defines ids that the plan of this builder also defines, as when a
-    /// plan is joined with itself. Without a generator, it strips them.
-    fn blend(&self, incoming: LogicalPlan) -> Result<LogicalPlan> {
+    /// plan is joined with itself.
+    fn blend(&mut self, incoming: LogicalPlan) -> Result<LogicalPlan> {
         self.blend_join(incoming).map(|(plan, _)| plan)
     }
 
@@ -288,10 +304,16 @@ impl LogicalPlanBuilder {
     /// filter) cannot tell the two sides apart: they lose their ids (see
     /// [`strip_column_ids`]), and resolve by qualifier and name.
     fn blend_join(
-        &self,
+        &mut self,
         incoming: LogicalPlan,
     ) -> Result<(LogicalPlan, HashSet<ColumnId>)> {
-        incoming.blend_into(&self.plan, self.column_id_generator.as_deref())
+        // `incoming` may have been built with another generator: the ids
+        // allocated from now on must not collide with its ids either
+        let generator = self.generator();
+        if let Some(max) = incoming.max_column_id() {
+            generator.advance_past(max);
+        }
+        incoming.blend_into(&self.plan, &generator)
     }
 
     /// Returns `exprs`, about to be added on top of the plan of this builder,
@@ -299,11 +321,10 @@ impl LogicalPlanBuilder {
     /// subqueries) also defines have fresh column ids, as when a subquery is
     /// built from the plan it filters
     fn blend_subqueries(
-        &self,
+        &mut self,
         exprs: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Vec<Expr>> {
-        let mut blender =
-            SubqueryBlender::new(&self.plan, self.column_id_generator.as_deref());
+        let mut blender = SubqueryBlender::new(&self.plan, &mut self.column_id_generator);
         exprs
             .into_iter()
             .map(|expr| blender.blend(expr.into()))
@@ -312,11 +333,10 @@ impl LogicalPlanBuilder {
 
     /// [`Self::blend_subqueries`] for the expressions of a projection
     fn blend_select_subqueries(
-        &self,
+        &mut self,
         exprs: impl IntoIterator<Item = impl Into<SelectExpr>>,
     ) -> Result<Vec<SelectExpr>> {
-        let mut blender =
-            SubqueryBlender::new(&self.plan, self.column_id_generator.as_deref());
+        let mut blender = SubqueryBlender::new(&self.plan, &mut self.column_id_generator);
         exprs
             .into_iter()
             .map(|expr| match expr.into() {
@@ -408,7 +428,7 @@ impl LogicalPlanBuilder {
     /// Convert a regular plan into a recursive query.
     /// `is_distinct` indicates whether the recursive term should be de-duplicated (`UNION`) after each iteration or not (`UNION ALL`).
     pub fn to_recursive_query(
-        self,
+        mut self,
         name: String,
         recursive_term: LogicalPlan,
         is_distinct: bool,
@@ -440,16 +460,27 @@ impl LogicalPlanBuilder {
                 );
             }
         }
+        // The recursive term is combined with the static term, as the right
+        // side of a union: it is renumbered if it defines ids that the
+        // static term also defines
+        let recursive_term = self.blend(recursive_term)?;
         // Ensure that the recursive term has the same field types as the static term
+        // (the casts it adds define columns)
+        let generator = self.generator();
         let coerced_recursive_term =
-            coerce_plan_expr_for_schema(recursive_term, self.plan.schema())?;
+            coerce_plan_expr_for_schema(recursive_term, self.plan.schema(), &generator)?;
+        // the outputs of the recursive query get new ids
         let recursive_query = RecursiveQuery::try_new(
             name,
             self.plan,
             Arc::new(coerced_recursive_term),
             is_distinct,
+            &generator,
         )?;
-        Ok(Self::from(LogicalPlan::RecursiveQuery(recursive_query)))
+        Ok(Self::chain(
+            Some(generator),
+            LogicalPlan::RecursiveQuery(recursive_query),
+        ))
     }
 
     /// Create a values list based relation, and the schema is inferred from data, consuming
@@ -533,13 +564,10 @@ impl LogicalPlanBuilder {
         let LogicalPlan::Values(mut values) = Arc::unwrap_or_clone(builder.plan) else {
             return internal_err!("Expected a Values plan");
         };
-        if let Some(generator) = &column_id_generator {
-            values.schema = with_new_field_ids(values.schema, generator)?;
-        }
-        Ok(Self::chain(
-            column_id_generator,
-            LogicalPlan::Values(values),
-        ))
+        let generator =
+            column_id_generator.unwrap_or_else(|| Arc::new(ColumnIdGenerator::new()));
+        values.schema = with_new_field_ids(values.schema, &generator)?;
+        Ok(Self::chain(Some(generator), LogicalPlan::Values(values)))
     }
 
     fn infer_values_from_schema(
@@ -834,9 +862,13 @@ impl LogicalPlanBuilder {
         if table_scan.filters.is_empty()
             && let Some(p) = table_scan.source.get_logical_plan()
         {
-            let sub_plan = p
-                .into_owned()
-                .with_fresh_column_ids(column_id_generator.as_deref())?;
+            let sub_plan = p.into_owned();
+            let column_id_generator = match column_id_generator {
+                Some(generator) => generator,
+                None => own_column_id_generator([&sub_plan]),
+            };
+            let sub_plan = sub_plan.with_fresh_column_ids(&column_id_generator)?;
+            let column_id_generator = Some(column_id_generator);
 
             if let Some(proj) = table_scan.projection {
                 let projection_exprs = proj
@@ -864,21 +896,49 @@ impl LogicalPlanBuilder {
         // the scan defines its columns: they get new ids, unless they have
         // some (a scan rebuilt from another one)
         let mut table_scan = table_scan;
-        if let Some(generator) = &column_id_generator {
-            table_scan.projected_schema =
-                with_new_field_ids(table_scan.projected_schema, generator)?;
-        }
+        let generator = column_id_generator.unwrap_or_else(|| {
+            let generator = ColumnIdGenerator::new();
+            if let Some(max) = table_scan
+                .projected_schema
+                .field_ids()
+                .iter()
+                .flatten()
+                .max()
+            {
+                generator.advance_past(*max);
+            }
+            Arc::new(generator)
+        });
+        table_scan.projected_schema =
+            with_new_field_ids(table_scan.projected_schema, &generator)?;
         Ok(Self::chain(
-            column_id_generator,
+            Some(generator),
             LogicalPlan::TableScan(table_scan),
         ))
     }
 
-    /// Wrap a plan in a window
+    /// Wrap a plan in a window.
+    ///
+    /// The window expressions get new column ids from a generator advanced
+    /// past the ids of `input`, which may collide with ids defined elsewhere
+    /// in a larger plan: use [`Self::window_plan_with_column_id_generator`]
+    /// when building within one.
     pub fn window_plan(
         input: LogicalPlan,
         window_exprs: impl IntoIterator<Item = Expr>,
     ) -> Result<LogicalPlan> {
+        Self::window_plan_with_column_id_generator(input, window_exprs, None)
+    }
+
+    /// [`Self::window_plan`], where the window expressions get new column ids
+    /// from `column_id_generator` (see [`Self::with_column_id_generator`])
+    pub fn window_plan_with_column_id_generator(
+        input: LogicalPlan,
+        window_exprs: impl IntoIterator<Item = Expr>,
+        column_id_generator: Option<Arc<ColumnIdGenerator>>,
+    ) -> Result<LogicalPlan> {
+        let generator =
+            column_id_generator.unwrap_or_else(|| own_column_id_generator([&input]));
         let mut plan = input;
         let mut groups = group_window_expr_by_sort_keys(window_exprs)?;
         // To align with the behavior of PostgreSQL, we want the sort_keys sorted as same rule as PostgreSQL that first
@@ -906,6 +966,7 @@ impl LogicalPlanBuilder {
             // Partition and sorting is done at physical level, see the EnforceDistribution
             // and EnforceSorting rules.
             plan = LogicalPlanBuilder::from(plan)
+                .with_column_id_generator(Some(Arc::clone(&generator)))
                 .window(window_exprs)?
                 .build()?;
         }
@@ -913,19 +974,31 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a projection without alias.
+    ///
+    /// Each output gets a column id (see [`NamedExpr::allocate`]): a bare
+    /// column of the input with an id passes it through, with its id; any
+    /// other expression (including an alias of a column) defines a column,
+    /// with a new id from the generator of this builder.
     pub fn project(
-        self,
+        mut self,
         expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
     ) -> Result<Self> {
         let expr = self.blend_select_subqueries(expr)?;
-        project(Arc::unwrap_or_clone(self.plan), expr)
-            .map(|plan| Self::chain(self.column_id_generator, plan))
+        let generator = self.generator();
+        project_with_validation(
+            Arc::unwrap_or_clone(self.plan),
+            expr.into_iter().map(|e| (e, true)),
+            None,
+            &generator,
+        )
+        .map(|plan| Self::chain(Some(generator), plan))
     }
 
     /// Apply a projection without alias with optional validation
-    /// (true to validate, false to not validate)
+    /// (true to validate, false to not validate). The outputs get column ids
+    /// as in [`Self::project`].
     pub fn project_with_validation(
-        self,
+        mut self,
         expr: Vec<(impl Into<SelectExpr>, bool)>,
     ) -> Result<Self> {
         let (expr, validate): (Vec<_>, Vec<_>) = expr.into_iter().unzip();
@@ -933,24 +1006,28 @@ impl LogicalPlanBuilder {
             .blend_select_subqueries(expr)?
             .into_iter()
             .zip(validate);
-        project_with_validation(Arc::unwrap_or_clone(self.plan), expr, None)
-            .map(|plan| Self::chain(self.column_id_generator, plan))
+        let generator = self.generator();
+        project_with_validation(Arc::unwrap_or_clone(self.plan), expr, None, &generator)
+            .map(|plan| Self::chain(Some(generator), plan))
     }
 
     /// Apply a projection, aliasing non-Column/non-Alias expressions to
-    /// match the field names from the provided schema.
+    /// match the field names from the provided schema. The outputs get column
+    /// ids as in [`Self::project`].
     pub fn project_with_validation_and_schema(
-        self,
+        mut self,
         expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
         schema: &DFSchemaRef,
     ) -> Result<Self> {
         let expr = self.blend_select_subqueries(expr)?;
+        let generator = self.generator();
         project_with_validation(
             Arc::unwrap_or_clone(self.plan),
             expr.into_iter().map(|e| (e, true)),
             Some(schema),
+            &generator,
         )
-        .map(|plan| Self::chain(self.column_id_generator, plan))
+        .map(|plan| Self::chain(Some(generator), plan))
     }
 
     /// Select the given column indices
@@ -963,8 +1040,8 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a filter
-    pub fn filter(self, expr: impl Into<Expr>) -> Result<Self> {
-        let expr = SubqueryBlender::new(&self.plan, self.column_id_generator.as_deref())
+    pub fn filter(mut self, expr: impl Into<Expr>) -> Result<Self> {
+        let expr = SubqueryBlender::new(&self.plan, &mut self.column_id_generator)
             .blend(expr.into())?;
         let expr = normalize_col(expr, &self.plan)?;
         Filter::try_new(expr, self.plan)
@@ -973,8 +1050,8 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a filter which is used for a having clause
-    pub fn having(self, expr: impl Into<Expr>) -> Result<Self> {
-        let expr = SubqueryBlender::new(&self.plan, self.column_id_generator.as_deref())
+    pub fn having(mut self, expr: impl Into<Expr>) -> Result<Self> {
+        let expr = SubqueryBlender::new(&self.plan, &mut self.column_id_generator)
             .blend(expr.into())?;
         let expr = normalize_col(expr, &self.plan)?;
         Filter::try_new(expr, self.plan)
@@ -1024,10 +1101,14 @@ impl LogicalPlanBuilder {
         ))
     }
 
-    /// Apply an alias
-    pub fn alias(self, alias: impl Into<TableReference>) -> Result<Self> {
-        subquery_alias(Arc::unwrap_or_clone(self.plan), alias)
-            .map(|plan| Self::chain(self.column_id_generator, plan))
+    /// Apply an alias. If several fields have the same name, the projection
+    /// that renames them gets new column ids from the generator of this
+    /// builder.
+    pub fn alias(mut self, alias: impl Into<TableReference>) -> Result<Self> {
+        let generator = self.generator();
+        SubqueryAlias::try_new_with_column_id_generator(self.plan, alias, &generator)
+            .map(LogicalPlan::SubqueryAlias)
+            .map(|plan| Self::chain(Some(generator), plan))
     }
 
     /// Add missing sort columns to all downstream projection
@@ -1062,11 +1143,12 @@ impl LogicalPlanBuilder {
         curr_plan: LogicalPlan,
         missing_cols: &IndexSet<Column>,
         is_distinct: bool,
+        generator: &ColumnIdGenerator,
     ) -> Result<LogicalPlan> {
         match curr_plan {
             LogicalPlan::Projection(Projection {
                 input,
-                mut expr,
+                expr,
                 schema: _,
             }) if missing_cols.iter().all(|c| input.schema().has_column(c)) => {
                 let mut missing_exprs = missing_cols
@@ -1077,12 +1159,36 @@ impl LogicalPlanBuilder {
                 // Do not let duplicate columns to be added, some of the
                 // missing_cols may be already present but without the new
                 // projected alias.
-                missing_exprs.retain(|e| !expr.contains(e));
+                missing_exprs.retain(|e| !expr.iter().any(|entry| entry.expr == *e));
                 if is_distinct {
-                    Self::ambiguous_distinct_check(&missing_exprs, missing_cols, &expr)?;
+                    let projection_exprs =
+                        expr.iter().map(|e| e.expr.clone()).collect::<Vec<_>>();
+                    Self::ambiguous_distinct_check(
+                        &missing_exprs,
+                        missing_cols,
+                        &projection_exprs,
+                    )?;
                 }
-                expr.extend(missing_exprs);
-                project(Arc::unwrap_or_clone(input), expr)
+                // the outputs of the projection keep their ids, the columns
+                // added pass the input columns through
+                let ids = expr.iter().map(|e| e.id).collect::<Vec<_>>();
+                let exprs = validated_projection_exprs(
+                    &input,
+                    expr.into_iter()
+                        .map(|e| e.expr)
+                        .chain(missing_exprs)
+                        .map(|e| (e, true)),
+                    None,
+                )?;
+                let mut ids = ids.into_iter();
+                let expr = exprs
+                    .into_iter()
+                    .map(|e| match ids.next() {
+                        Some(id) => NamedExpr::new(e, id),
+                        None => NamedExpr::allocate(e, input.schema(), generator),
+                    })
+                    .collect();
+                Projection::try_new(expr, input).map(LogicalPlan::Projection)
             }
             _ => {
                 let is_distinct =
@@ -1095,6 +1201,7 @@ impl LogicalPlanBuilder {
                             (*input_plan).clone(),
                             missing_cols,
                             is_distinct,
+                            generator,
                         )
                     })
                     .collect::<Result<Vec<_>>>()?;
@@ -1198,13 +1305,17 @@ impl LogicalPlanBuilder {
         }
 
         // remove pushed down sort columns
-        let new_expr = schema.columns().into_iter().map(Expr::Column).collect();
+        let new_expr: Vec<Expr> =
+            schema.columns().into_iter().map(Expr::Column).collect();
 
+        let mut builder = self;
+        let generator = builder.generator();
         let is_distinct = false;
         let plan = Self::add_missing_columns(
-            Arc::unwrap_or_clone(self.plan),
+            Arc::unwrap_or_clone(builder.plan),
             &missing_cols,
             is_distinct,
+            &generator,
         )?;
 
         let sort_plan = LogicalPlan::Sort(Sort {
@@ -1213,49 +1324,45 @@ impl LogicalPlanBuilder {
             fetch,
         });
 
+        // the outputs pass the columns of the original plan through
+        let new_expr = new_expr
+            .into_iter()
+            .map(|e| NamedExpr::allocate(e, sort_plan.schema(), &generator))
+            .collect();
         Projection::try_new(new_expr, Arc::new(sort_plan))
             .map(LogicalPlan::Projection)
-            .map(|plan| Self::chain(self.column_id_generator, plan))
+            .map(|plan| Self::chain(Some(generator), plan))
     }
 
-    /// Apply a union, preserving duplicate rows
-    pub fn union(self, plan: LogicalPlan) -> Result<Self> {
+    /// Apply a union, preserving duplicate rows.
+    ///
+    /// The outputs of the union get new column ids from the generator of this
+    /// builder.
+    pub fn union(mut self, plan: LogicalPlan) -> Result<Self> {
         let plan = self.blend(plan)?;
-        union(Arc::unwrap_or_clone(self.plan), plan)
-            .map(|plan| Self::chain(self.column_id_generator, plan))
+        let generator = self.generator();
+        Union::try_new_with_loose_types(vec![self.plan, Arc::new(plan)], &generator)
+            .map(LogicalPlan::Union)
+            .map(|plan| Self::chain(Some(generator), plan))
     }
 
     /// Apply a union by name, preserving duplicate rows
-    pub fn union_by_name(self, plan: LogicalPlan) -> Result<Self> {
+    pub fn union_by_name(mut self, plan: LogicalPlan) -> Result<Self> {
         let plan = self.blend(plan)?;
-        union_by_name(Arc::unwrap_or_clone(self.plan), plan)
-            .map(|plan| Self::chain(self.column_id_generator, plan))
+        let generator = self.generator();
+        Union::try_new_by_name(vec![self.plan, Arc::new(plan)], &generator)
+            .map(LogicalPlan::Union)
+            .map(|plan| Self::chain(Some(generator), plan))
     }
 
     /// Apply a union by name, removing duplicate rows
     pub fn union_by_name_distinct(self, plan: LogicalPlan) -> Result<Self> {
-        let plan = self.blend(plan)?;
-        let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
-        let right_plan: LogicalPlan = plan;
-
-        Ok(Self::chain(
-            self.column_id_generator,
-            LogicalPlan::Distinct(Distinct::All(Arc::new(union_by_name(
-                left_plan, right_plan,
-            )?))),
-        ))
+        self.union_by_name(plan)?.distinct()
     }
 
     /// Apply a union, removing duplicate rows
     pub fn union_distinct(self, plan: LogicalPlan) -> Result<Self> {
-        let plan = self.blend(plan)?;
-        let left_plan: LogicalPlan = Arc::unwrap_or_clone(self.plan);
-        let right_plan: LogicalPlan = plan;
-
-        Ok(Self::chain(
-            self.column_id_generator,
-            LogicalPlan::Distinct(Distinct::All(Arc::new(union(left_plan, right_plan)?))),
-        ))
+        self.union(plan)?.distinct()
     }
 
     /// Apply deduplication: Only distinct (different) values are returned)
@@ -1268,14 +1375,32 @@ impl LogicalPlanBuilder {
 
     /// Project first values of the specified expression list according to the provided
     /// sorting expressions grouped by the `DISTINCT ON` clause expressions.
+    ///
+    /// Every output defines a column, with a new id from the generator of
+    /// this builder, a bare column too: the outputs are computed per group of
+    /// the `ON` expressions (`ReplaceDistinctWithAggregate` computes them
+    /// with `first_value`), and keep their ids when the node is replaced.
     pub fn distinct_on(
-        self,
+        mut self,
         on_expr: Vec<Expr>,
         select_expr: Vec<Expr>,
         sort_expr: Option<Vec<SortExpr>>,
     ) -> Result<Self> {
+        let generator = self.generator();
+        let select_expr = select_expr
+            .into_iter()
+            .map(|e| {
+                // a bare column of the input gets its id, the output a new one
+                let entry = NamedExpr::allocate(e, self.plan.schema(), &generator);
+                if entry.is_pass_through() {
+                    NamedExpr::new(entry.expr, generator.next())
+                } else {
+                    entry
+                }
+            })
+            .collect();
         Ok(Self::chain(
-            self.column_id_generator,
+            Some(generator),
             LogicalPlan::Distinct(Distinct::On(DistinctOn::try_new(
                 on_expr,
                 select_expr,
@@ -1450,7 +1575,7 @@ impl LogicalPlanBuilder {
     }
 
     fn asof_join_with_constraint(
-        self,
+        mut self,
         right: LogicalPlan,
         on: Vec<(Expr, Expr)>,
         match_condition: AsOfMatch,
@@ -1540,7 +1665,7 @@ impl LogicalPlanBuilder {
     }
 
     pub fn join_detailed_with_options(
-        self,
+        mut self,
         right: LogicalPlan,
         join_type: JoinType,
         join_keys: (Vec<impl Into<Column>>, Vec<impl Into<Column>>),
@@ -1670,26 +1795,28 @@ impl LogicalPlanBuilder {
             return plan_err!("join condition should not be empty");
         }
 
+        let join = Join {
+            left: self.plan,
+            right: Arc::new(right),
+            on,
+            filter,
+            join_type,
+            join_constraint: JoinConstraint::On,
+            schema: DFSchemaRef::new(join_schema),
+            null_equality,
+            null_aware,
+            null_aware_value_keys: 1,
+        };
+        let join = with_new_mark_column_id(join, &mut self.column_id_generator)?;
         Ok(Self::chain(
             self.column_id_generator,
-            LogicalPlan::Join(Join {
-                left: self.plan,
-                right: Arc::new(right),
-                on,
-                filter,
-                join_type,
-                join_constraint: JoinConstraint::On,
-                schema: DFSchemaRef::new(join_schema),
-                null_equality,
-                null_aware,
-                null_aware_value_keys: 1,
-            }),
+            LogicalPlan::Join(join),
         ))
     }
 
     /// Apply a join with using constraint, which duplicates all join columns in output schema.
     pub fn join_using(
-        self,
+        mut self,
         right: LogicalPlan,
         join_type: JoinType,
         using_keys: Vec<Column>,
@@ -1769,6 +1896,7 @@ impl LogicalPlanBuilder {
                 NullEquality::NullEqualsNothing,
                 false, // null_aware
             )?;
+            let join = with_new_mark_column_id(join, &mut self.column_id_generator)?;
 
             Ok(Self::chain(
                 self.column_id_generator,
@@ -1778,7 +1906,7 @@ impl LogicalPlanBuilder {
     }
 
     /// Apply a cross join
-    pub fn cross_join(self, right: LogicalPlan) -> Result<Self> {
+    pub fn cross_join(mut self, right: LogicalPlan) -> Result<Self> {
         let right = self.blend(right)?;
         let join = Join::try_new(
             self.plan,
@@ -1808,16 +1936,24 @@ impl LogicalPlanBuilder {
         ))
     }
 
-    /// Apply a window functions to extend the schema
+    /// Apply a window functions to extend the schema.
+    ///
+    /// Each window expression defines a column, with a new id from the
+    /// generator of this builder.
     pub fn window(
-        self,
+        mut self,
         window_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
         let window_expr = self.blend_subqueries(window_expr)?;
         let window_expr = normalize_cols(window_expr, &self.plan)?;
         validate_unique_names("Windows", &window_expr)?;
+        let generator = self.generator();
+        let window_expr = window_expr
+            .into_iter()
+            .map(|e| NamedExpr::new(e, generator.next()))
+            .collect();
         Ok(Self::chain(
-            self.column_id_generator,
+            Some(generator),
             LogicalPlan::Window(Window::try_new(window_expr, self.plan)?),
         ))
     }
@@ -1826,12 +1962,11 @@ impl LogicalPlanBuilder {
     /// and calculating `aggr_expr` aggregates for each distinct
     /// value of the `group_expr`;
     pub fn aggregate(
-        self,
+        mut self,
         group_expr: impl IntoIterator<Item = impl Into<Expr>>,
         aggr_expr: impl IntoIterator<Item = impl Into<Expr>>,
     ) -> Result<Self> {
-        let mut blender =
-            SubqueryBlender::new(&self.plan, self.column_id_generator.as_deref());
+        let mut blender = SubqueryBlender::new(&self.plan, &mut self.column_id_generator);
         let group_expr = group_expr
             .into_iter()
             .map(|expr| blender.blend(expr.into()))
@@ -1849,9 +1984,17 @@ impl LogicalPlanBuilder {
             group_expr
         };
 
-        Aggregate::try_new(self.plan, group_expr, aggr_expr)
+        let generator = self.generator();
+        let (group_expr, grouping_sets) =
+            Aggregate::allocate_group_expr(group_expr, self.plan.schema(), &generator)?;
+        let aggr_expr = aggr_expr
+            .into_iter()
+            .map(|e| NamedExpr::new(e, generator.next()))
+            .collect();
+
+        Aggregate::try_new(self.plan, group_expr, grouping_sets, aggr_expr)
             .map(LogicalPlan::Aggregate)
-            .map(|plan| Self::chain(self.column_id_generator, plan))
+            .map(|plan| Self::chain(Some(generator), plan))
     }
 
     /// Create an expression to represent the explanation of the plan
@@ -1942,10 +2085,10 @@ impl LogicalPlanBuilder {
         join_type: JoinType,
         is_all: bool,
     ) -> Result<LogicalPlan> {
-        // without a generator, an overlapping right side is stripped of its
-        // ids (no generator, no ids)
+        // the sides may have been built with different generators
+        let generator = own_column_id_generator([&left_plan, &right_plan]);
         let right_plan =
-            right_plan.with_fresh_column_ids_if_overlapping(&left_plan, None)?;
+            right_plan.with_fresh_column_ids_if_overlapping(&left_plan, &generator)?;
         let left_len = left_plan.schema().fields().len();
         let right_len = right_plan.schema().fields().len();
 
@@ -1957,8 +2100,10 @@ impl LogicalPlanBuilder {
 
         // Requalify sides if needed to avoid duplicate qualified field names
         // (e.g., when both sides reference the same table)
-        let left_builder = LogicalPlanBuilder::from(left_plan);
-        let right_builder = LogicalPlanBuilder::from(right_plan);
+        let left_builder = LogicalPlanBuilder::from(left_plan)
+            .with_column_id_generator(Some(Arc::clone(&generator)));
+        let right_builder = LogicalPlanBuilder::from(right_plan)
+            .with_column_id_generator(Some(Arc::clone(&generator)));
         let (left_builder, right_builder, _requalified) =
             requalify_sides_if_needed(left_builder, right_builder)?;
         let left_plan = left_builder.build()?;
@@ -1976,7 +2121,8 @@ impl LogicalPlanBuilder {
                 )
             })
             .unzip();
-        let mut left_builder = LogicalPlanBuilder::from(left_plan);
+        let mut left_builder =
+            LogicalPlanBuilder::from(left_plan).with_column_id_generator(Some(generator));
         if !is_all {
             left_builder = left_builder.distinct()?;
         }
@@ -2011,7 +2157,7 @@ impl LogicalPlanBuilder {
     /// join. Note that `equi_exprs` predicates are evaluated more efficiently
     /// than the filter expressions, so they are preferred.
     pub fn join_with_expr_keys(
-        self,
+        mut self,
         right: LogicalPlan,
         join_type: JoinType,
         equi_exprs: (Vec<impl Into<Expr>>, Vec<impl Into<Expr>>),
@@ -2071,6 +2217,7 @@ impl LogicalPlanBuilder {
             NullEquality::NullEqualsNothing,
             false, // null_aware
         )?;
+        let join = with_new_mark_column_id(join, &mut self.column_id_generator)?;
 
         Ok(Self::chain(
             self.column_id_generator,
@@ -2079,9 +2226,11 @@ impl LogicalPlanBuilder {
     }
 
     /// Unnest the given column.
+    ///
+    /// The unnested columns get new column ids from the generator of this
+    /// builder.
     pub fn unnest_column(self, column: impl Into<Column>) -> Result<Self> {
-        unnest(Arc::unwrap_or_clone(self.plan), vec![column.into()])
-            .map(|plan| Self::chain(self.column_id_generator, plan))
+        self.unnest_columns_with_options(vec![column.into()], UnnestOptions::default())
     }
 
     /// Unnest the given column given [`UnnestOptions`]
@@ -2090,22 +2239,19 @@ impl LogicalPlanBuilder {
         column: impl Into<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
-        unnest_with_options(
-            Arc::unwrap_or_clone(self.plan),
-            vec![column.into()],
-            options,
-        )
-        .map(|plan| Self::chain(self.column_id_generator, plan))
+        self.unnest_columns_with_options(vec![column.into()], options)
     }
 
     /// Unnest the given columns with the given [`UnnestOptions`]
     pub fn unnest_columns_with_options(
-        self,
+        mut self,
         columns: Vec<Column>,
         options: UnnestOptions,
     ) -> Result<Self> {
-        unnest_with_options(Arc::unwrap_or_clone(self.plan), columns, options)
-            .map(|plan| Self::chain(self.column_id_generator, plan))
+        let generator = self.generator();
+        Unnest::try_new(self.plan, columns, options, &generator)
+            .map(LogicalPlan::Unnest)
+            .map(|plan| Self::chain(Some(generator), plan))
     }
 }
 
@@ -2503,28 +2649,42 @@ pub fn validate_unique_names<'a>(
 /// or alternatively, merge the union input schema using [`coerce_union_schema`] and
 /// apply the expression rewrite with [`coerce_plan_expr_for_schema`].
 ///
+/// The outputs of the union get column ids from a new generator, advanced
+/// past the ids of both inputs: use [`LogicalPlanBuilder::union`] to build
+/// within a larger plan.
+///
 /// [`TypeCoercionRewriter::coerce_union`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/struct.TypeCoercionRewriter.html#method.coerce_union
 /// [`coerce_union_schema`]: https://docs.rs/datafusion-optimizer/latest/datafusion_optimizer/analyzer/type_coercion/fn.coerce_union_schema.html
 pub fn union(left_plan: LogicalPlan, right_plan: LogicalPlan) -> Result<LogicalPlan> {
-    Ok(LogicalPlan::Union(Union::try_new_with_loose_types(vec![
-        Arc::new(left_plan),
-        Arc::new(right_plan),
-    ])?))
+    let generator = own_column_id_generator([&left_plan, &right_plan]);
+    Ok(LogicalPlan::Union(Union::try_new_with_loose_types(
+        vec![Arc::new(left_plan), Arc::new(right_plan)],
+        &generator,
+    )?))
 }
 
 /// Like [`union`], but combine rows from different tables by name, rather than
 /// by position.
+///
+/// The projections it adds to the inputs and the outputs of the union get
+/// column ids from a new generator, advanced past the ids of both inputs.
 pub fn union_by_name(
     left_plan: LogicalPlan,
     right_plan: LogicalPlan,
 ) -> Result<LogicalPlan> {
-    Ok(LogicalPlan::Union(Union::try_new_by_name(vec![
-        Arc::new(left_plan),
-        Arc::new(right_plan),
-    ])?))
+    let generator = own_column_id_generator([&left_plan, &right_plan]);
+    Ok(LogicalPlan::Union(Union::try_new_by_name(
+        vec![Arc::new(left_plan), Arc::new(right_plan)],
+        &generator,
+    )?))
 }
 
 /// Create Projection
+///
+/// The same as [`LogicalPlanBuilder::project`], with a builder that has no
+/// column id generator: the new outputs get ids from a new generator,
+/// advanced past the ids of `plan`.
+///
 /// # Errors
 /// This function errors under any of the following conditions:
 /// * Two or more expressions have the same name
@@ -2533,12 +2693,14 @@ pub fn project(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = impl Into<SelectExpr>>,
 ) -> Result<LogicalPlan> {
-    project_with_validation(plan, expr.into_iter().map(|e| (e, true)), None)
+    LogicalPlanBuilder::from(plan).project(expr)?.build()
 }
 
 /// Create Projection. Similar to project except that the expressions
 /// passed in have a flag to indicate if that expression requires
-/// validation (normalize & columnize) (true) or not (false)
+/// validation (normalize & columnize) (true) or not (false). The outputs get
+/// column ids as in [`LogicalPlanBuilder::project`], new ones from
+/// `generator`.
 /// # Errors
 /// This function errors under any of the following conditions:
 /// * Two or more expressions have the same name
@@ -2547,11 +2709,26 @@ fn project_with_validation(
     plan: LogicalPlan,
     expr: impl IntoIterator<Item = (impl Into<SelectExpr>, bool)>,
     schema: Option<&DFSchemaRef>,
+    generator: &ColumnIdGenerator,
 ) -> Result<LogicalPlan> {
+    let projected_expr = validated_projection_exprs(&plan, expr, schema)?
+        .into_iter()
+        .map(|e| NamedExpr::allocate(e, plan.schema(), generator))
+        .collect();
+    Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+}
+
+/// The expressions of a projection over `plan`, validated as described in
+/// [`project_with_validation`]
+fn validated_projection_exprs(
+    plan: &LogicalPlan,
+    expr: impl IntoIterator<Item = (impl Into<SelectExpr>, bool)>,
+    schema: Option<&DFSchemaRef>,
+) -> Result<Vec<Expr>> {
     let mut projected_expr = vec![];
     let mut has_wildcard = false;
-    let mut normalizer = ColumnNormalizer::new(&plan);
-    let columnizer = Columnizer::new(&plan);
+    let mut normalizer = ColumnNormalizer::new(plan);
+    let columnizer = Columnizer::new(plan);
     for (e, validate) in expr {
         let mut push_validated = |e: Expr| -> Result<()> {
             if validate {
@@ -2564,7 +2741,7 @@ fn project_with_validation(
         match e.into() {
             SelectExpr::Wildcard(opt) => {
                 has_wildcard = true;
-                let expanded = expand_wildcard(plan.schema(), &plan, Some(&opt))?;
+                let expanded = expand_wildcard(plan.schema(), plan, Some(&opt))?;
                 apply_replace(expanded, opt.replace.as_ref())?
                     .into_iter()
                     .try_for_each(push_validated)?;
@@ -2600,9 +2777,7 @@ fn project_with_validation(
 
     validate_unique_names("Projections", projected_expr.iter())?;
 
-    // `columnizer` borrows `plan`, which moves into the projection below.
-    drop(columnizer);
-    Projection::try_new(projected_expr, Arc::new(plan)).map(LogicalPlan::Projection)
+    Ok(projected_expr)
 }
 
 /// Applies a wildcard's REPLACE statement, if it has one, to the columns the
@@ -2735,9 +2910,14 @@ pub fn table_source_with_constraints(
 }
 
 /// Wrap projection for a plan, if the join keys contains normal expression.
+///
+/// The join keys that the projection computes get new column ids from
+/// `generator`: wrapping both sides of a join, use one generator, advanced
+/// past the ids of both.
 pub fn wrap_projection_for_join_if_necessary(
     join_keys: &[Expr],
     input: LogicalPlan,
+    generator: &Arc<ColumnIdGenerator>,
 ) -> Result<(LogicalPlan, Vec<Column>, bool)> {
     let input_schema = input.schema();
     let alias_join_keys: Vec<Expr> = join_keys
@@ -2778,6 +2958,7 @@ pub fn wrap_projection_for_join_if_necessary(
         projection.extend(join_key_items);
 
         LogicalPlanBuilder::from(input)
+            .with_column_id_generator(Some(Arc::clone(generator)))
             .project(projection.into_iter().map(SelectExpr::from))?
             .build()?
     } else {
@@ -2883,16 +3064,40 @@ pub fn get_struct_unnested_columns(
 /// | Int64   | Int32   | List(Int64)         |  Int64              |
 /// +---------+---------+---------------------+---------------------+
 /// ```
+///
+/// The unnested columns get column ids from a new generator, advanced past
+/// the ids of `input`: use
+/// [`LogicalPlanBuilder::unnest_columns_with_options`] to build within a
+/// larger plan.
 pub fn unnest_with_options(
     input: LogicalPlan,
     columns_to_unnest: Vec<Column>,
     options: UnnestOptions,
 ) -> Result<LogicalPlan> {
+    let generator = own_column_id_generator([&input]);
     Ok(LogicalPlan::Unnest(Unnest::try_new(
         Arc::new(input),
         columns_to_unnest,
         options,
+        &generator,
     )?))
+}
+
+/// Returns `join`, where the mark column of a mark join has a new id from
+/// `generator` (the generator of a builder, created if it has none yet)
+fn with_new_mark_column_id(
+    join: Join,
+    generator: &mut Option<Arc<ColumnIdGenerator>>,
+) -> Result<Join> {
+    if !matches!(join.join_type, JoinType::LeftMark | JoinType::RightMark) {
+        return Ok(join);
+    }
+    let plan = LogicalPlan::Join(join);
+    let generator = generator.get_or_insert_with(|| own_column_id_generator([&plan]));
+    let LogicalPlan::Join(join) = plan else {
+        unreachable!()
+    };
+    join.with_mark_column_id(generator.next())
 }
 
 #[cfg(test)]

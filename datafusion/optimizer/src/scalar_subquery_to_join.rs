@@ -11,7 +11,7 @@ use crate::decorrelate::{
     PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR, build_join_filter,
 };
 use crate::optimizer::ApplyOrder;
-use crate::utils::evaluates_to_null;
+use crate::utils::{evaluates_to_null, ids_builder, plan_builder, with_output_ids_of};
 use crate::{OptimizerConfig, OptimizerRule};
 
 use crate::analyzer::type_coercion::TypeCoercionRewriter;
@@ -19,10 +19,12 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, plan_err};
+use datafusion_common::{
+    Column, ColumnIdGenerator, Result, ScalarValue, assert_or_internal_err, plan_err,
+};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
 use datafusion_expr::logical_plan::{JoinType, Subquery};
-use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, not, when};
+use datafusion_expr::{Expr, LogicalPlan, lit, not, when};
 
 /// Optimizer rule that rewrites scalar subquery filters to joins and places an
 /// additional projection on top of the filter to preserve the original schema.
@@ -106,9 +108,12 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = filter.input.as_ref().clone();
                 for (subquery, alias) in subqueries {
-                    if let Some((optimized_subquery, compensation_exprs)) =
-                        build_join(&subquery, &cur_input, &alias)?
-                    {
+                    if let Some((optimized_subquery, compensation_exprs)) = build_join(
+                        &subquery,
+                        &cur_input,
+                        &alias,
+                        config.column_id_generator(),
+                    )? {
                         if !compensation_exprs.is_empty() {
                             rewrite_expr = rewrite_expr
                                 .transform_up(|expr| {
@@ -133,7 +138,7 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // Preserve original schema as new Join might have more fields than what Filter & parents expect.
                 let projection =
                     filter.input.schema().columns().into_iter().map(Expr::from);
-                let new_plan = LogicalPlanBuilder::from(cur_input)
+                let new_plan = plan_builder(cur_input, config)
                     .filter(rewrite_expr)?
                     .project(projection)?
                     .build()?;
@@ -175,9 +180,12 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                 // iterate through all subqueries in predicate, turning each into a left join
                 let mut cur_input = projection.input.as_ref().clone();
                 for (subquery, alias) in all_subqueries {
-                    if let Some((optimized_subquery, compensation_exprs)) =
-                        build_join(&subquery, &cur_input, &alias)?
-                    {
+                    if let Some((optimized_subquery, compensation_exprs)) = build_join(
+                        &subquery,
+                        &cur_input,
+                        &alias,
+                        config.column_id_generator(),
+                    )? {
                         cur_input = optimized_subquery;
                         if !compensation_exprs.is_empty()
                             && let Some(&idx) = alias_to_index.get(&alias)
@@ -213,9 +221,11 @@ impl OptimizerRule for ScalarSubqueryToJoin {
                         proj_exprs.push(new_expr);
                     }
                 }
-                let new_plan = LogicalPlanBuilder::from(cur_input)
+                // the outputs keep their ids
+                let new_plan = plan_builder(cur_input, config)
                     .project(proj_exprs)?
                     .build()?;
+                let new_plan = with_output_ids_of(new_plan, &projection.expr, config)?;
                 Ok(Transformed::yes(new_plan))
             }
 
@@ -330,12 +340,15 @@ fn build_join(
     subquery: &Subquery,
     outer_input: &LogicalPlan,
     subquery_alias: &str,
+    ids: &Arc<ColumnIdGenerator>,
 ) -> Result<Option<(LogicalPlan, HashMap<Column, Expr>)>> {
     // `build_join` also handles uncorrelated scalar subqueries (as a left
     // join with `Boolean(true)`) when the
     // `enable_physical_uncorrelated_scalar_subquery` option is disabled.
     let subquery_plan = subquery.subquery.as_ref();
-    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+    let mut pull_up = PullUpCorrelatedExpr::new()
+        .with_need_handle_count_bug(true)
+        .with_column_id_generator(Arc::clone(ids));
     let decorrelated_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(None);
@@ -345,7 +358,7 @@ fn build_join(
         .collected_count_expr_map
         .get(&decorrelated_subquery)
         .cloned();
-    let aliased_subquery = LogicalPlanBuilder::from(decorrelated_subquery)
+    let aliased_subquery = ids_builder(ids, decorrelated_subquery)
         .alias(subquery_alias.to_string())?
         .build()?;
 
@@ -362,7 +375,7 @@ fn build_join(
     // columns.
     let join_filter = join_filter_opt.or_else(|| Some(lit(true)));
 
-    let new_plan = LogicalPlanBuilder::from(outer_input.clone())
+    let new_plan = ids_builder(ids, outer_input.clone())
         .join_on(aliased_subquery, JoinType::Left, join_filter)?
         .build()?;
 
@@ -414,6 +427,7 @@ fn build_join(
 
 #[cfg(test)]
 mod tests {
+    use datafusion_expr::LogicalPlanBuilder;
     use std::ops::Add;
 
     use super::*;

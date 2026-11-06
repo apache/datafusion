@@ -5,6 +5,7 @@
 //! [`ReplaceDistinctWithAggregate`] replaces `DISTINCT ...` with `GROUP BY ...`
 
 use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
+use crate::utils::{plan_builder, with_output_ids_of};
 use crate::{OptimizerConfig, OptimizerRule};
 use std::sync::Arc;
 
@@ -12,8 +13,8 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, Dependency, Result};
 use datafusion_expr::expr_rewriter::normalize_cols;
 use datafusion_expr::utils::expand_wildcard;
-use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan};
-use datafusion_expr::{ExprFunctionExt, Limit, LogicalPlanBuilder, col, lit};
+use datafusion_expr::{Aggregate, Distinct, DistinctOn, Expr, LogicalPlan, NamedExpr};
+use datafusion_expr::{ExprFunctionExt, Limit, col, lit};
 
 /// Optimizer that replaces logical [[Distinct]] with a logical [[Aggregate]]
 ///
@@ -104,10 +105,21 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     }
                 }
 
-                // Replace with aggregation:
+                // Replace with aggregation: the columns pass through
+                let group_expr = group_expr
+                    .into_iter()
+                    .map(|e| {
+                        NamedExpr::allocate(
+                            e,
+                            input.schema(),
+                            config.column_id_generator(),
+                        )
+                    })
+                    .collect();
                 let aggr_plan = LogicalPlan::Aggregate(Aggregate::try_new(
                     input,
                     group_expr,
+                    None,
                     vec![],
                 )?);
                 Ok(Transformed::yes(aggr_plan))
@@ -124,7 +136,10 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                 // Construct the aggregation expression to be used to fetch the selected expressions.
                 let first_value_udaf: Arc<datafusion_expr::AggregateUDF> =
                     config.function_registry().unwrap().udaf("first_value")?;
+                // the projection above the aggregate keeps the ids of the outputs
+                let entries = select_expr.clone();
                 let aggr_expr = select_expr.into_iter().map(|e| {
+                    let e = e.into_expr();
                     if let Some(order_by) = &sort_expr {
                         first_value_udaf
                             .call(vec![e])
@@ -139,14 +154,25 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
 
                 let aggr_expr = normalize_cols(aggr_expr, input.as_ref())?;
                 let group_expr = normalize_cols(on_expr, input.as_ref())?;
+                // the `first_value`s define new columns, read only by the
+                // projection that replaces the `DistinctOn`
+                let ids = config.column_id_generator();
+                let aggr_expr = aggr_expr
+                    .into_iter()
+                    .map(|e| NamedExpr::new(e, ids.next()))
+                    .collect();
+                let group_expr = group_expr
+                    .into_iter()
+                    .map(|e| NamedExpr::allocate(e, input.schema(), ids))
+                    .collect();
 
                 // Build the aggregation plan
                 let plan = LogicalPlan::Aggregate(Aggregate::try_new(
-                    input, group_expr, aggr_expr,
+                    input, group_expr, None, aggr_expr,
                 )?);
                 // TODO use LogicalPlanBuilder directly rather than recreating the Aggregate
                 // when https://github.com/apache/datafusion/issues/10485 is available
-                let lpb = LogicalPlanBuilder::from(plan);
+                let lpb = plan_builder(plan, config);
 
                 let plan = if let Some(mut sort_expr) = sort_expr {
                     // While sort expressions were used in the `FIRST_VALUE` aggregation itself above,
@@ -175,9 +201,8 @@ impl OptimizerRule for ReplaceDistinctWithAggregate {
                     })
                     .collect::<Vec<Expr>>();
 
-                let plan = LogicalPlanBuilder::from(plan)
-                    .project(project_exprs)?
-                    .build()?;
+                let plan = plan_builder(plan, config).project(project_exprs)?.build()?;
+                let plan = with_output_ids_of(plan, &entries, config)?;
 
                 Ok(Transformed::yes(plan))
             }

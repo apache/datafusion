@@ -263,7 +263,7 @@ fn plan_in_list(
     );
     let expr = ctx
         .create_physical_expr(
-            projection.expr[0].clone().unalias(),
+            projection.expr[0].expr.clone().unalias(),
             projection.input.schema(),
         )
         .unwrap();

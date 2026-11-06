@@ -8,9 +8,11 @@ use std::sync::Arc;
 
 use datafusion_common::JoinType;
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{Column, DFSchemaRef, Result, ScalarValue, plan_err};
+use datafusion_common::{
+    Column, ColumnIdGenerator, DFSchemaRef, Result, ScalarValue, plan_err,
+};
 use datafusion_expr::logical_plan::LogicalPlan;
-use datafusion_expr::{EmptyRelation, Expr, GroupingSet, Projection, Union, cast, lit};
+use datafusion_expr::{EmptyRelation, Expr, NamedExpr, Projection, Union, cast, lit};
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
@@ -38,7 +40,7 @@ impl OptimizerRule for PropagateEmptyRelation {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
             LogicalPlan::EmptyRelation(_) => Ok(Transformed::no(plan)),
@@ -75,6 +77,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                             &join.schema,
                             left_field_count,
                             true,
+                            config.column_id_generator(),
                         )?))
                     }
                     JoinType::Full if left_empty => {
@@ -83,6 +86,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                             &join.schema,
                             left_field_count,
                             false,
+                            config.column_id_generator(),
                         )?))
                     }
                     JoinType::Inner if left_empty || right_empty => Ok(Transformed::yes(
@@ -105,6 +109,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                             &join.schema,
                             left_field_count,
                             true,
+                            config.column_id_generator(),
                         )?))
                     }
                     JoinType::Right if right_empty => Ok(Transformed::yes(
@@ -121,6 +126,7 @@ impl OptimizerRule for PropagateEmptyRelation {
                             &join.schema,
                             left_field_count,
                             false,
+                            config.column_id_generator(),
                         )?))
                     }
                     JoinType::LeftSemi if left_empty || right_empty => Ok(
@@ -162,8 +168,11 @@ impl OptimizerRule for PropagateEmptyRelation {
                 // (from `GROUPING SETS(())`, `ROLLUP(...)`, or `CUBE(...)`)
                 // always produces exactly one row even on empty input, so it
                 // must not be replaced by an empty relation.
-                if !agg.group_expr.is_empty()
-                    && !has_empty_grouping_set(&agg.group_expr)
+                if (!agg.group_expr.is_empty() || agg.grouping_sets.is_some())
+                    && !agg
+                        .grouping_sets
+                        .as_ref()
+                        .is_some_and(|g| g.sets.has_empty_set())
                     && let Some(empty_plan) = empty_child(&plan)?
                 {
                     return Ok(Transformed::yes(empty_plan));
@@ -195,19 +204,33 @@ impl OptimizerRule for PropagateEmptyRelation {
                     let input_plan = new_inputs.pop().unwrap(); // length checked
                     let child = Arc::unwrap_or_clone(input_plan);
                     if child.schema().eq(plan.schema()) {
+                        // the remaining input takes the ids of the outputs
+                        // of the union, which the plan above refers to
+                        let child = child
+                            .with_output_column_ids(plan.schema().field_ids())?
+                            .data;
                         Ok(Transformed::yes(child))
                     } else {
                         // The union takes its field names from its first
                         // input, which may be gone. Map the remaining
-                        // input's columns by position.
+                        // input's columns by position; they define the
+                        // outputs of the union, with their ids.
                         let exprs = child
                             .schema()
                             .columns()
                             .into_iter()
                             .zip(plan.schema().iter())
-                            .map(|(col, (qualifier, field))| {
-                                Expr::Column(col)
-                                    .alias_qualified(qualifier.cloned(), field.name())
+                            .zip(plan.schema().field_ids())
+                            .map(|((col, (qualifier, field)), id)| {
+                                NamedExpr::new(
+                                    Expr::Column(col).alias_qualified(
+                                        qualifier.cloned(),
+                                        field.name(),
+                                    ),
+                                    id.unwrap_or_else(|| {
+                                        config.column_id_generator().next()
+                                    }),
+                                )
                             })
                             .collect::<Vec<_>>();
                         Ok(Transformed::yes(LogicalPlan::Projection(
@@ -282,11 +305,16 @@ fn empty_child(plan: &LogicalPlan) -> Result<Option<LogicalPlan>> {
 ///   └── EmptyRelation                               CAST(NULL AS Utf8) AS reason)
 ///                                                   └── TableScan: orders
 /// ```
+///
+/// The outputs keep the ids of the join's fields: the surviving columns pass
+/// through, and the `NULL`s take the ids of the columns of the empty side,
+/// which is removed (they get new ids if they have none).
 fn build_null_padded_projection(
     surviving_plan: Arc<LogicalPlan>,
     join_schema: &DFSchemaRef,
     left_field_count: usize,
     empty_side_is_right: bool,
+    ids: &ColumnIdGenerator,
 ) -> Result<LogicalPlan> {
     let exprs = join_schema
         .iter()
@@ -298,11 +326,16 @@ fn build_null_padded_projection(
                 i < left_field_count
             };
 
+            let id = join_schema.field_id(i);
             if on_empty_side {
-                cast(lit(ScalarValue::Null), field.data_type().clone())
-                    .alias_qualified(qualifier.cloned(), field.name())
+                let expr = cast(lit(ScalarValue::Null), field.data_type().clone())
+                    .alias_qualified(qualifier.cloned(), field.name());
+                NamedExpr::new(expr, id.unwrap_or_else(|| ids.next()))
             } else {
-                Expr::Column(Column::new(qualifier.cloned(), field.name()))
+                let column = Expr::Column(
+                    Column::new(qualifier.cloned(), field.name()).with_id(id),
+                );
+                NamedExpr::allocate(column, surviving_plan.schema(), ids)
             }
         })
         .collect::<Vec<_>>();
@@ -312,30 +345,6 @@ fn build_null_padded_projection(
         surviving_plan,
         Arc::clone(join_schema),
     )?))
-}
-
-/// Returns `true` if any grouping set in the list of GROUP BY expressions is
-/// the empty set `()`.
-///
-/// An empty grouping set acts as a "grand total" group: the aggregate must
-/// always produce **exactly one row** for it, even when the input is empty.
-/// This means an aggregate with an empty grouping set cannot be replaced by
-/// an empty relation.
-///
-/// The three forms that can contain an empty grouping set:
-/// - `GROUPING SETS (…, (), …)` — explicitly listed.
-/// - `ROLLUP(exprs)` — always expands to include `()`.
-/// - `CUBE(exprs)`  — always expands to include `()`.
-fn has_empty_grouping_set(group_expr: &[Expr]) -> bool {
-    match group_expr.first() {
-        Some(Expr::GroupingSet(GroupingSet::GroupingSets(groups))) => {
-            groups.iter().any(|g| g.is_empty())
-        }
-        // Both ROLLUP and CUBE always include the empty grouping set ().
-        Some(Expr::GroupingSet(GroupingSet::Rollup(_)))
-        | Some(Expr::GroupingSet(GroupingSet::Cube(_))) => true,
-        _ => false,
-    }
 }
 
 #[cfg(test)]

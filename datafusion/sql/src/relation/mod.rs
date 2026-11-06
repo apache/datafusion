@@ -8,9 +8,9 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    DFSchema, Diagnostic, Result, Span, Spans, TableReference, not_impl_err, plan_err,
+    ColumnIdGenerator, DFSchema, Diagnostic, Result, Span, Spans, TableReference,
+    not_impl_err, plan_err,
 };
-use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::planner::{
     PlannedRelation, RelationPlannerContext, RelationPlanning,
 };
@@ -193,11 +193,18 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         ) {
                             // each reference to a CTE gets its own column ids
                             (Some(cte_plan), _) => {
-                                cte_plan.clone().with_fresh_column_ids(
-                                    planner_context
-                                        .column_id_generator()
-                                        .map(Arc::as_ref),
-                                )
+                                match planner_context.column_id_generator() {
+                                    Some(generator) => {
+                                        cte_plan.clone().with_fresh_column_ids(generator)
+                                    }
+                                    // the entry points always give the context a
+                                    // generator
+                                    None => cte_plan.clone().with_fresh_column_ids(
+                                        &ColumnIdGenerator::new_after(
+                                            cte_plan.max_column_id(),
+                                        ),
+                                    ),
+                                }
                             }
                             (_, Ok(provider)) => {
                                 LogicalPlanBuilder::scan_with_column_id_generator(
@@ -357,16 +364,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         match plan {
-            LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => {
-                subquery_alias(
-                    LogicalPlan::Subquery(Subquery {
-                        subquery: input,
-                        outer_ref_columns,
-                        spans: Spans::new(),
-                    }),
-                    alias,
-                )
-            }
+            LogicalPlan::SubqueryAlias(SubqueryAlias { input, alias, .. }) => self
+                .plan_builder(LogicalPlan::Subquery(Subquery {
+                    subquery: input,
+                    outer_ref_columns,
+                    spans: Spans::new(),
+                }))
+                .alias(alias)?
+                .build(),
             plan => Ok(LogicalPlan::Subquery(Subquery {
                 subquery: Arc::new(plan),
                 outer_ref_columns,

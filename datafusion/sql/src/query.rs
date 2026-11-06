@@ -10,9 +10,7 @@ use datafusion_common::{Constraints, DFSchema, Result, not_impl_err};
 use datafusion_expr::expr::{Sort, WildcardOptions};
 
 use datafusion_expr::select_expr::SelectExpr;
-use datafusion_expr::{
-    CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
-};
+use datafusion_expr::{CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan};
 use sqlparser::ast::{
     Expr as SQLExpr, ExprWithAliasAndOrderBy, LimitClause, ObjectName, Offset,
     OffsetRows, OrderBy, OrderByExpr, OrderByKind, PipeOperator, Query, SelectInto,
@@ -287,9 +285,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return Ok(input);
         }
 
-        LogicalPlanBuilder::from(input)
-            .limit_by_expr(skip, fetch)?
-            .build()
+        self.plan_builder(input).limit_by_expr(skip, fetch)?.build()
     }
 
     /// Wrap the logical in a sort
@@ -308,7 +304,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             let distinct_on = distinct_on.clone().with_sort_expr(order_by)?;
             Ok(LogicalPlan::Distinct(Distinct::On(distinct_on)))
         } else {
-            LogicalPlanBuilder::from(plan).sort(order_by)?.build()
+            self.plan_builder(plan).sort(order_by)?.build()
         }
     }
 
@@ -346,7 +342,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|e| process_expr(e, planner_context))
             .collect::<Result<Vec<_>>>()?;
 
-        LogicalPlanBuilder::from(plan)
+        self.plan_builder(plan)
             .aggregate(group_by_exprs, aggr_exprs)?
             .build()
     }

@@ -33,7 +33,7 @@ use crate::{
     Limit, LogicalPlan, MaterializedCte, MaterializedCtePlan, Partitioning, Prepare,
     Projection, RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias,
     TableScan, Union, Unnest, UserDefinedLogicalNode, Values, Window, WriteOp,
-    builder::unnest_with_options, dml::CopyTo,
+    dml::CopyTo,
 };
 use datafusion_common::tree_node::TreeNodeRefContainer;
 
@@ -102,12 +102,14 @@ impl TreeNode for LogicalPlan {
             LogicalPlan::Aggregate(Aggregate {
                 input,
                 group_expr,
+                grouping_sets,
                 aggr_expr,
                 schema,
             }) => input.map_elements(f)?.update_data(|input| {
                 LogicalPlan::Aggregate(Aggregate {
                     input,
                     group_expr,
+                    grouping_sets,
                     aggr_expr,
                     schema,
                 })
@@ -627,6 +629,7 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate {
                 input,
                 group_expr,
+                grouping_sets,
                 aggr_expr,
                 schema,
             }) => (group_expr, aggr_expr).map_elements(f)?.update_data(
@@ -634,6 +637,7 @@ impl LogicalPlan {
                     LogicalPlan::Aggregate(Aggregate {
                         input,
                         group_expr,
+                        grouping_sets,
                         aggr_expr,
                         schema,
                     })
@@ -771,14 +775,13 @@ impl LogicalPlan {
                 _ => Transformed::no(stmt),
             }
             .update_data(LogicalPlan::Statement),
-            LogicalPlan::Unnest(Unnest {
-                input,
-                exec_columns,
-                options,
-                ..
-            }) => {
-                let exprs: Vec<Expr> =
-                    exec_columns.into_iter().map(Expr::Column).collect();
+            LogicalPlan::Unnest(unnest) => {
+                let exprs: Vec<Expr> = unnest
+                    .exec_columns
+                    .iter()
+                    .cloned()
+                    .map(Expr::Column)
+                    .collect();
                 exprs.map_elements(f)?.map_data(|mapped_exprs| {
                     let new_columns = mapped_exprs
                         .into_iter()
@@ -794,12 +797,14 @@ impl LogicalPlan {
                     // `dependency_indices`, and `schema` are recomputed from
                     // the (possibly rewritten) columns rather than carried over
                     // stale. This keeps `map_expressions` consistent with
-                    // `with_new_exprs`.
-                    unnest_with_options(
-                        Arc::unwrap_or_clone(input),
+                    // `with_new_exprs`. The unnested columns keep their ids.
+                    Unnest::try_new_keeping_ids(
+                        &unnest,
+                        Arc::clone(&unnest.input),
                         new_columns,
-                        options,
+                        unnest.options.clone(),
                     )
+                    .map(LogicalPlan::Unnest)
                 })?
             }
             LogicalPlan::Dml(DmlStatement {

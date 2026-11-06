@@ -12,14 +12,17 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::TableReference;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::tree_node::{TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, Result, ScalarValue};
+use datafusion_common::{Column, ColumnIdGenerator, DFSchema, Result, ScalarValue};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
-    ColumnarValue, DistinctHandling, Expr, WriteOp, logical_plan::LogicalPlan,
+    Aggregate, ColumnarValue, DistinctHandling, Expr, LogicalPlanBuilder, NamedExpr,
+    Projection, WriteOp, logical_plan::LogicalPlan,
 };
+
+use crate::OptimizerConfig;
 use datafusion_physical_expr::create_physical_expr;
 use log::{debug, trace};
 use std::sync::Arc;
@@ -31,6 +34,110 @@ pub use datafusion_expr::expr_rewriter::NamePreserver;
 /// Whether an expression is free of volatile functions and subqueries.
 /// Subqueries are conservative barriers because their plans may contain
 /// volatile expressions that [`Expr::is_volatile`] does not visit.
+/// A [`LogicalPlanBuilder`] of `plan` that allocates column ids with the
+/// generator of `config`: the outputs that a rule builds with it get ids that
+/// do not collide with the rest of the plan
+pub(crate) fn plan_builder(
+    plan: impl Into<Arc<LogicalPlan>>,
+    config: &dyn OptimizerConfig,
+) -> LogicalPlanBuilder {
+    LogicalPlanBuilder::new_from_arc(plan.into())
+        .with_column_id_generator(Some(Arc::clone(config.column_id_generator())))
+}
+
+/// A [`LogicalPlanBuilder`] of `plan` that allocates column ids with `ids`
+/// (the generator of the optimizer config, see [`plan_builder`])
+pub(crate) fn ids_builder(
+    ids: &Arc<ColumnIdGenerator>,
+    plan: impl Into<Arc<LogicalPlan>>,
+) -> LogicalPlanBuilder {
+    LogicalPlanBuilder::new_from_arc(plan.into())
+        .with_column_id_generator(Some(Arc::clone(ids)))
+}
+
+/// Returns `plan`, a projection whose first outputs rebuild the outputs
+/// `entries` (one output per entry, in the same order, possibly followed by
+/// outputs it adds), where each rebuilt output keeps the id of its entry (see
+/// [`NamedExpr::with_rewritten_expr`])
+pub(crate) fn with_output_ids_of(
+    plan: LogicalPlan,
+    entries: &[NamedExpr],
+    config: &dyn OptimizerConfig,
+) -> Result<LogicalPlan> {
+    let LogicalPlan::Projection(projection) = plan else {
+        return Ok(plan);
+    };
+    if projection.expr.len() < entries.len() {
+        return Ok(LogicalPlan::Projection(projection));
+    }
+    let mut entries = entries.iter();
+    let expr = projection
+        .expr
+        .into_iter()
+        .map(|new| match entries.next() {
+            Some(entry) => entry
+                .clone()
+                .with_rewritten_expr(new.expr, config.column_id_generator()),
+            None => new,
+        })
+        .collect();
+    Projection::try_new_with_schema(expr, projection.input, projection.schema)
+        .map(LogicalPlan::Projection)
+}
+
+/// Returns `plan`, an aggregate that rebuilds `old` with possibly more
+/// grouping expressions (the aggregate expressions of `old` first, possibly
+/// followed by more), where the outputs it keeps keep their ids: a grouping
+/// expression equal to one of `old`, the grouping id column, and
+/// the aggregate expressions of `old`, by position (see
+/// [`NamedExpr::with_rewritten_expr`])
+pub(crate) fn with_aggregate_ids_of(
+    plan: LogicalPlan,
+    old: &Aggregate,
+    generator: &ColumnIdGenerator,
+) -> Result<LogicalPlan> {
+    let LogicalPlan::Aggregate(aggregate) = plan else {
+        return Ok(plan);
+    };
+    if aggregate.aggr_expr.len() < old.aggr_expr.len() {
+        return Ok(LogicalPlan::Aggregate(aggregate));
+    }
+    let Aggregate {
+        input,
+        group_expr,
+        grouping_sets,
+        aggr_expr,
+        schema,
+        ..
+    } = aggregate;
+    let group_expr = group_expr
+        .into_iter()
+        .map(
+            |new| match old.group_expr.iter().find(|entry| entry.expr == new.expr) {
+                Some(entry) => entry.clone().with_rewritten_expr(new.expr, generator),
+                None => new,
+            },
+        )
+        .collect();
+    // the grouping id column keeps its id
+    let grouping_sets = grouping_sets.map(|mut grouping_sets| {
+        if let Some(old) = &old.grouping_sets {
+            grouping_sets.grouping_id = old.grouping_id;
+        }
+        grouping_sets
+    });
+    let mut old_aggr = old.aggr_expr.iter();
+    let aggr_expr = aggr_expr
+        .into_iter()
+        .map(|new| match old_aggr.next() {
+            Some(entry) => entry.clone().with_rewritten_expr(new.expr, generator),
+            None => new,
+        })
+        .collect();
+    Aggregate::try_new_with_schema(input, group_expr, grouping_sets, aggr_expr, schema)
+        .map(LogicalPlan::Aggregate)
+}
+
 pub(crate) fn is_repeatable(expr: &Expr) -> bool {
     !expr
         .exists(|expr| {

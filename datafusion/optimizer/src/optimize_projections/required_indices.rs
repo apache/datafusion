@@ -183,8 +183,9 @@ impl RequiredIndices {
         self.map_indices(f).into_inner()
     }
 
-    /// Returns the `Expr`s from `exprs` that are at the indices in this instance
-    pub fn get_at_indices(&self, exprs: &[Expr]) -> Vec<Expr> {
+    /// Returns the `Expr`s (or the outputs of a projection) from `exprs` that
+    /// are at the indices in this instance
+    pub fn get_at_indices<T: Clone>(&self, exprs: &[T]) -> Vec<T> {
         self.indices.iter().map(|&idx| exprs[idx].clone()).collect()
     }
 

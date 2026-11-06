@@ -28,8 +28,8 @@ use datafusion_common::format::{
 };
 use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
-    NullEquality, Result, TableReference, assert_or_internal_err, context,
-    internal_datafusion_err, internal_err, not_impl_err, plan_err,
+    ColumnIdGenerator, NullEquality, Result, TableReference, assert_or_internal_err,
+    context, internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_datasource::file_format::FileFormat;
 use datafusion_datasource::file_format::{
@@ -51,7 +51,7 @@ use datafusion_expr::{
 };
 use datafusion_expr::{
     DistinctOn, DropView, Expr, JoinConstraint, LogicalPlan, LogicalPlanBuilder,
-    ScalarUDF, SortExpr, Statement, WindowUDF, dml,
+    NamedExpr, ScalarUDF, SortExpr, Statement, WindowUDF, dml,
     logical_plan::{
         Aggregate, AsOfJoin, AsOfMatch, CreateCatalog, CreateCatalogSchema,
         CreateExternalTable, CreateView, DdlStatement, Distinct, EmptyRelation,
@@ -523,6 +523,13 @@ impl AsLogicalPlan for LogicalPlanNode {
                 let expr: Vec<Expr> =
                     from_proto::parse_exprs(&projection.expr, ctx, extension_codec)?;
 
+                // ids are not encoded: the outputs get new ones, after the
+                // ids of the decoded input
+                let generator = ColumnIdGenerator::new_after(input.max_column_id());
+                let expr = expr
+                    .into_iter()
+                    .map(|e| NamedExpr::allocate(e, input.schema(), &generator))
+                    .collect();
                 let new_proj =
                     LogicalPlan::Projection(Projection::try_new(expr, Arc::new(input))?);
                 match projection.optional_alias.as_ref() {
@@ -551,8 +558,15 @@ impl AsLogicalPlan for LogicalPlanNode {
             LogicalPlanType::Window(window) => {
                 let input: LogicalPlan =
                     into_logical_plan!(window.input, ctx, extension_codec)?;
-                let window_expr =
+                let window_expr: Vec<Expr> =
                     from_proto::parse_exprs(&window.window_expr, ctx, extension_codec)?;
+                // ids are not encoded: the outputs get new ones, after the ids
+                // of the decoded input
+                let generator = ColumnIdGenerator::new_after(input.max_column_id());
+                let window_expr = window_expr
+                    .into_iter()
+                    .map(|e| NamedExpr::new(e, generator.next()))
+                    .collect();
                 Ok(LogicalPlan::Window(Window::try_new(
                     window_expr,
                     Arc::new(input),
@@ -565,9 +579,22 @@ impl AsLogicalPlan for LogicalPlanNode {
                     from_proto::parse_exprs(&aggregate.group_expr, ctx, extension_codec)?;
                 let aggr_expr =
                     from_proto::parse_exprs(&aggregate.aggr_expr, ctx, extension_codec)?;
+                // ids are not encoded: the outputs get new ones, after the ids
+                // of the decoded input (bare grouping columns pass through)
+                let generator = ColumnIdGenerator::new_after(input.max_column_id());
+                let (group_expr, grouping_sets) = Aggregate::allocate_group_expr(
+                    group_expr,
+                    input.schema(),
+                    &generator,
+                )?;
+                let aggr_expr = aggr_expr
+                    .into_iter()
+                    .map(|e| NamedExpr::new(e, generator.next()))
+                    .collect();
                 Ok(LogicalPlan::Aggregate(Aggregate::try_new(
                     Arc::new(input),
                     group_expr,
+                    grouping_sets,
                     aggr_expr,
                 )?))
             }
@@ -1048,8 +1075,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .map_or(Ok(None), |v| v.map(Some))?;
                 let left = into_logical_plan!(join.left, ctx, extension_codec)?;
                 let right = into_logical_plan!(join.right, ctx, extension_codec)?;
+                // the sides are decoded with their own ids, which may collide
+                let right = right.with_fresh_column_ids_if_overlapping(
+                    &left,
+                    &ColumnIdGenerator::new(),
+                )?;
                 let on: Vec<(Expr, Expr)> =
                     left_keys.into_iter().zip(right_keys).collect();
+                // ids are not encoded: the mark column of a mark join gets a
+                // new one, after the ids of both sides
+                let mark_id = ColumnIdGenerator::new_after(
+                    left.max_column_id().max(right.max_column_id()),
+                )
+                .next();
 
                 // Construct the Join directly instead of going through
                 // LogicalPlanBuilder. The builder methods hardcode
@@ -1077,7 +1115,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                             "null_aware_value_keys",
                         )?
                         .max(1),
-                    ),
+                    )
+                    .with_mark_column_id(mark_id)?,
                 ))
             }
             LogicalPlanType::AsOfJoin(join) => {
@@ -1135,6 +1174,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                 })?;
                 let left = into_logical_plan!(join.left, ctx, extension_codec)?;
                 let right = into_logical_plan!(join.right, ctx, extension_codec)?;
+                // the sides are decoded with their own ids, which may collide
+                let right = right.with_fresh_column_ids_if_overlapping(
+                    &left,
+                    &ColumnIdGenerator::new(),
+                )?;
                 Ok(LogicalPlan::AsOfJoin(AsOfJoin::try_new(
                     Arc::new(left),
                     Arc::new(right),
@@ -1166,10 +1210,19 @@ impl AsLogicalPlan for LogicalPlanNode {
                 LogicalPlanBuilder::from(left).cross_join(right)?.build()
             }
             LogicalPlanType::Extension(LogicalExtensionNode { node, inputs }) => {
-                let input_plans: Vec<LogicalPlan> = inputs
-                    .iter()
-                    .map(|i| i.try_into_logical_plan(ctx, extension_codec))
-                    .collect::<Result<_>>()?;
+                let mut input_plans: Vec<LogicalPlan> = Vec::with_capacity(inputs.len());
+                for input in inputs {
+                    // the inputs are decoded with their own ids, which may
+                    // collide
+                    let mut plan = input.try_into_logical_plan(ctx, extension_codec)?;
+                    for previous in &input_plans {
+                        plan = plan.with_fresh_column_ids_if_overlapping(
+                            previous,
+                            &ColumnIdGenerator::new(),
+                        )?;
+                    }
+                    input_plans.push(plan);
+                }
 
                 let extension_node =
                     extension_codec.try_decode(node, &input_plans, ctx)?;
@@ -1331,14 +1384,27 @@ impl AsLogicalPlan for LogicalPlanNode {
                         "Protobuf deserialization error, RecursiveQueryNode was missing required field recursive_term."
                     ))?
                     .try_into_logical_plan(ctx, extension_codec)?;
+                // the terms are decoded with their own ids, which may collide
+                let recursive_term = recursive_term
+                    .with_fresh_column_ids_if_overlapping(
+                        &static_term,
+                        &ColumnIdGenerator::new(),
+                    )?;
 
                 // The output schema is derived state, so decoding goes through
-                // the constructor after restoring the child terms.
+                // the constructor after restoring the child terms. Ids are not
+                // encoded: the outputs get new ones, after the ids of the terms
+                let generator = ColumnIdGenerator::new_after(
+                    static_term
+                        .max_column_id()
+                        .max(recursive_term.max_column_id()),
+                );
                 RecursiveQuery::try_new(
                     recursive_query_node.name.clone(),
                     Arc::new(static_term),
                     Arc::new(recursive_term),
                     recursive_query_node.is_distinct,
+                    &generator,
                 )
                 .map(LogicalPlan::RecursiveQuery)
             }
@@ -1657,7 +1723,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     extension_codec,
                                 )?,
                             )),
-                            expr: serialize_exprs(expr, extension_codec)?,
+                            expr: serialize_exprs(
+                                expr.iter().map(|e| &e.expr),
+                                extension_codec,
+                            )?,
                             optional_alias: None,
                         },
                     ))),
@@ -1712,7 +1781,10 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::DistinctOn(Box::new(
                         protobuf::DistinctOnNode {
                             on_expr: serialize_exprs(on_expr, extension_codec)?,
-                            select_expr: serialize_exprs(select_expr, extension_codec)?,
+                            select_expr: serialize_exprs(
+                                select_expr.iter().map(|e| &e.expr),
+                                extension_codec,
+                            )?,
                             sort_expr,
                             input: Some(Box::new(input)),
                         },
@@ -1730,17 +1802,21 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Window(Box::new(
                         protobuf::WindowNode {
                             input: Some(Box::new(input)),
-                            window_expr: serialize_exprs(window_expr, extension_codec)?,
+                            window_expr: serialize_exprs(
+                                window_expr.iter().map(|e| &e.expr),
+                                extension_codec,
+                            )?,
                         },
                     ))),
                 })
             }
-            LogicalPlan::Aggregate(Aggregate {
-                group_expr,
-                aggr_expr,
-                input,
-                ..
-            }) => {
+            LogicalPlan::Aggregate(
+                agg @ Aggregate {
+                    aggr_expr, input, ..
+                },
+            ) => {
+                // grouping sets are encoded as they are written
+                let group_expr = agg.group_by_exprs();
                 let input: LogicalPlanNode = LogicalPlanNode::try_from_logical_plan(
                     input.as_ref(),
                     extension_codec,
@@ -1749,8 +1825,11 @@ impl AsLogicalPlan for LogicalPlanNode {
                     logical_plan_type: Some(LogicalPlanType::Aggregate(Box::new(
                         protobuf::AggregateNode {
                             input: Some(Box::new(input)),
-                            group_expr: serialize_exprs(group_expr, extension_codec)?,
-                            aggr_expr: serialize_exprs(aggr_expr, extension_codec)?,
+                            group_expr: serialize_exprs(&group_expr, extension_codec)?,
+                            aggr_expr: serialize_exprs(
+                                aggr_expr.iter().map(|e| &e.expr),
+                                extension_codec,
+                            )?,
                         },
                     ))),
                 })

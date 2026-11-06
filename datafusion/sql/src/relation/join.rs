@@ -7,7 +7,7 @@ use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
     Column, HashMap, Result, not_impl_err, plan_datafusion_err, plan_err,
 };
-use datafusion_expr::{JoinType, LogicalPlan, LogicalPlanBuilder};
+use datafusion_expr::{JoinType, LogicalPlan};
 use sqlparser::ast::{
     Join, JoinConstraint, JoinOperator, ObjectName, TableFactor, TableWithJoins,
 };
@@ -122,7 +122,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let window_span = self.window_function_span(&sql_on, &HashMap::new());
                 let on = self.sql_to_expr(sql_on, &join_schema, planner_context)?;
                 reject_window_functions(&on, "JOIN ON", JOIN_ON_HELP, window_span)?;
-                LogicalPlanBuilder::from(left)
+                self.plan_builder(left)
                     .asof_join_on(right, Some(on), match_condition)?
                     .build()
             }
@@ -151,11 +151,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                             })
                     })
                     .collect::<Result<Vec<_>>>()?;
-                LogicalPlanBuilder::from(left)
+                self.plan_builder(left)
                     .asof_join_using(right, keys, match_condition)?
                     .build()
             }
-            JoinConstraint::None => LogicalPlanBuilder::from(left)
+            JoinConstraint::None => self
+                .plan_builder(left)
                 .asof_join_on(right, None, match_condition)?
                 .build(),
             JoinConstraint::Natural => plan_err!("NATURAL ASOF JOIN is not supported"),
@@ -167,7 +168,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         left: LogicalPlan,
         right: LogicalPlan,
     ) -> Result<LogicalPlan> {
-        LogicalPlanBuilder::from(left).cross_join(right)?.build()
+        self.plan_builder(left).cross_join(right)?.build()
     }
 
     fn parse_join(
@@ -188,7 +189,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // A join condition is evaluated before window functions are
                 // computed, so they may not appear in it
                 reject_window_functions(&expr, "JOIN ON", JOIN_ON_HELP, window_span)?;
-                LogicalPlanBuilder::from(left)
+                self.plan_builder(left)
                     .join_on(right, join_type, Some(expr))?
                     .build()
             }
@@ -214,7 +215,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     })
                     .collect::<Result<Vec<_>>>()?;
 
-                LogicalPlanBuilder::from(left)
+                self.plan_builder(left)
                     .join_using(right, join_type, keys)?
                     .build()
             }
@@ -232,12 +233,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if keys.is_empty() {
                     self.parse_cross_join(left, right)
                 } else {
-                    LogicalPlanBuilder::from(left)
+                    self.plan_builder(left)
                         .join_using(right, join_type, keys)?
                         .build()
                 }
             }
-            JoinConstraint::None => LogicalPlanBuilder::from(left)
+            JoinConstraint::None => self
+                .plan_builder(left)
                 .join_on(right, join_type, [])?
                 .build(),
         }

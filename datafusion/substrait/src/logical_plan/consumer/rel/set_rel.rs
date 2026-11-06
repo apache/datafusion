@@ -4,7 +4,9 @@
 
 use crate::logical_plan::consumer::SubstraitConsumer;
 use datafusion::arrow::datatypes::Field;
-use datafusion::common::{JoinType, NullEquality, not_impl_err, substrait_err};
+use datafusion::common::{
+    ColumnIdGenerator, JoinType, NullEquality, not_impl_err, substrait_err,
+};
 use datafusion::logical_expr::{
     Cast, Expr, LogicalPlan, LogicalPlanBuilder, requalify_sides_if_needed,
 };
@@ -142,6 +144,11 @@ fn intersect_rel(
         return LogicalPlanBuilder::intersect(left, right, is_all);
     }
 
+    // The inputs may have been built with different column id generators:
+    // renumber the right side now, as the join would, so that the column
+    // references taken from its schema below stay unambiguous.
+    let right =
+        right.with_fresh_column_ids_if_overlapping(&left, &ColumnIdGenerator::new())?;
     let (left, right, _) = requalify_sides_if_needed(
         LogicalPlanBuilder::from(left),
         LogicalPlanBuilder::from(right),

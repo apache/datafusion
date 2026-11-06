@@ -514,14 +514,11 @@ impl<'a, 'b> PgJsonVisitor<'a, 'b> {
                     "Expressions": expr_vec_fmt!(window_expr)
                 )
             }
-            LogicalPlan::Aggregate(Aggregate {
-                group_expr,
-                aggr_expr,
-                ..
-            }) => {
+            LogicalPlan::Aggregate(agg) => {
+                let Aggregate { aggr_expr, .. } = agg;
                 pg_fields!(
                     "Node Type": "Aggregate",
-                    "Group By": expr_vec_fmt!(group_expr),
+                    "Group By": expr_vec_fmt!(agg.group_by_exprs()),
                     "Aggregates": expr_vec_fmt!(aggr_expr)
                 )
             }

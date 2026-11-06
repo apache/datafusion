@@ -210,9 +210,10 @@ fn rewrite_node(
             ..
         }) => {
             // Narrows `live` to the columns the projection's expressions reference.
-            let child_live = LiveColumns::try_new(&expr, input.schema())?;
+            let child_live =
+                LiveColumns::try_new(expr.iter().map(|e| &e.expr), input.schema())?;
             let child_duplicate_insensitive =
-                duplicate_insensitive && expr.iter().all(is_repeatable);
+                duplicate_insensitive && expr.iter().all(|e| is_repeatable(e));
             rewrite_single_input(
                 input,
                 child_live,
@@ -242,13 +243,14 @@ fn rewrite_node(
         LogicalPlan::Aggregate(Aggregate {
             input,
             group_expr,
+            grouping_sets,
             aggr_expr,
             schema,
             ..
         }) => {
             // Narrows `live` to the grouping and aggregate expressions' columns.
             let child_live = LiveColumns::try_new(
-                group_expr.iter().chain(&aggr_expr),
+                group_expr.iter().chain(&aggr_expr).map(|e| &e.expr),
                 input.schema(),
             )?;
 
@@ -258,9 +260,10 @@ fn rewrite_node(
             // (`count(DISTINCT x)`). This covers grouping-only and global
             // aggregates. One sensitive aggregate makes input multiplicity
             // observable, even beneath an insensitive ancestor.
-            let child_duplicate_insensitive =
-                aggr_expr.iter().all(is_duplicate_insensitive_aggregate)
-                    && group_expr.iter().all(is_repeatable);
+            let child_duplicate_insensitive = aggr_expr
+                .iter()
+                .all(|e| is_duplicate_insensitive_aggregate(e))
+                && group_expr.iter().all(|e| is_repeatable(e));
 
             rewrite_single_input(
                 input,
@@ -268,7 +271,11 @@ fn rewrite_node(
                 child_duplicate_insensitive,
                 |input| {
                     Ok(LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-                        input, group_expr, aggr_expr, schema,
+                        input,
+                        group_expr,
+                        grouping_sets,
+                        aggr_expr,
+                        schema,
                     )?))
                 },
             )
@@ -296,7 +303,7 @@ fn rewrite_node(
             let exprs = || {
                 on_expr
                     .iter()
-                    .chain(&select_expr)
+                    .chain(select_expr.iter().map(|e| &e.expr))
                     .chain(sort_expr.iter().flatten().map(|sort| &sort.expr))
             };
             let child_live = LiveColumns::try_new(exprs(), input.schema())?;

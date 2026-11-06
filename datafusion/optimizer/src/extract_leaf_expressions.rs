@@ -60,9 +60,9 @@ use std::sync::Arc;
 
 use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, DFSchema, Result, qualified_name};
+use datafusion_common::{Column, ColumnIdGenerator, DFSchema, Result, qualified_name};
 use datafusion_expr::logical_plan::LogicalPlan;
-use datafusion_expr::{Expr, ExpressionPlacement, Projection};
+use datafusion_expr::{Expr, ExpressionPlacement, NamedExpr, Projection};
 
 use crate::optimizer::ApplyOrder;
 use crate::push_down_filter::replace_cols_by_name;
@@ -209,13 +209,14 @@ impl OptimizerRule for ExtractLeafExpressions {
             return Ok(Transformed::no(plan));
         }
         let alias_generator = config.alias_generator();
+        let ids = config.column_id_generator();
 
         // Advance the alias generator past any user-provided __datafusion_extracted_N
         // aliases to prevent collisions when generating new extraction aliases.
         advance_generator_past_existing(&plan, alias_generator)?;
 
         plan.transform_down_with_subqueries(|plan| {
-            extract_from_plan(plan, alias_generator)
+            extract_from_plan(plan, alias_generator, ids)
         })
     }
 }
@@ -259,6 +260,7 @@ fn advance_generator_past_existing(
 fn extract_from_plan(
     plan: LogicalPlan,
     alias_generator: &Arc<AliasGenerator>,
+    ids: &ColumnIdGenerator,
 ) -> Result<Transformed<LogicalPlan>> {
     // Only extract from plan types whose output schema is predictable after
     // expression rewriting.  Nodes like Window derive column names from
@@ -308,7 +310,7 @@ fn extract_from_plan(
     // Build per-input extractors
     let mut extractors: Vec<LeafExpressionExtractor> = input_schemas
         .iter()
-        .map(|schema| LeafExpressionExtractor::new(schema.as_ref(), alias_generator))
+        .map(|schema| LeafExpressionExtractor::new(schema.as_ref(), alias_generator, ids))
         .collect();
 
     // Build per-input column sets for routing expressions to the correct input
@@ -358,7 +360,7 @@ fn extract_from_plan(
         .with_new_exprs(transformed.data.expressions(), new_inputs)?;
 
     // Add recovery projection if the output schema changed
-    let recovered = build_recovery_projection(original_schema.as_ref(), new_plan)?;
+    let recovered = build_recovery_projection(original_schema.as_ref(), new_plan, ids)?;
 
     Ok(Transformed::yes(recovered))
 }
@@ -511,7 +513,7 @@ fn build_projection_replace_map(projection: &Projection) -> HashMap<String, Expr
         .zip(projection.expr.iter())
         .map(|((qualifier, field), expr)| {
             let key = Column::from((qualifier, field)).flat_name();
-            (key, expr.clone().unalias())
+            (key, expr.expr.clone().unalias())
         })
         .collect()
 }
@@ -542,8 +544,9 @@ fn build_projection_replace_map(projection: &Projection) -> HashMap<String, Expr
 fn build_recovery_projection(
     original_schema: &DFSchema,
     input: LogicalPlan,
+    ids: &ColumnIdGenerator,
 ) -> Result<LogicalPlan> {
-    let new_schema = input.schema();
+    let new_schema = Arc::clone(input.schema());
     let orig_len = original_schema.fields().len();
     let new_len = new_schema.fields().len();
 
@@ -570,16 +573,55 @@ fn build_recovery_projection(
             "build_recovery_projection: positional mapping requires same field count, \
              got original={orig_len} vs new={new_len}"
         );
+        //
+        // A renamed output that the node defines (an aggregate output) keeps
+        // its id in the recovery projection, which defines it now: the node
+        // gives its output a new id.
+        let renamed = |i: usize| {
+            let (orig_qualifier, orig_field) = original_schema.qualified_field(i);
+            let (new_qualifier, new_field) = new_schema.qualified_field(i);
+            orig_field.name() != new_field.name() || orig_qualifier != new_qualifier
+        };
+        let mut output_ids = new_schema.field_ids().to_vec();
+        let mut kept_ids = vec![None; orig_len];
+        for i in (0..orig_len).filter(|i| renamed(*i)) {
+            if let Some(id) = original_schema.field_id(i)
+                && new_schema.field_id(i) == Some(id)
+            {
+                output_ids[i] = Some(ids.next());
+                kept_ids[i] = Some(id);
+            }
+        }
+        let input = if kept_ids.iter().any(Option::is_some) {
+            input.with_output_column_ids(&output_ids)?.data
+        } else {
+            input
+        };
+        let new_schema = Arc::clone(input.schema());
         let mut proj_exprs = Vec::with_capacity(orig_len);
         for (i, (orig_qualifier, orig_field)) in original_schema.iter().enumerate() {
             let (new_qualifier, new_field) = new_schema.qualified_field(i);
-            if orig_field.name() == new_field.name() && orig_qualifier == new_qualifier {
-                proj_exprs.push(Expr::from((orig_qualifier, orig_field)));
-            } else {
-                let new_col = Expr::Column(Column::from((new_qualifier, new_field)));
-                proj_exprs.push(
-                    new_col.alias_qualified(orig_qualifier.cloned(), orig_field.name()),
+            if !renamed(i) {
+                let col = Expr::Column(
+                    Column::from((orig_qualifier, orig_field))
+                        .with_id(original_schema.field_id(i)),
                 );
+                proj_exprs.push(NamedExpr::allocate(col, &new_schema, ids));
+            } else {
+                let new_col = Expr::Column(
+                    Column::from((new_qualifier, new_field))
+                        .with_id(new_schema.field_id(i)),
+                );
+                let expr =
+                    new_col.alias_qualified(orig_qualifier.cloned(), orig_field.name());
+                let entry = match kept_ids[i] {
+                    // the node gave its output the new id
+                    Some(id) if new_schema.field_id(i) == output_ids[i] => {
+                        NamedExpr::new(expr, id)
+                    }
+                    _ => NamedExpr::allocate(expr, &new_schema, ids),
+                };
+                proj_exprs.push(entry);
             }
         }
         let projection = Projection::try_new(proj_exprs, Arc::new(input))?;
@@ -587,7 +629,12 @@ fn build_recovery_projection(
     } else {
         // Schema-preserving nodes: new schema has extra extraction columns.
         // Original columns still exist by name; select them to hide extras.
-        let col_exprs: Vec<Expr> = original_schema.iter().map(Expr::from).collect();
+        // They keep their ids: the recovery passes them through.
+        let col_exprs = original_schema
+            .columns()
+            .into_iter()
+            .map(|col| NamedExpr::allocate(Expr::Column(col), input.schema(), ids))
+            .collect();
         let projection = Projection::try_new(col_exprs, Arc::new(input))?;
         Ok(LogicalPlan::Projection(projection))
     }
@@ -613,15 +660,22 @@ struct LeafExpressionExtractor<'a> {
     input_schema: &'a DFSchema,
     /// Alias generator
     alias_generator: &'a Arc<AliasGenerator>,
+    /// Allocates the ids of the extracted columns
+    ids: &'a ColumnIdGenerator,
 }
 
 impl<'a> LeafExpressionExtractor<'a> {
-    fn new(input_schema: &'a DFSchema, alias_generator: &'a Arc<AliasGenerator>) -> Self {
+    fn new(
+        input_schema: &'a DFSchema,
+        alias_generator: &'a Arc<AliasGenerator>,
+        ids: &'a ColumnIdGenerator,
+    ) -> Self {
         Self {
             extracted: IndexMap::new(),
             columns_needed: IndexSet::new(),
             input_schema,
             alias_generator,
+            ids,
         }
     }
 
@@ -666,6 +720,7 @@ impl<'a> LeafExpressionExtractor<'a> {
             &self.columns_needed,
             input,
             self.input_schema,
+            self.ids,
         )?;
         Ok(Some(LogicalPlan::Projection(proj)))
     }
@@ -701,17 +756,21 @@ fn build_extraction_projection_impl(
     columns_needed: &IndexSet<Column>,
     target: &Arc<LogicalPlan>,
     target_schema: &DFSchema,
+    ids: &ColumnIdGenerator,
 ) -> Result<Projection> {
     if let LogicalPlan::Projection(existing) = target.as_ref() {
-        // Merge into existing projection
-        let mut proj_exprs = existing.expr.clone();
+        // Merge into existing projection: its outputs keep their ids, the
+        // outputs added get new ones (or pass a column through)
+        let mut proj_exprs: Vec<Expr> =
+            existing.expr.iter().map(|e| e.expr.clone()).collect();
+        let kept = existing.expr.len();
 
         // Build a map of existing expressions (by Expr equality) to their aliases
         let existing_extractions: IndexMap<Expr, String> = existing
             .expr
             .iter()
             .filter_map(|e| {
-                if let Expr::Alias(alias) = e
+                if let Expr::Alias(alias) = &e.expr
                     && alias.name.starts_with(EXTRACTED_EXPR_PREFIX)
                 {
                     return Some((*alias.expr.clone(), alias.name.clone()));
@@ -797,6 +856,18 @@ fn build_extraction_projection_impl(
             // the input or is ambiguous there: no single spelling is correct.
         }
 
+        let input_schema = existing.input.schema();
+        let proj_exprs = existing
+            .expr
+            .iter()
+            .cloned()
+            .chain(
+                proj_exprs
+                    .into_iter()
+                    .skip(kept)
+                    .map(|e| NamedExpr::allocate(e, input_schema, ids)),
+            )
+            .collect();
         Projection::try_new(proj_exprs, Arc::clone(&existing.input))
     } else {
         // Build new projection with extracted expressions + all input columns
@@ -808,6 +879,10 @@ fn build_extraction_projection_impl(
         for (qualifier, field) in target_schema.iter() {
             proj_exprs.push(Expr::from((qualifier, field)));
         }
+        let proj_exprs = proj_exprs
+            .into_iter()
+            .map(|e| NamedExpr::allocate(e, target.schema(), ids))
+            .collect();
         Projection::try_new(proj_exprs, Arc::clone(target))
     }
 }
@@ -872,7 +947,8 @@ impl OptimizerRule for PushDownLeafProjections {
             return Ok(Transformed::no(plan));
         }
         let alias_generator = config.alias_generator();
-        match try_push_input(&plan, alias_generator)? {
+        let ids = config.column_id_generator();
+        match try_push_input(&plan, alias_generator, ids)? {
             Some(new_plan) => Ok(Transformed::yes(new_plan)),
             None => Ok(Transformed::no(plan)),
         }
@@ -886,11 +962,12 @@ impl OptimizerRule for PushDownLeafProjections {
 fn try_push_input(
     input: &LogicalPlan,
     alias_generator: &Arc<AliasGenerator>,
+    ids: &ColumnIdGenerator,
 ) -> Result<Option<LogicalPlan>> {
     let LogicalPlan::Projection(proj) = input else {
         return Ok(None);
     };
-    split_and_push_projection(proj, alias_generator)
+    split_and_push_projection(proj, alias_generator, ids)
 }
 
 /// If this is a passthrough column.  I.e,
@@ -1002,13 +1079,15 @@ fn merge_would_duplicate_kept_expr(
 fn split_and_push_projection(
     proj: &Projection,
     alias_generator: &Arc<AliasGenerator>,
+    ids: &ColumnIdGenerator,
 ) -> Result<Option<LogicalPlan>> {
     // Fast pre-check: skip if there are no pre-existing extracted aliases
     // and no new extractable expressions.
     let has_existing_extracted = proj.expr.iter().any(|e| {
-        matches!(e, Expr::Alias(alias) if alias.name.starts_with(EXTRACTED_EXPR_PREFIX))
+        matches!(&e.expr, Expr::Alias(alias) if alias.name.starts_with(EXTRACTED_EXPR_PREFIX))
     });
-    if !has_existing_extracted && !has_extractable_expr(&proj.expr) {
+    let proj_exprs: Vec<Expr> = proj.expr.iter().map(|e| e.expr.clone()).collect();
+    if !has_existing_extracted && !has_extractable_expr(&proj_exprs) {
         return Ok(None);
     }
 
@@ -1033,6 +1112,7 @@ fn split_and_push_projection(
     let mut extractors = vec![LeafExpressionExtractor::new(
         input_schema.as_ref(),
         alias_generator,
+        ids,
     )];
     let input_column_sets = vec![schema_columns(input_schema.as_ref())];
 
@@ -1041,7 +1121,7 @@ fn split_and_push_projection(
     let mut has_new_extractions = false;
     let mut proj_exprs_captured: usize = 0;
 
-    for (expr, (qualifier, field)) in proj.expr.iter().zip(original_schema.iter()) {
+    for (expr, (qualifier, field)) in proj_exprs.iter().zip(original_schema.iter()) {
         if let Some(col) = passthrough_column(expr) {
             // Pass-through — the input already produces this column, so
             // there is nothing to extract; just track it in the extractor.
@@ -1137,6 +1217,7 @@ fn split_and_push_projection(
         proj,
         &proj_input,
         alias_generator,
+        ids,
         proj_exprs_captured,
     )?;
 
@@ -1163,8 +1244,9 @@ fn split_and_push_projection(
                 columns_needed,
                 &input_arc,
                 input_schema.as_ref(),
+                ids,
             )?);
-            match try_push_input(&extraction, alias_generator)? {
+            match try_push_input(&extraction, alias_generator, ids)? {
                 Some(pushed) => pushed,
                 // The extraction projection cannot move below `input`. Leave
                 // the original projection unchanged: the split would put the
@@ -1227,6 +1309,14 @@ fn split_and_push_projection(
 
     // Wrap with recovery projection if the output schema changed
     if needs_recovery {
+        // the recovery projection restores the outputs of `proj`: they keep
+        // their ids
+        let recovery_exprs = proj
+            .expr
+            .iter()
+            .zip(recovery_exprs)
+            .map(|(entry, expr)| entry.clone().with_rewritten_expr(expr, ids))
+            .collect();
         let recovery = LogicalPlan::Projection(Projection::try_new(
             recovery_exprs,
             Arc::new(base_plan),
@@ -1246,7 +1336,9 @@ fn split_and_push_projection(
 /// [`PushDownFilter`](crate::push_down_filter::PushDownFilter) uses the same
 /// predicate to keep a filter above such a projection. See the module
 /// documentation for the precedence rule.
-pub(crate) fn is_pure_extraction_projection(exprs: &[Expr]) -> bool {
+pub(crate) fn is_pure_extraction_projection<'a>(
+    exprs: impl IntoIterator<Item = &'a Expr>,
+) -> bool {
     let mut has_extraction = false;
     for expr in exprs {
         match expr {
@@ -1268,6 +1360,7 @@ fn push_extraction_pairs(
     proj: &Projection,
     proj_input: &Arc<LogicalPlan>,
     alias_generator: &Arc<AliasGenerator>,
+    ids: &ColumnIdGenerator,
     proj_exprs_captured: usize,
 ) -> Result<Option<LogicalPlan>> {
     match proj_input.as_ref() {
@@ -1284,8 +1377,10 @@ fn push_extraction_pairs(
                 columns_needed,
                 proj_input,
                 target_schema.as_ref(),
+                ids,
             )?;
-            let merged_is_pure = is_pure_extraction_projection(&merged.expr);
+            let merged_is_pure =
+                is_pure_extraction_projection(merged.expr.iter().map(|e| &e.expr));
             let merged_plan = LogicalPlan::Projection(merged);
 
             // After merging, try to push the result further down, but ONLY
@@ -1297,7 +1392,7 @@ fn push_extraction_pairs(
             // This handles: Extraction → Recovery(cols) → Filter → ... → TableScan
             // by pushing through the recovery projection AND the filter in one pass.
             if merged_is_pure
-                && let Some(pushed) = try_push_input(&merged_plan, alias_generator)?
+                && let Some(pushed) = try_push_input(&merged_plan, alias_generator, ids)?
             {
                 return Ok(Some(pushed));
             }
@@ -1313,6 +1408,7 @@ fn push_extraction_pairs(
             columns_needed,
             proj_input.as_ref(),
             alias_generator,
+            ids,
         ),
     }
 }
@@ -1407,6 +1503,7 @@ fn try_push_into_inputs(
     columns_needed: &IndexSet<Column>,
     node: &LogicalPlan,
     alias_generator: &Arc<AliasGenerator>,
+    ids: &ColumnIdGenerator,
 ) -> Result<Option<LogicalPlan>> {
     let inputs = node.inputs();
     if inputs.is_empty() {
@@ -1478,6 +1575,7 @@ fn try_push_into_inputs(
                 &per_input[idx].columns,
                 &input_arc,
                 target_schema.as_ref(),
+                ids,
             )?;
             // Verify all requested aliases appear in the projection's output.
             // A merge may deduplicate if the same expression already exists
@@ -1493,12 +1591,12 @@ fn try_push_into_inputs(
             // this input (e.g., through Filter → existing extraction projection).
             // This ensures the input's output schema is stable and won't change
             // when the TopDown pass later visits children.
-            let pushed = match try_push_input(&proj_plan, alias_generator)? {
+            let pushed = match try_push_input(&proj_plan, alias_generator, ids)? {
                 Some(pushed) => pushed,
                 None => proj_plan,
             };
             if is_union {
-                new_inputs.push(align_union_input(pushed, &per_input[idx])?);
+                new_inputs.push(align_union_input(pushed, &per_input[idx], ids)?);
             } else {
                 new_inputs.push(pushed);
             }
@@ -1532,6 +1630,7 @@ fn try_push_into_inputs(
 fn align_union_input(
     input: LogicalPlan,
     target: &ExtractionTarget,
+    ids: &ColumnIdGenerator,
 ) -> Result<LogicalPlan> {
     let exprs: Vec<Expr> = target
         .pairs
@@ -1552,6 +1651,10 @@ fn align_union_input(
     if already_aligned {
         return Ok(input);
     }
+    let exprs = exprs
+        .into_iter()
+        .map(|e| NamedExpr::allocate(e, input.schema(), ids))
+        .collect();
     Projection::try_new(exprs, Arc::new(input)).map(LogicalPlan::Projection)
 }
 
@@ -2534,6 +2637,7 @@ mod tests {
             &columns_needed,
             &Arc::new(projection),
             &target_schema,
+            &ColumnIdGenerator::new(),
         )?;
 
         assert_eq!(
@@ -3997,7 +4101,7 @@ mod tests {
     fn test_merge_would_duplicate_kept_expr_counts_only_kept_columns() -> Result<()> {
         let scan = test_table_scan_with_struct()?;
         // `k` holds a `KeepInPlace` definition. `id` is a plain column.
-        let child = Projection::try_new(
+        let child = new_projection(
             vec![keep_in_place_udf(col("user")).alias("k"), col("id")],
             Arc::new(scan),
         )?;

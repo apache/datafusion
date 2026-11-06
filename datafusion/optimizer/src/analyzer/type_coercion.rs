@@ -20,9 +20,9 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
-    exec_err, internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err,
-    plan_err,
+    Column, ColumnIdGenerator, DFSchema, DFSchemaRef, DataFusionError, Result,
+    ScalarValue, TableReference, exec_err, internal_datafusion_err, internal_err,
+    not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::{
     self, AggregateFunctionParams, Alias, Between, BinaryExpr, Case, Exists,
@@ -47,9 +47,9 @@ use datafusion_expr::utils::merge_schema;
 use datafusion_expr::{
     AsOfJoin, AsOfMatch, Cast, DmlStatement, Expr, ExprSchemable, Join, Limit,
     LogicalPlan, MaterializedCte, MaterializedCteId, MaterializedCtePlan,
-    MaterializedCteScan, Operator, Projection, Union, ValueOrLambda, WindowFrame,
-    WindowFrameBound, WindowFrameUnits, WriteOp, is_false, is_not_false, is_not_true,
-    is_not_unknown, is_true, is_unknown, lit, not,
+    MaterializedCteScan, NamedExpr, Operator, Projection, Union, ValueOrLambda,
+    WindowFrame, WindowFrameBound, WindowFrameUnits, WriteOp, is_false, is_not_false,
+    is_not_true, is_not_unknown, is_true, is_unknown, lit, not,
 };
 
 /// Performs type coercion by determining the schema
@@ -64,7 +64,11 @@ impl TypeCoercion {
 }
 
 /// Coerce output schema based upon optimizer config.
-fn coerce_output(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPlan> {
+fn coerce_output(
+    plan: LogicalPlan,
+    config: &ConfigOptions,
+    generator: &ColumnIdGenerator,
+) -> Result<LogicalPlan> {
     if !config.optimizer.expand_views_at_output {
         return Ok(plan);
     }
@@ -75,7 +79,7 @@ fn coerce_output(plan: LogicalPlan, config: &ConfigOptions) -> Result<LogicalPla
     }
 
     if let Some(dfschema) = transform_schema_to_nonview(plan.schema()) {
-        coerce_plan_expr_for_schema(plan, &dfschema?)
+        coerce_plan_expr_for_schema(plan, &dfschema?, generator)
     } else {
         Ok(plan)
     }
@@ -106,11 +110,22 @@ impl AnalyzerRule for TypeCoercion {
             })?
             .data;
 
+        // Analyzer rules have no generator: the columns that coercion defines
+        // (casts of passed through columns) get ids after the highest id of
+        // the plan
+        let generator = ColumnIdGenerator::new_after(plan.max_column_id());
+
         // recurse
-        let transformed_plan = coerce_plan_and_subqueries(plan, config)?;
+        let transformed_plan = coerce_plan_and_subqueries(plan, config, &generator)?;
 
         // finish
-        coerce_output(transformed_plan, config)
+        let plan = coerce_output(transformed_plan, config, &generator)?;
+
+        // a scalar subquery cast by `ExprSchemable::cast_to` gets ids that
+        // are new within the subquery only
+        Ok(plan
+            .with_fresh_column_ids_in_colliding_subqueries(&generator)?
+            .data)
     }
 }
 
@@ -118,6 +133,7 @@ impl AnalyzerRule for TypeCoercion {
 fn coerce_plan_and_subqueries(
     plan: LogicalPlan,
     config: &ConfigOptions,
+    generator: &ColumnIdGenerator,
 ) -> Result<LogicalPlan> {
     static EMPTY_SCHEMA: LazyLock<DFSchema> = LazyLock::new(DFSchema::empty);
 
@@ -127,14 +143,18 @@ fn coerce_plan_and_subqueries(
             // of a `NULL` column of a `UNION`. Coerce the body first, and give
             // its new schema to the scans before the continuation is coerced.
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
-                let body =
-                    coerce_plan_and_subqueries(Arc::unwrap_or_clone(cte.cte), config)?;
+                let body = coerce_plan_and_subqueries(
+                    Arc::unwrap_or_clone(cte.cte),
+                    config,
+                    generator,
+                )?;
                 let continuation = with_materialized_cte_scan_schema(
                     Arc::unwrap_or_clone(cte.continuation),
                     cte.id,
                     body.schema(),
                 )?;
-                let continuation = coerce_plan_and_subqueries(continuation, config)?;
+                let continuation =
+                    coerce_plan_and_subqueries(continuation, config, generator)?;
                 Ok(Transformed::new(
                     LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
                         MaterializedCte {
@@ -154,6 +174,7 @@ fn coerce_plan_and_subqueries(
                 &EMPTY_SCHEMA,
                 plan,
                 config.execution.time_zone.as_ref().map(|tz| tz.as_str()),
+                Some(generator),
             )
         },
     )
@@ -208,6 +229,7 @@ fn analyze_internal(
     external_schema: &DFSchema,
     plan: LogicalPlan,
     session_time_zone: Option<&str>,
+    generator: Option<&ColumnIdGenerator>,
 ) -> Result<Transformed<LogicalPlan>> {
     // get schema representing all available input fields. This is used for data type
     // resolution only, so order does not matter here
@@ -241,8 +263,9 @@ fn analyze_internal(
         plan
     };
 
-    let mut expr_rewrite =
-        TypeCoercionRewriter::new(&schema).with_session_time_zone(session_time_zone);
+    let mut expr_rewrite = TypeCoercionRewriter::new(&schema)
+        .with_session_time_zone(session_time_zone)
+        .with_column_id_generator(generator);
 
     let name_preserver = NamePreserver::new(&plan);
     let mut coerce_expr = |expr: Expr| {
@@ -277,10 +300,28 @@ fn analyze_internal(
     .map_data(|plan| plan.recompute_schema())
 }
 
+/// A borrowed or owned [`ColumnIdGenerator`]
+enum GeneratorRef<'a> {
+    Borrowed(&'a ColumnIdGenerator),
+    Owned(ColumnIdGenerator),
+}
+
+impl std::ops::Deref for GeneratorRef<'_> {
+    type Target = ColumnIdGenerator;
+
+    fn deref(&self) -> &ColumnIdGenerator {
+        match self {
+            Self::Borrowed(generator) => generator,
+            Self::Owned(generator) => generator,
+        }
+    }
+}
+
 /// Rewrite expressions to apply type coercion.
 pub struct TypeCoercionRewriter<'a> {
     pub(crate) schema: &'a DFSchema,
     session_time_zone: Option<&'a str>,
+    column_id_generator: Option<&'a ColumnIdGenerator>,
 }
 
 impl<'a> TypeCoercionRewriter<'a> {
@@ -290,6 +331,31 @@ impl<'a> TypeCoercionRewriter<'a> {
         Self {
             schema,
             session_time_zone: None,
+            column_id_generator: None,
+        }
+    }
+
+    /// Use `generator` for the ids of the columns that coercion defines
+    /// (casts of the outputs of subqueries and of union inputs). Without one,
+    /// they get ids after the highest id of the plan they are added to,
+    /// which may collide with the ids of a larger plan (see
+    /// `LogicalPlan::with_fresh_column_ids_in_colliding_subqueries`).
+    pub fn with_column_id_generator(
+        mut self,
+        column_id_generator: Option<&'a ColumnIdGenerator>,
+    ) -> Self {
+        self.column_id_generator = column_id_generator;
+        self
+    }
+
+    /// The generator of this rewriter, or a new one after the highest id of
+    /// `plan`
+    fn generator_for(&self, plan: &LogicalPlan) -> GeneratorRef<'a> {
+        match self.column_id_generator {
+            Some(generator) => GeneratorRef::Borrowed(generator),
+            None => {
+                GeneratorRef::Owned(ColumnIdGenerator::new_after(plan.max_column_id()))
+            }
         }
     }
 
@@ -309,7 +375,15 @@ impl<'a> TypeCoercionRewriter<'a> {
         match plan {
             LogicalPlan::Join(join) => self.coerce_join(join),
             LogicalPlan::AsOfJoin(join) => self.coerce_asof_join(join),
-            LogicalPlan::Union(union) => Self::coerce_union(union),
+            LogicalPlan::Union(union) => {
+                let generator = match self.column_id_generator {
+                    Some(generator) => GeneratorRef::Borrowed(generator),
+                    None => GeneratorRef::Owned(ColumnIdGenerator::new_after(
+                        union.inputs.iter().filter_map(|i| i.max_column_id()).max(),
+                    )),
+                };
+                Self::coerce_union(union, &generator)
+            }
             LogicalPlan::Limit(limit) => Self::coerce_limit(limit),
             LogicalPlan::Dml(dml) => self.coerce_dml(dml),
             _ => Ok(plan),
@@ -434,23 +508,34 @@ impl<'a> TypeCoercionRewriter<'a> {
 
     /// Coerce the union’s inputs to a common schema compatible with all inputs.
     /// This occurs after wildcard expansion and the coercion of the input expressions.
-    pub fn coerce_union(union_plan: Union) -> Result<LogicalPlan> {
-        let union_schema = Arc::new(coerce_union_schema_with_schema(
-            &union_plan.inputs,
-            &union_plan.schema,
-        )?);
+    ///
+    /// The casts it adds to the inputs define columns, with ids from
+    /// `generator`.
+    pub fn coerce_union(
+        union_plan: Union,
+        generator: &ColumnIdGenerator,
+    ) -> Result<LogicalPlan> {
+        // the outputs of the union keep their ids
+        let union_schema = Arc::new(
+            coerce_union_schema_with_schema(&union_plan.inputs, &union_plan.schema)?
+                .with_field_ids(union_plan.schema.field_ids().to_vec())?,
+        );
         let new_inputs = union_plan
             .inputs
             .into_iter()
             .map(|p| {
-                let plan =
-                    coerce_plan_expr_for_schema(Arc::unwrap_or_clone(p), &union_schema)?;
+                let plan = coerce_plan_expr_for_schema(
+                    Arc::unwrap_or_clone(p),
+                    &union_schema,
+                    generator,
+                )?;
                 match plan {
                     LogicalPlan::Projection(Projection { expr, input, .. }) => {
                         Ok(Arc::new(project_with_column_index(
                             expr,
                             input,
                             Arc::clone(&union_schema),
+                            generator,
                         )?))
                     }
                     other_plan => Ok(Arc::new(other_plan)),
@@ -710,6 +795,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     self.schema,
                     Arc::unwrap_or_clone(subquery),
                     self.session_time_zone,
+                    self.column_id_generator,
                 )?
                 .data;
                 Ok(Transformed::yes(Expr::ScalarSubquery(Subquery {
@@ -723,6 +809,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     self.schema,
                     Arc::unwrap_or_clone(subquery.subquery),
                     self.session_time_zone,
+                    self.column_id_generator,
                 )?
                 .data;
                 Ok(Transformed::yes(Expr::Exists(Exists {
@@ -743,6 +830,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     self.schema,
                     Arc::unwrap_or_clone(subquery.subquery),
                     self.session_time_zone,
+                    self.column_id_generator,
                 )?
                 .data;
                 let new_subquery = Subquery {
@@ -757,11 +845,13 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     // planned as a `struct` call whose arguments are compared
                     // pairwise with the subquery columns, so coerce each pair.
                     Expr::ScalarFunction(func) if is_tuple => {
+                        let generator = self.generator_for(&new_subquery.subquery);
                         let (expr, subquery) = coerce_multi_column_in_subquery(
                             func,
                             new_subquery,
                             self.schema,
                             self.session_time_zone,
+                            &generator,
                         )?;
                         Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
                             Box::new(expr),
@@ -781,9 +871,12 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                         .ok_or(plan_datafusion_err!(
                             "expr type {expr_type} can't cast to {subquery_type} in InSubquery"
                         ))?;
+                        let generator = self.generator_for(&new_subquery.subquery);
+                        let new_subquery =
+                            cast_subquery(new_subquery, &common_type, &generator)?;
                         Ok(Transformed::yes(Expr::InSubquery(InSubquery::new(
                             Box::new(expr.cast_to(&common_type, self.schema)?),
-                            cast_subquery(new_subquery, &common_type)?,
+                            new_subquery,
                             negated,
                         ))))
                     }
@@ -799,6 +892,7 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     self.schema,
                     Arc::unwrap_or_clone(subquery.subquery),
                     self.session_time_zone,
+                    self.column_id_generator,
                 )?
                 .data;
                 let expr_type = expr.get_type(self.schema)?;
@@ -823,9 +917,11 @@ impl TreeNodeRewriter for TypeCoercionRewriter<'_> {
                     outer_ref_columns: subquery.outer_ref_columns,
                     spans: subquery.spans,
                 };
+                let generator = self.generator_for(&new_subquery.subquery);
+                let new_subquery = cast_subquery(new_subquery, &common_type, &generator)?;
                 Ok(Transformed::yes(Expr::SetComparison(SetComparison::new(
                     Box::new(expr.cast_to(&common_type, self.schema)?),
-                    cast_subquery(new_subquery, &common_type)?,
+                    new_subquery,
                     op,
                     quantifier,
                 ))))
@@ -1756,26 +1852,33 @@ fn coerce_union_schema_with_schema(
 
 /// See `<https://github.com/apache/datafusion/pull/2108>`
 fn project_with_column_index(
-    expr: Vec<Expr>,
+    expr: Vec<NamedExpr>,
     input: Arc<LogicalPlan>,
     schema: DFSchemaRef,
+    generator: &ColumnIdGenerator,
 ) -> Result<LogicalPlan> {
     let alias_expr = expr
         .into_iter()
         .enumerate()
-        .map(|(i, e)| match e {
-            Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
-                Ok(e.unalias().alias(schema.field(i).name()))
-            }
-            Expr::Column(Column { ref name, .. }) if name != schema.field(i).name() => {
-                Ok(e.alias(schema.field(i).name()))
-            }
-            Expr::Alias { .. } | Expr::Column { .. } => Ok(e),
-            #[expect(deprecated)]
-            Expr::Wildcard { .. } => {
-                plan_err!("Wildcard should be expanded before type coercion")
-            }
-            _ => Ok(e.alias(schema.field(i).name())),
+        .map(|(i, entry)| {
+            let e = entry.expr.clone();
+            let e = match e {
+                Expr::Alias(Alias { ref name, .. }) if name != schema.field(i).name() => {
+                    e.unalias().alias(schema.field(i).name())
+                }
+                Expr::Column(Column { ref name, .. })
+                    if name != schema.field(i).name() =>
+                {
+                    e.alias(schema.field(i).name())
+                }
+                Expr::Alias { .. } | Expr::Column { .. } => e,
+                #[expect(deprecated)]
+                Expr::Wildcard { .. } => {
+                    return plan_err!("Wildcard should be expanded before type coercion");
+                }
+                _ => e.alias(schema.field(i).name()),
+            };
+            Ok(entry.with_rewritten_expr(e, generator))
         })
         .collect::<Result<Vec<_>>>()?;
 
@@ -1793,6 +1896,7 @@ fn coerce_multi_column_in_subquery(
     subquery: Subquery,
     schema: &DFSchema,
     session_time_zone: Option<&str>,
+    generator: &ColumnIdGenerator,
 ) -> Result<(Expr, Subquery)> {
     let subquery_schema = Arc::clone(subquery.subquery.schema());
     let mut common_types = Vec::with_capacity(func.args.len());
@@ -1813,7 +1917,7 @@ fn coerce_multi_column_in_subquery(
     }
     Ok((
         Expr::ScalarFunction(ScalarFunction::new_udf(func.func, args)),
-        cast_subquery_columns(subquery, &common_types)?,
+        cast_subquery_columns(subquery, &common_types, generator)?,
     ))
 }
 
@@ -1839,7 +1943,7 @@ mod test {
     use datafusion_expr::expr::{
         self, InSubquery, Like, ScalarFunction, SetComparison, SetQuantifier,
     };
-    use datafusion_expr::logical_plan::{EmptyRelation, Projection, Sort, table_scan};
+    use datafusion_expr::logical_plan::{EmptyRelation, Sort, table_scan};
     use datafusion_expr::test::function_stub::avg_udaf;
     use datafusion_expr::{
         AccumulatorFactoryFunction, AggregateUDF, BinaryExpr, Case, ColumnarValue, Expr,
@@ -1947,7 +2051,8 @@ mod test {
     fn simple_case() -> Result<()> {
         let expr = col("a").lt(lit(2_u32));
         let empty = empty_with_type(DataType::Float64);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -1991,12 +2096,13 @@ mod test {
                 .unwrap(),
             ),
         }));
-        let union = LogicalPlan::Union(Union::try_new_with_loose_types(vec![
-            left_plan, right_plan,
-        ])?);
+        let union = LogicalPlan::Union(Union::try_new_with_loose_types(
+            vec![left_plan, right_plan],
+            &datafusion_common::ColumnIdGenerator::new(),
+        )?);
         let analyzed_union = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
             .execute_and_check(union, &ConfigOptions::default(), |_, _| {})?;
-        let top_level_plan = LogicalPlan::Projection(Projection::try_new(
+        let top_level_plan = LogicalPlan::Projection(crate::test::new_projection(
             vec![col("a")],
             Arc::new(analyzed_union),
         )?);
@@ -2102,7 +2208,7 @@ mod test {
         // scenario: outermost utf8view projection
         let expr = col("a");
         let empty = empty_with_type(DataType::Utf8View);
-        let plan = LogicalPlan::Projection(Projection::try_new(
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
             vec![expr.clone()],
             Arc::clone(&empty),
         )?);
@@ -2130,7 +2236,7 @@ mod test {
         // Plan B
         // scenario: outermost bool projection
         let bool_expr = col("a").lt(lit("foo"));
-        let bool_plan = LogicalPlan::Projection(Projection::try_new(
+        let bool_plan = LogicalPlan::Projection(crate::test::new_projection(
             vec![bool_expr],
             Arc::clone(&empty),
         )?);
@@ -2197,7 +2303,7 @@ mod test {
 
         // Plan D
         // scenario: two layers of projections with view types
-        let plan = LogicalPlan::Projection(Projection::try_new(
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
             vec![col("a")],
             Arc::new(sort_plan),
         )?);
@@ -2233,7 +2339,7 @@ mod test {
         // scenario: outermost binaryview projection
         let expr = col("a");
         let empty = empty_with_type(DataType::BinaryView);
-        let plan = LogicalPlan::Projection(Projection::try_new(
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
             vec![expr.clone()],
             Arc::clone(&empty),
         )?);
@@ -2261,7 +2367,7 @@ mod test {
         // Plan B
         // scenario: outermost bool projection
         let bool_expr = col("a").lt(lit(vec![8, 1, 8, 1]));
-        let bool_plan = LogicalPlan::Projection(Projection::try_new(
+        let bool_plan = LogicalPlan::Projection(crate::test::new_projection(
             vec![bool_expr],
             Arc::clone(&empty),
         )?);
@@ -2319,7 +2425,7 @@ mod test {
 
         // Plan D
         // scenario: two layers of projections with view types
-        let plan = LogicalPlan::Projection(Projection::try_new(
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
             vec![col("a")],
             Arc::new(sort_plan),
         )?);
@@ -2356,7 +2462,7 @@ mod test {
         let expr = col("a").lt(lit(2_u32));
         let empty = empty_with_type(DataType::Float64);
 
-        let plan = LogicalPlan::Projection(Projection::try_new(
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
             vec![expr.clone().or(expr)],
             empty,
         )?);
@@ -2426,7 +2532,8 @@ mod test {
             signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
         })
         .call(vec![lit(123_i32)]);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![udf], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![udf], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2479,7 +2586,7 @@ mod test {
             signature: Signature::uniform(1, vec![DataType::Float32], Volatility::Stable),
         })
         .call(vec![lit("Apple")]);
-        Projection::try_new(vec![udf], empty)
+        crate::test::new_projection(vec![udf], empty)
             .expect_err("Expected an error due to incorrect function input");
 
         Ok(())
@@ -2495,7 +2602,7 @@ mod test {
         });
         let scalar_function_expr =
             Expr::ScalarFunction(ScalarFunction::new_udf(Arc::new(fun), vec![lit_expr]));
-        let plan = LogicalPlan::Projection(Projection::try_new(
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
             vec![scalar_function_expr],
             empty,
         )?);
@@ -2528,7 +2635,8 @@ mod test {
             vec![],
             None,
         ));
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![udaf], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![udaf], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2564,7 +2672,9 @@ mod test {
             None,
         ));
 
-        let err = Projection::try_new(vec![udaf], empty).err().unwrap();
+        let err = crate::test::new_projection(vec![udaf], empty)
+            .err()
+            .unwrap();
         assert!(
             err.strip_backtrace().starts_with("Error during planning: Failed to coerce arguments to satisfy a call to 'MY_AVG' function: coercion from Utf8 to the signature Uniform(1, [Float64]) failed")
         );
@@ -2582,7 +2692,8 @@ mod test {
             vec![],
             None,
         ));
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![agg_expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2601,7 +2712,8 @@ mod test {
             vec![],
             None,
         ));
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![agg_expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![agg_expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2623,7 +2735,7 @@ mod test {
             vec![],
             None,
         ));
-        let err = Projection::try_new(vec![agg_expr], empty)
+        let err = crate::test::new_projection(vec![agg_expr], empty)
             .err()
             .unwrap()
             .strip_backtrace();
@@ -2640,7 +2752,8 @@ mod test {
         let expr = cast(lit("1998-03-18"), DataType::Date32)
             + lit(ScalarValue::new_interval_dt(123, 456));
         let empty = empty();
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2656,7 +2769,8 @@ mod test {
         // a in (1,4,8), a is int64
         let expr = col("a").in_list(vec![lit(1_i32), lit(4_i8), lit(8_i64)], false);
         let empty = empty_with_type(DataType::Int64);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
         assert_analyzed_plan_eq!(
             plan,
             @r"
@@ -2673,7 +2787,8 @@ mod test {
                 std::collections::HashMap::new(),
             )?),
         }));
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
         assert_analyzed_plan_eq!(
             plan,
             @r"
@@ -2743,8 +2858,10 @@ mod test {
         // is true
         let expr = col("a").is_true();
         let empty = empty_with_type(DataType::Boolean);
-        let plan =
-            LogicalPlan::Projection(Projection::try_new(vec![expr.clone()], empty)?);
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
+            vec![expr.clone()],
+            empty,
+        )?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2755,7 +2872,8 @@ mod test {
         )?;
 
         let empty = empty_with_type(DataType::Int64);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
         assert_type_coercion_error(
             plan,
             "Cannot infer common argument type for comparison operation Int64 IS DISTINCT FROM Boolean",
@@ -2764,7 +2882,8 @@ mod test {
         // is not true
         let expr = col("a").is_not_true();
         let empty = empty_with_type(DataType::Boolean);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2777,7 +2896,8 @@ mod test {
         // is false
         let expr = col("a").is_false();
         let empty = empty_with_type(DataType::Boolean);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2790,7 +2910,8 @@ mod test {
         // is not false
         let expr = col("a").is_not_false();
         let empty = empty_with_type(DataType::Boolean);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2808,7 +2929,8 @@ mod test {
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(Utf8);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![like_expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2822,7 +2944,8 @@ mod test {
         let pattern = Box::new(lit(ScalarValue::Null));
         let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(Utf8);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![like_expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2836,7 +2959,8 @@ mod test {
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let like_expr = Expr::Like(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(DataType::Int64);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![like_expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![like_expr], empty)?);
         assert_type_coercion_error(
             plan,
             "There isn't a common type to coerce Int64 and Utf8 in LIKE expression",
@@ -2847,7 +2971,10 @@ mod test {
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
         let empty = empty_with_type(Utf8);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
+            vec![ilike_expr],
+            empty,
+        )?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2861,7 +2988,10 @@ mod test {
         let pattern = Box::new(lit(ScalarValue::Null));
         let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
         let empty = empty_with_type(Utf8);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
+            vec![ilike_expr],
+            empty,
+        )?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2875,7 +3005,10 @@ mod test {
         let pattern = Box::new(lit(ScalarValue::new_utf8("abc")));
         let ilike_expr = Expr::Like(Like::new(false, expr, pattern, None, true));
         let empty = empty_with_type(DataType::Int64);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![ilike_expr], empty)?);
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
+            vec![ilike_expr],
+            empty,
+        )?);
         assert_type_coercion_error(
             plan,
             "There isn't a common type to coerce Int64 and Utf8 in ILIKE expression",
@@ -2892,8 +3025,10 @@ mod test {
         let similar_to_expr =
             Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(Utf8);
-        let plan =
-            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
+            vec![similar_to_expr],
+            empty,
+        )?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2910,8 +3045,10 @@ mod test {
         let similar_to_expr =
             Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(Utf8);
-        let plan =
-            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
+            vec![similar_to_expr],
+            empty,
+        )?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2927,8 +3064,10 @@ mod test {
         let similar_to_expr =
             Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(DataType::Utf8View);
-        let plan =
-            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
+            vec![similar_to_expr],
+            empty,
+        )?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2944,8 +3083,10 @@ mod test {
         let similar_to_expr =
             Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(Utf8);
-        let plan =
-            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
+            vec![similar_to_expr],
+            empty,
+        )?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2964,8 +3105,10 @@ mod test {
             Box::new(DataType::Int32),
             Box::new(Utf8),
         ));
-        let plan =
-            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
+            vec![similar_to_expr],
+            empty,
+        )?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -2981,8 +3124,10 @@ mod test {
         let similar_to_expr =
             Expr::SimilarTo(Like::new(false, expr, pattern, None, false));
         let empty = empty_with_type(DataType::Int64);
-        let plan =
-            LogicalPlan::Projection(Projection::try_new(vec![similar_to_expr], empty)?);
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
+            vec![similar_to_expr],
+            empty,
+        )?);
         assert_type_coercion_error(
             plan,
             "There isn't a common type to coerce Int64 and Utf8 in SIMILAR TO expression",
@@ -2996,8 +3141,10 @@ mod test {
         // unknown
         let expr = col("a").is_unknown();
         let empty = empty_with_type(DataType::Boolean);
-        let plan =
-            LogicalPlan::Projection(Projection::try_new(vec![expr.clone()], empty)?);
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
+            vec![expr.clone()],
+            empty,
+        )?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -3008,7 +3155,8 @@ mod test {
         )?;
 
         let empty = empty_with_type(Utf8);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
         assert_type_coercion_error(
             plan,
             "Cannot infer common argument type for comparison operation Utf8 IS DISTINCT FROM Boolean",
@@ -3017,7 +3165,8 @@ mod test {
         // is not unknown
         let expr = col("a").is_not_unknown();
         let empty = empty_with_type(DataType::Boolean);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -3038,8 +3187,10 @@ mod test {
             signature: Signature::variadic(vec![Utf8], Volatility::Immutable),
         })
         .call(args.to_vec());
-        let plan =
-            LogicalPlan::Projection(Projection::try_new(vec![expr], Arc::clone(&empty))?);
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
+            vec![expr],
+            Arc::clone(&empty),
+        )?);
         assert_analyzed_plan_eq!(
             plan,
             @r#"
@@ -3095,7 +3246,8 @@ mod test {
         )
         .eq(cast(lit("1998-03-18"), DataType::Date32));
         let empty = empty();
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -3450,7 +3602,8 @@ mod test {
 
         let expr = col("a").eq(cast(col("a"), may_type_custom));
         let empty = empty_with_type(map_type_entries);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -3477,7 +3630,8 @@ mod test {
 
         let expr = ScalarUDF::from(TestArrayElementUDF).call(vec![col("a"), lit(1_i64)]);
         let empty = empty_with_type(list_type);
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -3500,7 +3654,8 @@ mod test {
             )),
         ));
         let empty = empty();
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -3525,7 +3680,8 @@ mod test {
             )),
         ));
         let empty = empty();
-        let plan = LogicalPlan::Projection(Projection::try_new(vec![expr], empty)?);
+        let plan =
+            LogicalPlan::Projection(crate::test::new_projection(vec![expr], empty)?);
 
         assert_analyzed_plan_eq!(
             plan,
@@ -3564,7 +3720,7 @@ mod test {
                 Box::new(col(right)),
             ))
         };
-        let plan = LogicalPlan::Projection(Projection::try_new(
+        let plan = LogicalPlan::Projection(crate::test::new_projection(
             vec![subtract("tstz", "ts"), subtract("ts", "tstz")],
             input,
         )?);

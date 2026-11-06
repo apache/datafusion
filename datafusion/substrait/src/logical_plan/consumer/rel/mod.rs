@@ -91,7 +91,9 @@ fn apply_emit_kind(
                                   "Emit output field {} cannot be resolved in input schema {}",
                                   field, proj.input.schema()
                                 ))?;
-                        exprs.push(name_tracker.get_uniquely_named_expr(expr.clone())?);
+                        exprs.push(
+                            name_tracker.get_uniquely_named_expr(expr.expr.clone())?,
+                        );
                     }
 
                     let input = Arc::unwrap_or_clone(proj.input);

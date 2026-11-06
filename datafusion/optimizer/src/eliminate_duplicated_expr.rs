@@ -10,7 +10,7 @@ use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Result, get_required_sort_exprs_indices, internal_err};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::utils::passthrough_field_index;
-use datafusion_expr::{Aggregate, Expr, Sort, SortExpr};
+use datafusion_expr::{Aggregate, NamedExpr, Sort, SortExpr};
 use std::hash::{Hash, Hasher};
 
 use indexmap::IndexSet;
@@ -100,12 +100,17 @@ impl OptimizerRule for EliminateDuplicatedExpr {
             }
             LogicalPlan::Aggregate(mut agg) => {
                 let len = agg.group_expr.len();
-                // With zero or one group expression, there is nothing to deduplicate.
-                if len <= 1 {
+                // With zero or one group expression, there is nothing to
+                // deduplicate. Grouping sets are left alone (their grouping
+                // expressions are distinct, and the sets refer to them by
+                // index).
+                if len <= 1 || agg.grouping_sets.is_some() {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(agg)));
                 }
 
-                let unique_exprs: Vec<Expr> = agg
+                // the first of the equal entries is kept, with its id (the
+                // output of the equal entries)
+                let unique_exprs: Vec<NamedExpr> = agg
                     .group_expr
                     .into_iter()
                     .collect::<IndexSet<_>>()
@@ -119,7 +124,7 @@ impl OptimizerRule for EliminateDuplicatedExpr {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(agg)));
                 }
 
-                Aggregate::try_new(agg.input, unique_exprs, agg.aggr_expr)
+                Aggregate::try_new(agg.input, unique_exprs, None, agg.aggr_expr)
                     .map(|f| Transformed::yes(LogicalPlan::Aggregate(f)))
             }
             _ => Ok(Transformed::no(plan)),
@@ -137,7 +142,7 @@ mod tests {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::test::*;
     use datafusion_expr::{
-        GroupingSet, col, lit, logical_plan::builder::LogicalPlanBuilder,
+        Expr, GroupingSet, col, lit, logical_plan::builder::LogicalPlanBuilder,
     };
     use datafusion_functions_aggregate::expr_fn::sum;
     use std::sync::Arc;
@@ -239,7 +244,7 @@ mod tests {
         let b = col("test.b");
         let computed = a.clone() + lit(1u32);
         let aggr_expr = vec![sum(col("test.c")).alias("total")];
-        let plan = LogicalPlan::Aggregate(Aggregate::try_new(
+        let plan = LogicalPlan::Aggregate(new_aggregate(
             Arc::clone(&input),
             vec![
                 b.clone(),
@@ -250,7 +255,7 @@ mod tests {
             ],
             aggr_expr.clone(),
         )?);
-        let expected = LogicalPlan::Aggregate(Aggregate::try_new(
+        let expected = LogicalPlan::Aggregate(new_aggregate(
             input,
             // Keep the order of the first occurrence of each expression.
             vec![b, computed, a],

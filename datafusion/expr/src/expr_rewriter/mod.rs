@@ -11,12 +11,12 @@ use std::sync::Arc;
 
 use crate::expr::{Alias, Sort, Unnest};
 use crate::logical_plan::Projection;
-use crate::{Expr, ExprSchemable, LogicalPlan};
+use crate::{Expr, ExprSchemable, LogicalPlan, NamedExpr};
 
 use datafusion_common::TableReference;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Column, DFSchema, Result};
+use datafusion_common::{Column, ColumnIdGenerator, DFSchema, Result};
 
 mod guarantees;
 pub use guarantees::GuaranteeRewriter;
@@ -265,15 +265,25 @@ pub fn strip_outer_reference(expr: Expr) -> Expr {
 }
 
 /// Returns plan with expressions coerced to types compatible with
-/// schema types
+/// schema types.
+///
+/// The outputs that this casts define new columns: they get ids from
+/// `generator` (see [`NamedExpr::with_rewritten_expr`]).
 pub fn coerce_plan_expr_for_schema(
     plan: LogicalPlan,
     schema: &DFSchema,
+    generator: &ColumnIdGenerator,
 ) -> Result<LogicalPlan> {
     match plan {
         // special case Projection to avoid adding multiple projections
         LogicalPlan::Projection(Projection { expr, input, .. }) => {
-            let new_exprs = coerce_exprs_for_schema(expr, input.schema(), schema)?;
+            let exprs = expr.iter().map(|e| e.expr.clone()).collect();
+            let new_exprs = coerce_exprs_for_schema(exprs, input.schema(), schema)?;
+            let new_exprs = expr
+                .into_iter()
+                .zip(new_exprs)
+                .map(|(entry, new_expr)| entry.with_rewritten_expr(new_expr, generator))
+                .collect();
             let projection = Projection::try_new(new_exprs, input)?;
             Ok(LogicalPlan::Projection(projection))
         }
@@ -282,6 +292,10 @@ pub fn coerce_plan_expr_for_schema(
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
             let add_project = new_exprs.iter().any(|expr| expr.try_as_col().is_none());
             if add_project {
+                let new_exprs = new_exprs
+                    .into_iter()
+                    .map(|e| NamedExpr::allocate(e, plan.schema(), generator))
+                    .collect();
                 let projection = Projection::try_new(new_exprs, Arc::new(plan))?;
                 Ok(LogicalPlan::Projection(projection))
             } else {

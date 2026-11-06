@@ -14,7 +14,7 @@ use datafusion_expr::logical_plan::{
     Filter, Join, JoinConstraint, JoinType, LogicalPlan, Projection,
 };
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
-use datafusion_expr::{ExprSchemable, Operator, and, build_join_schema};
+use datafusion_expr::{ExprSchemable, NamedExpr, Operator, and, build_join_schema};
 
 #[derive(Default, Debug)]
 pub struct EliminateCrossJoin;
@@ -169,10 +169,23 @@ impl OptimizerRule for EliminateCrossJoin {
         }
 
         if &plan_schema != left.schema() {
-            left = LogicalPlan::Projection(Projection::new_from_schema(
+            // the columns of the original plan pass through
+            let expr = plan_schema
+                .columns()
+                .into_iter()
+                .map(|col| {
+                    NamedExpr::allocate(
+                        Expr::Column(col),
+                        left.schema(),
+                        config.column_id_generator(),
+                    )
+                })
+                .collect();
+            left = LogicalPlan::Projection(Projection::try_new_with_schema(
+                expr,
                 Arc::new(left),
                 Arc::clone(&plan_schema),
-            ));
+            )?);
         }
 
         if !all_filters.is_empty() {

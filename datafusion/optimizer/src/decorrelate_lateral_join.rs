@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::optimizer::ApplyOrder;
-use crate::utils::evaluates_to_null;
+use crate::utils::{evaluates_to_null, ids_builder};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::{Expr, Join, expr};
@@ -16,10 +16,12 @@ use datafusion_expr::{Expr, Join, expr};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{Column, DFSchema, Result, ScalarValue, TableReference};
+use datafusion_common::{
+    Column, ColumnIdGenerator, DFSchema, Result, ScalarValue, TableReference,
+};
 use datafusion_expr::logical_plan::{JoinType, Subquery};
 use datafusion_expr::utils::conjunction;
-use datafusion_expr::{LogicalPlan, LogicalPlanBuilder, SubqueryAlias};
+use datafusion_expr::{LogicalPlan, SubqueryAlias};
 
 /// Optimizer rule for rewriting lateral joins to joins
 #[derive(Default, Debug)]
@@ -36,14 +38,14 @@ impl OptimizerRule for DecorrelateLateralJoin {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         // Find cross joins with outer column references on the right side (i.e., the apply operator).
         let LogicalPlan::Join(join) = plan else {
             return Ok(Transformed::no(plan));
         };
 
-        rewrite_internal(join)
+        rewrite_internal(join, config.column_id_generator())
     }
 
     fn name(&self) -> &str {
@@ -57,7 +59,10 @@ impl OptimizerRule for DecorrelateLateralJoin {
 
 // Build the decorrelated join based on the original lateral join query.
 // Supports INNER and LEFT lateral joins.
-fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
+fn rewrite_internal(
+    join: Join,
+    ids: &Arc<ColumnIdGenerator>,
+) -> Result<Transformed<LogicalPlan>> {
     if !matches!(join.join_type, JoinType::Inner | JoinType::Left) {
         return Ok(Transformed::no(LogicalPlan::Join(join)));
     }
@@ -91,7 +96,9 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     // Walk the subquery plan bottom-up, extracting correlated filter
     // predicates into join conditions and converting ungrouped aggregates
     // into group-by aggregates keyed on the correlation columns.
-    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+    let mut pull_up = PullUpCorrelatedExpr::new()
+        .with_need_handle_count_bug(true)
+        .with_column_id_generator(Arc::clone(ids));
     let rewritten_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
         return Ok(Transformed::no(LogicalPlan::Join(join)));
@@ -119,23 +126,26 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     // Re-wrap in SubqueryAlias if the original had one, preserving the alias name.
     // The SubqueryAlias re-qualifies all columns with the alias, so we must also
     // rewrite column references in both the correlation and ON-clause filters.
-    let (right_plan, correlation_filter, original_join_filter) =
-        if let Some(ref alias) = alias {
-            let inner_schema = Arc::clone(rewritten_subquery.schema());
-            let right = LogicalPlan::SubqueryAlias(SubqueryAlias::try_new(
+    let (right_plan, correlation_filter, original_join_filter) = if let Some(ref alias) =
+        alias
+    {
+        let inner_schema = Arc::clone(rewritten_subquery.schema());
+        let right =
+            LogicalPlan::SubqueryAlias(SubqueryAlias::try_new_with_column_id_generator(
                 Arc::new(rewritten_subquery),
                 alias.clone(),
+                ids,
             )?);
-            let corr = correlation_filter
-                .map(|f| requalify_filter(f, &inner_schema, alias))
-                .transpose()?;
-            let on = original_join_filter
-                .map(|f| requalify_filter(f, &inner_schema, alias))
-                .transpose()?;
-            (right, corr, on)
-        } else {
-            (rewritten_subquery, correlation_filter, original_join_filter)
-        };
+        let corr = correlation_filter
+            .map(|f| requalify_filter(f, &inner_schema, alias))
+            .transpose()?;
+        let on = original_join_filter
+            .map(|f| requalify_filter(f, &inner_schema, alias))
+            .transpose()?;
+        (right, corr, on)
+    } else {
+        (rewritten_subquery, correlation_filter, original_join_filter)
+    };
 
     let correlation_filter = correlation_filter.map(strip_outer_reference);
 
@@ -210,7 +220,7 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
         };
 
     let left_field_count = join.left.schema().fields().len();
-    let new_plan = LogicalPlanBuilder::from(join.left)
+    let new_plan = ids_builder(ids, join.left)
         .join_on(right_plan, join_type, join_filter)?
         .build()?;
 
@@ -257,9 +267,7 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
             proj_exprs.push(col);
         }
 
-        LogicalPlanBuilder::from(new_plan)
-            .project(proj_exprs)?
-            .build()?
+        ids_builder(ids, new_plan).project(proj_exprs)?.build()?
     } else {
         new_plan
     };
@@ -296,18 +304,14 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
             proj_exprs.push(case_expr.alias_qualified(qualifier.cloned(), field.name()));
         }
 
-        LogicalPlanBuilder::from(new_plan)
-            .project(proj_exprs)?
-            .build()?
+        ids_builder(ids, new_plan).project(proj_exprs)?.build()?
     } else {
         new_plan
     };
 
     // Apply the original ON clause as a post-join filter (INNER lateral only).
     let new_plan = if let Some(on_filter) = post_join_filter {
-        LogicalPlanBuilder::from(new_plan)
-            .filter(on_filter)?
-            .build()?
+        ids_builder(ids, new_plan).filter(on_filter)?.build()?
     } else {
         new_plan
     };

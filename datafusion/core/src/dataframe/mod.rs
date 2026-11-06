@@ -158,7 +158,7 @@ fn blend(
 ) -> Result<LogicalPlan> {
     incoming.with_fresh_column_ids_if_overlapping(
         existing,
-        Some(&state.execution_props().column_id_generator),
+        &state.execution_props().column_id_generator,
     )
 }
 
@@ -381,6 +381,15 @@ impl DataFrame {
     /// [`SessionContext::read_csv`] and other methods for creating a
     /// `DataFrame` from an existing datasource.
     pub fn new(session_state: SessionState, plan: LogicalPlan) -> Self {
+        // the plan may have been built elsewhere (another session, decoded):
+        // the ids the session allocates for this DataFrame must not collide
+        // with its ids
+        if let Some(max) = plan.max_column_id() {
+            session_state
+                .execution_props()
+                .column_id_generator
+                .advance_past(max);
+        }
         Self {
             session_state: Box::new(session_state),
             plan,
@@ -576,7 +585,13 @@ impl DataFrame {
         let window_func_exprs = find_window_exprs(expressions.iter().copied());
         let has_windows = !window_func_exprs.is_empty();
         let mut plan = if has_windows {
-            LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
+            LogicalPlanBuilder::window_plan_with_column_id_generator(
+                self.plan,
+                window_func_exprs,
+                Some(Arc::clone(
+                    &self.session_state.execution_props().column_id_generator,
+                )),
+            )?
         } else {
             self.plan
         };
@@ -2494,7 +2509,13 @@ impl DataFrame {
         let plan = if window_func_exprs.is_empty() {
             self.plan
         } else {
-            LogicalPlanBuilder::window_plan(self.plan, window_func_exprs)?
+            LogicalPlanBuilder::window_plan_with_column_id_generator(
+                self.plan,
+                window_func_exprs,
+                Some(Arc::clone(
+                    &self.session_state.execution_props().column_id_generator,
+                )),
+            )?
         };
 
         let new_column = expr.alias(name);

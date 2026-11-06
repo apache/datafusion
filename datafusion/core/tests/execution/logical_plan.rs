@@ -9,12 +9,15 @@ use arrow::array::Int64Array;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::{ViewTable, provider_as_source};
 use datafusion::execution::session_state::SessionStateBuilder;
-use datafusion_common::{Column, DFSchema, DFSchemaRef, Result, ScalarValue};
+use datafusion_common::{
+    Column, ColumnIdGenerator, DFSchema, DFSchemaRef, Result, ScalarValue,
+};
 use datafusion_execution::TaskContext;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 use datafusion_expr::logical_plan::{LogicalPlan, Values};
 use datafusion_expr::{
-    Aggregate, AggregateUDF, EmptyRelation, Expr, LogicalPlanBuilder, UNNAMED_TABLE,
+    Aggregate, AggregateUDF, EmptyRelation, Expr, LogicalPlanBuilder, NamedExpr,
+    UNNAMED_TABLE,
 };
 use datafusion_functions_aggregate::count::Count;
 use datafusion_physical_plan::collect;
@@ -45,16 +48,20 @@ async fn count_only_nulls() -> Result<()> {
     let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
         input,
         vec![],
-        vec![Expr::AggregateFunction(AggregateFunction {
-            func: Arc::new(AggregateUDF::new_from_impl(Count::new())),
-            params: AggregateFunctionParams {
-                args: vec![input_col_ref],
-                distinct: false,
-                filter: None,
-                order_by: vec![],
-                null_treatment: None,
-            },
-        })],
+        None,
+        vec![NamedExpr::new(
+            Expr::AggregateFunction(AggregateFunction {
+                func: Arc::new(AggregateUDF::new_from_impl(Count::new())),
+                params: AggregateFunctionParams {
+                    args: vec![input_col_ref],
+                    distinct: false,
+                    filter: None,
+                    order_by: vec![],
+                    null_treatment: None,
+                },
+            }),
+            ColumnIdGenerator::new().next(),
+        )],
     )?);
 
     // Execute and verify results

@@ -14,6 +14,52 @@ use std::sync::Arc;
 pub mod udfs;
 pub mod user_defined;
 
+/// A projection computing `exprs` over `input`, whose outputs get ids as with
+/// `LogicalPlanBuilder::project`, from a generator advanced past the ids of
+/// `input` (for tests that build projections by hand)
+pub fn new_projection(
+    exprs: Vec<datafusion_expr::Expr>,
+    input: Arc<LogicalPlan>,
+) -> Result<datafusion_expr::Projection> {
+    let exprs = named_exprs(exprs, &input);
+    datafusion_expr::Projection::try_new(exprs, input)
+}
+
+/// An aggregate computing `group_expr` and `aggr_expr` over `input`, whose
+/// outputs get ids from a generator advanced past the ids of `input` (bare
+/// grouping columns pass through)
+pub fn new_aggregate(
+    input: Arc<LogicalPlan>,
+    group_expr: Vec<datafusion_expr::Expr>,
+    aggr_expr: Vec<datafusion_expr::Expr>,
+) -> Result<datafusion_expr::Aggregate> {
+    let generator =
+        datafusion_common::ColumnIdGenerator::new_after(input.max_column_id());
+    let (group_expr, grouping_sets) = datafusion_expr::Aggregate::allocate_group_expr(
+        group_expr,
+        input.schema(),
+        &generator,
+    )?;
+    let aggr_expr = aggr_expr
+        .into_iter()
+        .map(|e| datafusion_expr::NamedExpr::new(e, generator.next()))
+        .collect();
+    datafusion_expr::Aggregate::try_new(input, group_expr, grouping_sets, aggr_expr)
+}
+
+/// The outputs computing `exprs` over `input`, see [`new_projection`]
+pub fn named_exprs(
+    exprs: Vec<datafusion_expr::Expr>,
+    input: &LogicalPlan,
+) -> Vec<datafusion_expr::NamedExpr> {
+    let generator =
+        datafusion_common::ColumnIdGenerator::new_after(input.max_column_id());
+    exprs
+        .into_iter()
+        .map(|e| datafusion_expr::NamedExpr::allocate(e, input.schema(), &generator))
+        .collect()
+}
+
 pub fn test_table_scan_fields() -> Vec<Field> {
     vec![
         Field::new("a", DataType::UInt32, false),

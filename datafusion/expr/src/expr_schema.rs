@@ -15,7 +15,8 @@ use crate::type_coercion::functions::value_fields_with_higher_order_udf_and_lamb
 use crate::type_coercion::functions::{UDFCoercionExt, fields_with_udf};
 use crate::udf::ReturnFieldArgs;
 use crate::{
-    LogicalPlan, Operator, Projection, Subquery, WindowFunctionDefinition, utils,
+    LogicalPlan, NamedExpr, Operator, Projection, Subquery, WindowFunctionDefinition,
+    utils,
 };
 use arrow::compute::can_cast_types;
 use arrow::datatypes::FieldRef;
@@ -23,8 +24,8 @@ use arrow::datatypes::{DataType, Field};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
 use datafusion_common::{
-    Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
-    not_impl_err, plan_datafusion_err, plan_err,
+    Column, ColumnIdGenerator, DataFusionError, ExprSchema, Result, ScalarValue, Spans,
+    TableReference, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr_common::type_coercion::binary::BinaryTypeCoercer;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -777,7 +778,19 @@ impl ExprSchemable for Expr {
         if can_cast {
             match self {
                 Expr::ScalarSubquery(subquery) => {
-                    Ok(Expr::ScalarSubquery(cast_subquery(subquery, cast_to_type)?))
+                    // No generator here: the cast output gets an id that is
+                    // new within the subquery only, which may collide with an
+                    // id defined elsewhere in the plan. Nothing outside the
+                    // subquery refers to its output by id, and the analyzer
+                    // renumbers subqueries whose ids collide (see
+                    // `LogicalPlan::with_fresh_column_ids_in_colliding_subqueries`).
+                    let generator =
+                        ColumnIdGenerator::new_after(subquery.subquery.max_column_id());
+                    Ok(Expr::ScalarSubquery(cast_subquery(
+                        subquery,
+                        cast_to_type,
+                        &generator,
+                    )?))
                 }
                 _ => Ok(Expr::Cast(Cast::new(Box::new(self), cast_to_type.clone()))),
             }
@@ -840,8 +853,14 @@ fn scalar_subquery_nullable(subquery: &Subquery) -> bool {
 ///    new projection with the casted expression.
 /// 2. **Non-projection plan**: If the subquery isn't a projection, it adds a projection to the plan
 ///    with the casted first column.
-pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subquery> {
-    cast_subquery_columns(subquery, std::slice::from_ref(cast_to_type))
+///
+/// The cast outputs that define new columns get ids from `generator`.
+pub fn cast_subquery(
+    subquery: Subquery,
+    cast_to_type: &DataType,
+    generator: &ColumnIdGenerator,
+) -> Result<Subquery> {
+    cast_subquery_columns(subquery, std::slice::from_ref(cast_to_type), generator)
 }
 
 /// Cast the leading columns of a subquery to the given types, one per column,
@@ -853,6 +872,7 @@ pub fn cast_subquery(subquery: Subquery, cast_to_type: &DataType) -> Result<Subq
 pub fn cast_subquery_columns(
     subquery: Subquery,
     cast_to_types: &[DataType],
+    generator: &ColumnIdGenerator,
 ) -> Result<Subquery> {
     let schema = subquery.subquery.schema();
     if schema
@@ -871,9 +891,12 @@ pub fn cast_subquery_columns(
                 .expr
                 .iter()
                 .zip(cast_to_types)
-                .map(|(expr, cast_to_type)| {
-                    expr.clone()
-                        .cast_to(cast_to_type, projection.input.schema())
+                .map(|(entry, cast_to_type)| {
+                    let expr = entry
+                        .expr
+                        .clone()
+                        .cast_to(cast_to_type, projection.input.schema())?;
+                    Ok(entry.clone().with_rewritten_expr(expr, generator))
                 })
                 .collect::<Result<Vec<_>>>()?;
             LogicalPlan::Projection(Projection::try_new(
@@ -886,8 +909,10 @@ pub fn cast_subquery_columns(
                 .iter()
                 .enumerate()
                 .map(|(i, cast_to_type)| {
-                    Expr::Column(Column::from(plan.schema().qualified_field(i)))
-                        .cast_to(cast_to_type, subquery.subquery.schema())
+                    let expr =
+                        Expr::Column(Column::from(plan.schema().qualified_field(i)))
+                            .cast_to(cast_to_type, subquery.subquery.schema())?;
+                    Ok(NamedExpr::allocate(expr, plan.schema(), generator))
                 })
                 .collect::<Result<Vec<_>>>()?;
             LogicalPlan::Projection(Projection::try_new(

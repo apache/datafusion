@@ -6,6 +6,7 @@
 //! into a `first_value` aggregate.
 
 use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
+use crate::utils::plan_builder;
 use crate::{OptimizerConfig, OptimizerRule};
 use std::sync::Arc;
 
@@ -13,9 +14,10 @@ use datafusion_common::ScalarValue;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::{Column, Result};
 use datafusion_expr::{
-    Aggregate, BinaryExpr, Expr, Filter, LogicalPlan, Operator, Projection, SortExpr,
+    Aggregate, BinaryExpr, Expr, Filter, LogicalPlan, NamedExpr, Operator, Projection,
+    SortExpr,
 };
-use datafusion_expr::{ExprFunctionExt, LogicalPlanBuilder, lit};
+use datafusion_expr::{ExprFunctionExt, lit};
 
 /// Optimizer that replaces a logical `Filter` with a top-1 predicate over a
 /// `row_number()` window with an aggregate.
@@ -114,6 +116,7 @@ impl OptimizerRule for ReplaceFilterTop1 {
             return Ok(Transformed::no(plan));
         };
         let first_value = registry.udaf("first_value")?;
+        let ids = config.column_id_generator();
         let aggr_expr = input_cols
             .iter()
             .filter(|c| !is_partition(c))
@@ -122,13 +125,24 @@ impl OptimizerRule for ReplaceFilterTop1 {
                     .call(vec![Expr::Column(c.clone())])
                     .order_by(order_by.to_vec())
                     .build()
-                    .map(|e| e.alias_qualified(c.relation.clone(), c.name.clone()))
+                    .map(|e| {
+                        NamedExpr::new(
+                            e.alias_qualified(c.relation.clone(), c.name.clone()),
+                            ids.next(),
+                        )
+                    })
             })
             .collect::<Result<Vec<_>>>()?;
+        let group_expr = partition_by
+            .iter()
+            .cloned()
+            .map(|e| NamedExpr::allocate(e, child.schema(), ids))
+            .collect();
 
         let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
             Arc::clone(child),
-            partition_by.to_vec(),
+            group_expr,
+            None,
             aggr_expr,
         )?);
 
@@ -153,13 +167,13 @@ impl OptimizerRule for ReplaceFilterTop1 {
                     if matches!(unalias(expr), Expr::Column(c) if *c == rn_col) {
                         lit(1u64).alias_qualified(qualifier.cloned(), field.name())
                     } else {
-                        expr.clone()
+                        expr.expr.clone()
                     }
                 })
                 .collect::<Vec<_>>(),
         };
 
-        let new_plan = LogicalPlanBuilder::from(aggregate)
+        let new_plan = plan_builder(aggregate, config)
             .project(proj_exprs)?
             .build()?;
         Ok(Transformed::yes(new_plan))
@@ -235,7 +249,7 @@ fn validate_window_input(input: &Arc<LogicalPlan>) -> Option<WindowTop1<'_>> {
     }
 
     let window_expr = window.window_expr.first()?;
-    let Expr::WindowFunction(window_function) = window_expr else {
+    let Expr::WindowFunction(window_function) = &window_expr.expr else {
         return None;
     };
 
@@ -301,6 +315,7 @@ mod tests {
     use std::collections::HashSet;
 
     use chrono::{DateTime, Utc};
+    use datafusion_common::ColumnIdGenerator;
     use datafusion_common::DataFusionError;
     use datafusion_common::alias::AliasGenerator;
     use datafusion_common::config::ConfigOptions;
@@ -309,7 +324,9 @@ mod tests {
     use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::planner::ExprPlanner;
     use datafusion_expr::registry::FunctionRegistry;
-    use datafusion_expr::{AggregateUDF, HigherOrderUDF, ScalarUDF, WindowUDF};
+    use datafusion_expr::{
+        AggregateUDF, HigherOrderUDF, LogicalPlanBuilder, ScalarUDF, WindowUDF,
+    };
 
     /// A minimal [`FunctionRegistry`] that only knows `first_value` (all the
     /// rewrite needs). `OptimizerContext` provides no registry on its own.
@@ -389,6 +406,9 @@ mod tests {
         }
         fn function_registry(&self) -> Option<&dyn FunctionRegistry> {
             Some(&self.registry)
+        }
+        fn column_id_generator(&self) -> &Arc<ColumnIdGenerator> {
+            self.inner.column_id_generator()
         }
     }
 

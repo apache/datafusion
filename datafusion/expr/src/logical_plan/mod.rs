@@ -34,11 +34,12 @@ pub use dml::{
 };
 pub use plan::{
     Aggregate, Analyze, AsOfJoin, AsOfMatch, ColumnUnnestList, Distinct, DistinctOn,
-    EmptyRelation, Explain, ExplainOption, Extension, FetchType, Filter, Join,
-    JoinConstraint, JoinType, Limit, LogicalPlan, Partitioning, PlanType, Projection,
-    RangePartitioning, RecursiveQuery, Repartition, Show, ShowKind, SkipType, Sort,
-    StringifiedPlan, Subquery, SubqueryAlias, TableScan, TableScanBuilder,
-    ToStringifiedPlan, Union, Unnest, Values, Window, projection_schema,
+    EmptyRelation, Explain, ExplainOption, Extension, FetchType, Filter,
+    GroupingSetIndexes, GroupingSets, Join, JoinConstraint, JoinType, Limit, LogicalPlan,
+    Partitioning, PlanType, Projection, RangePartitioning, RecursiveQuery, Repartition,
+    Show, ShowKind, SkipType, Sort, StringifiedPlan, Subquery, SubqueryAlias, TableScan,
+    TableScanBuilder, ToStringifiedPlan, Union, Unnest, Values, Window,
+    projection_schema,
 };
 pub use statement::{
     Deallocate, Execute, Prepare, ResetVariable, SetVariable, Statement,

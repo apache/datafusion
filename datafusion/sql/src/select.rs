@@ -40,7 +40,7 @@ use datafusion_expr::utils::{
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, GroupingSet, LogicalPlan, LogicalPlanBuilder,
-    LogicalPlanBuilderOptions, Partitioning, SortExpr,
+    LogicalPlanBuilderOptions, NamedExpr, Partitioning, SortExpr,
 };
 
 use indexmap::IndexMap;
@@ -433,7 +433,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         let plan = if let Some(having_expr_post_aggr) = having_expr_post_aggr {
-            LogicalPlanBuilder::from(plan)
+            self.plan_builder(plan)
                 .having(having_expr_post_aggr)?
                 .build()?
         } else {
@@ -456,7 +456,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let plan = if window_func_exprs.is_empty() {
             plan
         } else {
-            let plan = LogicalPlanBuilder::window_plan(plan, window_func_exprs.clone())?;
+            let plan = LogicalPlanBuilder::window_plan_with_column_id_generator(
+                plan,
+                window_func_exprs.clone(),
+                Some(self.column_id_generator()),
+            )?;
 
             // Re-write the projection
             select_exprs_post_aggr = select_exprs_post_aggr
@@ -514,7 +518,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 std::slice::from_ref(&qualify_expr_post_window),
             )?;
 
-            LogicalPlanBuilder::from(plan)
+            self.plan_builder(plan)
                 .filter(qualify_expr_post_window)?
                 .build()?
         } else {
@@ -557,7 +561,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     qualify_post_projection,
                     "QUALIFY",
                 )?;
-                LogicalPlanBuilder::from(plan).distinct()?.build()?
+                self.plan_builder(plan).distinct()?.build()?
             }
             Some(Distinct::On(_))
                 if having_post_projection.is_some()
@@ -581,7 +585,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // underlying input expression first.
                     order_by_rex =
                         substitute_top_level_aliases_in_sorts(order_by_rex, &alias_map);
-                    LogicalPlanBuilder::from(base_plan)
+                    self.plan_builder(base_plan)
                         .distinct_on(on_exprs_post_aggr, select_exprs, None)?
                         .build()?
                 } else {
@@ -615,7 +619,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     )?;
                     order_by_rex = rewritten_order_by_rex;
 
-                    LogicalPlanBuilder::from(plan)
+                    self.plan_builder(plan)
                         .distinct_on(on_exprs_post_aggr, select_exprs_post_aggr, None)?
                         .build()?
                 }
@@ -635,7 +639,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     )
                 })
                 .collect::<Result<Vec<_>>>()?;
-            LogicalPlanBuilder::from(plan)
+            self.plan_builder(plan)
                 .repartition(Partitioning::DistributeBy(x))?
                 .build()?
         } else {
@@ -674,7 +678,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 );
             }
         }
-        LogicalPlanBuilder::from(plan).filter(expr)?.build()
+        self.plan_builder(plan).filter(expr)?.build()
     }
 
     /// Try converting Expr(Unnest(Expr)) to Projection/Unnest/Projection
@@ -689,7 +693,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 select_exprs.into_iter().map(|expr| vec![expr]).collect(),
             )?;
 
-        LogicalPlanBuilder::from(plan)
+        self.plan_builder(plan)
             .project(flatten_expr_groups(expr_groups))?
             .build()
     }
@@ -837,7 +841,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 unnest_col_vec.push(col);
             }
 
-            intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
+            intermediate_plan = self
+                .plan_builder(intermediate_plan)
                 .project(inner_projection_exprs.into_exprs())?
                 .unnest_columns_with_options(unnest_col_vec, unnest_options)?
                 .build()?;
@@ -878,20 +883,65 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         match input {
             // Fast path if there are no unnest in group by
             LogicalPlan::Aggregate(ref agg)
-                if !&agg.group_expr.iter().any(has_unnest_expr_recursively) =>
+                if !&agg
+                    .group_expr
+                    .iter()
+                    .any(|e| has_unnest_expr_recursively(e)) =>
             {
                 Ok(input)
             }
             LogicalPlan::Aggregate(agg) => {
-                let agg_expr = agg.aggr_expr.clone();
+                let group_entries = agg.group_expr.clone();
+                let old_grouping_sets = agg.grouping_sets.clone();
+                let aggr_entries = agg.aggr_expr.clone();
+                let agg_expr = agg
+                    .aggr_expr
+                    .iter()
+                    .map(|e| e.expr.clone())
+                    .collect::<Vec<_>>();
                 let (new_input, new_group_by_exprs) =
                     self.try_process_group_by_unnest(agg)?;
                 let options = LogicalPlanBuilderOptions::new()
                     .with_add_implicit_group_by_exprs(true);
-                LogicalPlanBuilder::from(new_input)
+                let plan = self
+                    .plan_builder(new_input)
                     .with_options(options)
                     .aggregate(new_group_by_exprs, agg_expr)?
-                    .build()
+                    .build()?;
+                // the rebuilt outputs keep the ids of the aggregate they
+                // replace: the aggregate expressions, and the grouping
+                // expressions if each was rewritten into one
+                let LogicalPlan::Aggregate(new) = plan else {
+                    return Ok(plan);
+                };
+                let generator = self.column_id_generator();
+                let keep = |old: &[NamedExpr], new: Vec<NamedExpr>| -> Vec<NamedExpr> {
+                    if old.len() != new.len() {
+                        return new;
+                    }
+                    old.iter()
+                        .zip(new)
+                        .map(|(old, new)| {
+                            old.clone().with_rewritten_expr(new.expr, &generator)
+                        })
+                        .collect()
+                };
+                let group_expr = keep(&group_entries, new.group_expr);
+                let aggr_expr = keep(&aggr_entries, new.aggr_expr);
+                let grouping_sets = new.grouping_sets.map(|mut grouping_sets| {
+                    if let Some(old) = &old_grouping_sets {
+                        grouping_sets.grouping_id = old.grouping_id;
+                    }
+                    grouping_sets
+                });
+                Aggregate::try_new_with_schema(
+                    new.input,
+                    group_expr,
+                    grouping_sets,
+                    aggr_expr,
+                    new.schema,
+                )
+                .map(LogicalPlan::Aggregate)
             }
             LogicalPlan::Filter(mut filter) => {
                 filter.input =
@@ -913,11 +963,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<(LogicalPlan, Vec<Expr>)> {
         let mut aggr_expr_using_columns: Option<HashSet<Expr>> = None;
 
+        // the grouping as it is written (grouping sets as one
+        // `Expr::GroupingSet`)
+        let group_expr = agg.group_by_exprs();
         let Aggregate {
-            input,
-            group_expr,
-            aggr_expr,
-            ..
+            input, aggr_expr, ..
         } = agg;
 
         // Process unnest of group_by_exprs, and input of agg will be rewritten
@@ -963,14 +1013,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
                         let mut columns = HashSet::new();
                         for expr in &aggr_expr {
-                            expr.apply(|expr| {
-                                if let Expr::Column(c) = expr {
-                                    columns.insert(Expr::Column(c.clone()));
-                                }
-                                Ok(TreeNodeRecursion::Continue)
-                            })
-                            // As the closure always returns Ok, this "can't" error
-                            .expect("Unexpected error");
+                            expr.expr
+                                .apply(|expr| {
+                                    if let Expr::Column(c) = expr {
+                                        columns.insert(Expr::Column(c.clone()));
+                                    }
+                                    Ok(TreeNodeRecursion::Continue)
+                                })
+                                // As the closure always returns Ok, this "can't" error
+                                .expect("Unexpected error");
                         }
                         aggr_expr_using_columns = Some(columns.clone());
                         columns
@@ -996,7 +1047,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     unnest_col_vec.push(col);
                 }
 
-                intermediate_plan = LogicalPlanBuilder::from(intermediate_plan)
+                intermediate_plan = self
+                    .plan_builder(intermediate_plan)
                     .project(projection_exprs)?
                     .unnest_columns_with_options(unnest_col_vec, unnest_options)?
                     .build()?;
@@ -1082,7 +1134,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => {
                 let mut from = from.into_iter();
 
-                let mut left = LogicalPlanBuilder::from({
+                let mut left = self.plan_builder({
                     let input = from.next().unwrap();
                     self.plan_table_with_joins(input, planner_context)?
                 });
@@ -1290,7 +1342,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // When inside a set expression, pass the left-most schema so
         // that expressions get aliased to match, avoiding duplicate
         // name errors from expressions like `count(*), count(*)`.
-        let builder = LogicalPlanBuilder::from(input);
+        let builder = self.plan_builder(input);
         if let Some(left_schema) = set_expr_left_schema {
             builder
                 .project_with_validation_and_schema(expr, &left_schema)?
@@ -1345,7 +1397,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // create the aggregate plan
         let options =
             LogicalPlanBuilderOptions::new().with_add_implicit_group_by_exprs(true);
-        let plan = LogicalPlanBuilder::from(input.clone())
+        let plan = self
+            .plan_builder(input.clone())
             .with_options(options)
             .aggregate(group_by_exprs.to_vec(), aggr_exprs.to_vec())?
             .build()?;
@@ -1365,7 +1418,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let mut aggr_projection_exprs =
             Vec::with_capacity(group_by_exprs.len() + aggr_exprs.len());
         for expr in group_by_exprs {
-            match expr {
+            match &expr.expr {
                 Expr::GroupingSet(GroupingSet::Rollup(exprs)) => {
                     aggr_projection_exprs.extend_from_slice(exprs)
                 }
@@ -1377,7 +1430,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         aggr_projection_exprs.extend_from_slice(exprs)
                     }
                 }
-                _ => aggr_projection_exprs.push(expr.clone()),
+                _ => aggr_projection_exprs.push(expr.expr.clone()),
             }
         }
         aggr_projection_exprs.extend_from_slice(aggr_exprs);
@@ -1395,10 +1448,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .map(|expr| expr_as_column_expr(expr, input))
             .collect::<Result<Vec<Expr>>>()?;
 
-        // next we re-write the projection
+        // next we re-write the projection: the rewritten references bind to
+        // the outputs of the aggregate (a grouping column is not the input
+        // column under grouping sets that omit it, see `Aggregate`)
         let select_exprs_post_aggr = select_exprs
             .iter()
-            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
+            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, &plan))
             .collect::<Result<Vec<Expr>>>()?;
 
         // finally, we have some validation that the re-written projection can be resolved
@@ -1415,7 +1470,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // aggregation.
         let having_expr_post_aggr = if let Some(having_expr) = having_expr_opt {
             let having_expr_post_aggr =
-                rebase_expr(having_expr, &aggr_projection_exprs, input)?;
+                rebase_expr(having_expr, &aggr_projection_exprs, &plan)?;
 
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
@@ -1434,7 +1489,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // aggregation.
         let qualify_expr_post_aggr = if let Some(qualify_expr) = qualify_expr_opt {
             let qualify_expr_post_aggr =
-                rebase_expr(qualify_expr, &aggr_projection_exprs, input)?;
+                rebase_expr(qualify_expr, &aggr_projection_exprs, &plan)?;
 
             check_columns_satisfy_exprs(
                 &column_exprs_post_aggr,
@@ -1457,7 +1512,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .iter()
             .map(|sort_expr| {
                 let rewritten_expr =
-                    rebase_expr(&sort_expr.expr, &aggr_projection_exprs, input)?;
+                    rebase_expr(&sort_expr.expr, &aggr_projection_exprs, &plan)?;
 
                 // Check if this ORDER BY expression matches any aliased SELECT expression
                 // If so, use the SELECT's alias instead of the raw expression
@@ -1511,7 +1566,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // grouping column or a raw aggregate expression in ON is resolved.
         let on_exprs_post_aggr = on_exprs
             .iter()
-            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, input))
+            .map(|expr| rebase_expr(expr, &aggr_projection_exprs, &plan))
             .collect::<Result<Vec<Expr>>>()?;
         check_columns_satisfy_exprs(
             &all_valid_exprs,

@@ -11,23 +11,42 @@
 //! ([`Column::id`]). A lookup of a column with an id finds the field with that
 //! id, and falls back to the qualifier and name otherwise.
 //!
-//! Ids are allocated by a [`ColumnIdGenerator`] shared by a session. No
-//! generator, no ids: plans built without one have no ids, and resolve by
-//! qualifier and name.
+//! Ids are allocated by a [`ColumnIdGenerator`] shared by a session. Every
+//! `LogicalPlanBuilder` has a generator: the session's, or else its own,
+//! whose ids follow the highest id of its inputs (see
+//! [`LogicalPlan::max_column_id`]).
 //!
 //! # Definitions and references
 //!
 //! A column is *defined* once in a plan, subqueries included: by the leaf
 //! that produces it (`TableScan`, `Values`, `MaterializedCteScan`, the work
-//! table scan of a recursive query, which is a `TableScan`), and later by the
-//! nodes that compute outputs. Other nodes pass their inputs' ids through: a
+//! table scan of a recursive query, which is a `TableScan`), and by the
+//! nodes that compute outputs: an output of a `Projection` or a
+//! `DistinctOn`, a window expression of a `Window`, or a grouping or
+//! aggregate expression of an `Aggregate` (a [`NamedExpr`]) defines the
+//! column of its id, unless it passes a column through (a bare column with
+//! the same id). Other nodes pass their inputs' ids through: a
 //! schema can have the same id twice (`SELECT a, a`), and the fields hold the
 //! same values. A plan value that is used twice (a view referenced twice, a
 //! self-join of a DataFrame) is renumbered where it is blended in.
 //!
-//! The leaves allocate ids when they are built with a generator
-//! (`LogicalPlanBuilder::scan_with_column_id_generator`,
-//! `LogicalPlanBuilder::values_with_column_id_generator`, the SQL planner).
+//! Some nodes define columns without expressions: the outputs of a `Union`
+//! and of a `RecursiveQuery` (they are not the columns of any input), the
+//! unnested columns of an `Unnest` (the others pass through), and the mark
+//! column of a mark join. Their ids are stored in the schema of the node,
+//! allocated when it is built and kept when it is rebuilt.
+//!
+//! An aggregate with grouping sets also defines its grouping id column
+//! (`__grouping_id`), whose id its grouping sets hold; a bare grouping column
+//! that one of the sets omits defines a column (its output is NULL in the
+//! rows of that set).
+//!
+//! [`NamedExpr`]: crate::NamedExpr
+//!
+//! The leaves built by `LogicalPlanBuilder` allocate ids (from the generator
+//! they are given with `LogicalPlanBuilder::scan_with_column_id_generator`
+//! and `LogicalPlanBuilder::values_with_column_id_generator`, as the SQL
+//! planner does, or from a new one).
 //! A `TableScan` rebuilt with another projection (`TableScanBuilder::from`)
 //! keeps the ids of the source columns it retains.
 //!
@@ -76,7 +95,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::Arc;
 
-use crate::logical_plan::{MaterializedCtePlan, Projection, Subquery};
+use crate::logical_plan::{
+    Aggregate, Distinct, DistinctOn, MaterializedCtePlan, Projection, Subquery, Window,
+};
 use crate::{Expr, LogicalPlan};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
@@ -102,26 +123,6 @@ pub(crate) fn apply_node_column_refs(
         })
     })?;
     Ok(())
-}
-
-/// The ids of the outputs of a node that computes one output per expression
-/// of `exprs` over `input` (a projection, the grouping of an aggregate): the
-/// id of the input field that an expression passes through if it is a bare
-/// column, `None` for the outputs it computes (they get ids with `NamedExpr`).
-pub(crate) fn pass_through_column_ids<'a>(
-    exprs: impl IntoIterator<Item = &'a Expr>,
-    input: &DFSchema,
-) -> Vec<Option<ColumnId>> {
-    let has_ids = input.field_ids().iter().any(Option::is_some);
-    exprs
-        .into_iter()
-        .map(|expr| match expr {
-            Expr::Column(col) if has_ids => input
-                .maybe_index_of_column(col)
-                .and_then(|i| input.field_id(i)),
-            _ => None,
-        })
-        .collect()
 }
 
 /// Returns `schema` where every field has a new id from `generator`, if no
@@ -250,7 +251,10 @@ impl LogicalPlan {
     /// of a lookup by id.
     ///
     /// The definitions checked for uniqueness are the fields of the leaves
-    /// (`TableScan`, `Values`, `MaterializedCteScan`).
+    /// (`TableScan`, `Values`, `MaterializedCteScan`), the outputs of
+    /// projections and `DistinctOn`s that do not pass a column through, the
+    /// window expressions of windows, and the columns that nodes define
+    /// without expressions (see the [module documentation](self)).
     pub fn column_id_issues(&self) -> Vec<ColumnIdIssue> {
         let mut verifier = Verifier {
             describe: true,
@@ -273,16 +277,63 @@ impl LogicalPlan {
         counts
     }
 
-    /// The ids of the columns this node defines itself (not those it passes
-    /// through from its inputs)
-    fn node_defined_column_ids(&self) -> &[Option<ColumnId>] {
+    /// Calls `f` with the index in the schema and the id of each column this
+    /// node defines itself (not those it passes through from its inputs):
+    /// the columns of a leaf, the outputs of a projection, a `DistinctOn` or
+    /// an aggregate that do not pass a column through, the window
+    /// expressions of a window, the grouping id of grouping sets, the outputs of a union or a recursive query, the unnested
+    /// columns of an unnest, and the mark column of a mark join
+    fn for_each_node_defined_column_id(&self, mut f: impl FnMut(usize, ColumnId)) {
         match self {
             LogicalPlan::TableScan(_)
             | LogicalPlan::Values(_)
-            | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => {
-                self.schema().field_ids()
+            | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
+            | LogicalPlan::Union(_)
+            | LogicalPlan::RecursiveQuery(_) => {
+                for (i, id) in self.schema().field_ids().iter().enumerate() {
+                    if let Some(id) = id {
+                        f(i, *id)
+                    }
+                }
             }
-            _ => &[],
+            LogicalPlan::Projection(Projection { expr: entries, .. })
+            | LogicalPlan::Distinct(Distinct::On(DistinctOn {
+                select_expr: entries,
+                ..
+            })) => {
+                for (i, entry) in entries.iter().enumerate() {
+                    if let Some(id) = entry.defined_id() {
+                        f(i, id)
+                    }
+                }
+            }
+            // the input columns pass through, the window expressions follow
+            LogicalPlan::Window(window) => {
+                let input_len = window.input.schema().fields().len();
+                for (i, entry) in window.window_expr.iter().enumerate() {
+                    if let Some(id) = entry.defined_id() {
+                        f(input_len + i, id)
+                    }
+                }
+            }
+            LogicalPlan::Aggregate(aggregate) => {
+                for (i, id) in aggregate.defined_column_ids() {
+                    f(i, id)
+                }
+            }
+            LogicalPlan::Unnest(unnest) => {
+                for i in unnest.unnested_output_indices() {
+                    if let Some(id) = unnest.schema.field_id(i) {
+                        f(i, id)
+                    }
+                }
+            }
+            LogicalPlan::Join(join) => {
+                if let Some(id) = join.mark_column_id() {
+                    f(join.schema.fields().len() - 1, id)
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -302,11 +353,11 @@ impl LogicalPlan {
         let mut ids = vec![];
         // the closure never fails
         let _ = self.apply_with_subqueries(|plan| {
-            for id in plan.node_defined_column_ids().iter().flatten() {
-                if seen.insert(*id) {
-                    ids.push(*id);
+            plan.for_each_node_defined_column_id(|_, id| {
+                if seen.insert(id) {
+                    ids.push(id);
                 }
-            }
+            });
             Ok(TreeNodeRecursion::Continue)
         });
         ids
@@ -318,25 +369,67 @@ impl LogicalPlan {
     /// ids that the plan does not define, such as outer references to an
     /// enclosing query, are left alone.
     ///
-    /// Without a generator, it strips the ids instead: the columns it defines
-    /// and the references to them get no id (no generator, no ids). This can
-    /// never collide.
-    ///
     /// Used where a plan value is blended into another plan that may already
     /// contain it (see the [module documentation](self)), so that no id is
     /// defined twice.
-    pub fn with_fresh_column_ids(
-        self,
-        generator: Option<&ColumnIdGenerator>,
-    ) -> Result<Self> {
+    pub fn with_fresh_column_ids(self, generator: &ColumnIdGenerator) -> Result<Self> {
         self.renumber(generator, &HashSet::new())
+    }
+
+    /// Returns this plan, where the columns of its output take the ids `ids`
+    /// (by position): each output id that this plan defines is renamed to
+    /// the id at its position, in the schemas and the references inside the
+    /// plan (subqueries included).
+    ///
+    /// Used where this plan replaces a node that defined `ids`, as the only
+    /// remaining input of a union replaces the union: the references above
+    /// it keep finding their columns. The nodes inside the plan do not refer
+    /// to its outputs, so renaming their definitions is safe.
+    ///
+    /// A position is left as it is when it cannot take its id: its output
+    /// has no id, or one that this plan does not define (an outer
+    /// reference), or one that an earlier position renamed to another id
+    /// (`SELECT a, a`), or the new id is already defined in this plan.
+    /// Returns [`Transformed::no`] if no position changed.
+    pub fn with_output_column_ids(
+        self,
+        ids: &[Option<ColumnId>],
+    ) -> Result<Transformed<Self>> {
+        if ids.len() != self.schema().fields().len() {
+            return Ok(Transformed::no(self));
+        }
+        let defined = self.defined_column_ids();
+        let mut renames: HashMap<ColumnId, ColumnId> = HashMap::new();
+        for (old, new) in self.schema().field_ids().iter().zip(ids) {
+            let (Some(old), Some(new)) = (old, new) else {
+                continue;
+            };
+            if old == new {
+                renames.entry(*old).or_insert(*new);
+                continue;
+            }
+            if !defined.contains(old) || defined.contains(new) {
+                continue;
+            }
+            renames.entry(*old).or_insert(*new);
+        }
+        renames.retain(|old, new| old != new);
+        if renames.is_empty() {
+            return Ok(Transformed::no(self));
+        }
+        let renames = Renames {
+            ids: renames,
+            strip_outer: &HashSet::new(),
+        };
+        self.transform_up_with_subqueries(|plan| rename_node_column_ids(plan, &renames))
+            .map(|transformed| Transformed::yes(transformed.data))
     }
 
     /// [`Self::with_fresh_column_ids`], where the outer references to the
     /// ids in `strip_outer` lose their id instead of being renamed
     fn renumber(
         self,
-        generator: Option<&ColumnIdGenerator>,
+        generator: &ColumnIdGenerator,
         strip_outer: &HashSet<ColumnId>,
     ) -> Result<Self> {
         let defined = self.defined_column_ids_in_order();
@@ -346,7 +439,7 @@ impl LogicalPlan {
         let renames = Renames {
             ids: defined
                 .into_iter()
-                .map(|id| (id, generator.map(ColumnIdGenerator::next)))
+                .map(|id| (id, generator.next()))
                 .collect(),
             strip_outer,
         };
@@ -357,11 +450,13 @@ impl LogicalPlan {
     /// Returns this plan, renumbered with [`Self::with_fresh_column_ids`] if
     /// it defines an id that `existing` also defines: used where this plan is
     /// blended into a plan that contains `existing` (the right side of a
-    /// join, a subquery of `existing`)
+    /// join, a subquery of `existing`). The generator is first moved past
+    /// the ids of both plans, which may have been built with other
+    /// generators.
     pub fn with_fresh_column_ids_if_overlapping(
         self,
         existing: &LogicalPlan,
-        generator: Option<&ColumnIdGenerator>,
+        generator: &ColumnIdGenerator,
     ) -> Result<Self> {
         self.blend_into(existing, generator).map(|(plan, _)| plan)
     }
@@ -374,7 +469,7 @@ impl LogicalPlan {
     pub(crate) fn blend_into(
         self,
         existing: &LogicalPlan,
-        generator: Option<&ColumnIdGenerator>,
+        generator: &ColumnIdGenerator,
     ) -> Result<(Self, HashSet<ColumnId>)> {
         // the incoming plan is usually the smaller one: look at it first
         let defined = self.defined_column_ids();
@@ -384,19 +479,25 @@ impl LogicalPlan {
         let mut overlap = HashSet::new();
         // the closure never fails
         let _ = existing.apply_with_subqueries(|plan| {
-            overlap.extend(
-                plan.node_defined_column_ids()
-                    .iter()
-                    .flatten()
-                    .filter(|id| defined.contains(*id)),
-            );
+            plan.for_each_node_defined_column_id(|_, id| {
+                if defined.contains(&id) {
+                    overlap.insert(id);
+                }
+            });
             Ok(TreeNodeRecursion::Continue)
         });
         if overlap.is_empty() {
-            Ok((self, overlap))
-        } else {
-            Ok((self.with_fresh_column_ids(generator)?, overlap))
+            return Ok((self, overlap));
         }
+        // the plans may have been built with another generator: the new ids
+        // must not collide with theirs
+        for max in [self.max_column_id(), existing.max_column_id()]
+            .into_iter()
+            .flatten()
+        {
+            generator.advance_past(max);
+        }
+        Ok((self.with_fresh_column_ids(generator)?, overlap))
     }
 
     /// Returns this plan where every subquery expression that defines an id
@@ -410,9 +511,48 @@ impl LogicalPlan {
     /// not refer to the columns defined inside it.
     pub fn with_fresh_column_ids_in_repeated_subqueries(
         self,
-        generator: Option<&ColumnIdGenerator>,
+        generator: &ColumnIdGenerator,
     ) -> Result<Transformed<Self>> {
         renumber_repeated_subqueries(self, &mut HashSet::new(), generator)
+    }
+
+    /// Returns this plan where every subquery expression that defines an id
+    /// that is defined more than once in the plan is renumbered with
+    /// [`Self::with_fresh_column_ids`] (its outer references to the colliding
+    /// ids lose them). Ids defined twice outside of subquery expressions are
+    /// left alone.
+    ///
+    /// Used after code that allocates the ids of a subquery without the
+    /// generator of the plan (casting a scalar subquery, see
+    /// `ExprSchemable::cast_to`): its new ids are new within the subquery
+    /// only. Renumbering a subquery expression is safe: the plan around it
+    /// does not refer to the columns defined inside it.
+    pub fn with_fresh_column_ids_in_colliding_subqueries(
+        self,
+        generator: &ColumnIdGenerator,
+    ) -> Result<Transformed<Self>> {
+        let mut counts = self.defined_column_id_counts();
+        if counts.values().all(|count| *count < 2) {
+            return Ok(Transformed::no(self));
+        }
+        if let Some(max) = self.max_column_id() {
+            generator.advance_past(max);
+        }
+        renumber_colliding_subqueries(self, &mut counts, generator)
+    }
+
+    /// The number of times each id is defined in this plan, subqueries
+    /// included
+    fn defined_column_id_counts(&self) -> HashMap<ColumnId, usize> {
+        let mut counts: HashMap<ColumnId, usize> = HashMap::new();
+        // the closure never fails
+        let _ = self.apply_with_subqueries(|plan| {
+            plan.for_each_node_defined_column_id(|_, id| {
+                *counts.entry(id).or_default() += 1;
+            });
+            Ok(TreeNodeRecursion::Continue)
+        });
+        counts
     }
 
     /// The schema stored in this node, if it stores one (other nodes return
@@ -452,10 +592,12 @@ impl LogicalPlan {
 fn renumber_repeated_subqueries(
     plan: LogicalPlan,
     seen: &mut HashSet<ColumnId>,
-    generator: Option<&ColumnIdGenerator>,
+    generator: &ColumnIdGenerator,
 ) -> Result<Transformed<LogicalPlan>> {
     plan.transform_down(|node| {
-        seen.extend(node.node_defined_column_ids().iter().flatten().copied());
+        node.for_each_node_defined_column_id(|_, id| {
+            seen.insert(id);
+        });
         node.map_subqueries(|subquery| {
             let LogicalPlan::Subquery(mut subquery) = subquery else {
                 return Ok(Transformed::no(subquery));
@@ -485,12 +627,83 @@ fn renumber_repeated_subqueries(
     })
 }
 
+/// A new generator for a builder that was given none: its ids follow the
+/// highest id of `plans` (see [`LogicalPlan::max_column_id`]), so that it
+/// can allocate into them
+pub(crate) fn own_column_id_generator<'a>(
+    plans: impl IntoIterator<Item = &'a LogicalPlan>,
+) -> Arc<ColumnIdGenerator> {
+    let generator = ColumnIdGenerator::new();
+    for plan in plans {
+        if let Some(max) = plan.max_column_id() {
+            generator.advance_past(max);
+        }
+    }
+    Arc::new(generator)
+}
+
+/// See [`LogicalPlan::with_fresh_column_ids_in_colliding_subqueries`].
+/// `counts` holds the number of definitions of each id in the whole plan,
+/// updated as subqueries are renumbered. The innermost subqueries are
+/// renumbered first, so that a subquery that repeats an id defined in a
+/// subquery around it is the one renumbered.
+fn renumber_colliding_subqueries(
+    plan: LogicalPlan,
+    counts: &mut HashMap<ColumnId, usize>,
+    generator: &ColumnIdGenerator,
+) -> Result<Transformed<LogicalPlan>> {
+    plan.transform_down(|node| {
+        node.map_subqueries(|subquery| {
+            let LogicalPlan::Subquery(mut subquery) = subquery else {
+                return Ok(Transformed::no(subquery));
+            };
+            let inner = renumber_colliding_subqueries(
+                Arc::unwrap_or_clone(subquery.subquery),
+                counts,
+                generator,
+            )?;
+            let mut transformed = inner.transformed;
+            let mut plan = inner.data;
+            let local = plan.defined_column_id_counts();
+            let overlap: HashSet<ColumnId> = local
+                .keys()
+                .filter(|id| counts.get(id).is_some_and(|count| *count > 1))
+                .copied()
+                .collect();
+            if !overlap.is_empty() {
+                for expr in &mut subquery.outer_ref_columns {
+                    *expr = strip_column_ids(std::mem::take(expr), &overlap)?;
+                }
+                plan = plan.renumber(generator, &overlap)?;
+                // its definitions now have new ids, each defined once
+                for (id, count) in local {
+                    if let Some(total) = counts.get_mut(&id) {
+                        *total = total.saturating_sub(count);
+                    }
+                }
+                transformed = true;
+            }
+            subquery.subquery = Arc::new(plan);
+            Ok(Transformed::new_transformed(
+                LogicalPlan::Subquery(subquery),
+                transformed,
+            ))
+        })
+    })
+}
+
 /// Renumbers the subqueries of expressions about to be added to the plan
 /// `outer`, when they define ids that `outer` or a subquery seen before
-/// also define, as when a subquery is built from the plan it filters
+/// also define, as when a subquery is built from the plan it filters.
+///
+/// The generator is the one of the builder of `outer`: created (see
+/// [`own_column_id_generator`]) when a subquery that defines ids is seen,
+/// if the builder has none yet, and moved past the ids of each such
+/// subquery, so that the ids the builder allocates next do not collide with
+/// them.
 pub(crate) struct SubqueryBlender<'a> {
     outer: &'a LogicalPlan,
-    generator: Option<&'a ColumnIdGenerator>,
+    generator: &'a mut Option<Arc<ColumnIdGenerator>>,
     /// The ids defined by `outer` and the subqueries seen so far, computed
     /// when the first subquery that defines ids is seen
     taken: Option<HashSet<ColumnId>>,
@@ -499,7 +712,7 @@ pub(crate) struct SubqueryBlender<'a> {
 impl<'a> SubqueryBlender<'a> {
     pub(crate) fn new(
         outer: &'a LogicalPlan,
-        generator: Option<&'a ColumnIdGenerator>,
+        generator: &'a mut Option<Arc<ColumnIdGenerator>>,
     ) -> Self {
         Self {
             outer,
@@ -521,6 +734,13 @@ impl<'a> SubqueryBlender<'a> {
             if defined.is_empty() {
                 return Ok(Transformed::no(expr));
             }
+            let outer = self.outer;
+            let generator = self
+                .generator
+                .get_or_insert_with(|| own_column_id_generator([outer]));
+            if let Some(max) = subquery.subquery.max_column_id() {
+                generator.advance_past(max);
+            }
             let taken = self
                 .taken
                 .get_or_insert_with(|| self.outer.defined_column_ids());
@@ -532,7 +752,7 @@ impl<'a> SubqueryBlender<'a> {
                 // outer column from the inner one: they lose their ids, and
                 // resolve by name
                 let plan = Arc::unwrap_or_clone(Arc::clone(&subquery.subquery));
-                subquery.subquery = Arc::new(plan.renumber(self.generator, &overlap)?);
+                subquery.subquery = Arc::new(plan.renumber(generator, &overlap)?);
                 for expr in &mut subquery.outer_ref_columns {
                     *expr = strip_column_ids(std::mem::take(expr), &overlap)?;
                 }
@@ -602,8 +822,8 @@ pub(crate) fn strip_column_ids(expr: Expr, ids: &HashSet<ColumnId>) -> Result<Ex
 
 /// The renames of [`LogicalPlan::renumber`]
 struct Renames<'a> {
-    /// The new id of each id that the plan defines (`None` to strip it)
-    ids: HashMap<ColumnId, Option<ColumnId>>,
+    /// The new id of each id that the plan defines
+    ids: HashMap<ColumnId, ColumnId>,
     /// The ids whose outer references lose their id instead
     strip_outer: &'a HashSet<ColumnId>,
 }
@@ -619,7 +839,7 @@ impl Renames<'_> {
             None
         } else {
             match self.ids.get(&id) {
-                Some(new_id) => *new_id,
+                Some(new_id) => Some(*new_id),
                 None => return false,
             }
         };
@@ -689,7 +909,7 @@ fn rename_node_column_ids(
     renames: &Renames,
 ) -> Result<Transformed<LogicalPlan>> {
     let rename = |id: Option<ColumnId>| -> Option<Option<ColumnId>> {
-        id.and_then(|id| renames.ids.get(&id).copied())
+        id.and_then(|id| renames.ids.get(&id).map(|new_id| Some(*new_id)))
     };
 
     let mut transformed = false;
@@ -728,6 +948,41 @@ fn rename_node_column_ids(
     let mut result =
         map_expressions_keeping_schema(plan, |expr| renames.rename_expr(expr))?;
     result.transformed |= transformed;
+
+    // the ids of the outputs of a projection, a window or a `DistinctOn`,
+    // after its expressions (which keep the ids of their entries): a
+    // pass-through follows its column
+    let (entries, more_entries) = match &mut result.data {
+        LogicalPlan::Projection(Projection { expr, .. })
+        | LogicalPlan::Window(Window {
+            window_expr: expr, ..
+        })
+        | LogicalPlan::Distinct(Distinct::On(DistinctOn {
+            select_expr: expr, ..
+        })) => (expr.as_mut_slice(), &mut [][..]),
+        LogicalPlan::Aggregate(Aggregate {
+            group_expr,
+            aggr_expr,
+            ..
+        }) => (group_expr.as_mut_slice(), aggr_expr.as_mut_slice()),
+        _ => (&mut [][..], &mut [][..]),
+    };
+    for entry in entries.iter_mut().chain(more_entries) {
+        if let Some(new_id) = renames.ids.get(&entry.id) {
+            entry.id = *new_id;
+            result.transformed = true;
+        }
+    }
+    // the grouping id column of grouping sets
+    if let LogicalPlan::Aggregate(Aggregate {
+        grouping_sets: Some(grouping_sets),
+        ..
+    }) = &mut result.data
+        && let Some(new_id) = renames.ids.get(&grouping_sets.grouping_id)
+    {
+        grouping_sets.grouping_id = *new_id;
+        result.transformed = true;
+    }
     Ok(result)
 }
 
@@ -755,19 +1010,15 @@ impl Verifier {
             issues.push(ColumnIdIssue { kind, column, node });
         };
 
-        for (i, id) in plan.node_defined_column_ids().iter().enumerate() {
-            if let Some(id) = id
-                && !self.defined.insert(*id)
-            {
+        let defined = &mut self.defined;
+        let issues = &mut self.issues;
+        plan.for_each_node_defined_column_id(|i, id| {
+            if !defined.insert(id) {
                 let column =
-                    Column::from(plan.schema().qualified_field(i)).with_id(Some(*id));
-                report(
-                    &mut self.issues,
-                    ColumnIdIssueKind::DuplicateDefinition,
-                    column,
-                );
+                    Column::from(plan.schema().qualified_field(i)).with_id(Some(id));
+                report(issues, ColumnIdIssueKind::DuplicateDefinition, column);
             }
-        }
+        });
 
         let inputs = plan.inputs();
         let scopes: Vec<DFSchemaRef> = if inputs.is_empty() {
@@ -813,24 +1064,32 @@ fn classify<'a>(
     let Some(id) = col.id else {
         return Some(ColumnIdIssueKind::Missing);
     };
-    let found_by_id = schemas
-        .clone()
-        .any(|schema| schema.index_of_column_id(id).is_some());
-    // the id of the field the name resolves to, if it resolves
-    let id_by_name = schemas.into_iter().find_map(|schema| {
+    // the id of the field the name resolves to in `schema`, if it resolves
+    let id_by_name = |schema: &DFSchema| {
         schema
             .index_of_column_by_name(col.relation.as_ref(), &col.name)
             .map(|i| schema.field_id(i))
-    });
-    match (found_by_id, id_by_name) {
-        (true, Some(id_by_name)) if id_by_name != Some(id) => {
-            Some(ColumnIdIssueKind::Disagree)
-        }
-        (true, _) => None,
-        (false, Some(Some(id_by_name))) if id_by_name != id => {
+    };
+    // A reference found by id must agree with its name in the schema where
+    // it is found: the inputs of a join can both have a field with the same
+    // qualified name (a join of two unnamed tables), and each join key
+    // resolves in its own side
+    if let Some(schema) = schemas
+        .clone()
+        .find(|schema| schema.index_of_column_id(id).is_some())
+    {
+        return match id_by_name(schema) {
+            Some(id_by_name) if id_by_name != Some(id) => {
+                Some(ColumnIdIssueKind::Disagree)
+            }
+            _ => None,
+        };
+    }
+    match schemas.into_iter().find_map(id_by_name) {
+        Some(Some(id_by_name)) if id_by_name != id => {
             Some(ColumnIdIssueKind::Misresolved)
         }
-        (false, _) => Some(ColumnIdIssueKind::Stale),
+        _ => Some(ColumnIdIssueKind::Stale),
     }
 }
 
@@ -838,39 +1097,35 @@ fn classify<'a>(
 mod tests {
     use super::*;
     use crate::logical_plan::builder::table_scan;
-    use crate::{LogicalPlanBuilder, col, exists, lit};
+    use crate::{LogicalPlanBuilder, NamedExpr, col, exists, lit};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::ColumnIdGenerator;
     use std::sync::Arc;
 
     #[test]
     fn max_column_id_without_ids() -> Result<()> {
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        let plan = table_scan(Some("t"), &schema, None)?
-            .filter(col("a").gt(lit(1)))?
-            .build()?;
+        let plan = filter(scan_with_ids("t", [None, None])?, col("a"))?;
         assert_eq!(plan.max_column_id(), None);
         Ok(())
     }
 
     #[test]
     fn max_column_id_finds_references_in_subqueries() -> Result<()> {
-        let generator = ColumnIdGenerator::new();
-        let low = generator.next();
-        let high = generator.next();
-        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let high = id(100);
         // a subquery reading an outer reference with the highest id
         let outer_ref = Expr::OuterReferenceColumn(
             Arc::new(Field::new("a", DataType::Int32, false)),
             Column::new(Some("t"), "a").with_id(Some(high)),
         );
-        let inner_ref = Expr::Column(Column::new(Some("s"), "a").with_id(Some(low)));
-        let subquery = table_scan(Some("s"), &schema, None)?
-            .filter(outer_ref.eq(inner_ref))?
-            .build()?;
-        let plan = table_scan(Some("t"), &schema, None)?
-            .filter(exists(Arc::new(subquery)))?
-            .build()?;
+        let inner_ref = Expr::Column(Column::new(Some("s"), "a").with_id(Some(id(1))));
+        let subquery = filter(
+            scan_with_ids("s", [Some(1), Some(2)])?,
+            outer_ref.eq(inner_ref),
+        )?;
+        let plan = LogicalPlan::Filter(crate::Filter::try_new(
+            exists(Arc::new(subquery)),
+            Arc::new(scan_with_ids("t", [Some(3), Some(4)])?),
+        )?);
         assert_eq!(plan.max_column_id(), Some(high));
         Ok(())
     }
@@ -1098,34 +1353,48 @@ mod tests {
             .build()?;
         assert_eq!(output_ids(&plan), ids(&[Some(1), Some(2)]));
 
-        // a projection passes bare columns through, computed outputs have none
+        // a projection passes bare columns through, other outputs (an alias of
+        // a column too) define columns, with new ids from the builder
         let plan = LogicalPlanBuilder::from(t()?)
             .project(vec![col("t.b"), col("t.a").alias("x"), col("t.a") + lit(1)])?
             .build()?;
-        assert_eq!(output_ids(&plan), ids(&[Some(2), None, None]));
+        assert_eq!(output_ids(&plan), ids(&[Some(2), Some(3), Some(4)]));
+        assert_eq!(
+            plan.defined_column_ids(),
+            [id(1), id(2), id(3), id(4)].into()
+        );
 
-        // so do the grouping of an aggregate and a window (with its input)
+        // so does the grouping of an aggregate; its other outputs define
+        // columns
         let plan = LogicalPlanBuilder::from(t()?)
             .aggregate(
                 vec![col("t.b"), col("t.a") + lit(1)],
                 vec![col("t.a").gt(lit(0))],
             )?
             .build()?;
-        assert_eq!(output_ids(&plan), ids(&[Some(2), None, None]));
+        assert_eq!(output_ids(&plan), ids(&[Some(2), Some(3), Some(4)]));
+        assert_eq!(
+            plan.defined_column_ids(),
+            [id(1), id(2), id(3), id(4)].into()
+        );
 
         // an alias requalifies and keeps the ids
         let plan = LogicalPlanBuilder::from(t()?).alias("u")?.build()?;
         assert_eq!(output_ids(&plan), ids(&[Some(1), Some(2)]));
         // when it has to rename duplicate names, the renamed columns are
-        // computed (aliased) outputs, without ids yet
+        // defined by the projection it adds, with new ids from the builder
         let plan = LogicalPlanBuilder::from(t()?)
             .cross_join(s()?)?
             .alias("u")?
             .build()?;
-        assert_eq!(output_ids(&plan), ids(&[Some(1), Some(2), None, None]));
+        assert_eq!(
+            output_ids(&plan),
+            ids(&[Some(1), Some(2), Some(5), Some(6)])
+        );
+        assert_eq!(kinds(&plan), vec![]);
 
         // joins concatenate, semi joins keep one side, mark joins add a mark
-        // column without an id
+        // column, defined by the join with a new id from the builder
         for (join_type, expected) in [
             (
                 crate::JoinType::Left,
@@ -1133,7 +1402,7 @@ mod tests {
             ),
             (crate::JoinType::LeftSemi, ids(&[Some(1), Some(2)])),
             (crate::JoinType::RightAnti, ids(&[Some(3), Some(4)])),
-            (crate::JoinType::LeftMark, ids(&[Some(1), Some(2), None])),
+            (crate::JoinType::LeftMark, ids(&[Some(1), Some(2), Some(5)])),
         ] {
             let plan = LogicalPlanBuilder::from(t()?)
                 .join(s()?, join_type, (vec!["t.a"], vec!["s.a"]), None)?
@@ -1148,9 +1417,27 @@ mod tests {
             assert_eq!(output_ids(&plan), expected, "{join_type}");
         }
 
-        // a union defines its outputs: they have no id yet
+        // a mark join defines its mark column
+        let plan = LogicalPlanBuilder::from(t()?)
+            .join(
+                s()?,
+                crate::JoinType::LeftMark,
+                (vec!["t.a"], vec!["s.a"]),
+                None,
+            )?
+            .build()?;
+        assert_eq!(plan.defined_column_ids(), [1, 2, 3, 4, 5].map(id).into());
+        assert_eq!(kinds(&plan), vec![]);
+
+        // a union defines its outputs, with new ids from the builder, kept
+        // when it is rebuilt
         let plan = LogicalPlanBuilder::from(t()?).union(s()?)?.build()?;
-        assert_eq!(output_ids(&plan), ids(&[None, None]));
+        assert_eq!(output_ids(&plan), ids(&[Some(5), Some(6)]));
+        assert_eq!(plan.defined_column_ids(), [1, 2, 3, 4, 5, 6].map(id).into());
+        let rebuilt =
+            plan.with_new_exprs(vec![], plan.inputs().into_iter().cloned().collect())?;
+        assert_eq!(output_ids(&rebuilt), output_ids(&plan));
+        assert_eq!(output_ids(&rebuilt.recompute_schema()?), output_ids(&plan));
         Ok(())
     }
 
@@ -1171,17 +1458,261 @@ mod tests {
         );
         let scan = LogicalPlan::TableScan(scan);
 
+        // the unnested column is defined by the unnest, with a new id; the
+        // others pass through
         let plan = LogicalPlanBuilder::from(scan.clone())
             .unnest_column("t.l")?
             .build()?;
-        assert_eq!(output_ids(&plan), vec![Some(id(1)), None]);
+        assert_eq!(output_ids(&plan), vec![Some(id(1)), Some(id(3))]);
+        assert_eq!(plan.defined_column_ids(), [1, 2, 3].map(id).into());
+        // rebuilt, it keeps its id
+        let rebuilt = plan.with_new_exprs(plan.expressions(), {
+            plan.inputs().into_iter().cloned().collect()
+        })?;
+        assert_eq!(output_ids(&rebuilt), output_ids(&plan));
+        assert_eq!(output_ids(&rebuilt.recompute_schema()?), output_ids(&plan));
+        // renumbered, it gets a new one
+        let generator = ColumnIdGenerator::new_after(plan.max_column_id());
+        let renumbered = plan.with_fresh_column_ids(&generator)?;
+        assert_eq!(output_ids(&renumbered), vec![Some(id(5)), Some(id(4))]);
+        // (the unnested column is referenced by name)
+        assert_eq!(kinds(&renumbered), vec![ColumnIdIssueKind::Missing]);
 
         // (the window functions are in other crates: a window without any)
-        let window = crate::Window::try_new(vec![], Arc::new(scan))?;
+        let window = Window::try_new(vec![], Arc::new(scan))?;
         assert_eq!(
             output_ids(&LogicalPlan::Window(window)),
             vec![Some(id(1)), Some(id(2))]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn window_and_distinct_on_outputs_are_definitions() -> Result<()> {
+        use crate::expr::WindowFunction;
+        use crate::test::function_stub::count_udaf;
+        let count = || {
+            Expr::WindowFunction(Box::new(WindowFunction::new(
+                crate::WindowFunctionDefinition::AggregateUDF(count_udaf()),
+                vec![col("t.a")],
+            )))
+        };
+        // the input columns pass through, the window expression defines #3
+        let plan = LogicalPlanBuilder::from(scan_with_ids("t", [Some(1), Some(2)])?)
+            .window(vec![count()])?
+            .build()?;
+        assert_eq!(
+            output_ids(&plan),
+            vec![Some(id(1)), Some(id(2)), Some(id(3))]
+        );
+        assert_eq!(plan.defined_column_ids(), [id(1), id(2), id(3)].into());
+        // rebuilt from its expressions, it keeps them
+        let rebuilt = plan.with_new_exprs(
+            plan.expressions(),
+            plan.inputs().into_iter().cloned().collect(),
+        )?;
+        assert_eq!(output_ids(&rebuilt), output_ids(&plan));
+        let rebuilt = rebuilt.recompute_schema()?;
+        assert_eq!(output_ids(&rebuilt), output_ids(&plan));
+        // renumbered, the window output is renamed with its references
+        let count_col =
+            Column::from(plan.schema().qualified_field(2)).with_id(Some(id(3)));
+        let plan = LogicalPlanBuilder::from(plan)
+            .filter(Expr::Column(count_col).gt(lit(0)))?
+            .build()?;
+        assert_eq!(kinds(&plan), vec![]);
+        let generator = ColumnIdGenerator::new_after(plan.max_column_id());
+        let plan = plan.with_fresh_column_ids(&generator)?;
+        assert_eq!(
+            output_ids(&plan),
+            vec![Some(id(5)), Some(id(6)), Some(id(4))]
+        );
+        assert_eq!(kinds(&plan), vec![]);
+
+        // a `DistinctOn` defines all its outputs, a bare column too: they are
+        // computed per group of the `ON` expressions
+        let plan = LogicalPlanBuilder::from(scan_with_ids("t", [Some(1), Some(2)])?)
+            .distinct_on(
+                vec![col("a")],
+                vec![col("b"), col_with_id("t", "a", Some(1)) + lit(1)],
+                None,
+            )?
+            .build()?;
+        assert_eq!(output_ids(&plan), vec![Some(id(3)), Some(id(4))]);
+        assert_eq!(
+            plan.defined_column_ids(),
+            [id(1), id(2), id(3), id(4)].into()
+        );
+        let rebuilt = plan.with_new_exprs(
+            plan.expressions(),
+            plan.inputs().into_iter().cloned().collect(),
+        )?;
+        assert_eq!(output_ids(&rebuilt), output_ids(&plan));
+        let generator = ColumnIdGenerator::new_after(plan.max_column_id());
+        let plan = plan.with_fresh_column_ids(&generator)?;
+        assert_eq!(output_ids(&plan), vec![Some(id(5)), Some(id(6))]);
+        assert_eq!(kinds(&plan), vec![]);
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_outputs_are_definitions() -> Result<()> {
+        use crate::test::function_stub::sum;
+        let t = || scan_with_ids("t", [Some(1), Some(2)]);
+        // a bare grouping column passes through, the other grouping
+        // expressions and the aggregates define columns; equal grouping
+        // expressions have one output
+        let plan = LogicalPlanBuilder::from(t()?)
+            .aggregate(
+                vec![col("a"), col("t.b") + lit(1), col("a"), col("t.b") + lit(1)],
+                vec![sum(col("t.b"))],
+            )?
+            .build()?;
+        let LogicalPlan::Aggregate(aggregate) = &plan else {
+            unreachable!()
+        };
+        let entry_ids = aggregate
+            .group_expr
+            .iter()
+            .map(|e| e.id)
+            .collect::<Vec<_>>();
+        assert_eq!(entry_ids, vec![id(1), id(3), id(1), id(3)]);
+        assert_eq!(
+            output_ids(&plan),
+            vec![Some(id(1)), Some(id(3)), Some(id(4))]
+        );
+        assert_eq!(
+            plan.defined_column_ids(),
+            [id(1), id(2), id(3), id(4)].into()
+        );
+        // same-shape rebuilds keep them
+        let rebuilt = plan.with_new_exprs(
+            plan.expressions(),
+            plan.inputs().into_iter().cloned().collect(),
+        )?;
+        assert_eq!(output_ids(&rebuilt), output_ids(&plan));
+        let rebuilt = rebuilt.recompute_schema()?;
+        assert_eq!(output_ids(&rebuilt), output_ids(&plan));
+        // renumbered, the outputs are renamed with their references
+        let sum_col = Column::from(plan.schema().qualified_field(2)).with_id(Some(id(4)));
+        let plan = LogicalPlanBuilder::from(plan)
+            .filter(Expr::Column(sum_col).gt(lit(0)))?
+            .build()?;
+        assert_eq!(kinds(&plan), vec![]);
+        let generator = ColumnIdGenerator::new_after(plan.max_column_id());
+        let plan = plan.with_fresh_column_ids(&generator)?;
+        assert_eq!(
+            output_ids(&plan),
+            vec![Some(id(7)), Some(id(5)), Some(id(6))]
+        );
+        assert_eq!(kinds(&plan), vec![]);
+
+        // under grouping sets, a bare column passes through only if it is in
+        // every set (`ROLLUP` has the empty set); the grouping id is defined
+        // by the aggregate
+        let plan = LogicalPlanBuilder::from(t()?)
+            .aggregate(
+                vec![Expr::GroupingSet(crate::GroupingSet::Rollup(vec![
+                    col("a"),
+                    col("t.b") + lit(1),
+                ]))],
+                vec![sum(col("t.b"))],
+            )?
+            .build()?;
+        assert_eq!(
+            output_ids(&plan),
+            vec![Some(id(3)), Some(id(4)), Some(id(5)), Some(id(6))]
+        );
+        assert_eq!(
+            plan.defined_column_ids(),
+            [id(1), id(2), id(3), id(4), id(5), id(6)].into()
+        );
+        let plan = LogicalPlanBuilder::from(t()?)
+            .aggregate(
+                vec![Expr::GroupingSet(crate::GroupingSet::GroupingSets(vec![
+                    vec![col("a"), col("b")],
+                    vec![col("a")],
+                ]))],
+                vec![sum(col("t.b"))],
+            )?
+            .build()?;
+        assert_eq!(
+            output_ids(&plan),
+            vec![Some(id(1)), Some(id(3)), Some(id(4)), Some(id(5))]
+        );
+        // rebuilt, it keeps them; renumbered, they are renamed
+        let rebuilt = plan.with_new_exprs(
+            plan.expressions(),
+            plan.inputs().into_iter().cloned().collect(),
+        )?;
+        assert_eq!(output_ids(&rebuilt), output_ids(&plan));
+        let rebuilt = rebuilt.recompute_schema()?;
+        assert_eq!(output_ids(&rebuilt), output_ids(&plan));
+        let generator = ColumnIdGenerator::new_after(plan.max_column_id());
+        let renumbered = plan.clone().with_fresh_column_ids(&generator)?;
+        assert_eq!(kinds(&renumbered), vec![]);
+        assert!(
+            renumbered
+                .defined_column_ids()
+                .is_disjoint(&plan.defined_column_ids())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn recursive_query_outputs_are_definitions() -> Result<()> {
+        let generator = Arc::new(ColumnIdGenerator::new());
+        let static_term = scan_from("t", &generator)?;
+        let recursive_term = scan_from("w", &generator)?;
+        let plan = LogicalPlanBuilder::from(static_term)
+            .with_column_id_generator(Some(Arc::clone(&generator)))
+            .to_recursive_query("r".to_string(), recursive_term, false)?
+            .build()?;
+        assert_eq!(output_ids(&plan), vec![Some(id(5)), Some(id(6))]);
+        assert_eq!(plan.defined_column_ids(), [1, 2, 3, 4, 5, 6].map(id).into());
+        let rebuilt =
+            plan.with_new_exprs(vec![], plan.inputs().into_iter().cloned().collect())?;
+        assert_eq!(output_ids(&rebuilt), output_ids(&plan));
+        assert_eq!(output_ids(&rebuilt.recompute_schema()?), output_ids(&plan));
+
+        // a recursive term that repeats the static term is renumbered
+        let static_term = scan_from("t", &generator)?;
+        let plan = LogicalPlanBuilder::from(static_term.clone())
+            .with_column_id_generator(Some(Arc::clone(&generator)))
+            .to_recursive_query("r".to_string(), static_term, false)?
+            .build()?;
+        assert_eq!(kinds(&plan), vec![]);
+        Ok(())
+    }
+
+    #[test]
+    fn output_column_ids_are_taken_over() -> Result<()> {
+        let generator = ColumnIdGenerator::new();
+        let scan = scan_from("t", &generator)?;
+        let plan = filter(scan, col_with_id("t", "a", Some(1)))?;
+        // the filter outputs the scan's #1 and #2: they become #7 and #8,
+        // and so does the reference of the filter
+        let renamed = plan.with_output_column_ids(&[Some(id(7)), Some(id(8))])?;
+        assert!(renamed.transformed);
+        let plan = renamed.data;
+        assert_eq!(output_ids(&plan), vec![Some(id(7)), Some(id(8))]);
+        assert_eq!(ref_ids(&plan), vec![Some(id(7))]);
+        assert_eq!(kinds(&plan), vec![]);
+
+        // an id at two positions takes the first new id only
+        let plan = LogicalPlanBuilder::from(scan_from("s", &generator)?)
+            .project(vec![col("s.a"), col("s.a").alias("a2"), col("s.b")])?
+            .build()?;
+        let ids_before = output_ids(&plan);
+        let plan = plan
+            .with_output_column_ids(&[Some(id(20)), Some(id(21)), Some(id(22))])?
+            .data;
+        assert_eq!(
+            output_ids(&plan),
+            vec![Some(id(20)), Some(id(21)), Some(id(22))]
+        );
+        assert_ne!(ids_before, output_ids(&plan));
+        assert_eq!(kinds(&plan), vec![]);
         Ok(())
     }
 
@@ -1229,7 +1760,7 @@ mod tests {
             .build()?;
         assert_eq!(kinds(&plan), vec![]);
 
-        let plan = plan.with_fresh_column_ids(Some(&generator))?;
+        let plan = plan.with_fresh_column_ids(&generator)?;
         assert_eq!(output_ids(&plan), vec![Some(id(3)), Some(id(4))]);
         assert_eq!(plan.defined_column_ids(), [id(3), id(4)].into());
         // the references were renamed with the definitions
@@ -1244,15 +1775,49 @@ mod tests {
     }
 
     #[test]
-    fn renumbering_without_generator_strips() -> Result<()> {
+    fn renumbering_renames_projection_outputs() -> Result<()> {
         let generator = ColumnIdGenerator::new();
         let scan = scan_from("t", &generator)?;
-        let plan = filter(scan, col_with_id("t", "a", Some(1)))?;
+        // `t.a` passes #1 through, `t.b + 1 AS c` defines #3
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![
+                NamedExpr::new(col_with_id("t", "a", Some(1)), id(1)),
+                NamedExpr::new(
+                    (col_with_id("t", "b", Some(2)) + lit(1)).alias("c"),
+                    generator.next(),
+                ),
+            ],
+            Arc::new(scan),
+        )?);
+        assert_eq!(plan.defined_column_ids(), [id(1), id(2), id(3)].into());
+        assert_eq!(kinds(&plan), vec![]);
 
-        let plan = plan.with_fresh_column_ids(None)?;
-        assert_eq!(output_ids(&plan), vec![None, None]);
-        assert!(plan.defined_column_ids().is_empty());
-        assert_eq!(kinds(&plan), vec![ColumnIdIssueKind::Missing]);
+        // the projection's definition is found first
+        let plan = plan.with_fresh_column_ids(&generator)?;
+        assert_eq!(output_ids(&plan), vec![Some(id(5)), Some(id(4))]);
+        let LogicalPlan::Projection(projection) = &plan else {
+            unreachable!()
+        };
+        assert!(projection.expr[0].is_pass_through());
+        assert_eq!(projection.expr[1].defined_id(), Some(id(4)));
+        assert_eq!(kinds(&plan), vec![]);
+        Ok(())
+    }
+
+    #[test]
+    fn projection_outputs_are_definitions() -> Result<()> {
+        let generator = ColumnIdGenerator::new();
+        let scan = scan_from("t", &generator)?;
+        // a computed output that reuses the id of a scan column defines it
+        // twice
+        let plan = LogicalPlan::Projection(Projection::try_new(
+            vec![NamedExpr::new(
+                (col_with_id("t", "a", Some(1)) + lit(1)).alias("a"),
+                id(1),
+            )],
+            Arc::new(scan),
+        )?);
+        assert_eq!(kinds(&plan), vec![ColumnIdIssueKind::DuplicateDefinition]);
         Ok(())
     }
 
@@ -1268,7 +1833,7 @@ mod tests {
         );
         let subquery = filter(inner, outer_ref.eq(col_with_id("s", "a", Some(3))))?;
 
-        let subquery = subquery.with_fresh_column_ids(Some(&generator))?;
+        let subquery = subquery.with_fresh_column_ids(&generator)?;
         assert_eq!(output_ids(&subquery), vec![Some(id(5)), Some(id(6))]);
         let mut refs = vec![];
         apply_node_column_refs(&subquery, |col, outer| refs.push((col.id, outer)))?;
@@ -1323,9 +1888,10 @@ mod tests {
         assert_eq!(inputs[1].defined_column_ids(), [id(5), id(6)].into());
         assert!(!kinds(&plan).contains(&ColumnIdIssueKind::DuplicateDefinition));
 
-        // without a generator, the inlined plan has no ids
+        // without a generator, the builder renumbers the inlined plan with
+        // its own
         let plan = LogicalPlanBuilder::scan("v", Arc::clone(&view), None)?.build()?;
-        assert!(plan.defined_column_ids().is_empty());
+        assert_eq!(plan.defined_column_ids(), [id(3), id(4)].into());
         Ok(())
     }
 
@@ -1360,9 +1926,9 @@ mod tests {
         .build()?;
         assert_eq!(output_ids(&scan), vec![Some(id(1)), Some(id(2))]);
 
-        // without a generator, no ids
+        // without a generator, the builder allocates from its own
         let scan_without = LogicalPlanBuilder::scan("t", source(), None)?.build()?;
-        assert_eq!(output_ids(&scan_without), vec![None, None]);
+        assert_eq!(output_ids(&scan_without), vec![Some(id(1)), Some(id(2))]);
 
         // a scan rebuilt with another projection keeps the ids of the columns
         // it retains
@@ -1536,8 +2102,7 @@ mod tests {
             LogicalPlan::Filter(crate::Filter::try_new(predicate, Arc::new(outer))?);
         assert!(kinds(&plan).contains(&ColumnIdIssueKind::DuplicateDefinition));
 
-        let renumbered =
-            plan.with_fresh_column_ids_in_repeated_subqueries(Some(&generator))?;
+        let renumbered = plan.with_fresh_column_ids_in_repeated_subqueries(&generator)?;
         assert!(renumbered.transformed);
         let plan = renumbered.data;
         assert_eq!(kinds(&plan), vec![]);
@@ -1547,8 +2112,7 @@ mod tests {
         );
 
         // nothing to do the second time
-        let again =
-            plan.with_fresh_column_ids_in_repeated_subqueries(Some(&generator))?;
+        let again = plan.with_fresh_column_ids_in_repeated_subqueries(&generator)?;
         assert!(!again.transformed);
         Ok(())
     }

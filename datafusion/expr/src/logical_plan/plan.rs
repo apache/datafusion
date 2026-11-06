@@ -16,14 +16,14 @@ use super::invariants::{
     assert_executable_invariants,
 };
 use super::{DdlStatement, information_schema};
-use crate::builder::{unique_field_aliases, unnest_with_options};
+use crate::builder::unique_field_aliases;
 use crate::expr::{
     Alias, Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams,
 };
 use crate::expr_rewriter::{
     NamePreserver, create_col_from_scalar_expr, normalize_cols, normalize_sorts,
 };
-use crate::logical_plan::column_ids::pass_through_column_ids;
+use crate::logical_plan::column_ids::with_new_field_ids;
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
 use crate::logical_plan::materialized_cte::{
@@ -33,14 +33,14 @@ use crate::logical_plan::{DmlStatement, Statement, WriteOp};
 use crate::utils::{
     check_aggregate_and_window_nesting, check_no_window_functions,
     enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
-    find_out_reference_exprs, get_unnested_list_field, grouping_set_expr_count,
-    grouping_set_to_exprlist, merge_schema, passthrough_field_index, split_conjunction,
+    find_out_reference_exprs, get_unnested_list_field, merge_schema,
+    passthrough_field_index, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
-    LogicalPlanBuilder, Operator, Prepare, TableProviderFilterPushDown, TableSource,
-    WindowFunctionDefinition, build_asof_join_schema, build_join_schema, expr_vec_fmt,
-    requalify_sides_if_needed,
+    LogicalPlanBuilder, NamedExpr, Operator, Prepare, TableProviderFilterPushDown,
+    TableSource, WindowFunctionDefinition, build_asof_join_schema, build_join_schema,
+    expr_vec_fmt, requalify_sides_if_needed,
 };
 
 use crate::logical_plan::information_schema::ColumnsDetail;
@@ -56,11 +56,12 @@ use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, ColumnId, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
-    FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
-    ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
-    aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
+    Column, ColumnId, ColumnIdGenerator, Constraints, DFSchema, DFSchemaRef,
+    DataFusionError, Dependency, FunctionalDependence, FunctionalDependencies,
+    NullEquality, ParamValues, Result, ScalarValue, Spans, SplitPoint, TableReference,
+    UnnestOptions, aggregate_functional_dependencies, assert_eq_or_internal_err,
+    assert_or_internal_err, internal_err, plan_datafusion_err, plan_err,
+    validate_range_split_points,
 };
 use itertools::Itertools as _;
 
@@ -611,17 +612,19 @@ impl LogicalPlan {
     pub fn head_output_expr(&self) -> Result<Option<Expr>> {
         match self {
             LogicalPlan::Projection(projection) => {
-                Ok(Some(projection.expr.as_slice()[0].clone()))
+                Ok(Some(projection.expr[0].expr.clone()))
             }
             LogicalPlan::Aggregate(agg) => {
-                if agg.group_expr.is_empty() {
-                    Ok(Some(agg.aggr_expr.as_slice()[0].clone()))
+                if agg.grouping_sets.is_some() {
+                    Ok(agg.group_by_exprs().into_iter().next())
+                } else if agg.group_expr.is_empty() {
+                    Ok(Some(agg.aggr_expr[0].expr.clone()))
                 } else {
-                    Ok(Some(agg.group_expr.as_slice()[0].clone()))
+                    Ok(Some(agg.group_expr[0].expr.clone()))
                 }
             }
             LogicalPlan::Distinct(Distinct::On(DistinctOn { select_expr, .. })) => {
-                Ok(Some(select_expr[0].clone()))
+                Ok(Some(select_expr[0].expr.clone()))
             }
             LogicalPlan::Filter(Filter { input, .. })
             | LogicalPlan::Distinct(Distinct::All(input))
@@ -739,9 +742,10 @@ impl LogicalPlan {
             LogicalPlan::Aggregate(Aggregate {
                 input,
                 group_expr,
+                grouping_sets,
                 aggr_expr,
                 schema: _,
-            }) => Aggregate::try_new(input, group_expr, aggr_expr)
+            }) => Aggregate::try_new(input, group_expr, grouping_sets, aggr_expr)
                 .map(LogicalPlan::Aggregate),
             LogicalPlan::Sort(_) => Ok(self),
             LogicalPlan::Join(Join {
@@ -751,13 +755,17 @@ impl LogicalPlan {
                 join_type,
                 join_constraint,
                 on,
-                schema: _,
+                schema: old_schema,
                 null_equality,
                 null_aware,
                 null_aware_value_keys,
             }) => {
-                let schema =
-                    build_join_schema(left.schema(), right.schema(), &join_type)?;
+                // the mark column keeps its id
+                let schema = with_mark_column_id(
+                    build_join_schema(left.schema(), right.schema(), &join_type)?,
+                    join_type,
+                    mark_column_id(&old_schema, join_type),
+                )?;
 
                 let new_on: Vec<_> = on
                     .into_iter()
@@ -834,7 +842,12 @@ impl LogicalPlan {
                     // `Union` was created `BY NAME`, and can safely rely on the
                     // `try_new` initializer to derive the new schema based on
                     // column positions.
-                    Ok(LogicalPlan::Union(Union::try_new(inputs)?))
+                    //
+                    // The outputs that remain are not known here: they have no
+                    // ids (the caller that pruned the inputs can give them the
+                    // ids of the outputs they were).
+                    let schema = Union::derive_schema_from_inputs(&inputs, false, false)?;
+                    Ok(LogicalPlan::Union(Union { inputs, schema }))
                 }
             }
             LogicalPlan::Distinct(distinct) => {
@@ -860,23 +873,31 @@ impl LogicalPlan {
                 static_term,
                 recursive_term,
                 is_distinct,
-                schema: _,
-            }) => RecursiveQuery::try_new(name, static_term, recursive_term, is_distinct)
-                .map(LogicalPlan::RecursiveQuery),
+                schema,
+            }) => RecursiveQuery::try_new_with_field_ids(
+                name,
+                static_term,
+                recursive_term,
+                is_distinct,
+                schema.field_ids(),
+            )
+            .map(LogicalPlan::RecursiveQuery),
             LogicalPlan::Analyze(_) => Ok(self),
             LogicalPlan::Explain(_) => Ok(self),
             LogicalPlan::TableScan(_) => Ok(self),
             LogicalPlan::EmptyRelation(_) => Ok(self),
             LogicalPlan::Statement(_) => Ok(self),
             LogicalPlan::Show(_) => Ok(self),
-            LogicalPlan::Unnest(Unnest {
-                input,
-                exec_columns,
-                options,
-                ..
-            }) => {
-                // Update schema with unnested column type.
-                unnest_with_options(Arc::unwrap_or_clone(input), exec_columns, options)
+            LogicalPlan::Unnest(unnest) => {
+                // Update schema with unnested column type (the unnested
+                // columns keep their ids)
+                Unnest::try_new_keeping_ids(
+                    &unnest,
+                    Arc::clone(&unnest.input),
+                    unnest.exec_columns.clone(),
+                    unnest.options.clone(),
+                )
+                .map(LogicalPlan::Unnest)
             }
         }
     }
@@ -914,8 +935,10 @@ impl LogicalPlan {
         match self {
             // Since expr may be different than the previous expr, schema of the projection
             // may change. We need to use try_new method instead of try_new_with_schema method.
-            LogicalPlan::Projection(Projection { .. }) => {
+            // a same-shape rebuild: each output keeps the id of its entry
+            LogicalPlan::Projection(Projection { expr: entries, .. }) => {
                 let input = self.only_input(inputs)?;
+                let expr = with_entry_ids(entries, expr)?;
                 Projection::try_new(expr, Arc::new(input)).map(LogicalPlan::Projection)
             }
             LogicalPlan::Dml(DmlStatement {
@@ -1028,17 +1051,26 @@ impl LogicalPlan {
                     }))
                 }
             },
+            // a same-shape rebuild: each output keeps the id of its entry
             LogicalPlan::Window(Window { window_expr, .. }) => {
-                assert_eq!(window_expr.len(), expr.len());
                 let input = self.only_input(inputs)?;
+                let expr = with_entry_ids(window_expr, expr)?;
                 Window::try_new(expr, Arc::new(input)).map(LogicalPlan::Window)
             }
-            LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
+            // a same-shape rebuild: each output keeps the id of its entry
+            LogicalPlan::Aggregate(Aggregate {
+                group_expr,
+                grouping_sets,
+                aggr_expr,
+                ..
+            }) => {
                 let input = self.only_input(inputs)?;
                 // group exprs are the first expressions
                 let agg_expr = expr.split_off(group_expr.len());
+                let group = with_entry_ids(group_expr, expr)?;
+                let aggr = with_entry_ids(aggr_expr, agg_expr)?;
 
-                Aggregate::try_new(Arc::new(input), expr, agg_expr)
+                Aggregate::try_new(Arc::new(input), group, grouping_sets.clone(), aggr)
                     .map(LogicalPlan::Aggregate)
             }
             LogicalPlan::Sort(Sort {
@@ -1064,10 +1096,16 @@ impl LogicalPlan {
                 null_equality,
                 null_aware,
                 null_aware_value_keys,
+                schema: old_schema,
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
-                let schema = build_join_schema(left.schema(), right.schema(), join_type)?;
+                // the mark column keeps its id
+                let schema = with_mark_column_id(
+                    build_join_schema(left.schema(), right.schema(), join_type)?,
+                    *join_type,
+                    mark_column_id(old_schema, *join_type),
+                )?;
 
                 let equi_expr_count = on.len() * 2;
                 assert!(expr.len() >= equi_expr_count);
@@ -1249,7 +1287,10 @@ impl LogicalPlan {
                     Arc::clone(schema)
                 } else if input_schema.field_ids().iter().any(Option::is_some) {
                     // the outputs of a union are not the columns of its first
-                    // input: they do not take their ids
+                    // input: they do not take their ids. The outputs that
+                    // remain are not known here: they have no ids (the caller
+                    // that pruned the inputs can give them the ids of the
+                    // outputs they were)
                     let ids = vec![None; input_schema.fields().len()];
                     Arc::new(input_schema.as_ref().clone().with_field_ids(ids)?)
                 } else {
@@ -1269,16 +1310,18 @@ impl LogicalPlan {
                     }
                     Distinct::On(DistinctOn {
                         on_expr,
-                        select_expr,
+                        select_expr: entries,
                         ..
                     }) => {
                         let input = self.only_input(inputs)?;
-                        let sort_expr = expr.split_off(on_expr.len() + select_expr.len());
+                        let sort_expr = expr.split_off(on_expr.len() + entries.len());
                         let select_expr = expr.split_off(on_expr.len());
                         assert!(
                             sort_expr.is_empty(),
                             "with_new_exprs for Distinct does not support sort expressions"
                         );
+                        // a same-shape rebuild: each output keeps its id
+                        let select_expr = with_entry_ids(entries, select_expr)?;
                         Distinct::On(DistinctOn::try_new(
                             expr,
                             select_expr,
@@ -1290,15 +1333,20 @@ impl LogicalPlan {
                 Ok(LogicalPlan::Distinct(distinct))
             }
             LogicalPlan::RecursiveQuery(RecursiveQuery {
-                name, is_distinct, ..
+                name,
+                is_distinct,
+                schema,
+                ..
             }) => {
                 self.assert_no_expressions(expr)?;
                 let (static_term, recursive_term) = self.only_two_inputs(inputs)?;
-                RecursiveQuery::try_new(
+                // the outputs keep their ids
+                RecursiveQuery::try_new_with_field_ids(
                     name.clone(),
                     Arc::new(static_term),
                     Arc::new(recursive_term),
                     *is_distinct,
+                    schema.field_ids(),
                 )
                 .map(LogicalPlan::RecursiveQuery)
             }
@@ -1361,11 +1409,13 @@ impl LogicalPlan {
                 self.assert_no_inputs(inputs)?;
                 Ok(self.clone())
             }
-            LogicalPlan::Unnest(Unnest {
-                exec_columns: columns,
-                options,
-                ..
-            }) => {
+            LogicalPlan::Unnest(
+                unnest @ Unnest {
+                    exec_columns: columns,
+                    options,
+                    ..
+                },
+            ) => {
                 let exec_columns = if expr.is_empty() {
                     columns.clone()
                 } else {
@@ -1379,7 +1429,14 @@ impl LogicalPlan {
                         .collect::<Result<Vec<_>>>()?
                 };
                 let input = self.only_input(inputs)?;
-                Ok(unnest_with_options(input, exec_columns, options.clone())?)
+                // the unnested columns keep their ids
+                Unnest::try_new_keeping_ids(
+                    unnest,
+                    Arc::new(input),
+                    exec_columns,
+                    options.clone(),
+                )
+                .map(LogicalPlan::Unnest)
             }
         }
     }
@@ -1546,12 +1603,16 @@ impl LogicalPlan {
             }
             LogicalPlan::Window(Window { input, .. }) => input.max_rows(),
             LogicalPlan::Aggregate(Aggregate {
-                input, group_expr, ..
+                input,
+                group_expr,
+                grouping_sets,
+                ..
             }) => {
                 // Empty group_expr will return Some(1)
-                if group_expr
-                    .iter()
-                    .all(|expr| matches!(expr, Expr::Literal(_, _)))
+                if grouping_sets.is_none()
+                    && group_expr
+                        .iter()
+                        .all(|expr| matches!(expr.expr, Expr::Literal(_, _)))
                 {
                     Some(1)
                 } else {
@@ -1639,10 +1700,14 @@ impl LogicalPlan {
             | LogicalPlan::Repartition(Repartition { input, .. })
             | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => input.min_rows(),
             LogicalPlan::Filter(_) => 0,
-            LogicalPlan::Aggregate(Aggregate { group_expr, .. }) => {
+            LogicalPlan::Aggregate(Aggregate {
+                group_expr,
+                grouping_sets,
+                ..
+            }) => {
                 // An ungrouped aggregate always produces one row, even for an
                 // empty input.
-                usize::from(group_expr.is_empty())
+                usize::from(group_expr.is_empty() && grouping_sets.is_none())
             }
             LogicalPlan::Sort(Sort { input, fetch, .. }) => fetch
                 .map(|fetch| input.min_rows().min(fetch))
@@ -1830,6 +1895,7 @@ impl LogicalPlan {
                 output_exprs.extend(
                     window_expr
                         .iter()
+                        .map(|e| &e.expr)
                         .zip(schema.columns().into_iter().skip(input_len)),
                 );
                 Ok(output_exprs)
@@ -2341,16 +2407,27 @@ impl LogicalPlan {
                             expr_vec_fmt!(window_expr)
                         )
                     }
-                    LogicalPlan::Aggregate(Aggregate {
-                        group_expr,
-                        aggr_expr,
-                        ..
-                    }) => write!(
-                        f,
-                        "Aggregate: groupBy=[[{}]], aggr=[[{}]]",
-                        expr_vec_fmt!(group_expr),
-                        expr_vec_fmt!(aggr_expr)
-                    ),
+                    LogicalPlan::Aggregate(
+                        agg @ Aggregate {
+                            group_expr,
+                            grouping_sets,
+                            aggr_expr,
+                            ..
+                        },
+                    ) => {
+                        // grouping sets display as they are written
+                        let group_by = if grouping_sets.is_some() {
+                            expr_vec_fmt!(agg.group_by_exprs())
+                        } else {
+                            expr_vec_fmt!(group_expr)
+                        };
+                        write!(
+                            f,
+                            "Aggregate: groupBy=[[{}]], aggr=[[{}]]",
+                            group_by,
+                            expr_vec_fmt!(aggr_expr)
+                        )
+                    }
                     LogicalPlan::Sort(Sort { expr, fetch, .. }) => {
                         write!(f, "Sort: ")?;
                         for (i, expr_item) in expr.iter().enumerate() {
@@ -2685,14 +2762,48 @@ impl PartialOrd for RecursiveQuery {
 }
 
 impl RecursiveQuery {
+    /// Creates a recursive query of the terms `static_term` and
+    /// `recursive_term`.
+    ///
+    /// The query defines its outputs (they are neither the columns of the
+    /// static term nor those of the recursive term): they get new
+    /// [`ColumnId`]s from `generator`, which are kept when the node is
+    /// rebuilt.
     pub fn try_new(
         name: String,
         static_term: Arc<LogicalPlan>,
         recursive_term: Arc<LogicalPlan>,
         is_distinct: bool,
+        generator: &ColumnIdGenerator,
     ) -> Result<Self> {
         let schema =
             recursive_query_output_schema(static_term.schema(), recursive_term.schema())?;
+        let schema = with_new_field_ids(schema, generator)?;
+        Ok(Self {
+            name,
+            static_term,
+            recursive_term,
+            is_distinct,
+            schema,
+        })
+    }
+
+    /// [`Self::try_new`], where the outputs have the ids `ids` (a rebuild
+    /// of a recursive query whose outputs had these ids)
+    fn try_new_with_field_ids(
+        name: String,
+        static_term: Arc<LogicalPlan>,
+        recursive_term: Arc<LogicalPlan>,
+        is_distinct: bool,
+        ids: &[Option<ColumnId>],
+    ) -> Result<Self> {
+        let schema =
+            recursive_query_output_schema(static_term.schema(), recursive_term.schema())?;
+        let schema = if ids.len() == schema.fields().len() {
+            Arc::new(Arc::unwrap_or_clone(schema).with_field_ids(ids.to_vec())?)
+        } else {
+            schema
+        };
         Ok(Self {
             name,
             static_term,
@@ -2764,12 +2875,19 @@ impl PartialOrd for Values {
 
 /// Evaluates an arbitrary list of expressions (essentially a
 /// SELECT with an expression list) on its input.
+///
+/// Each output is a [`NamedExpr`]: an expression with the [`ColumnId`] of the
+/// column it outputs, which the schema gives its field. An output that is a
+/// bare column with its own id passes the input column through; any other
+/// output defines a column (see [`NamedExpr`]).
+///
+/// [`ColumnId`]: datafusion_common::ColumnId
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
 pub struct Projection {
-    /// The list of expressions
-    pub expr: Vec<Expr>,
+    /// The outputs, with the ids of their columns
+    pub expr: Vec<NamedExpr>,
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
     /// The schema description of the output
@@ -2789,28 +2907,37 @@ impl PartialOrd for Projection {
 }
 
 impl Projection {
-    /// Create a new Projection
-    pub fn try_new(expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+    /// Create a new Projection computing the outputs `expr` over `input`.
+    ///
+    /// Each output states the id of its column: the entry it rebuilds, or a
+    /// new one (see [`NamedExpr::allocate`]).
+    pub fn try_new(expr: Vec<NamedExpr>, input: Arc<LogicalPlan>) -> Result<Self> {
         let projection_schema = projection_schema(&input, &expr)?;
         Self::try_new_with_schema(expr, input, projection_schema)
     }
 
-    /// Create a new Projection using the specified output schema
+    /// Create a new Projection using the specified output schema. The fields
+    /// of the schema take the ids of the outputs.
     pub fn try_new_with_schema(
-        expr: Vec<Expr>,
+        expr: Vec<NamedExpr>,
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
         #[expect(deprecated)]
-        if !expr.iter().any(|e| matches!(e, Expr::Wildcard { .. }))
-            && expr.len() != schema.fields().len()
-        {
+        let has_wildcard = expr.iter().any(|e| matches!(e.expr, Expr::Wildcard { .. }));
+        if !has_wildcard && expr.len() != schema.fields().len() {
             return plan_err!(
                 "Projection has mismatch between number of expressions ({}) and number of fields in schema ({})",
                 expr.len(),
                 schema.fields().len()
             );
         }
+        let schema = if has_wildcard || schema_has_entry_ids(&schema, &expr) {
+            schema
+        } else {
+            let ids = expr.iter().map(|e| Some(e.id)).collect();
+            Arc::new(Arc::unwrap_or_clone(schema).with_field_ids(ids)?)
+        };
         Ok(Self {
             expr,
             input,
@@ -2818,15 +2945,56 @@ impl Projection {
         })
     }
 
-    /// Create a new Projection using the specified output schema
-    pub fn new_from_schema(input: Arc<LogicalPlan>, schema: DFSchemaRef) -> Self {
-        let expr: Vec<Expr> = schema.columns().into_iter().map(Expr::Column).collect();
-        Self {
+    /// Create a new Projection that passes the columns of `schema` through,
+    /// with their ids. Every field of `schema` must have an id.
+    pub fn new_from_schema(input: Arc<LogicalPlan>, schema: DFSchemaRef) -> Result<Self> {
+        let expr = schema
+            .columns()
+            .into_iter()
+            .map(|col| match col.id {
+                Some(id) => Ok(NamedExpr::new(Expr::Column(col), id)),
+                None => plan_err!(
+                    "Projection::new_from_schema: the field {} has no column id",
+                    col.flat_name()
+                ),
+            })
+            .collect::<Result<_>>()?;
+        Ok(Self {
             expr,
             input,
             schema,
-        }
+        })
     }
+}
+
+/// Whether the fields of `schema` have the ids of the entries `expr`
+fn schema_has_entry_ids(schema: &DFSchema, expr: &[NamedExpr]) -> bool {
+    schema
+        .field_ids()
+        .iter()
+        .zip(expr)
+        .all(|(id, e)| *id == Some(e.id))
+}
+
+/// Rebuilds the entries `entries` with the expressions `exprs`, in the same
+/// order: each keeps its id (a same-shape rebuild, see
+/// [`LogicalPlan::with_new_exprs`])
+pub(crate) fn with_entry_ids(
+    entries: &[NamedExpr],
+    exprs: Vec<Expr>,
+) -> Result<Vec<NamedExpr>> {
+    if entries.len() != exprs.len() {
+        return internal_err!(
+            "A same-shape rebuild of a node with {} outputs got {} expressions",
+            entries.len(),
+            exprs.len()
+        );
+    }
+    Ok(entries
+        .iter()
+        .zip(exprs)
+        .map(|(entry, expr)| NamedExpr::new(expr, entry.id))
+        .collect())
 }
 
 /// Computes the schema of the result produced by applying a projection to the input logical plan.
@@ -2848,18 +3016,29 @@ impl Projection {
 /// A `Result` containing an `Arc<DFSchema>` representing the schema of the result
 /// produced by the projection operation. If the schema computation is successful,
 /// the `Result` will contain the schema; otherwise, it will contain an error.
-pub fn projection_schema(input: &LogicalPlan, exprs: &[Expr]) -> Result<Arc<DFSchema>> {
+pub fn projection_schema(
+    input: &LogicalPlan,
+    exprs: &[NamedExpr],
+) -> Result<Arc<DFSchema>> {
     // Preserve input schema metadata at the schema level
     let metadata = input.schema().metadata().clone();
 
     // Convert expressions to fields with Field properties determined by `Expr::to_field`
-    let schema =
-        DFSchema::new_with_metadata(exprlist_to_fields(exprs, input)?, metadata)?
-            .with_functional_dependencies(calc_func_dependencies_for_project(
-                exprs, input,
-            )?)?;
-    // bare columns pass the ids of their input fields through
-    let schema = schema.with_field_ids(pass_through_column_ids(exprs, input.schema()))?;
+    let fields = exprlist_to_fields(exprs.iter().map(|e| &e.expr), input)?;
+    #[expect(deprecated)]
+    let has_wildcard = exprs
+        .iter()
+        .any(|e| matches!(e.expr, Expr::Wildcard { .. }));
+    let schema = DFSchema::new_with_metadata(fields, metadata)?
+        .with_functional_dependencies(calc_func_dependencies_for_project(
+            exprs, input,
+        )?)?;
+    // the fields take the ids of the outputs
+    let schema = if has_wildcard {
+        schema
+    } else {
+        schema.with_field_ids(exprs.iter().map(|e| Some(e.id)).collect())?
+    };
 
     Ok(Arc::new(schema))
 }
@@ -2878,12 +3057,36 @@ pub struct SubqueryAlias {
 }
 
 impl SubqueryAlias {
+    /// Creates an alias of `plan`.
+    ///
+    /// If several fields of `plan` have the same name, a projection that
+    /// renames them is added below the alias. Its renamed outputs define
+    /// columns, with new ids from a generator advanced past the ids of
+    /// `plan`, which may collide with ids defined elsewhere in a larger
+    /// plan: use [`Self::try_new_with_column_id_generator`] when building
+    /// within one.
     pub fn try_new(
         plan: Arc<LogicalPlan>,
         alias: impl Into<TableReference>,
     ) -> Result<Self> {
-        let alias = alias.into();
+        Self::try_new_inner(plan, alias.into(), None)
+    }
 
+    /// [`Self::try_new`], where the outputs of the projection that renames
+    /// duplicate names get new ids from `generator`
+    pub fn try_new_with_column_id_generator(
+        plan: Arc<LogicalPlan>,
+        alias: impl Into<TableReference>,
+        generator: &ColumnIdGenerator,
+    ) -> Result<Self> {
+        Self::try_new_inner(plan, alias.into(), Some(generator))
+    }
+
+    fn try_new_inner(
+        plan: Arc<LogicalPlan>,
+        alias: TableReference,
+        generator: Option<&ColumnIdGenerator>,
+    ) -> Result<Self> {
         // Since SubqueryAlias will replace all field qualification for the output schema of `plan`,
         // no field must share the same column name as this would lead to ambiguity when referencing
         // columns in parent logical nodes.
@@ -2894,6 +3097,14 @@ impl SubqueryAlias {
 
         // Insert a projection node, if needed, to make sure aliases are applied.
         let plan = if is_projection_needed {
+            let own_generator;
+            let generator = match generator {
+                Some(generator) => generator,
+                None => {
+                    own_generator = ColumnIdGenerator::new_after(plan.max_column_id());
+                    &own_generator
+                }
+            };
             let projection_expressions = aliases
                 .iter()
                 .zip(plan.schema().iter())
@@ -2903,10 +3114,11 @@ impl SubqueryAlias {
                         Column::new(qualifier.cloned(), field.name()).with_id(*id),
                     );
                     match alias {
-                        None => column,
-                        Some(alias) => {
-                            Expr::Alias(Alias::new(column, qualifier.cloned(), alias))
-                        }
+                        None => NamedExpr::allocate(column, plan.schema(), generator),
+                        Some(alias) => NamedExpr::new(
+                            Expr::Alias(Alias::new(column, qualifier.cloned(), alias)),
+                            generator.next(),
+                        ),
                     }
                 })
                 .collect();
@@ -3120,23 +3332,32 @@ impl Filter {
 ///
 /// Note that the `PARTITION BY` expression "B+1" is not produced in the output
 /// schema.
+///
+/// The input columns pass through with their [`ColumnId`]s; each window
+/// expression is a [`NamedExpr`] that defines its output column with the id
+/// of its entry.
+///
+/// [`ColumnId`]: datafusion_common::ColumnId
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Window {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
-    /// The window function expression
-    pub window_expr: Vec<Expr>,
+    /// The window function expressions, with the ids of their output columns
+    pub window_expr: Vec<NamedExpr>,
     /// The schema description of the window output
     pub schema: DFSchemaRef,
 }
 
 impl Window {
-    /// Create a new window operator.
-    pub fn try_new(window_expr: Vec<Expr>, input: Arc<LogicalPlan>) -> Result<Self> {
+    /// Create a new window operator computing `window_expr` over `input`.
+    ///
+    /// Each window expression states the id of its output column: the entry
+    /// it rebuilds, or a new one from a generator.
+    pub fn try_new(window_expr: Vec<NamedExpr>, input: Arc<LogicalPlan>) -> Result<Self> {
         // Reject e.g. `sum(sum(x) OVER ()) OVER ()` here rather than letting it
         // reach physical planning, which has no equivalent for a nested window
         // function.
-        check_aggregate_and_window_nesting(window_expr.iter())?;
+        check_aggregate_and_window_nesting(window_expr.iter().map(|e| &e.expr))?;
 
         let fields: Vec<(Option<TableReference>, Arc<Field>)> = input
             .schema()
@@ -3145,7 +3366,8 @@ impl Window {
             .collect();
         let input_len = fields.len();
         let mut window_fields = fields;
-        let expr_fields = exprlist_to_fields(window_expr.as_slice(), &input)?;
+        let expr_fields =
+            exprlist_to_fields(window_expr.iter().map(|e| &e.expr), &input)?;
         window_fields.extend_from_slice(expr_fields.as_slice());
         let metadata = input.schema().metadata().clone();
 
@@ -3161,7 +3383,7 @@ impl Window {
             .iter()
             .enumerate()
             .filter_map(|(idx, expr)| {
-                let Expr::WindowFunction(window_fun) = expr else {
+                let Expr::WindowFunction(window_fun) = &expr.expr else {
                     return None;
                 };
                 let WindowFunction {
@@ -3197,7 +3419,7 @@ impl Window {
         // Validate that FILTER clauses are only used with aggregate window functions
         if let Some(e) = window_expr.iter().find(|e| {
             matches!(
-                e,
+                &e.expr,
                 Expr::WindowFunction(wf)
                     if !matches!(wf.fun, WindowFunctionDefinition::AggregateUDF(_))
                         && wf.params.filter.is_some()
@@ -3208,13 +3430,14 @@ impl Window {
             );
         }
 
-        // the input columns keep their ids, the window outputs have none yet
+        // the input columns keep their ids, the window outputs take the ids
+        // of their entries
         let field_ids = input
             .schema()
             .field_ids()
             .iter()
             .copied()
-            .chain(std::iter::repeat_n(None, window_expr.len()))
+            .chain(window_expr.iter().map(|e| Some(e.id)))
             .collect();
         Self::try_new_with_schema(
             window_expr,
@@ -3232,8 +3455,11 @@ impl Window {
     ///
     /// This method should only be called when you are absolutely sure that the schema being
     /// provided is correct for the window function. If in doubt, call [try_new](Self::try_new) instead.
+    ///
+    /// The fields of the schema take the ids of the input columns and of the
+    /// window expressions.
     pub fn try_new_with_schema(
-        window_expr: Vec<Expr>,
+        window_expr: Vec<NamedExpr>,
         input: Arc<LogicalPlan>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
@@ -3245,6 +3471,18 @@ impl Window {
                 schema.fields().len()
             );
         }
+        let field_ids: Vec<Option<ColumnId>> = input
+            .schema()
+            .field_ids()
+            .iter()
+            .copied()
+            .chain(window_expr.iter().map(|e| Some(e.id)))
+            .collect();
+        let schema = if schema.field_ids() == field_ids.as_slice() {
+            schema
+        } else {
+            Arc::new(Arc::unwrap_or_clone(schema).with_field_ids(field_ids)?)
+        };
 
         Ok(Window {
             input,
@@ -3600,26 +3838,48 @@ pub struct Union {
 impl Union {
     /// Constructs new Union instance deriving schema from inputs.
     /// Schema data types must match exactly.
-    pub fn try_new(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
+    ///
+    /// A union defines its outputs (they are not the columns of any of its
+    /// inputs): they get new [`ColumnId`]s from `generator`, stored in its
+    /// schema, which are kept when the node is rebuilt.
+    pub fn try_new(
+        inputs: Vec<Arc<LogicalPlan>>,
+        generator: &ColumnIdGenerator,
+    ) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, false, false)?;
+        let schema = with_new_field_ids(schema, generator)?;
         Ok(Union { inputs, schema })
     }
 
     /// Constructs new Union instance deriving schema from inputs.
     /// Inputs do not have to have matching types and produced schema will
     /// take type from the first input.
+    ///
+    /// The outputs get new ids from `generator` (see [`Self::try_new`]).
     // TODO (https://github.com/apache/datafusion/issues/14380): Avoid creating uncoerced union at all.
-    pub fn try_new_with_loose_types(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
+    pub fn try_new_with_loose_types(
+        inputs: Vec<Arc<LogicalPlan>>,
+        generator: &ColumnIdGenerator,
+    ) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, true, false)?;
+        let schema = with_new_field_ids(schema, generator)?;
         Ok(Union { inputs, schema })
     }
 
     /// Constructs a new Union instance that combines rows from different tables by name,
     /// instead of by position. This means that the specified inputs need not have schemas
     /// that are all the same width.
-    pub fn try_new_by_name(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
+    ///
+    /// The projections that this adds to the inputs (see above) allocate the
+    /// ids of the columns they define with `generator`, and so do the outputs
+    /// of the union (see [`Self::try_new`]).
+    pub fn try_new_by_name(
+        inputs: Vec<Arc<LogicalPlan>>,
+        generator: &ColumnIdGenerator,
+    ) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, true, true)?;
-        let inputs = Self::rewrite_inputs_from_schema(&schema, inputs)?;
+        let inputs = Self::rewrite_inputs_from_schema(&schema, inputs, generator)?;
+        let schema = with_new_field_ids(schema, generator)?;
 
         Ok(Union { inputs, schema })
     }
@@ -3630,6 +3890,7 @@ impl Union {
     fn rewrite_inputs_from_schema(
         schema: &Arc<DFSchema>,
         inputs: Vec<Arc<LogicalPlan>>,
+        generator: &ColumnIdGenerator,
     ) -> Result<Vec<Arc<LogicalPlan>>> {
         let schema_width = schema.iter().count();
         let mut wrapped_inputs = Vec::with_capacity(inputs.len());
@@ -3643,11 +3904,15 @@ impl Union {
                     .schema()
                     .has_column_with_unqualified_name(column.name())
                 {
-                    expr.push(Expr::Column(column));
+                    // the union schema has no ids yet: the column resolves by
+                    // name in the input
+                    let column = Expr::Column(column.with_id(None));
+                    expr.push(NamedExpr::allocate(column, input.schema(), generator));
                 } else {
-                    expr.push(
+                    expr.push(NamedExpr::new(
                         Expr::Literal(ScalarValue::Null, None).alias(column.name()),
-                    );
+                        generator.next(),
+                    ));
                 }
             }
             wrapped_inputs.push(Arc::new(LogicalPlan::Projection(
@@ -4223,8 +4488,9 @@ impl Distinct {
 pub struct DistinctOn {
     /// The `DISTINCT ON` clause expression list
     pub on_expr: Vec<Expr>,
-    /// The selected projection expression list
-    pub select_expr: Vec<Expr>,
+    /// The selected projection expression list: the outputs, with the ids of
+    /// their columns (as the outputs of a [`Projection`])
+    pub select_expr: Vec<NamedExpr>,
     /// The `ORDER BY` clause, whose initial expressions must match those of the `ON` clause when
     /// present. Note that those matching expressions actually wrap the `ON` expressions with
     /// additional info pertaining to the sorting procedure (i.e. ASC/DESC, and NULLS FIRST/LAST).
@@ -4237,9 +4503,12 @@ pub struct DistinctOn {
 
 impl DistinctOn {
     /// Create a new `DistinctOn` struct.
+    ///
+    /// Each output of `select_expr` states the id of its column: the entry it
+    /// rebuilds, or a new one (see [`NamedExpr::allocate`]).
     pub fn try_new(
         on_expr: Vec<Expr>,
-        select_expr: Vec<Expr>,
+        select_expr: Vec<NamedExpr>,
         sort_expr: Option<Vec<SortExpr>>,
         input: Arc<LogicalPlan>,
     ) -> Result<Self> {
@@ -4248,16 +4517,17 @@ impl DistinctOn {
         }
 
         let on_expr = normalize_cols(on_expr, input.as_ref())?;
-        let qualified_fields = exprlist_to_fields(select_expr.as_slice(), &input)?
-            .into_iter()
-            .collect();
+        let qualified_fields =
+            exprlist_to_fields(select_expr.iter().map(|e| &e.expr), &input)?
+                .into_iter()
+                .collect();
 
-        // bare columns pass the ids of their input fields through
+        // the fields take the ids of the outputs
         let dfschema = DFSchema::new_with_metadata(
             qualified_fields,
             input.schema().metadata().clone(),
         )?
-        .with_field_ids(pass_through_column_ids(&select_expr, input.schema()))?;
+        .with_field_ids(select_expr.iter().map(|e| Some(e.id)).collect())?;
 
         let mut distinct_on = DistinctOn {
             on_expr,
@@ -4308,7 +4578,7 @@ impl PartialOrd for DistinctOn {
             /// The `DISTINCT ON` clause expression list
             pub on_expr: &'a Vec<Expr>,
             /// The selected projection expression list
-            pub select_expr: &'a Vec<Expr>,
+            pub select_expr: &'a Vec<NamedExpr>,
             /// The `ORDER BY` clause, whose initial expressions must match those of the `ON` clause when
             /// present. Note that those matching expressions actually wrap the `ON` expressions with
             /// additional info pertaining to the sorting procedure (i.e. ASC/DESC, and NULLS FIRST/LAST).
@@ -4347,52 +4617,210 @@ impl PartialOrd for DistinctOn {
 /// `SUM(A) GROUP BY C+B`, the output schema will be `"C+B", "SUM(A)"` where
 /// "C+B" and "SUM(A)" are the names of the output columns. Note that "C+B" is a
 /// single new column
+///
+/// # Grouping sets
+///
+/// `GROUP BY ROLLUP (a, b)`, `CUBE (a, b)` and `GROUPING SETS ((a), (a, b))`
+/// are flat: [`Self::group_expr`] lists each grouping expression once, and
+/// [`Self::grouping_sets`] lists the sets as indexes into it (see
+/// [`GroupingSets`]). The outputs are then the grouping expressions, the
+/// grouping id column ([`Self::INTERNAL_GROUPING_ID`]) and the aggregate
+/// expressions. [`Self::group_by_exprs`] gives the grouping as it is written,
+/// with an [`Expr::GroupingSet`] (which only exists at the boundary: the SQL
+/// planner, the DataFrame API, and `LogicalPlanBuilder::aggregate`, which
+/// converts it).
+///
+/// # Column ids
+///
+/// Each grouping expression and each aggregate expression is a [`NamedExpr`]
+/// that states the [`ColumnId`] of its output column. A grouping expression
+/// that is a bare column with the id of its entry passes the column through
+/// (the output holds the values of the input column); any other entry defines
+/// a column. Grouping expressions that are equal have one output, with the id
+/// of the first of them. Under grouping sets, a bare column passes through
+/// only if it is in every set: otherwise the output is NULL in the rows of the
+/// sets that omit it, which is not the input column (the builder gives it a
+/// new id). The grouping id column has the id [`GroupingSets::grouping_id`].
+///
+/// [`ColumnId`]: datafusion_common::ColumnId
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 // mark non_exhaustive to encourage use of try_new/new()
 #[non_exhaustive]
 pub struct Aggregate {
     /// The incoming logical plan
     pub input: Arc<LogicalPlan>,
-    /// Grouping expressions
-    pub group_expr: Vec<Expr>,
-    /// Aggregate expressions.
+    /// Grouping expressions, with the ids of their output columns
+    pub group_expr: Vec<NamedExpr>,
+    /// The grouping sets, as indexes into [`Self::group_expr`], if the
+    /// aggregate groups by grouping sets
+    pub grouping_sets: Option<GroupingSets>,
+    /// Aggregate expressions, with the ids of their output columns.
     ///
     /// Note these *must* be either [`Expr::AggregateFunction`] or [`Expr::Alias`]
-    pub aggr_expr: Vec<Expr>,
+    pub aggr_expr: Vec<NamedExpr>,
     /// The schema description of the aggregate output
     pub schema: DFSchemaRef,
 }
 
+/// The grouping sets of an [`Aggregate`] (see
+/// [`Aggregate::grouping_sets`]), with the id of its grouping id column.
+///
+/// Equality, hashing and ordering ignore the id, as they ignore the ids of
+/// [`Column`]s.
+#[derive(Debug, Clone)]
+pub struct GroupingSets {
+    /// The sets, as indexes into the grouping expressions of the aggregate,
+    /// in the form they were written
+    pub sets: GroupingSetIndexes,
+    /// The id of the grouping id column ([`Aggregate::INTERNAL_GROUPING_ID`])
+    pub grouping_id: ColumnId,
+}
+
+/// Grouping sets as indexes into the grouping expressions of an
+/// [`Aggregate`], in the form they were written (an [`Expr::GroupingSet`]
+/// whose expressions are indexes): `ROLLUP` and `CUBE` keep their form for
+/// display and physical planning.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd)]
+pub enum GroupingSetIndexes {
+    /// `ROLLUP` of these expressions
+    Rollup(Vec<usize>),
+    /// `CUBE` of these expressions
+    Cube(Vec<usize>),
+    /// `GROUPING SETS` of these sets of expressions
+    Sets(Vec<Vec<usize>>),
+}
+
+impl GroupingSetIndexes {
+    /// The indexes of `grouping_set` into `exprs` (which lists every
+    /// expression of the grouping set), or an error if one is missing
+    pub fn try_new(grouping_set: &GroupingSet, exprs: &[&Expr]) -> Result<Self> {
+        let index = |expr: &Expr| {
+            exprs.iter().position(|e| *e == expr).ok_or_else(|| {
+                DataFusionError::Internal(format!(
+                    "Grouping set expression {expr} is not a grouping expression"
+                ))
+            })
+        };
+        let indexes = |list: &[Expr]| list.iter().map(index).collect::<Result<Vec<_>>>();
+        Ok(match grouping_set {
+            GroupingSet::Rollup(list) => Self::Rollup(indexes(list)?),
+            GroupingSet::Cube(list) => Self::Cube(indexes(list)?),
+            GroupingSet::GroupingSets(sets) => Self::Sets(
+                sets.iter()
+                    .map(|set| indexes(set))
+                    .collect::<Result<Vec<_>>>()?,
+            ),
+        })
+    }
+
+    /// The grouping set these indexes describe, with the expressions of
+    /// `group_expr`
+    pub fn to_grouping_set<E: AsRef<Expr>>(&self, group_expr: &[E]) -> GroupingSet {
+        let exprs = |list: &[usize]| {
+            list.iter()
+                .map(|i| group_expr[*i].as_ref().clone())
+                .collect::<Vec<_>>()
+        };
+        match self {
+            Self::Rollup(list) => GroupingSet::Rollup(exprs(list)),
+            Self::Cube(list) => GroupingSet::Cube(exprs(list)),
+            Self::Sets(sets) => {
+                GroupingSet::GroupingSets(sets.iter().map(|set| exprs(set)).collect())
+            }
+        }
+    }
+
+    /// Calls `f` on every index
+    fn for_each_index(&self, mut f: impl FnMut(usize)) {
+        match self {
+            Self::Rollup(list) | Self::Cube(list) => list.iter().for_each(|i| f(*i)),
+            Self::Sets(sets) => sets.iter().flatten().for_each(|i| f(*i)),
+        }
+    }
+
+    /// Whether one of the sets is empty (`ROLLUP` and `CUBE` always have
+    /// the empty set): then the aggregate outputs a row for an empty input
+    pub fn has_empty_set(&self) -> bool {
+        match self {
+            Self::Rollup(_) | Self::Cube(_) => true,
+            Self::Sets(sets) => sets.iter().any(|set| set.is_empty()),
+        }
+    }
+
+    /// Whether the grouping expression at `index` is in every set (it is
+    /// never NULL because of a set that omits it)
+    pub fn is_in_every_set(&self, index: usize) -> bool {
+        match self {
+            Self::Rollup(_) | Self::Cube(_) => false,
+            Self::Sets(sets) => sets.iter().all(|set| set.contains(&index)),
+        }
+    }
+}
+
+impl GroupingSets {
+    /// The grouping sets `sets`, whose grouping id column has the id
+    /// `grouping_id`
+    pub fn new(sets: GroupingSetIndexes, grouping_id: ColumnId) -> Self {
+        Self { sets, grouping_id }
+    }
+}
+
+impl PartialEq for GroupingSets {
+    fn eq(&self, other: &Self) -> bool {
+        self.sets == other.sets
+    }
+}
+
+impl Eq for GroupingSets {}
+
+impl Hash for GroupingSets {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.sets.hash(state)
+    }
+}
+
+impl PartialOrd for GroupingSets {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.sets.partial_cmp(&other.sets)
+    }
+}
+
 impl Aggregate {
     /// Create a new aggregate operator.
+    ///
+    /// Each grouping and aggregate expression states the id of its output
+    /// column: the entry it rebuilds, or a new one (see
+    /// [`NamedExpr::allocate`] and [`Self::allocate_group_expr`]), and so do
+    /// the grouping sets for the grouping id column. `LogicalPlanBuilder::aggregate`
+    /// allocates them. A rebuild passes the grouping sets of the aggregate it
+    /// rebuilds.
     pub fn try_new(
         input: Arc<LogicalPlan>,
-        group_expr: Vec<Expr>,
-        aggr_expr: Vec<Expr>,
+        group_expr: Vec<NamedExpr>,
+        grouping_sets: Option<GroupingSets>,
+        aggr_expr: Vec<NamedExpr>,
     ) -> Result<Self> {
         // Reject e.g. `sum(sum(x))` here rather than letting it reach physical
         // planning, which has no equivalent for a nested aggregate.
-        check_aggregate_and_window_nesting(group_expr.iter().chain(aggr_expr.iter()))?;
+        check_aggregate_and_window_nesting(
+            group_expr.iter().chain(aggr_expr.iter()).map(|e| &e.expr),
+        )?;
+        check_group_expr(&group_expr, grouping_sets.as_ref())?;
 
-        let group_expr = enumerate_grouping_sets(group_expr)?;
+        let grouping_expr: Vec<&Expr> = distinct_group_entries(&group_expr)
+            .into_iter()
+            .map(|e| &e.expr)
+            .collect();
 
-        let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
-
-        let grouping_expr: Vec<&Expr> = grouping_set_to_exprlist(group_expr.as_slice())?;
-
-        // bare grouping columns pass their ids through; the grouping id and
-        // the aggregates have none yet
-        let mut field_ids =
-            pass_through_column_ids(grouping_expr.iter().copied(), input.schema());
         let mut qualified_fields = exprlist_to_fields(grouping_expr, &input)?;
 
         // Even columns that cannot be null will become nullable when used in a grouping set.
-        if is_grouping_set {
+        if let Some(grouping_sets) = &grouping_sets {
             qualified_fields = qualified_fields
                 .into_iter()
                 .map(|(q, f)| (q, f.as_ref().clone().with_nullable(true).into()))
                 .collect::<Vec<_>>();
-            let max_ordinal = max_grouping_set_duplicate_ordinal(&group_expr);
+            let max_ordinal = max_grouping_set_duplicate_ordinal(grouping_sets);
             qualified_fields.push((
                 None,
                 Field::new(
@@ -4404,16 +4832,26 @@ impl Aggregate {
             ));
         }
 
-        qualified_fields.extend(exprlist_to_fields(aggr_expr.as_slice(), &input)?);
-        field_ids.resize(qualified_fields.len(), None);
+        qualified_fields.extend(exprlist_to_fields(
+            aggr_expr.iter().map(|e| &e.expr),
+            &input,
+        )?);
 
+        let field_ids =
+            aggregate_output_ids(&group_expr, grouping_sets.as_ref(), &aggr_expr);
         let schema = DFSchema::new_with_metadata(
             qualified_fields,
             input.schema().metadata().clone(),
         )?
         .with_field_ids(field_ids)?;
 
-        Self::try_new_with_schema(input, group_expr, aggr_expr, Arc::new(schema))
+        Self::try_new_with_schema(
+            input,
+            group_expr,
+            grouping_sets,
+            aggr_expr,
+            Arc::new(schema),
+        )
     }
 
     /// Create a new aggregate operator using the provided schema to avoid the overhead of
@@ -4421,13 +4859,16 @@ impl Aggregate {
     ///
     /// This method should only be called when you are absolutely sure that the schema being
     /// provided is correct for the aggregate. If in doubt, call [try_new](Self::try_new) instead.
+    ///
+    /// The fields of the schema take the ids of the entries.
     pub fn try_new_with_schema(
         input: Arc<LogicalPlan>,
-        group_expr: Vec<Expr>,
-        aggr_expr: Vec<Expr>,
+        group_expr: Vec<NamedExpr>,
+        grouping_sets: Option<GroupingSets>,
+        aggr_expr: Vec<NamedExpr>,
         schema: DFSchemaRef,
     ) -> Result<Self> {
-        if group_expr.is_empty() && aggr_expr.is_empty() {
+        if group_expr.is_empty() && grouping_sets.is_none() && aggr_expr.is_empty() {
             return plan_err!(
                 "Aggregate requires at least one grouping or aggregate expression. \
                 Aggregate without grouping expressions nor aggregate expressions is \
@@ -4435,7 +4876,9 @@ impl Aggregate {
                 single row. Please use VALUES instead."
             );
         }
-        let group_expr_count = grouping_set_expr_count(&group_expr)?;
+        check_group_expr(&group_expr, grouping_sets.as_ref())?;
+        let group_expr_count = distinct_group_entries(&group_expr).len()
+            + usize::from(grouping_sets.is_some());
         if schema.fields().len() != group_expr_count + aggr_expr.len() {
             return plan_err!(
                 "Aggregate schema has wrong number of fields. Expected {} got {}",
@@ -4444,22 +4887,132 @@ impl Aggregate {
             );
         }
 
-        let aggregate_func_dependencies =
-            calc_func_dependencies_for_aggregate(&group_expr, &input, &schema)?;
-        let new_schema = Arc::unwrap_or_clone(schema);
+        let field_ids =
+            aggregate_output_ids(&group_expr, grouping_sets.as_ref(), &aggr_expr);
+        let aggregate_func_dependencies = calc_func_dependencies_for_aggregate(
+            &group_expr,
+            grouping_sets.as_ref(),
+            &input,
+            &schema,
+        )?;
+        let mut new_schema = Arc::unwrap_or_clone(schema);
+        if new_schema.field_ids() != field_ids.as_slice() {
+            new_schema = new_schema.with_field_ids(field_ids)?;
+        }
         let schema = Arc::new(
             new_schema.with_functional_dependencies(aggregate_func_dependencies)?,
         );
         Ok(Self {
             input,
             group_expr,
+            grouping_sets,
             aggr_expr,
             schema,
         })
     }
 
+    /// The entries of the grouping expressions `group_expr` (as written in a
+    /// `GROUP BY`, possibly with an [`Expr::GroupingSet`]) of a new
+    /// aggregate over `input`, and its grouping sets, with new ids from
+    /// `generator`:
+    ///
+    /// - a bare column of `input` passes its id through (see
+    ///   [`NamedExpr::allocate`]), unless the aggregate has grouping sets and
+    ///   one of them omits it; other expressions get a new id;
+    /// - equal expressions share the id of the first (they have one output);
+    /// - grouping sets are combined (see [`enumerate_grouping_sets`]) and
+    ///   flattened: each of their expressions is one grouping expression, and
+    ///   the grouping id column gets a new id.
+    pub fn allocate_group_expr(
+        group_expr: Vec<Expr>,
+        input: &DFSchema,
+        generator: &ColumnIdGenerator,
+    ) -> Result<(Vec<NamedExpr>, Option<GroupingSets>)> {
+        let mut group_expr = enumerate_grouping_sets(group_expr)?;
+        if let [Expr::GroupingSet(grouping_set)] = group_expr.as_slice() {
+            let exprs = grouping_set.distinct_expr();
+            let sets = GroupingSetIndexes::try_new(grouping_set, &exprs)?;
+            let entries = exprs
+                .iter()
+                .enumerate()
+                .map(|(i, expr)| {
+                    let entry = NamedExpr::allocate((*expr).clone(), input, generator);
+                    if entry.is_pass_through() && !sets.is_in_every_set(i) {
+                        NamedExpr::new(entry.expr, generator.next())
+                    } else {
+                        entry
+                    }
+                })
+                .collect();
+            let grouping_sets = GroupingSets::new(sets, generator.next());
+            return Ok((entries, Some(grouping_sets)));
+        }
+        if group_expr.iter().any(|e| matches!(e, Expr::GroupingSet(_))) {
+            return plan_err!(
+                "Invalid group by expressions, GroupingSet must be the only expression"
+            );
+        }
+        let mut firsts: Vec<NamedExpr> = Vec::with_capacity(group_expr.len());
+        Ok((
+            group_expr
+                .drain(..)
+                .map(|expr| {
+                    if let Some(first) = firsts.iter().find(|e| e.expr == expr) {
+                        return NamedExpr::new(expr, first.id);
+                    }
+                    let entry = NamedExpr::allocate(expr, input, generator);
+                    firsts.push(entry.clone());
+                    entry
+                })
+                .collect(),
+            None,
+        ))
+    }
+
+    /// The grouping of this aggregate as it is written in a `GROUP BY`: the
+    /// grouping expressions, or one [`Expr::GroupingSet`] if it has grouping
+    /// sets. [`LogicalPlanBuilder::aggregate`] accepts it.
+    pub fn group_by_exprs(&self) -> Vec<Expr> {
+        match &self.grouping_sets {
+            Some(grouping_sets) => vec![Expr::GroupingSet(
+                grouping_sets.sets.to_grouping_set(&self.group_expr),
+            )],
+            None => self.group_expr.iter().map(|e| e.expr.clone()).collect(),
+        }
+    }
+
+    /// The entries of the grouping expressions that have an output column, in
+    /// the order of the output columns: the first of the grouping expressions
+    /// that are equal
+    pub fn group_output_entries(&self) -> Vec<&NamedExpr> {
+        distinct_group_entries(&self.group_expr)
+    }
+
+    /// The ids of the columns this aggregate defines, with their index in
+    /// the schema: the grouping expressions that do not pass a column
+    /// through, the grouping id of grouping sets, and the aggregate
+    /// expressions
+    pub(crate) fn defined_column_ids(&self) -> Vec<(usize, ColumnId)> {
+        let mut defined = vec![];
+        let entries = self.group_output_entries();
+        for (i, entry) in entries.iter().enumerate() {
+            if let Some(id) = entry.defined_id() {
+                defined.push((i, id));
+            }
+        }
+        let mut group_len = entries.len();
+        if let Some(grouping_sets) = &self.grouping_sets {
+            defined.push((group_len, grouping_sets.grouping_id));
+            group_len += 1;
+        }
+        for (i, entry) in self.aggr_expr.iter().enumerate() {
+            defined.push((group_len + i, entry.id));
+        }
+        defined
+    }
+
     fn is_grouping_set(&self) -> bool {
-        matches!(self.group_expr.as_slice(), [Expr::GroupingSet(_)])
+        self.grouping_sets.is_some()
     }
 
     /// Get the output expressions.
@@ -4467,11 +5020,15 @@ impl Aggregate {
         static INTERNAL_ID_EXPR: LazyLock<Expr> = LazyLock::new(|| {
             Expr::Column(Column::from_name(Aggregate::INTERNAL_GROUPING_ID))
         });
-        let mut exprs = grouping_set_to_exprlist(self.group_expr.as_slice())?;
+        let mut exprs: Vec<&Expr> = self
+            .group_output_entries()
+            .into_iter()
+            .map(|e| &e.expr)
+            .collect();
         if self.is_grouping_set() {
             exprs.push(&INTERNAL_ID_EXPR);
         }
-        exprs.extend(self.aggr_expr.iter());
+        exprs.extend(self.aggr_expr.iter().map(|e| &e.expr));
         debug_assert_eq!(exprs.len(), self.schema.fields().len());
         Ok(exprs)
     }
@@ -4480,7 +5037,7 @@ impl Aggregate {
     /// This is not simply group by expression length. Expression may be
     /// GroupingSet, etc. In these case we need to get inner expression lengths.
     pub fn group_expr_len(&self) -> Result<usize> {
-        grouping_set_expr_count(&self.group_expr)
+        Ok(self.group_output_entries().len() + usize::from(self.is_grouping_set()))
     }
 
     /// Returns the data type of the grouping id.
@@ -4549,7 +5106,14 @@ impl PartialOrd for Aggregate {
         match self.input.partial_cmp(&other.input) {
             Some(Ordering::Equal) => {
                 match self.group_expr.partial_cmp(&other.group_expr) {
-                    Some(Ordering::Equal) => self.aggr_expr.partial_cmp(&other.aggr_expr),
+                    Some(Ordering::Equal) => {
+                        match self.grouping_sets.partial_cmp(&other.grouping_sets) {
+                            Some(Ordering::Equal) => {
+                                self.aggr_expr.partial_cmp(&other.aggr_expr)
+                            }
+                            cmp => cmp,
+                        }
+                    }
                     cmp => cmp,
                 }
             }
@@ -4560,16 +5124,15 @@ impl PartialOrd for Aggregate {
     }
 }
 
-/// Returns the highest duplicate ordinal across all grouping sets in `group_expr`.
+/// Returns the highest duplicate ordinal across all grouping sets.
 ///
 /// The ordinal for each occurrence of a grouping set pattern is its 0-based
 /// index among identical entries. For example, if the same set appears three
 /// times, the ordinals are 0, 1, 2 and this function returns 2.
 /// Returns 0 when no grouping set is duplicated.
-#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
-fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
-    if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
-        let mut counts: HashMap<&[Expr], usize> = HashMap::with_capacity(sets.len());
+fn max_grouping_set_duplicate_ordinal(grouping_sets: &GroupingSets) -> usize {
+    if let GroupingSetIndexes::Sets(sets) = &grouping_sets.sets {
+        let mut counts: HashMap<&[usize], usize> = HashMap::with_capacity(sets.len());
         for set in sets {
             *counts.entry(set).or_insert(0) += 1;
         }
@@ -4579,30 +5142,84 @@ fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
     }
 }
 
-/// Checks whether any expression in `group_expr` contains `Expr::GroupingSet`.
-fn contains_grouping_set(group_expr: &[Expr]) -> bool {
+/// Checks that `group_expr` has no [`Expr::GroupingSet`] (grouping sets are
+/// given as [`GroupingSets`]) and that `grouping_sets` indexes into it
+fn check_group_expr(
+    group_expr: &[NamedExpr],
+    grouping_sets: Option<&GroupingSets>,
+) -> Result<()> {
+    if group_expr
+        .iter()
+        .any(|e| matches!(e.expr, Expr::GroupingSet(_)))
+    {
+        return plan_err!(
+            "An Aggregate takes its grouping sets as GroupingSets, not as an \
+            Expr::GroupingSet: use LogicalPlanBuilder::aggregate or \
+            Aggregate::allocate_group_expr"
+        );
+    }
+    if let Some(grouping_sets) = grouping_sets {
+        let mut out_of_range = None;
+        grouping_sets.sets.for_each_index(|i| {
+            if i >= group_expr.len() {
+                out_of_range = Some(i);
+            }
+        });
+        if let Some(i) = out_of_range {
+            return internal_err!(
+                "Grouping set index {i} out of range of {} grouping expressions",
+                group_expr.len()
+            );
+        }
+    }
+    Ok(())
+}
+
+/// The first of the entries of `group_expr` whose expressions are equal, in
+/// order: the entries that have an output column
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
+fn distinct_group_entries(group_expr: &[NamedExpr]) -> Vec<&NamedExpr> {
+    let mut seen = HashSet::with_capacity(group_expr.len());
     group_expr
         .iter()
-        .any(|expr| matches!(expr, Expr::GroupingSet(_)))
+        .filter(|entry| seen.insert(&entry.expr))
+        .collect()
+}
+
+/// The ids of the output columns of an aggregate: the ids of the entries of
+/// `group_expr` that have an output column (see [`distinct_group_entries`]),
+/// the id of the grouping id column, then the ids of `aggr_expr`
+fn aggregate_output_ids(
+    group_expr: &[NamedExpr],
+    grouping_sets: Option<&GroupingSets>,
+    aggr_expr: &[NamedExpr],
+) -> Vec<Option<ColumnId>> {
+    distinct_group_entries(group_expr)
+        .into_iter()
+        .map(|e| Some(e.id))
+        .chain(grouping_sets.map(|g| Some(g.grouping_id)))
+        .chain(aggr_expr.iter().map(|e| Some(e.id)))
+        .collect()
 }
 
 /// Calculates functional dependencies for aggregate expressions.
 fn calc_func_dependencies_for_aggregate(
     // Expressions in the GROUP BY clause:
-    group_expr: &[Expr],
+    group_expr: &[NamedExpr],
+    grouping_sets: Option<&GroupingSets>,
     // Input plan of the aggregate:
     input: &LogicalPlan,
     // Aggregate schema
     aggr_schema: &DFSchema,
 ) -> Result<FunctionalDependencies> {
     // We can do a case analysis on how to propagate functional dependencies based on
-    // whether the GROUP BY in question contains a grouping set expression:
+    // whether the GROUP BY in question contains grouping sets:
     // - If so, the functional dependencies will be empty because we cannot guarantee
     //   that GROUP BY expression results will be unique.
     // - Otherwise, it may be possible to propagate functional dependencies.
-    if !contains_grouping_set(group_expr) {
+    if grouping_sets.is_none() {
         // One entry per GROUP BY output field, in the order of `aggr_schema`
-        let group_by_input_indices = grouping_set_to_exprlist(group_expr)?
+        let group_by_input_indices = distinct_group_entries(group_expr)
             .into_iter()
             .map(|item| passthrough_field_index(item, input.schema()))
             .collect::<Vec<_>>();
@@ -4620,7 +5237,7 @@ fn calc_func_dependencies_for_aggregate(
 /// This function projects functional dependencies of the `input` plan according
 /// to projection expressions `exprs`.
 fn calc_func_dependencies_for_project(
-    exprs: &[Expr],
+    exprs: &[NamedExpr],
     input: &LogicalPlan,
 ) -> Result<FunctionalDependencies> {
     // Sentinel for projection outputs that do not map back to any input field.
@@ -4643,7 +5260,7 @@ fn calc_func_dependencies_for_project(
     // A projection expression can produce multiple output columns, such as `*`.
     let proj_indices = exprs
         .iter()
-        .map(|expr| match expr {
+        .map(|expr| match &expr.expr {
             #[expect(deprecated)]
             Expr::Wildcard { qualifier, options } => {
                 let wildcard_fields = exprlist_to_fields(
@@ -4964,6 +5581,29 @@ impl Join {
         self
     }
 
+    /// The [`ColumnId`] of the mark column of a [`JoinType::LeftMark`] or
+    /// [`JoinType::RightMark`] join (the last field of its schema), if it has
+    /// one; `None` for other joins.
+    pub fn mark_column_id(&self) -> Option<ColumnId> {
+        mark_column_id(&self.schema, self.join_type)
+    }
+
+    /// Returns this join, where the mark column of a [`JoinType::LeftMark`] or
+    /// [`JoinType::RightMark`] join has the id `id`. Other joins are returned
+    /// unchanged.
+    ///
+    /// The mark column is defined by the join: [`Self::try_new`] leaves it
+    /// without an id, and the code that builds a mark join gives it one with
+    /// this method (`LogicalPlanBuilder` does). Rebuilds of the join keep it.
+    pub fn with_mark_column_id(mut self, id: ColumnId) -> Result<Self> {
+        if is_mark_join(self.join_type) {
+            let schema = Arc::unwrap_or_clone(self.schema);
+            self.schema =
+                Arc::new(with_mark_column_id(schema, self.join_type, Some(id))?);
+        }
+        Ok(self)
+    }
+
     /// Create Join with input which wrapped with projection, this method is used in physical planning only to help
     /// create the physical join.
     pub fn try_new_with_project_input(
@@ -4999,10 +5639,14 @@ impl Join {
             .map(|(l, r)| (Expr::Column(l), Expr::Column(r)))
             .collect();
 
-        let join_schema = build_join_schema(
-            left_sch.schema(),
-            right_sch.schema(),
-            &original_join.join_type,
+        let join_schema = with_mark_column_id(
+            build_join_schema(
+                left_sch.schema(),
+                right_sch.schema(),
+                &original_join.join_type,
+            )?,
+            original_join.join_type,
+            original_join.mark_column_id(),
         )?;
 
         Ok((
@@ -5021,6 +5665,38 @@ impl Join {
             requalified,
         ))
     }
+}
+
+/// Whether a join of type `join_type` outputs a mark column
+fn is_mark_join(join_type: JoinType) -> bool {
+    matches!(join_type, JoinType::LeftMark | JoinType::RightMark)
+}
+
+/// The id of the mark column of a join of type `join_type` whose schema is
+/// `schema`: the id of its last field, for a mark join
+pub(crate) fn mark_column_id(schema: &DFSchema, join_type: JoinType) -> Option<ColumnId> {
+    if is_mark_join(join_type) {
+        schema.field_ids().last().copied().flatten()
+    } else {
+        None
+    }
+}
+
+/// Returns `schema`, the schema of a join of type `join_type`, where the mark
+/// column of a mark join has the id `id`
+fn with_mark_column_id(
+    schema: DFSchema,
+    join_type: JoinType,
+    id: Option<ColumnId>,
+) -> Result<DFSchema> {
+    if !is_mark_join(join_type) || schema.field_ids().last() == Some(&id) {
+        return Ok(schema);
+    }
+    let mut ids = schema.field_ids().to_vec();
+    if let Some(last) = ids.last_mut() {
+        *last = id;
+    }
+    schema.with_field_ids(ids)
 }
 
 // Manual implementation needed because of `schema` field. Comparison excludes this field.
@@ -5350,10 +6026,68 @@ impl PartialOrd for Unnest {
 }
 
 impl Unnest {
+    /// Creates an unnest of the columns `exec_columns` of `input`.
+    ///
+    /// The columns that are not unnested pass through with their
+    /// [`ColumnId`]s; the unnested columns are defined by the node: they get
+    /// new ids from `generator`, stored in its schema, which are kept when
+    /// the node is rebuilt.
     pub fn try_new(
         input: Arc<LogicalPlan>,
         exec_columns: Vec<Column>,
         options: UnnestOptions,
+        generator: &ColumnIdGenerator,
+    ) -> Result<Self> {
+        Self::try_new_inner(input, exec_columns, options, |_| Some(generator.next()))
+    }
+
+    /// [`Self::try_new`] for a rebuild of `previous` (with another input or
+    /// other columns): each unnested column keeps the id of the unnested
+    /// column of `previous` with the same qualified name (a new unnested
+    /// column has no id)
+    pub(crate) fn try_new_keeping_ids(
+        previous: &Unnest,
+        input: Arc<LogicalPlan>,
+        exec_columns: Vec<Column>,
+        options: UnnestOptions,
+    ) -> Result<Self> {
+        let previous_ids: HashMap<(Option<&TableReference>, &str), ColumnId> = previous
+            .unnested_output_indices()
+            .filter_map(|i| {
+                let (qualifier, field) = previous.schema.qualified_field(i);
+                let id = previous.schema.field_id(i)?;
+                Some(((qualifier, field.name().as_str()), id))
+            })
+            .collect();
+        Self::try_new_inner(input, exec_columns, options, |(qualifier, field)| {
+            previous_ids
+                .get(&(qualifier.as_ref(), field.name().as_str()))
+                .copied()
+        })
+    }
+
+    /// The indices in the schema of the unnested columns (the columns this
+    /// node defines; the others pass the columns of the input through)
+    pub fn unnested_output_indices(&self) -> impl Iterator<Item = usize> + '_ {
+        self.dependency_indices
+            .iter()
+            .enumerate()
+            .filter(|(_, input_index)| {
+                self.list_type_columns
+                    .iter()
+                    .any(|(i, _)| i == *input_index)
+                    || self.struct_type_columns.contains(input_index)
+            })
+            .map(|(output_index, _)| output_index)
+    }
+
+    /// See [`Self::try_new`]: `unnested_id` gives the id of each unnested
+    /// column
+    fn try_new_inner(
+        input: Arc<LogicalPlan>,
+        exec_columns: Vec<Column>,
+        options: UnnestOptions,
+        mut unnested_id: impl FnMut(&(Option<TableReference>, Arc<Field>)) -> Option<ColumnId>,
     ) -> Result<Self> {
         if exec_columns.is_empty() {
             return plan_err!("unnest plan requires at least 1 column to unnest");
@@ -5472,11 +6206,16 @@ impl Unnest {
 
         let metadata = input_schema.metadata().clone();
         // the columns that are not unnested keep their ids, the unnested ones
-        // have none yet
+        // are defined by the node
         let field_ids = dependency_indices
             .iter()
-            .map(|index| {
-                if indices_to_unnest.contains_key(index) {
+            .zip(&fields)
+            .map(|(index, field)| {
+                let unnested = list_columns.iter().any(|(i, _)| i == index)
+                    || struct_columns.contains(index);
+                if unnested {
+                    unnested_id(field)
+                } else if indices_to_unnest.contains_key(index) {
                     None
                 } else {
                     input_schema.field_id(*index)
@@ -5598,6 +6337,16 @@ fn get_unnested_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Outputs computing `exprs`, with new ids (pass-throughs for the bare
+    /// columns of `input` that have one)
+    fn named(exprs: Vec<Expr>, input: &LogicalPlan) -> Vec<NamedExpr> {
+        let generator = ColumnIdGenerator::new_after(input.max_column_id());
+        exprs
+            .into_iter()
+            .map(|e| NamedExpr::allocate(e, input.schema(), &generator))
+            .collect()
+    }
     use crate::builder::LogicalTableSource;
     use crate::logical_plan::table_scan;
     use crate::select_expr::SelectExpr;
@@ -5822,7 +6571,7 @@ mod tests {
         );
         let input = LogicalPlanBuilder::scan("employee_csv", source, None)?.build()?;
         #[expect(deprecated)]
-        let projection = Projection::try_new(
+        let exprs = named(
             vec![
                 Expr::Wildcard {
                     qualifier: None,
@@ -5830,8 +6579,9 @@ mod tests {
                 },
                 col("employee_csv.id"),
             ],
-            Arc::new(input),
-        )?;
+            &input,
+        );
+        let projection = Projection::try_new(exprs, Arc::new(input))?;
 
         let deps = projection.schema.functional_dependencies();
         assert_eq!(deps.len(), 1);
@@ -5928,12 +6678,18 @@ mod tests {
         });
 
         // References the *unqualified* second field, which is not a key.
-        let exprs = vec![Expr::Column(Column::new_unqualified("orders.id"))];
+        let exprs = named(
+            vec![Expr::Column(Column::new_unqualified("orders.id"))],
+            &input,
+        );
         let deps = calc_func_dependencies_for_project(&exprs, &input)?;
         assert!(deps.is_empty());
 
         // References the qualified first field, which is a key.
-        let exprs = vec![Expr::Column(Column::new(Some("orders"), "id"))];
+        let exprs = named(
+            vec![Expr::Column(Column::new(Some("orders"), "id"))],
+            &input,
+        );
         let deps = calc_func_dependencies_for_project(&exprs, &input)?;
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].source_indices, vec![0]);
@@ -6149,8 +6905,13 @@ mod tests {
             ],
         )?;
 
-        let query =
-            RecursiveQuery::try_new("t".to_string(), static_term, recursive_term, false)?;
+        let query = RecursiveQuery::try_new(
+            "t".to_string(),
+            static_term,
+            recursive_term,
+            false,
+            &ColumnIdGenerator::new(),
+        )?;
 
         // Names and types are taken from the static term.
         assert_eq!(query.schema.field(0).name(), "a");
@@ -6180,9 +6941,14 @@ mod tests {
             ],
         )?;
 
-        let err =
-            RecursiveQuery::try_new("t".to_string(), static_term, recursive_term, false)
-                .unwrap_err();
+        let err = RecursiveQuery::try_new(
+            "t".to_string(),
+            static_term,
+            recursive_term,
+            false,
+            &ColumnIdGenerator::new(),
+        )
+        .unwrap_err();
         assert!(
             err.strip_backtrace()
                 .contains("must have the same number of columns"),
@@ -6582,10 +7348,13 @@ mod tests {
 
         let count_window_function = |schema| {
             Window::try_new_with_schema(
-                vec![Expr::WindowFunction(Box::new(WindowFunction::new(
-                    WindowFunctionDefinition::AggregateUDF(count_udaf()),
-                    vec![],
-                )))],
+                vec![NamedExpr::new(
+                    Expr::WindowFunction(Box::new(WindowFunction::new(
+                        WindowFunctionDefinition::AggregateUDF(count_udaf()),
+                        vec![],
+                    ))),
+                    ColumnIdGenerator::new().next(),
+                )],
                 Arc::clone(&empty_values),
                 Arc::new(schema),
             )
@@ -6633,12 +7402,13 @@ mod tests {
     #[test]
     fn projection_expr_schema_mismatch() -> Result<()> {
         let empty_schema = Arc::new(DFSchema::empty());
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: false,
+            schema: Arc::clone(&empty_schema),
+        });
         let p = Projection::try_new_with_schema(
-            vec![col("a")],
-            Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
-                produce_one_row: false,
-                schema: Arc::clone(&empty_schema),
-            })),
+            named(vec![col("a")], &input),
+            Arc::new(input),
             empty_schema,
         );
         assert_snapshot!(p.unwrap_err().strip_backtrace(), @"Error during planning: Projection has mismatch between number of expressions (1) and number of fields in schema (0)");

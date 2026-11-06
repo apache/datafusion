@@ -15,14 +15,15 @@ use arrow::datatypes::DataType;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{
-    Column, DFSchema, Result, ScalarValue, internal_datafusion_err, plan_err,
+    Column, ColumnId, ColumnIdGenerator, DFSchema, Result, ScalarValue,
+    internal_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::{AggregateFunction, Alias};
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::utils::grouping_set_to_exprlist;
 use datafusion_expr::{
-    Aggregate, Expr, Projection, bitwise_and, bitwise_or, bitwise_shift_left,
-    bitwise_shift_right, cast,
+    Aggregate, Expr, GroupingSets, NamedExpr, Projection, bitwise_and, bitwise_or,
+    bitwise_shift_left, bitwise_shift_right, cast,
 };
 use itertools::Itertools;
 
@@ -38,7 +39,11 @@ impl ResolveGroupingFunction {
 
 impl AnalyzerRule for ResolveGroupingFunction {
     fn analyze(&self, plan: LogicalPlan, _: &ConfigOptions) -> Result<LogicalPlan> {
-        plan.transform_up(analyze_internal).data()
+        // analyzer rules have no generator: the outputs of the projections
+        // added get ids after the highest id of the plan
+        let generator = ColumnIdGenerator::new_after(plan.max_column_id());
+        plan.transform_up(|plan| analyze_internal(plan, &generator))
+            .data()
     }
 
     fn name(&self) -> &str {
@@ -50,7 +55,7 @@ impl AnalyzerRule for ResolveGroupingFunction {
 ///
 /// For more details on how the grouping id bitmap works the documentation for
 /// [[Aggregate::INTERNAL_GROUPING_ID]]
-fn group_expr_to_bitmap_index(group_expr: &[Expr]) -> Result<HashMap<&Expr, usize>> {
+fn group_expr_to_bitmap_index(group_expr: &[NamedExpr]) -> Result<HashMap<&Expr, usize>> {
     Ok(grouping_set_to_exprlist(group_expr)?
         .into_iter()
         .rev()
@@ -63,24 +68,29 @@ fn group_expr_to_bitmap_index(group_expr: &[Expr]) -> Result<HashMap<&Expr, usiz
 fn replace_grouping_exprs(
     input: Arc<LogicalPlan>,
     schema: &DFSchema,
-    group_expr: Vec<Expr>,
-    aggr_expr: Vec<Expr>,
+    group_expr: Vec<NamedExpr>,
+    grouping_sets: Option<GroupingSets>,
+    aggr_expr: Vec<NamedExpr>,
+    generator: &ColumnIdGenerator,
 ) -> Result<LogicalPlan> {
     // Create HashMap from Expr to index in the grouping_id bitmap
-    let is_grouping_set = matches!(group_expr.as_slice(), [Expr::GroupingSet(_)]);
+    let is_grouping_set = grouping_sets.is_some();
     let group_expr_to_bitmap_index = group_expr_to_bitmap_index(&group_expr)?;
     let columns = schema.columns();
     let mut new_agg_expr = Vec::new();
     let grouping_id_len = usize::from(is_grouping_set);
     let group_expr_len = columns.len() - aggr_expr.len() - grouping_id_len;
-    let mut projection_exprs = Vec::with_capacity(group_expr_len + aggr_expr.len());
+    // the outputs of the projection, with the ids of the aggregate outputs
+    // that a grouping function replaces (the others pass through)
+    let mut projection_exprs: Vec<(Expr, Option<ColumnId>)> =
+        Vec::with_capacity(group_expr_len + aggr_expr.len());
     projection_exprs.extend(
         columns
             .iter()
             .take(group_expr_len)
-            .map(|column| Expr::Column(column.clone())),
+            .map(|column| (Expr::Column(column.clone()), None)),
     );
-    for (expr, column) in aggr_expr
+    for (entry, column) in aggr_expr
         .into_iter()
         .zip(columns.into_iter().skip(group_expr_len + grouping_id_len))
     {
@@ -91,6 +101,8 @@ fn replace_grouping_exprs(
                     .map(|f| f.data_type().clone())
             })
             .transpose()?;
+        let id = entry.id;
+        let expr = entry.expr;
         match expr {
             Expr::AggregateFunction(ref function) if is_grouping_function(&expr) => {
                 let grouping_expr = grouping_function_on_id(
@@ -98,11 +110,10 @@ fn replace_grouping_exprs(
                     &group_expr_to_bitmap_index,
                     grouping_id_type,
                 )?;
-                projection_exprs.push(Expr::Alias(Alias::new(
-                    grouping_expr,
-                    column.relation,
-                    column.name,
-                )));
+                projection_exprs.push((
+                    Expr::Alias(Alias::new(grouping_expr, column.relation, column.name)),
+                    Some(id),
+                ));
             }
             Expr::Alias(Alias {
                 ref relation,
@@ -116,22 +127,36 @@ fn replace_grouping_exprs(
                     grouping_id_type,
                 )?;
                 // Preserve the outermost user-provided alias
-                projection_exprs.push(Expr::Alias(Alias::new(
-                    grouping_expr,
-                    relation.clone(),
-                    name.clone(),
-                )));
+                projection_exprs.push((
+                    Expr::Alias(Alias::new(
+                        grouping_expr,
+                        relation.clone(),
+                        name.clone(),
+                    )),
+                    Some(id),
+                ));
             }
             _ => {
-                projection_exprs.push(Expr::Column(column));
-                new_agg_expr.push(expr);
+                projection_exprs.push((Expr::Column(column), None));
+                new_agg_expr.push(NamedExpr::new(expr, id));
             }
         }
     }
     // Recreate aggregate without grouping functions
-    let new_aggregate =
-        LogicalPlan::Aggregate(Aggregate::try_new(input, group_expr, new_agg_expr)?);
+    let new_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
+        input,
+        group_expr,
+        grouping_sets,
+        new_agg_expr,
+    )?);
     // Create projection with grouping functions calculations
+    let projection_exprs = projection_exprs
+        .into_iter()
+        .map(|(e, id)| match id {
+            Some(id) => NamedExpr::new(e, id),
+            None => NamedExpr::allocate(e, new_aggregate.schema(), generator),
+        })
+        .collect();
     let projection = LogicalPlan::Projection(Projection::try_new(
         projection_exprs,
         new_aggregate.into(),
@@ -139,21 +164,33 @@ fn replace_grouping_exprs(
     Ok(projection)
 }
 
-fn analyze_internal(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+fn analyze_internal(
+    plan: LogicalPlan,
+    generator: &ColumnIdGenerator,
+) -> Result<Transformed<LogicalPlan>> {
     // rewrite any subqueries in the plan first
-    let transformed_plan =
-        plan.map_subqueries(|plan| plan.transform_up(analyze_internal))?;
+    let transformed_plan = plan.map_subqueries(|plan| {
+        plan.transform_up(|plan| analyze_internal(plan, generator))
+    })?;
 
     let transformed_plan = transformed_plan.transform_data(|plan| match plan {
         LogicalPlan::Aggregate(Aggregate {
             input,
             group_expr,
+            grouping_sets,
             aggr_expr,
             schema,
             ..
-        }) if contains_grouping_function(&aggr_expr) => Ok(Transformed::yes(
-            replace_grouping_exprs(input, schema.as_ref(), group_expr, aggr_expr)?,
-        )),
+        }) if contains_grouping_function(&aggr_expr) => {
+            Ok(Transformed::yes(replace_grouping_exprs(
+                input,
+                schema.as_ref(),
+                group_expr,
+                grouping_sets,
+                aggr_expr,
+                generator,
+            )?))
+        }
         _ => Ok(Transformed::no(plan)),
     })?;
 
@@ -183,8 +220,8 @@ fn is_grouping_function(expr: &Expr) -> bool {
     }
 }
 
-fn contains_grouping_function(exprs: &[Expr]) -> bool {
-    exprs.iter().any(is_grouping_function)
+fn contains_grouping_function(exprs: &[NamedExpr]) -> bool {
+    exprs.iter().any(|e| is_grouping_function(e))
 }
 
 /// Validate that the arguments to the grouping function are in the group by clause.

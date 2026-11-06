@@ -3131,7 +3131,10 @@ fn assert_projection_contains_scalar_subquery(plan: &LogicalPlan) {
         other => panic!("expected Projection plan, got {other:?}"),
     };
 
-    let found_scalar_subquery = projection.expr.iter().any(expr_contains_scalar_subquery);
+    let found_scalar_subquery = projection
+        .expr
+        .iter()
+        .any(|e| expr_contains_scalar_subquery(e));
     assert!(
         found_scalar_subquery,
         "expected Projection to contain ScalarSubquery expression"

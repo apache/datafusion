@@ -29,7 +29,6 @@ use datafusion_expr::dml::{
 };
 use datafusion_expr::expr_rewriter::normalize_col_with_schemas_and_ambiguity_check;
 use datafusion_expr::logical_plan::DdlStatement;
-use datafusion_expr::logical_plan::builder::project;
 use datafusion_expr::logical_plan::information_schema::ColumnsDetail;
 use datafusion_expr::utils::expr_to_columns;
 use datafusion_expr::{
@@ -591,7 +590,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                                 })
                                 .collect::<Vec<_>>();
 
-                            LogicalPlanBuilder::from(plan.clone())
+                            self.plan_builder(plan.clone())
                                 .project(project_exprs)?
                                 .build()?
                         } else {
@@ -1694,8 +1693,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let table_ref = self.object_name_to_table_reference(object_name)?;
                 let table_source =
                     self.context_provider.get_table_source(table_ref.clone())?;
-                let plan =
-                    LogicalPlanBuilder::scan(table_name, table_source, None)?.build()?;
+                let plan = LogicalPlanBuilder::scan_with_column_id_generator(
+                    table_name,
+                    table_source,
+                    None,
+                    self.new_planner_context().column_id_generator().cloned(),
+                )?
+                .build()?;
                 let input_schema = Arc::clone(plan.schema());
                 (plan, input_schema, Some(table_ref))
             }
@@ -2290,10 +2294,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             table_ref.clone(),
             &table_source.schema(),
         )?;
-        let scan =
-            LogicalPlanBuilder::scan(table_ref.clone(), Arc::clone(&table_source), None)?
-                .build()?;
         let mut planner_context = self.new_planner_context();
+        // the scan and the subqueries of the predicate share the generator
+        let scan = LogicalPlanBuilder::scan_with_column_id_generator(
+            table_ref.clone(),
+            Arc::clone(&table_source),
+            None,
+            planner_context.column_id_generator().cloned(),
+        )?
+        .build()?;
 
         let source = match predicate_expr {
             None => scan,
@@ -2424,7 +2433,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             })
             .collect::<Result<Vec<_>>>()?;
 
-        let source = project(source, exprs)?;
+        let source = self.plan_builder(source).project(exprs)?.build()?;
 
         let plan = LogicalPlan::Dml(DmlStatement::new(
             table_name,
@@ -2894,7 +2903,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 Ok(expr.alias(target_field.name()))
             })
             .collect::<Result<Vec<Expr>>>()?;
-        let source = project(source, exprs)?;
+        let source = self.plan_builder(source).project(exprs)?.build()?;
 
         let insert_op = match (overwrite, replace_into) {
             (false, false) => InsertOp::Append,

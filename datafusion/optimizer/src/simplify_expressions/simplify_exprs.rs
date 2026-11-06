@@ -7,13 +7,15 @@
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchema, DFSchemaRef, DataFusionError, Result};
-use datafusion_expr::Expr;
+use datafusion_common::{
+    Column, ColumnIdGenerator, DFSchema, DFSchemaRef, DataFusionError, Result,
+};
 use datafusion_expr::logical_plan::{Aggregate, LogicalPlan, Projection};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::utils::{
     columnize_expr, find_aggregate_exprs, grouping_set_to_exprlist, merge_schema,
 };
+use datafusion_expr::{Expr, NamedExpr};
 
 use super::ExprSimplifier;
 use crate::optimizer::ApplyOrder;
@@ -126,7 +128,9 @@ impl SimplifyExpressions {
                 rewrite_expr(expr)
             }
         })?
-        .transform_data(rewrite_aggregate_non_aggregate_aggr_expr)
+        .transform_data(|plan| {
+            rewrite_aggregate_non_aggregate_aggr_expr(plan, config.column_id_generator())
+        })
     }
 }
 
@@ -156,13 +160,20 @@ impl SimplifyExpressions {
 /// into:
 /// * `Projection(exp1 + _X)`
 /// * `  Aggregate(group_expr, aggr_expr=[agg(exp2) AS _X])`
+///
+/// The outputs of the projection keep the ids of the outputs of the
+/// aggregate it replaces; the new aggregate expressions get new ids from
+/// `ids`, except one equal to an output, which keeps its id (the projection
+/// passes it through).
 fn rewrite_aggregate_non_aggregate_aggr_expr(
     plan: LogicalPlan,
+    ids: &ColumnIdGenerator,
 ) -> Result<Transformed<LogicalPlan>> {
     let LogicalPlan::Aggregate(Aggregate {
         input,
         group_expr,
-        mut aggr_expr,
+        grouping_sets,
+        aggr_expr: aggr_entries,
         schema,
         ..
     }) = plan
@@ -170,12 +181,26 @@ fn rewrite_aggregate_non_aggregate_aggr_expr(
         return Ok(Transformed::no(plan));
     };
 
+    let mut aggr_expr = aggr_entries
+        .iter()
+        .map(|e| e.expr.clone())
+        .collect::<Vec<_>>();
     let rewrote_aggs = rewrite_multiple_linear_aggregates(&mut aggr_expr)?;
+    // a same-shape rewrite: each output keeps its id
+    let aggr_expr = aggr_entries
+        .iter()
+        .zip(aggr_expr)
+        .map(|(entry, expr)| NamedExpr::new(expr, entry.id))
+        .collect::<Vec<_>>();
 
     // Ensure that all Aggregate arguments are AggregateExpr
-    if aggr_expr.iter().all(is_top_level_aggregate_expr) {
+    if aggr_expr.iter().all(|e| is_top_level_aggregate_expr(e)) {
         let new_plan = LogicalPlan::Aggregate(Aggregate::try_new_with_schema(
-            input, group_expr, aggr_expr, schema,
+            input,
+            group_expr,
+            grouping_sets,
+            aggr_expr,
+            schema,
         )?);
         return if !rewrote_aggs {
             Ok(Transformed::no(new_plan))
@@ -187,19 +212,42 @@ fn rewrite_aggregate_non_aggregate_aggr_expr(
     // Otherwise we need to add a Projection above Aggregate to calculate
     // the final output expressions.
 
-    let inner_aggr_expr = find_aggregate_exprs(aggr_expr.iter());
+    let mut kept_ids = vec![];
+    let inner_aggr_expr = find_aggregate_exprs(aggr_expr.iter().map(|e| &e.expr))
+        .into_iter()
+        .map(|expr| {
+            match aggr_expr
+                .iter()
+                .find(|entry| entry.expr == expr && !kept_ids.contains(&entry.id))
+            {
+                Some(entry) => {
+                    kept_ids.push(entry.id);
+                    NamedExpr::new(expr, entry.id)
+                }
+                None => NamedExpr::new(expr, ids.next()),
+            }
+        })
+        .collect();
     let inner_aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
         Arc::clone(&input),
         group_expr.clone(),
+        grouping_sets.clone(),
         inner_aggr_expr,
     )?);
     let inner_aggregate = Arc::new(inner_aggregate);
 
-    let mut projection_exprs = aggregate_output_exprs(&group_expr)?;
-    projection_exprs.extend(aggr_expr);
-    let projection_exprs = projection_exprs
+    // the grouping outputs pass through, the others keep their ids
+    let projection_exprs = aggregate_output_exprs(&group_expr, grouping_sets.is_some())?
         .into_iter()
-        .map(|expr| columnize_expr(expr, inner_aggregate.as_ref()))
+        .map(|expr| (expr, None))
+        .chain(aggr_expr.into_iter().map(|e| (e.expr, Some(e.id))))
+        .map(|(expr, id)| {
+            let expr = columnize_expr(expr, inner_aggregate.as_ref())?;
+            Ok(match id {
+                Some(id) => NamedExpr::new(expr, id),
+                None => NamedExpr::allocate(expr, inner_aggregate.schema(), ids),
+            })
+        })
         .collect::<Result<Vec<_>>>()?;
 
     Ok(Transformed::yes(LogicalPlan::Projection(
@@ -214,13 +262,16 @@ fn is_top_level_aggregate_expr(expr: &Expr) -> bool {
     )
 }
 
-fn aggregate_output_exprs(group_expr: &[Expr]) -> Result<Vec<Expr>> {
+fn aggregate_output_exprs(
+    group_expr: &[NamedExpr],
+    has_grouping_sets: bool,
+) -> Result<Vec<Expr>> {
     let mut output_exprs = grouping_set_to_exprlist(group_expr)?
         .into_iter()
         .cloned()
         .collect::<Vec<_>>();
 
-    if matches!(group_expr, [Expr::GroupingSet(_)]) {
+    if has_grouping_sets {
         output_exprs.push(Expr::Column(Column::from_name(
             Aggregate::INTERNAL_GROUPING_ID,
         )));

@@ -20,7 +20,9 @@ use super::{
         unproject_unnest_expr_as_flatten_value, unproject_window_exprs,
     },
 };
-use crate::unparser::utils::{find_unnest_node_until_relation, unproject_agg_exprs};
+use crate::unparser::utils::{
+    find_unnest_node_until_relation, unproject_agg_exprs, without_column_ids,
+};
 use crate::unparser::{
     ast::FlattenRelationBuilder, ast::UnnestRelationBuilder, rewrite::rewrite_qualify,
 };
@@ -30,16 +32,17 @@ use crate::unparser::{
 };
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, Result, ScalarValue, TableReference,
-    assert_or_internal_err, internal_datafusion_err, internal_err, not_impl_err,
+    Column, ColumnIdGenerator, DFSchema, DataFusionError, Result, ScalarValue,
+    TableReference, assert_or_internal_err, internal_datafusion_err, internal_err,
+    not_impl_err,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion},
     utils::combine_limit,
 };
 use datafusion_expr::expr::{OUTER_REFERENCE_COLUMN_PREFIX, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{
     Aggregate, AsOfJoin, BinaryExpr, Distinct, Expr, FetchType, JoinConstraint, JoinType,
-    LogicalPlan, LogicalPlanBuilder, Operator, Projection, SkipType, Sort, SortExpr,
-    TableScan, Unnest, UserDefinedLogicalNode, Window, expr::Alias,
+    LogicalPlan, LogicalPlanBuilder, NamedExpr, Operator, Projection, SkipType, Sort,
+    SortExpr, TableScan, Unnest, UserDefinedLogicalNode, Window, expr::Alias,
 };
 use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
 use std::{collections::HashSet, sync::Arc, vec};
@@ -311,7 +314,7 @@ impl Unparser<'_> {
         select: &mut SelectBuilder,
         fully_absorbed: bool,
     ) -> Result<bool> {
-        let mut exprs = p.expr.clone();
+        let mut exprs: Vec<Expr> = p.expr.iter().map(|e| e.expr.clone()).collect();
 
         // If an Unnest node is found within the select, find and unproject the unnest column
         let flatten_alias = select.current_flatten_alias();
@@ -385,9 +388,8 @@ impl Unparser<'_> {
 
                 select.projection(items);
                 select.group_by(ast::GroupByExpr::Expressions(
-                    agg.group_expr
-                        .iter()
-                        .cloned()
+                    agg.group_by_exprs()
+                        .into_iter()
                         .map(|expr| {
                             self.expr_to_sql(&unparser_agg_scope.normalize(expr)?)
                         })
@@ -742,9 +744,9 @@ impl Unparser<'_> {
         Ok(false)
     }
 
-    fn project_window_output(
+    fn project_window_output<'a>(
         &self,
-        window_expr: &[Expr],
+        window_expr: impl IntoIterator<Item = &'a Expr>,
         select: &mut SelectBuilder,
         agg: Option<&Aggregate>,
     ) -> Result<()> {
@@ -758,7 +760,7 @@ impl Unparser<'_> {
 
         items.extend(
             window_expr
-                .iter()
+                .into_iter()
                 .map(|expr| {
                     // No normalization: this agg branch is only reachable from a
                     // hand-built plan. SQL wraps windows in a projection, which
@@ -814,7 +816,7 @@ impl Unparser<'_> {
         let window_expr = window
             .window_expr
             .iter()
-            .map(|expr| expr.clone().rewrite(&mut alias_rewriter).data())
+            .map(|entry| entry.expr.clone().rewrite(&mut alias_rewriter).data())
             .collect::<Result<Vec<_>>>()?;
 
         self.project_window_output(&window_expr, select, None)
@@ -884,7 +886,7 @@ impl Unparser<'_> {
                 // will have at least one expression referencing an unnest
                 // placeholder column.
                 let unnest_input_type: Option<UnnestInputType> =
-                    p.expr.iter().find_map(Self::find_unnest_placeholder);
+                    p.expr.iter().find_map(|e| Self::find_unnest_placeholder(e));
 
                 // --- UNNEST table factor path (BigQuery, etc.) ---
                 // Only fires for a single bare-placeholder projection.
@@ -956,7 +958,7 @@ impl Unparser<'_> {
                     let items = p
                         .expr
                         .iter()
-                        .cloned()
+                        .map(|e| e.expr.clone())
                         .map(|expr| self.rebase_derived_input_expr(expr, Some(scope)))
                         .map(|expr| self.select_item_to_sql(&expr?))
                         .collect::<Result<Vec<_>>>()?;
@@ -969,7 +971,7 @@ impl Unparser<'_> {
                 // reconstruct_select_statement and the downstream Unnest
                 // handler both use the same alias.
                 if self.dialect.unnest_as_lateral_flatten()
-                    && p.expr.iter().any(Self::has_internal_unnest_alias)
+                    && p.expr.iter().any(|e| Self::has_internal_unnest_alias(e))
                 {
                     select.next_flatten_alias();
                 }
@@ -1367,8 +1369,8 @@ impl Unparser<'_> {
                     let exprs: Vec<_> = agg
                         .aggr_expr
                         .iter()
-                        .chain(agg.group_expr.iter())
-                        .cloned()
+                        .map(|e| e.expr.clone())
+                        .chain(agg.group_by_exprs())
                         .map(|expr| {
                             self.select_item_to_sql(&unparser_agg_scope.normalize(expr)?)
                         })
@@ -1376,9 +1378,8 @@ impl Unparser<'_> {
                     select.projection(exprs);
 
                     select.group_by(ast::GroupByExpr::Expressions(
-                        agg.group_expr
-                            .iter()
-                            .cloned()
+                        agg.group_by_exprs()
+                            .into_iter()
                             .map(|expr| {
                                 self.expr_to_sql(&unparser_agg_scope.normalize(expr)?)
                             })
@@ -1831,7 +1832,11 @@ impl Unparser<'_> {
                 )?;
 
                 if project_window_output {
-                    self.project_window_output(&window.window_expr, select, agg)?;
+                    self.project_window_output(
+                        window.window_expr.iter().map(|e| &e.expr),
+                        select,
+                        agg,
+                    )?;
                 }
 
                 Ok(())
@@ -2432,7 +2437,7 @@ impl Unparser<'_> {
         projection
             .expr
             .iter()
-            .all(|expr| matches!(expr, Expr::Column(column) if column.relation.is_some()))
+            .all(|expr| matches!(&expr.expr, Expr::Column(column) if column.relation.is_some()))
     }
 
     fn unwrap_qualified_passthrough_join_projection(
@@ -2593,11 +2598,15 @@ impl Unparser<'_> {
                     }
                 }
 
+                // the scan is rebuilt with new column ids: the expressions
+                // moved onto it resolve by name
                 let filter_expr: Result<Option<Expr>> = table_scan
                     .filters
                     .iter()
                     .cloned()
+                    .map(without_column_ids)
                     .map(|expr| {
+                        let expr = expr?;
                         if let Some(ref mut rewriter) = filter_alias_rewriter {
                             expr.rewrite(rewriter).data()
                         } else {
@@ -2673,12 +2682,20 @@ impl Unparser<'_> {
                     // alias. (Otherwise `plan` is the scan-derived plan and we
                     // fall through to rebase to the alias, correct one level
                     // above the scan.)
+                    // `plan` is rebuilt with new column ids: the expressions
+                    // moved onto it resolve by name
                     if alias.is_some() && matches!(plan, LogicalPlan::Projection(_)) {
+                        let generator =
+                            ColumnIdGenerator::new_after(plan.max_column_id());
                         let exprs = projection
                             .expr
                             .iter()
-                            .cloned()
-                            .map(Self::strip_column_qualifiers)
+                            .map(|e| {
+                                let expr = Self::strip_column_qualifiers(
+                                    without_column_ids(e.expr.clone())?,
+                                )?;
+                                Ok(NamedExpr::allocate(expr, plan.schema(), &generator))
+                            })
                             .collect::<Result<Vec<_>>>()?;
                         return Ok(Some(LogicalPlan::Projection(Projection::try_new(
                             exprs,
@@ -2696,8 +2713,9 @@ impl Unparser<'_> {
                         projection
                             .expr
                             .iter()
-                            .cloned()
+                            .map(|e| without_column_ids(e.expr.clone()))
                             .map(|expr| {
+                                let expr = expr?;
                                 if let Some(ref mut rewriter) = alias_rewriter {
                                     expr.rewrite(rewriter).data()
                                 } else {
@@ -2706,7 +2724,11 @@ impl Unparser<'_> {
                             })
                             .collect::<Result<Vec<_>>>()?
                     } else {
-                        projection.expr.clone()
+                        projection
+                            .expr
+                            .iter()
+                            .map(|e| without_column_ids(e.expr.clone()))
+                            .collect::<Result<Vec<_>>>()?
                     };
                     Ok(Some(
                         LogicalPlanBuilder::from(plan).project(exprs)?.build()?,

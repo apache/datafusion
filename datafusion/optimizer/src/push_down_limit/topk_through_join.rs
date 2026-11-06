@@ -333,7 +333,7 @@ fn resolve_sort_exprs_through_projection(
         .zip(projection.expr.iter())
         .map(|((qualifier, field), expr)| {
             let key = Column::from((qualifier, field));
-            (key, expr.clone().unalias())
+            (key, expr.expr.clone().unalias())
         })
         .collect();
 
@@ -1058,7 +1058,7 @@ mod test {
                 None,
             )?
             .build()?;
-        let proj = Projection::try_new(
+        let proj = new_projection(
             vec![col("t1.a"), col("t2.b").alias("t1.b"), col("t1.b")],
             Arc::new(join),
         )?;
@@ -1280,7 +1280,7 @@ mod test {
         // Built via `Projection::try_new` (see comment on
         // `resolve_through_projection_quoted_alias_no_collision`): the
         // builder's `project()` would reject this expression list outright.
-        let proj = LogicalPlan::Projection(Projection::try_new(
+        let proj = LogicalPlan::Projection(new_projection(
             vec![col("t1.a"), col("t2.b").alias("t1.b"), col("t1.b")],
             Arc::new(join),
         )?);

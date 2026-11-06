@@ -66,7 +66,7 @@ impl OptimizerRule for EliminateAggregateDistinct {
         let LogicalPlan::Aggregate(aggregate) = &plan else {
             return Ok(Transformed::no(plan));
         };
-        if !can_strip_every_distinct(&aggregate.aggr_expr)? {
+        if !can_strip_every_distinct(aggregate.aggr_expr.iter().map(|e| &e.expr))? {
             return Ok(Transformed::no(plan));
         }
 
@@ -95,7 +95,9 @@ impl OptimizerRule for EliminateAggregateDistinct {
 /// nothing to rewrite. This is conservative: `min(DISTINCT x),
 /// count(DISTINCT y)` keeps the `min` flag. That flag costs nothing at run
 /// time, because `min` ignores `is_distinct` when it selects its accumulator.
-fn can_strip_every_distinct(aggr_expr: &[Expr]) -> Result<bool> {
+fn can_strip_every_distinct<'a>(
+    aggr_expr: impl IntoIterator<Item = &'a Expr>,
+) -> Result<bool> {
     let mut found_distinct = false;
     let mut all_insensitive = true;
     for expr in aggr_expr {

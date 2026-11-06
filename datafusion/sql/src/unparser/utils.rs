@@ -15,7 +15,7 @@ use datafusion_common::{
 };
 use datafusion_expr::{
     Aggregate, Expr, Filter, LogicalPlan, LogicalPlanBuilder, Projection, SortExpr,
-    Unnest, Window, expr, utils::grouping_set_to_exprlist,
+    Unnest, Window, expr,
 };
 
 use arrow::compute::DatePart;
@@ -162,7 +162,7 @@ pub(crate) fn unproject_unnest_expr(expr: Expr, unnest: &Unnest) -> Result<Expr>
                     if let Ok(idx) = unnest.schema.index_of_column(col_ref)
                         && let LogicalPlan::Projection(Projection { expr, .. }) = unnest.input.as_ref()
                             && let Some(unprojected_expr) = expr.get(idx) {
-                                let unnest_expr = Expr::Unnest(expr::Unnest::new(unprojected_expr.clone()));
+                                let unnest_expr = Expr::Unnest(expr::Unnest::new(unprojected_expr.expr.clone()));
                                 return Ok(Transformed::yes(unnest_expr));
                             }
                     return internal_err!(
@@ -255,9 +255,13 @@ pub(crate) fn unproject_window_exprs(expr: Expr, windows: &[&Window]) -> Result<
 
 fn find_agg_expr<'a>(agg: &'a Aggregate, column: &Column) -> Result<Option<&'a Expr>> {
     if let Ok(index) = agg.schema.index_of_column(column) {
-        if matches!(agg.group_expr.as_slice(), [Expr::GroupingSet(_)]) {
-            // For grouping set expr, we must operate by expression list from the grouping set
-            let grouping_expr = grouping_set_to_exprlist(agg.group_expr.as_slice())?;
+        if agg.grouping_sets.is_some() {
+            // For grouping sets, the grouping id follows the grouping expressions
+            let grouping_expr: Vec<&Expr> = agg
+                .group_output_entries()
+                .into_iter()
+                .map(|e| &e.expr)
+                .collect();
             match index.cmp(&grouping_expr.len()) {
                 Ordering::Less => Ok(grouping_expr.into_iter().nth(index)),
                 Ordering::Equal => {
@@ -265,12 +269,18 @@ fn find_agg_expr<'a>(agg: &'a Aggregate, column: &Column) -> Result<Option<&'a E
                         "Tried to unproject column referring to internal grouping id"
                     )
                 }
-                Ordering::Greater => {
-                    Ok(agg.aggr_expr.get(index - grouping_expr.len() - 1))
-                }
+                Ordering::Greater => Ok(agg
+                    .aggr_expr
+                    .get(index - grouping_expr.len() - 1)
+                    .map(|e| &e.expr)),
             }
         } else {
-            Ok(agg.group_expr.iter().chain(agg.aggr_expr.iter()).nth(index))
+            Ok(agg
+                .group_expr
+                .iter()
+                .chain(agg.aggr_expr.iter())
+                .nth(index)
+                .map(|e| &e.expr))
         }
     } else {
         Ok(None)
@@ -283,7 +293,7 @@ fn find_window_expr<'a>(
 ) -> Option<&'a Expr> {
     windows
         .iter()
-        .flat_map(|w| w.window_expr.iter())
+        .flat_map(|w| w.window_expr.iter().map(|e| &e.expr))
         .find(|expr| expr.schema_name().to_string() == column_name)
 }
 
@@ -324,7 +334,8 @@ pub(crate) fn unproject_sort_expr(
                     if let LogicalPlan::Projection(Projection { expr, schema, .. }) =
                         input
                         && let Ok(idx) = schema.index_of_column(&col)
-                        && let Some(Expr::ScalarFunction(scalar_fn)) = expr.get(idx)
+                        && let Some(Expr::ScalarFunction(scalar_fn)) =
+                            expr.get(idx).map(|e| &e.expr)
                     {
                         return Ok(Transformed::yes(Expr::ScalarFunction(
                             scalar_fn.clone(),
@@ -605,7 +616,7 @@ pub(crate) fn filter_depends_on_input_alias(filter: &Filter) -> bool {
             let alias = projection
                 .expr
                 .iter()
-                .filter_map(|e| match e {
+                .filter_map(|e| match &e.expr {
                     Expr::Alias(a) => Some((&a.relation, &a.name)),
                     _ => None,
                 })
@@ -619,4 +630,21 @@ pub(crate) fn filter_depends_on_input_alias(filter: &Filter) -> bool {
         }
         _ => false,
     }
+}
+
+/// Returns `expr` where the column references (outer references included)
+/// have no column id, so that they resolve by qualifier and name: used for
+/// expressions that the unparser moves onto plans it rebuilds, whose columns
+/// get new ids
+pub(crate) fn without_column_ids(expr: Expr) -> Result<Expr> {
+    expr.transform(|expr| match expr {
+        Expr::Column(col) if col.id.is_some() => {
+            Ok(Transformed::yes(Expr::Column(col.with_id(None))))
+        }
+        Expr::OuterReferenceColumn(field, col) if col.id.is_some() => Ok(
+            Transformed::yes(Expr::OuterReferenceColumn(field, col.with_id(None))),
+        ),
+        _ => Ok(Transformed::no(expr)),
+    })
+    .data()
 }

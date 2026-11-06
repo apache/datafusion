@@ -5,20 +5,20 @@
 use arrow::datatypes::{DataType, Field, Schema};
 use criterion::{Criterion, criterion_group, criterion_main};
 use datafusion_common::ToDFSchema;
-use datafusion_common::{Column, TableReference};
-use datafusion_expr::{Expr, logical_plan::LogicalPlan, projection_schema};
+use datafusion_common::{Column, ColumnIdGenerator, TableReference};
+use datafusion_expr::{Expr, NamedExpr, logical_plan::LogicalPlan, projection_schema};
 use datafusion_optimizer::optimize_projections::is_projection_unnecessary;
 use std::hint::black_box;
 use std::sync::Arc;
 
 fn is_projection_unnecessary_old(
     input: &LogicalPlan,
-    proj_exprs: &[Expr],
+    proj_exprs: &[NamedExpr],
 ) -> datafusion_common::Result<bool> {
     // First check if all expressions are trivial (cheaper operation than `projection_schema`)
     if !proj_exprs
         .iter()
-        .all(|expr| matches!(expr, Expr::Column(_) | Expr::Literal(_, _)))
+        .all(|expr| matches!(expr.expr, Expr::Column(_) | Expr::Literal(_, _)))
     {
         return Ok(false);
     }
@@ -26,7 +26,7 @@ fn is_projection_unnecessary_old(
     Ok(&proj_schema == input.schema())
 }
 
-fn create_plan_with_many_exprs(num_exprs: usize) -> (LogicalPlan, Vec<Expr>) {
+fn create_plan_with_many_exprs(num_exprs: usize) -> (LogicalPlan, Vec<NamedExpr>) {
     // Create schema with many fields
     let fields = (0..num_exprs)
         .map(|i| Field::new(format!("col{i}"), DataType::Int32, false))
@@ -40,8 +40,13 @@ fn create_plan_with_many_exprs(num_exprs: usize) -> (LogicalPlan, Vec<Expr>) {
     });
 
     // Create projection expressions (just column references)
+    let generator = ColumnIdGenerator::new();
     let exprs = (0..num_exprs)
-        .map(|i| Expr::Column(Column::new(None::<TableReference>, format!("col{i}"))))
+        .map(|i| {
+            let expr =
+                Expr::Column(Column::new(None::<TableReference>, format!("col{i}")));
+            NamedExpr::allocate(expr, table_scan.schema(), &generator)
+        })
         .collect();
 
     (table_scan, exprs)

@@ -916,7 +916,16 @@ impl MyAnalyzerRule {
         plan.transform(|plan| {
             Ok(match plan {
                 LogicalPlan::Projection(projection) => {
-                    let expr = Self::analyze_expr(projection.expr.clone())?;
+                    let expr = Self::analyze_expr(
+                        projection.expr.iter().map(|e| e.expr.clone()).collect(),
+                    )?;
+                    // a rewrite of the same outputs: they keep their ids
+                    let expr = projection
+                        .expr
+                        .iter()
+                        .zip(expr)
+                        .map(|(entry, expr)| entry.clone().with_expr(expr))
+                        .collect();
                     Transformed::yes(LogicalPlan::Projection(Projection::try_new(
                         expr,
                         projection.input,

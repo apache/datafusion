@@ -10,9 +10,9 @@ use crate::{OptimizerConfig, OptimizerRule};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
-use datafusion_expr::{Aggregate, Expr, LogicalPlan, Projection, Volatility};
+use datafusion_common::{Column, Result};
+use datafusion_expr::{Aggregate, Expr, LogicalPlan, NamedExpr, Projection, Volatility};
 
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
 /// and places additional projection on top of aggregation, to preserve
@@ -30,15 +30,17 @@ impl OptimizerRule for EliminateGroupByConstant {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
         match plan {
-            LogicalPlan::Aggregate(aggregate) => {
+            // grouping sets are left alone: a constant in a set is NULL in
+            // the rows of the sets that omit it
+            LogicalPlan::Aggregate(aggregate) if aggregate.grouping_sets.is_none() => {
                 // Collect bare column references in GROUP BY
-                let group_by_columns: HashSet<&datafusion_common::Column> = aggregate
+                let group_by_columns: HashSet<&Column> = aggregate
                     .group_expr
                     .iter()
-                    .filter_map(|expr| match expr {
+                    .filter_map(|expr| match &expr.expr {
                         Expr::Column(c) => Some(c),
                         _ => None,
                     })
@@ -69,12 +71,19 @@ impl OptimizerRule for EliminateGroupByConstant {
                     .filter(|(_, redundant)| !**redundant)
                     .map(|(expr, _)| expr.clone())
                     .collect();
-                let simplified_aggregate =
-                    Aggregate::try_new(aggregate.input, required, aggregate.aggr_expr)?;
+                let simplified_aggregate = Aggregate::try_new(
+                    aggregate.input,
+                    required,
+                    None,
+                    aggregate.aggr_expr,
+                )?;
                 let simplified_schema = Arc::clone(&simplified_aggregate.schema);
 
                 // Refer to the output columns of the simplified aggregate by
-                // position. Do not re-plan the original group expressions on top
+                // position, keeping the ids of the outputs of the original
+                // aggregate: a redundant expression defines its output, the
+                // others pass the outputs of the simplified aggregate (which
+                // keeps their entries) through. Do not re-plan the original group expressions on top
                 // of it: an expression can refer to an input column through a
                 // name that the aggregate output does not carry, so a rebuilt
                 // projection does not always resolve. A redundant expression
@@ -90,31 +99,48 @@ impl OptimizerRule for EliminateGroupByConstant {
                     .enumerate()
                 {
                     let (qualifier, field) = original_schema.qualified_field(i);
-                    let expr = if redundant {
-                        expr
+                    let id = expr.id;
+                    let (expr, passes_through) = if redundant {
+                        (expr.expr, false)
                     } else {
                         let column =
-                            Expr::from(simplified_schema.qualified_field(next_output));
+                            Column::from(simplified_schema.qualified_field(next_output))
+                                .with_id(simplified_schema.field_id(next_output));
                         next_output += 1;
-                        column
+                        (Expr::Column(column), true)
                     };
-                    let expr = if expr.qualified_name()
+                    let entry = if expr.qualified_name()
                         == (qualifier.cloned(), field.name().clone())
                     {
-                        expr
+                        NamedExpr::new(expr, id)
+                    } else if passes_through {
+                        // the column is renamed: a new column
+                        NamedExpr::new(
+                            expr.alias_qualified(qualifier.cloned(), field.name()),
+                            config.column_id_generator().next(),
+                        )
                     } else {
-                        expr.alias_qualified(qualifier.cloned(), field.name())
+                        NamedExpr::new(
+                            expr.alias_qualified(qualifier.cloned(), field.name()),
+                            id,
+                        )
                     };
-                    projection_expr.push(expr);
+                    projection_expr.push(entry);
                 }
                 for i in next_output..simplified_schema.fields().len() {
-                    projection_expr
-                        .push(Expr::from(simplified_schema.qualified_field(i)));
+                    let column = Column::from(simplified_schema.qualified_field(i))
+                        .with_id(simplified_schema.field_id(i));
+                    projection_expr.push(NamedExpr::allocate(
+                        Expr::Column(column),
+                        &simplified_schema,
+                        config.column_id_generator(),
+                    ));
                 }
 
+                let input = LogicalPlan::Aggregate(simplified_aggregate);
                 let projection = LogicalPlan::Projection(Projection::try_new(
                     projection_expr,
-                    Arc::new(LogicalPlan::Aggregate(simplified_aggregate)),
+                    Arc::new(input),
                 )?);
 
                 Ok(Transformed::yes(projection))
@@ -136,10 +162,7 @@ impl OptimizerRule for EliminateGroupByConstant {
 /// changing grouping semantics). An expression is redundant if it is a
 /// deterministic function of constants and columns already present as bare
 /// column references in the GROUP BY.
-fn is_redundant_group_expr(
-    expr: &Expr,
-    group_by_columns: &HashSet<&datafusion_common::Column>,
-) -> bool {
+fn is_redundant_group_expr(expr: &Expr, group_by_columns: &HashSet<&Column>) -> bool {
     // Bare column references are never redundant - they define the grouping
     if matches!(expr, Expr::Column(_)) {
         return false;
@@ -149,10 +172,7 @@ fn is_redundant_group_expr(
 
 /// Returns true if `expr` is a deterministic expression whose only column
 /// references are contained in `known_columns`.
-fn is_deterministic_of(
-    expr: &Expr,
-    known_columns: &HashSet<&datafusion_common::Column>,
-) -> bool {
+fn is_deterministic_of(expr: &Expr, known_columns: &HashSet<&Column>) -> bool {
     match expr {
         Expr::Alias(e) => is_deterministic_of(&e.expr, known_columns),
         Expr::Column(c) => known_columns.contains(c),
@@ -262,10 +282,10 @@ mod tests {
         let input = LogicalPlanBuilder::from(test_table_scan()?)
             .alias("m")?
             .build()?;
-        let plan = LogicalPlan::Aggregate(Aggregate::try_new(
+        let plan = LogicalPlan::Aggregate(new_aggregate(
             Arc::new(input),
             vec![
-                Expr::Column(datafusion_common::Column::new_unqualified("b")).alias("k"),
+                Expr::Column(Column::new_unqualified("b")).alias("k"),
                 col("m.a"),
                 col("m.a") + lit(1u32),
             ],

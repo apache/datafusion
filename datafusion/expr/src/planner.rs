@@ -128,8 +128,8 @@ pub trait ContextProvider {
     /// provider and by the optimizer (a session shares the one in its
     /// `ExecutionProps`), so that the plans it builds do not reuse ids.
     ///
-    /// Defaults to `None`: no generator, no ids. Plans are then built with
-    /// columns and fields without ids, which resolve by qualifier and name.
+    /// Defaults to `None`: the SQL planner then uses a new generator for each
+    /// statement it plans.
     ///
     /// [`ColumnId`]: datafusion_common::ColumnId
     fn column_id_generator(&self) -> Option<Arc<ColumnIdGenerator>> {

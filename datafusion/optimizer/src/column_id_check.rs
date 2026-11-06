@@ -118,12 +118,8 @@ pub(crate) fn renumber_repeated_subqueries(
     if !has_subqueries || !RULES_THAT_REPEAT_SUBQUERIES.contains(&rule) {
         return Ok(plan);
     }
-    plan.with_fresh_column_ids_in_repeated_subqueries(
-        config
-            .column_id_generator()
-            .map(|generator| generator.as_ref()),
-    )
-    .map(|transformed| transformed.data)
+    plan.with_fresh_column_ids_in_repeated_subqueries(config.column_id_generator())
+        .map(|transformed| transformed.data)
 }
 
 /// The log target of the reports
@@ -357,12 +353,11 @@ mod tests {
         else {
             unreachable!()
         };
-        if with_id {
-            scan.projected_schema = Arc::new(
-                DFSchema::clone(&scan.projected_schema)
-                    .with_field_ids(vec![Some(id(1))])?,
-            );
-        }
+        // the builder allocates ids: set them
+        scan.projected_schema = Arc::new(
+            DFSchema::clone(&scan.projected_schema)
+                .with_field_ids(vec![with_id.then(|| id(1))])?,
+        );
         Ok(LogicalPlan::TableScan(scan))
     }
 

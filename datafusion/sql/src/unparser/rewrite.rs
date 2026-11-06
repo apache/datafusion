@@ -10,7 +10,7 @@ use datafusion_common::{
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRewriter},
 };
 use datafusion_expr::expr::{Alias, UNNEST_COLUMN_PREFIX};
-use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
+use datafusion_expr::{Expr, LogicalPlan, NamedExpr, Projection, Sort, SortExpr};
 use sqlparser::ast::Ident;
 
 /// Normalize the schema of a union plan to remove qualifiers from the schema fields and sort expressions.
@@ -186,28 +186,28 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         .expr
         .iter()
         .enumerate()
-        .map(|(i, f)| match f {
+        .map(|(i, f)| match &f.expr {
             Expr::Alias(alias) => {
                 let a = Expr::Column(alias.name.clone().into());
-                map.insert(a.clone(), f.clone());
+                map.insert(a.clone(), f.expr.clone());
                 a
             }
             Expr::Column(_) => {
                 map.insert(
                     Expr::Column(inner_p.schema.field(i).name().into()),
-                    f.clone(),
+                    f.expr.clone(),
                 );
-                f.clone()
+                f.expr.clone()
             }
             _ => {
                 let a = Expr::Column(inner_p.schema.field(i).name().into());
-                map.insert(a.clone(), f.clone());
+                map.insert(a.clone(), f.expr.clone());
                 a
             }
         })
         .collect::<Vec<_>>();
 
-    let mut collects = p.expr.clone();
+    let mut collects: Vec<Expr> = p.expr.iter().map(|e| e.expr.clone()).collect();
     for sort in &sort.expr {
         // Strip aliases from sort expressions so the comparison matches
         // the inner Projection's raw expressions. The optimizer may add
@@ -234,10 +234,11 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         let mut sort = sort.clone();
         let mut inner_p = inner_p.clone();
 
+        // the outer projection's outputs, with their ids
         let new_exprs = p
             .expr
             .iter()
-            .map(|e| map.get(e).unwrap_or(e).clone())
+            .map(|e| NamedExpr::new(map.get(&e.expr).unwrap_or(&e.expr).clone(), e.id))
             .collect::<Vec<_>>();
 
         // The inner Projection may define aliases that the Sort references
@@ -249,7 +250,7 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         // the alias's underlying expression instead.
         let projected_aliases: HashSet<&str> = new_exprs
             .iter()
-            .filter_map(|e| match e {
+            .filter_map(|e| match &e.expr {
                 Expr::Alias(alias) => Some(alias.name.as_str()),
                 _ => None,
             })
@@ -258,7 +259,7 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
         let dropped_aliases: HashMap<String, Expr> = inner_p
             .expr
             .iter()
-            .filter_map(|e| match e {
+            .filter_map(|e| match &e.expr {
                 Expr::Alias(alias)
                     if !projected_aliases.contains(alias.name.as_str()) =>
                 {
@@ -351,13 +352,13 @@ pub(super) fn subquery_alias_inner_query_and_columns(
     }
 
     for (i, inner_expr) in inner_projection.expr.iter().enumerate() {
-        let Expr::Alias(outer_alias) = &outer_projections.expr[i] else {
+        let Expr::Alias(outer_alias) = &outer_projections.expr[i].expr else {
             return (plan, vec![]);
         };
 
         // Inner projection schema fields store the projection name which is used in outer
         // projection expr
-        let inner_expr_string = match inner_expr {
+        let inner_expr_string = match &inner_expr.expr {
             Expr::Column(_) => inner_expr.to_string(),
             _ => inner_projection.schema.field(i).name().clone(),
         };
@@ -400,7 +401,7 @@ pub(super) fn find_unnest_column_alias(
         if projection.expr.len() != 1 {
             return (plan, None);
         }
-        if let Some(Expr::Alias(alias)) = projection.expr.first()
+        if let Some(Expr::Alias(alias)) = projection.expr.first().map(|e| &e.expr)
             && alias
                 .expr
                 .schema_name()
@@ -457,18 +458,20 @@ pub(super) fn inject_column_aliases(
         .expr
         .into_iter()
         .zip(aliases)
-        .map(|(expr, col_alias)| {
-            let relation = match &expr {
+        .map(|(entry, col_alias)| {
+            let relation = match &entry.expr {
                 Expr::Column(col) => col.relation.clone(),
                 _ => None,
             };
 
-            Expr::Alias(Alias {
-                expr: Box::new(expr.clone()),
+            let id = entry.id;
+            let expr = Expr::Alias(Alias {
+                expr: Box::new(entry.expr),
                 relation,
                 name: col_alias.value,
                 metadata: None,
-            })
+            });
+            NamedExpr::new(expr, id)
         })
         .collect::<Vec<_>>();
 

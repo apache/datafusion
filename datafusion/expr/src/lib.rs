@@ -109,7 +109,7 @@ pub use datafusion_expr_common::signature::{
 };
 pub use datafusion_expr_common::type_coercion::binary;
 pub use expr::{
-    Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GroupingSet, Like,
+    Between, BinaryExpr, Case, Cast, Expr, GetFieldAccess, GroupingSet, Like, NamedExpr,
     Sort as SortExpr, TryCast, WindowFunctionDefinition,
 };
 pub use expr_fn::*;

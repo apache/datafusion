@@ -293,9 +293,8 @@ impl PlannerContext {
     /// Update the PlannerContext with the generator of the column ids of the
     /// planned plans (see [`ContextProvider::column_id_generator`]).
     ///
-    /// No generator, no ids: without one (the default), planning allocates
-    /// no ids. The entry points of [`SqlToRel`] use the generator of their
-    /// [`ContextProvider`] when the context has none.
+    /// Without one (the default), the entry points of [`SqlToRel`] use the
+    /// generator of their [`ContextProvider`], or a new one if it has none.
     pub fn with_column_id_generator(
         mut self,
         column_id_generator: Option<Arc<ColumnIdGenerator>>,
@@ -467,6 +466,9 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) options: ParserOptions,
     pub(crate) ident_normalizer: IdentNormalizer,
     warnings: Mutex<Vec<Diagnostic>>,
+    /// Allocates the column ids of the planned plans: the generator of the
+    /// context provider, or a new one if it has none
+    column_id_generator: Arc<ColumnIdGenerator>,
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -485,29 +487,48 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub fn new_with_options(context_provider: &'a S, options: ParserOptions) -> Self {
         let ident_normalize = options.enable_ident_normalization;
 
+        let column_id_generator = context_provider
+            .column_id_generator()
+            .unwrap_or_else(|| Arc::new(ColumnIdGenerator::new()));
         SqlToRel {
             context_provider,
             options,
             ident_normalizer: IdentNormalizer::new(ident_normalize),
             warnings: Mutex::new(vec![]),
+            column_id_generator,
         }
     }
 
     /// A new [`PlannerContext`], with the column id generator of the context
     /// provider
     pub(crate) fn new_planner_context(&self) -> PlannerContext {
-        PlannerContext::new()
-            .with_column_id_generator(self.context_provider.column_id_generator())
+        PlannerContext::new().with_column_id_generator(Some(self.column_id_generator()))
     }
 
     /// Gives `planner_context` the column id generator of the context
-    /// provider, if it has none (called by the entry points that take a
-    /// [`PlannerContext`] from the caller)
+    /// provider (or a new one), if it has none (called by the entry points
+    /// that take a [`PlannerContext`] from the caller)
     pub(crate) fn init_planner_context(&self, planner_context: &mut PlannerContext) {
         if planner_context.column_id_generator.is_none() {
-            planner_context.column_id_generator =
-                self.context_provider.column_id_generator();
+            planner_context.column_id_generator = Some(self.column_id_generator());
         }
+    }
+
+    /// The column id generator of the context provider, or a new one if it
+    /// has none (created with this planner): planning always allocates ids
+    pub(crate) fn column_id_generator(&self) -> Arc<ColumnIdGenerator> {
+        Arc::clone(&self.column_id_generator)
+    }
+
+    /// A [`LogicalPlanBuilder`] of `plan` that allocates column ids with the
+    /// generator of this planner, so that the outputs it builds do not collide
+    /// with the other columns of the statement
+    pub(crate) fn plan_builder(
+        &self,
+        plan: impl Into<Arc<LogicalPlan>>,
+    ) -> LogicalPlanBuilder {
+        LogicalPlanBuilder::new_from_arc(plan.into())
+            .with_column_id_generator(Some(self.column_id_generator()))
     }
 
     pub(crate) fn add_warning(&self, warning: Diagnostic) {
@@ -597,7 +618,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         let idents = alias.columns.into_iter().map(|c| c.name).collect();
         let plan = self.apply_expr_alias(plan, idents)?;
 
-        LogicalPlanBuilder::from(plan)
+        self.plan_builder(plan)
             .alias(TableReference::bare(
                 self.ident_normalizer.normalize(alias.name),
             ))?
@@ -620,7 +641,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             )
         } else {
             let columns = plan.schema().columns();
-            LogicalPlanBuilder::from(plan)
+            self.plan_builder(plan)
                 .project(columns.into_iter().zip(idents).map(|(col, ident)| {
                     Expr::Column(col).alias(self.ident_normalizer.normalize(ident))
                 }))?

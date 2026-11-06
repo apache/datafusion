@@ -1866,15 +1866,15 @@ impl SessionContext {
     /// Creates a [`DataFrame`] for reading a [`RecordBatch`]
     pub fn read_batch(&self, batch: RecordBatch) -> Result<DataFrame> {
         let provider = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-        Ok(DataFrame::new(
-            self.state(),
-            LogicalPlanBuilder::scan(
-                UNNAMED_TABLE,
-                provider_as_source(Arc::new(provider)),
-                None,
-            )?
-            .build()?,
-        ))
+        let state = self.state();
+        let plan = LogicalPlanBuilder::scan_with_column_id_generator(
+            UNNAMED_TABLE,
+            provider_as_source(Arc::new(provider)),
+            None,
+            Some(Arc::clone(&state.execution_props().column_id_generator)),
+        )?
+        .build()?;
+        Ok(DataFrame::new(state, plan))
     }
     /// Create a [`DataFrame`] for reading a [`Vec[`RecordBatch`]`]
     pub fn read_batches(
@@ -1889,15 +1889,15 @@ impl SessionContext {
             Arc::new(Schema::empty())
         };
         let provider = MemTable::try_new(schema, vec![batches.collect()])?;
-        Ok(DataFrame::new(
-            self.state(),
-            LogicalPlanBuilder::scan(
-                UNNAMED_TABLE,
-                provider_as_source(Arc::new(provider)),
-                None,
-            )?
-            .build()?,
-        ))
+        let state = self.state();
+        let plan = LogicalPlanBuilder::scan_with_column_id_generator(
+            UNNAMED_TABLE,
+            provider_as_source(Arc::new(provider)),
+            None,
+            Some(Arc::clone(&state.execution_props().column_id_generator)),
+        )?
+        .build()?;
+        Ok(DataFrame::new(state, plan))
     }
     /// Registers a [`ListingTable`] that can assemble multiple files
     /// from locations in an [`ObjectStore`] instance into a single

@@ -23,14 +23,15 @@ use datafusion_expr::logical_plan::MaterializedCtePlan;
 use std::sync::Arc;
 
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, HashMap, JoinType, Result, assert_eq_or_internal_err,
-    get_required_group_by_exprs_indices, internal_datafusion_err, internal_err,
+    Column, ColumnId, DFSchema, DFSchemaRef, HashMap, JoinType, Result,
+    assert_eq_or_internal_err, get_required_group_by_exprs_indices,
+    internal_datafusion_err, internal_err,
 };
 use datafusion_expr::expr::Alias;
 use datafusion_expr::utils::passthrough_field_index;
 use datafusion_expr::{
-    Aggregate, Distinct, EmptyRelation, Expr, Projection, TableScanBuilder, Unnest,
-    Window, logical_plan::LogicalPlan,
+    Aggregate, Distinct, EmptyRelation, Expr, NamedExpr, Projection, TableScanBuilder,
+    Unnest, Window, logical_plan::LogicalPlan,
 };
 
 use crate::optimize_projections::required_indices::RequiredIndices;
@@ -129,7 +130,7 @@ fn optimize_projections(
     // their parents' required indices.
     match plan {
         LogicalPlan::Projection(proj) => {
-            return merge_consecutive_projections(proj)?
+            return merge_consecutive_projections(proj, config)?
                 .transform_data(|proj| {
                     rewrite_projection_given_requirements(proj, config, &indices)
                 })?
@@ -146,11 +147,14 @@ fn optimize_projections(
             //
             // When the input has no functional dependencies, we can
             // short-circuit this analysis.
-            let new_group_bys = if aggregate
-                .input
-                .schema()
-                .functional_dependencies()
-                .is_empty()
+            // (grouping sets keep their grouping expressions: the sets refer
+            // to them by index)
+            let new_group_bys = if aggregate.grouping_sets.is_some()
+                || aggregate
+                    .input
+                    .schema()
+                    .functional_dependencies()
+                    .is_empty()
             {
                 aggregate.group_expr
             } else {
@@ -183,7 +187,10 @@ fn optimize_projections(
             // by the parent:
             let new_aggr_expr = aggregate_reqs.get_at_indices(&aggregate.aggr_expr);
 
-            if new_group_bys.is_empty() && new_aggr_expr.is_empty() {
+            if new_group_bys.is_empty()
+                && aggregate.grouping_sets.is_none()
+                && new_aggr_expr.is_empty()
+            {
                 // Global aggregation with no aggregate functions always produces 1 row and no columns.
                 return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
                     EmptyRelation {
@@ -193,7 +200,11 @@ fn optimize_projections(
                 )));
             }
 
-            let all_exprs_iter = new_group_bys.iter().chain(new_aggr_expr.iter());
+            // the grouping and aggregate expressions it keeps keep their ids
+            let all_exprs_iter = new_group_bys
+                .iter()
+                .chain(new_aggr_expr.iter())
+                .map(|e| &e.expr);
             let schema = aggregate.input.schema();
             let necessary_indices =
                 RequiredIndices::new().with_exprs(schema, all_exprs_iter);
@@ -209,7 +220,7 @@ fn optimize_projections(
                 // that its input only contains absolutely necessary columns for
                 // the aggregate expressions. Note that necessary_indices refer to
                 // fields in `aggregate.input.schema()`.
-                add_projection_on_top_if_helpful(aggregate_input, necessary_exprs)
+                add_projection_on_top_if_helpful(aggregate_input, necessary_exprs, config)
             })?
             .map_data(|aggregate_input| {
                 // Create a new aggregate plan with the updated input and only the
@@ -217,6 +228,7 @@ fn optimize_projections(
                 Aggregate::try_new(
                     Arc::new(aggregate_input),
                     new_group_bys,
+                    aggregate.grouping_sets,
                     new_aggr_expr,
                 )
                 .map(LogicalPlan::Aggregate)
@@ -232,12 +244,13 @@ fn optimize_projections(
             let (child_reqs, window_reqs) = indices.split_off(n_input_fields);
 
             // Only use window expressions that are absolutely necessary according
-            // to parent requirements:
+            // to parent requirements (they keep their ids):
             let new_window_expr = window_reqs.get_at_indices(&window.window_expr);
 
             // Get all the required column indices at the input, either by the
             // parent or window expression requirements.
-            let required_indices = child_reqs.with_exprs(&input_schema, &new_window_expr);
+            let required_indices = child_reqs
+                .with_exprs(&input_schema, new_window_expr.iter().map(|e| &e.expr));
 
             return optimize_projections(
                 Arc::unwrap_or_clone(window.input),
@@ -254,9 +267,12 @@ fn optimize_projections(
                     // refers to that schema
                     let required_exprs =
                         required_indices.get_required_exprs(&input_schema);
-                    let window_child =
-                        add_projection_on_top_if_helpful(window_child, required_exprs)?
-                            .data;
+                    let window_child = add_projection_on_top_if_helpful(
+                        window_child,
+                        required_exprs,
+                        config,
+                    )?
+                    .data;
                     Window::try_new(new_window_expr, Arc::new(window_child))
                         .map(LogicalPlan::Window)
                         .map(Transformed::yes)
@@ -281,6 +297,19 @@ fn optimize_projections(
         // Other node types are handled below
         _ => {}
     }
+
+    // The ids of the outputs of a union that remain if its inputs are pruned
+    // (the rebuilt union does not know which ones remain)
+    let remaining_union_ids = match &plan {
+        LogicalPlan::Union(union) => Some(
+            indices
+                .indices()
+                .iter()
+                .map(|i| union.schema.field_id(*i))
+                .collect::<Vec<_>>(),
+        ),
+        _ => None,
+    };
 
     // For other plan node types, calculate indices for columns they use and
     // try to rewrite their children
@@ -488,7 +517,7 @@ fn optimize_projections(
         optimize_projections(child, config, required_indices)?.transform_data(
             |new_input| {
                 if projection_beneficial {
-                    add_projection_on_top_if_helpful(new_input, project_exprs)
+                    add_projection_on_top_if_helpful(new_input, project_exprs, config)
                 } else {
                     Ok(Transformed::no(new_input))
                 }
@@ -501,9 +530,31 @@ fn optimize_projections(
 
     // If any of the children are transformed, we need to potentially update the plan's schema
     if transformed_plan.transformed {
-        transformed_plan.map_data(|plan| plan.recompute_schema())
+        transformed_plan.map_data(|plan| {
+            let plan = plan.recompute_schema()?;
+            with_remaining_union_ids(plan, remaining_union_ids)
+        })
     } else {
         Ok(transformed_plan)
+    }
+}
+
+/// Returns `plan`, where a union whose inputs were pruned gives its outputs
+/// the ids they had (`ids`, the ids of the outputs that remain)
+fn with_remaining_union_ids(
+    plan: LogicalPlan,
+    ids: Option<Vec<Option<ColumnId>>>,
+) -> Result<LogicalPlan> {
+    match (plan, ids) {
+        (LogicalPlan::Union(mut union), Some(ids))
+            if union.schema.fields().len() == ids.len()
+                && union.schema.field_ids() != ids.as_slice() =>
+        {
+            union.schema =
+                Arc::new(Arc::unwrap_or_clone(union.schema).with_field_ids(ids)?);
+            Ok(LogicalPlan::Union(union))
+        }
+        (plan, _) => Ok(plan),
     }
 }
 
@@ -550,7 +601,10 @@ fn optimize_subqueries(
 ///   merged projection.
 /// - `Ok(None)`: Signals that merge is not beneficial (and has not taken place).
 /// - `Err(error)`: An error occurred during the function call.
-fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Projection>> {
+fn merge_consecutive_projections(
+    proj: Projection,
+    config: &dyn OptimizerConfig,
+) -> Result<Transformed<Projection>> {
     // Collapse the whole chain in one pass; otherwise an N-deep chain needs
     // N outer optimizer passes to fully fold.
     let mut current = proj;
@@ -558,7 +612,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
     loop {
         let Transformed {
             data, transformed, ..
-        } = merge_consecutive_projections_one_level(current)?;
+        } = merge_consecutive_projections_one_level(current, config)?;
         current = data;
         if !transformed {
             break;
@@ -574,6 +628,7 @@ fn merge_consecutive_projections(proj: Projection) -> Result<Transformed<Project
 
 fn merge_consecutive_projections_one_level(
     proj: Projection,
+    config: &dyn OptimizerConfig,
 ) -> Result<Transformed<Projection>> {
     let Projection {
         expr,
@@ -608,6 +663,8 @@ fn merge_consecutive_projections_one_level(
         // We know it is a `LogicalPlan::Projection` from check above
         unreachable!();
     };
+    // the upper outputs, before the rewrite (for their ids)
+    let upper_entries = expr.clone();
 
     // Try to rewrite the expressions in the current projection using the
     // previous projection as input:
@@ -650,12 +707,31 @@ fn merge_consecutive_projections_one_level(
     // if the expressions could be rewritten, create a new projection with the
     // new expressions
     if new_exprs.transformed {
-        // Add any needed aliases back to the expressions
+        // Add any needed aliases back to the expressions. Each merged output
+        // keeps the id of the upper projection's output: the plan above refers
+        // to it (a merged bare column can then define a column, see
+        // `NamedExpr`). The lower projection's definitions disappear with the
+        // merge, so an upper output that passed one of them through can keep
+        // its id. But an upper output that passes through a column defined
+        // elsewhere (further below, or not at all) and is no longer a
+        // pass-through (`t.a AS a`) defines a new column: it gets a new id.
         let new_exprs = new_exprs
             .data
             .into_iter()
             .zip(original_names)
-            .map(|(expr, original_name)| original_name.restore(expr))
+            .zip(upper_entries)
+            .map(|((entry, original_name), upper)| {
+                let expr = original_name.restore(entry.expr);
+                let defined_by_lower = prev_projection
+                    .expr
+                    .iter()
+                    .any(|lower| lower.id == upper.id && !lower.is_pass_through());
+                if !upper.is_pass_through() || defined_by_lower {
+                    NamedExpr::new(expr, upper.id)
+                } else {
+                    upper.with_rewritten_expr(expr, config.column_id_generator())
+                }
+            })
             .collect::<Vec<_>>();
         Projection::try_new(new_exprs, prev_projection.input).map(Transformed::yes)
     } else {
@@ -736,7 +812,7 @@ fn rewrite_expr(expr: Expr, input: &Projection) -> Result<Transformed<Expr>> {
                 // * the current column is an expression "f"
                 //
                 // return the expression `d + e` (not `d + e` as f)
-                let input_expr = input.expr[idx].clone().unalias_nested().data;
+                let input_expr = input.expr[idx].expr.clone().unalias_nested().data;
                 Ok(Transformed::yes(input_expr))
             }
             // Unsupported type for consecutive projection merge analysis.
@@ -828,11 +904,17 @@ fn split_join_requirements(
 fn add_projection_on_top_if_helpful(
     plan: LogicalPlan,
     project_exprs: Vec<Expr>,
+    config: &dyn OptimizerConfig,
 ) -> Result<Transformed<LogicalPlan>> {
     // Make sure projection decreases the number of columns, otherwise it is unnecessary.
     if project_exprs.len() >= plan.schema().fields().len() {
         Ok(Transformed::no(plan))
     } else {
+        // the columns pass through
+        let project_exprs = project_exprs
+            .into_iter()
+            .map(|e| NamedExpr::allocate(e, plan.schema(), config.column_id_generator()))
+            .collect();
         Projection::try_new(project_exprs, Arc::new(plan))
             .map(LogicalPlan::Projection)
             .map(Transformed::yes)
@@ -870,8 +952,8 @@ fn rewrite_projection_given_requirements(
 
     let exprs_used = indices.get_at_indices(&expr);
 
-    let required_indices =
-        RequiredIndices::new().with_exprs(input.schema(), exprs_used.iter());
+    let required_indices = RequiredIndices::new()
+        .with_exprs(input.schema(), exprs_used.iter().map(|e| &e.expr));
     let old_input_schema = Arc::clone(input.schema());
     let read_indices = required_indices.indices().to_vec();
 
@@ -881,7 +963,7 @@ fn rewrite_projection_given_requirements(
         .transform_data(|input| {
             if is_projection_unnecessary(&input, &exprs_used)? {
                 Ok(Transformed::yes(input))
-            } else if exprs_used.iter().any(contains_subquery)
+            } else if exprs_used.iter().any(|e| contains_subquery(&e.expr))
                 || !read_fields_unchanged(
                     &old_input_schema,
                     input.schema(),
@@ -991,7 +1073,7 @@ fn project_schema_by_indices(
 /// - all projection expressions are either Column or Literal
 pub fn is_projection_unnecessary(
     input: &LogicalPlan,
-    proj_exprs: &[Expr],
+    proj_exprs: &[NamedExpr],
 ) -> Result<bool> {
     // First check if the number of expressions is equal to the number of fields in the input schema.
     if proj_exprs.len() != input.schema().fields().len() {
@@ -1000,7 +1082,7 @@ pub fn is_projection_unnecessary(
     Ok(input.schema().iter().zip(proj_exprs.iter()).all(
         |((field_relation, field_name), expr)| {
             // Check if the expression is a column and if it matches the field name
-            if let Expr::Column(col) = expr {
+            if let Expr::Column(col) = &expr.expr {
                 col.relation.as_ref() == field_relation && col.name.eq(field_name.name())
             } else {
                 false
@@ -1021,11 +1103,12 @@ mod tests {
     use crate::optimize_projections::OptimizeProjections;
     use crate::optimizer::{ApplyOrder, Optimizer};
     use crate::test::{
-        assert_fields_eq, scan_empty, test_table_scan, test_table_scan_fields,
-        test_table_scan_with_name,
+        assert_fields_eq, named_exprs, new_aggregate, new_projection, scan_empty,
+        test_table_scan, test_table_scan_fields, test_table_scan_with_name,
     };
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
     use arrow::datatypes::{DataType, Field, Schema};
+    use datafusion_common::ColumnIdGenerator;
     use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
     use datafusion_common::{
         Column, DFSchema, DFSchemaRef, JoinType, Result, ScalarValue, TableReference,
@@ -1323,7 +1406,7 @@ mod tests {
         ];
 
         let full_schema =
-            Arc::clone(&Projection::try_new(exprs.clone(), Arc::clone(&input))?.schema);
+            Arc::clone(&new_projection(exprs.clone(), Arc::clone(&input))?.schema);
 
         // Guard the premise above: if this ever stops holding, the subsets below
         // would no longer exercise nullability propagation at all.
@@ -1355,7 +1438,10 @@ mod tests {
                 indices.iter().map(|&i| exprs[i].clone()).collect();
 
             let reused = project_schema_by_indices(&full_schema, &indices)?;
-            let recomputed = projection_schema(input.as_ref(), &exprs_used)?;
+            let recomputed = projection_schema(
+                input.as_ref(),
+                &named_exprs(exprs_used, input.as_ref()),
+            )?;
 
             // Output fields (name, data type, nullability, field metadata) must
             // match the from-scratch computation exactly.
@@ -1917,7 +2003,13 @@ mod tests {
     #[test]
     fn test_user_defined_logical_plan_node4() -> Result<()> {
         let left_table = test_table_scan_with_name("l")?;
-        let right_table = test_table_scan_with_name("r")?;
+        // the scans are built with different generators: the extension
+        // combines them by hand, so the right side must be renumbered
+        let right_table = test_table_scan_with_name("r")?
+            .with_fresh_column_ids_if_overlapping(
+                &left_table,
+                &ColumnIdGenerator::new(),
+            )?;
         let custom_plan = LogicalPlan::Extension(Extension {
             node: Arc::new(UserDefinedCrossJoin::new(
                 Arc::new(left_table),
@@ -2331,8 +2423,7 @@ mod tests {
         // that the Column references are unqualified (e.g. their
         // relation is `None`). PlanBuilder resolves the expressions
         let expr = vec![col("test.a"), col("test.b")];
-        let plan =
-            LogicalPlan::Projection(Projection::try_new(expr, Arc::new(table_scan))?);
+        let plan = LogicalPlan::Projection(new_projection(expr, Arc::new(table_scan))?);
 
         assert_fields_eq(&plan, vec!["a", "b"]);
 
@@ -2783,16 +2874,17 @@ mod tests {
         let table_scan = Arc::new(test_table_scan()?);
         let group_expr = vec![lit(1u32).alias("g")];
         let aggr_expr = vec![count(col("b")).alias("cnt")];
-        let aggregate = Aggregate::try_new(
-            Arc::clone(&table_scan),
-            group_expr.clone(),
-            aggr_expr.clone(),
-        )?;
+        let aggregate = new_aggregate(Arc::clone(&table_scan), group_expr, aggr_expr)?;
         // A non-null group column stored as nullable, as a rule that keeps a
         // node's schema while folding its expressions can leave it.
         let stale = with_nullable_field(&aggregate.schema, "g")?;
-        let aggregate =
-            Aggregate::try_new_with_schema(table_scan, group_expr, aggr_expr, stale)?;
+        let aggregate = Aggregate::try_new_with_schema(
+            table_scan,
+            aggregate.group_expr,
+            None,
+            aggregate.aggr_expr,
+            stale,
+        )?;
         let plan = LogicalPlanBuilder::from(LogicalPlan::Aggregate(aggregate))
             .project(vec![col("g").alias("x")])?
             .build()?;
@@ -2817,11 +2909,13 @@ mod tests {
             col("b"),
             datafusion_expr::scalar_subquery(Arc::new(subquery)).alias("s"),
         ];
-        let derived = Projection::try_new(exprs.clone(), Arc::clone(&input))?;
+        let derived = new_projection(exprs, Arc::clone(&input))?;
         // Mark `b` nullable so a reused schema would differ from the derived one.
         let stale = with_nullable_field(&derived.schema, "b")?;
         let plan = LogicalPlan::Projection(Projection::try_new_with_schema(
-            exprs, input, stale,
+            derived.expr,
+            input,
+            stale,
         )?);
 
         let optimized = optimize(plan)?;

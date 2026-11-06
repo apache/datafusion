@@ -19,8 +19,10 @@ pub fn from_aggregate(
     agg: &Aggregate,
 ) -> datafusion::common::Result<Box<Rel>> {
     let input = producer.handle_plan(agg.input.as_ref())?;
+    // grouping sets are produced as they are written
+    let group_exprs = agg.group_by_exprs();
     let (grouping_expressions, groupings) =
-        to_substrait_groupings(producer, &agg.group_expr, agg.input.schema())?;
+        to_substrait_groupings(producer, &group_exprs, agg.input.schema())?;
     let measures = agg
         .aggr_expr
         .iter()

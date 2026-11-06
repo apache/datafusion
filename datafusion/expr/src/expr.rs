@@ -28,8 +28,8 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, DFSchema, ExprSchema, HashMap, Result, ScalarValue, Spans, TableReference,
-    plan_err,
+    Column, ColumnId, ColumnIdGenerator, DFSchema, ExprSchema, HashMap, Result,
+    ScalarValue, Spans, TableReference, plan_err,
 };
 use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
@@ -1076,6 +1076,178 @@ impl Display for Sort {
             write!(f, " NULLS LAST")?;
         }
         Ok(())
+    }
+}
+
+/// An output of a node that computes one output per expression (the entries
+/// of a [`Projection`]), with the [`ColumnId`] of the column it outputs.
+///
+/// An entry whose expression is a bare column with the same id as the entry
+/// *passes the column through*: the output is the input column. Any other
+/// entry *defines* a column, with the entry's id, including an entry whose
+/// expression is a bare column with another id (merging the projection
+/// `a1 AS x` into `a AS a1` leaves the bare column `a` with the id the upper
+/// projection gave `x`). A column is defined once in a plan, and the schema
+/// of the node gives each field the id of its entry.
+///
+/// Dereferences to its expression, so that code reading the expressions of a
+/// node keeps working. [`Display`] and [`Debug`](fmt::Debug) show the
+/// expression only, and equality, hashing and ordering ignore the id, as
+/// they ignore the ids of [`Column`]s.
+///
+/// [`Projection`]: crate::logical_plan::Projection
+#[derive(Clone)]
+pub struct NamedExpr {
+    /// The expression that computes the output
+    pub expr: Expr,
+    /// The id of the output column
+    pub id: ColumnId,
+}
+
+impl NamedExpr {
+    /// Creates an entry computing `expr` as the column `id`
+    pub fn new(expr: Expr, id: ColumnId) -> Self {
+        Self { expr, id }
+    }
+
+    /// An entry for `expr`, an output computed over a node whose input
+    /// schema is `input`: if `expr` is a bare column that resolves to a field
+    /// of `input` with an id, an entry passing that column through (the
+    /// column gets the id); otherwise an entry with a new id from
+    /// `generator`.
+    ///
+    /// This is how a new output gets its id. A rebuild of an output that
+    /// already exists keeps the id of its entry instead.
+    pub fn allocate(expr: Expr, input: &DFSchema, generator: &ColumnIdGenerator) -> Self {
+        if let Expr::Column(col) = &expr
+            && let Some(id) = input
+                .maybe_index_of_column(col)
+                .and_then(|i| input.field_id(i))
+        {
+            let Expr::Column(col) = expr else {
+                unreachable!()
+            };
+            return Self::new(Expr::Column(col.with_id(Some(id))), id);
+        }
+        Self::new(expr, generator.next())
+    }
+
+    /// Whether this entry passes a column through: its expression is a bare
+    /// column with the id of the entry
+    pub fn is_pass_through(&self) -> bool {
+        matches!(&self.expr, Expr::Column(col) if col.id == Some(self.id))
+    }
+
+    /// The id of the column this entry defines, `None` if it passes a column
+    /// through (see [`Self::is_pass_through`])
+    pub fn defined_id(&self) -> Option<ColumnId> {
+        (!self.is_pass_through()).then_some(self.id)
+    }
+
+    /// Returns this entry with its expression replaced by `expr`, a rewrite of
+    /// it: the entry keeps its id, unless it passed a column through and
+    /// `expr` does not pass the same column through (casting a passed through
+    /// column defines a new column), in which case it gets a new id from
+    /// `generator`
+    pub fn with_rewritten_expr(self, expr: Expr, generator: &ColumnIdGenerator) -> Self {
+        let was_pass_through = self.is_pass_through();
+        let entry = Self::new(expr, self.id);
+        if was_pass_through && !entry.is_pass_through() {
+            Self::new(entry.expr, generator.next())
+        } else {
+            entry
+        }
+    }
+
+    /// Returns the expression, dropping the id
+    pub fn into_expr(self) -> Expr {
+        self.expr
+    }
+
+    /// Returns this entry with its expression replaced by `expr`, keeping
+    /// its id
+    pub fn with_expr(self, expr: Expr) -> Self {
+        Self { expr, id: self.id }
+    }
+}
+
+impl std::ops::Deref for NamedExpr {
+    type Target = Expr;
+
+    fn deref(&self) -> &Expr {
+        &self.expr
+    }
+}
+
+impl AsRef<Expr> for NamedExpr {
+    fn as_ref(&self) -> &Expr {
+        &self.expr
+    }
+}
+
+impl From<NamedExpr> for Expr {
+    fn from(named: NamedExpr) -> Self {
+        named.expr
+    }
+}
+
+impl Display for NamedExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        Display::fmt(&self.expr, f)
+    }
+}
+
+impl fmt::Debug for NamedExpr {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        // the id is not shown, as for `Column`: `Debug` ends up in error
+        // messages and test expectations
+        fmt::Debug::fmt(&self.expr, f)
+    }
+}
+
+impl PartialEq for NamedExpr {
+    fn eq(&self, other: &Self) -> bool {
+        // ignores the id, see the documentation of `NamedExpr`
+        self.expr == other.expr
+    }
+}
+
+impl Eq for NamedExpr {}
+
+impl PartialEq<Expr> for NamedExpr {
+    fn eq(&self, other: &Expr) -> bool {
+        self.expr == *other
+    }
+}
+
+impl Hash for NamedExpr {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.expr.hash(state)
+    }
+}
+
+impl PartialOrd for NamedExpr {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.expr.partial_cmp(&other.expr)
+    }
+}
+
+impl<'a> TreeNodeContainer<'a, Expr> for NamedExpr {
+    fn apply_elements<F: FnMut(&'a Expr) -> Result<TreeNodeRecursion>>(
+        &'a self,
+        f: F,
+    ) -> Result<TreeNodeRecursion> {
+        self.expr.apply_elements(f)
+    }
+
+    fn map_elements<F: FnMut(Expr) -> Result<Transformed<Expr>>>(
+        self,
+        f: F,
+    ) -> Result<Transformed<Self>> {
+        let id = self.id;
+        self.expr
+            .map_elements(f)?
+            .map_data(|expr| Ok(Self { expr, id }))
     }
 }
 
