@@ -395,8 +395,10 @@ impl TypePlanner for CustomTypePlanner {
                     None | Some(9) => TimeUnit::Nanosecond,
                     _ => unreachable!(),
                 };
+                // Differs from the default mapping (no time zone)
                 Ok(Some(
-                    DataType::Timestamp(precision, None).into_nullable_field_ref(),
+                    DataType::Timestamp(precision, Some("UTC".into()))
+                        .into_nullable_field_ref(),
                 ))
             }
             _ => Ok(None),

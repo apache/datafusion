@@ -325,8 +325,6 @@ fn hash_array_primitive<T>(
 }
 
 /// Overwrite each slot with `value.hash_one(state)`, 16 rows per iteration.
-/// Gathering + hashing a whole lane batch before storing keeps the independent
-/// hashes in flight so the pipeline isn't serialized on store-to-load deps.
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(always)]
 fn hash_prim_fresh_dense<N, S>(values: &[N], hashes: &mut [u64], state: &S)
