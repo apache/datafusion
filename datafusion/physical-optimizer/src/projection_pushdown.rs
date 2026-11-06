@@ -451,19 +451,30 @@ fn remap_filter_expr(
         } else if let Some(variable) = expr.downcast_ref::<LambdaVariable>()
             && old_input_len != new_input_len
         {
-            let offset = variable.index().checked_sub(old_input_len).ok_or_else(|| {
-                internal_datafusion_err!(
-                    "Lambda parameter {variable} precedes the {old_input_len} input columns"
-                )
-            })?;
-            return Ok(Transformed::yes(Arc::new(LambdaVariable::new(
-                new_input_len + offset,
-                Arc::clone(variable.field()),
-            )) as _));
+            let rebased = rebase_lambda_variable(variable, old_input_len, new_input_len)?;
+            return Ok(Transformed::yes(rebased));
         }
         Ok(Transformed::no(expr))
     })
     .data()
+}
+
+/// Shifts a lambda parameter by the change in input width, for the reason
+/// [`remap_filter_expr`] documents.
+fn rebase_lambda_variable(
+    variable: &LambdaVariable,
+    old_input_len: usize,
+    new_input_len: usize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let offset = variable.index().checked_sub(old_input_len).ok_or_else(|| {
+        internal_datafusion_err!(
+            "Lambda parameter {variable} precedes the {old_input_len} input columns"
+        )
+    })?;
+    Ok(Arc::new(LambdaVariable::new(
+        new_input_len + offset,
+        Arc::clone(variable.field()),
+    )))
 }
 
 /// Prefix for the columns this rule adds when it splits a projection.
@@ -547,6 +558,7 @@ fn try_split_leaf_projection(
                     Arc::clone(&proj_expr.expr),
                     &leaves,
                     &passthrough_indices,
+                    child_schema.fields().len(),
                 )?,
                 alias: proj_expr.alias.clone(),
             })
@@ -559,10 +571,15 @@ fn try_split_leaf_projection(
         vec![new_child],
         ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
     )?;
-    Ok(Some(Arc::new(ProjectionExec::try_new(
-        new_exprs,
-        new_repartition,
-    )?)))
+    // `try_new` would derive the output schema from the expressions alone and
+    // drop the metadata the planner set, which `schema_check` then rejects.
+    Ok(Some(Arc::new(
+        ProjectionExec::try_new_with_schema_metadata(
+            new_exprs,
+            new_repartition,
+            projection.schema().as_ref(),
+        )?,
+    )))
 }
 
 /// Collects the distinct outermost [`ExpressionPlacement::MoveTowardsLeafNodes`]
@@ -614,14 +631,17 @@ fn collect_outer_columns(
 
 /// Rewrites an outer projection expression against the split child schema:
 /// every leaf sub-expression becomes a reference to the column the split added
-/// for it, and every surviving column is remapped to its new index.
+/// for it, and every surviving column or lambda parameter is remapped to its
+/// new index. `old_input_len` is the child's width before the split.
 fn rewrite_outer_expr(
     expr: Arc<dyn PhysicalExpr>,
     leaves: &[Arc<dyn PhysicalExpr>],
     passthrough_indices: &[usize],
+    old_input_len: usize,
 ) -> Result<Arc<dyn PhysicalExpr>> {
     // The leaf columns were appended after the passthrough ones.
     let first_leaf = passthrough_indices.len();
+    let new_input_len = first_leaf + leaves.len();
     expr.transform_down(|node| {
         if let Some(pos) = leaves.iter().position(|leaf| leaf == &node) {
             let column = Column::new(&leaf_column_name(pos), first_leaf + pos);
@@ -645,6 +665,14 @@ fn rewrite_outer_expr(
                 let remapped = Column::new(column.name(), new_index);
                 return Ok(Transformed::yes(Arc::new(remapped) as Arc<dyn PhysicalExpr>));
             }
+        }
+        // The split widens the input, which moves the lambda parameters indexed
+        // after it; see `remap_filter_expr`.
+        if let Some(variable) = node.downcast_ref::<LambdaVariable>()
+            && old_input_len != new_input_len
+        {
+            let rebased = rebase_lambda_variable(variable, old_input_len, new_input_len)?;
+            return Ok(Transformed::yes(rebased));
         }
         Ok(Transformed::no(node))
     })
