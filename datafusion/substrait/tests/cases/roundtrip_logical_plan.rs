@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::utils::test::read_json;
 use datafusion::arrow::array::ArrayRef;
@@ -2662,6 +2649,51 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
       TableScan: data3 projection=[p1]
     "
     );
+
+    Ok(())
+}
+
+// Substrait lambda parameter types carry no struct field names, so a parameter over a
+// list of structs must take its field names from the list, not from its declared type.
+#[tokio::test]
+async fn roundtrip_lambda_parameter_struct_field_names() -> Result<()> {
+    let ctx = higher_order_function_ctx().await?;
+    ctx.sql(
+        "CREATE TABLE structs AS SELECT \
+         [named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y')] AS s, \
+         [[named_struct('a', 3, 'b', 'z')]] AS nested",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    // field of a parameter over a column
+    roundtrip_with_ctx(
+        "SELECT array_transform(s, p0 -> get_field(p0, 'b')) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    // field of a parameter over a computed list
+    roundtrip_with_ctx(
+        "SELECT array_transform(array_concat(s, s), p0 -> get_field(p0, 'a')) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    // field of the inner parameter, where the inner list is the outer parameter
+    roundtrip_with_ctx(
+        "SELECT array_transform(nested, p0 -> array_transform(p0, p1 -> get_field(p1, 'b'))) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    // field of the outer parameter, read inside an inner lambda
+    roundtrip_with_ctx(
+        "SELECT array_transform(s, p0 -> array_transform([1, 2], p1 -> get_field(p0, 'a') + p1)) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
 
     Ok(())
 }

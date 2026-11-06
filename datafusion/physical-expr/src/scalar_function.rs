@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Declaration of built-in (scalar) functions.
 //! This module contains built-in functions' enumeration and metadata.
@@ -158,8 +145,8 @@ impl ScalarFunctionExpr {
         &self.config_options
     }
 
-    /// Returns whether this function expression's argument types have been
-    /// explicitly audited as candidates for range-key locality analysis.
+    /// Returns whether this function expression's argument types and literal
+    /// values have been audited as candidates for range-key locality analysis.
     ///
     /// See [`ScalarUDFImpl::supports_range_key_locality_analysis`] for the safety
     /// requirements.
@@ -172,9 +159,14 @@ impl ScalarFunctionExpr {
             .iter()
             .map(|argument| argument.data_type(input_schema))
             .collect::<Result<Vec<_>>>()?;
+        let literal_arguments = self
+            .args
+            .iter()
+            .map(|argument| argument.downcast_ref::<Literal>().map(Literal::value))
+            .collect::<Vec<_>>();
         Ok(self
             .fun
-            .supports_range_key_locality_analysis(&argument_types))
+            .supports_range_key_locality_analysis(&argument_types, &literal_arguments))
     }
 
     /// Given an arbitrary PhysicalExpr attempt to downcast it to a ScalarFunctionExpr
@@ -383,7 +375,7 @@ impl PhysicalExpr for ScalarFunctionExpr {
 mod tests {
     use super::*;
     use crate::expressions::Column;
-    use arrow::datatypes::{Field, TimeUnit};
+    use arrow::datatypes::{Field, IntervalUnit, TimeUnit};
     use datafusion_expr::sort_properties::SortProperties;
     use datafusion_expr::{ScalarUDFImpl, Signature};
     use datafusion_physical_expr_common::physical_expr::is_volatile;
@@ -413,6 +405,111 @@ mod tests {
                 &self.return_type,
             )?))
         }
+    }
+
+    /// Builds `date_bin(stride, ts)` and checks whether locality analysis is allowed.
+    fn date_bin_supports_locality_with_stride(
+        function: Arc<ScalarUDF>,
+        stride: Arc<dyn PhysicalExpr>,
+    ) -> Result<bool> {
+        let schema = Schema::new(vec![
+            Field::new(
+                "stride",
+                DataType::Interval(IntervalUnit::MonthDayNano),
+                true,
+            ),
+            Field::new("ts", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]);
+        let expr = ScalarFunctionExpr::try_new(
+            function,
+            vec![stride, Arc::new(Column::new("ts", 1))],
+            &schema,
+            Arc::new(ConfigOptions::default()),
+        )?;
+        expr.supports_range_key_locality_analysis(&schema)
+    }
+
+    #[test]
+    fn range_key_locality_analysis_receives_literal_values() -> Result<()> {
+        let function = datafusion_functions::datetime::date_bin();
+        let hour = Arc::new(Literal::new(ScalarValue::new_interval_mdn(
+            0,
+            0,
+            3_600_000_000_000,
+        )));
+        let month = Arc::new(Literal::new(ScalarValue::new_interval_mdn(1, 0, 0)));
+
+        assert!(date_bin_supports_locality_with_stride(
+            Arc::clone(&function),
+            hour
+        )?);
+        assert!(!date_bin_supports_locality_with_stride(function, month)?);
+        Ok(())
+    }
+
+    #[test]
+    fn range_key_locality_analysis_preserves_aliases() -> Result<()> {
+        let date_bin = datafusion_functions::datetime::date_bin();
+        let function =
+            Arc::new(date_bin.as_ref().clone().with_aliases(["date_bin_alias"]));
+        let hour = Arc::new(Literal::new(ScalarValue::new_interval_mdn(
+            0,
+            0,
+            3_600_000_000_000,
+        )));
+        let month = Arc::new(Literal::new(ScalarValue::new_interval_mdn(1, 0, 0)));
+
+        assert!(date_bin_supports_locality_with_stride(
+            Arc::clone(&function),
+            hour
+        )?);
+        assert!(!date_bin_supports_locality_with_stride(function, month)?);
+        Ok(())
+    }
+
+    #[test]
+    fn range_key_locality_analysis_rejects_non_literal_parameters() -> Result<()> {
+        use crate::expressions::CastExpr;
+
+        let function = datafusion_functions::datetime::date_bin();
+        let column = Arc::new(Column::new("stride", 0));
+        let hour = Arc::new(Literal::new(ScalarValue::new_interval_mdn(
+            0,
+            0,
+            3_600_000_000_000,
+        )));
+        let cast = Arc::new(CastExpr::new(
+            hour,
+            DataType::Interval(IntervalUnit::MonthDayNano),
+            None,
+        ));
+
+        assert!(!date_bin_supports_locality_with_stride(
+            Arc::clone(&function),
+            column
+        )?);
+        assert!(!date_bin_supports_locality_with_stride(function, cast)?);
+        Ok(())
+    }
+
+    #[test]
+    fn range_key_locality_analysis_accepts_date_trunc() -> Result<()> {
+        let schema = Schema::new(vec![Field::new(
+            "ts",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            true,
+        )]);
+        let expr = ScalarFunctionExpr::try_new(
+            datafusion_functions::datetime::date_trunc(),
+            vec![
+                Arc::new(Literal::new(ScalarValue::from("hour"))),
+                Arc::new(Column::new("ts", 0)),
+            ],
+            &schema,
+            Arc::new(ConfigOptions::default()),
+        )?;
+        assert!(expr.supports_range_key_locality_analysis(&schema)?);
+        Ok(())
     }
 
     fn default_bounds_expr(return_type: DataType) -> ScalarFunctionExpr {

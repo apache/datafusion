@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarUDF`]: Scalar User Defined Functions
 
@@ -368,9 +355,10 @@ impl ScalarUDF {
     pub fn supports_range_key_locality_analysis(
         &self,
         argument_types: &[DataType],
+        literal_arguments: &[Option<&ScalarValue>],
     ) -> bool {
         self.inner
-            .supports_range_key_locality_analysis(argument_types)
+            .supports_range_key_locality_analysis(argument_types, literal_arguments)
     }
 
     pub fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
@@ -992,8 +980,8 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
         Ok(inner(inputs))
     }
 
-    /// Returns whether this function and argument-type combination has been
-    /// audited for range-partitioning locality analysis.
+    /// Returns whether this function has been audited for range-key locality
+    /// analysis with these argument types and literal values.
     ///
     /// Range-boundary analysis has subtle correctness requirements, so the
     /// policy is default-deny. Functions may opt in only after individual audit.
@@ -1011,7 +999,15 @@ pub trait ScalarUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// This does not claim a concrete partition layout or cross-input
     /// co-partitioning compatibility. Boundary evaluation errors cause the
     /// analysis to return `false`. This capability is not transported across FFI.
-    fn supports_range_key_locality_analysis(&self, _argument_types: &[DataType]) -> bool {
+    ///
+    /// `literal_arguments` has one entry per argument. `None` means the argument
+    /// is not a literal; `Some(value)` supplies its value, which may itself be
+    /// NULL. Non-literal expressions are not evaluated to obtain these values.
+    fn supports_range_key_locality_analysis(
+        &self,
+        _argument_types: &[DataType],
+        _literal_arguments: &[Option<&ScalarValue>],
+    ) -> bool {
         false
     }
 
@@ -1237,9 +1233,13 @@ impl ScalarUDFImpl for AliasedScalarUDFImpl {
         self.inner.output_ordering(inputs)
     }
 
-    fn supports_range_key_locality_analysis(&self, argument_types: &[DataType]) -> bool {
+    fn supports_range_key_locality_analysis(
+        &self,
+        argument_types: &[DataType],
+        literal_arguments: &[Option<&ScalarValue>],
+    ) -> bool {
         self.inner
-            .supports_range_key_locality_analysis(argument_types)
+            .supports_range_key_locality_analysis(argument_types, literal_arguments)
     }
 
     fn preserves_lex_ordering(&self, inputs: &[ExprProperties]) -> Result<bool> {
@@ -1327,7 +1327,10 @@ mod tests {
     #[test]
     fn range_key_locality_analysis_is_disabled_by_default() {
         let function = test_func("range_function", "a");
-        assert!(!function.supports_range_key_locality_analysis(&[DataType::Int64]));
+        assert!(!function.supports_range_key_locality_analysis(
+            &[DataType::Int64],
+            &[Some(&ScalarValue::Int64(Some(1)))],
+        ));
     }
 
     fn test_func(name: &'static str, parameter: &'static str) -> ScalarUDF {

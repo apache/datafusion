@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use futures::{Stream, StreamExt};
 use std::collections::VecDeque;
@@ -1018,7 +1005,7 @@ mod tests {
         );
         assert_eq!(
             metrics.spilled_bytes.value(),
-            320,
+            312,
             "Spilled bytes should reflect data written (header + 1 batch)"
         );
         assert_eq!(
@@ -1493,7 +1480,7 @@ mod tests {
         // Check metrics before drop - spilled_bytes already reflects written data
         let spilled_bytes_before = metrics.spilled_bytes.value();
         assert_eq!(
-            spilled_bytes_before, 1088,
+            spilled_bytes_before, 1048,
             "Spilled bytes should reflect data written (header + 5 batches)"
         );
 

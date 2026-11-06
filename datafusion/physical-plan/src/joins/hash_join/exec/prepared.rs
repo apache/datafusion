@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Explicit immutable build reuse for embedding executors.
 
@@ -58,7 +45,7 @@ impl fmt::Debug for PreparedHashJoinBuild {
 impl PreparedHashJoinBuild {
     /// Return the retained build reservation, excluding all per-probe state.
     pub fn reserved_bytes(&self) -> usize {
-        self.build.reservation.size()
+        self.build.reservation.size() + self.build.map.reserved_bytes()
     }
 
     /// Return the complete build row count, including duplicate and null keys.
@@ -303,8 +290,8 @@ impl HashJoinExecBuilder {
     ///   executions. An existing expression handle is preserved for its probe
     ///   consumers, while the build-report accumulator is reset.
     /// * Retain a prepared-build lease if a dynamic-filter expression outlives
-    ///   this plan. Its array/map references preserve allocation lifetime, but
-    ///   the lease is what preserves the corresponding memory charge.
+    ///   this plan. The map carries its own charge, but the IN-list arrays
+    ///   share the build batch, and the lease is what preserves their charge.
     /// * Attach after physical optimizations that rewrite the build child.
     ///   Probe-only rewrites must preserve the attached join's `left()`; replacing
     ///   it or making incompatible key, mode, or join-type changes fails.

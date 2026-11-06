@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Expression simplification API
 
@@ -1663,12 +1650,12 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // a between 3 and 5  -->  a >= 3 AND a <=5
             // a not between 3 and 5  -->  a < 3 OR a > 5
             Expr::Between(between) => Transformed::yes(if between.negated {
-                let l = *between.expr.clone();
+                let l = between.expr.as_ref().clone();
                 let r = *between.expr;
                 or(l.lt(*between.low), r.gt(*between.high))
             } else {
                 and(
-                    between.expr.clone().gt_eq(*between.low),
+                    between.expr.as_ref().clone().gt_eq(*between.low),
                     between.expr.lt_eq(*between.high),
                 )
             }),
@@ -2145,6 +2132,11 @@ fn get_preimage(
     if func.signature().volatility != Volatility::Immutable {
         return Ok(PreimageResult::None);
     }
+    // We can get duplicate expressions due to preimage rewrites due to volatile arguments
+    if args.iter().any(Expr::is_volatile) {
+        return Ok(PreimageResult::None);
+    }
+
     func.preimage(args, right_expr, info)
 }
 
@@ -2273,12 +2265,12 @@ fn as_inlist(expr: &'_ Expr) -> Option<Cow<'_, InList>> {
             match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(_), Expr::Literal(_, _)) => Some(Cow::Owned(InList {
                     expr: left.clone(),
-                    list: vec![*right.clone()],
+                    list: vec![right.as_ref().clone()],
                     negated: false,
                 })),
                 (Expr::Literal(_, _), Expr::Column(_)) => Some(Cow::Owned(InList {
                     expr: right.clone(),
-                    list: vec![*left.clone()],
+                    list: vec![left.as_ref().clone()],
                     negated: false,
                 })),
                 _ => None,

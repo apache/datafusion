@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Functionality used both on logical and physical plans
 
@@ -338,8 +325,6 @@ fn hash_array_primitive<T>(
 }
 
 /// Overwrite each slot with `value.hash_one(state)`, 16 rows per iteration.
-/// Gathering + hashing a whole lane batch before storing keeps the independent
-/// hashes in flight so the pipeline isn't serialized on store-to-load deps.
 #[cfg(not(feature = "force_hash_collisions"))]
 #[inline(always)]
 fn hash_prim_fresh_dense<N, S>(values: &[N], hashes: &mut [u64], state: &S)
