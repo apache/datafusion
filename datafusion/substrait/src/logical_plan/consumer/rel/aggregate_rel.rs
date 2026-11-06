@@ -151,7 +151,12 @@ fn reorder_grouping_set_output(
         (0..grouping_id_index)
             .chain(grouping_id_index + 1..schema.fields().len())
             .chain(std::iter::once(grouping_id_index))
-            .map(|index| Expr::Column(Column::from(schema.qualified_field(index))))
+            .map(|index| {
+                Expr::Column(
+                    Column::from(schema.qualified_field(index))
+                        .with_id(schema.field_id(index)),
+                )
+            })
             .collect()
     };
     project(plan, exprs)

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use crate::decorrelate::{PullUpCorrelatedExpr, UN_MATCHED_ROW_INDICATOR};
 use crate::optimizer::ApplyOrder;
-use crate::utils::{evaluates_to_null, ids_builder};
+use crate::utils::{evaluates_to_null, ids_builder, project_redefining_outputs};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_expr::expr_rewriter::strip_outer_reference;
 use datafusion_expr::{Expr, Join, expr};
@@ -229,14 +229,14 @@ fn rewrite_internal(
     // have non-NULL defaults on empty input (e.g., COUNT returns 0, not
     // NULL). Add a projection that wraps those columns:
     //   CASE WHEN __always_true IS NULL THEN <default> ELSE <column> END
+    //
+    // The wrapped columns keep the ids of the columns they wrap, which the
+    // plan above reads (see `project_redefining_outputs`).
     let new_plan = if let Some(expr_map) = collected_count_expr_map {
-        let join_schema = new_plan.schema();
+        let join_schema = Arc::clone(new_plan.schema());
         let alias_qualifier = alias.as_ref();
-        let mut proj_exprs: Vec<Expr> = Vec::with_capacity(join_schema.fields().len());
-
-        for (i, (qualifier, field)) in join_schema.iter().enumerate() {
-            let col = Expr::Column(Column::new(qualifier.cloned(), field.name()));
-
+        project_redefining_outputs(new_plan, ids, |i, col| {
+            let (qualifier, field) = join_schema.qualified_field(i);
             // Only compensate right-side (subquery) fields. Left-side fields
             // may share a name with an aggregate alias but must not be wrapped.
             let name = field.name();
@@ -256,18 +256,15 @@ fn rewrite_internal(
                     )],
                     else_expr: Some(Box::new(col)),
                 });
-                proj_exprs.push(Expr::Alias(expr::Alias {
+                return Ok(Some(Expr::Alias(expr::Alias {
                     expr: Box::new(case_expr),
                     relation: qualifier.cloned(),
                     name: name.to_string(),
                     metadata: None,
-                }));
-                continue;
+                })));
             }
-            proj_exprs.push(col);
-        }
-
-        ids_builder(ids, new_plan).project(proj_exprs)?.build()?
+            Ok(None)
+        })?
     } else {
         new_plan
     };
@@ -281,16 +278,11 @@ fn rewrite_internal(
     // assumes it is deterministic.
     let new_plan = if let Some(on_cond) = on_condition_for_projection {
         let schema = Arc::clone(new_plan.schema());
-        let mut proj_exprs: Vec<Expr> = Vec::with_capacity(schema.fields().len());
-
-        for (i, (qualifier, field)) in schema.iter().enumerate() {
-            let col = Expr::Column(Column::new(qualifier.cloned(), field.name()));
-
+        project_redefining_outputs(new_plan, ids, |i, col| {
             if i < left_field_count {
-                proj_exprs.push(col);
-                continue;
+                return Ok(None);
             }
-
+            let (qualifier, field) = schema.qualified_field(i);
             let typed_null =
                 Expr::Literal(ScalarValue::try_from(field.data_type())?, None);
             let case_expr = Expr::Case(expr::Case {
@@ -301,10 +293,10 @@ fn rewrite_internal(
                 )],
                 else_expr: Some(Box::new(col)),
             });
-            proj_exprs.push(case_expr.alias_qualified(qualifier.cloned(), field.name()));
-        }
-
-        ids_builder(ids, new_plan).project(proj_exprs)?.build()?
+            Ok(Some(
+                case_expr.alias_qualified(qualifier.cloned(), field.name()),
+            ))
+        })?
     } else {
         new_plan
     };

@@ -2290,10 +2290,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let table_source = self.context_provider.get_table_source(table_ref.clone())?;
-        let schema = DFSchema::try_from_qualified_schema(
-            table_ref.clone(),
-            &table_source.schema(),
-        )?;
         let mut planner_context = self.new_planner_context();
         // the scan and the subqueries of the predicate share the generator
         let scan = LogicalPlanBuilder::scan_with_column_id_generator(
@@ -2303,13 +2299,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             planner_context.column_id_generator().cloned(),
         )?
         .build()?;
+        // the predicate reads the columns of the scan, with their ids
+        let schema = Arc::clone(scan.schema());
 
         let source = match predicate_expr {
             None => scan,
             Some(predicate_expr) => {
                 let filter_expr =
                     self.sql_to_expr(predicate_expr, &schema, &mut planner_context)?;
-                let schema = Arc::new(schema);
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let filter_expr = normalize_col_with_schemas_and_ambiguity_check(

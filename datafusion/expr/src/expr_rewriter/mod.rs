@@ -288,7 +288,13 @@ pub fn coerce_plan_expr_for_schema(
             Ok(LogicalPlan::Projection(projection))
         }
         _ => {
-            let exprs: Vec<Expr> = plan.schema().iter().map(Expr::from).collect();
+            // the columns of `plan`, with their ids
+            let exprs: Vec<Expr> = plan
+                .schema()
+                .columns()
+                .into_iter()
+                .map(Expr::Column)
+                .collect();
             let new_exprs = coerce_exprs_for_schema(exprs, plan.schema(), schema)?;
             let add_project = new_exprs.iter().any(|expr| expr.try_as_col().is_none());
             if add_project {

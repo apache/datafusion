@@ -89,7 +89,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<LogicalPlan> {
         let planned_relation =
             match self.create_extension_relation(relation, planner_context)? {
-                RelationPlanning::Planned(planned) => planned,
+                // a plan built by an extension, possibly with another
+                // generator, is blended in: it gets new ids
+                RelationPlanning::Planned(mut planned) => {
+                    let generator = planner_context
+                        .column_id_generator()
+                        .cloned()
+                        .unwrap_or_else(|| Arc::clone(&self.column_id_generator));
+                    if let Some(max) = planned.plan.max_column_id() {
+                        generator.advance_past(max);
+                    }
+                    planned.plan = planned.plan.with_fresh_column_ids(&generator)?;
+                    planned
+                }
                 RelationPlanning::Original(original) => {
                     Box::new(self.create_default_relation(*original, planner_context)?)
                 }

@@ -485,6 +485,8 @@ fn rewrite_join(
         repeatable,
     );
 
+    // the id of the mark column of a mark join, which a rebuild keeps
+    let mark_column_id = join.mark_column_id();
     let left = rewrite_subtree(
         Arc::unwrap_or_clone(join.left),
         left_live,
@@ -503,20 +505,26 @@ fn rewrite_join(
 
     if changed {
         // The join type or an input changed, so the output schema may have
-        // narrowed; recompute it via `try_new`.
-        Ok(Transformed::yes(LogicalPlan::Join(
-            Join::try_new(
-                left,
-                right,
-                join.on,
-                join.filter,
-                rewritten_join_type,
-                join.join_constraint,
-                join.null_equality,
-                join.null_aware,
-            )?
-            .with_null_aware_value_keys(join.null_aware_value_keys),
-        )))
+        // narrowed; recompute it via `try_new`. A mark join keeps the id of
+        // the mark column it defines (a join keeps its type when only an
+        // input changed).
+        let mut new_join = Join::try_new(
+            left,
+            right,
+            join.on,
+            join.filter,
+            rewritten_join_type,
+            join.join_constraint,
+            join.null_equality,
+            join.null_aware,
+        )?
+        .with_null_aware_value_keys(join.null_aware_value_keys);
+        if let Some(id) = mark_column_id
+            && rewritten_join_type == join.join_type
+        {
+            new_join = new_join.with_mark_column_id(id)?;
+        }
+        Ok(Transformed::yes(LogicalPlan::Join(new_join)))
     } else {
         // Nothing changed; reassemble the join reusing its existing schema rather
         // than recomputing it.
@@ -749,6 +757,41 @@ mod tests {
             .build()?;
 
         assert_optimized_plan_equal!(plan, @"EmptyRelation: rows=0")
+    }
+
+    /// A mark join whose input is rewritten keeps the id of its mark column,
+    /// which the plan above refers to (checked by the optimizer's column id
+    /// verification)
+    #[test]
+    fn mark_join_with_rewritten_input_keeps_mark_column_id() -> Result<()> {
+        // the left join's right side is unused and unique on the join key:
+        // the join is replaced by its left input
+        let right =
+            LogicalPlanBuilder::from(scan("r", &test_schema(), Constraints::default())?)
+                .join(
+                    scan("u", &test_schema(), primary_key_on_id())?,
+                    JoinType::Left,
+                    (vec!["r.id"], vec!["u.id"]),
+                    None,
+                )?
+                .build()?;
+        let plan =
+            LogicalPlanBuilder::from(scan("l", &test_schema(), Constraints::default())?)
+                .join(
+                    right,
+                    JoinType::LeftMark,
+                    (vec!["l.id"], vec!["r.id"]),
+                    None,
+                )?
+                .project(vec![col("l.x"), col("mark")])?
+                .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Projection: l.x, mark
+          LeftMark Join: l.id = r.id
+            TableScan: l
+            TableScan: r
+        ")
     }
 
     #[test]

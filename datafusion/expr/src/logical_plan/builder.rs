@@ -490,7 +490,15 @@ impl LogicalPlanBuilder {
     /// so it's usually better to override the default names with a table alias list.
     ///
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
+    ///
+    /// The columns get new column ids from the builder's own generator (see
+    /// [`Self::values_with_column_id_generator`]), as a scan's do.
     pub fn values(values: Vec<Vec<Expr>>) -> Result<Self> {
+        Self::values_with_column_id_generator(values, None, None)
+    }
+
+    /// [`Self::values`], without column ids
+    fn values_without_ids(values: Vec<Vec<Expr>>) -> Result<Self> {
         if values.is_empty() {
             return plan_err!("Values list cannot be empty");
         }
@@ -522,7 +530,17 @@ impl LogicalPlanBuilder {
     /// so it's usually better to override the default names with a table alias list.
     ///
     /// If the values include params/binders such as $1, $2, $3, etc, then the `param_data_types` should be provided.
+    ///
+    /// The columns get new column ids, as with [`Self::values`].
     pub fn values_with_schema(
+        values: Vec<Vec<Expr>>,
+        schema: &DFSchemaRef,
+    ) -> Result<Self> {
+        Self::values_with_column_id_generator(values, Some(schema), None)
+    }
+
+    /// [`Self::values_with_schema`], without column ids
+    fn values_with_schema_without_ids(
         values: Vec<Vec<Expr>>,
         schema: &DFSchemaRef,
     ) -> Result<Self> {
@@ -558,8 +576,8 @@ impl LogicalPlanBuilder {
         column_id_generator: Option<Arc<ColumnIdGenerator>>,
     ) -> Result<Self> {
         let builder = match schema {
-            Some(schema) => Self::values_with_schema(values, schema)?,
-            None => Self::values(values)?,
+            Some(schema) => Self::values_with_schema_without_ids(values, schema)?,
+            None => Self::values_without_ids(values)?,
         };
         let LogicalPlan::Values(mut values) = Arc::unwrap_or_clone(builder.plan) else {
             return internal_err!("Expected a Values plan");
@@ -893,24 +911,26 @@ impl LogicalPlanBuilder {
                 .alias(table_scan.table_name);
         }
 
-        // the scan defines its columns: they get new ids, unless they have
-        // some (a scan rebuilt from another one)
-        let mut table_scan = table_scan;
+        // the scan defines the columns of its source: they get new ids,
+        // unless they have some (a scan rebuilt from another one)
+        let table_scan = table_scan;
         let generator = column_id_generator.unwrap_or_else(|| {
             let generator = ColumnIdGenerator::new();
-            if let Some(max) = table_scan
-                .projected_schema
-                .field_ids()
-                .iter()
-                .flatten()
-                .max()
-            {
+            let max = match &table_scan.source_column_ids {
+                Some(ids) => ids.iter().max(),
+                None => table_scan
+                    .projected_schema
+                    .field_ids()
+                    .iter()
+                    .flatten()
+                    .max(),
+            };
+            if let Some(max) = max {
                 generator.advance_past(*max);
             }
             Arc::new(generator)
         });
-        table_scan.projected_schema =
-            with_new_field_ids(table_scan.projected_schema, &generator)?;
+        let table_scan = table_scan.with_new_column_ids(&generator)?;
         Ok(Self::chain(
             Some(generator),
             LogicalPlan::TableScan(table_scan),

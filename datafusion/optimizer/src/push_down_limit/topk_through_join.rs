@@ -26,13 +26,12 @@
 //! Dispatched from `PushDownLimit::rewrite` when the plan node is
 //! `LogicalPlan::Sort` with `fetch.is_some()`.
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::utils::{has_all_column_refs, schema_columns};
+use crate::utils::{InputColumns, OutputColumns};
 
-use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, Result, internal_err};
+use datafusion_common::tree_node::Transformed;
+use datafusion_common::{ColumnIdGenerator, Result, internal_err};
 use datafusion_expr::logical_plan::{
     JoinType, LogicalPlan, Projection, Sort as SortPlan, SubqueryAlias,
 };
@@ -76,7 +75,10 @@ fn peel_transparent_layer<'a>(
 /// re-wrapping it into a `LogicalPlan` just to immediately unwrap it) means
 /// early exits can hand `sort` straight back via `LogicalPlan::Sort(sort)`
 /// without cloning.
-pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<LogicalPlan>> {
+pub(super) fn push_topk_through_join(
+    sort: SortPlan,
+    ids: &ColumnIdGenerator,
+) -> Result<Transformed<LogicalPlan>> {
     let Some(fetch) = sort.fetch else {
         return Ok(Transformed::no(LogicalPlan::Sort(sort)));
     };
@@ -150,9 +152,10 @@ pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<Logic
     }
 
     // Confirm the preserved side's schema contains all referenced sort
-    // columns.
+    // columns. A column with an id that one of the inputs has belongs to
+    // that input (see `InputColumns`); the others are found by name.
     //
-    // Caveat: `schema_columns` adds an unqualified entry for every field
+    // Caveat: without an id, `schema_columns` adds an unqualified entry for every field
     // alongside its qualified one, so an unqualified sort column matches as
     // long as the preserved side has a same-named field — even if an
     // identically-named field also exists on the *other* side, in which
@@ -164,15 +167,18 @@ pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<Logic
     // deliberately unqualified `Column` can hit this. `push_down_filter`
     // has the exact same caveat, for the same reason (it also calls
     // `schema_columns` to accept unqualified filter columns).
-    let schema = match preserved_side {
-        Side::Left => join.left.schema(),
-        Side::Right => join.right.schema(),
+    let input_columns =
+        InputColumns::new([join.left.schema().as_ref(), join.right.schema().as_ref()]);
+    let preserved_idx = match preserved_side {
+        Side::Left => 0,
+        Side::Right => 1,
     };
-    let cols = schema_columns(schema);
-    if !resolved_sort_exprs
-        .iter()
-        .all(|se| has_all_column_refs(&se.expr, &cols))
-    {
+    if !resolved_sort_exprs.iter().all(|se| {
+        se.expr
+            .column_refs()
+            .iter()
+            .all(|col| input_columns.has(preserved_idx, col))
+    }) {
         return Ok(Transformed::no(LogicalPlan::Sort(sort)));
     }
 
@@ -242,9 +248,11 @@ pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<Logic
         if child_fetch_tighter {
             return Ok(Transformed::no(LogicalPlan::Sort(sort)));
         }
+        // the pushed sort expressions are copies of the top sort's: their
+        // subqueries get new ids
         rebuild_with_tightened_sort(
             preserved_child.as_ref(),
-            &deep_resolved_exprs,
+            &with_fresh_subquery_column_ids(deep_resolved_exprs, ids)?,
             fetch,
         )?
     } else {
@@ -254,7 +262,7 @@ pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<Logic
         // fetch, re-sorting a small set is cheap and still reduces join
         // input.
         Arc::new(LogicalPlan::Sort(SortPlan {
-            expr: resolved_sort_exprs,
+            expr: with_fresh_subquery_column_ids(resolved_sort_exprs, ids)?,
             input: Arc::clone(preserved_child),
             fetch: Some(fetch),
         }))
@@ -294,27 +302,39 @@ pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<Logic
     })))
 }
 
-/// Replace column references in sort expressions using a structural
-/// `Column`→expr map. Keying by `Column` (rather than `Column::flat_name()`)
-/// avoids collisions between an unqualified column whose name happens to
-/// contain a dot (e.g. a quoted alias `"t1.b"`) and a qualified column that
-/// stringifies the same way (`t1.b`).
+/// `exprs`, copies of sort expressions, where the subqueries have new ids
+/// (see [`Expr::with_fresh_subquery_column_ids`])
+fn with_fresh_subquery_column_ids(
+    exprs: Vec<SortExpr>,
+    ids: &ColumnIdGenerator,
+) -> Result<Vec<SortExpr>> {
+    exprs
+        .into_iter()
+        .map(|sort_expr| {
+            let expr = sort_expr.expr.with_fresh_subquery_column_ids(ids)?.data;
+            Ok(SortExpr { expr, ..sort_expr })
+        })
+        .collect()
+}
+
+/// Replace the column references in sort expressions that read the outputs
+/// of a node whose schema is `schema` with `replacement(i)` for the output
+/// `i` they read (when it is `Some`). A reference finds the output it reads
+/// by id, otherwise by the output `Column` rather than its flat name (see
+/// [`OutputColumns`]): this avoids collisions between an unqualified column
+/// whose name happens to contain a dot (e.g. a quoted alias `"t1.b"`) and a
+/// qualified column that stringifies the same way (`t1.b`).
 fn replace_columns_in_sort_exprs(
     sort_exprs: &[SortExpr],
-    replace_map: &HashMap<Column, Expr>,
+    schema: &datafusion_common::DFSchema,
+    replacement: impl Fn(usize) -> Option<Expr>,
 ) -> Result<Vec<SortExpr>> {
+    let outputs = OutputColumns::new(schema);
     sort_exprs
         .iter()
         .map(|sort_expr| {
-            let new_expr = sort_expr.expr.clone().transform(|expr| {
-                let replacement = match &expr {
-                    Expr::Column(col) => replace_map.get(col).cloned(),
-                    _ => None,
-                };
-                Ok(replacement.map_or_else(|| Transformed::no(expr), Transformed::yes))
-            })?;
             Ok(SortExpr {
-                expr: new_expr.data,
+                expr: outputs.replace(sort_expr.expr.clone(), &replacement)?,
                 ..*sort_expr
             })
         })
@@ -327,17 +347,9 @@ fn resolve_sort_exprs_through_projection(
     sort_exprs: &[SortExpr],
     projection: &Projection,
 ) -> Result<Vec<SortExpr>> {
-    let replace_map: HashMap<Column, Expr> = projection
-        .schema
-        .iter()
-        .zip(projection.expr.iter())
-        .map(|((qualifier, field), expr)| {
-            let key = Column::from((qualifier, field));
-            (key, expr.expr.clone().unalias())
-        })
-        .collect();
-
-    replace_columns_in_sort_exprs(sort_exprs, &replace_map)
+    replace_columns_in_sort_exprs(sort_exprs, &projection.schema, |i| {
+        projection.expr.get(i).map(|e| e.expr.clone().unalias())
+    })
 }
 
 /// Compare two slices of `SortExpr` for structural equality.
@@ -356,18 +368,11 @@ fn resolve_sort_exprs_through_subquery_alias(
     sort_exprs: &[SortExpr],
     subquery_alias: &SubqueryAlias,
 ) -> Result<Vec<SortExpr>> {
-    let replace_map: HashMap<Column, Expr> = subquery_alias
-        .schema
-        .iter()
-        .zip(subquery_alias.input.schema().iter())
-        .map(|((alias_qual, alias_field), (input_qual, input_field))| {
-            let alias_col = Column::from((alias_qual, alias_field));
-            let input_col = Column::from((input_qual, input_field));
-            (alias_col, Expr::Column(input_col))
-        })
-        .collect();
-
-    replace_columns_in_sort_exprs(sort_exprs, &replace_map)
+    // each output is the input column at the same index, with the same id
+    let input_columns = subquery_alias.input.schema().columns();
+    replace_columns_in_sort_exprs(sort_exprs, &subquery_alias.schema, |i| {
+        input_columns.get(i).cloned().map(Expr::Column)
+    })
 }
 
 /// Rebuild the tree from `root` down to an existing Sort whose expressions
@@ -417,6 +422,7 @@ mod test {
     use crate::push_down_limit::PushDownLimit;
     use crate::test::*;
 
+    use datafusion_common::Column;
     use datafusion_expr::col;
     use datafusion_expr::lit;
     use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
@@ -1280,10 +1286,12 @@ mod test {
         // Built via `Projection::try_new` (see comment on
         // `resolve_through_projection_quoted_alias_no_collision`): the
         // builder's `project()` would reject this expression list outright.
-        let proj = LogicalPlan::Projection(new_projection(
-            vec![col("t1.a"), col("t2.b").alias("t1.b"), col("t1.b")],
-            Arc::new(join),
-        )?);
+        // The columns are bound to the join's, as the builder would.
+        let exprs = [col("t1.a"), col("t2.b").alias("t1.b"), col("t1.b")]
+            .into_iter()
+            .map(|e| datafusion_expr::expr_rewriter::normalize_col(e, &join))
+            .collect::<Result<_>>()?;
+        let proj = LogicalPlan::Projection(new_projection(exprs, Arc::new(join))?);
         let plan = LogicalPlanBuilder::from(proj)
             .sort_with_limit(
                 vec![Expr::Column(Column::new_unqualified("t1.b")).sort(true, false)],

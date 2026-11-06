@@ -8,9 +8,9 @@
 use crate::utils::{ids_builder, is_repeatable};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{
-    Transformed, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{ColumnIdGenerator, Result};
+use datafusion_common::{ColumnId, ColumnIdGenerator, Result};
 use datafusion_expr::expr_rewriter::coerce_plan_expr_for_schema;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::utils::disjunction;
@@ -19,6 +19,7 @@ use datafusion_expr::{
     TableSource, Union,
 };
 use log::debug;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 #[derive(Default, Debug)]
@@ -114,8 +115,14 @@ fn try_rewrite_distinct_union(
             wrappers: branch.wrappers,
             table_sources,
         };
-        if let Some((_, conds)) = grouped.iter_mut().find(|(k, _)| k == &key) {
-            conds.push(branch.predicate);
+        if let Some((kept, conds)) = grouped.iter_mut().find(|(k, _)| k == &key) {
+            // the predicate reads the columns of the merged branch's source:
+            // it reads the same columns of the kept one's
+            let Some(ids) = key.source.corresponding_column_ids(&kept.source) else {
+                debug!("unions_to_filter skipped: branch sources do not correspond");
+                return Ok(None);
+            };
+            conds.push(with_renamed_column_ids(branch.predicate, &ids)?);
             transformed = true;
         } else {
             grouped.push((key, vec![branch.predicate]));
@@ -148,6 +155,25 @@ fn try_rewrite_distinct_union(
     // the union it replaces, which the plan above refers to
     let union = union.with_output_column_ids(schema.field_ids())?.data;
     Ok(Some(LogicalPlan::Distinct(Distinct::All(Arc::new(union)))))
+}
+
+/// Returns `expr` where the column references to the ids in `ids` read the
+/// ids they map to
+fn with_renamed_column_ids(
+    expr: Expr,
+    ids: &HashMap<ColumnId, ColumnId>,
+) -> Result<Expr> {
+    expr.transform(|expr| match expr {
+        Expr::Column(col) => match col.id.and_then(|id| ids.get(&id)) {
+            Some(id) => {
+                let id = Some(*id);
+                Ok(Transformed::yes(Expr::Column(col.with_id(id))))
+            }
+            None => Ok(Transformed::no(Expr::Column(col))),
+        },
+        _ => Ok(Transformed::no(expr)),
+    })
+    .data()
 }
 
 struct UnionBranch {

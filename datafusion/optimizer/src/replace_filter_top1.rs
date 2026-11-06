@@ -6,16 +6,17 @@
 //! into a `first_value` aggregate.
 
 use crate::optimizer::{ApplyOrder, ApplyOrder::BottomUp};
-use crate::utils::plan_builder;
 use crate::{OptimizerConfig, OptimizerRule};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use datafusion_common::ScalarValue;
 use datafusion_common::tree_node::Transformed;
-use datafusion_common::{Column, Result};
+use datafusion_common::{Column, ColumnIdGenerator, Result, internal_err};
+use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::{
     Aggregate, BinaryExpr, Expr, Filter, LogicalPlan, NamedExpr, Operator, Projection,
-    SortExpr,
+    Window,
 };
 use datafusion_expr::{ExprFunctionExt, lit};
 
@@ -83,11 +84,8 @@ impl OptimizerRule for ReplaceFilterTop1 {
         };
 
         let Some(WindowTop1 {
-            order_by,
-            partition_by,
+            window,
             rn_col,
-            input_cols,
-            child,
             projection,
         }) = validate_window_input(input)
         else {
@@ -106,29 +104,45 @@ impl OptimizerRule for ReplaceFilterTop1 {
             return Ok(Transformed::no(plan));
         }
 
-        let is_partition = |c: &Column| {
-            partition_by.iter().any(|e| matches!(e, Expr::Column(p) if p.name == c.name && p.relation == c.relation))
-        };
-
-        // Group by the partition keys and take `first_value(col ORDER BY ...)` for every other
-        // input column, aliased back to that column's qualifier+name
         let Some(registry) = config.function_registry() else {
             return Ok(Transformed::no(plan));
         };
         let first_value = registry.udaf("first_value")?;
         let ids = config.column_id_generator();
-        let aggr_expr = input_cols
-            .iter()
-            .filter(|c| !is_partition(c))
-            .map(|c| {
+
+        // The plan above reads the outputs of the `Filter` by id, and the
+        // `first_value`s replace the input columns other than the partition
+        // keys. So the `first_value`s take the ids of those columns, which
+        // take new ids below them.
+        let renumbered = with_new_ids_for_payload_columns(window, ids)?;
+        let Some(window_function) = row_number_function(&renumbered) else {
+            return internal_err!("expected a row_number() window");
+        };
+        let order_by = &window_function.params.order_by;
+        let partition_by = &window_function.params.partition_by;
+        let child = &renumbered.input;
+
+        // Group by the partition keys and take `first_value(col ORDER BY ...)` for every other
+        // input column, aliased back to that column's qualifier+name. A column
+        // that the input outputs twice (`SELECT a, a`) is computed once.
+        let mut seen = HashSet::new();
+        let aggr_expr = child
+            .schema()
+            .columns()
+            .into_iter()
+            .zip(window.input.schema().field_ids())
+            .filter(|(c, _)| !is_partition_column(partition_by, c))
+            .filter(|(_, id)| id.is_none_or(|id| seen.insert(id)))
+            .map(|(c, id)| {
+                let alias = (c.relation.clone(), c.name.clone());
                 first_value
-                    .call(vec![Expr::Column(c.clone())])
-                    .order_by(order_by.to_vec())
+                    .call(vec![Expr::Column(c)])
+                    .order_by(order_by.clone())
                     .build()
                     .map(|e| {
                         NamedExpr::new(
-                            e.alias_qualified(c.relation.clone(), c.name.clone()),
-                            ids.next(),
+                            e.alias_qualified(alias.0, alias.1),
+                            id.unwrap_or_else(|| ids.next()),
                         )
                     })
             })
@@ -139,43 +153,63 @@ impl OptimizerRule for ReplaceFilterTop1 {
             .map(|e| NamedExpr::allocate(e, child.schema(), ids))
             .collect();
 
-        let aggregate = LogicalPlan::Aggregate(Aggregate::try_new(
+        let aggregate = Arc::new(LogicalPlan::Aggregate(Aggregate::try_new(
             Arc::clone(child),
             group_expr,
             None,
             aggr_expr,
-        )?);
+        )?));
 
         // Restoring the Filter's exact output schema on top of the aggregate
         let proj_exprs = match projection {
-            None => input
-                .schema()
-                .iter()
-                .map(|(qualifier, field)| {
-                    if qualifier.is_none() && field.name() == &rn_col.name {
-                        lit(1u64).alias(field.name())
-                    } else {
-                        Expr::Column(Column::new(qualifier.cloned(), field.name()))
-                    }
-                })
-                .collect::<Vec<_>>(),
+            None => {
+                let rn_index = window.schema.fields().len() - 1;
+                window
+                    .schema
+                    .iter()
+                    .enumerate()
+                    .map(|(i, (qualifier, field))| {
+                        if i == rn_index {
+                            return NamedExpr::new(
+                                lit(1u64).alias(field.name()),
+                                window.window_expr[0].id,
+                            );
+                        }
+                        let column = Column::new(qualifier.cloned(), field.name());
+                        match window.schema.field_id(i) {
+                            Some(id) => NamedExpr::new(
+                                Expr::Column(column.with_id(Some(id))),
+                                id,
+                            ),
+                            None => NamedExpr::allocate(
+                                Expr::Column(column),
+                                aggregate.schema(),
+                                ids,
+                            ),
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            }
             Some(p) => p
                 .expr
                 .iter()
                 .zip(p.schema.iter())
-                .map(|(expr, (qualifier, field))| {
-                    if matches!(unalias(expr), Expr::Column(c) if *c == rn_col) {
-                        lit(1u64).alias_qualified(qualifier.cloned(), field.name())
+                .map(|(entry, (qualifier, field))| {
+                    if matches!(unalias(&entry.expr), Expr::Column(c) if c.same_column(&rn_col))
+                    {
+                        NamedExpr::new(
+                            lit(1u64).alias_qualified(qualifier.cloned(), field.name()),
+                            entry.id,
+                        )
                     } else {
-                        expr.expr.clone()
+                        entry.clone()
                     }
                 })
                 .collect::<Vec<_>>(),
         };
 
-        let new_plan = plan_builder(aggregate, config)
-            .project(proj_exprs)?
-            .build()?;
+        let new_plan =
+            LogicalPlan::Projection(Projection::try_new(proj_exprs, aggregate)?);
         Ok(Transformed::yes(new_plan))
     }
 
@@ -205,7 +239,7 @@ fn has_valid_predicate(predicate: &Expr, rn_ref: &Column) -> bool {
         _ => return false,
     };
 
-    col == rn_ref
+    col.same_column(rn_ref)
         && match op {
             Operator::Lt => val == 2,
             Operator::Eq | Operator::LtEq => val == 1,
@@ -216,16 +250,13 @@ fn has_valid_predicate(predicate: &Expr, rn_ref: &Column) -> bool {
 /// A `row_number()` window recognized beneath a `Filter`, decomposed into the
 /// pieces the rewrite needs. Borrows from the matched [`LogicalPlan`].
 struct WindowTop1<'a> {
-    /// `ORDER BY` of the window (becomes the `first_value` ordering).
-    order_by: &'a [SortExpr],
-    /// `PARTITION BY` of the window (becomes the aggregate group-by).
-    partition_by: &'a [Expr],
+    /// The window, whose function is `row_number()` with a `PARTITION BY` (see
+    /// [`row_number_function`]). The `ORDER BY` becomes the `first_value`
+    /// ordering, the `PARTITION BY` the aggregate group-by, the input the
+    /// aggregate's input and its columns the candidate payload columns.
+    window: &'a Window,
     /// The `row_number()` output column produced by the window.
     rn_col: Column,
-    /// Columns produced by the window's input (candidate payload columns).
-    input_cols: Vec<Column>,
-    /// The window's input, which becomes the aggregate's input.
-    child: &'a Arc<LogicalPlan>,
     /// Optional passthrough `Projection` sitting between the `Filter` and the
     /// `Window`. When present, its expressions are re-applied on top of the
     /// rewritten aggregate.
@@ -247,7 +278,22 @@ fn validate_window_input(input: &Arc<LogicalPlan>) -> Option<WindowTop1<'_>> {
     if window.window_expr.len() != 1 {
         return None;
     }
+    row_number_function(window)?;
 
+    // The row_number output is the single window expression, appended
+    // as the last column of the window's output schema.
+    let rn_col = window.schema.columns().last()?.clone();
+
+    Some(WindowTop1 {
+        window,
+        rn_col,
+        projection,
+    })
+}
+
+/// The window function of `window` if it is `row_number()` with a non-empty
+/// `PARTITION BY`
+fn row_number_function(window: &Window) -> Option<&WindowFunction> {
     let window_expr = window.window_expr.first()?;
     let Expr::WindowFunction(window_function) = &window_expr.expr else {
         return None;
@@ -263,34 +309,70 @@ fn validate_window_input(input: &Arc<LogicalPlan>) -> Option<WindowTop1<'_>> {
         return None;
     }
 
-    // The row_number output is the single window expression, appended
-    // as the last column of the window's output schema.
-    let rn_col = window.schema.columns().last()?.clone();
-
-    Some(WindowTop1 {
-        order_by: &window_function.params.order_by,
-        partition_by: &window_function.params.partition_by,
-        rn_col,
-        input_cols: window.input.schema().columns(),
-        child: &window.input,
-        projection,
-    })
+    Some(window_function)
 }
 
-/// Return the projection output name for a plain passthrough of `rn_col`
+/// Whether `column` is one of the `PARTITION BY` expressions `partition_by`
+fn is_partition_column(partition_by: &[Expr], column: &Column) -> bool {
+    partition_by
+        .iter()
+        .any(|e| matches!(e, Expr::Column(p) if p.same_column(column)))
+}
+
+/// Returns `window` where the columns of its input that are not partition keys
+/// have new ids, in the input and in the expressions of the window.
+fn with_new_ids_for_payload_columns(
+    window: &Window,
+    ids: &ColumnIdGenerator,
+) -> Result<Window> {
+    let partition_by = row_number_function(window)
+        .map(|f| f.params.partition_by.as_slice())
+        .unwrap_or_default();
+    let mut new_ids = HashMap::new();
+    let input_len = window.input.schema().fields().len();
+    let output_ids = window
+        .schema
+        .columns()
+        .iter()
+        .enumerate()
+        .map(|(i, column)| {
+            if i >= input_len || is_partition_column(partition_by, column) {
+                column.id
+            } else {
+                column
+                    .id
+                    .map(|id| *new_ids.entry(id).or_insert_with(|| ids.next()))
+            }
+        })
+        .collect::<Vec<_>>();
+    match LogicalPlan::Window(window.clone())
+        .with_output_column_ids(&output_ids)?
+        .data
+    {
+        LogicalPlan::Window(window) => Ok(window),
+        plan => internal_err!("expected a window, got {plan}"),
+    }
+}
+
+/// Return the projection output column for a plain passthrough of `rn_col`
 /// or `None` if unsafe (dropped, duplicated, used inside computed expr that wecan't fold to the constant integer `1`)
 fn rn_passthrough_column(projection: &Projection, rn_col: &Column) -> Option<Column> {
     let mut rn_output: Option<Column> = None;
-    for (expr, (qualifier, field)) in projection.expr.iter().zip(projection.schema.iter())
+    for (entry, (qualifier, field)) in
+        projection.expr.iter().zip(projection.schema.iter())
     {
-        let is_passthrough = matches!(unalias(expr), Expr::Column(c) if c == rn_col);
+        let is_passthrough =
+            matches!(unalias(&entry.expr), Expr::Column(c) if c.same_column(rn_col));
         if is_passthrough {
             if rn_output.is_some() {
                 // rn exposed under more than one output column.
                 return None;
             }
-            rn_output = Some(Column::new(qualifier.cloned(), field.name().clone()));
-        } else if expr.column_refs().iter().any(|c| *c == rn_col) {
+            rn_output = Some(
+                Column::new(qualifier.cloned(), field.name().clone())
+                    .with_id(Some(entry.id)),
+            );
+        } else if entry.column_refs().iter().any(|c| c.same_column(rn_col)) {
             // rn used inside a non-passthrough (like a computed) expression.
             return None;
         }
@@ -312,21 +394,17 @@ mod tests {
     use crate::OptimizerContext;
     use crate::test::*;
 
-    use std::collections::HashSet;
-
     use chrono::{DateTime, Utc};
-    use datafusion_common::ColumnIdGenerator;
     use datafusion_common::DataFusionError;
     use datafusion_common::alias::AliasGenerator;
     use datafusion_common::config::ConfigOptions;
     use datafusion_expr::WindowFunctionDefinition;
-    use datafusion_expr::col;
-    use datafusion_expr::expr::WindowFunction;
     use datafusion_expr::planner::ExprPlanner;
     use datafusion_expr::registry::FunctionRegistry;
     use datafusion_expr::{
         AggregateUDF, HigherOrderUDF, LogicalPlanBuilder, ScalarUDF, WindowUDF,
     };
+    use datafusion_expr::{SortExpr, col};
 
     /// A minimal [`FunctionRegistry`] that only knows `first_value` (all the
     /// rewrite needs). `OptimizerContext` provides no registry on its own.
@@ -472,7 +550,15 @@ mod tests {
     }
 
     fn rewrite(plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
-        ReplaceFilterTop1::new().rewrite(plan, &TestConfig::new())
+        let config = TestConfig::new();
+        // as the optimizer does before its rules
+        if let Some(id) = plan.max_column_id() {
+            config.column_id_generator().advance_past(id);
+        }
+        let before = plan.clone();
+        let optimized = ReplaceFilterTop1::new().rewrite(plan, &config)?;
+        assert_no_new_column_id_issues(&before, &optimized.data);
+        Ok(optimized)
     }
 
     // ---------- rewrite fires ----------
@@ -546,6 +632,25 @@ Projection: test.c, test.a, test.b, UInt64(1) AS rn
   Aggregate: groupBy=[[test.a]], aggr=[[first_value(test.b) ORDER BY [test.c DESC NULLS FIRST] AS b, first_value(test.c) ORDER BY [test.c DESC NULLS FIRST] AS c]]
     TableScan: test
 ");
+        Ok(())
+    }
+
+    #[test]
+    fn rewrite_keeps_output_column_ids() -> Result<()> {
+        for plan in [
+            top1_plan(vec![col("a")], |rn| rn.eq(lit(1u64)))?,
+            top1_plan_with_projection(
+                vec![col("a")],
+                |rn| vec![col("c"), col("a"), col("b"), rn.alias("rn")],
+                |rn_out| rn_out.eq(lit(1u64)),
+            )?,
+        ] {
+            let output_ids = plan.schema().field_ids().to_vec();
+            assert!(output_ids.iter().all(Option::is_some));
+            let optimized = rewrite(plan)?;
+            assert!(optimized.transformed);
+            assert_eq!(optimized.data.schema().field_ids(), output_ids.as_slice());
+        }
         Ok(())
     }
 

@@ -105,9 +105,10 @@ fn apply_emit_kind(
 
                     let mut exprs: Vec<Expr> = Vec::with_capacity(output_mapping.len());
                     for index in output_mapping.into_iter() {
-                        let column = Expr::Column(Column::from(
-                            input_schema.qualified_field(index as usize),
-                        ));
+                        let column = Expr::Column(
+                            Column::from(input_schema.qualified_field(index as usize))
+                                .with_id(input_schema.field_id(index as usize)),
+                        );
                         let expr = name_tracker.get_uniquely_named_expr(column)?;
                         exprs.push(expr);
                     }

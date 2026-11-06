@@ -121,10 +121,10 @@ impl AnalyzerRule for TypeCoercion {
         // finish
         let plan = coerce_output(transformed_plan, config, &generator)?;
 
-        // a scalar subquery cast by `ExprSchemable::cast_to` gets ids that
-        // are new within the subquery only
+        // a scalar subquery cast by `ExprSchemable::cast_to` gets outputs
+        // whose ids are new within the subquery only
         Ok(plan
-            .with_fresh_column_ids_in_colliding_subqueries(&generator)?
+            .with_fresh_ids_for_colliding_subquery_outputs(&generator)?
             .data)
     }
 }
@@ -339,7 +339,7 @@ impl<'a> TypeCoercionRewriter<'a> {
     /// (casts of the outputs of subqueries and of union inputs). Without one,
     /// they get ids after the highest id of the plan they are added to,
     /// which may collide with the ids of a larger plan (see
-    /// `LogicalPlan::with_fresh_column_ids_in_colliding_subqueries`).
+    /// `LogicalPlan::with_fresh_ids_for_colliding_subquery_outputs`).
     pub fn with_column_id_generator(
         mut self,
         column_id_generator: Option<&'a ColumnIdGenerator>,
@@ -2076,14 +2076,16 @@ mod test {
 
     #[test]
     fn test_coerce_union() -> Result<()> {
+        let generator = datafusion_common::ColumnIdGenerator::new();
         let left_plan = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
             produce_one_row: false,
             schema: Arc::new(
+                // the relations define their columns
                 DFSchema::try_from_qualified_schema(
                     TableReference::full("datafusion", "test", "foo"),
                     &Schema::new(vec![Field::new("a", DataType::Int32, false)]),
-                )
-                .unwrap(),
+                )?
+                .with_field_ids(vec![Some(generator.next())])?,
             ),
         }));
         let right_plan = Arc::new(LogicalPlan::EmptyRelation(EmptyRelation {
@@ -2092,13 +2094,13 @@ mod test {
                 DFSchema::try_from_qualified_schema(
                     TableReference::full("datafusion", "test", "foo"),
                     &Schema::new(vec![Field::new("a", DataType::Int64, false)]),
-                )
-                .unwrap(),
+                )?
+                .with_field_ids(vec![Some(generator.next())])?,
             ),
         }));
         let union = LogicalPlan::Union(Union::try_new_with_loose_types(
             vec![left_plan, right_plan],
-            &datafusion_common::ColumnIdGenerator::new(),
+            &generator,
         )?);
         let analyzed_union = Analyzer::with_rules(vec![Arc::new(TypeCoercion::new())])
             .execute_and_check(union, &ConfigOptions::default(), |_, _| {})?;

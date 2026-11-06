@@ -11,8 +11,12 @@ use arrow::array::{Array, RecordBatch, new_null_array};
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion_common::TableReference;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::tree_node::{TransformedResult, TreeNode, TreeNodeRecursion};
-use datafusion_common::{Column, ColumnIdGenerator, DFSchema, Result, ScalarValue};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
+use datafusion_common::{
+    Column, ColumnId, ColumnIdGenerator, DFSchema, Result, ScalarValue,
+};
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr::{Exists, InSubquery, SetComparison};
 use datafusion_expr::expr_rewriter::replace_col;
@@ -83,6 +87,109 @@ pub(crate) fn with_output_ids_of(
         .collect();
     Projection::try_new_with_schema(expr, projection.input, projection.schema)
         .map(LogicalPlan::Projection)
+}
+
+/// Returns a projection over `plan` that passes its outputs through, except
+/// those for which `redefine(i, column)` (`column` reads output `i`) returns
+/// an expression: that output is computed by the expression, and keeps the id
+/// the output of `plan` had, which the plan above refers to. The column it
+/// replaces gets a new id inside `plan` (see
+/// [`LogicalPlan::with_output_column_ids`]), and the references of the new
+/// expressions follow it. References without an id in the new expressions
+/// are bound by name to the outputs of `plan`.
+///
+/// Used where a rule wraps the columns of a plan that replaces a node (count
+/// bug compensation): the plan above reads the wrapped values.
+pub(crate) fn project_redefining_outputs(
+    plan: LogicalPlan,
+    ids: &ColumnIdGenerator,
+    mut redefine: impl FnMut(usize, Expr) -> Result<Option<Expr>>,
+) -> Result<LogicalPlan> {
+    let schema = Arc::clone(plan.schema());
+    let columns = schema.columns();
+    let bind = |expr: Expr| -> Result<Expr> {
+        expr.transform(|expr| match expr {
+            Expr::Column(col) if col.id.is_none() => {
+                let id = schema
+                    .maybe_index_of_column(&col)
+                    .and_then(|i| schema.field_id(i));
+                Ok(Transformed::new_transformed(
+                    Expr::Column(col.with_id(id)),
+                    id.is_some(),
+                ))
+            }
+            _ => Ok(Transformed::no(expr)),
+        })
+        .data()
+    };
+    let mut redefined = Vec::with_capacity(columns.len());
+    for (i, column) in columns.iter().enumerate() {
+        redefined.push(
+            redefine(i, Expr::Column(column.clone()))?
+                .map(bind)
+                .transpose()?,
+        );
+    }
+    if redefined.iter().all(Option::is_none) {
+        return Ok(plan);
+    }
+    // the redefined outputs of `plan` take new ids
+    let defined = plan.defined_column_ids();
+    let mut renames: HashMap<ColumnId, ColumnId> = HashMap::new();
+    let new_ids: Vec<Option<ColumnId>> = schema
+        .field_ids()
+        .iter()
+        .zip(&redefined)
+        .map(|(id, expr)| match (id, expr) {
+            (Some(id), Some(_)) if defined.contains(id) => {
+                Some(*renames.entry(*id).or_insert_with(|| ids.next()))
+            }
+            _ => *id,
+        })
+        .collect();
+    let plan = plan.with_output_column_ids(&new_ids)?.data;
+    let renamed_schema = Arc::clone(plan.schema());
+    let rename = |expr: Expr| -> Result<Expr> {
+        expr.transform(|expr| match expr {
+            Expr::Column(col) => match col.id.and_then(|id| renames.get(&id)) {
+                Some(new_id) => {
+                    let new_id = Some(*new_id);
+                    Ok(Transformed::yes(Expr::Column(col.with_id(new_id))))
+                }
+                None => Ok(Transformed::no(Expr::Column(col))),
+            },
+            _ => Ok(Transformed::no(expr)),
+        })
+        .data()
+    };
+    let entries = redefined
+        .into_iter()
+        .enumerate()
+        .map(|(i, expr)| {
+            let old_id = schema.field_id(i);
+            let new_id = renamed_schema.field_id(i);
+            match expr {
+                // the output keeps its id if the column below was renamed
+                Some(expr) => {
+                    let id = match (old_id, new_id) {
+                        (Some(old), Some(new)) if old != new => old,
+                        _ => ids.next(),
+                    };
+                    Ok(NamedExpr::new(rename(expr)?, id))
+                }
+                None => {
+                    let column = Expr::Column(
+                        Column::from(renamed_schema.qualified_field(i)).with_id(new_id),
+                    );
+                    Ok(match new_id {
+                        Some(id) => NamedExpr::new(column, id),
+                        None => NamedExpr::allocate(column, &renamed_schema, ids),
+                    })
+                }
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Projection::try_new(entries, Arc::new(plan)).map(LogicalPlan::Projection)
 }
 
 /// Returns `plan`, an aggregate that rebuilds `old` with possibly more
@@ -237,22 +344,6 @@ fn visit_referenced_indices(
     Ok(())
 }
 
-/// Returns true if `expr` contains all columns in `schema_cols`
-pub(crate) fn has_all_column_refs(
-    expr: &Expr,
-    schema_cols: &HashSet<ColumnReference>,
-) -> bool {
-    let column_refs = expr.column_refs();
-    // note can't use HashSet::intersect because of different types (owned vs References)
-    column_refs
-        .iter()
-        .filter(|c| {
-            schema_cols.contains(&ColumnReference::new(c.relation.as_ref(), c.name()))
-        })
-        .count()
-        == column_refs.len()
-}
-
 pub(crate) fn replace_qualified_name(
     expr: Expr,
     cols: &BTreeSet<Column>,
@@ -266,6 +357,138 @@ pub(crate) fn replace_qualified_name(
         cols.iter().zip(alias_cols.iter()).collect();
 
     replace_col(expr, &replace_map)
+}
+
+/// Finds the output column of a node that a reference reads, as a lookup in
+/// the node's schema does: by id when the node has an output with the
+/// reference's id, otherwise by qualifier and name. Unlike
+/// [`DFSchema::maybe_index_of_column`], the name must match exactly (as
+/// [`Column`] equality): an unqualified reference does not find a qualified
+/// output, so that rules that substitute the outputs they find keep the
+/// references they did not find by name before ids.
+///
+/// The first output wins when several have the same id (`SELECT a, a`, they
+/// hold the same values) or the same name.
+#[derive(Debug)]
+pub(crate) struct OutputColumns {
+    by_id: HashMap<ColumnId, usize>,
+    by_column: HashMap<Column, usize>,
+}
+
+impl OutputColumns {
+    /// The outputs of a node whose schema is `schema`
+    pub(crate) fn new(schema: &DFSchema) -> Self {
+        let mut by_id = HashMap::with_capacity(schema.fields().len());
+        let mut by_column = HashMap::with_capacity(schema.fields().len());
+        for (i, col) in schema.columns().into_iter().enumerate() {
+            if let Some(id) = col.id {
+                by_id.entry(id).or_insert(i);
+            }
+            by_column.entry(col).or_insert(i);
+        }
+        Self { by_id, by_column }
+    }
+
+    /// The index of the output that `col` reads, if any
+    pub(crate) fn index_of(&self, col: &Column) -> Option<usize> {
+        col.id
+            .and_then(|id| self.by_id.get(&id))
+            .or_else(|| self.by_column.get(col))
+            .copied()
+    }
+
+    /// Returns `expr` with each column that reads an output `i` for which
+    /// `replacement(i)` is `Some` replaced by that expression
+    pub(crate) fn replace(
+        &self,
+        expr: Expr,
+        mut replacement: impl FnMut(usize) -> Option<Expr>,
+    ) -> Result<Expr> {
+        expr.transform_up(|expr| {
+            if let Expr::Column(col) = &expr
+                && let Some(new_expr) = self.index_of(col).and_then(&mut replacement)
+            {
+                Ok(Transformed::yes(new_expr))
+            } else {
+                Ok(Transformed::no(expr))
+            }
+        })
+        .data()
+    }
+
+    /// Whether `expr` reads an output `i` for which `f(i)` is true (columns
+    /// only, not the outer references of its subqueries)
+    pub(crate) fn reads_any(
+        &self,
+        expr: &Expr,
+        mut f: impl FnMut(usize) -> bool,
+    ) -> bool {
+        let mut found = false;
+        expr.apply(|expr| {
+            if let Expr::Column(col) = expr
+                && self.index_of(col).is_some_and(&mut f)
+            {
+                found = true;
+                return Ok(TreeNodeRecursion::Stop);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })
+        .expect("traversal is infallible");
+        found
+    }
+}
+
+/// The columns of the inputs of a node, to find the input whose columns an
+/// expression reads: a column with an id that one of the inputs has belongs
+/// to that input, the others are found by qualifier and name (also
+/// unqualified, see [`schema_columns`]).
+pub(crate) struct InputColumns<'a> {
+    /// The columns of each input, by name
+    columns: Vec<HashSet<ColumnReference<'a>>>,
+    /// The input each id of the inputs is a column of
+    ids: HashMap<ColumnId, usize>,
+}
+
+impl<'a> InputColumns<'a> {
+    pub(crate) fn new(schemas: impl IntoIterator<Item = &'a DFSchema>) -> Self {
+        let mut columns = vec![];
+        let mut ids = HashMap::new();
+        for (idx, schema) in schemas.into_iter().enumerate() {
+            for id in schema.field_ids().iter().flatten() {
+                ids.entry(*id).or_insert(idx);
+            }
+            columns.push(schema_columns(schema));
+        }
+        Self { columns, ids }
+    }
+
+    /// Whether `col` is a column of the input `idx`
+    pub(crate) fn has(&self, idx: usize, col: &Column) -> bool {
+        match col.id.and_then(|id| self.ids.get(&id)) {
+            Some(owner) => *owner == idx,
+            None => self.columns[idx]
+                .contains(&ColumnReference::new(col.relation.as_ref(), col.name())),
+        }
+    }
+
+    /// The index of the input whose columns cover the column references of
+    /// `expr`. Returns `None` if the expression references columns from
+    /// multiple inputs or if multiple inputs match (ambiguous, e.g.
+    /// unqualified columns present in both sides of a join).
+    pub(crate) fn owner(&self, expr: &Expr) -> Option<usize> {
+        let column_refs = expr.column_refs();
+        let mut found = None;
+        for idx in 0..self.columns.len() {
+            if column_refs.iter().all(|col| self.has(idx, col)) {
+                if found.is_some() {
+                    // Ambiguous — multiple inputs match
+                    return None;
+                }
+                found = Some(idx);
+            }
+        }
+        found
+    }
 }
 
 /// Column reference to avoid copying string around

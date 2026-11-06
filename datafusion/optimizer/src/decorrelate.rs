@@ -1125,6 +1125,18 @@ fn correlated_filter_columns(plan: &LogicalPlan) -> Vec<Column> {
 /// window expression keeps its old output name and id, so nothing above sees a
 /// change.
 fn partition_window_by(window: &Window, cols: &BTreeSet<Column>) -> Result<LogicalPlan> {
+    // the columns read the window's input, with their ids
+    let input_schema = window.input.schema();
+    let cols: BTreeSet<Column> = cols
+        .iter()
+        .map(|col| {
+            let id = input_schema
+                .maybe_index_of_column(col)
+                .and_then(|i| input_schema.field_id(i));
+            col.clone().with_id(id.or(col.id))
+        })
+        .collect();
+    let cols = &cols;
     let window_expr = window
         .window_expr
         .iter()

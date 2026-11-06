@@ -782,8 +782,8 @@ impl ExprSchemable for Expr {
                     // new within the subquery only, which may collide with an
                     // id defined elsewhere in the plan. Nothing outside the
                     // subquery refers to its output by id, and the analyzer
-                    // renumbers subqueries whose ids collide (see
-                    // `LogicalPlan::with_fresh_column_ids_in_colliding_subqueries`).
+                    // gives new ids to the outputs that collide (see
+                    // `LogicalPlan::with_fresh_ids_for_colliding_subquery_outputs`).
                     let generator =
                         ColumnIdGenerator::new_after(subquery.subquery.max_column_id());
                     Ok(Expr::ScalarSubquery(cast_subquery(
@@ -909,9 +909,11 @@ pub fn cast_subquery_columns(
                 .iter()
                 .enumerate()
                 .map(|(i, cast_to_type)| {
-                    let expr =
-                        Expr::Column(Column::from(plan.schema().qualified_field(i)))
-                            .cast_to(cast_to_type, subquery.subquery.schema())?;
+                    let expr = Expr::Column(
+                        Column::from(plan.schema().qualified_field(i))
+                            .with_id(plan.schema().field_id(i)),
+                    )
+                    .cast_to(cast_to_type, subquery.subquery.schema())?;
                     Ok(NamedExpr::allocate(expr, plan.schema(), generator))
                 })
                 .collect::<Result<Vec<_>>>()?;

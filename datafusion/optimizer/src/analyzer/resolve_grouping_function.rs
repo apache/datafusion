@@ -76,6 +76,8 @@ fn replace_grouping_exprs(
     // Create HashMap from Expr to index in the grouping_id bitmap
     let is_grouping_set = grouping_sets.is_some();
     let group_expr_to_bitmap_index = group_expr_to_bitmap_index(&group_expr)?;
+    // the grouping id column, which the grouping functions read
+    let grouping_id = grouping_sets.as_ref().map(|sets| sets.grouping_id);
     let columns = schema.columns();
     let mut new_agg_expr = Vec::new();
     let grouping_id_len = usize::from(is_grouping_set);
@@ -94,11 +96,13 @@ fn replace_grouping_exprs(
         .into_iter()
         .zip(columns.into_iter().skip(group_expr_len + grouping_id_len))
     {
-        let grouping_id_type = is_grouping_set
-            .then(|| {
-                schema
-                    .field_with_name(None, Aggregate::INTERNAL_GROUPING_ID)
-                    .map(|f| f.data_type().clone())
+        let grouping_id_column = grouping_id
+            .map(|id| -> Result<_> {
+                let data_type = schema
+                    .field_with_name(None, Aggregate::INTERNAL_GROUPING_ID)?
+                    .data_type()
+                    .clone();
+                Ok((id, data_type))
             })
             .transpose()?;
         let id = entry.id;
@@ -108,7 +112,7 @@ fn replace_grouping_exprs(
                 let grouping_expr = grouping_function_on_id(
                     function,
                     &group_expr_to_bitmap_index,
-                    grouping_id_type,
+                    grouping_id_column.clone(),
                 )?;
                 projection_exprs.push((
                     Expr::Alias(Alias::new(grouping_expr, column.relation, column.name)),
@@ -124,7 +128,7 @@ fn replace_grouping_exprs(
                 let grouping_expr = grouping_function_on_id(
                     function,
                     &group_expr_to_bitmap_index,
-                    grouping_id_type,
+                    grouping_id_column.clone(),
                 )?;
                 // Preserve the outermost user-provided alias
                 projection_exprs.push((
@@ -250,15 +254,16 @@ fn validate_args(
 fn grouping_function_on_id(
     function: &AggregateFunction,
     group_by_expr: &HashMap<&Expr, usize>,
-    // None means not a grouping set (result is always 0).
-    grouping_id_type: Option<DataType>,
+    // The id and type of the grouping id column; None means not a grouping
+    // set (result is always 0).
+    grouping_id_column: Option<(ColumnId, DataType)>,
 ) -> Result<Expr> {
     validate_args(function, group_by_expr)?;
     let args = &function.params.args;
 
     // Postgres allows grouping function for group by without grouping sets, the result is then
     // always 0
-    let Some(grouping_id_type) = grouping_id_type else {
+    let Some((grouping_id, grouping_id_type)) = grouping_id_column else {
         return Ok(Expr::Literal(ScalarValue::from(0i32), None));
     };
 
@@ -273,7 +278,9 @@ fn grouping_function_on_id(
         DataType::UInt64 => Expr::Literal(ScalarValue::from(value as u64), None),
         other => panic!("unexpected __grouping_id type: {other}"),
     };
-    let grouping_id_column = Expr::Column(Column::from(Aggregate::INTERNAL_GROUPING_ID));
+    let grouping_id_column = Expr::Column(
+        Column::from(Aggregate::INTERNAL_GROUPING_ID).with_id(Some(grouping_id)),
+    );
     if args.len() == group_by_expr.len()
         && args
             .iter()

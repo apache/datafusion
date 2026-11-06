@@ -712,9 +712,11 @@ fn merge_consecutive_projections_one_level(
         // to it (a merged bare column can then define a column, see
         // `NamedExpr`). The lower projection's definitions disappear with the
         // merge, so an upper output that passed one of them through can keep
-        // its id. But an upper output that passes through a column defined
-        // elsewhere (further below, or not at all) and is no longer a
-        // pass-through (`t.a AS a`) defines a new column: it gets a new id.
+        // its id, and so can one that still passes its column through (also
+        // as `t.a AS a`, see `NamedExpr::is_pass_through`). Otherwise an
+        // upper output that passed through a column defined elsewhere
+        // (further below, or not at all) defines a new column: it gets a new
+        // id.
         let new_exprs = new_exprs
             .data
             .into_iter()
@@ -726,10 +728,14 @@ fn merge_consecutive_projections_one_level(
                     .expr
                     .iter()
                     .any(|lower| lower.id == upper.id && !lower.is_pass_through());
-                if !upper.is_pass_through() || defined_by_lower {
-                    NamedExpr::new(expr, upper.id)
+                let merged = NamedExpr::new(expr, upper.id);
+                if !upper.is_pass_through()
+                    || defined_by_lower
+                    || merged.is_pass_through()
+                {
+                    merged
                 } else {
-                    upper.with_rewritten_expr(expr, config.column_id_generator())
+                    upper.with_rewritten_expr(merged.expr, config.column_id_generator())
                 }
             })
             .collect::<Vec<_>>();
@@ -962,7 +968,16 @@ fn rewrite_projection_given_requirements(
     optimize_projections(Arc::unwrap_or_clone(input), config, required_indices)?
         .transform_data(|input| {
             if is_projection_unnecessary(&input, &exprs_used)? {
-                Ok(Transformed::yes(input))
+                // The input replaces the projection. An entry can re-define the
+                // column it reads with another id (see `NamedExpr`), which the
+                // plan above refers to: the input's outputs take the ids of
+                // the projection's outputs, where its definitions can (see
+                // `LogicalPlan::with_output_column_ids`).
+                let ids: Vec<_> = exprs_used.iter().map(|e| Some(e.id)).collect();
+                if input.schema().field_ids() == ids.as_slice() {
+                    return Ok(Transformed::yes(input));
+                }
+                Ok(Transformed::yes(input.with_output_column_ids(&ids)?.data))
             } else if exprs_used.iter().any(|e| contains_subquery(&e.expr))
                 || !read_fields_unchanged(
                     &old_input_schema,
@@ -1127,7 +1142,6 @@ mod tests {
     };
     use insta::assert_snapshot;
 
-    use crate::assert_optimized_plan_eq_snapshot;
     use datafusion_functions_aggregate::count::count_udaf;
     use datafusion_functions_aggregate::expr_fn::{count, max, min};
     use datafusion_functions_aggregate::min_max::max_udaf;
@@ -1138,13 +1152,11 @@ mod tests {
             @ $expected:literal $(,)?
         ) => {{
             let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
-            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(OptimizeProjections::new())];
-            assert_optimized_plan_eq_snapshot!(
-                optimizer_ctx,
-                rules,
-                $plan,
-                @ $expected,
-            )
+            let plan: LogicalPlan = $plan;
+            let optimizer = Optimizer::with_rules(vec![Arc::new(OptimizeProjections::new())]);
+            let optimized_plan = optimizer.optimize(plan, &optimizer_ctx, observe)?;
+            insta::assert_snapshot!(optimized_plan, @ $expected);
+            Ok::<(), datafusion_common::DataFusionError>(())
         }};
     }
 
@@ -3020,6 +3032,40 @@ mod tests {
         let rewritten = rewritten.data.map_expressions(|e| Ok(Transformed::no(e)))?;
         assert!(!rewritten.transformed);
         assert!(Arc::ptr_eq(&schema, rewritten.data.schema()));
+        Ok(())
+    }
+
+    /// A projection whose bare columns define new ids (as merging projections
+    /// can leave) is dropped as unnecessary: its input's columns take its
+    /// ids, so that the references above it still find their columns
+    #[test]
+    fn unnecessary_projection_gives_its_ids_to_its_input() -> Result<()> {
+        let table_scan = test_table_scan()?;
+        let generator = ColumnIdGenerator::new_after(table_scan.max_column_id());
+        let exprs = table_scan
+            .schema()
+            .columns()
+            .into_iter()
+            .map(|col| {
+                datafusion_expr::NamedExpr::new(Expr::Column(col), generator.next())
+            })
+            .collect();
+        let projection =
+            LogicalPlan::Projection(Projection::try_new(exprs, Arc::new(table_scan))?);
+        let ids = projection.schema().field_ids().to_vec();
+        let a = projection.schema().columns().swap_remove(0);
+        let plan = LogicalPlanBuilder::from(projection)
+            .filter(Expr::Column(a).gt(lit(1)))?
+            .build()?;
+        let input = plan.clone();
+
+        let optimized = optimize(plan)?;
+        assert_snapshot!(optimized, @r"
+        Filter: test.a > Int32(1)
+          TableScan: test projection=[a, b, c]
+        ");
+        crate::test::assert_no_new_column_id_issues(&input, &optimized);
+        assert_eq!(optimized.schema().field_ids(), ids.as_slice());
         Ok(())
     }
 

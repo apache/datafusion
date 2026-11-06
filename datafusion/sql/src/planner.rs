@@ -468,7 +468,7 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     warnings: Mutex<Vec<Diagnostic>>,
     /// Allocates the column ids of the planned plans: the generator of the
     /// context provider, or a new one if it has none
-    column_id_generator: Arc<ColumnIdGenerator>,
+    pub(crate) column_id_generator: Arc<ColumnIdGenerator>,
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {

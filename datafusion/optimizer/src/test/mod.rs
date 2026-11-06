@@ -187,6 +187,38 @@ pub fn assert_analyzer_check_err(
     }
 }
 
+/// Asserts that `after`, the output of rules applied to `before`, has no
+/// more column id issues of any kind than `before`: the strict check of
+/// `column_id_check`, for the tests of a rule that stays in its
+/// `UNMIGRATED_RULES` only because it moves or copies references that other
+/// rules leave wrong
+///
+/// A plan without any id is not checked, as by the verifier.
+pub fn assert_no_new_column_id_issues(before: &LogicalPlan, after: &LogicalPlan) {
+    if after.max_column_id().is_none() {
+        return;
+    }
+    let (before_counts, after_counts) = (
+        before.column_id_issue_counts(),
+        after.column_id_issue_counts(),
+    );
+    let introduced: Vec<_> = datafusion_expr::ColumnIdIssueKind::ALL
+        .into_iter()
+        .filter(|kind| after_counts[*kind as usize] > before_counts[*kind as usize])
+        .collect();
+    assert!(
+        introduced.is_empty(),
+        "column id issues of kinds {introduced:?} introduced:\n{}\nin\n{}",
+        after
+            .column_id_issues()
+            .iter()
+            .map(|issue| issue.to_string())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        after.display_indent()
+    );
+}
+
 fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
 #[macro_export]

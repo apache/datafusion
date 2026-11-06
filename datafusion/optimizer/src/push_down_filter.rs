@@ -30,7 +30,6 @@ use datafusion_expr::logical_plan::MaterializedCtePlan;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use arrow::datatypes::DataType;
 use indexmap::IndexSet;
 use itertools::Itertools;
 use log::{Level, debug, log_enabled};
@@ -40,15 +39,13 @@ use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
 use datafusion_common::{
-    Column, DFSchema, Result, ScalarValue, assert_eq_or_internal_err, internal_err,
-    plan_err, qualified_name,
+    Column, ColumnId, DFSchema, Result, ScalarValue, assert_eq_or_internal_err,
+    internal_err, plan_err,
 };
 use datafusion_expr::expr::WindowFunction;
 use datafusion_expr::expr_rewriter::replace_col;
 use datafusion_expr::logical_plan::{Join, JoinType, LogicalPlan};
-use datafusion_expr::utils::{
-    conjunction, expr_to_columns, split_conjunction, split_conjunction_owned,
-};
+use datafusion_expr::utils::{conjunction, split_conjunction, split_conjunction_owned};
 use datafusion_expr::{
     BinaryExpr, Distinct, EmptyRelation, Expr, Filter, Operator, Projection,
     TableProviderFilterPushDown, and, or,
@@ -58,7 +55,7 @@ use crate::extract_leaf_expressions::is_pure_extraction_projection;
 use crate::optimizer::ApplyOrder;
 use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
 use crate::utils::{
-    ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
+    ColumnReference, OutputColumns, is_restrict_null_predicate, schema_columns,
 };
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_expr::ExpressionPlacement;
@@ -203,6 +200,10 @@ pub(crate) fn on_lr_is_preserved(join_type: JoinType) -> (bool, bool) {
 
 /// Evaluates the columns referenced in the given expression to see if they refer
 /// only to the left or right columns
+///
+/// A column with an id that one of the inputs defines belongs to that input;
+/// the others are found by qualifier and name (also unqualified, see
+/// [`schema_columns`]).
 #[derive(Debug)]
 struct ColumnChecker<'a> {
     /// schema of left join input
@@ -213,6 +214,9 @@ struct ColumnChecker<'a> {
     right_schema: &'a DFSchema,
     /// columns in left_schema, computed on demand
     right_columns: Option<HashSet<ColumnReference<'a>>>,
+    /// the input each id of the inputs is a column of (`true` for the left),
+    /// computed on demand
+    sides: Option<HashMap<ColumnId, bool>>,
 }
 
 impl<'a> ColumnChecker<'a> {
@@ -222,23 +226,46 @@ impl<'a> ColumnChecker<'a> {
             left_columns: None,
             right_schema,
             right_columns: None,
+            sides: None,
         }
     }
 
     /// Return true if the expression references only columns from the left side of the join
     fn is_left_only(&mut self, predicate: &Expr) -> bool {
-        if self.left_columns.is_none() {
-            self.left_columns = Some(schema_columns(self.left_schema));
-        }
-        has_all_column_refs(predicate, self.left_columns.as_ref().unwrap())
+        self.is_side_only(predicate, true)
     }
 
     /// Return true if the expression references only columns from the right side of the join
     fn is_right_only(&mut self, predicate: &Expr) -> bool {
-        if self.right_columns.is_none() {
-            self.right_columns = Some(schema_columns(self.right_schema));
-        }
-        has_all_column_refs(predicate, self.right_columns.as_ref().unwrap())
+        self.is_side_only(predicate, false)
+    }
+
+    /// Return true if the expression references only columns from the left
+    /// side of the join (`left`), or the right side
+    fn is_side_only(&mut self, predicate: &Expr, left: bool) -> bool {
+        let (left_schema, right_schema) = (self.left_schema, self.right_schema);
+        let sides = self.sides.get_or_insert_with(|| {
+            let mut sides = HashMap::new();
+            for (schema, is_left) in [(right_schema, false), (left_schema, true)] {
+                for id in schema.field_ids().iter().flatten() {
+                    sides.insert(*id, is_left);
+                }
+            }
+            sides
+        });
+        let (schema, columns) = if left {
+            (left_schema, &mut self.left_columns)
+        } else {
+            (right_schema, &mut self.right_columns)
+        };
+        let columns = columns.get_or_insert_with(|| schema_columns(schema));
+        predicate.column_refs().iter().all(|col| {
+            match col.id.and_then(|id| sides.get(&id)) {
+                Some(is_left) => *is_left == left,
+                None => columns
+                    .contains(&ColumnReference::new(col.relation.as_ref(), col.name())),
+            }
+        })
     }
 }
 
@@ -320,33 +347,37 @@ fn can_evaluate_as_join_condition(predicate: &Expr) -> Result<bool> {
 /// * `((A AND B) OR (C AND D)) AND (A OR C)`
 /// * `((A AND B) OR (C AND D)) AND ((A AND B) OR C)`
 /// * do nothing.
-fn extract_or_clauses_for_join<'a>(
-    filters: &'a [Expr],
-    schema_cols: &'a HashSet<ColumnReference>,
-) -> impl Iterator<Item = Expr> + 'a {
+fn extract_or_clauses_for_join(
+    filters: &[Expr],
+    is_side_only: &mut impl FnMut(&Expr) -> bool,
+) -> Vec<Expr> {
     // new formed OR clauses and their column references
-    filters.iter().filter_map(move |expr| {
-        if let Expr::BinaryExpr(BinaryExpr {
-            left,
-            op: Operator::Or,
-            right,
-        }) = expr
-        {
-            let left_expr = extract_or_clause(left.as_ref(), schema_cols);
-            let right_expr = extract_or_clause(right.as_ref(), schema_cols);
+    filters
+        .iter()
+        .filter_map(|expr| {
+            if let Expr::BinaryExpr(BinaryExpr {
+                left,
+                op: Operator::Or,
+                right,
+            }) = expr
+            {
+                let left_expr = extract_or_clause(left.as_ref(), is_side_only);
+                let right_expr = extract_or_clause(right.as_ref(), is_side_only);
 
-            // If nothing can be extracted from any sub clauses, do nothing for this OR clause.
-            if let (Some(left_expr), Some(right_expr)) = (left_expr, right_expr) {
-                return Some(or(left_expr, right_expr));
+                // If nothing can be extracted from any sub clauses, do nothing for this OR clause.
+                if let (Some(left_expr), Some(right_expr)) = (left_expr, right_expr) {
+                    return Some(or(left_expr, right_expr));
+                }
             }
-        }
-        None
-    })
+            None
+        })
+        .collect()
 }
 
 /// extract qual from OR sub-clause.
 ///
-/// A qual is extracted if it only contains set of column references in schema_columns.
+/// A qual is extracted if it only contains column references of one side of
+/// the join (`is_side_only`).
 ///
 /// For AND clause, we extract from both sub-clauses, then make new AND clause by extracted
 /// clauses if both extracted; Otherwise, use the extracted clause from any sub-clauses or None.
@@ -357,7 +388,7 @@ fn extract_or_clauses_for_join<'a>(
 /// For other clause, apply the rule above to extract clause.
 fn extract_or_clause(
     expr: &Expr,
-    schema_columns: &HashSet<ColumnReference>,
+    is_side_only: &mut impl FnMut(&Expr) -> bool,
 ) -> Option<Expr> {
     let mut predicate = None;
 
@@ -367,8 +398,8 @@ fn extract_or_clause(
             op: Operator::Or,
             right: r_expr,
         }) => {
-            let l_expr = extract_or_clause(l_expr, schema_columns);
-            let r_expr = extract_or_clause(r_expr, schema_columns);
+            let l_expr = extract_or_clause(l_expr, is_side_only);
+            let r_expr = extract_or_clause(r_expr, is_side_only);
 
             if let (Some(l_expr), Some(r_expr)) = (l_expr, r_expr) {
                 predicate = Some(or(l_expr, r_expr));
@@ -379,8 +410,8 @@ fn extract_or_clause(
             op: Operator::And,
             right: r_expr,
         }) => {
-            let l_expr = extract_or_clause(l_expr, schema_columns);
-            let r_expr = extract_or_clause(r_expr, schema_columns);
+            let l_expr = extract_or_clause(l_expr, is_side_only);
+            let r_expr = extract_or_clause(r_expr, is_side_only);
 
             match (l_expr, r_expr) {
                 (Some(l_expr), Some(r_expr)) => {
@@ -398,7 +429,7 @@ fn extract_or_clause(
             }
         }
         _ => {
-            if has_all_column_refs(expr, schema_columns) {
+            if is_side_only(expr) {
                 predicate = Some(expr.clone());
             }
         }
@@ -443,9 +474,6 @@ fn push_down_all_join(
     let left_schema = join.left.schema();
     let right_schema = join.right.schema();
 
-    let left_schema_columns = schema_columns(left_schema.as_ref());
-    let right_schema_columns = schema_columns(right_schema.as_ref());
-
     let mut left_push = vec![];
     let mut right_push = vec![];
     let mut keep_predicates = vec![];
@@ -488,24 +516,20 @@ fn push_down_all_join(
     // Extract from OR clause, generate new predicates for both side of join if possible.
     // We only track the unpushable predicates above.
     if left_preserved {
-        left_push.extend(extract_or_clauses_for_join(
-            &keep_predicates,
-            &left_schema_columns,
-        ));
-        left_push.extend(extract_or_clauses_for_join(
-            &join_conditions,
-            &left_schema_columns,
-        ));
+        left_push.extend(extract_or_clauses_for_join(&keep_predicates, &mut |e| {
+            checker.is_left_only(e)
+        }));
+        left_push.extend(extract_or_clauses_for_join(&join_conditions, &mut |e| {
+            checker.is_left_only(e)
+        }));
     }
     if right_preserved {
-        right_push.extend(extract_or_clauses_for_join(
-            &keep_predicates,
-            &right_schema_columns,
-        ));
-        right_push.extend(extract_or_clauses_for_join(
-            &join_conditions,
-            &right_schema_columns,
-        ));
+        right_push.extend(extract_or_clauses_for_join(&keep_predicates, &mut |e| {
+            checker.is_right_only(e)
+        }));
+        right_push.extend(extract_or_clauses_for_join(&join_conditions, &mut |e| {
+            checker.is_right_only(e)
+        }));
     }
 
     // For predicates from join filter, we should check with if a join side is preserved
@@ -513,13 +537,13 @@ fn push_down_all_join(
     if on_left_preserved {
         left_push.extend(extract_or_clauses_for_join(
             &on_filter_join_conditions,
-            &left_schema_columns,
+            &mut |e| checker.is_left_only(e),
         ));
     }
     if on_right_preserved {
         right_push.extend(extract_or_clauses_for_join(
             &on_filter_join_conditions,
-            &right_schema_columns,
+            &mut |e| checker.is_right_only(e),
         ));
     }
 
@@ -777,11 +801,11 @@ fn infer_join_predicates_impl<
 
         for &col in &predicate.column_refs() {
             for (l, r) in join_col_keys.iter() {
-                if ENABLE_LEFT_TO_RIGHT && col == *l {
+                if ENABLE_LEFT_TO_RIGHT && col.same_column(l) {
                     join_cols_to_replace.insert(col, *r);
                     break;
                 }
-                if ENABLE_RIGHT_TO_LEFT && col == *r {
+                if ENABLE_RIGHT_TO_LEFT && col.same_column(r) {
                     join_cols_to_replace.insert(col, *l);
                     break;
                 }
@@ -797,7 +821,9 @@ fn infer_join_predicates_impl<
     Ok(())
 }
 
-/// Whether `expr` depends on any of the columns named in `names`.
+/// Whether `expr` depends on any of the columns named in `names`, columns of
+/// `schema` (the output of the node that asks to keep them): a column with
+/// the id of a field of `schema` is that field, the others are found by name.
 ///
 /// This is the columns `Expr::column_refs` would collect plus the outer columns
 /// that any subquery inside `expr` correlates on. A subquery records those in
@@ -805,12 +831,21 @@ fn infer_join_predicates_impl<
 /// predicate, and `Expr`'s own traversal does not descend into that field, so
 /// looking only at `column_refs` would report such a predicate as depending on
 /// nothing and let it be pushed past a node that asked to keep those columns.
-fn references_any_column(expr: &Expr, names: &HashSet<String>) -> bool {
+fn references_any_column(
+    expr: &Expr,
+    schema: &DFSchema,
+    names: &HashSet<String>,
+) -> bool {
+    let is_named =
+        |col: &Column| match col.id.and_then(|id| schema.index_of_column_id(id)) {
+            Some(i) => names.contains(schema.field(i).name()),
+            None => names.contains(&col.name),
+        };
     let mut found = false;
     expr.apply(|e| {
         let outer_refs = match e {
             Expr::Column(col) => {
-                if names.contains(&col.name) {
+                if is_named(col) {
                     found = true;
                     return Ok(TreeNodeRecursion::Stop);
                 }
@@ -825,7 +860,7 @@ fn references_any_column(expr: &Expr, names: &HashSet<String>) -> bool {
             _ => return Ok(TreeNodeRecursion::Continue),
         };
         if outer_refs.iter().any(|outer_ref| {
-            matches!(outer_ref, Expr::OuterReferenceColumn(_, c) if names.contains(&c.name))
+            matches!(outer_ref, Expr::OuterReferenceColumn(_, c) if is_named(c))
         }) {
             found = true;
             return Ok(TreeNodeRecursion::Stop);
@@ -972,20 +1007,13 @@ impl OptimizerRule for PushDownFilter {
                 Ok(Transformed::yes(LogicalPlan::Sort(sort)))
             }
             LogicalPlan::SubqueryAlias(mut subquery_alias) => {
-                let mut replace_map =
-                    HashMap::with_capacity(subquery_alias.input.schema().fields().len());
-                for (i, (qualifier, field)) in
-                    subquery_alias.input.schema().iter().enumerate()
-                {
-                    let (sub_qualifier, sub_field) =
-                        subquery_alias.schema.qualified_field(i);
-                    replace_map.insert(
-                        qualified_name(sub_qualifier, sub_field.name()),
-                        Expr::Column(Column::new(qualifier.cloned(), field.name())),
-                    );
-                }
-
-                filter.predicate = replace_cols_by_name(filter.predicate, &replace_map)?;
+                // each output is the input column at the same index, with the
+                // same id
+                let outputs = OutputColumns::new(&subquery_alias.schema);
+                let input_columns = subquery_alias.input.schema().columns();
+                filter.predicate = outputs.replace(filter.predicate, |i| {
+                    input_columns.get(i).cloned().map(Expr::Column)
+                })?;
                 filter.input = subquery_alias.input;
                 subquery_alias.input = Arc::new(LogicalPlan::Filter(filter));
                 Ok(Transformed::yes(LogicalPlan::SubqueryAlias(subquery_alias)))
@@ -1007,37 +1035,12 @@ impl OptimizerRule for PushDownFilter {
                 let predicates = split_conjunction_owned(filter.predicate.clone());
                 let mut non_unnest_predicates = vec![];
                 let mut unnest_predicates = vec![];
-                let mut unnest_struct_columns = vec![];
-
-                for idx in &unnest.struct_type_columns {
-                    let (sub_qualifier, field) =
-                        unnest.input.schema().qualified_field(*idx);
-                    if let DataType::Struct(children) = field.data_type() {
-                        let field_name = field.name();
-                        for child in children {
-                            let child_name = child.name();
-                            unnest_struct_columns.push(Column::new(
-                                sub_qualifier.cloned(),
-                                format!("{field_name}.{child_name}"),
-                            ));
-                        }
-                    }
-                }
-
-                let mut accum: HashSet<Column> = HashSet::new();
+                // the columns the unnest defines, found by id (see
+                // `OutputColumns`)
+                let outputs = OutputColumns::new(&unnest.schema);
+                let unnested: HashSet<usize> = unnest.unnested_output_indices().collect();
                 for predicate in predicates {
-                    // collect all the Expr::Column in predicate recursively
-                    accum.clear();
-                    expr_to_columns(&predicate, &mut accum)?;
-
-                    let contains_list_columns =
-                        unnest.list_type_columns.iter().any(|(_, unnest_list)| {
-                            accum.contains(&unnest_list.output_column)
-                        });
-                    let contains_struct_columns =
-                        unnest_struct_columns.iter().any(|c| accum.contains(c));
-
-                    if contains_list_columns || contains_struct_columns {
+                    if outputs.reads_any(&predicate, |i| unnested.contains(&i)) {
                         unnest_predicates.push(predicate);
                     } else {
                         non_unnest_predicates.push(predicate);
@@ -1077,20 +1080,14 @@ impl OptimizerRule for PushDownFilter {
             }
             LogicalPlan::Union(mut union) => {
                 let mut inputs = Vec::with_capacity(union.inputs.len());
-                let mut replace_map = HashMap::with_capacity(union.schema.fields().len());
+                // each output reads the column of each input at the same index
+                let outputs = OutputColumns::new(&union.schema);
                 for input in union.inputs {
-                    replace_map.clear();
-                    for (i, (qualifier, field)) in input.schema().iter().enumerate() {
-                        let (union_qualifier, union_field) =
-                            union.schema.qualified_field(i);
-                        replace_map.insert(
-                            qualified_name(union_qualifier, union_field.name()),
-                            Expr::Column(Column::new(qualifier.cloned(), field.name())),
-                        );
-                    }
-
-                    let push_predicate =
-                        replace_cols_by_name(filter.predicate.clone(), &replace_map)?;
+                    let input_columns = input.schema().columns();
+                    let push_predicate = outputs
+                        .replace(filter.predicate.clone(), |i| {
+                            input_columns.get(i).cloned().map(Expr::Column)
+                        })?;
                     inputs.push(Arc::new(LogicalPlan::Filter(Filter::new(
                         push_predicate,
                         input,
@@ -1111,35 +1108,33 @@ impl OptimizerRule for PushDownFilter {
                 // Volatile group keys are excluded: below the aggregate, the
                 // predicate would evaluate the key again and see a different
                 // value than the one used for grouping.
-                let non_volatile_group_exprs: Vec<Expr> = agg
-                    .group_expr
-                    .iter()
-                    .filter(|expr| !expr.is_volatile())
-                    .map(|expr| expr.expr.clone())
-                    .collect();
-                let group_expr_columns = expr_columns(&non_volatile_group_exprs);
-
-                // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
-                // After push, we need to replace `a+b` with Column(a)+Column(b)
-                // So we need create a replace_map, add {`a+b` --> Expr(Column(a)+Column(b))}
                 //
-                // Keyed by the output column, the same key `group_expr_columns`
-                // is built from, so a predicate admitted below cannot miss its
-                // replacement. See `replace_cols_by_column` for why the flat
-                // name is not enough.
-                let mut replace_map = HashMap::with_capacity(agg.group_expr.len());
-                for expr in &agg.group_expr {
-                    let (relation, name) = expr.qualified_name();
-                    replace_map.insert(Column::new(relation, name), unalias(expr));
-                }
+                // As for plan Filter: Column(a+b) > 0 -- Agg: groupby:[Column(a)+Column(b)]
+                // After push, we need to replace `a+b` with Column(a)+Column(b).
+                // The grouping outputs come first in the schema of the
+                // aggregate, in the order of `group_output_entries`, and a
+                // reference finds its output by id (see `OutputColumns`).
+                let outputs = OutputColumns::new(&agg.schema);
+                let group_outputs: Vec<Option<&Expr>> = agg
+                    .group_output_entries()
+                    .into_iter()
+                    .map(|entry| (!entry.is_volatile()).then(|| unalias(entry)))
+                    .collect();
+                let group_output = |col: &Column| {
+                    outputs
+                        .index_of(col)
+                        .and_then(|i| group_outputs.get(i).copied().flatten())
+                };
 
                 let predicates = split_conjunction_owned(filter.predicate);
                 let mut keep_predicates = vec![];
                 let mut push_predicates = vec![];
                 for expr in predicates {
                     let cols = expr.column_refs();
-                    if cols.iter().all(|c| group_expr_columns.contains(c)) {
-                        push_predicates.push(replace_cols_by_column(expr, &replace_map)?);
+                    if cols.iter().all(|c| group_output(c).is_some()) {
+                        push_predicates.push(outputs.replace(expr, |i| {
+                            group_outputs.get(i).copied().flatten().cloned()
+                        })?);
                     } else {
                         keep_predicates.push(expr);
                     }
@@ -1439,7 +1434,13 @@ impl OptimizerRule for PushDownFilter {
                 let predicate_push_or_keep: Vec<bool> =
                     split_conjunction(&filter.predicate)
                         .iter()
-                        .map(|expr| !references_any_column(expr, &prevent_cols))
+                        .map(|expr| {
+                            !references_any_column(
+                                expr,
+                                extension_plan.node.schema(),
+                                &prevent_cols,
+                            )
+                        })
                         .collect();
 
                 // all predicates are kept, no changes needed
@@ -1557,26 +1558,27 @@ fn rewrite_projection(
     // undo the push-down, creating an infinite loop that runs until the
     // iteration limit is hit).
     //
-    // Keyed by the output column rather than its flat name, for the reason
-    // given on `replace_cols_by_column`. `EliminateGroupByConstant` can leave a
-    // projection that outputs both `t.a` and `CAST(t.a AS ...)` under that one
-    // name.
-    let (non_pushable_map, pushable_map): (HashMap<_, _>, HashMap<_, _>) = projection
-        .schema
+    // A reference finds the output it reads by id, otherwise by the output
+    // column rather than its flat name (see `OutputColumns`): a qualified
+    // column `t.a` and an unqualified field named `t.a` are different columns
+    // that share a flat name, and a node can output both.
+    // `EliminateGroupByConstant` can leave a projection that outputs both
+    // `t.a` and `CAST(t.a AS ...)` under that one name.
+    let outputs = OutputColumns::new(&projection.schema);
+    let pushable: Vec<bool> = projection
+        .expr
         .iter()
-        .zip(projection.expr.iter())
-        .map(|((qualifier, field), expr)| {
-            (Column::new(qualifier.cloned(), field.name()), unalias(expr))
+        .map(|expr| {
+            let value = unalias(expr);
+            !(value.is_volatile()
+                || value.placement() == ExpressionPlacement::MoveTowardsLeafNodes)
         })
-        .partition(|(_, value)| {
-            value.is_volatile()
-                || value.placement() == ExpressionPlacement::MoveTowardsLeafNodes
-        });
+        .collect();
 
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
     for expr in predicates {
-        if contains_column(&expr, &non_pushable_map) {
+        if outputs.reads_any(&expr, |i| !pushable[i]) {
             keep_predicates.push(expr);
         } else {
             push_predicates.push(expr);
@@ -1586,10 +1588,11 @@ fn rewrite_projection(
     let projection = if let Some(expr) = conjunction(push_predicates) {
         // re-write all filters based on this projection
         // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
-        projection.input = Arc::new(LogicalPlan::Filter(Filter::new(
-            replace_cols_by_column(expr, &pushable_map)?,
-            projection.input,
-        )));
+        let expr = outputs.replace(expr, |i| {
+            pushable[i].then(|| unalias(&projection.expr[i]).clone())
+        })?;
+        projection.input =
+            Arc::new(LogicalPlan::Filter(Filter::new(expr, projection.input)));
 
         Transformed::yes(LogicalPlan::Projection(projection))
     } else {
@@ -1647,28 +1650,6 @@ pub fn replace_cols_by_name(
     .data()
 }
 
-/// Replaces column references by the expression the node below computes for
-/// that column.
-///
-/// Keyed by [`Column`] rather than by its flat name, because a qualified column
-/// `t.a` and an unqualified field named `t.a` are different columns that share a
-/// flat name, and a node can output both.
-fn replace_cols_by_column(
-    e: Expr,
-    replace_map: &HashMap<Column, impl AsRef<Expr>>,
-) -> Result<Expr> {
-    e.transform_up(|expr| {
-        if let Expr::Column(c) = &expr
-            && let Some(new_expr) = replace_map.get(c)
-        {
-            Ok(Transformed::yes(new_expr.as_ref().clone()))
-        } else {
-            Ok(Transformed::no(expr))
-        }
-    })
-    .data()
-}
-
 /// Unalias expression reference.
 fn unalias(expr: &Expr) -> &Expr {
     if let Expr::Alias(alias) = expr {
@@ -1676,12 +1657,6 @@ fn unalias(expr: &Expr) -> &Expr {
     } else {
         expr
     }
-}
-
-/// check whether the expression uses the columns in `check_map`.
-fn contains_column<T>(e: &Expr, check_map: &HashMap<Column, T>) -> bool {
-    e.exists(|expr| Ok(matches!(expr, Expr::Column(c) if check_map.contains_key(c))))
-        .unwrap()
 }
 
 fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
@@ -1741,25 +1716,17 @@ fn reads_beyond_this_node(node: &Expr) -> bool {
     )
 }
 
-fn expr_columns(exprs: &[Expr]) -> HashSet<Column> {
-    exprs
-        .iter()
-        .map(|expr| {
-            let (relation, name) = expr.qualified_name();
-            Column::new(relation, name)
-        })
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use std::cmp::Ordering;
     use std::fmt::{Debug, Formatter};
 
-    use arrow::datatypes::{Field, Metadata, Schema, SchemaRef};
+    use arrow::datatypes::{DataType, Field, Metadata, Schema, SchemaRef};
     use async_trait::async_trait;
 
-    use datafusion_common::{DFSchemaRef, DataFusionError, ScalarValue, Spans};
+    use datafusion_common::{
+        ColumnId, ColumnIdGenerator, DFSchemaRef, DataFusionError, ScalarValue, Spans,
+    };
     use datafusion_expr::expr::{ScalarFunction, SetComparison, SetQuantifier};
     use datafusion_expr::logical_plan::table_scan;
     use datafusion_expr::{
@@ -1770,7 +1737,6 @@ mod tests {
     };
 
     use crate::OptimizerContext;
-    use crate::assert_optimized_plan_eq_snapshot;
     use crate::optimizer::Optimizer;
     use crate::simplify_expressions::SimplifyExpressions;
     use crate::test::udfs::leaf_udf_expr;
@@ -1782,19 +1748,22 @@ mod tests {
 
     fn observe(_plan: &LogicalPlan, _rule: &dyn OptimizerRule) {}
 
+    /// Also asserts that the rule introduces no column id issues (it stays
+    /// in `UNMIGRATED_RULES` because it moves a reference that decorrelation
+    /// leaves out of scope)
     macro_rules! assert_optimized_plan_equal {
         (
             $plan:expr,
             @ $expected:literal $(,)?
         ) => {{
             let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
-            let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> = vec![Arc::new(PushDownFilter::new())];
-            assert_optimized_plan_eq_snapshot!(
-                optimizer_ctx,
-                rules,
-                $plan,
-                @ $expected,
-            )
+            let plan: LogicalPlan = $plan;
+            let input = plan.clone();
+            let optimizer = Optimizer::with_rules(vec![Arc::new(PushDownFilter::new())]);
+            let optimized_plan = optimizer.optimize(plan, &optimizer_ctx, observe)?;
+            crate::test::assert_no_new_column_id_issues(&input, &optimized_plan);
+            insta::assert_snapshot!(optimized_plan, @ $expected);
+            Ok::<(), DataFusionError>(())
         }};
     }
 
@@ -3500,16 +3469,27 @@ mod tests {
         projection: Option<Vec<usize>>,
     ) -> Result<LogicalPlanBuilder> {
         let test_provider = PushDownProvider { filter_support };
+        // the scan defines its columns, as a scan built with a generator does
+        let projected_schema = DFSchema::try_from(test_provider.schema())?;
+        let ids = ColumnIdGenerator::new();
+        let source_column_ids: Arc<[ColumnId]> = projected_schema
+            .fields()
+            .iter()
+            .map(|_| ids.next())
+            .collect();
+        let projected_schema = projected_schema
+            .with_field_ids(source_column_ids.iter().copied().map(Some).collect())?;
 
         let table_scan = LogicalPlan::TableScan(TableScan {
             table_name: "test".into(),
             filters,
-            projected_schema: Arc::new(DFSchema::try_from(test_provider.schema())?),
+            projected_schema: Arc::new(projected_schema),
             projection,
             source: Arc::new(test_provider),
             fetch: None,
             skip: None,
             statistics_requests: Box::default(),
+            source_column_ids: Some(source_column_ids),
         });
 
         Ok(LogicalPlanBuilder::from(table_scan))

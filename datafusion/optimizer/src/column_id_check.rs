@@ -22,17 +22,19 @@
 //!   - after the analyzer, if the plan has any
 //!     [`DuplicateDefinition`](ColumnIdIssueKind::DuplicateDefinition) or
 //!     [`Disagree`](ColumnIdIssueKind::Disagree) issue, or more
+//!     [`Missing`](ColumnIdIssueKind::Missing),
+//!     [`Stale`](ColumnIdIssueKind::Stale) or
 //!     [`Misresolved`](ColumnIdIssueKind::Misresolved) references than its
 //!     input (which is the output of the planner, or a plan optimized before
 //!     for a prepared statement);
 //!   - after an optimizer rule, if it introduced issues of a kind it may not
-//!     introduce: a rule in [`UNMIGRATED_RULES`] may introduce `Missing`,
-//!     `Stale` and (counted, for now) `Misresolved` references, any other
-//!     rule nothing. No rule may introduce `DuplicateDefinition` or
-//!     `Disagree` issues.
+//!     introduce: a rule in [`UNMIGRATED_RULES`] may introduce issues of the
+//!     kind listed with it (a `Missing` or `Stale` reference), any other
+//!     rule nothing.
 //!
 //!   A plan without any id (built without a generator) is not checked: all
-//!   its references are `Missing`, as before ids.
+//!   its references are `Missing`, as before ids. Neither is the output of
+//!   the analyzer for such a plan.
 //!
 //! Only the verification switch fails queries; the others only report.
 
@@ -45,82 +47,36 @@ use datafusion_common::{Result, internal_err};
 use datafusion_expr::{ColumnIdIssueKind, LogicalPlan};
 use log::{Level, debug, log_enabled};
 
-use crate::OptimizerConfig;
-
-/// Rules that may still lose or misattach column ids. Remove a rule once it
-/// keeps them; CI then fails if it regresses.
+/// The rules that may still introduce column id issues, each with the one
+/// kind of issue it may introduce. Every other rule may introduce none;
+/// remove a rule once it keeps its ids, CI then fails if it regresses.
 ///
-/// When verification is on (see the [module documentation](self)), a rule on
-/// this list may introduce `Missing`, `Stale` and `Misresolved` references,
-/// and a rule that is not on it may introduce no issue. No rule may introduce
-/// `DuplicateDefinition` or `Disagree` issues. `Misresolved` references are
-/// counted (see `DATAFUSION_COLUMN_ID_STATS`): they are where wrong results
-/// come from, and may become an error for every rule.
+/// The rules listed are migrated: the issues they may introduce come from
+/// plans that are wrong without ids (on `main`), which the decorrelation
+/// rules build and the unnesting rule of #5492 replaces, and from a node
+/// that does not define the columns it reads (MERGE INTO). See the
+/// [module documentation](self).
 ///
-/// The analyzer rules are listed too: the analyzer is checked as a whole,
-/// after all its rules.
-pub(crate) const UNMIGRATED_RULES: &[&str] = &[
-    // analyzer
-    "apply_function_rewrites",
-    "resolve_grouping_function",
-    "type_coercion",
-    // optimizer
-    "common_sub_expression_eliminate",
-    "decorrelate_lateral_join",
-    "decorrelate_predicate_subquery",
-    "eliminate_aggregate_distinct",
-    "eliminate_cross_join",
-    "eliminate_duplicated_expr",
-    "eliminate_filter",
-    "eliminate_group_by_constant",
-    "eliminate_join",
-    "eliminate_limit",
-    "eliminate_outer_join",
-    "extract_equijoin_predicate",
-    "extract_leaf_expressions",
-    "filter_null_join_keys",
-    "optimize_projections",
-    "optimize_unions",
-    "propagate_empty_relation",
-    "push_down_filter",
-    "push_down_leaf_projections",
-    "push_down_limit",
-    "replace_distinct_aggregate",
-    "replace_filter_top1",
-    "rewrite_set_comparison",
-    "scalar_subquery_to_join",
-    "simplify_expressions",
-    "single_distinct_aggregation_to_group_by",
-    "unions_to_filter",
+/// The analyzer is checked as a whole, after all its rules, and may not
+/// introduce any issue.
+pub(crate) const UNMIGRATED_RULES: &[(&str, ColumnIdIssueKind)] = &[
+    // pushes into a join filter the reference that
+    // DecorrelatePredicateSubquery leaves out of scope when it decorrelates
+    // a subquery that reads a column two levels up (merge_into.slt; the
+    // SELECT form fails on `main` with "No field named t.id"): the
+    // reference has the right id, which is stale there
+    ("push_down_filter", ColumnIdIssueKind::Stale),
+    // copies the subquery of a set comparison, and with it the outer
+    // references to the target columns of a MERGE INTO, which have no ids:
+    // no node defines them (the target is not an input of the `Dml` node)
+    ("rewrite_set_comparison", ColumnIdIssueKind::Missing),
+    // a subquery nested in a correlated scalar subquery that reads a column
+    // two levels up (an `EXISTS` inside a scalar subquery) ends up reading
+    // it as a plain column in a join filter where it is not in scope, as on
+    // `main` (explain-only tests in subquery.slt): the reference has the
+    // right id, which is stale there
+    ("scalar_subquery_to_join", ColumnIdIssueKind::Stale),
 ];
-
-/// Rules that can put one subquery expression in two places (rewriting a set
-/// comparison into several subqueries, simplifying `COALESCE(x IN (...),
-/// false)`, pushing a sort with a fetch whose keys have a subquery through a
-/// join), which would define its ids twice. Until they renumber where they
-/// duplicate, the optimizer renumbers the repeated subqueries after them (see
-/// [`renumber_repeated_subqueries`]).
-const RULES_THAT_REPEAT_SUBQUERIES: &[&str] = &[
-    "push_down_limit",
-    "rewrite_set_comparison",
-    "simplify_expressions",
-];
-
-/// Returns `plan`, the output of `rule`, where the subquery expressions that
-/// `rule` repeated have fresh ids, if `rule` is one of
-/// [`RULES_THAT_REPEAT_SUBQUERIES`] and `plan` has subqueries
-pub(crate) fn renumber_repeated_subqueries(
-    rule: &str,
-    plan: LogicalPlan,
-    has_subqueries: bool,
-    config: &dyn OptimizerConfig,
-) -> Result<LogicalPlan> {
-    if !has_subqueries || !RULES_THAT_REPEAT_SUBQUERIES.contains(&rule) {
-        return Ok(plan);
-    }
-    plan.with_fresh_column_ids_in_repeated_subqueries(config.column_id_generator())
-        .map(|transformed| transformed.data)
-}
 
 /// The log target of the reports
 const LOG_TARGET: &str = "datafusion::column_id";
@@ -156,19 +112,22 @@ type Counts = [usize; ColumnIdIssueKind::ALL.len()];
 
 /// Whether `rule` may introduce issues of `kind` (see [`UNMIGRATED_RULES`])
 fn may_introduce(rule: &str, kind: ColumnIdIssueKind) -> bool {
-    match kind {
-        ColumnIdIssueKind::Missing
-        | ColumnIdIssueKind::Stale
-        | ColumnIdIssueKind::Misresolved => UNMIGRATED_RULES.contains(&rule),
-        ColumnIdIssueKind::Disagree | ColumnIdIssueKind::DuplicateDefinition => false,
-    }
+    UNMIGRATED_RULES.contains(&(rule, kind))
 }
 
-/// The kinds of issues that a plan may not have after the analyzer
-const AFTER_ANALYZER_FORBIDDEN: [ColumnIdIssueKind; 3] = [
-    ColumnIdIssueKind::Misresolved,
+/// The kinds of issues that a plan may not have after the analyzer at all
+const AFTER_ANALYZER_FORBIDDEN: [ColumnIdIssueKind; 2] = [
     ColumnIdIssueKind::Disagree,
     ColumnIdIssueKind::DuplicateDefinition,
+];
+
+/// The kinds of issues that the analyzer may not introduce: a plan may have
+/// them after the analyzer only if its input had them (the output of the
+/// planner, or a plan optimized before for a prepared statement)
+const ANALYZER_MAY_NOT_INTRODUCE: [ColumnIdIssueKind; 3] = [
+    ColumnIdIssueKind::Missing,
+    ColumnIdIssueKind::Stale,
+    ColumnIdIssueKind::Misresolved,
 ];
 
 /// Compares the column id issues of a plan before and after each rule.
@@ -176,6 +135,8 @@ const AFTER_ANALYZER_FORBIDDEN: [ColumnIdIssueKind; 3] = [
 pub(crate) struct ColumnIdCheck {
     /// The counts of the last plan checked, `None` when off
     before: Option<Counts>,
+    /// Whether the plan checking started from has ids
+    input_has_ids: bool,
 }
 
 impl ColumnIdCheck {
@@ -186,6 +147,7 @@ impl ColumnIdCheck {
             || STATS_FILE.is_some();
         Self {
             before: enabled.then(|| plan.column_id_issue_counts()),
+            input_has_ids: enabled && plan.max_column_id().is_some(),
         }
     }
 
@@ -200,19 +162,20 @@ impl ColumnIdCheck {
         let Some(after) = self.record("analyzer", plan) else {
             return Ok(());
         };
-        if !*VERIFY {
+        // a plan built without ids gets some where the analyzer defines
+        // columns (casting a subquery), and its references are all missing,
+        // as before ids
+        if !*VERIFY || !self.input_has_ids {
             return Ok(());
         }
-        let failed: Vec<_> = AFTER_ANALYZER_FORBIDDEN
+        let failed: Vec<_> = ColumnIdIssueKind::ALL
             .into_iter()
-            .filter(|kind| match kind {
-                // the input of the analyzer can be a plan that was optimized
-                // before (a prepared statement), where the rules that may
-                // introduce misresolved references did
-                ColumnIdIssueKind::Misresolved => {
+            .filter(|kind| {
+                if ANALYZER_MAY_NOT_INTRODUCE.contains(kind) {
                     after[*kind as usize] > before[*kind as usize]
+                } else {
+                    AFTER_ANALYZER_FORBIDDEN.contains(kind) && after[*kind as usize] > 0
                 }
-                _ => after[*kind as usize] > 0,
             })
             .collect();
         fail_if_any("the analyzer produced", &failed, &after, plan)
@@ -336,7 +299,7 @@ mod tests {
     use super::*;
     use datafusion_common::{Column, ColumnId, DFSchema};
     use datafusion_expr::logical_plan::builder::table_scan;
-    use datafusion_expr::{Expr, Filter, col, lit};
+    use datafusion_expr::{Expr, Filter, lit};
 
     use arrow::datatypes::{DataType, Field, Schema};
     use std::sync::Arc;
@@ -354,6 +317,8 @@ mod tests {
             unreachable!()
         };
         // the builder allocates ids: set them
+        // the ids are set by hand: the scan defines its projected columns
+        scan.source_column_ids = None;
         scan.projected_schema = Arc::new(
             DFSchema::clone(&scan.projected_schema)
                 .with_field_ids(vec![with_id.then(|| id(1))])?,
@@ -381,12 +346,17 @@ mod tests {
     fn listed_rules_may_lose_ids() -> Result<()> {
         let plan = scan(true)?;
         let mut check = ColumnIdCheck::new(&plan);
-        // a listed rule adds a reference without an id, or with a stale one
-        check.after_rule("push_down_filter", &filter(scan(true)?, None)?)?;
-        check.after_rule(
-            "push_down_filter",
-            &filter(filter(scan(true)?, None)?, Some(9))?,
-        )?;
+        // a listed rule adds a stale reference (`t.a#9` resolves by name to
+        // a field without an id), the kind listed with it
+        check.after_rule("scalar_subquery_to_join", &filter(scan(false)?, Some(9))?)?;
+        // but not a missing one
+        let err = check
+            .after_rule(
+                "scalar_subquery_to_join",
+                &filter(filter(scan(false)?, Some(9))?, None)?,
+            )
+            .unwrap_err();
+        assert!(err.to_string().contains("kinds missing"), "{err}");
 
         // another rule may not
         let mut check = ColumnIdCheck::new(&plan);
@@ -414,6 +384,8 @@ mod tests {
         else {
             unreachable!()
         };
+        // the ids are set by hand: the scan defines its projected columns
+        table_scan.source_column_ids = None;
         table_scan.projected_schema = Arc::new(
             DFSchema::clone(&table_scan.projected_schema)
                 .with_field_ids(vec![Some(id(1)), Some(id(2))])?,
@@ -421,16 +393,17 @@ mod tests {
         let input = LogicalPlan::TableScan(table_scan);
         let mut check = ColumnIdCheck::new(&input);
         let column = Expr::Column(Column::new(Some("t"), "b").with_id(Some(id(1))));
-        let plan = Filter::try_new(col("t.a").eq(column), Arc::new(input))?;
+        let a = Expr::Column(Column::new(Some("t"), "a").with_id(Some(id(1))));
+        let plan = Filter::try_new(a.eq(column), Arc::new(input))?;
         let err = check
-            .after_rule("push_down_filter", &LogicalPlan::Filter(plan))
+            .after_rule("scalar_subquery_to_join", &LogicalPlan::Filter(plan))
             .unwrap_err();
         assert!(err.to_string().contains("kinds disagree"), "{err}");
         Ok(())
     }
 
     #[test]
-    fn analyzer_output_may_not_misresolve() -> Result<()> {
+    fn analyzer_may_not_introduce_issues() -> Result<()> {
         let plan = scan(true)?;
         let mut check = ColumnIdCheck::new(&plan);
         // `t.a#9` is not in the input, and `t.a` resolves to `t.a#1`
@@ -439,8 +412,16 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("misresolved: t.a#9"), "{err}");
 
-        // missing references are fine
+        // nor missing references
         let mut check = ColumnIdCheck::new(&plan);
+        let err = check
+            .after_analyzer(&filter(scan(true)?, None)?)
+            .unwrap_err();
+        assert!(err.to_string().contains("missing: t.a"), "{err}");
+
+        // unless its input had them
+        let input = filter(scan(true)?, None)?;
+        let mut check = ColumnIdCheck::new(&input);
         check.after_analyzer(&filter(scan(true)?, None)?)
     }
 
@@ -452,14 +433,17 @@ mod tests {
     }
 
     #[test]
-    fn every_rule_is_listed() {
+    fn unmigrated_rules_exist() {
         let optimizer = crate::Optimizer::new();
-        for rule in &optimizer.rules {
-            assert!(UNMIGRATED_RULES.contains(&rule.name()), "{}", rule.name());
-        }
         let analyzer = crate::Analyzer::new();
-        for rule in &analyzer.rules {
-            assert!(UNMIGRATED_RULES.contains(&rule.name()), "{}", rule.name());
+        let names: Vec<&str> = optimizer
+            .rules
+            .iter()
+            .map(|rule| rule.name())
+            .chain(analyzer.rules.iter().map(|rule| rule.name()))
+            .collect();
+        for (rule, _) in UNMIGRATED_RULES {
+            assert!(names.contains(rule), "{rule} is not a rule");
         }
     }
 }

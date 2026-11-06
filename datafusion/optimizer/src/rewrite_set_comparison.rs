@@ -9,11 +9,15 @@
 use crate::utils::{NamePreserver, merge_into_schema};
 use crate::{OptimizerConfig, OptimizerRule};
 use datafusion_common::tree_node::{Transformed, TreeNode};
-use datafusion_common::{Column, DFSchema, ExprSchema, Result, ScalarValue, plan_err};
+use datafusion_common::{
+    Column, ColumnId, ColumnIdGenerator, DFSchema, ExprSchema, Result, ScalarValue,
+    plan_err,
+};
 use datafusion_expr::expr::{self, Exists, SetComparison, SetQuantifier};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::{Expr, LogicalPlan, lit};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use datafusion_expr::utils::merge_schema;
@@ -31,7 +35,11 @@ impl RewriteSetComparison {
         Self
     }
 
-    fn rewrite_plan(&self, plan: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+    fn rewrite_plan(
+        &self,
+        plan: LogicalPlan,
+        config: &dyn OptimizerConfig,
+    ) -> Result<Transformed<LogicalPlan>> {
         let mut schema = merge_schema(&plan.inputs());
         if let Some(merge_schema) = merge_into_schema(&plan)? {
             schema = merge_schema;
@@ -47,7 +55,7 @@ impl RewriteSetComparison {
         let name_preserver = NamePreserver::new(&plan);
         plan.map_expressions(|expr| {
             let original_name = name_preserver.save(&expr);
-            expr.transform_up(|expr| rewrite_set_comparison(expr, &schema))
+            expr.transform_up(|expr| rewrite_set_comparison(expr, &schema, config))
                 .map(|t| t.update_data(|expr| original_name.restore(expr)))
         })
     }
@@ -61,19 +69,21 @@ impl OptimizerRule for RewriteSetComparison {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
-        plan.transform_up_with_subqueries(|plan| self.rewrite_plan(plan))
+        plan.transform_up_with_subqueries(|plan| self.rewrite_plan(plan, config))
     }
 }
 
 fn rewrite_set_comparison(
     expr: Expr,
     outer_schema: &DFSchema,
+    config: &dyn OptimizerConfig,
 ) -> Result<Transformed<Expr>> {
     match expr {
         Expr::SetComparison(set_comparison) => {
-            let rewritten = build_set_comparison_subquery(set_comparison, outer_schema)?;
+            let rewritten =
+                build_set_comparison_subquery(set_comparison, outer_schema, config)?;
             Ok(Transformed::yes(rewritten))
         }
         _ => Ok(Transformed::no(expr)),
@@ -83,6 +93,7 @@ fn rewrite_set_comparison(
 fn build_set_comparison_subquery(
     set_comparison: SetComparison,
     outer_schema: &DFSchema,
+    config: &dyn OptimizerConfig,
 ) -> Result<Expr> {
     let SetComparison {
         expr,
@@ -97,7 +108,10 @@ fn build_set_comparison_subquery(
         return plan_err!("single expression required.");
     }
     // avoid `head_output_expr` for aggr/window plan, it will gives group-by expr if exists
-    let right_expr = Expr::Column(Column::from(subquery_schema.qualified_field(0)));
+    let right_expr = Expr::Column(
+        Column::from(subquery_schema.qualified_field(0))
+            .with_id(subquery_schema.field_id(0)),
+    );
 
     let comparison = Expr::BinaryExpr(expr::BinaryExpr::new(
         Box::new(left_expr),
@@ -105,10 +119,16 @@ fn build_set_comparison_subquery(
         Box::new(right_expr),
     ));
 
+    // the subquery is put in two or three places: each copy after the first
+    // gets new ids (the comparison reads its first output, renamed with it)
+    let ids = config.column_id_generator();
     let true_exists =
-        exists_subquery(&subquery, Expr::IsTrue(Box::new(comparison.clone())))?;
-    let null_exists =
-        exists_subquery(&subquery, Expr::IsNull(Box::new(comparison.clone())))?;
+        exists_subquery(&subquery, Expr::IsTrue(Box::new(comparison.clone())), None)?;
+    let null_exists = exists_subquery(
+        &subquery,
+        Expr::IsNull(Box::new(comparison.clone())),
+        Some(ids),
+    )?;
 
     let result_expr = match quantifier {
         SetQuantifier::Any => Expr::Case(expr::Case {
@@ -123,8 +143,11 @@ fn build_set_comparison_subquery(
             else_expr: Some(Box::new(lit(false))),
         }),
         SetQuantifier::All => {
-            let false_exists =
-                exists_subquery(&subquery, Expr::IsFalse(Box::new(comparison.clone())))?;
+            let false_exists = exists_subquery(
+                &subquery,
+                Expr::IsFalse(Box::new(comparison.clone())),
+                Some(ids),
+            )?;
             Expr::Case(expr::Case {
                 expr: None,
                 when_then_expr: vec![
@@ -142,8 +165,39 @@ fn build_set_comparison_subquery(
     Ok(result_expr)
 }
 
-fn exists_subquery(subquery: &Subquery, filter: Expr) -> Result<Expr> {
-    let plan = LogicalPlanBuilder::from(subquery.subquery.as_ref().clone())
+/// `EXISTS (<subquery> WHERE filter)`, where `filter` reads the first output
+/// of `subquery`. With `renumber`, the subquery is a copy: it gets new ids
+/// from it, and `filter` reads the renamed output.
+fn exists_subquery(
+    subquery: &Subquery,
+    filter: Expr,
+    renumber: Option<&Arc<ColumnIdGenerator>>,
+) -> Result<Expr> {
+    let mut plan = subquery.subquery.as_ref().clone();
+    let mut filter = filter;
+    if let Some(ids) = renumber {
+        let old_ids = plan.schema().field_ids().to_vec();
+        plan = plan.with_fresh_column_ids(ids)?;
+        let renames: HashMap<ColumnId, ColumnId> = old_ids
+            .into_iter()
+            .zip(plan.schema().field_ids().iter().copied())
+            .filter_map(|(old, new)| Some((old?, new?)))
+            .collect();
+        filter = filter
+            .transform(|expr| match expr {
+                Expr::Column(col) => match col.id.and_then(|id| renames.get(&id)) {
+                    Some(new_id) => {
+                        let new_id = Some(*new_id);
+                        Ok(Transformed::yes(Expr::Column(col.with_id(new_id))))
+                    }
+                    None => Ok(Transformed::no(Expr::Column(col))),
+                },
+                _ => Ok(Transformed::no(expr)),
+            })?
+            .data;
+    }
+    let plan = LogicalPlanBuilder::from(plan)
+        .with_column_id_generator(renumber.cloned())
         .filter(filter)?
         .build()?;
     let outer_ref_columns = plan.all_out_ref_exprs();

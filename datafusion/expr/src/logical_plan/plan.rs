@@ -1957,8 +1957,18 @@ impl LogicalPlan {
             // Build `LogicalPlan::Values` from the values for type inference.
             // We can't use `recompute_schema` because it skips recomputing for
             // `LogicalPlan::Values`.
-            LogicalPlan::Values(Values { values, schema: _ }) => {
-                LogicalPlanBuilder::values(values)?.build()
+            // The columns keep their ids.
+            LogicalPlan::Values(Values { values, schema }) => {
+                let LogicalPlan::Values(mut rebuilt) =
+                    LogicalPlanBuilder::values(values)?.build()?
+                else {
+                    return internal_err!("Expected a Values plan");
+                };
+                rebuilt.schema = Arc::new(
+                    Arc::unwrap_or_clone(rebuilt.schema)
+                        .with_field_ids(schema.field_ids().to_vec())?,
+                );
+                Ok(LogicalPlan::Values(rebuilt))
             }
             // other plans can just use `recompute_schema` directly.
             plan => plan.recompute_schema(),
@@ -3542,6 +3552,16 @@ pub struct TableScan {
     // `TableScan` (and thus `LogicalPlan`) by its own size;
     // see `test_size_of_logical_plan`.
     pub statistics_requests: Box<BTreeSet<StatisticsRequest>>,
+    /// The [`ColumnId`]s of the columns of the source, indexed like the
+    /// fields of the source schema, `None` if the scan has no ids.
+    ///
+    /// A scan defines every column of its source, projected or not: its
+    /// `filters` can read columns that its projection omits, and they resolve
+    /// against these ids. The ids are allocated once, when the scan is
+    /// created, and shared by the scans rebuilt from it (see
+    /// [`TableScanBuilder`]): the ids of the projected schema are the subset
+    /// that the projection selects.
+    pub source_column_ids: Option<Arc<[ColumnId]>>,
 }
 
 impl Debug for TableScan {
@@ -3615,6 +3635,65 @@ impl Hash for TableScan {
 }
 
 impl TableScan {
+    /// Returns this scan where every column of its source has a new id from
+    /// `generator` (see [`Self::source_column_ids`]), and the references of
+    /// its filters that have no id are bound by name to them, if neither its
+    /// source columns nor its projected columns have ids yet (a scan just
+    /// created). Costs the width of the source, once.
+    pub fn with_new_column_ids(mut self, generator: &ColumnIdGenerator) -> Result<Self> {
+        if self.source_column_ids.is_some()
+            || self
+                .projected_schema
+                .field_ids()
+                .iter()
+                .any(Option::is_some)
+        {
+            return Ok(self);
+        }
+        let source_schema = self.source.schema();
+        let ids: Arc<[ColumnId]> = source_schema
+            .fields()
+            .iter()
+            .map(|_| generator.next())
+            .collect();
+        let projected_ids = match &self.projection {
+            Some(p) => p.iter().map(|i| ids.get(*i).copied()).collect(),
+            None => ids.iter().copied().map(Some).collect(),
+        };
+        self.projected_schema = Arc::new(
+            Arc::unwrap_or_clone(self.projected_schema).with_field_ids(projected_ids)?,
+        );
+        if !self.filters.is_empty() {
+            let source = self.source_dfschema_with(&ids)?;
+            self.filters = std::mem::take(&mut self.filters)
+                .into_iter()
+                .map(|filter| bind_column_ids(filter, &source))
+                .collect::<Result<_>>()?;
+        }
+        self.source_column_ids = Some(ids);
+        Ok(self)
+    }
+
+    /// The schema of the whole source of this scan, qualified by its table
+    /// name, with the ids of [`Self::source_column_ids`] (the projected
+    /// schema if it has none): the schema the references of its filters
+    /// resolve against. Costs the width of the source.
+    pub fn source_schema(&self) -> Result<DFSchemaRef> {
+        match &self.source_column_ids {
+            Some(ids) => self.source_dfschema_with(ids).map(Arc::new),
+            None => Ok(Arc::clone(&self.projected_schema)),
+        }
+    }
+
+    /// The schema of the source, qualified by the table name, with `ids`
+    fn source_dfschema_with(&self, ids: &[ColumnId]) -> Result<DFSchema> {
+        DFSchema::try_from_qualified_schema(
+            self.table_name.clone(),
+            &self.source.schema(),
+        )?
+        .with_field_ids(ids.iter().copied().map(Some).collect())
+    }
+
     /// Initialize TableScan with appropriate schema from the given
     /// arguments.
     #[deprecated(since = "54.0.0", note = "use `TableScanBuilder` instead")]
@@ -3649,11 +3728,16 @@ pub struct TableScanBuilder {
     skip: Option<usize>,
     #[expect(clippy::box_collection)] // additional indirection for smaller size_of()
     statistics_requests: Box<BTreeSet<StatisticsRequest>>,
+    /// The column ids of the columns of the source (see
+    /// [`TableScan::source_column_ids`]), when the builder was made from a
+    /// scan that has them: the new scan shares them
+    source_column_ids: Option<Arc<[ColumnId]>>,
     /// The column ids of the columns of the source, indexed like the fields
     /// of the source schema, when the builder was made from a scan whose
-    /// columns have ids (empty otherwise): the columns that the new
-    /// projection retains keep their ids
-    source_column_ids: Vec<Option<ColumnId>>,
+    /// projected columns have ids but that has no
+    /// [`TableScan::source_column_ids`] (built by hand; empty otherwise):
+    /// the columns that the new projection retains keep their ids
+    projected_column_ids: Vec<Option<ColumnId>>,
 }
 
 impl TableScanBuilder {
@@ -3670,7 +3754,8 @@ impl TableScanBuilder {
             fetch: None,
             skip: None,
             statistics_requests: Box::default(),
-            source_column_ids: vec![],
+            source_column_ids: None,
+            projected_column_ids: vec![],
         }
     }
 
@@ -3720,6 +3805,7 @@ impl TableScanBuilder {
             skip,
             statistics_requests,
             source_column_ids,
+            projected_column_ids,
         } = self;
 
         if table_name.table().is_empty() {
@@ -3752,10 +3838,18 @@ impl TableScanBuilder {
                 df_schema.with_functional_dependencies(func_dependencies)
             })?;
         // the columns of the source keep their ids, whatever the projection
-        let projected_schema = if source_column_ids.len() == schema.fields().len() {
+        let source_column_ids =
+            source_column_ids.filter(|ids| ids.len() == schema.fields().len());
+        let projected_schema = if let Some(ids) = &source_column_ids {
             let ids = match &projection {
-                Some(p) => p.iter().map(|i| source_column_ids[*i]).collect(),
-                None => source_column_ids,
+                Some(p) => p.iter().map(|i| Some(ids[*i])).collect(),
+                None => ids.iter().copied().map(Some).collect(),
+            };
+            projected_schema.with_field_ids(ids)?
+        } else if projected_column_ids.len() == schema.fields().len() {
+            let ids = match &projection {
+                Some(p) => p.iter().map(|i| projected_column_ids[*i]).collect(),
+                None => projected_column_ids,
             };
             projected_schema.with_field_ids(ids)?
         } else {
@@ -3772,13 +3866,39 @@ impl TableScanBuilder {
             fetch,
             skip,
             statistics_requests,
+            source_column_ids,
         })
     }
 }
 
+/// Returns `expr` where the column references without an id that resolve
+/// by name in `schema` have the id of the field they resolve to
+fn bind_column_ids(expr: Expr, schema: &DFSchema) -> Result<Expr> {
+    expr.transform(|expr| match expr {
+        Expr::Column(col) if col.id.is_none() => {
+            match schema.maybe_index_of_column(&col) {
+                Some(i) => {
+                    let id = schema.field_id(i);
+                    Ok(Transformed::new_transformed(
+                        Expr::Column(col.with_id(id)),
+                        id.is_some(),
+                    ))
+                }
+                None => Ok(Transformed::no(Expr::Column(col))),
+            }
+        }
+        _ => Ok(Transformed::no(expr)),
+    })
+    .map(|transformed| transformed.data)
+}
+
 /// The ids of the columns of `scan`'s source, indexed like the fields of the
-/// source schema, if the columns of `scan` have ids (empty otherwise)
-fn source_column_ids(scan: &TableScan) -> Vec<Option<ColumnId>> {
+/// source schema, if the projected columns of `scan` have ids but it has no
+/// [`TableScan::source_column_ids`] (empty otherwise)
+fn projected_column_ids(scan: &TableScan) -> Vec<Option<ColumnId>> {
+    if scan.source_column_ids.is_some() {
+        return vec![];
+    }
     let projected_ids = scan.projected_schema.field_ids();
     if projected_ids.iter().all(Option::is_none) {
         return vec![];
@@ -3803,7 +3923,7 @@ impl From<TableScan> for TableScanBuilder {
     /// A builder of `scan`, which keeps the column ids of `scan` for the
     /// columns that the projection of the new scan retains
     fn from(scan: TableScan) -> Self {
-        let source_column_ids = source_column_ids(&scan);
+        let projected_column_ids = projected_column_ids(&scan);
         Self {
             table_name: scan.table_name,
             source: scan.source,
@@ -3812,7 +3932,8 @@ impl From<TableScan> for TableScanBuilder {
             fetch: scan.fetch,
             skip: scan.skip,
             statistics_requests: scan.statistics_requests,
-            source_column_ids,
+            source_column_ids: scan.source_column_ids,
+            projected_column_ids,
         }
     }
 }
@@ -7718,6 +7839,7 @@ mod tests {
             fetch: None,
             skip: None,
             statistics_requests: Box::default(),
+            source_column_ids: None,
         }));
         let col = schema.field_names()[0].clone();
 
@@ -7750,6 +7872,7 @@ mod tests {
             fetch: None,
             skip: None,
             statistics_requests: Box::default(),
+            source_column_ids: None,
         }));
         let col = schema.field_names()[0].clone();
 

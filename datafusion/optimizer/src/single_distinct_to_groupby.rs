@@ -11,13 +11,13 @@ use crate::utils::{plan_builder, with_output_ids_of};
 use crate::{OptimizerConfig, OptimizerRule};
 
 use datafusion_common::{
-    DFSchema, DataFusionError, HashSet, Result, assert_or_internal_err,
+    Column, ColumnId, DFSchema, DataFusionError, HashSet, Result, assert_or_internal_err,
     tree_node::Transformed,
 };
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::expr_schema::ExprSchemable;
 use datafusion_expr::{
-    AggregateUDF, Expr, NamedExpr, cast, col,
+    AggregateUDF, Expr, NamedExpr, cast,
     expr::AggregateFunction,
     lit,
     logical_plan::{Aggregate, LogicalPlan},
@@ -72,6 +72,12 @@ use datafusion_expr::{
 pub struct SingleDistinctToGroupBy {}
 
 const SINGLE_DISTINCT_ALIAS: &str = "alias1";
+
+/// A reference to the column `name` with the id `id`, defined by the inner
+/// aggregate
+fn column_with_id(name: &str, id: ColumnId) -> Expr {
+    Expr::Column(Column::from_name(name).with_id(Some(id)))
+}
 
 impl SingleDistinctToGroupBy {
     #[expect(missing_docs)]
@@ -232,6 +238,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
             )? =>
             {
                 let group_size = group_expr.len();
+                let ids = config.column_id_generator();
                 // the projection on top rebuilds the outputs: they keep
                 // their ids
                 let entries = group_expr
@@ -241,9 +248,11 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .collect::<Vec<_>>();
                 let group_expr = group_expr.into_iter().map(NamedExpr::into_expr);
                 let aggr_expr = aggr_expr.into_iter().map(NamedExpr::into_expr);
-                // alias all original group_by exprs
+                // alias all original group_by exprs. The inner aggregate
+                // passes the bare columns through, and defines the others,
+                // which the outer aggregate references by id.
                 let (mut inner_group_exprs, out_group_expr_with_alias): (
-                    Vec<Expr>,
+                    Vec<NamedExpr>,
                     Vec<(Expr, _)>,
                 ) = group_expr
                     .into_iter()
@@ -251,7 +260,14 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .map(|(i, group_expr)| {
                         if let Expr::Column(_) = group_expr {
                             // For Column expressions we can use existing expression as is.
-                            (group_expr.clone(), (group_expr, None))
+                            (
+                                NamedExpr::allocate(
+                                    group_expr.clone(),
+                                    input.schema(),
+                                    ids,
+                                ),
+                                (group_expr, None),
+                            )
                         } else {
                             // For complex expression write is as alias, to be able to refer
                             // if from parent operators successfully.
@@ -273,17 +289,23 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                             // Second aggregate refers to the `test.a + Int32(1)` expression However, its input do not have `test.a` expression in it.
                             let alias_str = format!("group_alias_{i}");
                             let (qualifier, field) = schema.qualified_field(i);
+                            let id = ids.next();
                             (
-                                group_expr.alias(alias_str.clone()),
-                                (col(alias_str), Some((qualifier, field.name()))),
+                                NamedExpr::new(group_expr.alias(alias_str.clone()), id),
+                                (
+                                    column_with_id(&alias_str, id),
+                                    Some((qualifier, field.name())),
+                                ),
                             )
                         }
                     })
                     .unzip();
 
-                // replace the distinct arg with alias
+                // replace the distinct arg with alias (the column of the
+                // inner aggregate, whose id the outer aggregates reference)
                 let mut index = 1;
                 let mut group_fields_set = HashSet::new();
+                let distinct_id = ids.next();
                 let mut inner_aggr_exprs = vec![];
                 // Each aggregate yields the expression the outer `Aggregate`
                 // computes and the expression the projection above it selects.
@@ -320,13 +342,21 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 
                                 if group_fields_set.insert(arg.schema_name().to_string())
                                 {
-                                    inner_group_exprs
-                                        .push(arg.alias(SINGLE_DISTINCT_ALIAS));
+                                    inner_group_exprs.push(NamedExpr::new(
+                                        arg.alias(SINGLE_DISTINCT_ALIAS),
+                                        distinct_id,
+                                    ));
                                 }
                                 let outer =
                                     Expr::AggregateFunction(AggregateFunction::new_udf(
                                         func,
-                                        vec![col(SINGLE_DISTINCT_ALIAS); arity],
+                                        vec![
+                                            column_with_id(
+                                                SINGLE_DISTINCT_ALIAS,
+                                                distinct_id
+                                            );
+                                            arity
+                                        ],
                                         false, // intentional to remove distinct here
                                         filter,
                                         order_by,
@@ -337,6 +367,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                             } else {
                                 index += 1;
                                 let alias_str = format!("alias{index}");
+                                let id = ids.next();
                                 // `count`'s outer phase is `sum`, over the
                                 // partial counts the inner group-by produced.
                                 let rollup = count_rollup
@@ -346,7 +377,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                     Some(rollup) => Arc::clone(&rollup.sum),
                                     None => Arc::clone(&func),
                                 };
-                                inner_aggr_exprs.push(
+                                inner_aggr_exprs.push(NamedExpr::new(
                                     Expr::AggregateFunction(AggregateFunction::new_udf(
                                         Arc::clone(&func),
                                         args,
@@ -356,11 +387,12 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                         null_treatment,
                                     ))
                                     .alias(&alias_str),
-                                );
+                                    id,
+                                ));
                                 let outer =
                                     Expr::AggregateFunction(AggregateFunction::new_udf(
                                         outer_func,
-                                        vec![col(&alias_str)],
+                                        vec![column_with_id(&alias_str, id)],
                                         false,
                                         None,
                                         vec![],
@@ -384,17 +416,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                     .into_iter()
                     .unzip();
 
-                // construct the inner AggrPlan: the bare grouping columns
-                // pass through, the other outputs are new columns
-                let ids = config.column_id_generator();
-                let inner_group_exprs = inner_group_exprs
-                    .into_iter()
-                    .map(|e| NamedExpr::allocate(e, input.schema(), ids))
-                    .collect();
-                let inner_aggr_exprs = inner_aggr_exprs
-                    .into_iter()
-                    .map(|e| NamedExpr::new(e, ids.next()))
-                    .collect();
+                // construct the inner AggrPlan
                 let inner_agg = LogicalPlan::Aggregate(Aggregate::try_new(
                     input,
                     inner_group_exprs,
@@ -468,11 +490,11 @@ mod tests {
     use datafusion_common::ColumnIdGenerator;
     use datafusion_common::alias::AliasGenerator;
     use datafusion_common::config::ConfigOptions;
-    use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::function::AccumulatorArgs;
     use datafusion_expr::registry::{FunctionRegistry, MemoryFunctionRegistry};
     use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+    use datafusion_expr::{ExprFunctionExt, col};
     use datafusion_expr::{
         lit,
         logical_plan::builder::{LogicalPlanBuilder, table_scan},

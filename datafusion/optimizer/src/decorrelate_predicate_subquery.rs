@@ -543,13 +543,17 @@ fn mark_join(
         ids,
     )?
     .map(|join| {
-        // the reference to the mark column has its id
+        // the reference to the mark column has its id: the mark column of
+        // the join, or the output that compensates it for the count bug
+        let mark = Column::new(Some(alias.clone()), "mark");
         let mark_id = match &join.plan {
             LogicalPlan::Join(join) => join.mark_column_id(),
-            _ => None,
+            plan => plan
+                .schema()
+                .maybe_index_of_column(&mark)
+                .and_then(|i| plan.schema().field_id(i)),
         };
-        let exists_col =
-            Expr::Column(Column::new(Some(alias.clone()), "mark").with_id(mark_id));
+        let exists_col = Expr::Column(mark.with_id(mark_id));
         let exists_expr = if negated { !exists_col } else { exists_col };
         MarkJoin {
             plan: join.plan,
@@ -1025,8 +1029,24 @@ fn build_join(
                     } else {
                         subquery_output_expr(subquery, i)?
                     };
+                    // the subquery output `i`, through the alias: with its id,
+                    // and with the name the alias gives it if it renamed a
+                    // duplicate name (`SELECT p1.id, p2.id`: the name alone
+                    // read the first `id`)
                     let right_col =
                         create_col_from_scalar_expr(&output_expr, alias.to_string())?;
+                    let alias_schema = sub_query_alias.schema();
+                    let right_col = if i < alias_schema.fields().len() {
+                        let aliased = Column::from(alias_schema.qualified_field(i))
+                            .with_id(alias_schema.field_id(i));
+                        if aliased.name == right_col.name {
+                            right_col.with_id(aliased.id)
+                        } else {
+                            aliased
+                        }
+                    } else {
+                        right_col
+                    };
                     Ok(InValue {
                         value: value.clone(),
                         subquery_column: Expr::Column(right_col),

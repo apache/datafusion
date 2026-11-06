@@ -732,6 +732,7 @@ impl LogicalPlan {
                 fetch,
                 skip: offset,
                 statistics_requests,
+                source_column_ids,
             }) => filters.map_elements(f)?.update_data(|filters| {
                 LogicalPlan::TableScan(TableScan {
                     table_name,
@@ -742,6 +743,7 @@ impl LogicalPlan {
                     fetch,
                     skip: offset,
                     statistics_requests,
+                    source_column_ids,
                 })
             }),
             LogicalPlan::Distinct(Distinct::On(DistinctOn {

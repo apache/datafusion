@@ -4,7 +4,7 @@
 
 //! [`CommonSubexprEliminate`] to avoid redundant computation of common sub-expressions
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -17,8 +17,8 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::cse::{CSE, CSEController, FoundCommonNodes};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    Column, ColumnId, DFSchema, DFSchemaRef, Result, assert_eq_or_internal_err,
-    qualified_name,
+    Column, ColumnId, ColumnIdGenerator, DFSchema, DFSchemaRef, Result,
+    assert_eq_or_internal_err, qualified_name,
 };
 use datafusion_expr::expr::{
     AggregateFunction, AggregateFunctionParams, Alias, HigherOrderFunction,
@@ -28,7 +28,7 @@ use datafusion_expr::logical_plan::{
     Aggregate, Filter, LogicalPlan, Projection, Sort, Window,
 };
 use datafusion_expr::{
-    BinaryExpr, Case, Expr, ExpressionPlacement, NamedExpr, Operator, SortExpr, col,
+    BinaryExpr, Case, Expr, ExpressionPlacement, NamedExpr, Operator, SortExpr,
 };
 
 const CSE_PREFIX: &str = "__common_expr";
@@ -168,13 +168,13 @@ impl CommonSubexprEliminate {
             get_consecutive_window_exprs(window);
 
         // Extract common sub-expressions from the list.
-
-        match CSE::new(ExprCSEController::new(
-            config.alias_generator().as_ref(),
+        let mut common_ids = CommonExprIds::default();
+        match extract_common_exprs(
+            config,
             ExprMask::Normal,
-        ))
-        .extract_common_nodes(window_expr_list)?
-        {
+            window_expr_list,
+            &mut common_ids,
+        )? {
             // If there are common sub-expressions, then the insert a projection node
             // with the common expressions between the new window nodes and the
             // original input.
@@ -182,15 +182,15 @@ impl CommonSubexprEliminate {
                 common_nodes: common_exprs,
                 new_nodes_list: new_exprs_list,
                 original_nodes_list: original_exprs_list,
-            } => build_common_expr_project_plan(input, common_exprs, config).map(
-                |new_input| {
-                    Transformed::yes((
-                        new_exprs_list,
-                        new_input,
-                        Some(original_exprs_list),
-                    ))
-                },
-            ),
+            } => build_common_expr_project_plan(
+                input,
+                common_exprs,
+                &mut common_ids,
+                config,
+            )
+            .map(|new_input| {
+                Transformed::yes((new_exprs_list, new_input, Some(original_exprs_list)))
+            }),
             FoundCommonNodes::No {
                 original_nodes_list: original_exprs_list,
             } => Ok(Transformed::no((original_exprs_list, input, None))),
@@ -316,12 +316,13 @@ impl CommonSubexprEliminate {
             Ok(rebuild(&group_entries, exprs))
         };
         // Extract common sub-expressions from the aggregate and grouping expressions.
-        match CSE::new(ExprCSEController::new(
-            config.alias_generator().as_ref(),
+        let mut common_ids = CommonExprIds::default();
+        match extract_common_exprs(
+            config,
             ExprMask::Normal,
-        ))
-        .extract_common_nodes(vec![group_expr, aggr_expr])?
-        {
+            vec![group_expr, aggr_expr],
+            &mut common_ids,
+        )? {
             // If there are common sub-expressions, then insert a projection node
             // with the common expressions between the new aggregate node and the
             // original input.
@@ -333,17 +334,21 @@ impl CommonSubexprEliminate {
                 let new_aggr_expr = new_exprs_list.pop().unwrap();
                 let new_group_expr = new_exprs_list.pop().unwrap();
 
-                build_common_expr_project_plan(input, common_exprs, config).map(
-                    |new_input| {
-                        let aggr_expr = original_exprs_list.pop().unwrap();
-                        Transformed::yes((
-                            new_aggr_expr,
-                            new_group_expr,
-                            new_input,
-                            Some(aggr_expr),
-                        ))
-                    },
+                build_common_expr_project_plan(
+                    input,
+                    common_exprs,
+                    &mut common_ids,
+                    config,
                 )
+                .map(|new_input| {
+                    let aggr_expr = original_exprs_list.pop().unwrap();
+                    Transformed::yes((
+                        new_aggr_expr,
+                        new_group_expr,
+                        new_input,
+                        Some(aggr_expr),
+                    ))
+                })
             }
 
             FoundCommonNodes::No {
@@ -376,12 +381,13 @@ impl CommonSubexprEliminate {
         .transform_data(
             |(new_aggr_expr, new_group_expr, aggr_expr, new_input)| {
                 // Extract common aggregate sub-expressions from the aggregate expressions.
-                match CSE::new(ExprCSEController::new(
-                    config.alias_generator().as_ref(),
+                let mut common_ids = CommonExprIds::default();
+                match extract_common_exprs(
+                    config,
                     ExprMask::NormalAndAggregates,
-                ))
-                .extract_common_nodes(vec![new_aggr_expr])?
-                {
+                    vec![new_aggr_expr],
+                    &mut common_ids,
+                )? {
                     FoundCommonNodes::Yes {
                         common_nodes: common_exprs,
                         new_nodes_list: mut new_exprs_list,
@@ -399,28 +405,25 @@ impl CommonSubexprEliminate {
                             (0..new_aggr_expr.len()).map(|_| None).collect()
                         };
 
-                        // the common aggregates define new columns
+                        // the common aggregates define the columns that the
+                        // rewritten aggregates reference
                         let mut agg_exprs = common_exprs
                             .into_iter()
                             .map(|(expr, expr_alias)| {
-                                NamedExpr::new(expr.alias(expr_alias), ids.next())
+                                let id = common_ids.id(&expr_alias, ids);
+                                NamedExpr::new(expr.alias(expr_alias), id)
                             })
                             .collect::<Vec<_>>();
 
                         // the outputs of the projection, with the ids of the
                         // aggregate outputs they replace (the others pass the
                         // outputs of the new aggregate through)
-                        let mut proj_exprs: Vec<(Expr, Option<ColumnId>)> =
-                            Vec::with_capacity(
-                                new_group_expr.len() + rewritten_aggr_expr.len(),
-                            );
-                        let mut group_proj_exprs = vec![];
-                        for expr in &new_group_expr {
-                            extract_expressions(expr, &mut group_proj_exprs)
-                        }
-
-                        proj_exprs
-                            .extend(group_proj_exprs.into_iter().map(|e| (e, None)));
+                        // the outputs of the projection that replace the
+                        // aggregate expressions, with the ids of the
+                        // aggregate outputs they replace (the grouping
+                        // outputs are passed through, below)
+                        let mut proj_exprs: Vec<NamedExpr> =
+                            Vec::with_capacity(rewritten_aggr_expr.len());
                         for (((expr_rewritten, expr_orig), saved_name), entry) in
                             rewritten_aggr_expr
                                 .into_iter()
@@ -444,9 +447,12 @@ impl CommonSubexprEliminate {
                                         expr.alias(&name),
                                         entry.id,
                                     ));
-                                    proj_exprs.push((
-                                        Expr::Column(Column::from_name(name)),
-                                        None,
+                                    proj_exprs.push(NamedExpr::new(
+                                        Expr::Column(
+                                            Column::from_name(name)
+                                                .with_id(Some(entry.id)),
+                                        ),
+                                        entry.id,
                                     ));
                                 } else {
                                     let expr_alias =
@@ -458,18 +464,22 @@ impl CommonSubexprEliminate {
 
                                     // the renamed output of the
                                     // projection replaces it
+                                    let id = ids.next();
                                     agg_exprs.push(NamedExpr::new(
                                         expr_rewritten.alias(&expr_alias),
-                                        ids.next(),
+                                        id,
                                     ));
-                                    proj_exprs.push((
-                                        Expr::Column(Column::from_name(expr_alias))
-                                            .alias(out_name),
-                                        Some(entry.id),
+                                    proj_exprs.push(NamedExpr::new(
+                                        Expr::Column(
+                                            Column::from_name(expr_alias)
+                                                .with_id(Some(id)),
+                                        )
+                                        .alias(out_name),
+                                        entry.id,
                                     ));
                                 }
                             } else {
-                                proj_exprs.push((expr_rewritten, Some(entry.id)));
+                                proj_exprs.push(NamedExpr::new(expr_rewritten, entry.id));
                             }
                         }
 
@@ -479,12 +489,21 @@ impl CommonSubexprEliminate {
                             grouping_sets.clone(),
                             agg_exprs,
                         )?);
-                        let proj_exprs = proj_exprs
+                        // the grouping outputs (and the grouping id) pass
+                        // through
+                        let group_len = match &agg {
+                            LogicalPlan::Aggregate(agg) => agg.group_expr_len()?,
+                            _ => unreachable!(),
+                        };
+                        let proj_exprs = agg
+                            .schema()
+                            .columns()
                             .into_iter()
-                            .map(|(e, id)| match id {
-                                Some(id) => NamedExpr::new(e, id),
-                                None => NamedExpr::allocate(e, agg.schema(), ids),
+                            .take(group_len)
+                            .map(|col| {
+                                NamedExpr::allocate(Expr::Column(col), agg.schema(), ids)
                             })
+                            .chain(proj_exprs)
                             .collect();
                         Projection::try_new(proj_exprs, Arc::new(agg))
                             .map(|p| Transformed::yes(LogicalPlan::Projection(p)))
@@ -569,20 +588,26 @@ impl CommonSubexprEliminate {
         config: &dyn OptimizerConfig,
     ) -> Result<Transformed<(Vec<Expr>, LogicalPlan)>> {
         // Extract common sub-expressions from the expressions.
-        match CSE::new(ExprCSEController::new(
-            config.alias_generator().as_ref(),
+        let mut common_ids = CommonExprIds::default();
+        match extract_common_exprs(
+            config,
             ExprMask::Normal,
-        ))
-        .extract_common_nodes(vec![exprs])?
-        {
+            vec![exprs],
+            &mut common_ids,
+        )? {
             FoundCommonNodes::Yes {
                 common_nodes: common_exprs,
                 new_nodes_list: mut new_exprs_list,
                 original_nodes_list: _,
             } => {
                 let new_exprs = new_exprs_list.pop().unwrap();
-                build_common_expr_project_plan(input, common_exprs, config)
-                    .map(|new_input| Transformed::yes((new_exprs, new_input)))
+                build_common_expr_project_plan(
+                    input,
+                    common_exprs,
+                    &mut common_ids,
+                    config,
+                )
+                .map(|new_input| Transformed::yes((new_exprs, new_input)))
             }
             FoundCommonNodes::No {
                 original_nodes_list: mut original_exprs_list,
@@ -755,20 +780,59 @@ enum ExprMask {
 
 struct ExprCSEController<'a> {
     alias_generator: &'a AliasGenerator,
+    column_id_generator: &'a ColumnIdGenerator,
     mask: ExprMask,
+    /// The ids of the columns of the common expressions, which the references
+    /// that replace them take
+    common_ids: &'a mut CommonExprIds,
 
     // how many aliases have we seen so far
     alias_counter: usize,
 }
 
 impl<'a> ExprCSEController<'a> {
-    fn new(alias_generator: &'a AliasGenerator, mask: ExprMask) -> Self {
+    fn new(
+        config: &'a dyn OptimizerConfig,
+        mask: ExprMask,
+        common_ids: &'a mut CommonExprIds,
+    ) -> Self {
         Self {
-            alias_generator,
+            alias_generator: config.alias_generator().as_ref(),
+            column_id_generator: config.column_id_generator(),
             mask,
+            common_ids,
             alias_counter: 0,
         }
     }
+}
+
+/// The ids of the columns that compute the common expressions extracted by
+/// [`extract_common_exprs`], by alias: the references that replace the
+/// expressions, and the entries that compute them below, take the same id
+#[derive(Debug, Default)]
+struct CommonExprIds(HashMap<String, ColumnId>);
+
+impl CommonExprIds {
+    /// The id of the column of the common expression `alias`, allocated from
+    /// `generator` when it is first asked for
+    fn id(&mut self, alias: &str, generator: &ColumnIdGenerator) -> ColumnId {
+        *self
+            .0
+            .entry(alias.to_owned())
+            .or_insert_with(|| generator.next())
+    }
+}
+
+/// Extracts the common subexpressions of `exprs_list` (see [`CSE`]). The ids
+/// of the columns that compute them are recorded in `common_ids`.
+fn extract_common_exprs(
+    config: &dyn OptimizerConfig,
+    mask: ExprMask,
+    exprs_list: Vec<Vec<Expr>>,
+    common_ids: &mut CommonExprIds,
+) -> Result<FoundCommonNodes<Expr>> {
+    CSE::new(ExprCSEController::new(config, mask, common_ids))
+        .extract_common_nodes(exprs_list)
 }
 
 impl CSEController for ExprCSEController<'_> {
@@ -929,12 +993,15 @@ impl CSEController for ExprCSEController<'_> {
     }
 
     fn rewrite(&mut self, node: &Self::Node, alias: &str) -> Self::Node {
+        // a reference to the column that computes the common expression
+        let id = self.common_ids.id(alias, self.column_id_generator);
+        let reference = Expr::Column(Column::from_name(alias).with_id(Some(id)));
         // alias the expressions without an `Alias` ancestor node
         if self.alias_counter > 0 {
-            col(alias)
+            reference
         } else {
             self.alias_counter += 1;
-            col(alias).alias(node.schema_name().to_string())
+            reference.alias(node.schema_name().to_string())
         }
     }
 
@@ -969,28 +1036,36 @@ impl Default for CommonSubexprEliminate {
 fn build_common_expr_project_plan(
     input: LogicalPlan,
     common_exprs: Vec<(Expr, String)>,
+    common_ids: &mut CommonExprIds,
     config: &dyn OptimizerConfig,
 ) -> Result<LogicalPlan> {
     let mut fields_set = BTreeSet::new();
+    // the common expressions define the columns their references read
     let mut project_exprs = common_exprs
         .into_iter()
         .map(|(expr, expr_alias)| {
             fields_set.insert(expr_alias.clone());
-            Ok(expr.alias(expr_alias))
+            let id = common_ids.id(&expr_alias, config.column_id_generator());
+            NamedExpr::new(expr.alias(expr_alias), id)
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect::<Vec<_>>();
 
-    for (qualifier, field) in input.schema().iter() {
+    // the input columns pass through
+    for (col, (qualifier, field)) in input
+        .schema()
+        .columns()
+        .into_iter()
+        .zip(input.schema().iter())
+    {
         if fields_set.insert(qualified_name(qualifier, field.name())) {
-            project_exprs.push(Expr::from((qualifier, field)));
+            project_exprs.push(NamedExpr::allocate(
+                Expr::Column(col),
+                input.schema(),
+                config.column_id_generator(),
+            ));
         }
     }
 
-    // the common expressions define columns, the input columns pass through
-    let project_exprs = project_exprs
-        .into_iter()
-        .map(|e| NamedExpr::allocate(e, input.schema(), config.column_id_generator()))
-        .collect();
     Projection::try_new(project_exprs, Arc::new(input)).map(LogicalPlan::Projection)
 }
 
@@ -1019,23 +1094,6 @@ fn build_recover_project_plan(
     Projection::try_new(col_exprs, Arc::new(input)).map(LogicalPlan::Projection)
 }
 
-fn extract_expressions(expr: &Expr, result: &mut Vec<Expr>) {
-    if let Expr::GroupingSet(groupings) = expr {
-        for e in groupings.distinct_expr() {
-            let (qualifier, field_name) = e.qualified_name();
-            let col = Column::new(qualifier, field_name);
-            result.push(Expr::Column(col))
-        }
-        result.push(Expr::Column(Column::from_name(
-            Aggregate::INTERNAL_GROUPING_ID,
-        )));
-    } else {
-        let (qualifier, field_name) = expr.qualified_name();
-        let col = Column::new(qualifier, field_name);
-        result.push(Expr::Column(col));
-    }
-}
-
 #[cfg(test)]
 mod test {
 
@@ -1048,7 +1106,7 @@ mod test {
         ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, SimpleAggregateUDF,
         Volatility, WindowFunctionDefinition, grouping_set, is_null, not, when,
     };
-    use datafusion_expr::{lit, logical_plan::builder::LogicalPlanBuilder};
+    use datafusion_expr::{col, lit, logical_plan::builder::LogicalPlanBuilder};
 
     use super::*;
     use crate::assert_optimized_plan_eq_snapshot;
@@ -1407,12 +1465,14 @@ mod test {
         let project = build_common_expr_project_plan(
             table_scan,
             common_exprs_1,
+            &mut CommonExprIds::default(),
             &OptimizerContext::new(),
         )
         .unwrap();
         let project_2 = build_common_expr_project_plan(
             project,
             common_exprs_2,
+            &mut CommonExprIds::default(),
             &OptimizerContext::new(),
         )
         .unwrap();
@@ -1447,12 +1507,14 @@ mod test {
         let project = build_common_expr_project_plan(
             join,
             common_exprs_1,
+            &mut CommonExprIds::default(),
             &OptimizerContext::new(),
         )
         .unwrap();
         let project_2 = build_common_expr_project_plan(
             project,
             common_exprs_2,
+            &mut CommonExprIds::default(),
             &OptimizerContext::new(),
         )
         .unwrap();
@@ -1538,36 +1600,6 @@ mod test {
     }
 
     #[test]
-    fn test_extract_expressions_from_grouping_set() -> Result<()> {
-        let mut result = Vec::with_capacity(4);
-        let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("c")]]);
-        extract_expressions(&grouping, &mut result);
-
-        assert_eq!(
-            result,
-            vec![
-                col("a"),
-                col("b"),
-                col("c"),
-                col(Aggregate::INTERNAL_GROUPING_ID),
-            ]
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_extract_expressions_from_grouping_set_with_identical_expr() -> Result<()> {
-        let mut result = Vec::with_capacity(3);
-        let grouping = grouping_set(vec![vec![col("a"), col("b")], vec![col("a")]]);
-        extract_expressions(&grouping, &mut result);
-        assert_eq!(
-            result,
-            vec![col("a"), col("b"), col(Aggregate::INTERNAL_GROUPING_ID),]
-        );
-        Ok(())
-    }
-
-    #[test]
     fn test_alias_collision() -> Result<()> {
         let table_scan = test_table_scan()?;
 
@@ -1624,14 +1656,6 @@ mod test {
         "
         )?;
 
-        Ok(())
-    }
-
-    #[test]
-    fn test_extract_expressions_from_col() -> Result<()> {
-        let mut result = Vec::with_capacity(1);
-        extract_expressions(&col("a"), &mut result);
-        assert_eq!(result.len(), 1);
         Ok(())
     }
 

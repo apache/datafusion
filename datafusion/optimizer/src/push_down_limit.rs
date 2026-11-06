@@ -12,9 +12,9 @@ use std::sync::Arc;
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
 
-use datafusion_common::Result;
 use datafusion_common::tree_node::Transformed;
 use datafusion_common::utils::combine_limit;
+use datafusion_common::{ColumnIdGenerator, Result};
 use datafusion_expr::logical_plan::{Join, JoinType, Limit, LogicalPlan};
 use datafusion_expr::{FetchType, SkipType, lit};
 
@@ -52,11 +52,12 @@ impl OptimizerRule for PushDownLimit {
     fn rewrite(
         &self,
         plan: LogicalPlan,
-        _config: &dyn OptimizerConfig,
+        config: &dyn OptimizerConfig,
     ) -> Result<Transformed<LogicalPlan>> {
+        let ids = config.column_id_generator();
         match plan {
-            LogicalPlan::Limit(limit) => rewrite_limit(limit),
-            LogicalPlan::Sort(s) if s.fetch.is_some() => push_topk_through_join(s),
+            LogicalPlan::Limit(limit) => rewrite_limit(limit, ids),
+            LogicalPlan::Sort(s) if s.fetch.is_some() => push_topk_through_join(s, ids),
             other => Ok(Transformed::no(other)),
         }
     }
@@ -73,7 +74,10 @@ impl OptimizerRule for PushDownLimit {
 /// Limit-side dispatch (split out from `rewrite` so that the top-level
 /// match in `OptimizerRule::rewrite` reads as a parallel branch alongside
 /// the Sort-with-fetch handler).
-fn rewrite_limit(mut limit: Limit) -> Result<Transformed<LogicalPlan>> {
+fn rewrite_limit(
+    mut limit: Limit,
+    ids: &ColumnIdGenerator,
+) -> Result<Transformed<LogicalPlan>> {
     // Currently only rewrite if skip and fetch are both literals
     let SkipType::Literal(skip) = limit.get_skip_type()? else {
         return Ok(Transformed::no(LogicalPlan::Limit(limit)));
@@ -99,7 +103,7 @@ fn rewrite_limit(mut limit: Limit) -> Result<Transformed<LogicalPlan>> {
         };
 
         // recursively reapply the rule on the new limit
-        return rewrite_limit(new_limit);
+        return rewrite_limit(new_limit, ids);
     }
 
     // no fetch to push, so return the original plan
@@ -178,7 +182,7 @@ fn rewrite_limit(mut limit: Limit) -> Result<Transformed<LogicalPlan>> {
                 // replaces the Limit as the visited node and its own visit is
                 // skipped, so apply the TopK pushdown here. The plan changed
                 // (the Limit is gone) even if the TopK does not move.
-                let mut result = push_topk_through_join(sort)?;
+                let mut result = push_topk_through_join(sort, ids)?;
                 result.transformed = true;
                 Ok(result)
             }

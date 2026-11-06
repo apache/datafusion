@@ -34,8 +34,10 @@ pub(crate) fn from_substrait_field_reference(
                 }
                 let field_idx = struct_field.field as usize;
                 match &field_ref.root_type {
+                    // positional: the reference reads the field's id
                     Some(RootType::RootReference(_)) | None => Ok(Expr::Column(
-                        Column::from(input_schema.qualified_field(field_idx)),
+                        Column::from(input_schema.qualified_field(field_idx))
+                            .with_id(input_schema.field_id(field_idx)),
                     )),
                     Some(RootType::OuterReference(outer_ref)) => {
                         resolve_outer_reference(consumer, outer_ref, field_idx)
@@ -69,7 +71,7 @@ fn resolve_outer_reference(
         );
     };
     let (qualifier, field) = outer_schema.qualified_field(field_idx);
-    let col = Column::from((qualifier, field));
+    let col = Column::from((qualifier, field)).with_id(outer_schema.field_id(field_idx));
     Ok(Expr::OuterReferenceColumn(Arc::clone(field), col))
 }
 

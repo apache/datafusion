@@ -10,8 +10,8 @@ use crate::{OptimizerConfig, OptimizerRule};
 use std::collections::HashSet;
 use std::sync::Arc;
 
-use datafusion_common::tree_node::Transformed;
-use datafusion_common::{Column, Result};
+use datafusion_common::tree_node::{Transformed, TreeNode};
+use datafusion_common::{Column, ColumnId, Result};
 use datafusion_expr::{Aggregate, Expr, LogicalPlan, NamedExpr, Projection, Volatility};
 
 /// Optimizer rule that removes constant expressions from `GROUP BY` clause
@@ -63,6 +63,17 @@ impl OptimizerRule for EliminateGroupByConstant {
                     return Ok(Transformed::no(LogicalPlan::Aggregate(aggregate)));
                 }
 
+                // the output id of each bare GROUP BY column, which a
+                // redundant expression reads once it is computed over the
+                // simplified aggregate (the output can define a new id)
+                let group_by_outputs: Vec<(Column, ColumnId)> = aggregate
+                    .group_expr
+                    .iter()
+                    .filter_map(|entry| match &entry.expr {
+                        Expr::Column(c) => Some((c.clone(), entry.id)),
+                        _ => None,
+                    })
+                    .collect();
                 let original_schema = Arc::clone(&aggregate.schema);
                 let required = aggregate
                     .group_expr
@@ -101,7 +112,31 @@ impl OptimizerRule for EliminateGroupByConstant {
                     let (qualifier, field) = original_schema.qualified_field(i);
                     let id = expr.id;
                     let (expr, passes_through) = if redundant {
-                        (expr.expr, false)
+                        let expr = expr
+                            .expr
+                            .transform(|expr| match expr {
+                                Expr::Column(c) => {
+                                    // by id, else as the rule found it
+                                    // redundant (by name)
+                                    let output = group_by_outputs
+                                        .iter()
+                                        .find(|(col, _)| col.same_column(&c))
+                                        .or_else(|| {
+                                            group_by_outputs
+                                                .iter()
+                                                .find(|(col, _)| *col == c)
+                                        });
+                                    match output {
+                                        Some((_, id)) => Ok(Transformed::yes(
+                                            Expr::Column(c.with_id(Some(*id))),
+                                        )),
+                                        None => Ok(Transformed::no(Expr::Column(c))),
+                                    }
+                                }
+                                _ => Ok(Transformed::no(expr)),
+                            })?
+                            .data;
+                        (expr, false)
                     } else {
                         let column =
                             Column::from(simplified_schema.qualified_field(next_output))

@@ -20,7 +20,8 @@
 //!
 //! A column is *defined* once in a plan, subqueries included: by the leaf
 //! that produces it (`TableScan`, `Values`, `MaterializedCteScan`, the work
-//! table scan of a recursive query, which is a `TableScan`), and by the
+//! table scan of a recursive query, which is a `TableScan`, and an
+//! `EmptyRelation` whose columns have ids), and by the
 //! nodes that compute outputs: an output of a `Projection` or a
 //! `DistinctOn`, a window expression of a `Window`, or a grouping or
 //! aggregate expression of an `Aggregate` (a [`NamedExpr`]) defines the
@@ -47,8 +48,11 @@
 //! they are given with `LogicalPlanBuilder::scan_with_column_id_generator`
 //! and `LogicalPlanBuilder::values_with_column_id_generator`, as the SQL
 //! planner does, or from a new one).
-//! A `TableScan` rebuilt with another projection (`TableScanBuilder::from`)
-//! keeps the ids of the source columns it retains.
+//! A `TableScan` defines every column of its source, projected or not
+//! (`TableScan::source_column_ids`, allocated once when it is created): the
+//! references of its filters resolve against them, and a scan rebuilt with
+//! another projection (`TableScanBuilder::from`) shares them, so a column
+//! pruned from the projection and added back keeps its id.
 //!
 //! # Binding
 //!
@@ -96,7 +100,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::logical_plan::{
-    Aggregate, Distinct, DistinctOn, MaterializedCtePlan, Projection, Subquery, Window,
+    Aggregate, Distinct, DistinctOn, MaterializedCtePlan, Projection, Subquery,
+    TableScan, Window,
 };
 use crate::{Expr, LogicalPlan};
 use datafusion_common::tree_node::{
@@ -161,6 +166,14 @@ impl LogicalPlan {
         // the closures never fail
         let _ = self.apply_with_subqueries(|plan| {
             plan.schema().field_ids().iter().for_each(|id| update(*id));
+            // a scan defines the columns its projection omits too
+            if let LogicalPlan::TableScan(TableScan {
+                source_column_ids: Some(ids),
+                ..
+            }) = plan
+            {
+                ids.iter().for_each(|id| update(Some(*id)));
+            }
             apply_node_column_refs(plan, |col, _| update(col.id))?;
             Ok(TreeNodeRecursion::Continue)
         });
@@ -282,11 +295,24 @@ impl LogicalPlan {
     /// the columns of a leaf, the outputs of a projection, a `DistinctOn` or
     /// an aggregate that do not pass a column through, the window
     /// expressions of a window, the grouping id of grouping sets, the outputs of a union or a recursive query, the unnested
-    /// columns of an unnest, and the mark column of a mark join
+    /// columns of an unnest, and the mark column of a mark join.
+    ///
+    /// A scan with [`TableScan::source_column_ids`] defines every column of
+    /// its source: the index is then the index in the source schema (see
+    /// [`defined_column`]).
     fn for_each_node_defined_column_id(&self, mut f: impl FnMut(usize, ColumnId)) {
         match self {
+            LogicalPlan::TableScan(TableScan {
+                source_column_ids: Some(ids),
+                ..
+            }) => {
+                for (i, id) in ids.iter().enumerate() {
+                    f(i, *id)
+                }
+            }
             LogicalPlan::TableScan(_)
             | LogicalPlan::Values(_)
+            | LogicalPlan::EmptyRelation(_)
             | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
             | LogicalPlan::Union(_)
             | LogicalPlan::RecursiveQuery(_) => {
@@ -374,6 +400,25 @@ impl LogicalPlan {
     /// defined twice.
     pub fn with_fresh_column_ids(self, generator: &ColumnIdGenerator) -> Result<Self> {
         self.renumber(generator, &HashSet::new())
+    }
+
+    /// The id that `other` defines in place of each id this plan defines, if
+    /// both plans define the same number of columns: for two plans equal up
+    /// to their ids (`==` ignores them), the definitions are found in the
+    /// same order, so this pairs each column of this plan with the same
+    /// column of `other`.
+    ///
+    /// Used where a rule keeps one of two equal plans and moves expressions
+    /// that read the other onto it (`UnionsToFilter`).
+    pub fn corresponding_column_ids(
+        &self,
+        other: &LogicalPlan,
+    ) -> Option<HashMap<ColumnId, ColumnId>> {
+        let (mine, theirs) = (
+            self.defined_column_ids_in_order(),
+            other.defined_column_ids_in_order(),
+        );
+        (mine.len() == theirs.len()).then(|| mine.into_iter().zip(theirs).collect())
     }
 
     /// Returns this plan, where the columns of its output take the ids `ids`
@@ -500,34 +545,16 @@ impl LogicalPlan {
         Ok((self.with_fresh_column_ids(generator)?, overlap))
     }
 
-    /// Returns this plan where every subquery expression that defines an id
-    /// already defined before it in the plan (a node before its inputs, and
-    /// before the subqueries of its inputs) is renumbered with
-    /// [`Self::with_fresh_column_ids`], as after a rule that put one subquery
-    /// in two places. Its outer references to the ids it shared lose them
-    /// (they would be ambiguous).
+    /// Returns this plan where each output of a subquery's top projection
+    /// whose id is defined more than once in the plan gets a new id from
+    /// `generator`. No reference is renamed: nothing refers by id to the
+    /// outputs of a subquery, neither inside it (they are its top) nor
+    /// outside it.
     ///
-    /// Renumbering a subquery expression is safe: the plan around it does
-    /// not refer to the columns defined inside it.
-    pub fn with_fresh_column_ids_in_repeated_subqueries(
-        self,
-        generator: &ColumnIdGenerator,
-    ) -> Result<Transformed<Self>> {
-        renumber_repeated_subqueries(self, &mut HashSet::new(), generator)
-    }
-
-    /// Returns this plan where every subquery expression that defines an id
-    /// that is defined more than once in the plan is renumbered with
-    /// [`Self::with_fresh_column_ids`] (its outer references to the colliding
-    /// ids lose them). Ids defined twice outside of subquery expressions are
-    /// left alone.
-    ///
-    /// Used after code that allocates the ids of a subquery without the
-    /// generator of the plan (casting a scalar subquery, see
-    /// `ExprSchemable::cast_to`): its new ids are new within the subquery
-    /// only. Renumbering a subquery expression is safe: the plan around it
-    /// does not refer to the columns defined inside it.
-    pub fn with_fresh_column_ids_in_colliding_subqueries(
+    /// Used after casting a scalar subquery with `ExprSchemable::cast_to`,
+    /// which has no generator: the outputs that the cast defines get ids
+    /// that are new within the subquery only.
+    pub fn with_fresh_ids_for_colliding_subquery_outputs(
         self,
         generator: &ColumnIdGenerator,
     ) -> Result<Transformed<Self>> {
@@ -538,7 +565,37 @@ impl LogicalPlan {
         if let Some(max) = self.max_column_id() {
             generator.advance_past(max);
         }
-        renumber_colliding_subqueries(self, &mut counts, generator)
+        self.transform_down_with_subqueries(|plan| {
+            let LogicalPlan::Subquery(mut subquery) = plan else {
+                return Ok(Transformed::no(plan));
+            };
+            let LogicalPlan::Projection(projection) = subquery.subquery.as_ref() else {
+                return Ok(Transformed::no(LogicalPlan::Subquery(subquery)));
+            };
+            let collides = |entry: &crate::NamedExpr| {
+                entry
+                    .defined_id()
+                    .is_some_and(|id| counts.get(&id).is_some_and(|count| *count > 1))
+            };
+            if !projection.expr.iter().any(collides) {
+                return Ok(Transformed::no(LogicalPlan::Subquery(subquery)));
+            }
+            let mut entries = projection.expr.clone();
+            for entry in &mut entries {
+                if let Some(id) = entry.defined_id()
+                    && let Some(count) = counts.get_mut(&id)
+                    && *count > 1
+                {
+                    *count -= 1;
+                    entry.id = generator.next();
+                }
+            }
+            subquery.subquery = Arc::new(LogicalPlan::Projection(Projection::try_new(
+                entries,
+                Arc::clone(&projection.input),
+            )?));
+            Ok(Transformed::yes(LogicalPlan::Subquery(subquery)))
+        })
     }
 
     /// The number of times each id is defined in this plan, subqueries
@@ -587,46 +644,6 @@ impl LogicalPlan {
     }
 }
 
-/// See [`LogicalPlan::with_fresh_column_ids_in_repeated_subqueries`]. `seen`
-/// holds the ids defined so far.
-fn renumber_repeated_subqueries(
-    plan: LogicalPlan,
-    seen: &mut HashSet<ColumnId>,
-    generator: &ColumnIdGenerator,
-) -> Result<Transformed<LogicalPlan>> {
-    plan.transform_down(|node| {
-        node.for_each_node_defined_column_id(|_, id| {
-            seen.insert(id);
-        });
-        node.map_subqueries(|subquery| {
-            let LogicalPlan::Subquery(mut subquery) = subquery else {
-                return Ok(Transformed::no(subquery));
-            };
-            let mut plan = Arc::unwrap_or_clone(subquery.subquery);
-            let overlap: HashSet<ColumnId> = plan
-                .defined_column_ids()
-                .into_iter()
-                .filter(|id| seen.contains(id))
-                .collect();
-            let renumbered = !overlap.is_empty();
-            if renumbered {
-                plan = plan.renumber(generator, &overlap)?;
-                for expr in &mut subquery.outer_ref_columns {
-                    *expr = strip_column_ids(std::mem::take(expr), &overlap)?;
-                }
-            }
-            // the subqueries inside it may repeat too
-            let inner = renumber_repeated_subqueries(plan, seen, generator)?;
-            let transformed = renumbered || inner.transformed;
-            subquery.subquery = Arc::new(inner.data);
-            Ok(Transformed::new_transformed(
-                LogicalPlan::Subquery(subquery),
-                transformed,
-            ))
-        })
-    })
-}
-
 /// A new generator for a builder that was given none: its ids follow the
 /// highest id of `plans` (see [`LogicalPlan::max_column_id`]), so that it
 /// can allocate into them
@@ -640,56 +657,6 @@ pub(crate) fn own_column_id_generator<'a>(
         }
     }
     Arc::new(generator)
-}
-
-/// See [`LogicalPlan::with_fresh_column_ids_in_colliding_subqueries`].
-/// `counts` holds the number of definitions of each id in the whole plan,
-/// updated as subqueries are renumbered. The innermost subqueries are
-/// renumbered first, so that a subquery that repeats an id defined in a
-/// subquery around it is the one renumbered.
-fn renumber_colliding_subqueries(
-    plan: LogicalPlan,
-    counts: &mut HashMap<ColumnId, usize>,
-    generator: &ColumnIdGenerator,
-) -> Result<Transformed<LogicalPlan>> {
-    plan.transform_down(|node| {
-        node.map_subqueries(|subquery| {
-            let LogicalPlan::Subquery(mut subquery) = subquery else {
-                return Ok(Transformed::no(subquery));
-            };
-            let inner = renumber_colliding_subqueries(
-                Arc::unwrap_or_clone(subquery.subquery),
-                counts,
-                generator,
-            )?;
-            let mut transformed = inner.transformed;
-            let mut plan = inner.data;
-            let local = plan.defined_column_id_counts();
-            let overlap: HashSet<ColumnId> = local
-                .keys()
-                .filter(|id| counts.get(id).is_some_and(|count| *count > 1))
-                .copied()
-                .collect();
-            if !overlap.is_empty() {
-                for expr in &mut subquery.outer_ref_columns {
-                    *expr = strip_column_ids(std::mem::take(expr), &overlap)?;
-                }
-                plan = plan.renumber(generator, &overlap)?;
-                // its definitions now have new ids, each defined once
-                for (id, count) in local {
-                    if let Some(total) = counts.get_mut(&id) {
-                        *total = total.saturating_sub(count);
-                    }
-                }
-                transformed = true;
-            }
-            subquery.subquery = Arc::new(plan);
-            Ok(Transformed::new_transformed(
-                LogicalPlan::Subquery(subquery),
-                transformed,
-            ))
-        })
-    })
 }
 
 /// Renumbers the subqueries of expressions about to be added to the plan
@@ -763,6 +730,60 @@ impl<'a> SubqueryBlender<'a> {
             Ok(Transformed::new_transformed(expr, transformed))
         })
         .map(|transformed| transformed.data)
+    }
+}
+
+impl Expr {
+    /// Returns this expression where the plan of every subquery expression in
+    /// it has new ids from `generator` (see
+    /// [`LogicalPlan::with_fresh_column_ids`]; their outer references are
+    /// left alone).
+    ///
+    /// Used where a rule copies an expression that has subqueries to a second
+    /// place in a plan: the copy is renumbered, so that no id is defined
+    /// twice.
+    pub fn with_fresh_subquery_column_ids(
+        self,
+        generator: &ColumnIdGenerator,
+    ) -> Result<Transformed<Expr>> {
+        self.transform_down(|mut expr| {
+            let Some(subquery) = subquery_mut(&mut expr) else {
+                return Ok(Transformed::no(expr));
+            };
+            let plan = Arc::unwrap_or_clone(Arc::clone(&subquery.subquery));
+            subquery.subquery = Arc::new(plan.with_fresh_column_ids(generator)?);
+            Ok(Transformed::new(expr, true, TreeNodeRecursion::Jump))
+        })
+    }
+
+    /// Returns this expression where each subquery expression that defines
+    /// an id in `seen` gets new ids from `generator` (see
+    /// [`Self::with_fresh_subquery_column_ids`]); the ids that the subqueries
+    /// define are added to `seen`, in order.
+    ///
+    /// Used after a rewrite that can put one subquery in two places in an
+    /// expression (simplifying `coalesce(x, y)` into a `CASE` that repeats
+    /// `x`): the second one is renumbered.
+    pub fn with_fresh_column_ids_in_repeated_subqueries(
+        self,
+        seen: &mut HashSet<ColumnId>,
+        generator: &ColumnIdGenerator,
+    ) -> Result<Transformed<Expr>> {
+        self.transform_down(|mut expr| {
+            let Some(subquery) = subquery_mut(&mut expr) else {
+                return Ok(Transformed::no(expr));
+            };
+            let defined = subquery.subquery.defined_column_ids();
+            let transformed = !seen.is_disjoint(&defined);
+            if transformed {
+                let plan = Arc::unwrap_or_clone(Arc::clone(&subquery.subquery));
+                subquery.subquery = Arc::new(plan.with_fresh_column_ids(generator)?);
+                seen.extend(subquery.subquery.defined_column_ids());
+            } else {
+                seen.extend(defined);
+            }
+            Ok(Transformed::new(expr, transformed, TreeNodeRecursion::Jump))
+        })
     }
 }
 
@@ -926,6 +947,21 @@ fn rename_node_column_ids(
         transformed = true;
     }
 
+    // the columns of a scan's source, which its projected schema (renamed
+    // above) shares
+    if let LogicalPlan::TableScan(TableScan {
+        source_column_ids: Some(ids),
+        ..
+    }) = &mut plan
+        && ids.iter().any(|id| renames.ids.contains_key(id))
+    {
+        *ids = ids
+            .iter()
+            .map(|id| renames.ids.get(id).copied().unwrap_or(*id))
+            .collect();
+        transformed = true;
+    }
+
     // columns stored outside of expressions
     match &mut plan {
         LogicalPlan::Subquery(Subquery {
@@ -1014,14 +1050,22 @@ impl Verifier {
         let issues = &mut self.issues;
         plan.for_each_node_defined_column_id(|i, id| {
             if !defined.insert(id) {
-                let column =
-                    Column::from(plan.schema().qualified_field(i)).with_id(Some(id));
+                let column = defined_column(plan, i).with_id(Some(id));
                 report(issues, ColumnIdIssueKind::DuplicateDefinition, column);
             }
         });
 
         let inputs = plan.inputs();
-        let scopes: Vec<DFSchemaRef> = if inputs.is_empty() {
+        let scopes: Vec<DFSchemaRef> = if let LogicalPlan::TableScan(scan) = plan {
+            // the filters of a scan read the columns of its source
+            match scan.filters.is_empty() {
+                true => vec![Arc::clone(plan.schema())],
+                false => vec![
+                    scan.source_schema()
+                        .unwrap_or_else(|_| Arc::clone(plan.schema())),
+                ],
+            }
+        } else if inputs.is_empty() {
             vec![Arc::clone(plan.schema())]
         } else {
             inputs
@@ -1052,6 +1096,20 @@ impl Verifier {
         for input in inputs {
             self.check(input, outer_scopes);
         }
+    }
+}
+
+/// The column that `plan` defines at index `i` (see
+/// [`LogicalPlan::for_each_node_defined_column_id`]), without its id
+fn defined_column(plan: &LogicalPlan, i: usize) -> Column {
+    match plan {
+        LogicalPlan::TableScan(TableScan {
+            table_name,
+            source,
+            source_column_ids: Some(_),
+            ..
+        }) => Column::new(Some(table_name.clone()), source.schema().field(i).name()),
+        _ => Column::from(plan.schema().qualified_field(i)),
     }
 }
 
@@ -1149,6 +1207,8 @@ mod tests {
         };
         let projected = Arc::unwrap_or_clone(scan.projected_schema)
             .with_field_ids(ids.iter().map(|n| n.map(id)).collect())?;
+        // the ids are set by hand: the scan defines its projected columns
+        scan.source_column_ids = None;
         scan.projected_schema = Arc::new(projected);
         Ok(LogicalPlan::TableScan(scan))
     }
@@ -1452,6 +1512,8 @@ mod tests {
         else {
             unreachable!()
         };
+        // the ids are set by hand: the scan defines its projected columns
+        scan.source_column_ids = None;
         scan.projected_schema = Arc::new(
             Arc::unwrap_or_clone(scan.projected_schema)
                 .with_field_ids(vec![Some(id(1)), Some(id(2))])?,
@@ -1947,6 +2009,54 @@ mod tests {
     }
 
     #[test]
+    fn scans_define_the_columns_they_do_not_project() -> Result<()> {
+        let generator = Arc::new(ColumnIdGenerator::new());
+        // a scan created with a projection allocates ids for its whole
+        // source, and binds its filters to them
+        let table_scan = crate::TableScanBuilder::new("t", source())
+            .with_projection(Some(vec![0]))
+            .with_filters(vec![col("t.b").eq(lit(1))])
+            .build()?;
+        let scan = LogicalPlanBuilder::table_scan_with_column_id_generator(
+            table_scan,
+            Some(Arc::clone(&generator)),
+        )?
+        .build()?;
+        assert_eq!(output_ids(&scan), vec![Some(id(1))]);
+        assert_eq!(scan.defined_column_ids(), [1, 2].map(id).into());
+        assert_eq!(scan.max_column_id(), Some(id(2)));
+        assert_eq!(ref_ids(&scan), vec![Some(id(2))]);
+        assert!(scan.column_id_issues().is_empty());
+
+        // pruned, then widened again, it keeps the ids of its source
+        let LogicalPlan::TableScan(table_scan) = scan else {
+            unreachable!()
+        };
+        let pruned = crate::TableScanBuilder::from(table_scan)
+            .with_projection(Some(vec![]))
+            .build()?;
+        let pruned = LogicalPlan::TableScan(pruned);
+        assert!(pruned.column_id_issues().is_empty());
+        let LogicalPlan::TableScan(pruned_scan) = pruned.clone() else {
+            unreachable!()
+        };
+        let widened = crate::TableScanBuilder::from(pruned_scan)
+            .with_projection(Some(vec![1, 0]))
+            .build()?;
+        assert_eq!(
+            widened.projected_schema.field_ids(),
+            &[Some(id(2)), Some(id(1))]
+        );
+
+        // renumbered, the filters follow
+        let renumbered = pruned.with_fresh_column_ids(&generator)?;
+        assert_eq!(renumbered.defined_column_ids(), [3, 4].map(id).into());
+        assert_eq!(ref_ids(&renumbered), vec![Some(id(4))]);
+        assert!(renumbered.column_id_issues().is_empty());
+        Ok(())
+    }
+
+    #[test]
     fn values_built_with_a_generator_allocate() -> Result<()> {
         let generator = Arc::new(ColumnIdGenerator::new());
         let values = LogicalPlanBuilder::values_with_column_id_generator(
@@ -2096,24 +2206,42 @@ mod tests {
             scan_from("s", &generator)?,
             col_with_id("s", "a", Some(3)),
         )?);
-        // one subquery in two places, as a rule may leave it
+        // one subquery in two places, as a rewrite may leave it
         let predicate = exists(Arc::clone(&subquery)).and(exists(subquery));
-        let plan =
-            LogicalPlan::Filter(crate::Filter::try_new(predicate, Arc::new(outer))?);
+        let plan = LogicalPlan::Filter(crate::Filter::try_new(
+            predicate.clone(),
+            Arc::new(outer.clone()),
+        )?);
         assert!(kinds(&plan).contains(&ColumnIdIssueKind::DuplicateDefinition));
 
-        let renumbered = plan.with_fresh_column_ids_in_repeated_subqueries(&generator)?;
+        let mut seen = HashSet::new();
+        let renumbered = predicate
+            .with_fresh_column_ids_in_repeated_subqueries(&mut seen, &generator)?;
         assert!(renumbered.transformed);
-        let plan = renumbered.data;
+        let plan = LogicalPlan::Filter(crate::Filter::try_new(
+            renumbered.data,
+            Arc::new(outer.clone()),
+        )?);
         assert_eq!(kinds(&plan), vec![]);
         assert_eq!(
             plan.defined_column_ids(),
             [id(1), id(2), id(3), id(4), id(5), id(6)].into()
         );
 
-        // nothing to do the second time
-        let again = plan.with_fresh_column_ids_in_repeated_subqueries(&generator)?;
-        assert!(!again.transformed);
+        // a copy renumbered as a whole
+        let LogicalPlan::Filter(filter) = plan else {
+            unreachable!()
+        };
+        let copy = filter
+            .predicate
+            .clone()
+            .with_fresh_subquery_column_ids(&generator)?;
+        assert!(copy.transformed);
+        let both = LogicalPlan::Filter(crate::Filter::try_new(
+            filter.predicate.and(copy.data),
+            Arc::new(outer),
+        )?);
+        assert_eq!(kinds(&both), vec![]);
         Ok(())
     }
 }

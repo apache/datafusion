@@ -4,6 +4,7 @@
 
 //! Simplify expressions optimizer rule and implementation
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -111,12 +112,23 @@ impl SimplifyExpressions {
 
         // Preserve expression names to avoid changing the schema of the plan.
         let name_preserver = NamePreserver::new(&plan);
+        // A simplification can repeat a subquery (`coalesce(x, y)` into a
+        // `CASE` that repeats `x`): the repeated one gets new ids.
+        let mut subquery_ids = HashSet::new();
         let mut rewrite_expr = |expr: Expr| {
             let name = name_preserver.save(&expr);
             let expr = simplifier.simplify_with_cycle_count_transformed(expr)?.0;
+            let transformed = expr.transformed;
+            let expr = expr
+                .data
+                .with_fresh_column_ids_in_repeated_subqueries(
+                    &mut subquery_ids,
+                    config.column_id_generator(),
+                )?
+                .data;
             Ok(Transformed::new_transformed(
-                name.restore(expr.data),
-                expr.transformed,
+                name.restore(expr),
+                transformed,
             ))
         };
 

@@ -1133,9 +1133,18 @@ impl NamedExpr {
     }
 
     /// Whether this entry passes a column through: its expression is a bare
-    /// column with the id of the entry
+    /// column with the id of the entry, or such a column under an alias that
+    /// only changes its qualifier (`t.a AS a`, as merging projections leaves
+    /// a pass-through that dropped the qualifier)
     pub fn is_pass_through(&self) -> bool {
-        matches!(&self.expr, Expr::Column(col) if col.id == Some(self.id))
+        match &self.expr {
+            Expr::Column(col) => col.id == Some(self.id),
+            Expr::Alias(Alias { expr, name, .. }) => matches!(
+                expr.as_ref(),
+                Expr::Column(col) if col.id == Some(self.id) && col.name == *name
+            ),
+            _ => false,
+        }
     }
 
     /// The id of the column this entry defines, `None` if it passes a column
