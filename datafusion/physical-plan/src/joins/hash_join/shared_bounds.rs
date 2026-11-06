@@ -222,7 +222,7 @@ fn create_bounds_predicate(
 /// Combines a membership predicate and a bounds predicate with logical AND.
 ///
 /// Returns `None` when neither is available; callers decide the fallback (e.g.
-/// skip updating the filter vs. emit a `lit(true)` branch inside a CASE).
+/// skip updating the filter or use `lit(true)`).
 fn combine_membership_and_bounds(
     membership_expr: Option<Arc<dyn PhysicalExpr>>,
     bounds_expr: Option<Arc<dyn PhysicalExpr>>,
@@ -484,7 +484,7 @@ impl SharedBuildAccumulator {
     /// This unified method handles both CollectLeft and Partitioned modes. When all partitions
     /// have reported (barrier wait), the leader builds the appropriate filter expression:
     /// - CollectLeft: Simple conjunction of bounds and membership check
-    /// - Partitioned: CASE expression routing to per-partition filters
+    /// - Partitioned: one lookup that routes each probe row to its partition's keys
     ///
     /// # Arguments
     /// * `data` - Build data including hash map, pushdown strategy, and bounds
@@ -730,11 +730,24 @@ impl SharedBuildAccumulator {
             }
         }
 
-        let filter_expr = if members.is_empty() {
+        let filter_expr = match members.as_slice() {
             // No build row exists, so no probe row can match.
-            lit(false)
-        } else {
-            self.merged_membership_filter(&members, merged_bounds, num_partitions)?
+            [] => lit(false),
+            // Only one build partition holds rows, so its own filter covers every
+            // probe match without routing, and an IN list keeps its pruning.
+            [(_, pushdown, bounds)] => combine_membership_and_bounds(
+                create_membership_predicate(
+                    &self.on_right,
+                    pushdown.clone(),
+                    &HASH_JOIN_SEED,
+                    self.probe_schema.as_ref(),
+                )?,
+                create_bounds_predicate(&self.on_right, bounds),
+            )
+            .expect("membership predicate is always present"),
+            _ => {
+                self.merged_membership_filter(&members, merged_bounds, num_partitions)?
+            }
         };
         self.dynamic_filter
             .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?)
@@ -1221,7 +1234,7 @@ mod tests {
     }
 
     #[test]
-    fn partitioned_hash_map_partitions_route_without_case() {
+    fn partitioned_hash_map_partitions_merge_into_one_lookup() {
         let acc = make_partitioned_expr_accumulator_for_test(3);
 
         acc.build_filter(FinalizeInput::Partitioned(vec![
@@ -1287,7 +1300,7 @@ mod tests {
     }
 
     /// Partitions that chose an IN list and partitions that chose a hash table
-    /// merge into one lookup without a `CASE`: a probe row passes exactly when
+    /// merge into one lookup: a probe row passes exactly when
     /// the partition its key routes to holds the key.
     #[test]
     #[cfg(not(feature = "force_hash_collisions"))]
@@ -1359,7 +1372,7 @@ mod tests {
     }
 
     #[test]
-    fn partitioned_one_real_partition_with_rest_empty_skips_case() {
+    fn partitioned_one_real_partition_with_rest_empty_keeps_its_in_list() {
         let acc = make_partitioned_expr_accumulator_for_test(3);
 
         acc.build_filter(FinalizeInput::Partitioned(vec![
@@ -1371,6 +1384,58 @@ mod tests {
 
         let expr = current_expr(&acc);
         in_list_expr(&expr);
+    }
+
+    /// One non-empty partition keeps its own filter: no routing, and an IN list
+    /// stays an IN list even when its duplicate rows exceed the merged list limit.
+    #[test]
+    fn partitioned_one_non_empty_partition_keeps_its_own_filter() {
+        let empty = || reported(PushdownStrategy::Empty, no_bounds());
+        let mut acc = make_partitioned_expr_accumulator_for_test(3);
+        acc.in_list_max_values = 150;
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            empty(),
+            reported(in_list(&[2; 1000]), no_bounds()),
+            PartitionStatus::CanceledUnknown,
+        ]))
+        .unwrap();
+        in_list_expr(&current_expr(&acc));
+
+        let acc = make_partitioned_expr_accumulator_for_test(3);
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            empty(),
+            reported(hash_map(), bounds(1, 7)),
+            PartitionStatus::CanceledUnknown,
+        ]))
+        .unwrap();
+        let expr = format!("{:?}", current_expr(&acc));
+        assert!(!expr.contains("routed by"), "{expr}");
+    }
+
+    /// A canceled partition rejects the rows routed to it, and only those: the
+    /// live partitions keep their matches.
+    #[cfg(not(feature = "force_hash_collisions"))]
+    #[test]
+    fn partitioned_canceled_partition_rejects_only_its_routed_rows() {
+        let acc = make_partitioned_expr_accumulator_for_test(4);
+        let keys: Vec<i32> = (0..40).collect();
+        let mut partitions =
+            routed_partitions(&acc, 4, &keys, |_, held| hash_map_of(held));
+        partitions[0] = PartitionStatus::CanceledUnknown;
+        acc.build_filter(FinalizeInput::Partitioned(partitions))
+            .unwrap();
+
+        let array: ArrayRef = Arc::new(Int32Array::from(keys.clone()));
+        let mut hashes = vec![0; keys.len()];
+        create_hashes(
+            [&array],
+            acc.repartition_random_state.random_state(),
+            &mut hashes,
+        )
+        .unwrap();
+        let expected: Vec<bool> = hashes.iter().map(|hash| *hash % 4 != 0).collect();
+        assert!(expected.contains(&true) && expected.contains(&false));
+        assert_matches(&acc, &keys, &expected);
     }
 
     #[test]
