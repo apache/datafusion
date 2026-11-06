@@ -821,19 +821,46 @@ impl LogicalPlan {
                 }))
             }
             LogicalPlan::Union(Union { inputs, schema }) => {
-                let first_input_schema = inputs[0].schema();
-                if schema.fields().len() == first_input_schema.fields().len() {
-                    // If inputs are not pruned do not change schema
-                    Ok(LogicalPlan::Union(Union { inputs, schema }))
-                } else {
-                    // A note on `Union`s constructed via `try_new_by_name`:
-                    //
-                    // At this point, the schema for each input should have
-                    // the same width. Thus, we do not need to save whether a
-                    // `Union` was created `BY NAME`, and can safely rely on the
-                    // `try_new` initializer to derive the new schema based on
-                    // column positions.
-                    Ok(LogicalPlan::Union(Union::try_new(inputs)?))
+                // Re-derive from the current children so field metadata and
+                // nullability stay aligned after expression rewrites (for
+                // example `CAST(coalesce(non_null_col, lit))` simplifying to
+                // `CAST(col)` under `UNION ALL` — see #26178).
+                //
+                // `try_new` rejects a loose union whose types are not coerced
+                // yet (`Int32` beside `Int64`). Keep the stored schema only in
+                // that case. A later child with a different width, a single
+                // input, or any other `try_new` failure is returned. `UNION BY
+                // NAME` inputs already share a width here, so positional
+                // `try_new` is enough.
+                fn inputs_awaiting_coercion(
+                    schema: &DFSchema,
+                    inputs: &[Arc<LogicalPlan>],
+                ) -> bool {
+                    if inputs.len() < 2 {
+                        return false;
+                    }
+                    let width = schema.fields().len();
+                    if inputs
+                        .iter()
+                        .any(|input| input.schema().fields().len() != width)
+                    {
+                        return false;
+                    }
+                    let first = inputs[0].schema();
+                    inputs.iter().skip(1).any(|input| {
+                        (0..width).any(|i| {
+                            input.schema().field(i).data_type()
+                                != first.field(i).data_type()
+                        })
+                    })
+                }
+
+                match Union::try_new(inputs.clone()) {
+                    Ok(union) => Ok(LogicalPlan::Union(union)),
+                    Err(_) if inputs_awaiting_coercion(&schema, &inputs) => {
+                        Ok(LogicalPlan::Union(Union { inputs, schema }))
+                    }
+                    Err(e) => Err(e),
                 }
             }
             LogicalPlan::Distinct(distinct) => {
@@ -1243,7 +1270,9 @@ impl LogicalPlan {
             LogicalPlan::Union(Union { schema, .. }) => {
                 self.assert_no_expressions(expr)?;
                 let input_schema = inputs[0].schema();
-                // If inputs are not pruned do not change schema.
+                // Same width: the inputs were not pruned, so keep the stored
+                // schema. `recompute_schema` is what refreshes metadata and
+                // nullability after the children change (#26178).
                 let schema = if schema.fields().len() == input_schema.fields().len() {
                     Arc::clone(schema)
                 } else {
@@ -7765,6 +7794,338 @@ mod tests {
         let rebuilt = unnest_plan.with_new_exprs(vec![], inputs)?;
         assert_eq!(rebuilt.schema(), unnest_plan.schema());
 
+        Ok(())
+    }
+
+    /// `recompute_schema` must refresh Union field metadata from children even
+    /// when the field count is unchanged (#26178).
+    #[test]
+    fn recompute_schema_refreshes_union_field_metadata() -> Result<()> {
+        use crate::LogicalPlanBuilder;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::collections::HashMap;
+
+        let meta = HashMap::from([("PARQUET:field_id".to_string(), "1".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("b", DataType::Int64, false).with_metadata(meta.clone()),
+        ]);
+        let scan = table_scan(Some("t"), &schema, None)?.build()?;
+        let proj = LogicalPlanBuilder::from(scan)
+            .project([col("b").alias("x")])?
+            .build()?;
+
+        let fresh = Union::try_new(vec![Arc::new(proj.clone()), Arc::new(proj.clone())])?;
+        assert_eq!(fresh.schema.field(0).metadata(), &meta);
+
+        // Simulate a stale Union that kept a pre-rewrite schema with empty
+        // metadata while its children already advertise field metadata.
+        let stale_schema = Arc::new(DFSchema::from_unqualified_fields(
+            vec![Field::new("x", DataType::Int64, false)].into(),
+            HashMap::new(),
+        )?);
+        let stale = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(proj.clone()), Arc::new(proj)],
+            schema: stale_schema,
+        });
+        assert!(stale.schema().field(0).metadata().is_empty());
+
+        let refreshed = stale.recompute_schema()?;
+        assert_eq!(
+            refreshed.schema().field(0).metadata(),
+            &meta,
+            "recompute_schema must refresh Union field metadata from children"
+        );
+        Ok(())
+    }
+
+    /// Loose-typed unions that cannot satisfy `Union::try_new` keep their
+    /// previous schema instead of erroring out of `recompute_schema`.
+    #[test]
+    fn recompute_schema_preserves_loose_union_when_types_differ() -> Result<()> {
+        use crate::LogicalPlanBuilder;
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let left = table_scan(
+            Some("l"),
+            &Schema::new(vec![Field::new("x", DataType::Int32, true)]),
+            None,
+        )?
+        .build()?;
+        let right = table_scan(
+            Some("r"),
+            &Schema::new(vec![Field::new("x", DataType::Int64, true)]),
+            None,
+        )?
+        .build()?;
+        // Project to unqualified `x` so positional union can be formed.
+        let left = LogicalPlanBuilder::from(left)
+            .project([col("x")])?
+            .build()?;
+        let right = LogicalPlanBuilder::from(right)
+            .project([col("x")])?
+            .build()?;
+
+        let loose = LogicalPlan::Union(Union::try_new_with_loose_types(vec![
+            Arc::new(left),
+            Arc::new(right),
+        ])?);
+        let before = Arc::clone(loose.schema());
+        let after = loose.recompute_schema()?;
+        assert_eq!(
+            after.schema().as_ref(),
+            before.as_ref(),
+            "loose unions should keep their schema when try_new cannot succeed"
+        );
+        assert_eq!(after.schema().field(0).data_type(), &DataType::Int32);
+        Ok(())
+    }
+
+    /// Width changes must still surface `Union::try_new` errors instead of
+    /// silently keeping a stale schema.
+    #[test]
+    fn recompute_schema_errors_when_union_width_mismatches() -> Result<()> {
+        use crate::LogicalPlanBuilder;
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let wide = table_scan(
+            Some("w"),
+            &Schema::new(vec![
+                Field::new("a", DataType::Int64, true),
+                Field::new("b", DataType::Int64, true),
+            ]),
+            None,
+        )?
+        .build()?;
+        let narrow = table_scan(
+            Some("n"),
+            &Schema::new(vec![Field::new("a", DataType::Int64, true)]),
+            None,
+        )?
+        .build()?;
+        let wide = LogicalPlanBuilder::from(wide)
+            .project([col("a"), col("b")])?
+            .build()?;
+        let narrow = LogicalPlanBuilder::from(narrow)
+            .project([col("a")])?
+            .build()?;
+
+        // Build a Union with a 2-field schema, then replace one child with a
+        // 1-field plan and ask recompute_schema to notice the mismatch.
+        let union = Union::try_new(vec![Arc::new(wide.clone()), Arc::new(wide)])?;
+        let schema = Arc::clone(&union.schema);
+        let stale_left = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(narrow.clone()), Arc::clone(&union.inputs[1])],
+            schema: Arc::clone(&schema),
+        });
+        let err = stale_left.recompute_schema().expect_err("width mismatch");
+        assert!(
+            err.to_string().contains("different number of columns"),
+            "unexpected error: {err}"
+        );
+
+        // Narrow input on the right. The first child still has the stored
+        // width, so a check against only `inputs[0]` would keep the schema.
+        let stale_right = LogicalPlan::Union(Union {
+            inputs: vec![Arc::clone(&union.inputs[0]), Arc::new(narrow)],
+            schema,
+        });
+        let err = stale_right
+            .recompute_schema()
+            .expect_err("later input width mismatch");
+        assert!(
+            err.to_string().contains("different number of columns"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    /// One input is not a loose union. `try_new` requires two, and that error
+    /// has to surface even when the remaining input matches the stored width.
+    #[test]
+    fn recompute_schema_errors_when_union_has_one_input() -> Result<()> {
+        use crate::LogicalPlanBuilder;
+        use arrow::datatypes::{DataType, Field, Schema};
+
+        let plan = table_scan(
+            Some("t"),
+            &Schema::new(vec![Field::new("x", DataType::Int64, true)]),
+            None,
+        )?
+        .build()?;
+        let plan = LogicalPlanBuilder::from(plan)
+            .project([col("x")])?
+            .build()?;
+        let schema = Arc::clone(plan.schema());
+        let union = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(plan)],
+            schema,
+        });
+        let err = union.recompute_schema().expect_err("one input");
+        assert!(
+            err.to_string().contains("at least two inputs"),
+            "unexpected error: {err}"
+        );
+        Ok(())
+    }
+
+    /// Same width, but the stored field is non-nullable while a child is
+    /// nullable. Recompute updates nullability and leaves name, type, and
+    /// metadata alone.
+    #[test]
+    fn recompute_schema_updates_union_nullability() -> Result<()> {
+        use crate::LogicalPlanBuilder;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::collections::HashMap;
+
+        let meta = HashMap::from([("PARQUET:field_id".to_string(), "1".to_string())]);
+        let left = table_scan(
+            Some("l"),
+            &Schema::new(vec![
+                Field::new("b", DataType::Int64, false).with_metadata(meta.clone()),
+            ]),
+            None,
+        )?
+        .build()?;
+        let right = table_scan(
+            Some("r"),
+            &Schema::new(vec![
+                Field::new("b", DataType::Int64, true).with_metadata(meta.clone()),
+            ]),
+            None,
+        )?
+        .build()?;
+        let left = LogicalPlanBuilder::from(left)
+            .project([col("b").alias("x")])?
+            .build()?;
+        let right = LogicalPlanBuilder::from(right)
+            .project([col("b").alias("x")])?
+            .build()?;
+
+        let stale_schema = Arc::new(DFSchema::from_unqualified_fields(
+            vec![Field::new("x", DataType::Int64, false).with_metadata(meta.clone())]
+                .into(),
+            HashMap::new(),
+        )?);
+        let stale = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(left), Arc::new(right)],
+            schema: stale_schema,
+        });
+        assert!(!stale.schema().field(0).is_nullable());
+
+        let refreshed = stale.recompute_schema()?;
+        let field = refreshed.schema().field(0);
+        assert_eq!(field.name(), "x");
+        assert_eq!(field.data_type(), &DataType::Int64);
+        assert!(field.is_nullable());
+        assert_eq!(field.metadata(), &meta);
+        Ok(())
+    }
+
+    /// While types disagree, the stored schema stays put, metadata included.
+    /// Once the children agree, the next recompute picks up metadata and
+    /// nullability from them.
+    #[test]
+    fn recompute_schema_restores_union_fields_after_types_match() -> Result<()> {
+        use crate::LogicalPlanBuilder;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::collections::HashMap;
+
+        let meta = HashMap::from([("PARQUET:field_id".to_string(), "1".to_string())]);
+        let loose_left = table_scan(
+            Some("l"),
+            &Schema::new(vec![
+                Field::new("b", DataType::Int32, false).with_metadata(meta.clone()),
+            ]),
+            None,
+        )?
+        .build()?;
+        let loose_right = table_scan(
+            Some("r"),
+            &Schema::new(vec![
+                Field::new("b", DataType::Int64, true).with_metadata(meta.clone()),
+            ]),
+            None,
+        )?
+        .build()?;
+        let loose_left = LogicalPlanBuilder::from(loose_left)
+            .project([col("b").alias("x")])?
+            .build()?;
+        let loose_right = LogicalPlanBuilder::from(loose_right)
+            .project([col("b").alias("x")])?
+            .build()?;
+
+        // Stale schema from before the children carried metadata.
+        let stale_schema = Arc::new(DFSchema::from_unqualified_fields(
+            vec![Field::new("x", DataType::Int32, false)].into(),
+            HashMap::new(),
+        )?);
+        let loose = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(loose_left), Arc::new(loose_right)],
+            schema: stale_schema,
+        });
+        let kept = loose.recompute_schema()?;
+        assert_eq!(kept.schema().field(0).data_type(), &DataType::Int32);
+        assert!(!kept.schema().field(0).is_nullable());
+        assert!(kept.schema().field(0).metadata().is_empty());
+
+        let coerced = table_scan(
+            Some("c"),
+            &Schema::new(vec![
+                Field::new("b", DataType::Int64, true).with_metadata(meta.clone()),
+            ]),
+            None,
+        )?
+        .build()?;
+        let coerced = LogicalPlanBuilder::from(coerced)
+            .project([col("b").alias("x")])?
+            .build()?;
+        let ready = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(coerced.clone()), Arc::new(coerced)],
+            schema: Arc::clone(kept.schema()),
+        });
+        let restored = ready.recompute_schema()?;
+        let field = restored.schema().field(0);
+        assert_eq!(field.name(), "x");
+        assert_eq!(field.data_type(), &DataType::Int64);
+        assert!(field.is_nullable());
+        assert_eq!(field.metadata(), &meta);
+        Ok(())
+    }
+
+    /// `with_new_exprs` keeps the stored schema when the width is unchanged.
+    /// `recompute_schema` is the call that brings metadata back.
+    #[test]
+    fn union_with_new_exprs_keeps_schema_until_recompute() -> Result<()> {
+        use crate::LogicalPlanBuilder;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::collections::HashMap;
+
+        let meta = HashMap::from([("PARQUET:field_id".to_string(), "1".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("b", DataType::Int64, false).with_metadata(meta.clone()),
+        ]);
+        let scan = table_scan(Some("t"), &schema, None)?.build()?;
+        let proj = LogicalPlanBuilder::from(scan)
+            .project([col("b").alias("x")])?
+            .build()?;
+
+        let stale_schema = Arc::new(DFSchema::from_unqualified_fields(
+            vec![Field::new("x", DataType::Int64, false)].into(),
+            HashMap::new(),
+        )?);
+        let stale = LogicalPlan::Union(Union {
+            inputs: vec![Arc::new(proj.clone()), Arc::new(proj)],
+            schema: stale_schema,
+        });
+        let child_inputs: Vec<_> = stale.inputs().into_iter().cloned().collect();
+        let rebuilt = stale.with_new_exprs(vec![], child_inputs)?;
+        assert!(
+            rebuilt.schema().field(0).metadata().is_empty(),
+            "with_new_exprs keeps the stored schema when the width is unchanged"
+        );
+
+        let refreshed = rebuilt.recompute_schema()?;
+        assert_eq!(refreshed.schema().field(0).metadata(), &meta);
         Ok(())
     }
 }

@@ -434,3 +434,25 @@ SELECT DISTINCT ON (1 + 1)
 ORDER BY TRY_CAST(1 AS BIGINT) + 1;
 ----
 1 1
+
+# DISTINCT ON rewrites the projected column through first_value, which is
+# nullable. A UNION built before that rewrite used to keep the old NOT NULL
+# schema and fail planning (#26178).
+statement ok
+CREATE TABLE distinct_on_union_nn (id BIGINT NOT NULL, a BIGINT NOT NULL, o BIGINT NOT NULL) AS VALUES (1, 10, 1), (1, 11, 2), (2, 20, 1);
+
+query I
+WITH d AS (SELECT DISTINCT ON (id) id, a FROM distinct_on_union_nn ORDER BY id, o)
+SELECT a FROM d UNION SELECT a FROM d ORDER BY a;
+----
+10
+20
+
+query B
+WITH d AS (SELECT DISTINCT ON (id) id, a FROM distinct_on_union_nn ORDER BY id, o)
+SELECT DISTINCT arrow_field(a)['nullable'] FROM (SELECT a FROM d UNION SELECT a FROM d) u;
+----
+true
+
+statement ok
+DROP TABLE distinct_on_union_nn;
