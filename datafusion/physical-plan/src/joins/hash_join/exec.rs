@@ -348,7 +348,7 @@ impl HashJoinExecBuilder {
                 column_indices: vec![],
                 null_equality: NullEquality::NullEqualsNothing,
                 null_aware: false,
-                null_aware_value_keys: 1,
+                null_aware_value_keys: 0,
                 dynamic_filter: None,
                 // Will be computed at when plan will be built.
                 cache: stub_properties(),
@@ -486,6 +486,10 @@ impl HashJoinExecBuilder {
                 filter.build_accumulator = OnceLock::new();
             }
         }
+        // Before `not_in`, whose value key checks assume some keys.
+        if exec.on.is_empty() {
+            return plan_err!("On constraints in HashJoinExec should be non-empty");
+        }
         // Validate null_aware flag
         exec.not_in()?;
 
@@ -518,9 +522,6 @@ impl HashJoinExecBuilder {
 
         let left_schema = left.schema();
         let right_schema = right.schema();
-        if on.is_empty() {
-            return plan_err!("On constraints in HashJoinExec should be non-empty");
-        }
 
         check_join_is_valid(&left_schema, &right_schema, &on)?;
         let (join_schema, column_indices) =
@@ -864,6 +865,11 @@ pub struct HashJoinExec {
     /// Such a join decides UNKNOWN per row, like a correlated scalar `NOT IN`:
     /// without scope keys every NULL-valued row is paired with every row on
     /// the other side to check its other elements.
+    ///
+    /// `0` leaves the count unset, the default of [`HashJoinExecBuilder::new`]
+    /// and [`Self::try_new`]. An unset count is accepted only for a single-key
+    /// join, a scalar `NOT IN`; a null-aware join with more keys must set it
+    /// with [`HashJoinExecBuilder::with_null_aware_value_keys`].
     pub null_aware_value_keys: usize,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
@@ -1425,7 +1431,7 @@ impl DisplayAs for HashJoinExec {
                 let display_null_aware =
                     match (self.null_aware, self.null_aware_value_keys) {
                         (false, _) => String::new(),
-                        (true, 1) => ", null_aware".to_string(),
+                        (true, 0 | 1) => ", null_aware".to_string(),
                         (true, n) => format!(", null_aware(value_keys={n})"),
                     };
                 let display_prepared = self
@@ -1479,7 +1485,7 @@ impl DisplayAs for HashJoinExec {
                 }
 
                 if self.null_aware {
-                    if self.null_aware_value_keys == 1 {
+                    if self.null_aware_value_keys <= 1 {
                         writeln!(f, "null_aware")?;
                     } else {
                         writeln!(
@@ -2290,16 +2296,14 @@ impl HashJoinExec {
             .with_partition_mode(partition_mode)
             .with_null_equality(null_equality)
             .with_null_aware(*null_aware)
-            // Messages predating the field decode it as 0; they can only hold
-            // scalar `NOT IN` joins.
-            .with_null_aware_value_keys(
-                usize_from_wire(
-                    u64::from(*null_aware_value_keys),
-                    "HashJoinExec",
-                    "null_aware_value_keys",
-                )?
-                .max(1),
-            )
+            // `0` is an unset count, which `build` accepts only for a single
+            // key. Messages predating the field decode it as 0; they can only
+            // hold scalar `NOT IN` joins.
+            .with_null_aware_value_keys(usize_from_wire(
+                u64::from(*null_aware_value_keys),
+                "HashJoinExec",
+                "null_aware_value_keys",
+            )?)
             .with_fetch(fetch)
             .build()?;
 
@@ -2595,8 +2599,9 @@ mod proto_tests {
     }
 
     /// A multi-column `NOT IN` keeps its value key count through the round
-    /// trip; a node written before the field existed decodes it as 0, which
-    /// is read as a scalar `NOT IN`.
+    /// trip. A count of 0, which is also how a node written before the field
+    /// existed decodes it, stays unset: accepted for a single key, rejected
+    /// for more.
     #[test]
     fn null_aware_value_keys_round_trip() {
         let on: Vec<(PhysicalExprRef, PhysicalExprRef)> = vec![
@@ -2624,7 +2629,17 @@ mod proto_tests {
         assert_eq!(as_join(&decode(node.clone())).null_aware_value_keys, 2);
 
         node.null_aware_value_keys = 0;
-        assert_eq!(as_join(&decode(node)).null_aware_value_keys, 1);
+        let decoder = StubPlanDecoder::ok();
+        let ctx = ExecutionPlanDecodeCtx::new(&decoder);
+        let err =
+            HashJoinExec::try_from_proto(&join_node(node.clone()), &ctx).unwrap_err();
+        assert!(
+            err.to_string().contains("with_null_aware_value_keys"),
+            "{err}"
+        );
+
+        node.on.truncate(1);
+        assert_eq!(as_join(&decode(node)).null_aware_value_keys, 0);
     }
 
     #[test]
@@ -10292,6 +10307,25 @@ mod tests {
         );
     }
 
+    /// A null-aware join for a scalar `NOT IN` on `on[0]`, correlated by any
+    /// keys after it: it states one `NOT IN` value key, which a multi-key
+    /// join must.
+    fn try_new_scalar_not_in(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        on: JoinOn,
+        filter: Option<JoinFilter>,
+        join_type: JoinType,
+        partition_mode: PartitionMode,
+    ) -> Result<HashJoinExec> {
+        HashJoinExecBuilder::new(left, right, on, join_type)
+            .with_filter(filter)
+            .with_partition_mode(partition_mode)
+            .with_null_aware(true)
+            .with_null_aware_value_keys(1)
+            .build()
+    }
+
     /// Test that null_aware validation rejects PartitionMode::Partitioned (must be CollectLeft).
     #[tokio::test]
     async fn test_null_aware_validation_partitioned() {
@@ -10310,16 +10344,13 @@ mod tests {
         ];
 
         // A correlated (multi-key) LeftMark requires CollectLeft.
-        let result = HashJoinExec::try_new(
+        let result = try_new_scalar_not_in(
             left,
             right,
             on,
             None,
-            &JoinType::LeftMark,
-            None,
+            JoinType::LeftMark,
             PartitionMode::Partitioned,
-            NullEquality::NullEqualsNothing,
-            true, // null_aware = true (invalid with Partitioned)
         );
 
         assert!(result.is_err());
@@ -10357,16 +10388,13 @@ mod tests {
         if multi_key {
             on.push(key("dummy", "dummy")?);
         }
-        let join = HashJoinExec::try_new(
+        let join = try_new_scalar_not_in(
             Arc::clone(&left),
             Arc::clone(&right),
             on,
             with_filter.then(prepare_join_filter),
-            &join_type,
-            None,
+            join_type,
             PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true,
         )?;
         let scope = NotInScope::Correlated { value_keys: 1 };
         let expected = match join_type {
@@ -10680,16 +10708,13 @@ mod tests {
             ),
         ];
 
-        let join = HashJoinExec::try_new(
+        let join = try_new_scalar_not_in(
             left,
             right,
             on,
             None,
-            &JoinType::LeftMark,
-            None,
+            JoinType::LeftMark,
             PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true,
         )?;
 
         let stream = join.execute(0, task_ctx)?;
@@ -10748,16 +10773,13 @@ mod tests {
             ),
         ];
 
-        let join = HashJoinExec::try_new(
+        let join = try_new_scalar_not_in(
             left,
             right,
             on,
             None,
-            &JoinType::LeftMark,
-            None,
+            JoinType::LeftMark,
             PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true,
         )?;
 
         let stream = join.execute(0, task_ctx)?;
@@ -10813,16 +10835,13 @@ mod tests {
                 Arc::new(Column::new_with_schema("grp", &right.schema())?) as _,
             ),
         ];
-        let join = HashJoinExec::try_new(
+        let join = try_new_scalar_not_in(
             left,
             right,
             on,
             None,
-            &JoinType::LeftAnti,
-            None,
+            JoinType::LeftAnti,
             PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true,
         )?;
         let task_ctx = fallback_context(memory_limit);
         let batches = common::collect(join.execute(0, task_ctx)?).await?;
@@ -11032,35 +11051,103 @@ mod tests {
         Ok(())
     }
 
-    /// The value key count must name at least one key and no more than the
-    /// join has.
-    #[tokio::test]
-    async fn test_null_aware_validation_value_keys() -> Result<()> {
-        for value_keys in [0, 3] {
-            let left = build_table_two_cols(("a", &vec![Some(1)]), ("b", &vec![Some(2)]));
-            let right =
-                build_table_two_cols(("x", &vec![Some(1)]), ("y", &vec![Some(2)]));
-            let on = vec![
-                (
-                    Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
-                    Arc::new(Column::new_with_schema("x", &right.schema())?) as _,
-                ),
-                (
-                    Arc::new(Column::new_with_schema("b", &left.schema())?) as _,
-                    Arc::new(Column::new_with_schema("y", &right.schema())?) as _,
-                ),
-            ];
-            let err = HashJoinExecBuilder::new(left, right, on, JoinType::LeftAnti)
-                .with_partition_mode(PartitionMode::CollectLeft)
+    /// The value key count must name no more keys than the join has. An
+    /// unset count (`0`) is a scalar `NOT IN` with a single key, and is
+    /// rejected with more keys rather than guessing which of them are `NOT IN`
+    /// value keys and which are correlation scope keys.
+    #[test]
+    fn test_null_aware_validation_value_keys() -> Result<()> {
+        let left = build_table_two_cols(("a", &vec![Some(1)]), ("b", &vec![None]));
+        let right = build_table_two_cols(("x", &vec![Some(1)]), ("y", &vec![Some(5)]));
+        let key = |l: &str, r: &str| -> Result<(PhysicalExprRef, PhysicalExprRef)> {
+            Ok((
+                Arc::new(Column::new_with_schema(l, &left.schema())?) as _,
+                Arc::new(Column::new_with_schema(r, &right.schema())?) as _,
+            ))
+        };
+        let two_keys = vec![key("a", "x")?, key("b", "y")?];
+        let build = |on: JoinOn, join_type, partition_mode, value_keys| {
+            HashJoinExecBuilder::new(Arc::clone(&left), Arc::clone(&right), on, join_type)
+                .with_partition_mode(partition_mode)
                 .with_null_aware(true)
                 .with_null_aware_value_keys(value_keys)
                 .build()
-                .unwrap_err();
-            assert!(
-                err.to_string()
-                    .contains("needs between 1 and 2 `NOT IN` value keys"),
-                "{err}"
-            );
+        };
+
+        for (value_keys, expected) in [
+            (
+                0,
+                "join with 2 keys needs the number of its `NOT IN` value keys, set it with `with_null_aware_value_keys`",
+            ),
+            (3, "needs between 1 and 2 `NOT IN` value keys"),
+        ] {
+            let err = build(
+                two_keys.clone(),
+                JoinType::LeftAnti,
+                PartitionMode::CollectLeft,
+                value_keys,
+            )
+            .unwrap_err();
+            assert!(err.to_string().contains(expected), "{err}");
+        }
+
+        // `HashJoinExec::try_new` cannot set the count, so it only builds
+        // single-key null-aware joins, as before value keys existed.
+        let err = HashJoinExec::try_new(
+            Arc::clone(&left),
+            Arc::clone(&right),
+            two_keys.clone(),
+            None,
+            &JoinType::LeftAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("with_null_aware_value_keys"),
+            "{err}"
+        );
+
+        let join = build(
+            vec![key("a", "x")?],
+            JoinType::LeftAnti,
+            PartitionMode::CollectLeft,
+            0,
+        )?;
+        assert_eq!(join.not_in()?.map(NotIn::value_keys), Some(1));
+
+        // A join that no count can make valid reports what is wrong with it,
+        // not the missing count.
+        for (on, join_type, partition_mode, expected) in [
+            (
+                two_keys.clone(),
+                JoinType::Inner,
+                PartitionMode::CollectLeft,
+                "null_aware can only be true for LeftAnti joins",
+            ),
+            (
+                two_keys.clone(),
+                JoinType::RightAnti,
+                PartitionMode::Partitioned,
+                "null_aware can only be true for LeftAnti joins",
+            ),
+            (
+                two_keys,
+                JoinType::LeftAnti,
+                PartitionMode::Partitioned,
+                "null_aware joins require PartitionMode::CollectLeft",
+            ),
+            (
+                vec![],
+                JoinType::LeftAnti,
+                PartitionMode::CollectLeft,
+                "On constraints in HashJoinExec should be non-empty",
+            ),
+        ] {
+            let err = build(on, join_type, partition_mode, 0).unwrap_err();
+            assert!(err.to_string().contains(expected), "{join_type}: {err}");
         }
         Ok(())
     }
@@ -11179,16 +11266,13 @@ mod tests {
 
         // The outer side `left` as the build side (`LeftAnti`), and swapped to
         // the probe side (`RightAnti`), must keep the same rows.
-        let left_anti = HashJoinExec::try_new(
+        let left_anti = try_new_scalar_not_in(
             Arc::clone(&left),
             Arc::clone(&right),
             on.clone(),
             None,
-            &JoinType::LeftAnti,
-            None,
+            JoinType::LeftAnti,
             PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true,
         )?;
         let right_anti = swap_for_separate_execution(&left_anti)?;
         let batches =
@@ -11332,16 +11416,13 @@ mod tests {
                     ))
                 })
                 .collect::<Result<JoinOn>>()?;
-            let join = HashJoinExec::try_new(
+            let join = try_new_scalar_not_in(
                 left,
                 right,
                 on,
                 None,
-                &join_type,
-                None,
+                join_type,
                 PartitionMode::CollectLeft,
-                NullEquality::NullEqualsNothing,
-                true,
             )?;
             let batches = common::collect(join.execute(0, task_ctx)?).await?;
             results.push(batches_to_sort_string(&batches));
@@ -11425,16 +11506,13 @@ mod tests {
             })
             .collect::<Result<JoinOn>>()?;
 
-        let join = HashJoinExec::try_new(
+        let join = try_new_scalar_not_in(
             left,
             right,
             on,
             None,
-            &JoinType::LeftAnti,
-            None,
+            JoinType::LeftAnti,
             PartitionMode::CollectLeft,
-            NullEquality::NullEqualsNothing,
-            true,
         )?;
 
         let stream = join.execute(0, task_ctx)?;

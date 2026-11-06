@@ -5,6 +5,7 @@
 //! Defines the spilling functions
 
 pub(crate) mod in_progress_spill_file;
+mod lengths;
 pub(crate) mod replayable_spill_input;
 pub(crate) mod spill_manager;
 pub mod spill_pool;
@@ -76,6 +77,9 @@ struct SpillReaderStream {
     _spill_file: Arc<dyn SpillFile>,
 
     schema_validated: bool,
+
+    /// Whether the file stores byte arrays as lengths, see [`lengths`]
+    decode_lengths: bool,
 }
 
 // Small margin allowed to accommodate slight memory accounting variation
@@ -336,6 +340,7 @@ impl SpillReaderStream {
             pending: VecDeque::new(),
             _spill_file: spill_file,
             schema_validated: false,
+            decode_lengths: false,
         })
     }
 }
@@ -367,7 +372,12 @@ impl Stream for SpillReaderStream {
                         if !this.schema_validated {
                             this.schema_validated = true;
                             let actual = batch.schema();
-                            if actual != this.schema {
+                            // Compressed spill files store byte arrays as lengths
+                            this.decode_lengths = actual != this.schema;
+                            if this.decode_lengths
+                                && !lengths::encode_schema(&this.schema)
+                                    .is_some_and(|encoded| encoded == actual)
+                            {
                                 this.is_done = true;
                                 return Poll::Ready(Some(Err(
                                     datafusion_common::exec_datafusion_err!(
@@ -380,6 +390,17 @@ impl Stream for SpillReaderStream {
                                 )));
                             }
                         }
+                        let batch = if this.decode_lengths {
+                            match lengths::decode(&batch, &this.schema) {
+                                Ok(batch) => batch,
+                                Err(e) => {
+                                    this.is_done = true;
+                                    return Poll::Ready(Some(Err(e)));
+                                }
+                            }
+                        } else {
+                            batch
+                        };
                         if let Some(max_record_batch_memory) =
                             this.max_record_batch_memory
                         {
@@ -466,10 +487,11 @@ impl IPCStreamWriter {
         spill_writer: Box<dyn SpillWriter>,
         schema: &Schema,
         spill_compression: SpillCompression,
+        first_batch_rows: usize,
     ) -> Result<Self> {
         Ok(Self {
             writer: spill_writer,
-            encoder: IPCStreamEncoder::new(schema, spill_compression)?,
+            encoder: IPCStreamEncoder::new(schema, spill_compression, first_batch_rows)?,
         })
     }
 
@@ -646,9 +668,15 @@ impl Drop for AsyncIPCStreamWriter {
     }
 }
 
+/// Fewer rows per batch than this and the struct and run-end metadata of a
+/// lengths column outweighs what the lengths save, see [`lengths`]
+const MIN_LENGTHS_ROWS: usize = 128;
+
 /// Encodes Arrow IPC streams without performing I/O.
 struct IPCStreamEncoder {
     encoder: Option<StreamEncoder>,
+    /// The schema written when byte arrays are spilled as lengths, see [`lengths`]
+    lengths_schema: Option<SchemaRef>,
 }
 
 impl IPCStreamEncoder {
@@ -664,7 +692,11 @@ impl IPCStreamEncoder {
     /// contract local and build-visible during Cargo feature resolution,
     /// rather than relying solely on workspace-level feature unification;
     /// see #21917.
-    fn new(schema: &Schema, spill_compression: SpillCompression) -> Result<Self> {
+    fn new(
+        schema: &Schema,
+        spill_compression: SpillCompression,
+        first_batch_rows: usize,
+    ) -> Result<Self> {
         let metadata_version = MetadataVersion::V5;
         // Depending on the schema, some array types such as StringViewArray require larger (16 byte in this case) alignment.
         // If the actual buffer layout after IPC read does not satisfy the alignment requirement,
@@ -678,23 +710,60 @@ impl IPCStreamEncoder {
         let compression_type = Option::<CompressionType>::from(spill_compression);
         write_options = write_options.try_with_compression(compression_type)?;
 
-        let encoder = StreamEncoder::try_new_with_options(schema, write_options)?;
+        // Lengths take as much space as offsets when uncompressed
+        let lengths_schema = compression_type
+            .filter(|_| first_batch_rows >= MIN_LENGTHS_ROWS)
+            .and_then(|_| lengths::encode_schema(schema));
+        let encoder = StreamEncoder::try_new_with_options(
+            lengths_schema.as_deref().unwrap_or(schema),
+            write_options,
+        )?;
         Ok(Self {
             encoder: Some(encoder),
+            lengths_schema,
         })
     }
 
     fn encode(&mut self, batch: &RecordBatch) -> Result<(usize, usize, Vec<Buffer>)> {
-        let buffers = self.encoder.as_mut().unwrap().encode(batch)?;
+        let encoder = self.encoder.as_mut().unwrap();
+        let buffers = match &self.lengths_schema {
+            Some(schema) => encoder.encode(&lengths::encode(batch, schema)?)?,
+            None => encoder.encode(batch)?,
+        };
         let bytes = buffers.iter().map(Buffer::len).sum();
-        Ok((batch.num_rows(), bytes, buffers))
+        Ok((batch.num_rows(), bytes, coalesce_buffers(buffers)))
     }
 
     fn finish(&mut self) -> Result<(usize, Vec<Buffer>)> {
         let buffers = self.encoder.take().unwrap().finish()?;
         let bytes = buffers.iter().map(Buffer::len).sum();
-        Ok((bytes, buffers))
+        Ok((bytes, coalesce_buffers(buffers)))
     }
+}
+
+/// Buffers at least this large are written on their own, see [`coalesce_buffers`]
+const COALESCE_BUFFERS_BELOW: usize = 64 * 1024;
+
+/// Copies runs of small buffers into one, so that writing a batch takes a few
+/// writes instead of one per IPC buffer and padding. The copy lives only for
+/// the write, unlike a buffer kept by every open spill file.
+fn coalesce_buffers(buffers: Vec<Buffer>) -> Vec<Buffer> {
+    let mut coalesced = Vec::new();
+    let mut small: Vec<u8> = Vec::new();
+    for buffer in buffers {
+        if buffer.len() < COALESCE_BUFFERS_BELOW {
+            small.extend_from_slice(buffer.as_slice());
+            continue;
+        }
+        if !small.is_empty() {
+            coalesced.push(Buffer::from_vec(std::mem::take(&mut small)));
+        }
+        coalesced.push(buffer);
+    }
+    if !small.is_empty() {
+        coalesced.push(Buffer::from_vec(small));
+    }
+    coalesced
 }
 
 struct ArrowBufferOwner(Buffer);
@@ -1142,8 +1211,11 @@ mod tests {
             finished: Arc::clone(&finished),
             aborted: Arc::clone(&aborted),
         };
-        let encoder =
-            IPCStreamEncoder::new(schema.as_ref(), SpillCompression::Uncompressed)?;
+        let encoder = IPCStreamEncoder::new(
+            schema.as_ref(),
+            SpillCompression::Uncompressed,
+            usize::MAX,
+        )?;
         let mut writer = AsyncIPCStreamWriter::new(Box::new(spill_writer), encoder);
 
         let (_, first_bytes) = writer.write(&batch1).await?;
@@ -1151,7 +1223,8 @@ mod tests {
         let trailing_bytes = writer.finish().await?;
 
         assert!(finished.load(Ordering::Relaxed));
-        assert!(writes.load(Ordering::Relaxed) > 2);
+        // One write per batch and one for the end of the stream
+        assert_eq!(writes.load(Ordering::Relaxed), 3);
         drop(writer);
         assert!(!aborted.load(Ordering::Relaxed));
 
@@ -1184,6 +1257,7 @@ mod tests {
         let encoder = IPCStreamEncoder::new(
             batch.schema().as_ref(),
             SpillCompression::Uncompressed,
+            usize::MAX,
         )?;
         let mut writer = AsyncIPCStreamWriter::new(
             Box::new(FailingAsyncWriter {
@@ -1218,6 +1292,7 @@ mod tests {
                 let encoder = IPCStreamEncoder::new(
                     batch.schema().as_ref(),
                     SpillCompression::Uncompressed,
+                    usize::MAX,
                 )?;
                 let mut writer = AsyncIPCStreamWriter::new(
                     Box::new(PendingFinishAsyncWriter {
@@ -1255,7 +1330,8 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let abort_count = Arc::new(AtomicUsize::new(0));
         let cleanup_done = Arc::new(Notify::new());
-        let encoder = IPCStreamEncoder::new(&schema, SpillCompression::Uncompressed)?;
+        let encoder =
+            IPCStreamEncoder::new(&schema, SpillCompression::Uncompressed, usize::MAX)?;
         let mut writer = AsyncIPCStreamWriter::new(
             Box::new(FailOnceAbortWriter {
                 abort_count: Arc::clone(&abort_count),
@@ -1297,6 +1373,7 @@ mod tests {
             let encoder = IPCStreamEncoder::new(
                 batch.schema().as_ref(),
                 SpillCompression::Uncompressed,
+                usize::MAX,
             )?;
             AsyncIPCStreamWriter::new(Box::new(spill_writer), encoder)
         };

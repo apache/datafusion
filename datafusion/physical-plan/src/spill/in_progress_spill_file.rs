@@ -78,6 +78,7 @@ impl InProgressSpillFile {
                     spill_writer,
                     schema.as_ref(),
                     self.spill_manager.compression,
+                    gc_batch.num_rows(),
                 )?));
 
                 // Update metrics
@@ -116,6 +117,7 @@ impl InProgressSpillFile {
                 let encoder = IPCStreamEncoder::new(
                     schema.as_ref(),
                     self.spill_manager.compression,
+                    gc_batch.num_rows(),
                 )?;
                 let spill_writer = in_progress_file.open_async_writer().await?;
 
