@@ -54,8 +54,8 @@ use sqlparser::ast::{
     Assignment, AssignmentTarget, ColumnDef, CreateIndex, CreateTable,
     CreateTableOptions, Delete, DescribeAlias, Expr as SQLExpr, FromTable, Ident, Insert,
     ObjectName, ObjectType, Query, SchemaName, SetExpr, ShowCreateObject,
-    ShowStatementFilter, Statement, TableConstraint, TableFactor, TableWithJoins,
-    TransactionMode, UnaryOperator, Value,
+    ShowStatementFilter, Statement, TableAlias, TableConstraint, TableFactor,
+    TableWithJoins, TransactionMode, UnaryOperator, Value,
 };
 use sqlparser::parser::ParserError::ParserError;
 
@@ -1245,8 +1245,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan_err!("Delete OUTPUT clause not supported")?;
                 }
 
-                let table_name = self.get_delete_target(from)?;
-                self.delete_to_plan(&table_name, selection)
+                let (table_name, table_alias) = self.get_delete_target(from)?;
+                self.delete_to_plan(&table_name, table_alias, selection)
             }
 
             Statement::Merge(merge) => self.merge_to_plan(merge),
@@ -1634,7 +1634,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
     }
 
-    fn get_delete_target(&self, from: FromTable) -> Result<ObjectName> {
+    fn get_delete_target(
+        &self,
+        from: FromTable,
+    ) -> Result<(ObjectName, Option<TableAlias>)> {
         let mut from = match from {
             FromTable::WithFromKeyword(v) => v,
             FromTable::WithoutKeyword(v) => v,
@@ -1650,13 +1653,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if !table_factor.joins.is_empty() {
             return not_impl_err!("DELETE FROM only supports single table, got: joins");
         }
-        let TableFactor::Table { name, .. } = table_factor.relation else {
+        let TableFactor::Table { name, alias, .. } = table_factor.relation else {
             return not_impl_err!(
                 "DELETE FROM only supports single table, got: {table_factor:?}"
             );
         };
 
-        Ok(name)
+        if alias
+            .as_ref()
+            .is_some_and(|alias| !alias.columns.is_empty())
+        {
+            return not_impl_err!("DELETE target alias column lists are not supported");
+        }
+
+        Ok((name, alias))
     }
 
     /// Generate a logical plan from a "SHOW TABLES" query
@@ -2276,31 +2286,34 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn delete_to_plan(
         &self,
         table_name: &ObjectName,
+        table_alias: Option<TableAlias>,
         predicate_expr: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
         // Do a table lookup to verify the table exists
         let table_ref = self.object_name_to_table_reference(table_name.clone())?;
         let table_source = self.context_provider.get_table_source(table_ref.clone())?;
-        let schema = DFSchema::try_from_qualified_schema(
-            table_ref.clone(),
-            &table_source.schema(),
-        )?;
         let scan =
             LogicalPlanBuilder::scan(table_ref.clone(), Arc::clone(&table_source), None)?
                 .build()?;
+        let scan = match table_alias {
+            Some(alias) => self.apply_table_alias(scan, alias)?,
+            None => scan,
+        };
         let mut planner_context = PlannerContext::new();
 
         let source = match predicate_expr {
             None => scan,
             Some(predicate_expr) => {
-                let filter_expr =
-                    self.sql_to_expr(predicate_expr, &schema, &mut planner_context)?;
-                let schema = Arc::new(schema);
+                let filter_expr = self.sql_to_expr(
+                    predicate_expr,
+                    scan.schema(),
+                    &mut planner_context,
+                )?;
                 let mut using_columns = HashSet::new();
                 expr_to_columns(&filter_expr, &mut using_columns)?;
                 let filter_expr = normalize_col_with_schemas_and_ambiguity_check(
                     filter_expr,
-                    &[&[&schema]],
+                    &[&[scan.schema()]],
                     &[using_columns],
                 )?;
                 LogicalPlan::Filter(Filter::try_new(filter_expr, Arc::new(scan))?)
