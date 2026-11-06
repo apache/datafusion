@@ -1147,3 +1147,51 @@ true
 
 statement ok
 DROP TABLE in_list_nulls;
+
+# IN must agree with = on signed zeros: -0.0 and +0.0 are equal on every
+# evaluation path (comparison chain, branchless, bitmap and hash set filters,
+# and runtime comparison when the list holds a column)
+# https://github.com/apache/datafusion/issues/27121
+statement ok
+CREATE TABLE signed_zeros AS
+SELECT id, x, y, arrow_cast(x, 'Float16') AS h
+FROM (VALUES
+  (1, -0.0, CAST(0.0 AS FLOAT)),
+  (2, 0.0, CAST(-0.0 AS FLOAT)),
+  (3, 5.0, CAST(5.0 AS FLOAT))
+) AS t(id, x, y);
+
+query IBBBBBBBBBBBBBBB
+SELECT
+  id,
+  x = 0.0,
+  -- constant folded with a scalar input
+  -0.0 IN (0.0, 1.0),
+  -- dictionary encoded input
+  arrow_cast(x, 'Dictionary(Int32, Float64)') IN (0.0, 5.0),
+  -- short literal list: branchless filter
+  x IN (0.0, 5.0),
+  x NOT IN (0.0, 5.0),
+  x IN (-0.0, 7.0),
+  -- non-column expression and four literals keep the membership filter
+  -x IN (0.0, -5.0),
+  x IN (0.0, 1.0, 2.0, 3.0),
+  x NOT IN (0.0, 1.0, 2.0, 3.0),
+  -- seventeen literals: hash set filter
+  x IN (0.0, 10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0, 17.0, 18.0, 19.0, 20.0, 21.0, 22.0, 23.0, 24.0, 25.0),
+  -- column in the list: compared at runtime
+  x IN (y, 7.0, 8.0, 9.0),
+  x NOT IN (y, 7.0, 8.0, 9.0),
+  y IN (CAST(0 AS FLOAT), CAST(9 AS FLOAT)),
+  y NOT IN (CAST(0 AS FLOAT), CAST(9 AS FLOAT)),
+  -- nine Float16 literals: bitmap filter
+  h IN (arrow_cast(0, 'Float16'), arrow_cast(1, 'Float16'), arrow_cast(2, 'Float16'), arrow_cast(3, 'Float16'), arrow_cast(4, 'Float16'), arrow_cast(6, 'Float16'), arrow_cast(7, 'Float16'), arrow_cast(8, 'Float16'), arrow_cast(9, 'Float16'))
+FROM signed_zeros
+ORDER BY id;
+----
+1 true true true true false true true true false true true false true false true
+2 true true true true false true true true false true true false true false true
+3 false true true true false false true false true false true false false true false
+
+statement ok
+DROP TABLE signed_zeros;

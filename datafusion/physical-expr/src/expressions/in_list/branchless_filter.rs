@@ -25,9 +25,12 @@
 //! `Float32` and a `UInt32` both use four bytes per value. The filter compares
 //! those stored bits through an unsigned type of the same size, without copying
 //! the value buffer. A bit pattern is simply the bytes Arrow uses to store a
-//! value. Comparing it preserves details such as `0.0` versus `-0.0` and
-//! different NaN values. [`BranchlessFilterType`] defines these safe,
-//! same-sized mappings and checks their sizes at compile time.
+//! value. Comparing it preserves details such as different NaN payloads.
+//! `InListExpr` normalizes `-0.0` to `+0.0` in both the list and the input
+//! before they reach this filter, so signed zeros still compare equal, as
+//! they do for `=` (see `datafusion_common::float_semantics`).
+//! [`BranchlessFilterType`] defines these safe, same-sized mappings and
+//! checks their sizes at compile time.
 //!
 //! The fast path is limited to short lists:
 //!

@@ -19,6 +19,7 @@ use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq as arrow_eq;
 use arrow::datatypes::*;
 
+use datafusion_common::float_semantics::{has_float_leaf, normalize_floats};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
@@ -124,6 +125,33 @@ fn try_evaluate_constant_list(
             Ok(None)
         }
     }
+}
+
+/// Applies DataFusion's float equality semantics to a value before it is
+/// compared: `-0.0` becomes `+0.0`, so it matches `+0.0` in the list.
+///
+/// The static filters and Arrow's `eq` kernel compare floats by bit pattern
+/// (IEEE 754 totalOrder), while SQL and the `=` operator treat the two zeros
+/// as equal. Normalizing both the list (in `instantiate_static_filter`) and
+/// the input (on every evaluation) keeps `IN` consistent with `=`. This is a
+/// no-op for non-float types and allocation-free when nothing needs to change.
+/// See [`datafusion_common::float_semantics`].
+fn normalize_value(value: ColumnarValue) -> Result<ColumnarValue> {
+    Ok(match value {
+        ColumnarValue::Array(array) => ColumnarValue::Array(normalize_floats(&array)),
+        ColumnarValue::Scalar(scalar) => match scalar {
+            ScalarValue::Float16(_)
+            | ScalarValue::Float32(_)
+            | ScalarValue::Float64(_) => ColumnarValue::Scalar(scalar.normalize()),
+            // Floats nested in dictionaries, lists or structs: normalize the
+            // array form, which handles every nesting
+            scalar if has_float_leaf(&scalar.data_type()) => {
+                let array = normalize_floats(&scalar.to_array()?);
+                ColumnarValue::Scalar(ScalarValue::try_from_array(&array, 0)?)
+            }
+            scalar => ColumnarValue::Scalar(scalar),
+        },
+    })
 }
 
 /// Asserts that the InList expression's data type matches a list element's
@@ -323,7 +351,7 @@ impl PhysicalExpr for InListExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let num_rows = batch.num_rows();
-        let value = self.expr.evaluate(batch)?;
+        let value = normalize_value(self.expr.evaluate(batch)?)?;
         let r = match &self.static_filter {
             Some(filter) => {
                 match value {
@@ -373,7 +401,7 @@ impl PhysicalExpr for InListExpr {
 
                 // Helper: compare value against a single list expression
                 let compare_one = |expr: &Arc<dyn PhysicalExpr>| -> Result<BooleanArray> {
-                    match expr.evaluate(batch)? {
+                    match normalize_value(expr.evaluate(batch)?)? {
                         ColumnarValue::Array(array) => {
                             if lhs_supports_arrow_eq
                                 && supports_arrow_eq(array.data_type())
@@ -1133,6 +1161,78 @@ mod tests {
             Arc::clone(&col_a),
             &schema
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_list_float_signed_zero() -> Result<()> {
+        // `IN` must agree with `=`: `-0.0` and `+0.0` are equal, whichever side
+        // of the comparison they appear on and whichever filter is used.
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Float64, true),
+            Field::new("b", DataType::Float64, true),
+        ]);
+        let a = Float64Array::from(vec![Some(0.0), Some(-0.0), Some(1.0), None]);
+        let b = Float64Array::from(vec![Some(-0.0), Some(0.0), Some(-0.0), Some(0.0)]);
+        let col_a = col("a", &schema)?;
+        let batch = RecordBatch::try_new(
+            Arc::new(schema.clone()),
+            vec![Arc::new(a), Arc::new(b)],
+        )?;
+        let expected = vec![Some(true), Some(true), Some(false), None];
+        let expected_negated = vec![Some(false), Some(false), Some(true), None];
+
+        // Short literal lists use the branchless filter
+        let list = || vec![lit(-0.0f64), lit(2.0f64)];
+        in_list!(
+            batch,
+            list(),
+            &false,
+            expected.clone(),
+            Arc::clone(&col_a),
+            &schema
+        );
+        in_list!(
+            batch,
+            list(),
+            &true,
+            expected_negated,
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // Longer literal lists use the hash set filter
+        let list: Vec<Arc<dyn PhysicalExpr>> = std::iter::once(lit(0.0f64))
+            .chain((2..22).map(|i| lit(i as f64)))
+            .collect();
+        in_list!(
+            batch,
+            list,
+            &false,
+            expected.clone(),
+            Arc::clone(&col_a),
+            &schema
+        );
+
+        // A column in the list is compared at runtime
+        let expr = make_in_list_with_columns(
+            Arc::clone(&col_a),
+            vec![col("b", &schema)?],
+            false,
+        );
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(
+            as_boolean_array(&result),
+            &BooleanArray::from(expected.clone())
+        );
+
+        // Lists built directly from an array are normalized as well
+        let haystack: ArrayRef = Arc::new(Float64Array::from(vec![-0.0]));
+        let expr =
+            InListExpr::try_new_from_array(Arc::clone(&col_a), haystack, false, &schema)?;
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        assert_eq!(as_boolean_array(&result), &BooleanArray::from(expected));
 
         Ok(())
     }
