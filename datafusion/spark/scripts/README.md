@@ -100,6 +100,9 @@ These records are skipped and counted, with the reason, in the summary:
   different strings.
 - `DECIMAL` types with a precision above 38
 - queries that use a table whose `CREATE TABLE` Spark could not run
+- `EXPLAIN` and `DESCRIBE`, whose output differs between the engines
+- results PySpark cannot return to Python, such as a map with array keys, and
+  interval values, which this runner does not format
 - records marked `skipif spark`, or `onlyif` another engine
 
 ## Values

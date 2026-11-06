@@ -761,11 +761,16 @@ class SparkRunner:
                 self.spark.catalog.dropTempView(table.name)
 
     def set(self, key: str, value: Optional[str]) -> None:
+        from pyspark.errors import PySparkException
+
         if value is None:
             value = SPARK_DEFAULTS[key]
         elif key == "spark.sql.ansi.enabled":
             value = value.lower()
-        self.spark.conf.set(key, value)
+        try:
+            self.spark.conf.set(key, value)
+        except PySparkException as e:
+            raise SparkError("error", _first_line(e))
         if key == "spark.sql.session.timeZone":
             self.time_zone = value
 
@@ -777,6 +782,9 @@ class SparkRunner:
         try:
             df = self.spark.sql(sql)
             return df.schema, df.limit(MAX_ROWS + 1).collect()
+        except TypeError as e:
+            # PySpark returns each MAP as a dict, which cannot have array keys.
+            raise SparkError("convert", f"PySpark cannot convert the result ({e})")
         except ParseException as e:
             raise SparkError("parse", f"Spark cannot parse it ({_condition(e)})")
         except PySparkException as e:
@@ -838,6 +846,9 @@ DIVERGENT = {
 _LARGE_STACK_RE = re.compile(r"\bstack\s*\(\s*(\d+)", re.IGNORECASE)
 _MAX_INT = 2**31 - 1
 
+# Statements whose output is a plan or schema in each engine's own format.
+_ENGINE_SPECIFIC_RE = re.compile(r"\s*(EXPLAIN|DESCRIBE|DESC|SHOW)\b", re.IGNORECASE)
+
 
 def run_record(runner: SparkRunner, record: Record) -> Outcome:
     if record.skip_reason:
@@ -847,8 +858,18 @@ def run_record(runner: SparkRunner, record: Record) -> Outcome:
         key, value = setting
         if key not in SETTINGS:
             return Outcome(record, "skip", f"no Spark equivalent for {key}")
-        runner.set(SETTINGS[key], value)
+        try:
+            runner.set(SETTINGS[key], value)
+        except SparkError as e:
+            if record.expect_error:
+                return Outcome(record, "pass")
+            return Outcome(record, "spark-error", e.message)
+        if record.expect_error:
+            return Outcome(record, "no-spark-error")
         return Outcome(record, "pass")
+    m = _ENGINE_SPECIFIC_RE.match(record.sql)
+    if m:
+        return Outcome(record, "skip", f"{m.group(1).upper()} output differs between engines")
     try:
         if record.kind == "statement":
             spark_sql = translate_statement(record.sql)

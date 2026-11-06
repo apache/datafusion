@@ -237,11 +237,14 @@ class FakeRunner:
 
     time_zone = "UTC"
 
-    def __init__(self, result=None):
+    def __init__(self, result=None, set_error=None):
         self.result = result
+        self.set_error = set_error
         self.settings = {}
 
     def set(self, key, value):
+        if self.set_error:
+            raise self.set_error
         self.settings[key] = value
 
     def run(self, sql):
@@ -283,6 +286,20 @@ class RunRecordTest(unittest.TestCase):
         [record] = parse("statement ok\nset datafusion.execution.enable_ansi_mode = true;\n")
         self.assertEqual(r.run_record(runner, record).status, "pass")
         self.assertEqual(runner.settings, {"spark.sql.ansi.enabled": "true"})
+
+    def test_invalid_settings(self):
+        rejected = FakeRunner(set_error=r.SparkError("error", "[INVALID_CONF_VALUE]"))
+        bogus = "set datafusion.spark.map_key_dedup_policy = 'BOGUS';\n"
+        [expect_error] = parse("statement error\n" + bogus)
+        [expect_ok] = parse("statement ok\n" + bogus)
+        self.assertEqual(r.run_record(rejected, expect_error).status, "pass")
+        self.assertEqual(r.run_record(rejected, expect_ok).status, "spark-error")
+        self.assertEqual(r.run_record(FakeRunner(), expect_error).status, "no-spark-error")
+
+    def test_engine_specific_output_is_skipped(self):
+        [record] = parse("query TT\nEXPLAIN SELECT 1\n----\nlogical_plan x\n")
+        outcome = r.run_record(FakeRunner(), record)
+        self.assertEqual((outcome.status, outcome.detail), ("skip", "EXPLAIN output differs between engines"))
 
     def test_zoned_timestamps(self):
         value = datetime.datetime(2024, 7, 15)
