@@ -1,26 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`NestedLoopJoinExec`]: joins without equijoin (equality predicates).
 
 use std::fmt::Formatter;
 use std::ops::{BitOr, ControlFlow};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::Poll;
 
 use super::utils::{
@@ -34,6 +20,7 @@ use crate::filter_pushdown::{
 };
 use crate::joins::SharedBitmapBuilder;
 use crate::joins::logical_batch::{BatchRow, LogicalBatch, RowIndices};
+use crate::joins::probe_completion::{Completion, ProbeCompletion};
 use crate::joins::utils::{
     BuildProbeJoinMetrics, ColumnIndex, JoinFilter, OnceAsync, OnceFut,
     boolean_mask_from_filter, build_join_schema, check_join_is_valid,
@@ -1158,8 +1145,6 @@ pub(crate) struct JoinLeftData {
     batch: LogicalBatch,
     /// Shared bitmap builder for visited left indices
     bitmap: SharedBitmapBuilder,
-    /// Counter of running probe-threads, potentially able to update `bitmap`
-    probe_threads_counter: AtomicUsize,
     /// Memory reservation for tracking batch and bitmap
     /// Cleared on `JoinLeftData` drop
     /// reservation is cleared on Drop
@@ -1171,13 +1156,11 @@ impl JoinLeftData {
     pub(crate) fn new(
         batch: LogicalBatch,
         bitmap: SharedBitmapBuilder,
-        probe_threads_counter: AtomicUsize,
         reservation: MemoryReservation,
     ) -> Self {
         Self {
             batch,
             bitmap,
-            probe_threads_counter,
             reservation,
         }
     }
@@ -1188,12 +1171,6 @@ impl JoinLeftData {
 
     pub(crate) fn bitmap(&self) -> &SharedBitmapBuilder {
         &self.bitmap
-    }
-
-    /// Decrements counter of running threads, and returns `true`
-    /// if caller is the last running thread
-    pub(crate) fn report_probe_completed(&self) -> bool {
-        self.probe_threads_counter.fetch_sub(1, Ordering::Relaxed) == 1
     }
 }
 
@@ -1301,12 +1278,14 @@ async fn collect_left_input(
         BooleanBufferBuilder::new(0)
     };
 
-    Ok(LeftLoad::InMemory(Arc::new(JoinLeftData::new(
-        buffered_build_batch,
-        Mutex::new(visited_left_side),
-        AtomicUsize::new(probe_threads_count),
-        reservation,
-    ))))
+    Ok(LeftLoad::InMemory {
+        left_data: Arc::new(JoinLeftData::new(
+            buffered_build_batch,
+            Mutex::new(visited_left_side),
+            reservation,
+        )),
+        probe_completion: Arc::new(ProbeCompletion::new(probe_threads_count)),
+    })
 }
 
 /// A left side with no rows needs no spill file, so it stays on the in-memory path.
@@ -1331,12 +1310,14 @@ fn left_load_from_spill(
             LeftLoad::Spilled(left_spill)
         }
         // No rows means no bitmap either, whatever the join type.
-        None => LeftLoad::InMemory(Arc::new(JoinLeftData::new(
-            LogicalBatch::new_empty(schema),
-            Mutex::new(BooleanBufferBuilder::new(0)),
-            AtomicUsize::new(probe_threads_count),
-            reservation,
-        ))),
+        None => LeftLoad::InMemory {
+            left_data: Arc::new(JoinLeftData::new(
+                LogicalBatch::new_empty(schema),
+                Mutex::new(BooleanBufferBuilder::new(0)),
+                reservation,
+            )),
+            probe_completion: Arc::new(ProbeCompletion::new(probe_threads_count)),
+        },
     }
 }
 
@@ -1414,7 +1395,7 @@ enum NLJState {
     /// Entered exactly once per stream, when it has finished probing the whole
     /// left side: the probe (right) side is exhausted or, in memory-limited
     /// mode, every left chunk has been probed. This state owns the single
-    /// `report_probe_completed` call that decrements the shared probe-threads
+    /// probe-completion report that decrements the shared probe-threads
     /// counter, and records in `is_unmatched_left_emitter` whether this stream
     /// is the one responsible for emitting unmatched-left rows. Splitting this
     /// decision out of `EmitLeftUnmatched` makes "decrement exactly once" a
@@ -1432,7 +1413,12 @@ enum NLJState {
 /// Outcome of the single pass over the left (build) input.
 pub(crate) enum LeftLoad {
     /// The left side fit the memory budget and is buffered as one batch.
-    InMemory(Arc<JoinLeftData>),
+    InMemory {
+        /// The buffered left side
+        left_data: Arc<JoinLeftData>,
+        /// Partitions that are still probing `left_data`
+        probe_completion: Arc<ProbeCompletion>,
+    },
     /// The budget ran out, so the left side was spilled during that same pass. Every partition
     /// shares this handle, and the chunks that are read back from the file.
     Spilled(Arc<LeftSpillData>),
@@ -1448,10 +1434,10 @@ struct SpilledLeftFile {
 
 /// The spilled left side, shared by every output partition.
 ///
-/// This is the memory-limited counterpart of [`JoinLeftData`]: the rows live in
-/// a spill file instead of memory, but the visited bitmap and the probe-threads
-/// counter cover the whole left side and are shared by all partitions in the
-/// same way.
+/// This is the memory-limited counterpart of [`LeftLoad::InMemory`]: the rows
+/// live in a spill file instead of memory, but the visited bitmap and the
+/// probe-threads counter cover the whole left side and are shared by all
+/// partitions in the same way.
 ///
 /// The rows come back one chunk at a time (see [`LeftChunkBarrier`]), while the
 /// bitmap spans all of them: bits are addressed by the row's position in the
@@ -1473,12 +1459,9 @@ pub(crate) struct LeftSpillData {
     /// Visited bitmap over every row of `spill_file`. Empty when the join type
     /// does not need it.
     visited: SharedBitmapBuilder,
-    /// Counter of partitions that have neither finished probing every chunk
-    /// nor gone away
-    probe_threads_counter: AtomicUsize,
-    /// Set when a partition went away before it finished probing. The final
-    /// left rows are then not emitted, as on the in-memory path.
-    incomplete: AtomicBool,
+    /// Partitions that have neither finished probing every chunk nor gone
+    /// away, and whether any went away before it finished
+    probe_completion: ProbeCompletion,
     /// Memory reservation for `visited`
     reservation: MemoryReservation,
 }
@@ -1513,8 +1496,7 @@ impl LeftSpillData {
             num_rows,
             reader: Arc::new(Mutex::new(None)),
             visited: Mutex::new(visited),
-            probe_threads_counter: AtomicUsize::new(probe_threads_count),
-            incomplete: AtomicBool::new(false),
+            probe_completion: ProbeCompletion::new(probe_threads_count),
             reservation,
         }
     }
@@ -1563,15 +1545,15 @@ impl LeftSpillData {
     /// running thread and no partition went away unfinished, it is the emitter
     /// and gets the complete visited bitmap, which it must account for.
     fn report_probe_completed(&self) -> Option<BooleanBuffer> {
-        if self.probe_threads_counter.fetch_sub(1, Ordering::AcqRel) != 1 {
-            return None;
-        }
-        let visited = self.take_visited();
-        if self.incomplete.load(Ordering::Acquire) {
+        match self.probe_completion.report_completed() {
+            Completion::NotLast => None,
+            Completion::Emit(_) => Some(self.take_visited()),
             // Nobody will emit, so nobody needs the bitmap
-            return None;
+            Completion::Abandoned => {
+                drop(self.take_visited());
+                None
+            }
         }
-        Some(visited)
     }
 
     /// `count` partitions went away before they finished probing.
@@ -1581,15 +1563,7 @@ impl LeftSpillData {
     /// the last to finish or go away, while the plan may live on. But the final
     /// left rows are then not emitted.
     fn depart_unfinished(&self, count: usize) {
-        if count == 0 {
-            return;
-        }
-        self.incomplete.store(true, Ordering::Release);
-        if self
-            .probe_threads_counter
-            .fetch_sub(count, Ordering::AcqRel)
-            == count
-        {
+        if self.probe_completion.abandon(count) {
             drop(self.take_visited());
         }
     }
@@ -2186,6 +2160,10 @@ pub(crate) struct NestedLoopJoinStream {
     // -----------------
     /// The current buffered left data to join
     buffered_left_data: Option<Arc<JoinLeftData>>,
+    /// Probe partitions still running over the in-memory left side, shared by
+    /// all of them. `None` on the spill path, which reports on
+    /// [`LeftSpillData`] instead.
+    in_memory_probe_completion: Option<Arc<ProbeCompletion>>,
     /// Index into the left buffered batch. Used in `ProbeRight` state
     left_probe_idx: usize,
     /// Index into the left buffered batch. Used in `EmitLeftUnmatched` state
@@ -2209,8 +2187,9 @@ pub(crate) struct NestedLoopJoinStream {
 
     /// Whether this stream is the one responsible for emitting unmatched-left
     /// rows. Set in the [`NLJState::ProbeEnd`] state, which is entered exactly
-    /// once per stream and owns the single `report_probe_completed` call (on
-    /// [`JoinLeftData`], or on [`LeftSpillData`] in memory-limited mode): the
+    /// once per stream and owns the single probe-completion report (on
+    /// [`LeftLoad::InMemory`]'s [`ProbeCompletion`], or on [`LeftSpillData`] in
+    /// memory-limited mode): the
     /// stream that drives the
     /// shared probe-threads counter to zero (the last to finish probing) becomes
     /// the emitter. Because the decrement happens once in `ProbeEnd` rather than
@@ -2545,6 +2524,7 @@ impl NestedLoopJoinStream {
             column_indices,
             left_data,
             metrics,
+            in_memory_probe_completion: None,
             buffered_left_data: None,
             output_buffer: Box::new(BatchCoalescer::new(schema, batch_size)),
             batch_size,
@@ -2660,7 +2640,12 @@ impl NestedLoopJoinStream {
             // Standard path: use OnceFut
             match self.left_data.get_shared(cx) {
                 Poll::Ready(Ok(load)) => match load.as_ref() {
-                    LeftLoad::InMemory(left_data) => {
+                    LeftLoad::InMemory {
+                        left_data,
+                        probe_completion,
+                    } => {
+                        self.in_memory_probe_completion =
+                            Some(Arc::clone(probe_completion));
                         self.buffered_left_data = Some(Arc::clone(left_data));
                         self.left_exhausted = true;
                         self.state = NLJState::FetchingRight;
@@ -2749,13 +2734,11 @@ impl NestedLoopJoinStream {
         };
 
         // This `JoinLeftData` is private to the partition: it shares the
-        // chunk's rows but has its own bitmap, so its probe-threads counter is
-        // not used. Probe completion is reported once for the whole left side,
-        // on `LeftSpillData`.
+        // chunk's rows but has its own bitmap. Probe completion is reported
+        // once for the whole left side, on `LeftSpillData`.
         self.buffered_left_data = Some(Arc::new(JoinLeftData::new(
             batch,
             Mutex::new(visited_left_side),
-            AtomicUsize::new(1),
             active.chunk_reservation.take(),
         )));
         active.current_chunk = Some(chunk);
@@ -3006,7 +2989,7 @@ impl NestedLoopJoinStream {
     ///
     /// Entered exactly once per stream, when it has probed the whole left side.
     /// This is the single place that decrements the shared probe-threads counter
-    /// via `report_probe_completed`: the stream that drives the
+    /// via [`ProbeCompletion::report_completed`]: the stream that drives the
     /// counter to zero (the last to finish probing) is the one responsible for
     /// emitting unmatched-left rows, recorded in `is_unmatched_left_emitter`.
     ///
@@ -3039,8 +3022,13 @@ impl NestedLoopJoinStream {
                 None => false,
             }
         } else {
-            match self.get_left_data() {
-                Ok(left_data) => left_data.report_probe_completed(),
+            match self.get_in_memory_probe_completion() {
+                Ok(probe_completion) => match probe_completion.report_completed() {
+                    Completion::NotLast => false,
+                    // Nothing abandons the in-memory left side
+                    Completion::Abandoned => false,
+                    Completion::Emit(_) => true,
+                },
                 Err(e) => return ControlFlow::Break(Poll::Ready(Some(Err(e)))),
             }
         };
@@ -3067,6 +3055,7 @@ impl NestedLoopJoinStream {
             Ok(false) => match self.output_buffer.finish_buffered_batch() {
                 Ok(()) => {
                     self.buffered_left_data = None;
+                    self.in_memory_probe_completion = None;
                     self.state = NLJState::Done;
                     ControlFlow::Continue(())
                 }
@@ -3744,6 +3733,12 @@ impl NestedLoopJoinStream {
             .ok_or_else(|| internal_datafusion_err!("LeftData should be available"))
     }
 
+    fn get_in_memory_probe_completion(&self) -> Result<&Arc<ProbeCompletion>> {
+        self.in_memory_probe_completion.as_ref().ok_or_else(|| {
+            internal_datafusion_err!("In-memory probe completion should be available")
+        })
+    }
+
     /// Flush the `output_buffer` if there are batches ready to output
     /// None if no result batch ready.
     fn maybe_flush_ready_batch(&mut self) -> Option<Poll<Option<Result<RecordBatch>>>> {
@@ -4261,6 +4256,7 @@ fn build_unmatched_batch(
 #[cfg(test)]
 pub(crate) mod tests {
     use std::pin::Pin;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
     use super::*;
@@ -5304,7 +5300,6 @@ pub(crate) mod tests {
         let left_data = JoinLeftData::new(
             left.into(),
             Mutex::new(BooleanBufferBuilder::new(0)),
-            AtomicUsize::new(1),
             MemoryConsumer::new("test").register(ctx.memory_pool()),
         );
         let mut stream = NestedLoopJoinStream::new(
@@ -6776,10 +6771,6 @@ pub(crate) mod tests {
                 .as_ref()
                 .expect("the left side spilled"),
         );
-        assert!(
-            left_spill.probe_threads_counter.load(Ordering::Acquire) >= 1,
-            "the replaying partition has not reported"
-        );
         drop(streams.remove(replaying));
         let survivor = streams.pop().unwrap();
 
@@ -6788,13 +6779,17 @@ pub(crate) mod tests {
                 .await
                 .expect("the remaining partition stalled")?;
         // The survivor emits its own unmatched right rows, but the final left
-        // rows are not emitted
-        assert_eq!(count_final_left_rows(JoinType::Full, &batches), 0);
-        assert!(left_spill.incomplete.load(Ordering::Acquire));
-        assert_eq!(left_spill.probe_threads_counter.load(Ordering::Acquire), 0);
+        // rows are not emitted. Had the replaying partition already reported,
+        // they would be.
+        assert_eq!(
+            count_final_left_rows(JoinType::Full, &batches),
+            0,
+            "the replaying partition must not have reported before it was dropped"
+        );
         drop(left_spill);
 
-        // Nothing stays reserved, although the plan is still alive
+        // Nothing stays reserved, although the plan is still alive. The bitmap
+        // is only released once every partition has finished or gone away.
         assert_eq!(task_ctx.memory_pool().reserved(), 0);
         Ok(())
     }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ScalarUDFImpl`] definitions for array_resize function.
 
@@ -24,11 +11,8 @@ use arrow::array::{
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::DataType;
+use arrow::datatypes::DataType::{LargeList, List};
 use arrow::datatypes::Field;
-use arrow::datatypes::{
-    DataType::{LargeList, List},
-    FieldRef,
-};
 use datafusion_common::cast::{as_int64_array, as_large_list_array, as_list_array};
 use datafusion_common::utils::ListCoercion;
 use datafusion_common::{
@@ -177,13 +161,13 @@ fn array_resize_inner(arg: &[ArrayRef]) -> Result<ArrayRef> {
     };
 
     match &arg[0].data_type() {
-        List(field) => {
+        List(_) => {
             let array = as_list_array(&arg[0])?;
-            general_list_resize::<i32>(array, new_len, field, new_element)
+            general_list_resize::<i32>(array, new_len, new_element)
         }
-        LargeList(field) => {
+        LargeList(_) => {
             let array = as_large_list_array(&arg[0])?;
-            general_list_resize::<i64>(array, new_len, field, new_element)
+            general_list_resize::<i64>(array, new_len, new_element)
         }
         array_type => exec_err!("array_resize does not support type '{array_type}'."),
     }
@@ -200,7 +184,6 @@ fn resize_count(count_array: &Int64Array, idx: usize) -> Result<usize> {
 fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
     array: &GenericListArray<O>,
     count_array: &Int64Array,
-    field: &FieldRef,
     default_element: Option<ArrayRef>,
 ) -> Result<ArrayRef> {
     let data_type = array.value_type();
@@ -268,7 +251,6 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
         build_resized_list(
             array,
             count_array,
-            field,
             &original_data,
             Some(&default_value_data),
             output_values_len,
@@ -287,7 +269,6 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
         build_resized_list(
             array,
             count_array,
-            field,
             &original_data,
             default_value_data.as_ref(),
             output_values_len,
@@ -308,7 +289,6 @@ fn general_list_resize<O: OffsetSizeTrait + TryInto<i64>>(
 fn build_resized_list<O, F>(
     array: &GenericListArray<O>,
     count_array: &Int64Array,
-    field: &FieldRef,
     original_data: &arrow::array::ArrayData,
     default_value_data: Option<&arrow::array::ArrayData>,
     output_values_len: usize,
@@ -358,7 +338,7 @@ where
     let data = mutable.freeze();
 
     Ok(Arc::new(GenericListArray::<O>::try_new(
-        Arc::clone(field),
+        Arc::clone(array.value_field()),
         OffsetBuffer::<O>::new(offsets.into()),
         arrow::array::make_array(data),
         null_builder.finish(),

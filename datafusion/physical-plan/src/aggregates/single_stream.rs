@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Single-stage hash aggregation stream implementation.
 //!
@@ -30,14 +17,15 @@ use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::StreamExt;
 
 use super::aggregate_hash_table::{
-    AggregateHashTable, OrderedAggregateTableMetrics, SingleMarker,
+    AggregateHashTable, ClusteredAggregateTableMetrics, SingleMarker,
 };
+use super::order::GroupClusteringMode;
 use super::spill::AggregateSpill;
 use super::{AggregateExec, create_schema};
+use crate::SendableRecordBatchStream;
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
-use crate::{InputOrderMode, SendableRecordBatchStream};
 
 /// Hash aggregation can run the full logical aggregation in one operator. This
 /// stream implements the single stage for grouped hash aggregation.
@@ -82,7 +70,7 @@ use crate::{InputOrderMode, SendableRecordBatchStream};
 /// 3. Perform a sort-preserving merge of all spill files and feed the merged output
 ///    into an ordered streaming aggregation, which ensures bounded memory usage and
 ///    evaluates the final result.
-///    - [`OrderedFinalAggregateStream`](super::ordered_final_stream::OrderedFinalAggregateStream) is reused for the streaming aggregation.
+///    - [`ClusteredFinalAggregateStream`](super::clustered_final_stream::ClusteredFinalAggregateStream) is reused for the streaming aggregation.
 ///
 /// # Optimization: DISTINCT LIMIT Soft Limit
 ///
@@ -162,7 +150,7 @@ impl SingleHashAggregateStream {
             agg.mode,
             AggregateMode::Single | AggregateMode::SinglePartitioned
         ));
-        debug_assert_eq!(agg.input_order_mode, InputOrderMode::Linear);
+        debug_assert_eq!(agg.group_clustering_mode, GroupClusteringMode::None);
 
         let schema = Arc::clone(&agg.schema);
         let input = agg.input.execute(partition, Arc::clone(context))?;
@@ -193,7 +181,7 @@ impl SingleHashAggregateStream {
                 context,
                 partition,
                 batch_size,
-                &InputOrderMode::Linear,
+                &GroupClusteringMode::None,
                 &state_schema,
                 spill_metrics,
             )?))
@@ -398,7 +386,7 @@ impl Aggregating {
 
             // Construct the replay stream: an ordered final aggregate stream
             // over the sort-preserving merge of all spill runs.
-            let metrics = OrderedAggregateTableMetrics::from_hash_table(&hash_table);
+            let metrics = ClusteredAggregateTableMetrics::from_hash_table(&hash_table);
             drop(hash_table);
             reservation.try_resize(0)?;
             // The outer ObservedStream counts output; replay only shares compute time.

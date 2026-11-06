@@ -1,27 +1,13 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion_expr::EmitTo;
-use std::mem::size_of;
 
-/// Tracks grouping state when the data is ordered entirely by its
-/// group keys
+/// Tracks group completion when rows are contiguous for the complete
+/// grouping tuple.
 ///
-/// When the group values are sorted, as soon as we see group `n+1` we
+/// When groups are contiguous, as soon as we see group `n+1` we
 /// know we will never see any rows for group `n` again and thus they
 /// can be emitted.
 ///
@@ -55,7 +41,7 @@ use std::mem::size_of;
 /// `0..12` can be emitted. Note that `13` can not yet be emitted as
 /// there may be more values in the next batch with the same group_id.
 #[derive(Debug)]
-pub struct GroupOrderingFull {
+pub struct GroupClusteringFull {
     state: State,
 }
 
@@ -72,7 +58,7 @@ enum State {
     Complete,
 }
 
-impl GroupOrderingFull {
+impl GroupClusteringFull {
     pub fn new() -> Self {
         Self {
             state: State::Start,
@@ -115,13 +101,13 @@ impl GroupOrderingFull {
         self.state = State::Complete;
     }
 
-    /// Starts tracking a new fully ordered input segment.
+    /// Starts tracking a new input segment with contiguous groups.
     pub fn reset(&mut self) {
         self.state = State::Start;
     }
 
     /// Called when new groups are added in a batch. See documentation
-    /// on [`super::GroupOrdering::new_groups`]
+    /// on [`super::GroupClustering::new_groups`]
     pub fn new_groups(&mut self, total_num_groups: usize) {
         assert_ne!(total_num_groups, 0);
 
@@ -143,13 +129,9 @@ impl GroupOrderingFull {
             }
         };
     }
-
-    pub(crate) fn size(&self) -> usize {
-        size_of::<Self>()
-    }
 }
 
-impl Default for GroupOrderingFull {
+impl Default for GroupClusteringFull {
     fn default() -> Self {
         Self::new()
     }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Regressions for immutable preparation, task isolation and buffer ownership.
 
@@ -161,82 +148,6 @@ fn payload_filter(op: Operator) -> JoinFilter {
             Field::new("probe_payload", DataType::Int64, true),
         ])),
     )
-}
-
-#[tokio::test]
-async fn prepared_build_integer_prefilter() -> Result<()> {
-    use datafusion_execution::config::SessionConfig;
-
-    let batches = vec![
-        batch(vec![Some(0), Some(1024)]),
-        batch(vec![Some(2048), Some(3072)]),
-    ];
-    let probe = batch(vec![
-        Some(0),
-        Some(1),
-        Some(1024),
-        Some(1025),
-        Some(2048),
-        Some(2049),
-        Some(3072),
-    ]);
-    let base = join(batches[0].schema(), probe.clone())?;
-    let mut baseline_bytes = 0;
-    let mut expected = None;
-    for build_enabled in [false, true] {
-        let mut config = ConfigOptions::default();
-        config.execution.enable_join_integer_prefilter = build_enabled;
-        let prepared = base
-            .prepare_build(
-                input(batches.clone(), batches[0].schema()),
-                Arc::new(GreedyMemoryPool::new(1 << 20)),
-                Arc::new(config),
-            )
-            .await?;
-        if build_enabled {
-            let bitmap = prepared.build.integer_prefilter.as_ref().unwrap();
-            assert!(bitmap.size() > 0);
-            assert_eq!(prepared.reserved_bytes(), baseline_bytes + bitmap.size());
-        } else {
-            assert!(prepared.build.integer_prefilter.is_none());
-            baseline_bytes = prepared.reserved_bytes();
-        }
-
-        // Repeated consumers share the bitmap, but each chooses whether to use it.
-        for probe_enabled in [false, true, true] {
-            let consumer = Arc::new(
-                join(base.left().schema(), probe.clone())?
-                    .builder()
-                    .with_prepared_build(Arc::clone(&prepared))
-                    .build()?,
-            );
-            let mut config = SessionConfig::default();
-            config.options_mut().execution.enable_join_integer_prefilter = probe_enabled;
-            let context = Arc::new(TaskContext::default().with_session_config(config));
-            let output = crate::collect(Arc::clone(&consumer) as _, context).await?;
-            assert_eq!(output.iter().map(RecordBatch::num_rows).sum::<usize>(), 4);
-            let output = batches_to_sort_string(&output);
-            if let Some(expected) = &expected {
-                assert_eq!(&output, expected);
-            } else {
-                expected = Some(output);
-            }
-            let metrics = consumer.metrics().unwrap();
-            assert_eq!(
-                metrics
-                    .sum_by_name("integer_prefilter_created_count")
-                    .map_or(0, |count| count.as_usize()),
-                0,
-            );
-            assert_eq!(
-                metrics
-                    .sum_by_name("probe_prefilter_rows_pruned")
-                    .map_or(0, |count| count.as_usize()),
-                if build_enabled && probe_enabled { 3 } else { 0 },
-            );
-        }
-    }
-    Ok(())
 }
 
 #[tokio::test]

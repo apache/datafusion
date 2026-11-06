@@ -1,0 +1,11 @@
+# LEFT JOIN, null_heavy: half the streamed keys are NULL (never match), the rest as no_match.
+
+subgroup null_heavy
+
+template sql_benchmarks/pwmj/pwmj.benchmark.template
+QPAD=06
+JOIN=LEFT
+JOIN_KIND=Left
+RIGHT_ROWS=2000000
+RIGHT_KEY=CASE WHEN value % 2 = 0 THEN NULL ELSE -(h % 1000) END
+EXPECTED_ROWS=100000

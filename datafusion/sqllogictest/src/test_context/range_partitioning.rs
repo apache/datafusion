@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fs::{File, create_dir_all, remove_dir_all};
 use std::path::Path;
@@ -70,6 +57,12 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         &[(10, 1, 100)],
         &[(20, 1, 200)],
         &[(30, 1, 300), (40, 4, 400)],
+    ];
+    const COMPOSITE_RANGE_PARTITIONS: [&[(i32, i32, i32)]; 4] = [
+        &[(1, 1, 10), (10, 0, 90)],
+        &[(10, 1, 100), (10, 1, 101), (20, 0, 190)],
+        &[(20, 1, 200), (30, 0, 290)],
+        &[(30, 1, 300), (35, 2, 350)],
     ];
 
     let schema = Arc::new(Schema::new(vec![
@@ -185,6 +178,35 @@ pub(super) fn register_range_partitioned_table(ctx: &SessionContext) {
         Arc::clone(&schema),
         range_batches(&schema, SPARSE_RANGE_PARTITIONS),
         sparse_output_partitioning,
+        None,
+    );
+    let composite_partitioning = Partitioning::Range(
+        RangePartitioning::try_new(
+            vec![
+                col("range_key").sort(true, true),
+                col("non_range_key").sort(true, true),
+            ],
+            [10, 20, 30]
+                .into_iter()
+                .map(|key| {
+                    SplitPoint::new(vec![
+                        ScalarValue::Int32(Some(key)),
+                        ScalarValue::Int32(Some(1)),
+                    ])
+                })
+                .collect(),
+        )
+        .expect("composite range partitioning should be valid"),
+    );
+
+    register_parquet_listing_table(
+        ctx,
+        "range_partitioned_composite",
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_files/scratch_range_partitioning/range_partitioned_composite"),
+        Arc::clone(&schema),
+        range_batches(&schema, COMPOSITE_RANGE_PARTITIONS),
+        composite_partitioning,
         None,
     );
 
@@ -388,9 +410,8 @@ type TimeBinRow = (
 /// - partition 1: `[2024-01-01 01:00, 02:00)`
 ///
 /// Files are range-partitioned on `timestamp` and sorted on `(key, timestamp)`.
-/// Because `date_bin(60 seconds, timestamp)` does not straddle the hour split,
-/// grouping by `(key, time_bin)` is partition-disjoint. Today's planner still
-/// inserts a hash shuffle; the test pins that plan so a follow-up can remove it.
+/// The hour split permits partition-local `date_trunc('hour')` and aligned
+/// `date_bin` aggregation, but daily bins straddle it.
 pub(super) fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
     let schema = Arc::new(Schema::new(vec![
         Field::new("key", DataType::Utf8, false),
@@ -454,6 +475,61 @@ pub(super) fn register_range_sorted_time_bin_table(ctx: &SessionContext) {
             col("key").sort(true, true),
             col("timestamp").sort(true, true),
         ]]),
+    );
+}
+
+/// Registers `range_sorted_day_bin` with two timestamp ranges split at midnight.
+pub(super) fn register_range_sorted_day_bin_table(ctx: &SessionContext) {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(
+            "timestamp",
+            DataType::Timestamp(TimeUnit::Nanosecond, None),
+            false,
+        ),
+        Field::new("value", DataType::Int64, false),
+    ]));
+    let partitions = [
+        (
+            vec![time_bin_ts(23 * 60, 0), time_bin_ts(23 * 60 + 30, 0)],
+            vec![1, 2],
+        ),
+        (
+            vec![time_bin_ts(24 * 60, 0), time_bin_ts(24 * 60 + 30, 0)],
+            vec![10, 20],
+        ),
+    ];
+    let batches = partitions
+        .into_iter()
+        .map(|(timestamps, values)| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(TimestampNanosecondArray::from(timestamps)) as ArrayRef,
+                    Arc::new(Int64Array::from(values)) as ArrayRef,
+                ],
+            )
+            .expect("daily time-bin batch should be valid")
+        })
+        .collect();
+    let output_partitioning = Partitioning::Range(
+        RangePartitioning::try_new(
+            vec![col("timestamp").sort(true, true)],
+            vec![SplitPoint::new(vec![ScalarValue::TimestampNanosecond(
+                Some(time_bin_ts(24 * 60, 0)),
+                None,
+            )])],
+        )
+        .expect("daily time-bin range partitioning should be valid"),
+    );
+    register_parquet_listing_table(
+        ctx,
+        "range_sorted_day_bin",
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("test_files/scratch_range_partitioning/range_sorted_day_bin"),
+        schema,
+        batches,
+        output_partitioning,
+        Some(vec![vec![col("timestamp").sort(true, true)]]),
     );
 }
 
