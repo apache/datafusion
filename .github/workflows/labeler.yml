@@ -37,7 +37,8 @@ jobs:
           persist-credentials: false
 
       # The same branch can target `main` and a release branch, so label every
-      # match.
+      # match. These are the current pull requests, so a delayed run for an
+      # older commit still labels the latest head.
       - name: Find the pull requests
         id: pr
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0

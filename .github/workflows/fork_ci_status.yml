@@ -43,7 +43,9 @@ concurrency:
 jobs:
   bridge:
     name: Mirror the fork run
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.event == 'pull_request'
+    # A `workflow_run` needs a runner only for a pull request from a fork. The
+    # base is checked in `notify()`.
+    if: github.event_name != 'workflow_run' || (github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.head_repository.fork == true)
     runs-on: ubuntu-slim
     timeout-minutes: 10
     steps:
@@ -213,13 +215,18 @@ jobs:
             async function notify() {
               // The same branch can also target a release branch, which gets no
               // mirrored check, so look only at the pull request to `main`.
-              const [pr] = await require('./ci/scripts/pull_requests_of_run.js')({
+              const pulls = await require('./ci/scripts/pull_requests_of_run.js')({
                 github,
                 context,
                 base: 'main',
               });
+              // A run for an older commit finds nothing, and the scheduled
+              // update creates the check of the new head.
+              const pr = pulls.find(
+                (pull) => pull.head.sha === context.payload.workflow_run.head_sha
+              );
               if (!pr) {
-                core.info('No open pull request to main for this commit; nothing to mirror.');
+                core.info('No open pull request to main at this commit; nothing to mirror.');
                 return;
               }
               // Only fork PRs to main skip jobs upstream; release branches have

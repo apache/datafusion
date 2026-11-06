@@ -233,15 +233,16 @@ const lookup = async ({ openPrs, base, triggeringRun = workflowRun }) => {
   return { found: found.map((p) => p.number), calls };
 };
 
-test("lookup returns every pull request from the head commit and no stale one", async () => {
-  const stale = {
+test("lookup returns the current pull requests of the branch whatever the run's commit", async () => {
+  // A newer push moved the head of one pull request after the run started.
+  const newer = {
     ...pr,
     number: 3,
     head: { ...pr.head, sha: "b".repeat(40) },
   };
   const release = { ...pr, number: 2, base: { ref: "branch-55" } };
-  const { found, calls } = await lookup({ openPrs: [stale, release, pr] });
-  assert.deepEqual(found, [2, 1]);
+  const { found, calls } = await lookup({ openPrs: [newer, release, pr] });
+  assert.deepEqual(found, [3, 2, 1]);
   assert.deepEqual(calls, [
     {
       owner: "apache",
@@ -413,21 +414,22 @@ test("a recent active PR in the sweep slice is only polled once", async () => {
   assert.deepEqual(calls, ["checks.listForRef", "actions.listWorkflowRuns"]);
 });
 
-// The concurrency expressions use string lookups, format() and &&/||, whose
+// The workflow expressions use string lookups, format() and &&/||, whose
 // semantics match JavaScript for these non-empty strings and booleans. A
 // missing or null property is null in a GitHub expression, so read it with ?.
 // and print it as an empty string in format().
 const format = (template, ...args) =>
   template.replace(/\{(\d+)\}/g, (_, index) => args[index] ?? "");
+const evaluate = (expression, github) =>
+  new Function(
+    "github",
+    "format",
+    `return (${expression.replace(/\./g, "?.")});`
+  )(github, format);
 function concurrencyGroup(github, workflow = rustWorkflow) {
   return workflow.concurrency.group.replace(
     /\$\{\{\s*(.*?)\s*\}\}/g,
-    (_, expression) =>
-      new Function(
-        "github",
-        "format",
-        `return (${expression.replace(/\./g, "?.")});`
-      )(github, format)
+    (_, expression) => evaluate(expression, github)
   );
 }
 const forkPush = {
@@ -508,4 +510,24 @@ test("a signal run from a deleted fork does not join the group of the sweep", ()
     group(sweepRun),
     group({ ...sweepRun, event_name: "workflow_dispatch" })
   );
+});
+
+test("signal runs skip the job unless they come from a fork", () => {
+  const runs = (github) => evaluate(forkStatus.jobs.bridge.if, github);
+  const signal = (event, head_repository) => ({
+    event_name: "workflow_run",
+    event: { workflow_run: { event, head_repository } },
+  });
+  assert.equal(runs(signal("pull_request", { fork: true })), true);
+  // A branch of this repository, a deleted fork, and another triggering event.
+  assert.equal(runs(signal("pull_request", { fork: false })), false);
+  assert.equal(runs(signal("pull_request", null)), false);
+  assert.equal(runs(signal("push", { fork: true })), false);
+});
+
+test("the scheduled and manual sweeps always run the job", () => {
+  for (const event_name of ["schedule", "workflow_dispatch"]) {
+    const github = { event_name, event: {} };
+    assert.equal(evaluate(forkStatus.jobs.bridge.if, github), true);
+  }
 });

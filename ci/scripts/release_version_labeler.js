@@ -4,6 +4,10 @@
 
 // Used by the release_version_labeler workflow
 
+// A push can have many commits. Look them up this many at a time, to stay well
+// below GitHub's limit of 100 concurrent requests.
+const BATCH_SIZE = 10;
+
 // A squash merge or a merge queue commit maps to the merged pull request. The
 // pull request can lag the push by a few seconds, so retry.
 async function mergedPulls({ github, context, sha }) {
@@ -44,21 +48,44 @@ module.exports = async ({ github, context }) => {
         }
     }
 
-    // A push can include several merged pull requests. Look the commits up in
-    // parallel, so the retries of commits without one overlap.
+    // A push can include several merged pull requests. Look the commits up a
+    // batch at a time, so the retries of commits without one overlap. A failed
+    // lookup or label must not cost the other pull requests their label, so
+    // collect the errors and throw the first one after labeling.
     const pushed = (context.payload.commits || []).map((commit) => commit.id);
     const shas = pushed.length ? pushed : [context.sha];
-    const found = await Promise.all(shas.map((sha) => mergedPulls({ github, context, sha })));
-    const numbers = new Set(found.flat().map((pull) => pull.number));
-    if (numbers.size === 0) {
+    const numbers = new Set();
+    const errors = [];
+    for (let i = 0; i < shas.length; i += BATCH_SIZE) {
+        const batch = shas.slice(i, i + BATCH_SIZE);
+        const settled = await Promise.allSettled(
+            batch.map((sha) => mergedPulls({ github, context, sha }))
+        );
+        for (const result of settled) {
+            if (result.status === 'fulfilled') {
+                result.value.forEach((pull) => numbers.add(pull.number));
+            } else {
+                errors.push(result.reason);
+            }
+        }
+    }
+    if (numbers.size === 0 && errors.length === 0) {
         console.log(`No merged pull request found for ${shas.join(', ')}`);
     }
     for (const number of numbers) {
-        await github.rest.issues.addLabels({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: number,
-            labels: [target_version]
-        });
+        try {
+            await github.rest.issues.addLabels({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: number,
+                labels: [target_version]
+            });
+        } catch (error) {
+            errors.push(error);
+        }
+    }
+    if (errors.length > 0) {
+        console.log(`${errors.length} request(s) failed. The pull requests that were found are labeled.`);
+        throw errors[0];
     }
 };

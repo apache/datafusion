@@ -17,9 +17,10 @@ const pull = (
   base: { ref: base },
 });
 
-// `lookups` maps a commit to the pull requests returned on each attempt. The
-// last response repeats once the attempts run out.
-async function execute({ lookups, commits }) {
+// `lookups` maps a commit to the pull requests returned on each attempt (the
+// last response repeats once the attempts run out), or to an error to throw.
+// `failLabels` lists the pull requests that fail to get the label.
+async function run({ lookups, commits, failLabels = [] }) {
   const result = {
     listed: [],
     labeled: [],
@@ -33,8 +34,12 @@ async function execute({ lookups, commits }) {
     rest: {
       issues: {
         getLabel: async () => {},
-        addLabels: async ({ issue_number, labels }) =>
-          result.labeled.push([issue_number, labels]),
+        addLabels: async ({ issue_number, labels }) => {
+          if (failLabels.includes(issue_number)) {
+            throw new Error(`cannot label ${issue_number}`);
+          }
+          result.labeled.push([issue_number, labels]);
+        },
       },
       repos: {
         listPullRequestsAssociatedWithCommit: async ({ commit_sha }) => {
@@ -44,6 +49,9 @@ async function execute({ lookups, commits }) {
           await Promise.resolve();
           result.inFlight--;
           const responses = lookups[commit_sha];
+          if (responses instanceof Error) {
+            throw responses;
+          }
           attempts[commit_sha] = (attempts[commit_sha] || 0) + 1;
           return {
             data: responses[
@@ -65,11 +73,22 @@ async function execute({ lookups, commits }) {
     callback();
   };
   console.log = (message) => result.logs.push(message);
+  let error;
   try {
     await labeler({ github, context });
+  } catch (thrown) {
+    error = thrown;
   } finally {
     globalThis.setTimeout = realSetTimeout;
     console.log = realLog;
+  }
+  return { result, error };
+}
+
+async function execute(args) {
+  const { result, error } = await run(args);
+  if (error) {
+    throw error;
   }
   return result;
 }
@@ -142,5 +161,41 @@ test("looks up the pushed commit when the payload has no commits", async () => {
   assert.deepEqual(
     result.labeled.map(([number]) => number),
     [3]
+  );
+});
+
+test("looks up at most ten commits at a time", async () => {
+  const commits = Array.from({ length: 25 }, (_, i) => `c${i}`);
+  const lookups = Object.fromEntries(
+    commits.map((sha, i) => [sha, [[pull(i + 1)]]])
+  );
+  const result = await execute({ commits, lookups });
+  assert.equal(result.maxInFlight, 10);
+  assert.equal(result.labeled.length, 25);
+});
+
+test("labels the other pull requests when a lookup fails, then fails the run", async () => {
+  const failure = new Error("rate limited");
+  const { result, error } = await run({
+    commits: ["a", "b", "c"],
+    lookups: { a: [[pull(1)]], b: failure, c: [[pull(3)]] },
+  });
+  assert.equal(error, failure);
+  assert.deepEqual(
+    result.labeled.map(([number]) => number),
+    [1, 3]
+  );
+});
+
+test("labels the other pull requests when one label fails, then fails the run", async () => {
+  const { result, error } = await run({
+    commits: ["a", "b"],
+    lookups: { a: [[pull(1)]], b: [[pull(2)]] },
+    failLabels: [1],
+  });
+  assert.match(error.message, /cannot label 1/);
+  assert.deepEqual(
+    result.labeled.map(([number]) => number),
+    [2]
   );
 });
