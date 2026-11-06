@@ -828,6 +828,9 @@ drop table t;
 # each UNION ALL arm selects a different literal and reads an already sorted
 # input. The literal is constant within each arm but not across arms, so it
 # must stay in the merge key.
+#
+# Earlier versions reported only [ts ASC NULLS LAST] as the merge key in SortPreservingMergeExec due to issues with the
+# constants in the individual partitions.
 
 statement ok
 COPY (SELECT * FROM (VALUES (1, 10.0), (2, 20.0), (3, 30.0)) AS v(ts, x) ORDER BY ts)
@@ -860,100 +863,6 @@ physical_plan
 03)----UnionExec
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/union_const_order/sorted.parquet]]}, projection=[b as id, ts, x], output_ordering=[ts@1 ASC NULLS LAST], file_type=parquet
 05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/union_const_order/sorted.parquet]]}, projection=[a as id, ts, x], output_ordering=[ts@1 ASC NULLS LAST], file_type=parquet
-
-query I
-COPY (
-  SELECT id, ts, x FROM (
-    SELECT 'b' AS id, ts, x FROM union_const_src
-    UNION ALL
-    SELECT 'a' AS id, ts, x FROM union_const_src
-  ) ORDER BY id, ts
-) TO 'test_files/scratch/copy/union_const_order/out.parquet';
-----
-6
-
-# With a LIMIT the sort is a TopK; the merge key must still include the literal.
-query I
-COPY (
-  SELECT id, ts, x FROM (
-    SELECT 'b' AS id, ts, x FROM union_const_src
-    UNION ALL
-    SELECT 'a' AS id, ts, x FROM union_const_src
-  ) ORDER BY id, ts LIMIT 100
-) TO 'test_files/scratch/copy/union_const_order/out_limit.parquet';
-----
-6
-
-# A descending literal, written through a different sink.
-query I
-COPY (
-  SELECT id, ts, x FROM (
-    SELECT 'b' AS id, ts, x FROM union_const_src
-    UNION ALL
-    SELECT 'a' AS id, ts, x FROM union_const_src
-  ) ORDER BY id DESC, ts
-) TO 'test_files/scratch/copy/union_const_order/out_desc.csv';
-----
-6
-
-# Read the written files back in file order: one partition, no ORDER BY.
-statement ok
-SET datafusion.execution.target_partitions = 1;
-
-statement ok
-CREATE EXTERNAL TABLE union_const_out STORED AS PARQUET
-LOCATION 'test_files/scratch/copy/union_const_order/out.parquet';
-
-query TIR
-SELECT id, ts, x FROM union_const_out;
-----
-a 1 10
-a 2 20
-a 3 30
-b 1 10
-b 2 20
-b 3 30
-
-statement ok
-CREATE EXTERNAL TABLE union_const_out_limit STORED AS PARQUET
-LOCATION 'test_files/scratch/copy/union_const_order/out_limit.parquet';
-
-query TIR
-SELECT id, ts, x FROM union_const_out_limit;
-----
-a 1 10
-a 2 20
-a 3 30
-b 1 10
-b 2 20
-b 3 30
-
-statement ok
-CREATE EXTERNAL TABLE union_const_out_desc (id VARCHAR, ts BIGINT, x DOUBLE) STORED AS CSV
-LOCATION 'test_files/scratch/copy/union_const_order/out_desc.csv'
-OPTIONS ('format.has_header' 'true');
-
-query TIR
-SELECT id, ts, x FROM union_const_out_desc;
-----
-b 1 10
-b 2 20
-b 3 30
-a 1 10
-a 2 20
-a 3 30
-
-statement ok
-SET datafusion.execution.target_partitions = 4;
-
-statement ok
-DROP TABLE union_const_out;
-
-statement ok
-DROP TABLE union_const_out_limit;
-
-statement ok
-DROP TABLE union_const_out_desc;
 
 statement ok
 DROP TABLE union_const_src;

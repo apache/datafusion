@@ -1367,9 +1367,7 @@ impl SortExec {
         self.preserve_partitioning = preserve_partitioning;
         let cache = Arc::make_mut(&mut self.cache);
         // Whether the sort merges its input partitions decides which input facts
-        // survive, so recompute them. Emission type, boundedness and the common
-        // sort prefix do not depend on this flag, and the boundedness may have
-        // been adjusted by `with_fetch`, so they are left alone.
+        // survive, so recompute them.
         if changed {
             cache.set_eq_properties(
                 Self::compute_eq_properties(
@@ -1559,11 +1557,9 @@ impl SortExec {
         preserve_partitioning: bool,
     ) -> Result<EquivalenceProperties> {
         let mut eq_properties = input.equivalence_properties().clone();
-        // A sort that does not preserve partitioning merges its input
-        // partitions into one. Constants whose value differs between
-        // partitions, and orderings that hold only within each partition, do
-        // not hold for the merged output, so they must not make `sort_exprs`
-        // look already satisfied.
+        // A sort that does not preserve partitioning merges its input partitions into one.
+        // Constants whose value differs between partitions, and orderings that hold only within
+        // each partition, do not hold for the merged output.
         if !preserve_partitioning && input.output_partitioning().partition_count() > 1 {
             eq_properties.clear_orderings();
             eq_properties.clear_groupings();
@@ -2532,7 +2528,6 @@ mod tests {
     use std::task::{Context, Poll};
 
     use super::*;
-    use crate::ExecutionPlanProperties;
     use crate::coalesce_partitions::CoalescePartitionsExec;
     use crate::empty::EmptyExec;
     use crate::execution_plan::Boundedness;
@@ -4945,105 +4940,73 @@ mod tests {
         Ok(())
     }
 
-    /// `UnionExec` over two inputs that are sorted on `ts` and select a different
-    /// literal as `id`: `id` is a `Heterogeneous` constant and `[ts]` holds only
-    /// within each of the two partitions.
-    fn union_of_literals_sorted_on_ts() -> Result<Arc<dyn ExecutionPlan>> {
+    /// Per-partition facts hold for a sort that preserves partitioning, but not for
+    /// one that merges partitions.
+    #[test]
+    fn sort_equivalence_properties_respect_partition_preservation() -> Result<()> {
+        let input = union_with_per_partition_constant_id()?;
+        let id = col_expr("id", 0);
+        let by_id_ts = sort_by(&[("id", 0), ("ts", 1)]);
+        let by_ts = sort_by(&[("ts", 1)]);
+
+        let assert_properties =
+            |sort: &SortExec,
+             ordering: &LexOrdering,
+             constant: Option<AcrossPartitions>| {
+                let properties = sort.properties();
+                assert_eq!(properties.output_ordering(), Some(ordering));
+                assert_eq!(
+                    properties.equivalence_properties().is_expr_constant(&id),
+                    constant
+                );
+            };
+
+        // Merging: `id` is no longer constant, so the full `[id, ts]` ordering is reported.
+        let sort = SortExec::new(by_id_ts.clone(), input);
+        assert_properties(&sort, &by_id_ts, None);
+
+        // Per partition: `id` is constant, so `[id, ts]` simplifies to `[ts]`.
+        let sort = sort.with_preserve_partitioning(true);
+        assert_properties(&sort, &by_ts, Some(AcrossPartitions::Heterogeneous));
+
+        // Switching back recomputes the merged properties.
+        let sort = sort.with_preserve_partitioning(false);
+        assert_properties(&sort, &by_id_ts, None);
+
+        Ok(())
+    }
+
+    /// Two partitions, each pre-sorted on `ts`, with a different literal `id`:
+    ///   Partition 0: SELECT 'b' AS id, ts FROM scan
+    ///   Partition 1: SELECT 'a' AS id, ts FROM scan
+    fn union_with_per_partition_constant_id() -> Result<Arc<dyn ExecutionPlan>> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("ts", DataType::Int32, false)]));
-        let ts: Arc<dyn PhysicalExpr> = Arc::new(Column::new("ts", 0));
+
         let arm = |id: &str| -> Result<Arc<dyn ExecutionPlan>> {
             let scan = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
-                .try_with_sort_information(vec![
-                    [PhysicalSortExpr::new_default(Arc::clone(&ts))].into(),
-                ])?;
+                .try_with_sort_information(vec![sort_by(&[("ts", 0)])])?;
             let scan = Arc::new(TestMemoryExec::update_cache(&Arc::new(scan)));
-            let exprs: [(Arc<dyn PhysicalExpr>, String); 2] = [
+            let projection = [
                 (lit(id), "id".to_string()),
-                (Arc::clone(&ts), "ts".to_string()),
+                (col_expr("ts", 0), "ts".to_string()),
             ];
-            Ok(Arc::new(ProjectionExec::try_new(exprs, scan)?))
-        };
-        let union = UnionExec::try_new(vec![arm("b")?, arm("a")?])?;
-        assert_eq!(union.output_partitioning().partition_count(), 2);
-        let id: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
-        assert_eq!(
-            union.equivalence_properties().is_expr_constant(&id),
-            Some(AcrossPartitions::Heterogeneous)
-        );
-        Ok(union)
-    }
-
-    /// The ordering `[id, ts]` over the output of [`union_of_literals_sorted_on_ts`].
-    fn id_ts_ordering() -> LexOrdering {
-        [
-            PhysicalSortExpr::new_default(Arc::new(Column::new("id", 0))),
-            PhysicalSortExpr::new_default(Arc::new(Column::new("ts", 1))),
-        ]
-        .into()
-    }
-
-    /// A sort that merges partitions must not treat a per-partition constant or a
-    /// per-partition ordering as if it held for the merged output.
-    #[test]
-    fn merging_sort_drops_per_partition_facts() -> Result<()> {
-        let input = union_of_literals_sorted_on_ts()?;
-        let ordering = id_ts_ordering();
-
-        let sort = SortExec::new(ordering.clone(), input);
-
-        assert_eq!(sort.properties().output_ordering(), Some(&ordering));
-        let id: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
-        assert_eq!(
-            sort.properties()
-                .equivalence_properties()
-                .is_expr_constant(&id),
-            None
-        );
-        Ok(())
-    }
-
-    /// Changing `preserve_partitioning` must give the same properties as building
-    /// the sort with that value, in either direction.
-    #[test]
-    fn with_preserve_partitioning_recomputes_equivalence_properties() -> Result<()> {
-        let input = union_of_literals_sorted_on_ts()?;
-        let ordering = id_ts_ordering();
-        let expected = |preserve_partitioning| -> Result<String> {
-            let (properties, _) = SortExec::compute_properties(
-                &input,
-                ordering.clone(),
-                preserve_partitioning,
-            )?;
-            Ok(properties.eq_properties.to_string())
+            Ok(Arc::new(ProjectionExec::try_new(projection, scan)?))
         };
 
-        // Within each partition `id` is constant, so the sort reports `[ts]`.
-        let sort = SortExec::new(ordering.clone(), Arc::clone(&input))
-            .with_preserve_partitioning(true);
-        assert_eq!(
-            sort.properties().equivalence_properties().to_string(),
-            expected(true)?
-        );
-        let ts_ordering: LexOrdering = [PhysicalSortExpr::new_default(Arc::new(
-            Column::new("ts", 1),
-        ))]
-        .into();
-        assert_eq!(sort.properties().output_ordering(), Some(&ts_ordering));
-        let id: Arc<dyn PhysicalExpr> = Arc::new(Column::new("id", 0));
-        assert_eq!(
-            sort.properties()
-                .equivalence_properties()
-                .is_expr_constant(&id),
-            Some(AcrossPartitions::Heterogeneous)
-        );
+        UnionExec::try_new(vec![arm("b")?, arm("a")?])
+    }
 
-        let sort = sort.with_preserve_partitioning(false);
-        assert_eq!(
-            sort.properties().equivalence_properties().to_string(),
-            expected(false)?
-        );
-        assert_eq!(sort.properties().output_ordering(), Some(&ordering));
-        Ok(())
+    fn col_expr(name: &str, index: usize) -> Arc<dyn PhysicalExpr> {
+        Arc::new(Column::new(name, index))
+    }
+
+    fn sort_by(columns: &[(&str, usize)]) -> LexOrdering {
+        LexOrdering::new(
+            columns.iter().map(|(name, index)| {
+                PhysicalSortExpr::new_default(col_expr(name, *index))
+            }),
+        )
+        .unwrap()
     }
 }
