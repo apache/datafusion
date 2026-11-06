@@ -7,7 +7,9 @@
 Run with: python3 -m unittest discover -s datafusion/spark/scripts
 """
 
+import contextlib
 import datetime
+import io
 import sys
 import tempfile
 import unittest
@@ -305,7 +307,61 @@ class RunRecordTest(unittest.TestCase):
     def test_session_died(self):
         died = type("Py4JNetworkError", (Exception,), {})("Answer from Java side is empty")
         self.assertTrue(r._session_died(died))
+        self.assertTrue(r._session_died(ConnectionRefusedError(61, "Connection refused")))
         self.assertFalse(r._session_died(ValueError("bug")))
+
+    def test_out_of_memory_is_skipped(self):
+        error = r.SparkError("memory", "Spark ran out of memory")
+        outcome = self.outcome("query error .*\nSELECT stack(2000000000, 1)\n", error)
+        self.assertEqual((outcome.status, outcome.detail), ("skip", "Spark ran out of memory"))
+
+
+class DyingRunner(FakeRunner):
+    """A fake session whose JVM dies when it runs `SELECT die`."""
+
+    version = "4.2.0"
+
+    def __init__(self):
+        super().__init__((FakeSchema("IntegerType"), [(1,)]))
+        self.dead = False
+        self.restarts = 0
+
+    def reset(self):
+        if self.dead:
+            raise ConnectionRefusedError(61, "Connection refused")
+
+    def restart(self):
+        self.dead = False
+        self.restarts += 1
+
+    def run(self, sql):
+        if self.dead or sql == "SELECT die":
+            self.dead = True
+            raise type("Py4JNetworkError", (Exception,), {})("Answer from Java side is empty")
+        return super().run(sql)
+
+
+class RunFilesTest(unittest.TestCase):
+    def test_new_session_after_the_jvm_dies(self):
+        with tempfile.TemporaryDirectory() as d:
+            first, second = Path(d, "a.slt"), Path(d, "b.slt")
+            query = "query I\nSELECT {}\n----\n1\n\n"
+            first.write_text(query.format(1) + query.format("die") + query.format(1))
+            second.write_text(query.format(1))
+            runner = DyingRunner()
+            with contextlib.redirect_stdout(io.StringIO()) as out:
+                statuses, reasons, stopped = r.run_files(runner, [first, second])
+        self.assertIsNone(stopped)
+        self.assertEqual(runner.restarts, 1)
+        self.assertEqual(statuses["pass"], 2)
+        self.assertEqual(
+            reasons,
+            {
+                "the Spark session died while running it": 1,
+                "the Spark session died earlier in the file": 1,
+            },
+        )
+        self.assertIn("a.slt:6: the Spark session died", out.getvalue())
 
 
 if __name__ == "__main__":

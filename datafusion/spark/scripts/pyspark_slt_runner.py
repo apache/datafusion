@@ -693,7 +693,6 @@ class SparkRunner:
         install = f"pip install -r {SCRIPT_DIR / 'requirements.txt'}"
         try:
             import pyspark
-            from pyspark.sql import SparkSession
         except ImportError:
             raise SystemExit(f"error: PySpark is not installed. Install it with `{install}`.")
 
@@ -702,21 +701,47 @@ class SparkRunner:
                 f"error: this runner needs PySpark {SPARK_VERSION}, found "
                 f"{pyspark.__version__}. Install it with `{install}`."
             )
+        self._start()
+
+    def _start(self) -> None:
+        from pyspark.sql import SparkSession
+
         builder = (
             SparkSession.builder.master("local[1]")
             .appName("datafusion-pyspark-slt-runner")
             .config("spark.ui.enabled", "false")
+            .config("spark.ui.showConsoleProgress", "false")
             .config("spark.driver.host", "127.0.0.1")
             .config("spark.driver.bindAddress", "127.0.0.1")
             .config("spark.sql.shuffle.partitions", "1")
             .config("spark.sql.warehouse.dir", tempfile.mkdtemp(prefix="pyspark-slt-"))
+            # Spark logs every failed query; the runner reports them instead.
+            .config("spark.log.level", "FATAL")
         )
         for key, value in SPARK_DEFAULTS.items():
             builder = builder.config(key, value)
         self.spark = builder.getOrCreate()
-        self.spark.sparkContext.setLogLevel("ERROR")
+        self.spark.sparkContext.setLogLevel("FATAL")
         self.version = self.spark.version
         self.time_zone = SPARK_DEFAULTS["spark.sql.session.timeZone"]
+
+    def restart(self) -> None:
+        """Start a new session after the JVM died, for example of an OutOfMemoryError."""
+        from pyspark import SparkContext
+        from pyspark.sql import SparkSession
+
+        try:
+            self.spark.stop()
+        except Exception:
+            pass
+        # PySpark keeps the dead gateway and session in class attributes, and
+        # would reuse them instead of launching a new JVM.
+        SparkContext._gateway = None
+        SparkContext._jvm = None
+        SparkContext._active_spark_context = None
+        SparkSession._instantiatedSession = None
+        SparkSession._activeSession = None
+        self._start()
 
     def reset(self) -> None:
         for key, value in SPARK_DEFAULTS.items():
@@ -746,6 +771,8 @@ class SparkRunner:
         except ParseException as e:
             raise SparkError("parse", f"Spark cannot parse it ({_condition(e)})")
         except PySparkException as e:
+            if "OutOfMemoryError" in str(e):
+                raise SparkError("memory", "Spark ran out of memory")
             condition = _condition(e)
             if condition == "UNRESOLVED_ROUTINE":
                 name = _parameter(e, "routineName") or "?"
@@ -755,7 +782,10 @@ class SparkRunner:
             message = str(e).strip().split("\n")[0]
             raise SparkError("error", message)
         except Py4JJavaError as e:
-            raise SparkError("error", str(e.java_exception).strip().split("\n")[0])
+            message = str(e.java_exception)
+            if "OutOfMemoryError" in message:
+                raise SparkError("memory", "Spark ran out of memory")
+            raise SparkError("error", message.strip().split("\n")[0])
 
 
 def _condition(e) -> Optional[str]:
@@ -930,35 +960,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     sys.stdout.reconfigure(line_buffering=True)
     runner = SparkRunner()
     print(f"Running {len(files)} file(s) on Spark {runner.version}\n")
-    statuses: Counter = Counter()
-    skip_reasons: Counter = Counter()
-    stopped = None
-    for path in files:
-        try:
-            runner.reset()
-        except Exception as e:
-            stopped = f"the Spark session failed before {_display_path(path)}: {e}"
-            break
-        for record in parse_slt(path):
-            try:
-                outcome = run_record(runner, record)
-            except Exception as e:
-                if _session_died(e):
-                    location = f"{_display_path(record.path)}:{record.line}"
-                    stopped = f"the Spark session died while running {location}: {e}"
-                    break
-                # A bug in this runner must never look like Spark behavior.
-                detail = traceback.format_exc(limit=1).strip().split("\n")[-1]
-                outcome = Outcome(record, "runner-error", detail)
-            statuses[outcome.status] += 1
-            if outcome.status == "skip":
-                skip_reasons[outcome.detail] += 1
-            if outcome.status in DIVERGENT:
-                print(report(outcome, runner.version) + "\n")
-            elif args.verbose:
-                print(report(outcome, runner.version))
-        if stopped:
-            break
+    statuses, skip_reasons, stopped = run_files(runner, files, args.verbose)
 
     total = sum(statuses.values())
     print(f"Spark {runner.version}: {total} records in {len(files)} file(s)")
@@ -977,10 +979,75 @@ def main(argv: Optional[list[str]] = None) -> int:
     return 1 if any(statuses[s] for s in DIVERGENT) else 0
 
 
-def _session_died(e: Exception) -> bool:
+# A run gives up after the Spark session dies this many times.
+MAX_RESTARTS = 5
+
+
+def run_files(runner, files: list[Path], verbose: bool = False):
+    """Run every record in `files`, printing each difference.
+
+    Returns (statuses, skip_reasons, stopped). `stopped` says why the run ended
+    early, or is None.
+    """
+    statuses: Counter = Counter()
+    skip_reasons: Counter = Counter()
+    restarts = 0
+    for path in files:
+        try:
+            runner.reset()
+        except Exception as e:
+            if not _session_died(e) or restarts == MAX_RESTARTS:
+                return statuses, skip_reasons, f"the Spark session failed before {_display_path(path)}: {e}"
+            # The JVM died, usually of an OutOfMemoryError in the previous file.
+            restarts += 1
+            print(f"Starting a new Spark session before {_display_path(path)}\n")
+            try:
+                runner.restart()
+                runner.reset()
+            except Exception as e:
+                return statuses, skip_reasons, f"a new Spark session failed to start: {e}"
+        died = False
+        for record in parse_slt(path):
+            if died:
+                # The new session would not have this file's views and settings.
+                outcome = Outcome(record, "skip", "the Spark session died earlier in the file")
+            else:
+                try:
+                    outcome = run_record(runner, record)
+                except Exception as e:
+                    if _session_died(e):
+                        died = True
+                        location = f"{_display_path(record.path)}:{record.line}"
+                        print(f"{location}: the Spark session died, skipping the rest of the file\n")
+                        outcome = Outcome(record, "skip", "the Spark session died while running it")
+                    else:
+                        # A bug in this runner must never look like Spark behavior.
+                        detail = traceback.format_exc(limit=1).strip().split("\n")[-1]
+                        outcome = Outcome(record, "runner-error", detail)
+            statuses[outcome.status] += 1
+            if outcome.status == "skip":
+                skip_reasons[outcome.detail] += 1
+            if outcome.status in DIVERGENT:
+                print(report(outcome, runner.version) + "\n")
+            elif verbose:
+                print(report(outcome, runner.version))
+    return statuses, skip_reasons, None
+
+
+def _session_died(e: BaseException) -> bool:
     """True if the error means the connection to the Spark JVM is gone."""
-    names = {type(c).__name__ for c in (e, e.__cause__, e.__context__) if c is not None}
-    return bool(names & {"Py4JNetworkError", "ConnectionRefusedError", "ConnectionResetError"})
+    chain = [c for c in (e, e.__cause__, e.__context__) if c is not None]
+    names = {type(c).__name__ for c in chain}
+    if names & {"Py4JNetworkError", "ConnectionRefusedError", "ConnectionResetError", "BrokenPipeError"}:
+        return True
+    messages = []
+    for c in chain:
+        try:
+            messages.append(str(c))
+        except Exception:
+            pass
+    text = " ".join(messages)
+    return "Answer from Java side is empty" in text or "Error while sending or receiving" in text
 
 
 if __name__ == "__main__":

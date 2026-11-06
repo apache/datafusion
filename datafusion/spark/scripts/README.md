@@ -48,21 +48,27 @@ From the repository root:
 Each difference is printed with its `file:line`, the query, the expected result
 and Spark's result. A summary of every outcome and the most common reasons for
 skipping comes at the end. The runner exits with status 1 if it found any
-differences, and with status 2 if the Spark session died before the end.
+differences, and with status 2 if it stopped early because Spark failed.
 
-| Outcome                                             | Meaning                                                                                                                                                                              |
-| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| results differ                                      | Spark returns different rows                                                                                                                                                         |
-| Spark raises an error                               | The file expects a result, but Spark raises an error                                                                                                                                 |
-| DataFusion expects an error, Spark returns a result | The file expects an error, but Spark does not raise one                                                                                                                              |
-| results match, column types differ                  | The rows match, but a column's type letter (`I`, `R`, `T`, ...) does not                                                                                                             |
-| same numbers, printed with a different scale        | For example `7` and `7.0`, usually a `DOUBLE` in one engine and a `DECIMAL` in the other. Spark reads a literal such as `1.5` as a `DECIMAL`, and DataFusion reads it as a `DOUBLE`. |
-| results differ only in floating-point digits        | The values differ by a relative error below 1e-12                                                                                                                                    |
-| same rows in a different order                      | Usually a query with no `ORDER BY`                                                                                                                                                   |
-| the runner failed                                   | A bug in this runner, not Spark behavior                                                                                                                                             |
+| Outcome                                             | Meaning                                                                  |
+| --------------------------------------------------- | ------------------------------------------------------------------------ |
+| results differ                                      | Spark returns different rows                                             |
+| Spark raises an error                               | The file expects a result, but Spark raises an error                     |
+| DataFusion expects an error, Spark returns a result | The file expects an error, but Spark does not raise one                  |
+| results match, column types differ                  | The rows match, but a column's type letter (`I`, `R`, `T`, ...) does not |
+| same numbers, printed with a different scale        | For example `7` and `7.0`, usually a `DOUBLE` against a `DECIMAL`        |
+| results differ only in floating-point digits        | The values differ by a relative error below 1e-12                        |
+| same rows in a different order                      | Usually a query with no `ORDER BY`                                       |
+| the runner failed                                   | A bug in this runner, not Spark behavior                                 |
+
+Spark reads a literal such as `1.5` as a `DECIMAL` and DataFusion reads it as a
+`DOUBLE`, which explains many of the scale differences.
 
 The runner collects at most 1000 rows per query, because some tests expect an
-error from a query that Spark answers with billions of rows.
+error from a query that Spark answers with billions of rows. Such a query can
+still exhaust Spark's memory, because `stack(2000000000, 1)` builds all of its
+rows at once. When the Spark session dies, the runner skips the rest of that
+file and starts a new session for the next one.
 
 ## How queries are run
 
