@@ -70,7 +70,11 @@ impl FileScanConfig {
         let mut new_config = self.clone();
 
         // Reverse file order (within each group) if the caller is requesting a reversal of this
-        // scan's declared output ordering.
+        // scan's declared output ordering. An exact source reads every file
+        // back to front, so for it the request only has to be satisfied by
+        // the reversed ordering under the scan's equivalences (constants from
+        // filters, monotonic functions, non-nullable columns), not be its
+        // literal reverse.
         let reverse_file_groups = if self.output_ordering.is_empty() {
             false
         } else if let Some(requested) = LexOrdering::new(order.iter().cloned()) {
@@ -79,20 +83,13 @@ impl FileScanConfig {
             orderings
                 .iter()
                 .any(|ordering| ordering.is_reverse(&requested))
+                || (is_exact && self.reverse_scan_satisfies(order)?)
         } else {
             false
         };
 
         if reverse_file_groups {
-            new_config.file_groups = new_config
-                .file_groups
-                .into_iter()
-                .map(|group| {
-                    let mut files = group.into_inner();
-                    files.reverse();
-                    files.into()
-                })
-                .collect();
+            new_config.file_groups = reversed_file_groups(new_config.file_groups);
         }
 
         new_config.file_source = new_file_source;
@@ -104,13 +101,7 @@ impl FileScanConfig {
         // if the ordering does not hold, clear it and the caller falls
         // back to `Inexact`, which keeps the `SortExec`.
         if reverse_file_groups && is_exact {
-            new_config.output_ordering = self
-                .output_ordering
-                .iter()
-                .filter_map(|ordering| {
-                    LexOrdering::new(ordering.iter().map(|expr| expr.reverse()))
-                })
-                .collect();
+            new_config.output_ordering = reversed_orderings(&self.output_ordering);
             if !new_config
                 .eq_properties()
                 .ordering_satisfy(order.iter().cloned())?
@@ -230,6 +221,71 @@ impl FileScanConfig {
         Ok(new_config)
     }
 
+    /// Finishes a pushdown whose source result is `Inexact`, or an `Exact`
+    /// one the scan could not keep: reorders files by statistics and upgrades
+    /// to `Exact` when the reordered files make the declared ordering hold.
+    pub(crate) fn inexact_pushdown(
+        &self,
+        new_file_source: Arc<dyn FileSource>,
+        order: &[PhysicalSortExpr],
+    ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        let mut config = self.rebuild_with_source(new_file_source, false, order)?;
+
+        // `rebuild_with_source` reorders files by stats; if the
+        // post-sort files are non-overlapping AND the request now
+        // validates against the new file groups, `output_ordering`
+        // is preserved and we can upgrade back to Exact. This
+        // restores the sort-elimination behaviour that lived in
+        // the `Unsupported` → `try_sort_file_groups_by_statistics`
+        // path before #21956 routed `column_in_file_schema` cases
+        // here.
+        if config.output_ordering.is_empty() {
+            return Ok(SortOrderPushdownResult::Inexact {
+                inner: Arc::new(config),
+            });
+        }
+        // Upgrading to Exact: the post-sort file groups are
+        // non-overlapping and each file's declared ordering
+        // re-validates, so reading the files in their natural
+        // (declared-sorted) order already yields the requested
+        // ordering — exactly like the `Unsupported` → Exact path,
+        // which reads files in natural order too.
+        //
+        // Drop the runtime row-group reorder hints the Inexact
+        // source carried (`sort_order_for_reorder` /
+        // `reverse_row_groups`) by restoring the original,
+        // hint-free source. With the `SortExec` removed those
+        // hints are not just redundant but unsafe: for a DESC
+        // request the opener sorts row groups ASC-by-min and then
+        // reverses them, which reorders two row groups within a
+        // single file that share the same `min` incorrectly
+        // (e.g. a file `[10,8,8,8]` whose row groups are
+        // `[10,8]` and `[8,8]` would stream as `8,8,10,8`).
+        // The `SortExec` used to mask this; once it is gone the
+        // reordered stream is the final, wrong answer.
+        config.file_source = Arc::clone(&self.file_source);
+        Ok(SortOrderPushdownResult::Exact {
+            inner: Arc::new(config),
+        })
+    }
+
+    /// Whether only a back-to-front read of this scan satisfies `order`: the
+    /// declared orderings do not, but their reverse does.
+    fn reverse_scan_satisfies(&self, order: &[PhysicalSortExpr]) -> Result<bool> {
+        if self
+            .eq_properties()
+            .ordering_satisfy(order.iter().cloned())?
+        {
+            return Ok(false);
+        }
+        let mut reversed = self.clone();
+        reversed.file_groups = reversed_file_groups(reversed.file_groups);
+        reversed.output_ordering = reversed_orderings(&self.output_ordering);
+        reversed
+            .eq_properties()
+            .ordering_satisfy(order.iter().cloned())
+    }
+
     /// Last-resort optimization when FileSource returns `Unsupported`.
     ///
     /// FileSource may return `Unsupported` because `eq_properties` had no
@@ -314,6 +370,28 @@ impl FileScanConfig {
             inner: Arc::new(new_config),
         })
     }
+}
+
+/// Returns `file_groups` with the files of each group in reverse order.
+fn reversed_file_groups(file_groups: Vec<FileGroup>) -> Vec<FileGroup> {
+    file_groups
+        .into_iter()
+        .map(|group| {
+            let mut files = group.into_inner();
+            files.reverse();
+            files.into()
+        })
+        .collect()
+}
+
+/// Returns `orderings` with every sort expression reversed.
+fn reversed_orderings(orderings: &[LexOrdering]) -> Vec<LexOrdering> {
+    orderings
+        .iter()
+        .filter_map(|ordering| {
+            LexOrdering::new(ordering.iter().map(|expr| expr.reverse()))
+        })
+        .collect()
 }
 
 /// Sort files within each file group by their min/max statistics.

@@ -51,7 +51,7 @@ use datafusion_physical_plan::execution_plan::SchedulingType;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType,
     display::{ProjectSchemaDisplay, display_orderings},
-    filter_pushdown::FilterPushdownPropagation,
+    filter_pushdown::{FilterPushdownPropagation, PushedDown},
     metrics::ExecutionPlanMetricsSet,
 };
 use log::{debug, warn};
@@ -1077,6 +1077,15 @@ impl DataSource for FileScanConfig {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
+        // The scan applies its limit after any filter it holds, so a filter
+        // from above the limit would let through rows the limit should have
+        // cut.
+        if self.limit.is_some() {
+            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
+                vec![PushedDown::No; filters.len()],
+            ));
+        }
+
         // Remap filter Column indices to match the table schema (file + partition columns).
         // This is necessary because filters refer to the output schema of this `DataSource`
         // (e.g., after projection pushdown has been applied) and need to be remapped to the table schema
@@ -1144,6 +1153,8 @@ impl DataSource for FileScanConfig {
     ///   │     (natural ordering satisfies request)
     ///   │     → rebuild_with_source: sort files by stats, verify non-overlapping
     ///   │     → SortExec removed, fetch (LIMIT) pushed to DataSourceExec
+    ///   │     → if the ordering cannot be kept, continue as for Inexact
+    ///   │       with the original source
     ///   │
     ///   ├─► FileSource returns Inexact
     ///   │     (e.g. column_in_file_schema: opener will reorder RGs at runtime)
@@ -1166,6 +1177,12 @@ impl DataSource for FileScanConfig {
         &self,
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
+        // Reordering the files or rows of a scan changes which rows its limit
+        // keeps.
+        if self.limit.is_some() {
+            return Ok(SortOrderPushdownResult::Unsupported);
+        }
+
         let pushdown_result = self
             .file_source
             .try_pushdown_sort(order, &self.eq_properties())?;
@@ -1176,54 +1193,19 @@ impl DataSource for FileScanConfig {
                 // rebuild_with_source keeps output_ordering only when all groups
                 // are non-overlapping. If output_ordering was cleared, files
                 // overlap despite within-file ordering → downgrade to Inexact.
-                if config.output_ordering.is_empty() {
-                    Ok(SortOrderPushdownResult::Inexact {
-                        inner: Arc::new(config),
-                    })
-                } else {
-                    Ok(SortOrderPushdownResult::Exact {
-                        inner: Arc::new(config),
-                    })
-                }
-            }
-            SortOrderPushdownResult::Inexact { inner } => {
-                let mut config = self.rebuild_with_source(inner, false, order)?;
-                // `rebuild_with_source` reorders files by stats; if the
-                // post-sort files are non-overlapping AND the request now
-                // validates against the new file groups, `output_ordering`
-                // is preserved and we can upgrade back to Exact. This
-                // restores the sort-elimination behaviour that lived in
-                // the `Unsupported` → `try_sort_file_groups_by_statistics`
-                // path before #21956 routed `column_in_file_schema` cases
-                // here.
-                if config.output_ordering.is_empty() {
-                    return Ok(SortOrderPushdownResult::Inexact {
+                if !config.output_ordering.is_empty() {
+                    return Ok(SortOrderPushdownResult::Exact {
                         inner: Arc::new(config),
                     });
                 }
-                // Upgrading to Exact: the post-sort file groups are
-                // non-overlapping and each file's declared ordering
-                // re-validates, so reading the files in their natural
-                // (declared-sorted) order already yields the requested
-                // ordering — exactly like the `Unsupported` → Exact path,
-                // which reads files in natural order too.
-                //
-                // Drop the runtime row-group reorder hints the Inexact
-                // source carried (`sort_order_for_reorder` /
-                // `reverse_row_groups`) by restoring the original,
-                // hint-free source. With the `SortExec` removed those
-                // hints are not just redundant but unsafe: for a DESC
-                // request the opener sorts row groups ASC-by-min and then
-                // reverses them, which reorders two row groups within a
-                // single file that share the same `min` incorrectly
-                // (e.g. a file `[10,8,8,8]` whose row groups are
-                // `[10,8]` and `[8,8]` would stream as `8,8,10,8`).
-                // The `SortExec` used to mask this; once it is gone the
-                // reordered stream is the final, wrong answer.
-                config.file_source = Arc::clone(&self.file_source);
-                Ok(SortOrderPushdownResult::Exact {
-                    inner: Arc::new(config),
-                })
+                // An exact source may read rows back to front, which only pays
+                // off when the scan replaces the sort. With the sort kept, fall
+                // back to the source as it was, so no buffering is left under
+                // it.
+                self.inexact_pushdown(Arc::clone(&self.file_source), order)
+            }
+            SortOrderPushdownResult::Inexact { inner } => {
+                self.inexact_pushdown(inner, order)
             }
             SortOrderPushdownResult::Unsupported => {
                 self.try_sort_file_groups_by_statistics(order)
@@ -3551,6 +3533,8 @@ mod tests {
     struct ExactSortPushdownSource {
         metrics: ExecutionPlanMetricsSet,
         table_schema: TableSchema,
+        /// Whether this is the source returned by `try_pushdown_sort`.
+        pushed: bool,
     }
 
     impl ExactSortPushdownSource {
@@ -3558,6 +3542,7 @@ mod tests {
             Self {
                 metrics: ExecutionPlanMetricsSet::new(),
                 table_schema,
+                pushed: false,
             }
         }
     }
@@ -3585,7 +3570,11 @@ mod tests {
         }
 
         fn file_type(&self) -> &str {
-            "mock_exact"
+            if self.pushed {
+                "mock_exact_pushed"
+            } else {
+                "mock_exact"
+            }
         }
 
         fn try_pushdown_sort(
@@ -3593,8 +3582,10 @@ mod tests {
             _order: &[PhysicalSortExpr],
             _eq_properties: &EquivalenceProperties,
         ) -> Result<SortOrderPushdownResult<Arc<dyn FileSource>>> {
+            let mut pushed = self.clone();
+            pushed.pushed = true;
             Ok(SortOrderPushdownResult::Exact {
-                inner: Arc::new(self.clone()) as Arc<dyn FileSource>,
+                inner: Arc::new(pushed) as Arc<dyn FileSource>,
             })
         }
 
@@ -3812,18 +3803,19 @@ mod tests {
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
         assert!(pushed_config.output_ordering.is_empty());
+        // The sort stays, so the scan keeps the source it had rather than the
+        // one that would read every file back to front under it.
+        assert_eq!(pushed_config.file_source.file_type(), "mock_exact");
         Ok(())
     }
 
-    /// A source can be `Exact` for a request that only its equivalence
-    /// reasoning recognises as the reverse of the declared ordering, here
+    /// A source can be `Exact` for a request that only equivalence reasoning
+    /// recognises as the reverse of the declared ordering, here
     /// `a DESC NULLS LAST` on a non-nullable `a` declared `a ASC NULLS LAST`.
-    /// `FileScanConfig` compares the orderings literally, so it sorts the
-    /// files by statistics instead of taking its reverse path, and the
-    /// forward ordering it would keep no longer describes the scan: the
-    /// claim is downgraded to `Inexact` and the sort is kept.
+    /// The scan reverses its files and orderings for it just as for a literal
+    /// reverse.
     #[test]
-    fn sort_pushdown_exact_without_file_reversal_downgraded_to_inexact() -> Result<()> {
+    fn sort_pushdown_exact_reverse_by_equivalence() -> Result<()> {
         let file_schema =
             Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
         let table_schema = TableSchema::from(&file_schema);
@@ -3841,7 +3833,7 @@ mod tests {
             FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
                 .with_file_groups(file_groups)
                 .with_output_ordering(vec![
-                    LexOrdering::new(vec![asc_nulls_last]).unwrap(),
+                    LexOrdering::new(vec![asc_nulls_last.clone()]).unwrap(),
                 ])
                 .build();
         let desc_nulls_last =
@@ -3849,13 +3841,53 @@ mod tests {
 
         let result = config.try_pushdown_sort(&[desc_nulls_last])?;
 
-        let SortOrderPushdownResult::Inexact { inner } = result else {
-            panic!("Expected Inexact result, got {result:?}");
+        let SortOrderPushdownResult::Exact { inner } = result else {
+            panic!("Expected Exact result, got {result:?}");
         };
         let pushed_config = inner
             .downcast_ref::<FileScanConfig>()
             .expect("Expected FileScanConfig");
-        assert!(pushed_config.output_ordering.is_empty());
+        let names: Vec<_> = pushed_config.file_groups[0]
+            .files()
+            .iter()
+            .map(|f| f.object_meta.location.as_ref())
+            .collect();
+        assert_eq!(names, ["file2", "file1"]);
+        assert_eq!(
+            pushed_config.output_ordering,
+            vec![LexOrdering::new(vec![asc_nulls_last.reverse()]).unwrap()]
+        );
+        assert_eq!(pushed_config.file_source.file_type(), "mock_exact_pushed");
+        Ok(())
+    }
+
+    /// A scan that holds a limit is not reordered: reading it in another order
+    /// would change which rows the limit keeps.
+    #[test]
+    fn sort_pushdown_with_limit_unsupported() -> Result<()> {
+        let file_schema =
+            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
+        let table_schema = TableSchema::from(&file_schema);
+        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
+        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
+        let config =
+            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+                .with_file_groups(vec![FileGroup::new(vec![
+                    make_file_with_stats("file1", 0.0, 9.0),
+                    make_file_with_stats("file2", 10.0, 19.0),
+                ])])
+                .with_output_ordering(vec![
+                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
+                ])
+                .with_limit(Some(5))
+                .build();
+
+        let result = config.try_pushdown_sort(&[sort_expr.reverse()])?;
+
+        assert!(
+            matches!(result, SortOrderPushdownResult::Unsupported),
+            "Expected Unsupported result, got {result:?}"
+        );
         Ok(())
     }
 

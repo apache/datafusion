@@ -17,7 +17,7 @@ use crate::metrics::{ByteProgress, RowFilterSkippedFullyMatchedMetric};
 use crate::page_filter::PagePruningAccessPlanFilter;
 use crate::push_decoder::{
     DecoderBuilderConfig, InitialDecoderState, PushDecoderStreamState, RgPlanEntry,
-    RowFilterContext, RowGroupPruner,
+    RowFilterContext, RowGroupPruner, RowGroupReverser,
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
@@ -1962,20 +1962,16 @@ impl RowGroupsPrunedParquetOpen {
             filter_installed,
             row_filter_skipped_fully_matched,
             byte_progress,
-            reverse_rows: prepared.reverse_rows,
-            reverse_limit: prepared.limit.filter(|_| prepared.reverse_rows),
-            reversed_batches: Vec::new(),
-            reversed_reservation: prepared
-                .memory_pool
-                .as_ref()
-                .filter(|_| prepared.reverse_rows)
-                .map(|pool| {
+            reverser: prepared.reverse_rows.then(|| {
+                let reservation = prepared.memory_pool.as_ref().map(|pool| {
                     MemoryConsumer::new(format!(
                         "ParquetReverseRowGroup[{}]",
                         prepared.partition_index
                     ))
                     .register(pool)
-                }),
+                });
+                RowGroupReverser::new(prepared.limit, reservation)
+            }),
         }
         .into_stream();
 

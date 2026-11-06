@@ -1078,10 +1078,12 @@ impl FileSource for ParquetSource {
         if reversed_satisfies
             && self.table_parquet_options.global.enable_exact_reverse_scan
         {
+            // Toggled, not set: pushing a reverse onto a scan that already
+            // reads back to front turns it forward again.
             let mut new_source = self.clone();
             new_source.sort_order_for_reorder = None;
-            new_source.reverse_row_groups = true;
-            new_source.reverse_rows = true;
+            new_source.reverse_row_groups = !self.reverse_rows;
+            new_source.reverse_rows = !self.reverse_rows;
             return Ok(SortOrderPushdownResult::Exact {
                 inner: Arc::new(new_source) as Arc<dyn FileSource>,
             });
@@ -1801,6 +1803,44 @@ mod tests {
         assert!(inner_parquet.reverse_row_groups());
         assert!(inner_parquet.reverse_rows());
         assert!(inner_parquet.sort_order_for_reorder.is_none());
+    }
+
+    /// Pushing a reverse onto a scan that already reads back to front turns
+    /// it forward again, rather than leaving it reversed under an ordering
+    /// that has been flipped back.
+    #[test]
+    fn try_pushdown_sort_exact_reverse_twice_reads_forward() {
+        let (schema, eq, order) = exact_reverse_case();
+        let mut options = TableParquetOptions::default();
+        options.global.enable_exact_reverse_scan = true;
+        let source = ParquetSource::new(schema).with_table_parquet_options(options);
+        let SortOrderPushdownResult::Exact { inner: reversed } =
+            source.try_pushdown_sort(&order, &eq).unwrap()
+        else {
+            panic!("expected Exact for the first pushdown");
+        };
+        let reversed = reversed
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(reversed.reverse_rows());
+
+        // The reversed scan declares the reversed ordering; ask for the
+        // original one.
+        let mut reversed_eq = eq.clone();
+        reversed_eq.clear_orderings();
+        reversed_eq.add_ordering(order.clone());
+        let forward_order: Vec<_> = order.iter().map(|expr| expr.reverse()).collect();
+        let SortOrderPushdownResult::Exact { inner } = reversed
+            .try_pushdown_sort(&forward_order, &reversed_eq)
+            .unwrap()
+        else {
+            panic!("expected Exact for the second pushdown");
+        };
+        let forward = inner
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(!forward.reverse_row_groups());
+        assert!(!forward.reverse_rows());
     }
 
     /// Without the option, the same request stays `Inexact` and rows keep
