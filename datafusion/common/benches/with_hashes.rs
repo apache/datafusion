@@ -30,6 +30,9 @@ struct BenchData {
     array: ArrayRef,
     /// Union arrays can't have null bitmasks added
     supports_nulls: bool,
+    /// Extra null percentages to benchmark, in addition to the default 3%
+    /// ("nulls") case
+    additional_null_densities: &'static [u8],
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
@@ -41,46 +44,55 @@ fn criterion_benchmark(c: &mut Criterion) {
             name: "int64",
             array: primitive_array::<Int64Type>(BATCH_SIZE),
             supports_nulls: true,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "utf8",
             array: pool.string_array::<i32>(BATCH_SIZE),
             supports_nulls: true,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "large_utf8",
             array: pool.string_array::<i64>(BATCH_SIZE),
             supports_nulls: true,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "utf8_view",
             array: pool.string_view_array(BATCH_SIZE),
             supports_nulls: true,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "utf8_view (small)",
             array: small_pool.string_view_array(BATCH_SIZE),
             supports_nulls: true,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "dictionary_utf8_int32",
             array: pool.dictionary_array::<Int32Type>(BATCH_SIZE),
             supports_nulls: true,
+            additional_null_densities: &[50, 97],
         },
         BenchData {
             name: "list_array",
             array: list_array(BATCH_SIZE),
             supports_nulls: true,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "map_array",
             array: map_array(BATCH_SIZE),
             supports_nulls: true,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "sparse_union",
             array: sparse_union_array(BATCH_SIZE),
             supports_nulls: false,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "sparse_union (2 types)",
@@ -90,6 +102,7 @@ fn criterion_benchmark(c: &mut Criterion) {
                     .collect(),
             ),
             supports_nulls: false,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "sparse_union (utf8)",
@@ -99,36 +112,43 @@ fn criterion_benchmark(c: &mut Criterion) {
                     .collect(),
             ),
             supports_nulls: false,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "dense_union",
             array: dense_union_array(BATCH_SIZE),
             supports_nulls: false,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "struct_array",
             array: create_struct_array(&pool, BATCH_SIZE),
             supports_nulls: true,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "run_array_int32",
             array: create_run_array::<Int32Type>(BATCH_SIZE),
             supports_nulls: true,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "null",
             array: Arc::new(NullArray::new(BATCH_SIZE)),
             supports_nulls: false,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "list_view_array",
             array: list_view_array(BATCH_SIZE),
             supports_nulls: true,
+            additional_null_densities: &[],
         },
         BenchData {
             name: "fixed_size_list_array",
             array: fixed_size_list_array(BATCH_SIZE),
             supports_nulls: true,
+            additional_null_densities: &[],
         },
     ];
 
@@ -136,6 +156,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         name,
         array,
         supports_nulls,
+        additional_null_densities,
     } in cases
     {
         c.bench_function(&format!("{name}: single, no nulls"), |b| {
@@ -147,7 +168,7 @@ fn criterion_benchmark(c: &mut Criterion) {
         });
         // Union arrays can't have null bitmasks
         if supports_nulls {
-            let nullable_array = add_nulls(&array);
+            let nullable_array = add_nulls(&array, DEFAULT_NULL_DENSITY);
             c.bench_function(&format!("{name}: single, nulls"), |b| {
                 do_hash_test(b, std::slice::from_ref(&nullable_array));
             });
@@ -159,21 +180,16 @@ fn criterion_benchmark(c: &mut Criterion) {
                 ];
                 do_hash_test(b, &arrays);
             });
-        }
-        // Apply additional null-density cases to all Int32 dictionary
-        // benchmarks, including any added in the future.
-        if let Some(dict) = array.as_any().downcast_ref::<DictionaryArray<Int32Type>>() {
-            for null_percent in [50, 97] {
-                let nullable_array = with_null_keys(dict, null_percent as f32 / 100.0);
-
+            for &null_percent in additional_null_densities {
+                let nullable_array = add_nulls(&array, null_percent as f32 / 100.0);
                 c.bench_function(
-                    &format!("{name}: single, {null_percent}% null keys"),
+                    &format!("{name}: single, {null_percent}% nulls"),
                     |b| {
                         do_hash_test(b, std::slice::from_ref(&nullable_array));
                     },
                 );
                 c.bench_function(
-                    &format!("{name}: multiple, {null_percent}% null keys"),
+                    &format!("{name}: multiple, {null_percent}% nulls"),
                     |b| {
                         let arrays = vec![
                             nullable_array.clone(),
@@ -199,17 +215,19 @@ fn do_hash_test(b: &mut Bencher, arrays: &[ArrayRef]) {
     });
 }
 
-fn create_null_mask(len: usize) -> NullBuffer
-where
-    StandardUniform: Distribution<bool>,
-{
-    create_null_mask_with_density(len, 0.03).expect("should be nulls in buffer")
-}
+/// Density of the default "nulls" benchmark cases
+const DEFAULT_NULL_DENSITY: f32 = 0.03;
 
 /// Returns a random null mask where each slot is null with probability
-/// `null_density`, or `None` if no slot ended up null
-fn create_null_mask_with_density(len: usize, null_density: f32) -> Option<NullBuffer> {
-    let mut rng = make_rng();
+/// `null_density`, or `None` if no slot ended up null.
+///
+/// The mask is drawn from its own RNG stream (`make_null_rng`) so null
+/// positions are independent of the random draws that generated the data.
+/// Every density restarts that stream, so a lower-density mask is a subset
+/// of a higher-density one: the cases in a density sweep differ only in how
+/// many slots are null.
+fn create_null_mask(len: usize, null_density: f32) -> Option<NullBuffer> {
+    let mut rng = make_null_rng();
     let mut builder = NullBufferBuilder::new(len);
     for _ in 0..len {
         if rng.random::<f32>() < null_density {
@@ -221,23 +239,10 @@ fn create_null_mask_with_density(len: usize, null_density: f32) -> Option<NullBu
     builder.finish()
 }
 
-/// Returns `dict` with a new random null mask on its keys, where each key is null
-/// with probability `null_density`. Any existing key nulls are replaced, and the
-/// key and value buffers are shared rather than copied
-fn with_null_keys<K: ArrowDictionaryKeyType>(
-    dict: &DictionaryArray<K>,
-    null_density: f32,
-) -> ArrayRef {
-    let keys = PrimitiveArray::<K>::new(
-        dict.keys().values().clone(),
-        create_null_mask_with_density(dict.len(), null_density),
-    );
-    Arc::new(DictionaryArray::new(keys, Arc::clone(dict.values())))
-}
-
-// Returns a new array that is the same as array, but with nulls
+// Returns a new array that is the same as array, but with each slot null with
+// probability `null_density`. For a dictionary these are null keys.
 // Handles the special case of RunArray where nulls must be in the values array
-fn add_nulls(array: &ArrayRef) -> ArrayRef {
+fn add_nulls(array: &ArrayRef, null_density: f32) -> ArrayRef {
     use arrow::datatypes::DataType;
 
     match array.data_type() {
@@ -258,7 +263,7 @@ fn add_nulls(array: &ArrayRef) -> ArrayRef {
                     .clone()
                     .into_data()
                     .into_builder()
-                    .nulls(Some(create_null_mask(values.len())))
+                    .nulls(create_null_mask(values.len(), null_density))
                     .build()
                     .unwrap();
                 make_array(array_data)
@@ -274,7 +279,7 @@ fn add_nulls(array: &ArrayRef) -> ArrayRef {
                 .clone()
                 .into_data()
                 .into_builder()
-                .nulls(Some(create_null_mask(array.len())))
+                .nulls(create_null_mask(array.len(), null_density))
                 .build()
                 .unwrap();
             make_array(array_data)
@@ -284,6 +289,13 @@ fn add_nulls(array: &ArrayRef) -> ArrayRef {
 
 pub fn make_rng() -> StdRng {
     StdRng::seed_from_u64(42)
+}
+
+/// RNG for null masks. Deliberately not `make_rng()`: sharing its stream makes
+/// null positions a function of the generated values (e.g. which pool string
+/// was picked for a row).
+fn make_null_rng() -> StdRng {
+    StdRng::seed_from_u64(43)
 }
 
 /// String pool for generating low cardinality data (for dictionaries and string views)
