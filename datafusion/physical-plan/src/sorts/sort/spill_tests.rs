@@ -215,6 +215,13 @@ fn sorter(
 }
 
 async fn assert_released(pool: &AdjustablePool, runtime: &RuntimeEnv) {
+    wait_until_released(pool, runtime).await;
+    let state = pool.state.lock().unwrap();
+    assert!(state.peak <= pool.capacity);
+    assert_eq!(state.unchecked_over_limit, 0);
+}
+
+async fn wait_until_released(pool: &AdjustablePool, runtime: &RuntimeEnv) {
     // Buffered readers may finish dropping their state after the owning stream.
     tokio::time::timeout(Duration::from_secs(5), async {
         while pool.reserved() != 0
@@ -227,9 +234,6 @@ async fn assert_released(pool: &AdjustablePool, runtime: &RuntimeEnv) {
     .await
     .expect("sort reservations and spill files must be released");
     assert_eq!(runtime.disk_manager.used_disk_space(), 0);
-    let state = pool.state.lock().unwrap();
-    assert!(state.peak <= pool.capacity);
-    assert_eq!(state.unchecked_over_limit, 0);
 }
 
 async fn check_spill_preserves_merge_workspace_after_limit_decreases() -> Result<()> {
@@ -696,7 +700,7 @@ async fn check_merge_keys_larger_than_batches() -> Result<()> {
         ]
     };
     let int_fields = [("a", DataType::Int32), ("b", DataType::Int32)];
-    check_merge_keys(&int_fields, 2, |batch| Ok(int_keys(batch))).await?;
+    check_merge_keys(&int_fields, 2, 16, true, |batch| Ok(int_keys(batch))).await?;
     // Longer than 12 bytes, so views keep them in data buffers.
     let strings = |batch: i32| -> StringArray {
         (0..rows)
@@ -707,25 +711,66 @@ async fn check_merge_keys_larger_than_batches() -> Result<()> {
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
     for payload in [DataType::Utf8View, dictionary] {
         let fields = [&int_fields[..], &[("c", payload.clone())]].concat();
-        check_merge_keys(&fields, 2, |batch| {
+        check_merge_keys(&fields, 2, 16, true, |batch| {
             let payload = cast(&strings(batch), &payload)?;
             Ok([int_keys(batch), vec![payload]].concat())
         })
         .await?;
     }
-    check_merge_keys(&[("k", DataType::FixedSizeBinary(16))], 1, |batch| {
-        let keys = (0..rows).map(|i| u128::from(((i * 31 + batch) % 1000) as u32));
-        let keys = FixedSizeBinaryArray::try_from_iter(keys.map(u128::to_be_bytes))?;
-        Ok(vec![Arc::new(keys)])
+    // Views into 1024 dictionary values share their bytes, as a
+    // dictionary-encoded Parquet column produces. Sorting the buffered batches
+    // before a spill grows past the pool, on `main` too.
+    let fields = [&int_fields[..], &[("c", DataType::Utf8View)]].concat();
+    check_merge_keys(&fields, 2, 16, false, |batch| {
+        let values: StringArray = (0..1024)
+            .map(|v| Some(format!("{batch:>4}-{v:0>59}")))
+            .collect();
+        let keys =
+            Int32Array::from_iter_values((0..rows).map(|i| (i * 7 + batch) % 1024));
+        let views = cast(
+            &DictionaryArray::try_new(keys, Arc::new(values))?,
+            &DataType::Utf8View,
+        )?;
+        Ok([int_keys(batch), vec![views]].concat())
     })
+    .await?;
+    // Batches that do not overlap, so a merged batch takes the strings of
+    // several split batches of one run, in as many buffers.
+    let view_keys = [("a", DataType::Utf8View), ("b", DataType::Utf8View)];
+    check_merge_keys(&view_keys, 2, 8, true, |batch| {
+        let keys = |key: &str| -> Result<ArrayRef> {
+            let strings: StringArray = (0..rows)
+                .rev()
+                .map(|i| Some(format!("{batch:0>4}{key}{i:0>61}")))
+                .collect();
+            Ok(cast(&strings, &DataType::Utf8View)?)
+        };
+        Ok(vec![keys("a")?, keys("b")?])
+    })
+    .await?;
+    check_merge_keys(
+        &[("k", DataType::FixedSizeBinary(16))],
+        1,
+        16,
+        true,
+        |batch| {
+            let keys = (0..rows).map(|i| u128::from(((i * 31 + batch) % 1000) as u32));
+            let keys = FixedSizeBinaryArray::try_from_iter(keys.map(u128::to_be_bytes))?;
+            Ok(vec![Arc::new(keys)])
+        },
+    )
     .await
 }
 
 /// Sorts 64 batches of `columns` by the first `keys` fields with room to buffer
-/// 16 of them, then checks the spilled output and that all memory is released.
+/// `buffered` of them, then checks the spilled output and that all memory is
+/// released. Unless `within_pool`, the pool may have been exceeded by an
+/// unchecked `grow`.
 async fn check_merge_keys(
     fields: &[(&str, DataType)],
     keys: usize,
+    buffered: usize,
+    within_pool: bool,
     columns: impl Fn(i32) -> Result<Vec<ArrayRef>>,
 ) -> Result<()> {
     let schema = Arc::new(Schema::new(
@@ -742,7 +787,8 @@ async fn check_merge_keys(
             PhysicalSortExpr::new_default(Arc::new(Column::new(fields[i].0, i)))
         }))
         .expect("at least one sort key");
-    let capacity = MERGE_BYTES + 16 * get_reserved_bytes_for_record_batch(&batches[0])?;
+    let capacity =
+        MERGE_BYTES + buffered * get_reserved_bytes_for_record_batch(&batches[0])?;
     let pool = AdjustablePool::new(capacity);
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
@@ -766,7 +812,11 @@ async fn check_merge_keys(
     let expected = sort_batch(&concat_batches(&schema, &batches)?, &ordering, None)?;
     assert_eq!(concat_batches(&schema, &output)?, expected);
     drop(sorter);
-    assert_released(&pool, &runtime).await;
+    if within_pool {
+        assert_released(&pool, &runtime).await;
+    } else {
+        wait_until_released(&pool, &runtime).await;
+    }
     Ok(())
 }
 
