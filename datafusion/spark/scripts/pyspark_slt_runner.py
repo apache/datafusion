@@ -47,6 +47,8 @@ SPARK_DEFAULTS = {
     "spark.sql.ansi.enabled": "false",
     "spark.sql.session.timeZone": "UTC",
     "spark.sql.mapKeyDedupPolicy": "EXCEPTION",
+    # Spark 4.2 rejects the TIME type unless this internal setting is on.
+    "spark.sql.timeType.enabled": "true",
 }
 
 # DataFusion settings that have a Spark equivalent.
@@ -151,11 +153,13 @@ def parse_slt(path: Path) -> list[Record]:
             i += 1
         record.sql = "\n".join(sql)
 
-        # Expected results (or an expected error message) run until a blank
-        # line. A result line may start with `#`, so it is not a comment here.
+        # Expected results (or an expected error message) run until an empty
+        # line. A result line may start with `#`, so it is not a comment here,
+        # and it may be a single space, the engine's empty first row before a
+        # multi-line value.
         if i < len(lines) and lines[i] == "----":
             i += 1
-            while i < len(lines) and lines[i].strip():
+            while i < len(lines) and lines[i] != "":
                 record.expected.append(lines[i])
                 i += 1
         records.append(record)
@@ -540,9 +544,11 @@ def format_nested(value, tree: tuple, time_zone: str) -> str:
     if kind == "array":
         return "[" + ", ".join(format_nested(v, tree[1], time_zone) for v in value) + "]"
     if kind == "map":
+        # A dict from PySpark, or a list of (key, value) rows from map_entries.
+        pairs = value.items() if isinstance(value, dict) else ((e[0], e[1]) for e in value)
         entries = (
             f"{format_nested(k, tree[1], time_zone)}: {format_nested(v, tree[2], time_zone)}"
-            for k, v in value.items()
+            for k, v in pairs
         )
         return "{" + ", ".join(entries) + "}"
     if kind == "struct":
@@ -781,7 +787,8 @@ class SparkRunner:
 
         try:
             df = self.spark.sql(sql)
-            return df.schema, df.limit(MAX_ROWS + 1).collect()
+            schema = df.schema
+            return schema, _maps_as_entries(df, schema).limit(MAX_ROWS + 1).collect()
         except TypeError as e:
             # PySpark returns each MAP as a dict, which cannot have array keys.
             raise SparkError("convert", f"PySpark cannot convert the result ({e})")
@@ -791,6 +798,9 @@ class SparkRunner:
             if "OutOfMemoryError" in str(e):
                 self.broken = True
                 raise SparkError("memory", "Spark ran out of memory")
+            m = re.search(r"(\w+Type)\.fromInternal is not implemented", str(e))
+            if m:
+                raise SparkError("convert", f"Spark returned a {m.group(1)} value")
             condition = _condition(e)
             if condition == "UNRESOLVED_ROUTINE":
                 name = _parameter(e, "routineName") or "?"
@@ -805,6 +815,22 @@ class SparkRunner:
                 self.broken = True
                 raise SparkError("memory", "Spark ran out of memory")
             raise SparkError("error", message.strip().split("\n")[0])
+
+
+def _maps_as_entries(df, schema):
+    """Collect top-level MAP columns as arrays of entries.
+
+    PySpark returns a MAP as a dict built from a Java HashMap, which loses
+    Spark's entry order and cannot have keys such as arrays.
+    """
+    is_map = [type(f.dataType).__name__ == "MapType" for f in schema.fields]
+    if not any(is_map):
+        return df
+    from pyspark.sql import functions as F
+
+    names = [f"_c{i}" for i in range(len(is_map))]
+    columns = [F.map_entries(n).alias(n) if m else F.col(n) for n, m in zip(names, is_map)]
+    return df.toDF(*names).select(columns)
 
 
 def _condition(e) -> Optional[str]:

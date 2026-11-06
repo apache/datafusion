@@ -70,6 +70,11 @@ class ParseTest(unittest.TestCase):
         self.assertEqual(records[0].skip_reason, "onlyif postgres")
         self.assertIsNone(records[1].skip_reason)
 
+    def test_space_result_line(self):
+        # The engine writes the empty first row before a multi-line value as a space.
+        [record] = parse("query T\nSELECT format_string('Line1%nLine2');\n----\n \n01)Line1\n02)Line2\n")
+        self.assertEqual(record.expected, [" ", "01)Line1", "02)Line2"])
+
 
 class TranslateTest(unittest.TestCase):
     def test_spark_parses_double_colon_casts(self):
@@ -166,6 +171,9 @@ class FormatTest(unittest.TestCase):
         self.assertEqual(self.cell([1.0, 2.5, None, 1e20, 1e-7], tree), "[1.0, 2.5, NULL, 1e20, 1e-7]")
         tree = ("struct", (("a", ("int",)), ("b", ("map", ("string",), ("boolean",)))))
         self.assertEqual(self.cell((1, {"x": True}), tree), "{a: 1, b: {x: true}}")
+        # Top-level maps arrive from map_entries as (key, value) rows, in Spark's order.
+        tree = ("map", ("int",), ("string",))
+        self.assertEqual(self.cell([(5, "b"), (2, "a")], tree), "{5: b, 2: a}")
         self.assertEqual(self.cell(bytearray(b"ab"), ("binary",)), "6162")
 
     def test_ryu(self):
