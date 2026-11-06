@@ -1009,7 +1009,6 @@ impl AggregateExec {
             LexRequirement::new(new_requirements).map(OrderingRequirements::new_soft);
 
         // Constant expressions never change, so they cannot mark a completed group.
-        // Exclude them from both the ordering indices and the group expression count.
         // If our aggregation has grouping sets then our base grouping exprs will
         // be expanded based on the flags in `group_by.groups` where for each
         // group we swap the grouping expr for `null` if the flag is `true`
@@ -1025,13 +1024,18 @@ impl AggregateExec {
             })
             .collect();
 
-        let num_non_constant_groupby_exprs = groupby_exprs
+        let has_non_constant_groupby_exprs = groupby_exprs
             .iter()
-            .filter(|expr| input_eq_properties.is_expr_constant(expr).is_none())
-            .count();
-        let mut group_clustering_mode = if indices.len() == num_non_constant_groupby_exprs
-            && !indices.is_empty()
-            && group_by.groups.len() == 1
+            .any(|expr| input_eq_properties.is_expr_constant(expr).is_none());
+        // Grouping sets can change group keys. PartialReduce combines intermediate
+        // states without using group boundaries to recognize completed groups.
+        let group_clustering_mode = if group_by.has_grouping_set()
+            || group_by.groups.len() != 1
+            || mode == AggregateMode::PartialReduce
+        {
+            GroupClusteringMode::None
+        } else if has_non_constant_groupby_exprs
+            && input_eq_properties.grouping_satisfy(groupby_exprs.iter().cloned())?
         {
             GroupClusteringMode::Full
         } else if !indices.is_empty() {
@@ -1039,16 +1043,6 @@ impl AggregateExec {
         } else {
             GroupClusteringMode::None
         };
-
-        // Grouping sets can change group keys. PartialReduce combines intermediate
-        // states without using group boundaries to recognize completed groups.
-        if group_by.has_grouping_set() || mode == AggregateMode::PartialReduce {
-            group_clustering_mode = GroupClusteringMode::None;
-        } else if num_non_constant_groupby_exprs > 0
-            && input_eq_properties.grouping_satisfy(groupby_exprs.iter().cloned())?
-        {
-            group_clustering_mode = GroupClusteringMode::Full;
-        }
 
         // construct a map from the input expression to the output expression of the Aggregation group by
         let group_expr_mapping =
@@ -5622,6 +5616,71 @@ mod tests {
             assert!(matches!(stream, StreamType::PartialReduceHash(_)));
         }
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn multiple_group_masks_do_not_use_group_clustering() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![2, 2, 1])),
+                Arc::new(Int32Array::from(vec![20, 20, 10])),
+                Arc::new(Int64Array::from(vec![10, 20, 40])),
+            ],
+        )?;
+        let input = TestMemoryExec::try_new(&[vec![batch]], Arc::clone(&schema), None)?;
+        let grouped_input = input
+            .clone()
+            .try_with_grouping_information(vec![vec![Arc::clone(&a), Arc::clone(&b)]])?;
+        // Repeating a mask repeats the keys, so input grouping does not prove
+        // contiguity after the masks are expanded.
+        let group_by = PhysicalGroupBy::new(
+            vec![(a, "a".to_string()), (b, "b".to_string())],
+            vec![],
+            vec![vec![false, false]; 2],
+            false,
+        );
+        let aggr_expr = Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(value)")
+                .build()?,
+        );
+
+        for input in [input, grouped_input] {
+            let aggregate = AggregateExec::try_new(
+                AggregateMode::Single,
+                group_by.clone(),
+                vec![Arc::clone(&aggr_expr)],
+                vec![None],
+                Arc::new(input),
+                Arc::clone(&schema),
+            )?;
+            let output =
+                collect(aggregate.execute(0, new_migrated_hash_ctx(1024))?).await?;
+            allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&output), @r"
+            +---+----+------------+
+            | a | b  | SUM(value) |
+            +---+----+------------+
+            | 1 | 10 | 80         |
+            | 2 | 20 | 60         |
+            +---+----+------------+
+            ");
+            }
+            assert_eq!(
+                aggregate.group_clustering_mode(),
+                &GroupClusteringMode::None
+            );
+        }
         Ok(())
     }
 
