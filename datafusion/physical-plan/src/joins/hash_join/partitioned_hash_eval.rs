@@ -7,7 +7,8 @@
 use std::{fmt::Display, hash::Hash, sync::Arc};
 
 use arrow::{
-    array::{ArrayRef, BooleanArray, BooleanBufferBuilder, UInt64Array},
+    array::{ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array, UInt64Array},
+    compute::take,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
@@ -57,9 +58,8 @@ impl SeededRandomState {
 /// This expression computes the hash of join key columns using a specific RandomState.
 /// It returns a UInt64Array containing the hash values.
 ///
-/// This is used for:
-/// - Computing routing hashes (with RepartitionExec's 0,0,0,0 seeds)
-/// - Computing lookup hashes (with HashJoin's 'J','O','I','N' seeds)
+/// The hash join does not build this expression. It exists so that
+/// `datafusion-proto` can still decode serialized plans that contain it.
 pub struct HashExpr {
     /// Columns to hash
     on_columns: Vec<PhysicalExprRef>,
@@ -351,9 +351,9 @@ impl HashTableLookupExpr {
     /// * `pruning_bitmap` - key-range summary covering every partition's keys
     ///   for pruning only, or `None`
     ///
-    /// A single non-empty map is probed directly without routing, so it may be
-    /// any [`Map`] and `router` is ignored. Otherwise `router` is required and
-    /// every map must be a [`Map::HashMap`].
+    /// When `maps` has exactly one entry, that map is probed directly without
+    /// routing and `router` is ignored. Otherwise `router` is required, even if
+    /// only one entry is non-empty.
     ///
     /// # Public Only for Internal Use:
     /// `datafusion-proto` tests require this constructor, but it is not part of
@@ -399,20 +399,10 @@ impl HashTableLookupExpr {
                     "a lookup over anything but one non-empty map needs a partition router"
                 );
             }
-            (Some(router), _) => {
-                if maps.iter().flatten().any(|map| {
-                    let map: &Map = map;
-                    !matches!(map, Map::HashMap(_))
-                }) {
-                    return internal_err!(
-                        "routed lookups only support hash table partitions"
-                    );
-                }
-                Lookup::Routed {
-                    router,
-                    maps: maps.into(),
-                }
-            }
+            (Some(router), _) => Lookup::Routed {
+                router,
+                maps: maps.into(),
+            },
         };
         Ok(Self {
             on_columns,
@@ -464,17 +454,24 @@ impl HashTableLookupExpr {
             for (partition, map) in maps.iter().enumerate() {
                 // An empty partition holds no key, so its rows stay unmatched.
                 let Some(map) = map else { continue };
-                let map: &Map = map;
-                let Map::HashMap(map) = map else {
-                    return internal_err!(
-                        "routed lookups only support hash table partitions"
-                    );
-                };
                 let run = starts[partition]..starts[partition + 1];
                 if run.is_empty() {
                     continue;
                 }
-                let hits = map.contain_hashes(&sorted_hashes[run.clone()]);
+                let map: &Map = map;
+                let hits = match map {
+                    Map::HashMap(map) => map.contain_hashes(&sorted_hashes[run.clone()]),
+                    // An array map is keyed by value, not hash, so it probes
+                    // the run's own key values.
+                    Map::ArrayMap(map) => {
+                        let indices = UInt32Array::from(rows[run.clone()].to_vec());
+                        let run_keys = keys
+                            .iter()
+                            .map(|key| take(key.as_ref(), &indices, None))
+                            .collect::<std::result::Result<Vec<_>, _>>()?;
+                        map.contain_keys(&run_keys)?
+                    }
+                };
                 for hit in hits.values().set_indices() {
                     matched.set_bit(rows[run.start + hit] as usize, true);
                 }
@@ -668,7 +665,9 @@ fn evaluate_columns(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::joins::array_map::ArrayMap;
     use crate::joins::join_hash_map::JoinHashMapU32;
+    use arrow::array::AsArray;
     use datafusion_common::ScalarValue;
     use datafusion_physical_expr::expressions::Column;
     use std::collections::hash_map::DefaultHasher;
@@ -1140,7 +1139,7 @@ mod tests {
         )]));
         let batch = RecordBatch::try_new(schema, vec![Arc::clone(probe)])?;
         let matched = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-        Ok(arrow::array::AsArray::as_boolean(&matched).clone())
+        Ok(matched.as_boolean().clone())
     }
 
     /// A hash table of `keys`, hashed with `random_state` as the build side
@@ -1152,6 +1151,18 @@ mod tests {
         let mut map = JoinHashMapU32::with_capacity(keys.len());
         map.update_from_iter(Box::new(hashes.iter().enumerate()), 0);
         Ok(Arc::new(Map::HashMap(Box::new(map))))
+    }
+
+    /// An array map of `keys`, as a dense build side gets.
+    fn array_map(keys: &ArrayRef) -> Result<Arc<Map>> {
+        let keys = keys.as_primitive::<arrow::datatypes::Int32Type>();
+        let key = |value: Option<i32>| {
+            ArrayMap::key_to_u64(&ScalarValue::Int32(value)).expect("Int32 key")
+        };
+        let min = key(arrow::compute::min(keys));
+        let max = key(arrow::compute::max(keys));
+        let keys: ArrayRef = Arc::new(keys.clone());
+        Ok(Arc::new(Map::ArrayMap(ArrayMap::try_new(&keys, min, max)?)))
     }
 
     /// One randomly generated scenario, see [`routed_lookup_fuzz`].
@@ -1195,7 +1206,12 @@ mod tests {
         .partition(
             RecordBatch::try_new(schema, vec![Arc::clone(&build)])?,
             |partition, batch| {
-                maps[partition] = Some(hash_table(batch.column(0), &random_state)?);
+                // A dense partition builds an array map, others a hash table.
+                maps[partition] = Some(if rng.random_bool(0.5) {
+                    array_map(batch.column(0))?
+                } else {
+                    hash_table(batch.column(0), &random_state)?
+                });
                 Ok(())
             },
         )?;
