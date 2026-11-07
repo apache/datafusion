@@ -397,9 +397,9 @@ fn sliced_array_benchmark(c: &mut Criterion) {
 
     // Sliced DictionaryArray with one value per row of the full array, like the
     // group keys an aggregation emits in `batch_size` slices. Hashing reduces
-    // it to the referenced values only above 16 values per row, so 1/8 keeps
-    // the full dictionary and 1/32 doesn't.
-    for ratio in [8, 32] {
+    // it to the referenced values only above 64 values per row, so 1/8 keeps
+    // the full dictionary and 1/128 doesn't.
+    for ratio in [8, 128] {
         let total_rows = BATCH_SIZE * ratio;
         let full_array = distinct_dictionary_array(total_rows);
         let sliced = full_array.slice(BATCH_SIZE * (ratio / 2), BATCH_SIZE);

@@ -16,6 +16,7 @@ use crate::error::{
     _exec_datafusion_err, _exec_err, _internal_datafusion_err, _internal_err,
     _plan_datafusion_err,
 };
+use crate::hash_utils::RandomState;
 use crate::{Result, ScalarValue};
 use arrow::array::{
     Array, ArrayRef, FixedSizeListArray, LargeListArray, ListArray, OffsetSizeTrait,
@@ -40,7 +41,7 @@ use arrow_select::dictionary::garbage_collect_any_dictionary;
 use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{Ordering, min};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::iter::repeat_n;
 use std::num::NonZero;
 use std::ops::Range;
@@ -446,29 +447,51 @@ where
 }
 
 /// The most dictionary values per row that code processing every value of a
-/// dictionary should handle. Past this, taking the values the rows reference
-/// is cheaper than processing all of them, even for the cheapest per-value
-/// work: the break-even is about 4 values per row for hashing and about 13 for
-/// ASCII `lower`/`upper`, which convert the whole values buffer at once. Any
-/// bound removes the cost that grows with the dictionary size; the exact value
-/// only trades a constant factor.
-pub const MAX_DICTIONARY_VALUES_PER_ROW: usize = 16;
+/// dictionary should handle. Past this, it first reduces the dictionary to the
+/// values its rows reference. This is a bound, not a tuned break-even: too high
+/// only gives up an improvement, while too low can make cheap per-value work
+/// slower than processing every value.
+pub const MAX_DICTIONARY_VALUES_PER_ROW: usize = 64;
 
 /// Returns `None` when `array` has at most [`MAX_DICTIONARY_VALUES_PER_ROW`]
-/// values per row, and otherwise a copy whose values are `take(values, keys)`
-/// and whose keys are `0..len`, so that work over its values costs O(rows).
+/// values per row, and otherwise [`compact_dictionary`] of it.
 pub(crate) fn compact_oversized_dictionary<K: ArrowDictionaryKeyType>(
     array: &DictionaryArray<K>,
 ) -> Result<Option<DictionaryArray<K>>> {
     if array.values().len() <= MAX_DICTIONARY_VALUES_PER_ROW * array.len() {
         return Ok(None);
     }
-    let values = take(array.values().as_ref(), array.keys(), None)?;
-    // `len < values.len()`, so every row index fits in the key type
-    let keys: ScalarBuffer<K::Native> =
-        (0..array.len()).map(K::Native::usize_as).collect();
-    let keys = PrimitiveArray::<K>::new(keys, array.keys().nulls().cloned());
-    Ok(Some(DictionaryArray::try_new(keys, values)?))
+    compact_dictionary(array).map(Some)
+}
+
+/// Returns a copy of `array` that holds each value its rows reference once.
+/// This costs O(rows), and work over its values never covers more than the
+/// values of `array`, however long they are or often they repeat.
+pub fn compact_dictionary<K: ArrowDictionaryKeyType>(
+    array: &DictionaryArray<K>,
+) -> Result<DictionaryArray<K>> {
+    let keys = array.keys();
+    let mut new_keys =
+        HashMap::with_capacity_and_hasher(keys.len(), RandomState::default());
+    let mut referenced = Vec::with_capacity(keys.len());
+    let remapped: ScalarBuffer<K::Native> = keys
+        .iter()
+        .map(|key| match key {
+            Some(key) => *new_keys.entry(key.as_usize()).or_insert_with(|| {
+                referenced.push(key);
+                // There are at most as many distinct keys as `K` can hold
+                K::Native::usize_as(referenced.len() - 1)
+            }),
+            None => K::Native::default(),
+        })
+        .collect();
+    let values = take(
+        array.values().as_ref(),
+        &PrimitiveArray::<K>::from_iter_values(referenced),
+        None,
+    )?;
+    let keys = PrimitiveArray::<K>::new(remapped, keys.nulls().cloned());
+    Ok(DictionaryArray::try_new(keys, values)?)
 }
 
 #[cfg(test)]
@@ -1561,7 +1584,7 @@ mod tests {
     use crate::ScalarValue::Null;
     use arrow::{
         array::{Float64Array, Int32Array, NullArray, StringArray},
-        datatypes::{Int8Type, Int32Type},
+        datatypes::{Int8Type, Int32Type, UInt8Type},
     };
     #[cfg(feature = "sql")]
     use sqlparser::ast::Ident;
@@ -2162,13 +2185,13 @@ mod tests {
 
     #[test]
     fn map_dictionary_values_bounds_values_per_row() -> Result<()> {
-        let strings = (0..24)
+        let strings = (0..100)
             .map(|i| (i % 5 != 1).then(|| "x".repeat(i)))
             .collect::<Vec<_>>();
         let dict: DictionaryArray<Int32Type> =
             strings.iter().map(|s| s.as_deref()).collect();
         let dict: ArrayRef = Arc::new(dict);
-        for (offset, len) in [(0, 24), (1, 1), (6, 1)] {
+        for (offset, len) in [(0, 100), (1, 1), (6, 1), (2, 1)] {
             let slice = dict.slice(offset, len);
             let mut seen = 0;
             let mapped = map_dictionary_values(&slice, |values| {
@@ -2224,6 +2247,91 @@ mod tests {
         let dict: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values)?);
         map_dictionary_values(&dict, fail_on_bad).unwrap_err();
         assert_eq!(calls.get(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn map_dictionary_values_runs_on_each_referenced_value_once() -> Result<()> {
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..1000).map(|i| "x".repeat(i % 7)),
+        ));
+        let keys = Int32Array::from(vec![
+            Some(7),
+            Some(900),
+            None,
+            Some(7),
+            Some(42),
+            Some(900),
+            Some(7),
+            None,
+        ]);
+        let dict: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values)?);
+        let mut seen = 0;
+        let mapped = map_dictionary_values(&dict, |values| {
+            seen = values.len();
+            Ok(length(values)?)
+        })?;
+        assert_eq!(seen, 3);
+        let expected = length(&arrow::compute::cast(&dict, &DataType::Utf8)?)?;
+        assert_eq!(&arrow::compute::cast(&mapped, &DataType::Int32)?, &expected);
+
+        // No row references a value
+        let all_null = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![None; 8]),
+            Arc::clone(dict.as_any_dictionary().values()),
+        )) as ArrayRef;
+        let mapped = map_dictionary_values(&all_null, |values| {
+            seen = values.len();
+            Ok(length(values)?)
+        })?;
+        assert_eq!(seen, 0);
+        assert_eq!(mapped.null_count(), 8);
+        Ok(())
+    }
+
+    // Arrow doesn't require the key type to be able to index every value, so
+    // the row count can exceed what the key type holds.
+    #[test]
+    fn map_dictionary_values_with_more_rows_than_the_key_type_holds() -> Result<()> {
+        fn check<K: ArrowDictionaryKeyType>(distinct_keys: usize) -> Result<()> {
+            let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+                (0..20_000).map(|i| format!("v{i}")),
+            ));
+            let keys: ScalarBuffer<K::Native> = (0..300)
+                .map(|i| K::Native::usize_as(i % distinct_keys))
+                .collect();
+            let keys = PrimitiveArray::<K>::new(keys, None);
+            let dict: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values)?);
+            let mapped = map_dictionary_values(&dict, |values| Ok(Arc::clone(values)))?;
+            assert_eq!(
+                &arrow::compute::cast(&mapped, &DataType::Utf8)?,
+                &arrow::compute::cast(&dict, &DataType::Utf8)?,
+            );
+            Ok(())
+        }
+        check::<UInt8Type>(250)?;
+        check::<Int8Type>(120)
+    }
+
+    #[test]
+    fn map_dictionary_values_does_not_copy_a_value_per_row() -> Result<()> {
+        // 64 copies of this value wouldn't fit in `i32` offsets
+        const LONG: usize = 34 * 1024 * 1024;
+        let long = "x".repeat(LONG);
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..5000).map(|i| if i == 0 { long.as_str() } else { "short" }),
+        ));
+        let dict: ArrayRef = Arc::new(DictionaryArray::try_new(
+            Int32Array::from(vec![0; 64]),
+            values,
+        )?);
+        let mapped = map_dictionary_values(&dict, |values| Ok(length(values)?))?;
+        assert_eq!(
+            arrow::compute::cast(&mapped, &DataType::Int32)?
+                .as_primitive::<Int32Type>()
+                .values(),
+            &[LONG as i32; 64]
+        );
         Ok(())
     }
 }
