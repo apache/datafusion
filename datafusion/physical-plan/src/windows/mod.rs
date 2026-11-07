@@ -454,7 +454,7 @@ pub(crate) fn window_equivalence_properties(
                             existing
                         })
                     });
-                    window_eq_properties.add_orderings(new_lexs);
+                    window_eq_properties.add_orderings(new_lexs)?;
                 }
             } else {
                 // The window frame is ever expanding, so set monotonicity comes
@@ -483,7 +483,7 @@ pub(crate) fn window_equivalence_properties(
                         window_eq_properties.add_ordering([PhysicalSortExpr::new(
                             Arc::new(window_col),
                             SortOptions::new(increasing, true),
-                        )]);
+                        )])?;
                     } else {
                         // Reverse set-monotonic cases for all orderings:
                         for mut lex in all_satisfied_lexs.into_iter() {
@@ -491,7 +491,7 @@ pub(crate) fn window_equivalence_properties(
                                 Arc::new(window_col.clone()),
                                 SortOptions::new(increasing, true),
                             ));
-                            window_eq_properties.add_ordering(lex);
+                            window_eq_properties.add_ordering(lex)?;
                         }
                     }
                 }
@@ -553,15 +553,19 @@ pub(crate) fn window_equivalence_properties(
                             set_monotonicity.eq(&SetMonotonicity::Increasing);
                         let window_col = Column::new(expr.name(), i + input_schema_len);
                         if increasing && (asc || no_partitioning) {
-                            window_eq_properties.add_ordering([PhysicalSortExpr::new(
-                                Arc::new(window_col),
-                                SortOptions::new(false, false),
-                            )]);
+                            window_eq_properties.add_ordering([
+                                PhysicalSortExpr::new(
+                                    Arc::new(window_col),
+                                    SortOptions::new(false, false),
+                                ),
+                            ])?;
                         } else if !increasing && (!asc || no_partitioning) {
-                            window_eq_properties.add_ordering([PhysicalSortExpr::new(
-                                Arc::new(window_col),
-                                SortOptions::new(true, false),
-                            )]);
+                            window_eq_properties.add_ordering([
+                                PhysicalSortExpr::new(
+                                    Arc::new(window_col),
+                                    SortOptions::new(true, false),
+                                ),
+                            ])?;
                         }
                     }
                 }

@@ -1086,7 +1086,7 @@ fn is_custom_sort_pushdown_valid(
             // Clear old ordering metadata so the proposal must prove this on its own.
             let mut proposed_properties = child_properties.clone();
             proposed_properties.clear_orderings();
-            proposed_properties.add_ordering(ordering.clone());
+            proposed_properties.add_ordering(ordering.clone())?;
             if !proposed_properties.ordering_satisfy(sort.expr().clone())? {
                 return Ok(false);
             }
@@ -1318,10 +1318,34 @@ fn handle_projection_pushdown(
     // (expressed in the projection's output schema) must be remapped into the
     // child schema before being pushed down. Forwarding `score@1` unchanged
     // could refer to a different input column and sort on the wrong key.
-    Ok(
+    let Some(requirements) =
         remap_requirement_through_projection(projection_exec, parent_required)
-            .map(|requirements| vec![Some(requirements)]),
-    )
+    else {
+        return Ok(None);
+    };
+    // If the input already has this ordering, no sort will be added below the
+    // projection. The parent still needs the projection to prove it, which it
+    // may not be able to do: the proof can depend on a column that it drops,
+    // such as a leading per-partition constant. Keep the sort above the
+    // projection in that case. Alternatives that cannot be remapped are not
+    // pushed down, so compare against the first one that can.
+    let pushed = parent_required.iter().find(|required| {
+        remap_lex_requirement_through_projection(projection_exec.expr(), required)
+            .is_some()
+    });
+    if let Some(pushed) = pushed
+        && projection_exec
+            .input()
+            .equivalence_properties()
+            .ordering_satisfy_requirement(requirements.first().clone())?
+        && !projection_exec
+            .properties()
+            .equivalence_properties()
+            .ordering_satisfy_requirement(pushed.clone())?
+    {
+        return Ok(None);
+    }
+    Ok(Some(vec![Some(requirements)]))
 }
 
 #[cfg(test)]
@@ -1335,7 +1359,7 @@ mod tests {
         ScalarSubqueryResults, SubqueryIndex,
     };
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, col};
+    use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
     use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::limit::GlobalLimitExec;
     use datafusion_physical_plan::scalar_subquery::{
@@ -1517,6 +1541,46 @@ mod tests {
         assert_eq!(remapped, expected);
         // Hardness/softness is preserved through the remap.
         assert!(matches!(remapped, OrderingRequirements::Soft(_)));
+    }
+
+    /// The guard compares the alternative that is pushed down, not the first
+    /// one, which may be an alternative that cannot be remapped. Here the
+    /// input is sorted by `c`, and the projection proves `score` (`c` renamed),
+    /// but not `score % 2`, so the requirement can be pushed down.
+    #[test]
+    fn projection_guard_compares_the_pushed_alternative() -> Result<()> {
+        let child = child_schema();
+        let empty: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&child)));
+        let sorted: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
+            [PhysicalSortExpr::new(col("c", &child)?, DESC)].into(),
+            empty,
+        ));
+        let projection = ProjectionExec::try_new(
+            vec![
+                (col("a", &child)?, "a".to_string()),
+                (col("c", &child)?, "score".to_string()),
+                (col("b", &child)?, "value".to_string()),
+            ],
+            sorted,
+        )?;
+        let out = projection.schema();
+
+        let computed: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            col("score", &out)?,
+            Operator::Modulo,
+            lit(2),
+        ));
+        let mut required =
+            OrderingRequirements::new(lex([PhysicalSortRequirement::new(
+                computed,
+                Some(ASC),
+            )]));
+        required.add_alternative(lex([req("score", &out, DESC)]));
+
+        let pushed = handle_projection_pushdown(&projection, &required)?;
+        let expected = OrderingRequirements::new(lex([req("c", &child, DESC)]));
+        assert_eq!(pushed, Some(vec![Some(expected)]));
+        Ok(())
     }
 
     #[test]

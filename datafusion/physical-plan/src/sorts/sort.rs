@@ -2826,9 +2826,11 @@ mod tests {
     impl SortedUnboundedExec {
         fn compute_properties(schema: SchemaRef) -> PlanProperties {
             let mut eq_properties = EquivalenceProperties::new(schema);
-            eq_properties.add_ordering([PhysicalSortExpr::new_default(Arc::new(
-                Column::new("c1", 0),
-            ))]);
+            eq_properties
+                .add_ordering([PhysicalSortExpr::new_default(Arc::new(Column::new(
+                    "c1", 0,
+                )))])
+                .unwrap();
             PlanProperties::new(
                 eq_properties,
                 Partitioning::UnknownPartitioning(1),

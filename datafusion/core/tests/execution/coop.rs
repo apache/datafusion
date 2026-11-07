@@ -148,7 +148,8 @@ fn make_lazy_exec_with_range(
     exec.add_ordering(vec![PhysicalSortExpr::new(
         Arc::new(Column::new(column_name, 0)),
         SortOptions::new(false, true),
-    )]);
+    )])
+    .unwrap();
 
     exec
 }

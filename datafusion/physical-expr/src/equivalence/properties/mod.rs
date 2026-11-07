@@ -114,7 +114,7 @@ use itertools::{Either, Itertools};
 /// eq_properties.add_ordering([
 ///     PhysicalSortExpr::new_default(col_a).asc(),
 ///     PhysicalSortExpr::new_default(col_c).desc(),
-/// ]);
+/// ]).unwrap();
 ///
 /// assert_eq!(
 ///     eq_properties.to_string(),
@@ -345,7 +345,7 @@ impl EquivalenceProperties {
     pub fn extend(mut self, other: Self) -> Result<Self> {
         self.constraints.extend(other.constraints);
         self.add_equivalence_group(other.eq_group)?;
-        self.add_orderings(other.oeq_class);
+        self.add_orderings(other.oeq_class)?;
         self.add_groupings(other.geq_class);
         Ok(self)
     }
@@ -379,11 +379,12 @@ impl EquivalenceProperties {
         }
     }
 
-    /// Adds new orderings into the existing ordering equivalence class.
+    /// Adds new orderings into the existing ordering equivalence class, along
+    /// with the orderings they imply through known equalities.
     pub fn add_orderings(
         &mut self,
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
-    ) {
+    ) -> Result<()> {
         let orderings: Vec<_> =
             orderings.into_iter().filter_map(LexOrdering::new).collect();
         let normal_orderings: Vec<_> = orderings
@@ -391,19 +392,33 @@ impl EquivalenceProperties {
             .cloned()
             .filter_map(|o| self.normalize_sort_exprs(o))
             .collect();
-        if !normal_orderings.is_empty() {
-            self.oeq_class.extend(orderings);
-            // Normalize given orderings to update the cache:
-            self.oeq_cache.normal_cls.extend(normal_orderings);
-            // TODO: If no ordering is found to be redundant during extension, we
-            //       can use a shortcut algorithm to update the leading map.
-            self.oeq_cache.update_map();
+        if normal_orderings.is_empty() {
+            return Ok(());
         }
+        // `add_constants` and `add_equal_conditions` discover implied orderings
+        // too, and whether an ordering is satisfied must not depend on which of
+        // them ran last.
+        let mut implied = vec![];
+        for ordering in &normal_orderings {
+            implied.extend(self.implied_by(ordering)?);
+        }
+        self.oeq_class.extend(orderings);
+        // Normalize given orderings to update the cache:
+        self.oeq_cache.normal_cls.extend(normal_orderings);
+        // TODO: If no ordering is found to be redundant during extension, we
+        //       can use a shortcut algorithm to update the leading map.
+        self.oeq_cache.update_map();
+        // Each implied ordering is shorter than the one implying it, so this
+        // terminates:
+        self.add_orderings(implied)
     }
 
     /// Adds a single ordering to the existing ordering equivalence class.
-    pub fn add_ordering(&mut self, ordering: impl IntoIterator<Item = PhysicalSortExpr>) {
-        self.add_orderings(std::iter::once(ordering));
+    pub fn add_ordering(
+        &mut self,
+        ordering: impl IntoIterator<Item = PhysicalSortExpr>,
+    ) -> Result<()> {
+        self.add_orderings(std::iter::once(ordering))
     }
 
     /// Adds complete grouping tuples whose values are contiguous within
@@ -568,13 +583,25 @@ impl EquivalenceProperties {
         let mut new_orderings = vec![];
         for idx in ordering_idxs {
             let ordering = &self.oeq_cache.normal_cls[*idx];
-            new_orderings
-                .extend(self.implied_ordering(&ordering[0], ordering[1..].iter())?);
+            new_orderings.extend(self.implied_by(ordering)?);
         }
-        if !new_orderings.is_empty() {
-            self.add_orderings(new_orderings);
+        self.add_orderings(new_orderings)
+    }
+
+    /// Returns what the normal ordering `ordering` implies, looking past the
+    /// constants that a normal ordering can keep (those that differ between
+    /// partitions): within a partition they have one value.
+    fn implied_by(
+        &self,
+        ordering: &LexOrdering,
+    ) -> Result<Option<Vec<PhysicalSortExpr>>> {
+        let mut rest = ordering.iter().filter(|sort_expr| {
+            self.eq_group.is_expr_constant(&sort_expr.expr).is_none()
+        });
+        match rest.next() {
+            Some(leading) => self.implied_ordering(leading, rest),
+            None => Ok(None),
         }
-        Ok(())
     }
 
     /// Returns the ordering that the normal ordering `[leading, rest..]`
@@ -662,7 +689,7 @@ impl EquivalenceProperties {
         if normal_ordering.len() != self.common_sort_prefix_length(&normal_ordering)? {
             // If the ordering is unsatisfied, replace existing orderings:
             self.clear_orderings();
-            self.add_ordering(ordering_tee);
+            self.add_ordering(ordering_tee)?;
             return Ok(true);
         }
         Ok(false)

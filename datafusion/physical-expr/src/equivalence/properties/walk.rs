@@ -43,19 +43,39 @@ pub(super) struct SortKeyWalk<'a> {
     /// found by [`EquivalenceProperties::implied_ordering`] as the walk goes.
     implied: Vec<LexOrdering>,
     /// For each ordering (the normal orderings of `props`, then `implied`),
-    /// the index of its head. Empty until the first pin, so that a walk with
-    /// nothing pinned allocates nothing; until then every head is at index 0.
+    /// the index of its head. Empty until a head moves, so that a walk that
+    /// moves no head allocates nothing; until then every head is at index 0.
     head_idxs: Vec<usize>,
 }
 
 impl<'a> SortKeyWalk<'a> {
     pub(super) fn new(props: &'a EquivalenceProperties) -> Self {
-        Self {
+        let mut walk = Self {
             props,
             pinned: HashSet::new(),
             implied: vec![],
             head_idxs: vec![],
+        };
+        // A normal ordering keeps a constant whose value differs between
+        // partitions (see `EquivalenceGroup::normalize_sort_exprs`), and such
+        // a constant may lead it. Within a partition it has one value, so it
+        // is fixed and the head is the first expression after it.
+        let normal = &props.oeq_cache.normal_cls;
+        if normal
+            .iter()
+            .any(|ordering| walk.is_fixed(&ordering[0].expr))
+        {
+            walk.head_idxs = normal
+                .iter()
+                .map(|ordering| {
+                    ordering
+                        .iter()
+                        .position(|sort_expr| !walk.is_fixed(&sort_expr.expr))
+                        .unwrap_or(ordering.len())
+                })
+                .collect();
         }
+        walk
     }
 
     /// Returns how many leading keys (in normal form) the existing orderings
@@ -276,6 +296,10 @@ impl<'a> SortKeyWalk<'a> {
         if class.is_some_and(|class| class.constant.is_some()) {
             return true;
         }
+        // A column is only fixed if it is pinned or constant:
+        if expr.is::<Column>() {
+            return false;
+        }
         // A volatile expression can change from row to row, even when all of
         // its inputs are fixed:
         if expr.is_volatile_node() {
@@ -314,7 +338,7 @@ impl<'a> SortKeyWalk<'a> {
 mod tests {
     use std::sync::Arc;
 
-    use crate::expressions::{BinaryExpr, CastExpr, col, lit};
+    use crate::expressions::{BinaryExpr, CastExpr, Column, col, lit};
     use crate::scalar_subquery::ScalarSubqueryExpr;
     use crate::{AcrossPartitions, ConstExpr, EquivalenceProperties};
     use crate::{PhysicalExpr, PhysicalSortExpr, ScalarFunctionExpr};
@@ -327,6 +351,182 @@ mod tests {
         ScalarSubqueryResults, SubqueryIndex,
     };
     use datafusion_expr::{ColumnarValue, Operator, Volatility, create_udf};
+
+    /// With `CAST(c AS DATE) = a`, the ordering `[a, c]` implies `[c]`, whether
+    /// the ordering or the equality comes first.
+    #[test]
+    fn implied_ordering_does_not_depend_on_call_order() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Date32, true),
+            Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let [a, c] = ["a", "c"].map(|name| col(name, &schema).unwrap());
+        let cast_c = Arc::new(CastExpr::new_with_target_field(
+            Arc::clone(&c),
+            Arc::new(Field::new("c", DataType::Date32, true)),
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+        let ordering =
+            [&a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
+
+        let mut equality_first = EquivalenceProperties::new(Arc::clone(&schema));
+        equality_first.add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
+        equality_first.add_ordering(ordering.clone())?;
+
+        let mut ordering_first = EquivalenceProperties::new(Arc::clone(&schema));
+        ordering_first.add_ordering(ordering)?;
+        ordering_first.add_equal_conditions(cast_c, Arc::clone(&a))?;
+
+        for properties in [equality_first, ordering_first] {
+            assert!(
+                properties
+                    .ordering_satisfy([PhysicalSortExpr::new_default(Arc::clone(&c))])?
+            );
+        }
+        Ok(())
+    }
+
+    /// A normal ordering can keep a leading per-partition constant, and the
+    /// equality behind it still counts: with `k` such a constant and
+    /// `CAST(c AS DATE) = a`, the ordering `[k, a, c]` implies `[c]`, whichever
+    /// order the constant, the equality and the ordering are added in.
+    #[test]
+    fn implied_ordering_behind_a_leading_constant() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("a", DataType::Date32, true),
+            Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let [k, a, c] = ["k", "a", "c"].map(|name| col(name, &schema).unwrap());
+        let cast_c = Arc::new(CastExpr::new_with_target_field(
+            Arc::clone(&c),
+            Arc::new(Field::new("c", DataType::Date32, true)),
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+        let ordering =
+            [&k, &a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
+        let constant = || ConstExpr::new(Arc::clone(&k), AcrossPartitions::Heterogeneous);
+
+        let mut constant_equality_ordering =
+            EquivalenceProperties::new(Arc::clone(&schema));
+        constant_equality_ordering.add_constants([constant()])?;
+        constant_equality_ordering
+            .add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
+        constant_equality_ordering.add_ordering(ordering.clone())?;
+
+        let mut constant_ordering_equality =
+            EquivalenceProperties::new(Arc::clone(&schema));
+        constant_ordering_equality.add_constants([constant()])?;
+        constant_ordering_equality.add_ordering(ordering.clone())?;
+        constant_ordering_equality
+            .add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
+
+        let mut equality_ordering_constant =
+            EquivalenceProperties::new(Arc::clone(&schema));
+        equality_ordering_constant.add_equal_conditions(cast_c, Arc::clone(&a))?;
+        equality_ordering_constant.add_ordering(ordering)?;
+        equality_ordering_constant.add_constants([constant()])?;
+
+        for properties in [
+            constant_equality_ordering,
+            constant_ordering_equality,
+            equality_ordering_constant,
+        ] {
+            assert!(
+                properties
+                    .ordering_satisfy([PhysicalSortExpr::new_default(Arc::clone(&c))])?
+            );
+        }
+        Ok(())
+    }
+
+    /// An implied ordering can imply another: with `CAST(c AS DATE) = a` and
+    /// `CAST(a AS DATE64) = d`, the ordering `[d, a, c]` implies `[a, c]`,
+    /// which implies `[c]`.
+    #[test]
+    fn implied_orderings_chain() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("d", DataType::Date64, true),
+            Field::new("a", DataType::Date32, true),
+            Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let [d, a, c] = ["d", "a", "c"].map(|name| col(name, &schema).unwrap());
+        let cast = |expr: &Arc<dyn PhysicalExpr>, data_type| {
+            Arc::new(CastExpr::new_with_target_field(
+                Arc::clone(expr),
+                Arc::new(Field::new("cast", data_type, true)),
+                None,
+            )) as Arc<dyn PhysicalExpr>
+        };
+
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.add_equal_conditions(Arc::clone(&a), cast(&c, DataType::Date32))?;
+        properties.add_equal_conditions(cast(&a, DataType::Date64), Arc::clone(&d))?;
+        properties.add_ordering(
+            [&d, &a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
+        )?;
+
+        assert!(
+            properties
+                .ordering_satisfy([PhysicalSortExpr::new_default(Arc::clone(&c))])?
+        );
+        Ok(())
+    }
+
+    /// `add_ordering` reports what it cannot derive instead of dropping it:
+    /// here `c` is not in the schema, so its type is unknown.
+    #[test]
+    fn add_ordering_returns_implied_ordering_errors() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Date32, true)]));
+        let a = col("a", &schema)?;
+        let c = Arc::new(Column::new("c", 1)) as Arc<dyn PhysicalExpr>;
+        let cast_c = Arc::new(CastExpr::new_with_target_field(
+            Arc::clone(&c),
+            Arc::new(Field::new("c", DataType::Date32, true)),
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.add_equal_conditions(cast_c, Arc::clone(&a))?;
+        let ordering =
+            [&a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
+        assert!(properties.add_ordering(ordering).is_err());
+        Ok(())
+    }
+
+    /// A normal ordering keeps a constant whose value differs between
+    /// partitions (`AcrossPartitions::Heterogeneous`), and such a constant
+    /// can lead it. Within a partition the constant has one value, so it is
+    /// fixed and the head is the expression after it. With `k` such a
+    /// constant and ordering `[k, b]`, the requirements `[b]` and `[b, k]`
+    /// hold before anything is pinned.
+    /// See <https://github.com/apache/datafusion/issues/26762>.
+    #[test]
+    fn leading_per_partition_constant_is_not_a_head() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("b", DataType::Int32, true),
+        ]));
+        let [k, b] = ["k", "b"].map(|name| col(name, &schema).unwrap());
+
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.add_constants([ConstExpr::new(
+            Arc::clone(&k),
+            AcrossPartitions::Heterogeneous,
+        )])?;
+        // Added after the constant, so that `k` stays in the normal ordering:
+        properties.add_ordering(
+            [&k, &b].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
+        )?;
+
+        for required in [vec![&b], vec![&b, &k], vec![&k, &b]] {
+            let required = required
+                .into_iter()
+                .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
+            assert!(properties.ordering_satisfy(required)?);
+        }
+        Ok(())
+    }
 
     /// Pinning a key can move the head of an ordering to an expression that
     /// is equal to a function of the expressions after it, which implies a
@@ -349,7 +549,7 @@ mod tests {
         let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
         properties.add_ordering(
             [&k, &a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
-        );
+        )?;
         properties.add_equal_conditions(cast_c, Arc::clone(&a))?;
 
         let required =
@@ -386,7 +586,7 @@ mod tests {
         properties.add_equal_conditions(Arc::clone(&x), cast(&y, DataType::Int64))?;
         properties.add_ordering(
             [&k, &x, &y, &z].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
-        );
+        )?;
 
         let required =
             [&k, &z].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
@@ -421,7 +621,7 @@ mod tests {
             vec![sort(&a, true), sort(&k, false), sort(&c, false)],
             vec![sort(&k, false), sort(&a, true), sort(&c, false)],
             vec![sort(&k, false), sort(&a, false)],
-        ]);
+        ])?;
 
         assert!(properties.ordering_satisfy([sort(&k, false), sort(&a, false)])?);
         Ok(())
@@ -457,7 +657,7 @@ mod tests {
                 PhysicalSortExpr::new_default(Arc::clone(&k)),
                 PhysicalSortExpr::new(Arc::clone(&x), options),
             ]
-        }));
+        }))?;
 
         for options in directions {
             let required = [
@@ -494,7 +694,7 @@ mod tests {
         properties.add_ordering([
             PhysicalSortExpr::new_default(plus(&b)),
             PhysicalSortExpr::new_default(Arc::clone(&d)),
-        ]);
+        ])?;
 
         for right in [&b, &c] {
             let (_, indices) =
@@ -527,7 +727,7 @@ mod tests {
         properties.add_ordering([
             PhysicalSortExpr::new_default(Arc::clone(&k)),
             PhysicalSortExpr::new_default(Arc::clone(&b_mod_5)),
-        ]);
+        ])?;
 
         let (_, indices) =
             properties.find_longest_permutation(&[lit(5i32), k, b_mod_5])?;
@@ -567,7 +767,7 @@ mod tests {
         };
 
         let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
-        properties.add_ordering([PhysicalSortExpr::new_default(Arc::clone(&a))]);
+        properties.add_ordering([PhysicalSortExpr::new_default(Arc::clone(&a))])?;
         let satisfied = |exprs: [&Arc<dyn PhysicalExpr>; 2]| {
             properties.ordering_satisfy(
                 exprs.map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),

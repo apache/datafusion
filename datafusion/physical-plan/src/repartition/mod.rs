@@ -2178,7 +2178,7 @@ impl RepartitionExec {
         partitioning: Partitioning,
     ) -> Result<Self> {
         let preserve_order = false;
-        let cache = Self::compute_properties(&input, partitioning, preserve_order);
+        let cache = Self::compute_properties(&input, partitioning, preserve_order)?;
         Ok(RepartitionExec {
             input,
             state: Default::default(),
@@ -2200,19 +2200,19 @@ impl RepartitionExec {
     fn eq_properties_helper(
         input: &Arc<dyn ExecutionPlan>,
         preserve_order: bool,
-    ) -> EquivalenceProperties {
+    ) -> Result<EquivalenceProperties> {
         let mut eq_properties = input.equivalence_properties().clone();
         // Fusing several input partitions keeps only the merge key ordering,
         // and per-partition constants no longer hold.
         if input.output_partitioning().partition_count() > 1 {
             eq_properties.clear_orderings();
             if preserve_order && let Some(ordering) = input.output_ordering() {
-                eq_properties.add_ordering(ordering.clone());
+                eq_properties.add_ordering(ordering.clone())?;
             }
             eq_properties.clear_groupings();
             eq_properties.clear_per_partition_constants();
         }
-        eq_properties
+        Ok(eq_properties)
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -2220,15 +2220,15 @@ impl RepartitionExec {
         input: &Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,
         preserve_order: bool,
-    ) -> PlanProperties {
-        PlanProperties::new(
-            Self::eq_properties_helper(input, preserve_order),
+    ) -> Result<PlanProperties> {
+        Ok(PlanProperties::new(
+            Self::eq_properties_helper(input, preserve_order)?,
             partitioning,
             input.pipeline_behavior(),
             input.boundedness(),
         )
         .with_scheduling_type(SchedulingType::Cooperative)
-        .with_evaluation_type(EvaluationType::Eager)
+        .with_evaluation_type(EvaluationType::Eager))
     }
 
     /// Specify if this repartitioning operation should preserve the order of
@@ -2245,7 +2245,8 @@ impl RepartitionExec {
                 // if there is only one input partition, merging is not required
                 // to maintain order
                 self.input.output_partitioning().partition_count() > 1;
-        let eq_properties = Self::eq_properties_helper(&self.input, self.preserve_order);
+        let eq_properties =
+            Self::eq_properties_helper(&self.input, self.preserve_order).unwrap();
         Arc::make_mut(&mut self.cache).set_eq_properties(eq_properties);
         self
     }
