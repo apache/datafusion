@@ -352,6 +352,40 @@ mod tests {
     };
     use datafusion_expr::{ColumnarValue, Operator, Volatility, create_udf};
 
+    /// With `CAST(c AS DATE) = a`, the ordering `[a, c]` implies `[c]`, whether
+    /// the ordering or the equality comes first.
+    #[test]
+    fn implied_ordering_does_not_depend_on_call_order() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Date32, true),
+            Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let [a, c] = ["a", "c"].map(|name| col(name, &schema).unwrap());
+        let cast_c = Arc::new(CastExpr::new_with_target_field(
+            Arc::clone(&c),
+            Arc::new(Field::new("c", DataType::Date32, true)),
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+        let ordering =
+            [&a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
+
+        let mut equality_first = EquivalenceProperties::new(Arc::clone(&schema));
+        equality_first.add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
+        equality_first.add_ordering(ordering.clone());
+
+        let mut ordering_first = EquivalenceProperties::new(Arc::clone(&schema));
+        ordering_first.add_ordering(ordering);
+        ordering_first.add_equal_conditions(cast_c, Arc::clone(&a))?;
+
+        for properties in [equality_first, ordering_first] {
+            assert!(
+                properties
+                    .ordering_satisfy([PhysicalSortExpr::new_default(Arc::clone(&c))])?
+            );
+        }
+        Ok(())
+    }
+
     /// A normal ordering keeps a constant whose value differs between
     /// partitions (`AcrossPartitions::Heterogeneous`), and such a constant
     /// can lead it. Within a partition the constant has one value, so it is

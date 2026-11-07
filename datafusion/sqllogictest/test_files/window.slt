@@ -7926,6 +7926,47 @@ a 2026-01-02T01:00:00 2
 a 2026-01-02T05:00:00 3
 b 2026-01-03T01:00:00 4
 
+# An ordering that a sort adds implies other orderings through known equalities,
+# as it does when the equality comes after the sort: `[a, c]` with
+# `a = CAST(c AS DATE)` has `[c]`.
+query DPI
+SELECT a, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT a, c FROM ordered_through_cast WHERE a = CAST(c AS DATE) ORDER BY a, c LIMIT 10)
+ORDER BY r;
+----
+2026-01-01 2026-01-01T09:00:00 1
+2026-01-02 2026-01-02T01:00:00 2
+2026-01-02 2026-01-02T05:00:00 3
+2026-01-03 2026-01-03T01:00:00 4
+
+# The same with a per-partition constant leading the sort.
+query TDPI
+SELECT k, a, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT lower(k) AS k, a, c FROM ordered_through_cast WHERE k = 'a' AND a = CAST(c AS DATE) ORDER BY k, a, c LIMIT 10)
+ORDER BY r;
+----
+a 2026-01-01 2026-01-01T09:00:00 1
+a 2026-01-02 2026-01-02T01:00:00 2
+a 2026-01-02 2026-01-02T05:00:00 3
+
+# And when a merge of partitions is added above the sort, which keeps only its
+# merge key.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+query DPI
+SELECT a, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT a, c FROM ordered_through_cast WHERE a = CAST(c AS DATE) ORDER BY a, c LIMIT 10)
+ORDER BY r;
+----
+2026-01-01 2026-01-01T09:00:00 1
+2026-01-02 2026-01-02T01:00:00 2
+2026-01-02 2026-01-02T05:00:00 3
+2026-01-03 2026-01-03T01:00:00 4
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
 statement ok
 DROP TABLE ordered_through_cast;
 

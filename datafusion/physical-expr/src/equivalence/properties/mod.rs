@@ -392,12 +392,27 @@ impl EquivalenceProperties {
             .filter_map(|o| self.normalize_sort_exprs(o))
             .collect();
         if !normal_orderings.is_empty() {
+            // What the new orderings imply through known equalities. `add_constants`
+            // and `add_equal_conditions` discover this too, and whether an ordering
+            // is satisfied must not depend on which of them ran last. If it cannot
+            // be derived, nothing is implied.
+            let implied: Vec<_> = normal_orderings
+                .iter()
+                .filter_map(|ordering| {
+                    self.implied_ordering(&ordering[0], ordering[1..].iter())
+                        .ok()
+                        .flatten()
+                })
+                .collect();
             self.oeq_class.extend(orderings);
             // Normalize given orderings to update the cache:
             self.oeq_cache.normal_cls.extend(normal_orderings);
             // TODO: If no ordering is found to be redundant during extension, we
             //       can use a shortcut algorithm to update the leading map.
             self.oeq_cache.update_map();
+            // Each implied ordering is shorter than the one implying it, so this
+            // terminates:
+            self.add_orderings(implied);
         }
     }
 
