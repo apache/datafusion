@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+template sql_benchmarks/staged_sort/staged_sort.benchmark.template
+QPAD=08
+NAME=q08_multiple_runs
+THRESHOLD=0
+PLAN=SortExec: expr=[sparse_key@4 ASC NULLS LAST, md5(payload@2)

@@ -359,6 +359,11 @@ impl IncrementalSortIterator {
             indices: None,
         }
     }
+
+    pub(crate) fn with_sorted_indices(mut self, indices: UInt32Array) -> Self {
+        self.indices = Some(indices);
+        self
+    }
 }
 
 impl Iterator for IncrementalSortIterator {
