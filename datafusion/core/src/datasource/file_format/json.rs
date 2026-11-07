@@ -629,4 +629,23 @@ mod tests {
         assert_eq!(2, batches[0].num_rows());
         Ok(())
     }
+
+    #[tokio::test]
+    async fn json_sink_metrics() -> Result<()> {
+        crate::datasource::file_format::test_util::assert_copy_sink_metrics(
+            "metrics.json",
+            "STORED AS JSON",
+        )
+        .await
+    }
+
+    #[cfg(feature = "compression")]
+    #[tokio::test]
+    async fn json_sink_metrics_report_compressed_bytes() -> Result<()> {
+        crate::datasource::file_format::test_util::assert_copy_sink_metrics(
+            "metrics.json.zst",
+            "STORED AS JSON OPTIONS ('format.compression' 'zstd')",
+        )
+        .await
+    }
 }

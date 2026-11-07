@@ -1635,4 +1635,23 @@ mod tests {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn csv_sink_metrics() -> Result<()> {
+        crate::datasource::file_format::test_util::assert_copy_sink_metrics(
+            "metrics.csv",
+            "STORED AS CSV",
+        )
+        .await
+    }
+
+    #[cfg(feature = "compression")]
+    #[tokio::test]
+    async fn csv_sink_metrics_report_compressed_bytes() -> Result<()> {
+        crate::datasource::file_format::test_util::assert_copy_sink_metrics(
+            "metrics.csv.gz",
+            "STORED AS CSV OPTIONS ('format.compression' 'gzip')",
+        )
+        .await
+    }
 }

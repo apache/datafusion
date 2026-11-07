@@ -18,7 +18,9 @@ use datafusion_common::{DataFusionError, HashMap, Result, internal_datafusion_er
 use datafusion_common_runtime::{JoinSet, SpawnedTask};
 use datafusion_datasource::display::FileGroupDisplay;
 use datafusion_datasource::file_compression_type::FileCompressionType;
-use datafusion_datasource::file_sink_config::{FileSink, FileSinkConfig};
+use datafusion_datasource::file_sink_config::{
+    FileSink, FileSinkConfig, FileSinkMetrics,
+};
 use datafusion_datasource::sink::DataSink;
 #[cfg(feature = "proto")]
 use datafusion_datasource::sink::DataSinkExec;
@@ -32,8 +34,7 @@ use datafusion_execution::{SendableRecordBatchStream, TaskContext};
 #[cfg(feature = "proto")]
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::metrics::{
-    ElapsedComputeFutureExt, ExecutionPlanMetricsSet, MetricBuilder, MetricCategory,
-    MetricsSet, Time,
+    ElapsedComputeFutureExt, ExecutionPlanMetricsSet, MetricsSet, Time,
 };
 use datafusion_physical_plan::{DisplayAs, DisplayFormatType};
 use object_store::ObjectStore;
@@ -258,15 +259,14 @@ impl FileSink for ParquetSink {
         mut file_stream_rx: DemuxedStreamReceiver,
         object_store: Arc<dyn ObjectStore>,
     ) -> Result<u64> {
-        let rows_written_counter = MetricBuilder::new(&self.metrics)
-            .with_category(MetricCategory::Rows)
-            .global_counter("rows_written");
         // Note: bytes_written is the sum of compressed row group sizes, which
         // may differ slightly from the actual on-disk file size (excludes footer,
         // page indexes, and other Parquet metadata overhead).
-        let bytes_written_counter =
-            MetricBuilder::new(&self.metrics).global_bytes_counter("bytes_written");
-        let elapsed_compute = MetricBuilder::new(&self.metrics).elapsed_compute(0);
+        let FileSinkMetrics {
+            rows_written: rows_written_counter,
+            bytes_written: bytes_written_counter,
+            elapsed_compute,
+        } = FileSinkMetrics::new(&self.metrics);
 
         let parquet_opts = &self.parquet_options;
 

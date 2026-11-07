@@ -34,6 +34,71 @@ pub(crate) mod test_util {
 
     use crate::test::object_store::local_unpartitioned_file;
 
+    /// Runs `COPY ... TO <file_name> <copy_options>` and checks that the
+    /// `DataSinkExec` reports `rows_written`, `elapsed_compute` and a
+    /// `bytes_written` matching the size of the file on disk.
+    pub async fn assert_copy_sink_metrics(
+        file_name: &str,
+        copy_options: &str,
+    ) -> Result<()> {
+        use crate::prelude::SessionContext;
+        use arrow::array::{Int32Array, RecordBatch, StringArray};
+        use arrow_schema::{DataType, Field, Schema};
+        use datafusion_execution::TaskContext;
+        use futures::TryStreamExt;
+
+        let ctx = SessionContext::new();
+        let tmp_dir = tempfile::TempDir::new()?;
+        let output_path = tmp_dir.path().join(file_name);
+        let output_path_str = output_path.to_str().unwrap();
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("val", DataType::Utf8, false),
+        ]));
+        let ids: Vec<i32> = (0..1000).collect();
+        let vals: Vec<String> = ids.iter().map(|i| format!("value-{}", i % 10)).collect();
+        let batch = RecordBatch::try_new(
+            schema,
+            vec![
+                Arc::new(Int32Array::from(ids)),
+                Arc::new(StringArray::from(vals)),
+            ],
+        )?;
+        ctx.register_batch("source", batch)?;
+
+        let plan = ctx
+            .sql(&format!(
+                "COPY source TO '{output_path_str}' {copy_options}"
+            ))
+            .await?
+            .create_physical_plan()
+            .await?;
+        let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+        let _: Vec<_> = plan.execute(0, task_ctx)?.try_collect().await?;
+
+        let metrics = plan
+            .metrics()
+            .expect("DataSinkExec should return file sink metrics")
+            .aggregate_by_name();
+        let metric = |name: &str| {
+            metrics
+                .iter()
+                .find(|m| m.value().name() == name)
+                .unwrap_or_else(|| panic!("should have {name} metric"))
+                .value()
+                .as_usize()
+        };
+
+        assert_eq!(metric("rows_written"), 1000);
+        let file_size = std::fs::metadata(&output_path)?.len() as usize;
+        assert!(file_size > 0);
+        assert_eq!(metric("bytes_written"), file_size);
+        assert!(metric("elapsed_compute") > 0);
+
+        Ok(())
+    }
+
     pub async fn scan_format(
         state: &dyn Session,
         format: &dyn FileFormat,
