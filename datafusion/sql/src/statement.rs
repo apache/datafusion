@@ -2338,24 +2338,28 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // Overwrite with assignment expressions
         let mut planner_context = PlannerContext::new();
-        let mut assign_map = assignments
-            .iter()
-            .map(|assign| {
-                let cols = match &assign.target {
-                    AssignmentTarget::ColumnName(cols) => cols,
-                    _ => plan_err!("Tuples are not supported")?,
-                };
-                let col_name: &Ident = cols
-                    .0
-                    .last()
-                    .ok_or_else(|| plan_datafusion_err!("Empty column id"))?
-                    .as_ident()
-                    .unwrap();
-                // Validate that the assignment target column exists
-                table_schema.field_with_unqualified_name(&col_name.value)?;
-                Ok((col_name.value.clone(), assign.value.clone()))
-            })
-            .collect::<Result<HashMap<String, SQLExpr>>>()?;
+        let mut assign_map = HashMap::with_capacity(assignments.len());
+        for assign in assignments {
+            let cols = match &assign.target {
+                AssignmentTarget::ColumnName(cols) => cols,
+                _ => plan_err!("Tuples are not supported")?,
+            };
+            let col_name: &Ident = cols
+                .0
+                .last()
+                .ok_or_else(|| plan_datafusion_err!("Empty column id"))?
+                .as_ident()
+                .unwrap();
+            // Validate that the assignment target column exists
+            table_schema.field_with_unqualified_name(&col_name.value)?;
+            let col_name = col_name.value.clone();
+            if assign_map
+                .insert(col_name.clone(), assign.value.clone())
+                .is_some()
+            {
+                return plan_err!("multiple assignments to same column \"{col_name}\"");
+            }
+        }
 
         // Build scan, join with from table if it exists.
         let mut input_tables = vec![table];
