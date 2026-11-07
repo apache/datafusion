@@ -48,16 +48,22 @@ SELECT arrow_cast(-0.0, 'Float16') AS negative_f16,
 
 # Short Float32/Float64 literal lists retain static membership filters.
 # Check IN and NOT IN across float widths, list lengths, and both zero signs.
-query BBBBB
+query BBBBBBBBBBB
 SELECT
+  -0.0 IN (0.0, 1, 2, 3),
   positive_f64 IN (-0.0, 1, 2),
   negative_f16 IN (arrow_cast(0.0, 'Float16'), 1, 2, 3),
   positive_f32 IN (arrow_cast(-0.0, 'Float32'), 1, 2, 3),
   positive_f64 IN (-0.0, 1, 2, 3),
-  positive_f64 NOT IN (-0.0, 1, 2, 3)
+  positive_f64 NOT IN (-0.0, 1, 2, 3),
+  negative_f64 IN (1, 2, 3, 4),
+  negative_f16 IN (arrow_cast(0.0, 'Float16'), 1, 2, 3, 4, 5, 6, 7, 8),
+  negative_f64 IN (0.0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+  negative_f64 NOT IN (0.0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16),
+  negative_f64 IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17)
 FROM negative_zero_in_list;
 ----
-true true true true false
+true true true true true false false true true false false
 
 # Dictionary encoding must preserve equality on both sides of the rewrite threshold.
 query BB
