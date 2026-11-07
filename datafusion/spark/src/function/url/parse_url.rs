@@ -180,8 +180,11 @@ impl ScalarUDFImpl for ParseUrl {
     }
 
     fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-        let ScalarFunctionArgs { args, .. } = args;
-        make_scalar_function(spark_parse_url, vec![])(&args)
+        let enable_ansi_mode = args.config_options.execution.enable_ansi_mode;
+        make_scalar_function(
+            move |arrays: &[ArrayRef]| spark_parse_url(arrays, enable_ansi_mode),
+            vec![],
+        )(&args.args)
     }
 }
 
@@ -200,8 +203,11 @@ impl ScalarUDFImpl for ParseUrl {
 /// - A string array with extracted URL components
 /// - `None` values where extraction failed or component doesn't exist
 /// - The output array type (StringArray or LargeStringArray) is determined by input types
-fn spark_parse_url(args: &[ArrayRef]) -> Result<ArrayRef> {
-    spark_handled_parse_url(args, |x| x)
+fn spark_parse_url(args: &[ArrayRef], enable_ansi_mode: bool) -> Result<ArrayRef> {
+    spark_handled_parse_url(args, |x| match x {
+        Err(_) if !enable_ansi_mode => Ok(None),
+        result => result,
+    })
 }
 
 pub fn spark_handled_parse_url(
@@ -621,5 +627,27 @@ mod tests {
         let err = spark_handled_parse_url(&[urls, bad_part], |x| x).unwrap_err();
         let msg = format!("{err}");
         assert!(msg.contains("expects STRING arguments"));
+    }
+
+    #[test]
+    fn test_malformed_url_null_unless_ansi() -> Result<()> {
+        let urls = sa(&[
+            Some("https://example.com/a"),
+            Some("inva lid://example.com"),
+        ]);
+        let parts = sa(&[Some("HOST"), Some("HOST")]);
+
+        let out = spark_parse_url(&[Arc::clone(&urls), Arc::clone(&parts)], false)?;
+        let out_sa = out.as_any().downcast_ref::<StringArray>().unwrap();
+        assert_eq!(out_sa.value(0), "example.com");
+        assert!(out_sa.is_null(1));
+
+        let err = spark_parse_url(&[Arc::clone(&urls), parts], true).unwrap_err();
+        assert!(format!("{err}").contains("The url is invalid"));
+
+        // Argument errors are not turned into NULL
+        let err = spark_parse_url(from_ref(&urls), false).unwrap_err();
+        assert!(format!("{err}").contains("expects 2 or 3 arguments"));
+        Ok(())
     }
 }
