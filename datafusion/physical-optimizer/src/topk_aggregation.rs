@@ -21,7 +21,7 @@ use itertools::Itertools;
 /// An optimizer rule that transforms Sort + Limit above a grouped Aggregate to use
 /// a more efficient Grouped TopK aggregation implementation when possible.
 ///
-/// Queries such as
+/// For example a query like
 ///
 /// ```sql
 /// SELECT trace_id, MAX(timestamp)
@@ -31,9 +31,11 @@ use itertools::Itertools;
 /// LIMIT 10
 /// ```
 ///
-/// are planned as a `SortExec` with a `fetch` (a "TopK" sort) above an
-/// `AggregateExec`. This rule rewrites the plan on the left into the plan on
-/// the right:
+/// Is planned as a `SortExec` with a `fetch` above an `AggregateExec` (left). After this rule
+/// the `AggregateExec` is transformed to a [`GroupedTopKAggregateStream`] that retains only
+/// the best `N` groups (right).
+///
+/// [`GroupedTopKAggregateStream`]: datafusion_physical_plan::aggregates#4-grouped-topk-aggregation
 ///
 /// ```text
 ///          Before                                        After
@@ -60,8 +62,8 @@ use itertools::Itertools;
 /// └────────────────────────────┘             └────────────────────────────┘
 /// ```
 ///
-/// Without this rule the aggregate retains every group in its hash table and
-/// the sort discards all but `N` of them afterwards.
+/// Without this rule the aggregate computes the aggregates for all groups in the input
+/// and the sort discards all but `N` of them afterwards.
 ///
 /// This rule pushes the limit and sort direction into the `AggregateExec` via
 /// [`AggregateExec::try_optimize_topk`]. The aggregate then runs the
