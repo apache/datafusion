@@ -19,10 +19,18 @@
 //!
 //! The reason is that the extraction projection is the node a source absorbs.
 //! A Parquet scan merges it into the file projection and reads only the struct
-//! leaf, which is what the rule exists for. Keeping the filter one node higher
-//! costs nothing at the scan, because `PushDownFilter` records the predicate in
+//! leaf, which is what the rule exists for.
+//!
+//! The filter node stays above the projection, but its predicates still reach
+//! the source. Usually `PushDownFilter` records them in
 //! [`TableScan::filters`](datafusion_expr::logical_plan::TableScan) in the pass
-//! that runs before the extraction projection exists.
+//! that runs before the extraction projection exists. A filter can also reach
+//! the projection later, for example when a rewrite puts a filter on an
+//! optimized plan and optimizes it again. For that case, when the projection is
+//! directly above a scan, `PushDownFilter` offers the scan each predicate that
+//! reads only pass-through columns. The scan records the predicates that its
+//! source accepts, and a predicate that the source applies exactly leaves the
+//! filter.
 //!
 //! [`PushDownLeafProjections`]: crate::extract_leaf_expressions::PushDownLeafProjections
 
@@ -54,8 +62,10 @@ use datafusion_expr::{
     TableProviderFilterPushDown, and, or,
 };
 
+use crate::common_subexpr_eliminate::CSE_PREFIX;
 use crate::extract_leaf_expressions::is_pure_extraction_projection;
 use crate::optimizer::ApplyOrder;
+use crate::projection_inliner::{DuplicationCost, ProjectionInliner, unalias};
 use crate::simplify_expressions::{reorder_predicates, simplify_predicates};
 use crate::utils::{
     ColumnReference, has_all_column_refs, is_restrict_null_predicate, schema_columns,
@@ -1310,91 +1320,9 @@ impl OptimizerRule for PushDownFilter {
 
                 result.map_data(|plan| Ok(with_filters(keep_predicates, plan)))
             }
-            LogicalPlan::TableScan(mut scan) => {
-                let filter_predicates = split_conjunction(&filter.predicate);
-                // Filters containing scalar subqueries cannot be pushed to
-                // providers because the subquery result is not available
-                // until execution time.
-                let (subquery_filters, pushdown_candidates): (Vec<&Expr>, Vec<&Expr>) =
-                    filter_predicates
-                        .into_iter()
-                        .partition(|pred| pred.contains_scalar_subquery());
-
-                let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
-                    pushdown_candidates
-                        .into_iter()
-                        .partition(|pred| pred.is_volatile());
-
-                // Check which non-volatile filters are supported by source
-                let supported_filters = scan
-                    .source
-                    .supports_filters_pushdown(non_volatile_filters.as_slice())?;
-                assert_eq_or_internal_err!(
-                    non_volatile_filters.len(),
-                    supported_filters.len(),
-                    "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
-                    supported_filters.len(),
-                    non_volatile_filters.len()
-                );
-
-                if supported_filters
-                    .iter()
-                    .all(|res| res == &TableProviderFilterPushDown::Unsupported)
-                {
-                    filter.input = Arc::new(LogicalPlan::TableScan(scan));
-                    return Ok(Transformed::new(
-                        LogicalPlan::Filter(filter),
-                        predicates_changed || reorder_changed,
-                        TreeNodeRecursion::Continue,
-                    ));
-                }
-
-                // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
-                let zip = non_volatile_filters.iter().zip(supported_filters.iter());
-
-                let new_scan_filters = zip
-                    .clone()
-                    .filter(|(_, res)| *res != &TableProviderFilterPushDown::Unsupported)
-                    .map(|(&pred, _)| pred);
-
-                // Add new scan filters
-                let new_scan_filters: Vec<Expr> = scan
-                    .filters
-                    .iter()
-                    .chain(new_scan_filters)
-                    .unique()
-                    .cloned()
-                    .collect();
-
-                if supported_filters
-                    .iter()
-                    .all(|res| res == &TableProviderFilterPushDown::Inexact)
-                    && scan.filters == new_scan_filters
-                {
-                    filter.input = Arc::new(LogicalPlan::TableScan(scan));
-                    return Ok(Transformed::new(
-                        LogicalPlan::Filter(filter),
-                        predicates_changed || reorder_changed,
-                        TreeNodeRecursion::Continue,
-                    ));
-                } else {
-                    scan.filters = new_scan_filters;
-                }
-
-                // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
-                // and also include volatile and subquery-containing filters
-                let new_predicate: Vec<Expr> = zip
-                    .filter(|(_, res)| *res != &TableProviderFilterPushDown::Exact)
-                    .map(|(&pred, _)| pred)
-                    .chain(volatile_filters)
-                    .chain(subquery_filters)
-                    .cloned()
-                    .collect();
-
-                Ok(Transformed::yes(with_filters(
-                    new_predicate,
-                    LogicalPlan::TableScan(scan),
-                )))
+            LogicalPlan::TableScan(scan) => {
+                filter.input = Arc::new(LogicalPlan::TableScan(scan));
+                push_down_into_table_scan(filter, predicates_changed || reorder_changed)
             }
             LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(mut cte)) => {
                 // The output is the output of the continuation, so the filter
@@ -1531,46 +1459,93 @@ fn rewrite_projection(
     // the pass limit stops them, and the surviving plan is decided by rule
     // order alone. `PushDownFilter` yields here, because the extraction
     // projection is the node the source absorbs: leaving it at the bottom keeps
-    // Parquet struct field pruning, and a filter kept one node higher still
-    // reaches the scan through `TableScan::filters`, which the pass that
-    // created the extraction projection has already set.
+    // Parquet struct field pruning.
     //
     // See the module documentation of `extract_leaf_expressions` for the
     // full statement of the invariant.
+    //
+    // The filter node stays above, but a predicate that reads only
+    // pass-through columns is still offered to a scan directly below. The
+    // filter can reach this position after the pass that created the
+    // extraction projection, for example when a rewrite puts a filter on an
+    // optimized subtree and optimizes the result again. Without this step the
+    // source would never see the predicate.
     if is_pure_extraction_projection(&projection.expr) {
-        return Ok((
-            Transformed::no(LogicalPlan::Projection(projection)),
-            predicates,
-        ));
+        return push_down_through_extraction_projection_into_scan(predicates, projection);
     }
 
-    // Partition projection expressions into non-pushable vs pushable.
-    // Non-pushable expressions are volatile (must not be duplicated) or
-    // MoveTowardsLeafNodes (cheap expressions like get_field where re-inlining
-    // into a filter causes optimizer instability — ExtractLeafExpressions will
-    // undo the push-down, creating an infinite loop that runs until the
-    // iteration limit is hit).
-    //
-    // Keyed by the output column rather than its flat name, for the reason
-    // given on `replace_cols_by_column`. `EliminateGroupByConstant` can leave a
-    // projection that outputs both `t.a` and `CAST(t.a AS ...)` under that one
-    // name.
-    let (non_pushable_map, pushable_map): (HashMap<_, _>, HashMap<_, _>) = projection
-        .schema
-        .iter()
-        .zip(projection.expr.iter())
-        .map(|((qualifier, field), expr)| {
-            (Column::new(qualifier.cloned(), field.name()), unalias(expr))
-        })
-        .partition(|(_, value)| {
-            value.is_volatile()
-                || value.placement() == ExpressionPlacement::MoveTowardsLeafNodes
-        });
+    let inliner = ProjectionInliner::new(&projection);
 
+    // A predicate is kept above the projection when it references:
+    // - a volatile definition. The projection still computes it, so a second
+    //   evaluation below would see a different value.
+    // - an expensive definition that the predicates reference more than one
+    //   time. Pushing would evaluate it more than one time, and
+    //   `CommonSubexprEliminate` would create a projection for it again below
+    //   the filter, so the two rules would never converge (issue #25329). A
+    //   single reference is pushed: if the columns above still use the
+    //   definition, that is the usual cost of a filter push-down.
+    // - a `MoveTowardsLeafNodes` definition (a cheap expression like
+    //   `get_field`). Re-inlining such an expression into a filter causes
+    //   optimizer instability: `ExtractLeafExpressions` undoes the push-down,
+    //   which creates a loop that runs until the iteration limit is hit.
+    //
+    // The references are counted over the predicates that can be pushed
+    // only: a predicate that is kept above reads the column that the
+    // projection computes, so it does not evaluate the definition again.
+    let references_leaf_expr: Vec<bool> = predicates
+        .iter()
+        .map(|expr| {
+            expr.column_refs().into_iter().any(|col| {
+                inliner.definition(col).is_some_and(|definition| {
+                    definition.placement() == ExpressionPlacement::MoveTowardsLeafNodes
+                })
+            })
+        })
+        .collect();
+    let no_other_consumers: [&Expr; 0] = [];
+    let pushable = || {
+        predicates
+            .iter()
+            .zip(&references_leaf_expr)
+            .filter(|(_, kept)| !**kept)
+            .map(|(expr, _)| expr)
+    };
+    let pinned = inliner.pinned_with_unknown_consumers(
+        pushable(),
+        no_other_consumers,
+        DuplicationCost::Cheap,
+    );
+    // A definition that `CommonSubexprEliminate` created records a decision
+    // that it is worth computing one time. Such a definition that is cheap,
+    // and that the predicates reference more than one time, is kept too:
+    // CSE would hoist it out of the pushed predicates again with a new alias,
+    // so the two rules would never converge. Only the CSE definitions get
+    // this stricter limit: the other definitions of the same projection (for
+    // example after `OptimizeProjections` merged it into a user projection)
+    // keep the usual one.
+    let pinned_cse = if projection.expr.iter().any(is_cse_definition) {
+        inliner.pinned_with_unknown_consumers(
+            pushable(),
+            no_other_consumers,
+            DuplicationCost::Free,
+        )
+    } else {
+        Default::default()
+    };
+    let references_pinned_cse = |expr: &Expr| {
+        !pinned_cse.is_empty()
+            && expr.column_refs().into_iter().any(|col| {
+                col.name.starts_with(CSE_PREFIX) && inliner.is_pinned(col, &pinned_cse)
+            })
+    };
     let mut push_predicates = vec![];
     let mut keep_predicates = vec![];
-    for expr in predicates {
-        if contains_column(&expr, &non_pushable_map) {
+    for (expr, references_leaf_expr) in predicates.into_iter().zip(references_leaf_expr) {
+        if references_leaf_expr
+            || inliner.references_pinned(&expr, &pinned)
+            || references_pinned_cse(&expr)
+        {
             keep_predicates.push(expr);
         } else {
             push_predicates.push(expr);
@@ -1581,7 +1556,7 @@ fn rewrite_projection(
         // re-write all filters based on this projection
         // E.g. in `Filter: b\n  Projection: a > 1 as b`, we can swap them, but the filter must be "a > 1"
         projection.input = Arc::new(LogicalPlan::Filter(Filter::new(
-            replace_cols_by_column(expr, &pushable_map)?,
+            inliner.substitute(expr)?,
             projection.input,
         )));
 
@@ -1591,6 +1566,200 @@ fn rewrite_projection(
     };
 
     Ok((projection, keep_predicates))
+}
+
+/// Pushes the conjuncts of `filter` into the scan that is its input, as far as
+/// the source of the scan accepts them, and keeps the rest in a filter above
+/// the scan. `changed` tells whether the caller already changed the filter, so
+/// that a result without a pushdown still reports the change.
+fn push_down_into_table_scan(
+    mut filter: Filter,
+    changed: bool,
+) -> Result<Transformed<LogicalPlan>> {
+    let LogicalPlan::TableScan(mut scan) = Arc::unwrap_or_clone(filter.input) else {
+        return internal_err!("the input of the filter is not a table scan");
+    };
+    // The fetch of a scan applies after its filters, so a filter above a scan
+    // with a fetch cannot move into it without changing the result.
+    if scan.fetch.is_some() {
+        filter.input = Arc::new(LogicalPlan::TableScan(scan));
+        return Ok(Transformed::new(
+            LogicalPlan::Filter(filter),
+            changed,
+            TreeNodeRecursion::Continue,
+        ));
+    }
+    let filter_predicates = split_conjunction(&filter.predicate);
+    // Filters containing scalar subqueries cannot be pushed to
+    // providers because the subquery result is not available
+    // until execution time.
+    let (subquery_filters, pushdown_candidates): (Vec<&Expr>, Vec<&Expr>) =
+        filter_predicates
+            .into_iter()
+            .partition(|pred| pred.contains_scalar_subquery());
+
+    let (volatile_filters, non_volatile_filters): (Vec<&Expr>, Vec<&Expr>) =
+        pushdown_candidates
+            .into_iter()
+            .partition(|pred| pred.is_volatile());
+
+    // Check which non-volatile filters are supported by source
+    let supported_filters = scan
+        .source
+        .supports_filters_pushdown(non_volatile_filters.as_slice())?;
+    assert_eq_or_internal_err!(
+        non_volatile_filters.len(),
+        supported_filters.len(),
+        "Vec returned length: {} from supports_filters_pushdown is not the same size as the filters passed, which length is: {}",
+        supported_filters.len(),
+        non_volatile_filters.len()
+    );
+
+    if supported_filters
+        .iter()
+        .all(|res| res == &TableProviderFilterPushDown::Unsupported)
+    {
+        filter.input = Arc::new(LogicalPlan::TableScan(scan));
+        return Ok(Transformed::new(
+            LogicalPlan::Filter(filter),
+            changed,
+            TreeNodeRecursion::Continue,
+        ));
+    }
+
+    // Compose scan filters from non-volatile filters of `Exact` or `Inexact` pushdown type
+    let zip = non_volatile_filters.iter().zip(supported_filters.iter());
+
+    let new_scan_filters = zip
+        .clone()
+        .filter(|(_, res)| *res != &TableProviderFilterPushDown::Unsupported)
+        .map(|(&pred, _)| pred);
+
+    // Add new scan filters
+    let new_scan_filters: Vec<Expr> = scan
+        .filters
+        .iter()
+        .chain(new_scan_filters)
+        .unique()
+        .cloned()
+        .collect();
+
+    // Nothing changes when no predicate leaves the filter and the scan already
+    // records every accepted predicate.
+    if supported_filters
+        .iter()
+        .all(|res| res != &TableProviderFilterPushDown::Exact)
+        && scan.filters == new_scan_filters
+    {
+        filter.input = Arc::new(LogicalPlan::TableScan(scan));
+        return Ok(Transformed::new(
+            LogicalPlan::Filter(filter),
+            changed,
+            TreeNodeRecursion::Continue,
+        ));
+    } else {
+        scan.filters = new_scan_filters;
+    }
+
+    // Compose predicates to be of `Unsupported` or `Inexact` pushdown type,
+    // and also include volatile and subquery-containing filters
+    let new_predicate: Vec<Expr> = zip
+        .filter(|(_, res)| *res != &TableProviderFilterPushDown::Exact)
+        .map(|(&pred, _)| pred)
+        .chain(volatile_filters)
+        .chain(subquery_filters)
+        .cloned()
+        .collect();
+
+    Ok(Transformed::yes(with_filters(
+        new_predicate,
+        LogicalPlan::TableScan(scan),
+    )))
+}
+
+/// Offers the predicates that read only pass-through columns of a pure
+/// extraction projection to the scan directly below it.
+///
+/// The projection and the filter keep their order, so `PushDownLeafProjections`
+/// has nothing to undo. The scan records each predicate its source accepts. A
+/// predicate the source applies exactly is removed from the returned
+/// predicates, which the caller keeps above the projection. A second call adds
+/// no scan filter that is already present, so the plan is a fixed point.
+fn push_down_through_extraction_projection_into_scan(
+    predicates: Vec<Expr>,
+    mut projection: Projection,
+) -> Result<(Transformed<LogicalPlan>, Vec<Expr>)> {
+    let LogicalPlan::TableScan(_) = projection.input.as_ref() else {
+        return Ok((
+            Transformed::no(LogicalPlan::Projection(projection)),
+            predicates,
+        ));
+    };
+
+    // A pass-through column has the same name above and below the projection,
+    // so a predicate that reads only such columns needs no rewrite.
+    let pass_through: HashSet<&Column> = projection
+        .expr
+        .iter()
+        .filter_map(Expr::try_as_col)
+        .collect();
+    let reads_only_pass_through = |predicate: &Expr| {
+        predicate
+            .column_refs()
+            .iter()
+            .all(|column| pass_through.contains(column))
+    };
+
+    let Some(scan_predicate) = conjunction(
+        predicates
+            .iter()
+            .filter(|predicate| reads_only_pass_through(predicate))
+            .cloned(),
+    ) else {
+        return Ok((
+            Transformed::no(LogicalPlan::Projection(projection)),
+            predicates,
+        ));
+    };
+    let pushed = push_down_into_table_scan(
+        Filter::try_new(scan_predicate, Arc::clone(&projection.input))?,
+        false,
+    )?;
+    if !pushed.transformed {
+        return Ok((
+            Transformed::no(LogicalPlan::Projection(projection)),
+            predicates,
+        ));
+    }
+
+    // The predicates the scan does not apply exactly come back in a filter
+    // above it. They stay above the projection.
+    let (scan, residual) = match pushed.data {
+        LogicalPlan::Filter(residual) => (
+            Arc::unwrap_or_clone(residual.input),
+            split_conjunction_owned(residual.predicate),
+        ),
+        scan => (scan, vec![]),
+    };
+    // Keep the predicates in their original order, which `reorder_predicates`
+    // chose by cost.
+    let keep_predicates = predicates
+        .into_iter()
+        .filter(|predicate| {
+            !reads_only_pass_through(predicate) || residual.contains(predicate)
+        })
+        .collect();
+    projection.input = Arc::new(scan);
+    Ok((
+        Transformed::yes(LogicalPlan::Projection(projection)),
+        keep_predicates,
+    ))
+}
+
+/// Returns `true` if `expr` is a definition that `CommonSubexprEliminate`
+/// created.
+fn is_cse_definition(expr: &Expr) -> bool {
+    matches!(expr, Expr::Alias(alias) if alias.name.starts_with(CSE_PREFIX))
 }
 
 /// Creates a new LogicalPlan::Filter node.
@@ -1661,21 +1830,6 @@ fn replace_cols_by_column(
         }
     })
     .data()
-}
-
-/// Unalias expression reference.
-fn unalias(expr: &Expr) -> &Expr {
-    if let Expr::Alias(alias) = expr {
-        unalias(&alias.expr)
-    } else {
-        expr
-    }
-}
-
-/// check whether the expression uses the columns in `check_map`.
-fn contains_column<T>(e: &Expr, check_map: &HashMap<Column, T>) -> bool {
-    e.exists(|expr| Ok(matches!(expr, Expr::Column(c) if check_map.contains_key(c))))
-        .unwrap()
 }
 
 fn with_filters(predicates: Vec<Expr>, plan: LogicalPlan) -> LogicalPlan {
@@ -1767,7 +1921,7 @@ mod tests {
     use crate::assert_optimized_plan_eq_snapshot;
     use crate::optimizer::Optimizer;
     use crate::simplify_expressions::SimplifyExpressions;
-    use crate::test::udfs::leaf_udf_expr;
+    use crate::test::udfs::{PlacementTestUDF, get_field_like, leaf_udf_expr};
     use crate::test::*;
     use datafusion_expr::test::function_stub::{count, sum};
     use insta::assert_snapshot;
@@ -4829,7 +4983,7 @@ mod tests {
     /// optimizer pass. See <https://github.com/apache/datafusion/issues/14540>
     /// and the module documentation.
     #[test]
-    fn filter_not_pushed_through_pure_extraction_projection() -> Result<()> {
+    fn filter_above_pure_extraction_projection_reaches_the_scan() -> Result<()> {
         let table_scan = test_table_scan()?;
 
         // The shape `ExtractLeafExpressions` produces: one extraction alias
@@ -4842,8 +4996,119 @@ mod tests {
             ])?
             .build()?;
 
-        // `b` is a plain pass-through column, so without the precedence rule
-        // this predicate would reach the scan as a `full_filters` entry.
+        // The filter does not move below the projection, but `b` is a
+        // pass-through column, so the predicate reaches the scan. The source
+        // applies it exactly, so no filter node is left.
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("b").gt(lit(5i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b, test.c
+          TableScan: test, full_filters=[test.b > Int64(5)]
+        "
+        )
+    }
+
+    /// A filter above a pure extraction projection over a source that applies
+    /// predicates inexactly.
+    fn filter_above_extraction_projection_over_inexact_source() -> Result<LogicalPlan> {
+        let proj = table_scan_with_pushdown_provider_builder(
+            TableProviderFilterPushDown::Inexact,
+            vec![],
+            None,
+        )?
+        .project(vec![
+            leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+            col("b"),
+        ])?
+        .build()?;
+        LogicalPlanBuilder::from(proj)
+            .filter(
+                col("b")
+                    .gt(lit(5i64))
+                    .and(col("__datafusion_extracted_1").eq(lit(1i64))),
+            )?
+            .build()
+    }
+
+    #[test]
+    fn inexact_predicate_above_pure_extraction_projection_reaches_the_scan() -> Result<()>
+    {
+        // The scan records the pass-through predicate. Both predicates stay in
+        // the filter above the projection: one because the source applies it
+        // inexactly, the other because it reads an extracted alias. They keep
+        // their order.
+        assert_optimized_plan_equal!(
+            filter_above_extraction_projection_over_inexact_source()?,
+            @r"
+        Filter: b > Int64(5) AND __datafusion_extracted_1 = Int64(1)
+          Projection: leaf_udf(a) AS __datafusion_extracted_1, b
+            TableScan: test, partial_filters=[b > Int64(5)]
+        "
+        )
+    }
+
+    #[test]
+    fn pushdown_into_scan_below_extraction_projection_is_a_fixed_point() -> Result<()> {
+        let rule = PushDownFilter::new();
+        let config = OptimizerContext::new();
+        let once = rule.rewrite(
+            filter_above_extraction_projection_over_inexact_source()?,
+            &config,
+        )?;
+        assert!(once.transformed);
+        let twice = rule.rewrite(once.data.clone(), &config)?;
+        assert!(!twice.transformed);
+        assert_eq!(twice.data, once.data);
+        Ok(())
+    }
+
+    #[test]
+    fn unsupported_predicate_stays_above_pure_extraction_projection() -> Result<()> {
+        let proj = table_scan_with_pushdown_provider_builder(
+            TableProviderFilterPushDown::Unsupported,
+            vec![],
+            None,
+        )?
+        .project(vec![
+            leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+            col("b"),
+        ])?
+        .build()?;
+        let plan = LogicalPlanBuilder::from(proj)
+            .filter(col("b").gt(lit(5i64)))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: b > Int64(5)
+          Projection: leaf_udf(a) AS __datafusion_extracted_1, b
+            TableScan: test
+        "
+        )
+    }
+
+    /// The fetch of a scan applies after its filters, so a predicate above a
+    /// pure extraction projection must not reach a scan with a fetch.
+    #[test]
+    fn predicate_above_pure_extraction_projection_skips_scan_with_fetch() -> Result<()> {
+        let LogicalPlan::TableScan(scan) = test_table_scan()? else {
+            unreachable!()
+        };
+        let scan_with_fetch = LogicalPlan::TableScan(TableScan {
+            fetch: Some(10),
+            ..scan
+        });
+        let proj = LogicalPlanBuilder::from(scan_with_fetch)
+            .project(vec![
+                leaf_udf_expr(col("a")).alias("__datafusion_extracted_1"),
+                col("b"),
+            ])?
+            .build()?;
         let plan = LogicalPlanBuilder::from(proj)
             .filter(col("b").gt(lit(5i64)))?
             .build()?;
@@ -4852,8 +5117,8 @@ mod tests {
             plan,
             @r"
         Filter: test.b > Int64(5)
-          Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b, test.c
-            TableScan: test
+          Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b
+            TableScan: test, fetch=10
         "
         )
     }
@@ -4956,6 +5221,148 @@ mod tests {
         Projection: leaf_udf(test.a) AS __datafusion_extracted_1, test.b + Int64(1) AS b_plus, test.c
           TableScan: test, full_filters=[test.c > Int64(5)]
         "
+        )
+    }
+
+    fn keep_in_place_udf(arg: Expr) -> Expr {
+        ScalarUDF::new_from_impl(
+            PlacementTestUDF::new().with_placement(ExpressionPlacement::KeepInPlace),
+        )
+        .call(vec![arg])
+    }
+
+    /// Issue #25329: `CommonSubexprEliminate` computes `c1` one time for
+    /// predicates that reference it twice. Pushing the predicates would compute
+    /// it twice, and CSE would then create the projection again below the
+    /// filter, so the two rules never converge.
+    #[test]
+    fn filter_with_repeated_expensive_reference_not_pushed_through_projection()
+    -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![keep_in_place_udf(col("a")).alias("c1"), col("b")])?
+            .filter(
+                col("c1")
+                    .is_not_null()
+                    .and(get_field_like(col("c1"), "x").is_null())
+                    .and(col("b").gt(lit(1))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Filter: c1 IS NOT NULL AND get_field_like(c1, Utf8("x")) IS NULL
+          Projection: keep_in_place_udf(test.a) AS c1, test.b
+            TableScan: test, full_filters=[test.b > Int32(1)]
+        "#
+        )
+    }
+
+    /// A single reference to an expensive definition is pushed, like any
+    /// other computed column of a projection.
+    #[test]
+    fn filter_with_single_expensive_reference_pushed_through_projection() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![keep_in_place_udf(col("a")).alias("c1"), col("b")])?
+            .filter(col("c1").is_not_null())?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: keep_in_place_udf(test.a) AS c1, test.b
+          TableScan: test, full_filters=[keep_in_place_udf(test.a) IS NOT NULL]
+        "
+        )
+    }
+
+    /// A cheap definition that `CommonSubexprEliminate` created is not
+    /// duplicated into pushed predicates that reference it more than one
+    /// time, or CSE would hoist it again with a new alias. A cheap user
+    /// definition in the same projection is still pushed.
+    #[test]
+    fn repeated_cheap_cse_reference_not_pushed_through_projection() -> Result<()> {
+        let cse = format!("{CSE_PREFIX}_1");
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![
+                (col("a") + lit(1)).alias(&cse),
+                (col("b") + lit(1)).alias("c1"),
+                col("c"),
+            ])?
+            .filter(
+                col(&cse)
+                    .gt(lit(1))
+                    .and(col(&cse).lt(lit(5)))
+                    .and(col("c1").gt(lit(1)).or(col("c1").lt(lit(0)))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: __common_expr_1 > Int32(1) AND __common_expr_1 < Int32(5)
+          Projection: test.a + Int32(1) AS __common_expr_1, test.b + Int32(1) AS c1, test.c
+            TableScan: test, full_filters=[test.b + Int32(1) > Int32(1) OR test.b + Int32(1) < Int32(0)]
+        "
+        )
+    }
+
+    /// A predicate that stays above the projection reads the computed column,
+    /// so it does not count as an evaluation of the definition. The other
+    /// predicate references `c1` one time and is pushed.
+    #[test]
+    fn kept_predicate_does_not_pin_expensive_reference() -> Result<()> {
+        let plan = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![
+                keep_in_place_udf(col("a")).alias("c1"),
+                get_field_like(col("b"), "x").alias("c2"),
+            ])?
+            .filter(
+                col("c1")
+                    .eq(col("c2"))
+                    .and(col("c1").gt(lit(ScalarValue::UInt32(Some(1))))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Filter: c1 = c2
+          Projection: keep_in_place_udf(test.a) AS c1, get_field_like(test.b, Utf8("x")) AS c2
+            TableScan: test, full_filters=[keep_in_place_udf(test.a) > UInt32(1)]
+        "#
+        )
+    }
+
+    /// The shape of draft https://github.com/apache/datafusion/pull/25388:
+    /// a filter over a projection that reads an expensive column of the
+    /// projection below it. The narrow policy pushes `c1 IS NOT NULL`,
+    /// because the predicates reference `c1` one time. `c2 IS NULL` stays
+    /// above, because `c2` is a `MoveTowardsLeafNodes` definition.
+    #[test]
+    fn filter_not_pushed_through_nested_computed_projection() -> Result<()> {
+        let inner = LogicalPlanBuilder::from(test_table_scan()?)
+            .project(vec![keep_in_place_udf(col("a")).alias("c1"), col("b")])?
+            .build()?;
+        let outer = LogicalPlanBuilder::from(inner)
+            .project(vec![
+                get_field_like(col("c1"), "x").alias("c2"),
+                col("c1"),
+                col("b"),
+            ])?
+            .build()?;
+        let plan = LogicalPlanBuilder::from(outer)
+            .filter(col("c1").is_not_null().and(col("c2").is_null()))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r#"
+        Filter: c2 IS NULL
+          Projection: get_field_like(c1, Utf8("x")) AS c2, c1, test.b
+            Projection: keep_in_place_udf(test.a) AS c1, test.b
+              TableScan: test, full_filters=[keep_in_place_udf(test.a) IS NOT NULL]
+        "#
         )
     }
 

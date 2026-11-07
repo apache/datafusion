@@ -28,7 +28,7 @@ use datafusion_expr::{
     BinaryExpr, Case, Expr, ExpressionPlacement, Operator, SortExpr, col,
 };
 
-const CSE_PREFIX: &str = "__common_expr";
+pub(crate) const CSE_PREFIX: &str = "__common_expr";
 
 /// Performs Common Sub-expression Elimination optimization.
 ///
