@@ -433,9 +433,6 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           # Measure coverage at the PR head commit, not the merge commit.
-          # codecov-action uploads reports under the PR head SHA, so coverage
-          # measured on the merge of the PR into main is attributed to the
-          # wrong line numbers whenever main has commits the PR lacks.
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
           submodules: true
           fetch-depth: 1
