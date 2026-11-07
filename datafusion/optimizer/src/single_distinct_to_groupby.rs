@@ -91,6 +91,32 @@ struct CountRollup {
     sum: Arc<AggregateUDF>,
 }
 
+fn unalias_top(mut expr: &Expr) -> &Expr {
+    while let Expr::Alias(alias) = expr
+        && alias
+            .metadata
+            .as_ref()
+            .is_none_or(|metadata| metadata.is_empty())
+    {
+        expr = &alias.expr;
+    }
+    expr
+}
+
+fn into_unaliased_top(expr: Expr) -> Expr {
+    match expr {
+        Expr::Alias(alias)
+            if alias
+                .metadata
+                .as_ref()
+                .is_none_or(|metadata| metadata.is_empty()) =>
+        {
+            into_unaliased_top(*alias.expr)
+        }
+        expr => expr,
+    }
+}
+
 impl CountRollup {
     fn try_new(config: &dyn OptimizerConfig) -> Option<Self> {
         let registry = config.function_registry()?;
@@ -118,6 +144,7 @@ fn is_single_distinct_agg(
     let mut distinct_aggs = vec![];
     let mut has_count_rollup = false;
     for expr in aggr_expr {
+        let expr = unalias_top(expr);
         if let Expr::AggregateFunction(AggregateFunction {
             func,
             params:
@@ -284,7 +311,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 // zero that `sum` reports as NULL over an empty input.
                 let (outer_aggr_exprs, outer_proj_exprs): (Vec<Expr>, Vec<Expr>) = aggr_expr
                     .into_iter()
-                    .map(|aggr_expr| match aggr_expr {
+                    .map(|aggr_expr| match into_unaliased_top(aggr_expr) {
                         Expr::AggregateFunction(AggregateFunction {
                             func,
                             params:
@@ -371,7 +398,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                                 Ok((outer, proj))
                             }
                         }
-                        _ => Ok((aggr_expr.clone(), aggr_expr)),
+                        aggr_expr => Ok((aggr_expr.clone(), aggr_expr)),
                     })
                     .collect::<Result<Vec<_>>>()?
                     .into_iter()
@@ -437,6 +464,7 @@ mod tests {
     use chrono::{DateTime, Utc};
     use datafusion_common::alias::AliasGenerator;
     use datafusion_common::config::ConfigOptions;
+    use datafusion_common::metadata::FieldMetadata;
     use datafusion_expr::ExprFunctionExt;
     use datafusion_expr::expr::GroupingSet;
     use datafusion_expr::function::AccumulatorArgs;
@@ -451,6 +479,7 @@ mod tests {
     use datafusion_functions_aggregate::expr_fn::{count, count_distinct, max, min, sum};
     use datafusion_functions_aggregate::min_max::max_udaf;
     use datafusion_functions_aggregate::sum::sum_udaf;
+    use std::collections::HashMap;
 
     fn max_distinct(expr: Expr) -> Expr {
         Expr::AggregateFunction(AggregateFunction::new_udf(
@@ -1204,6 +1233,69 @@ mod tests {
               TableScan: test [a:UInt32, b:Utf8, c:UInt32]
         "
         )
+    }
+
+    #[test]
+    fn aliased_count_and_distinct_without_groupby() -> Result<()> {
+        let table_scan = test_table_scan_utf8_b()?;
+
+        // Simplifying `count(a)` to `count(1)` preserves its old name with an
+        // alias before this rule runs.
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![
+                    count_udaf().call(vec![lit(1_i64)]).alias("count(test.a)"),
+                    count_distinct(col("b")),
+                ],
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: CASE WHEN sum(alias2) IS NOT NULL THEN sum(alias2) ELSE Int64(0) END AS count(test.a), count(alias1) AS count(DISTINCT test.b) [count(test.a):Int64, count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[]], aggr=[[sum(alias2), count(alias1)]] [sum(alias2):Int64;N, count(alias1):Int64]
+            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[count(Int64(1)) AS alias2]] [alias1:Utf8, alias2:Int64]
+              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn aliased_count_with_metadata_and_distinct_is_not_rewritten() -> Result<()> {
+        let table_scan = test_table_scan_utf8_b()?;
+        let metadata = FieldMetadata::from(HashMap::from([(
+            "key".to_string(),
+            "value".to_string(),
+        )]));
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(
+                Vec::<Expr>::new(),
+                vec![
+                    count_star()
+                        .alias_with_metadata("count(test.a)", Some(metadata.clone())),
+                    count_distinct(col("b")),
+                ],
+            )?
+            .build()?;
+
+        // Do nothing: removing the alias would drop its metadata
+        let rule: Arc<dyn OptimizerRule + Send + Sync> =
+            Arc::new(SingleDistinctToGroupBy::new());
+        let optimized_plan = Optimizer::with_rules(vec![rule]).optimize(
+            plan.clone(),
+            &RegistryOptimizerContext::new(),
+            |_, _| {},
+        )?;
+
+        assert_eq!(optimized_plan, plan);
+        assert_eq!(
+            optimized_plan.schema().field(0).metadata(),
+            &metadata.to_hashmap()
+        );
+        Ok(())
     }
 
     #[test]
