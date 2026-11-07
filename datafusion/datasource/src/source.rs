@@ -27,6 +27,7 @@ use itertools::Itertools;
 
 use crate::file::FileSource;
 use crate::file_scan_config::FileScanConfig;
+use crate::instrumentation::DataSourceInstrumentationExtension;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Constraints, Result, Statistics};
@@ -365,6 +366,9 @@ pub struct DataSourceExec {
     /// and then passed to
     /// [`DataSource::open_with_args`].
     execution_state: Arc<OnceLock<Option<Arc<dyn Any + Send + Sync>>>>,
+    /// Application metrics must persist even when the source uses the default
+    /// `DataSource::metrics`, which returns a fresh empty set on every call.
+    instrumentation_metrics: Arc<OnceLock<ExecutionPlanMetricsSet>>,
 }
 
 impl DisplayAs for DataSourceExec {
@@ -449,28 +453,44 @@ impl ExecutionPlan for DataSourceExec {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> Result<SendableRecordBatchStream> {
-        let shared_state = self
-            .execution_state
-            .get_or_init(|| {
-                self.data_source
-                    .create_sibling_state(context.session_config().options())
-            })
-            .clone();
-        let args = OpenArgs::new(partition, Arc::clone(&context))
-            .with_shared_state(shared_state);
-        let stream = self.data_source.open_with_args(args)?;
-        let batch_size = context.session_config().batch_size();
+        let open = || -> Result<SendableRecordBatchStream> {
+            let shared_state = self
+                .execution_state
+                .get_or_init(|| {
+                    self.data_source
+                        .create_sibling_state(context.session_config().options())
+                })
+                .clone();
+            let args = OpenArgs::new(partition, Arc::clone(&context))
+                .with_shared_state(shared_state);
+            let stream = self.data_source.open_with_args(args)?;
+            let batch_size = context.session_config().batch_size();
 
-        log::debug!(
-            "Batch splitting enabled for partition {partition}: batch_size={batch_size}"
-        );
-        let metrics = self.data_source.metrics();
-        let split_metrics = SplitMetrics::new(&metrics, partition);
-        Ok(Box::pin(BatchSplitStream::new(
-            stream,
-            batch_size,
-            split_metrics,
-        )))
+            log::debug!(
+                "Batch splitting enabled for partition {partition}: batch_size={batch_size}"
+            );
+            let metrics = self.data_source.metrics();
+            let split_metrics = SplitMetrics::new(&metrics, partition);
+            Ok(Box::pin(BatchSplitStream::new(
+                stream,
+                batch_size,
+                split_metrics,
+            )))
+        };
+        match context
+            .session_config()
+            .get_extension::<DataSourceInstrumentationExtension>()
+        {
+            Some(extension) => extension.0.instrument(
+                self.data_source.as_ref(),
+                partition,
+                &context,
+                self.instrumentation_metrics
+                    .get_or_init(ExecutionPlanMetricsSet::new),
+                Box::new(open),
+            ),
+            None => open(),
+        }
     }
 
     fn metrics(&self) -> Option<MetricsSet> {
@@ -486,6 +506,11 @@ impl ExecutionPlan for DataSourceExec {
             metrics.push(output_rows_skew);
         }
 
+        if let Some(instrumentation_metrics) = self.instrumentation_metrics.get() {
+            for metric in instrumentation_metrics.clone_inner().iter() {
+                metrics.push(Arc::clone(metric));
+            }
+        }
         Some(metrics)
     }
 
@@ -506,6 +531,7 @@ impl ExecutionPlan for DataSourceExec {
             data_source,
             cache,
             execution_state,
+            instrumentation_metrics: Arc::new(OnceLock::new()),
         }))
     }
 
@@ -547,6 +573,7 @@ impl ExecutionPlan for DataSourceExec {
             Some(data_source) => {
                 let mut new_node = self.clone();
                 new_node.data_source = data_source;
+                new_node.instrumentation_metrics = Arc::new(OnceLock::new());
                 // Re-compute properties since we have new filters which will impact equivalence info
                 new_node.cache =
                     Arc::new(Self::compute_properties(&new_node.data_source));
@@ -591,6 +618,7 @@ impl ExecutionPlan for DataSourceExec {
     fn reset_state(self: Arc<Self>) -> Result<Arc<dyn ExecutionPlan>> {
         let mut new_exec = Arc::unwrap_or_clone(self);
         new_exec.execution_state = Arc::new(OnceLock::new());
+        new_exec.instrumentation_metrics = Arc::new(OnceLock::new());
         Ok(Arc::new(new_exec))
     }
 
@@ -619,6 +647,7 @@ impl DataSourceExec {
             data_source,
             cache: Arc::new(cache),
             execution_state: Arc::new(OnceLock::new()),
+            instrumentation_metrics: Arc::new(OnceLock::new()),
         }
     }
 
@@ -631,6 +660,7 @@ impl DataSourceExec {
         self.cache = Arc::new(Self::compute_properties(&data_source));
         self.data_source = data_source;
         self.execution_state = Arc::new(OnceLock::new());
+        self.instrumentation_metrics = Arc::new(OnceLock::new());
         self
     }
 

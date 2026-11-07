@@ -8,4 +8,5 @@
 
 // Include tests in csv module
 mod csv;
+mod instrumentation;
 mod object_store_access;
