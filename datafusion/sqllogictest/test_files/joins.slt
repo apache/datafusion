@@ -6343,3 +6343,103 @@ DROP TABLE projection_networks;
 
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+# A computed constant must survive the projection embedded into a sort-merge
+# join, even when only the expression's argument is projected.
+# https://github.com/apache/datafusion/issues/26624
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+statement ok
+CREATE TABLE constant_projection (a INT, b INT, s VARCHAR) AS VALUES
+(1, 1, 'x'), (2, 0, 'X'), (3, 1, 'y'), (4, NULL, NULL), (5, 1, 'X');
+
+query II
+SELECT t1.b + 1 AS x, t2.a
+FROM constant_projection t1 JOIN constant_projection t2 ON t1.a = t2.a
+WHERE t1.b + 1 = 2
+ORDER BY x, t2.a;
+----
+2 1
+2 3
+2 5
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT t1.b + 1 AS x, t2.a
+FROM constant_projection t1 JOIN constant_projection t2 ON t1.a = t2.a
+WHERE t1.b + 1 = 2
+ORDER BY x, t2.a;
+----
+physical_plan
+01)SortPreservingMergeExec: [x@0 ASC NULLS LAST, a@1 ASC NULLS LAST]
+02)--SortExec: expr=[a@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[CAST(b@0 AS Int64) + 1 as x, a@1 as a]
+04)------SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0)], projection=[b@1, a@2]
+05)--------SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+07)------------FilterExec: CAST(b@1 AS Int64) + 1 = 2
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)--------SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+10)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+11)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+query II
+SELECT t1.b + 1 AS x, t2.a
+FROM constant_projection t1 LEFT JOIN constant_projection t2 ON t1.a = t2.a
+WHERE t1.b + 1 = 2
+ORDER BY x, t2.a;
+----
+2 1
+2 3
+2 5
+
+# NULL padding invalidates the right side's constant, so x still needs sorting.
+query II
+SELECT t2.b + 1 AS x, t1.a
+FROM constant_projection t1
+LEFT JOIN (SELECT * FROM constant_projection WHERE b + 1 = 2) t2 ON t1.a = t2.a
+ORDER BY x, t1.a;
+----
+2 1
+2 3
+2 5
+NULL 2
+NULL 4
+
+query TI
+SELECT upper(t1.s) AS x, t2.a
+FROM constant_projection t1 JOIN constant_projection t2 ON t1.a = t2.a
+WHERE upper(t1.s) = 'X'
+ORDER BY x, t2.a;
+----
+X 1
+X 2
+X 5
+
+statement ok
+DROP TABLE constant_projection;
+
+# The expression must also survive when it contains a scalar-subquery leaf.
+statement ok
+CREATE TABLE subquery_projection (a INT, b INT) AS VALUES (1, 1), (2, 0);
+
+query III
+SELECT * FROM (
+  SELECT t1.b + (SELECT max(a) FROM subquery_projection) AS x
+  FROM subquery_projection t1 JOIN subquery_projection t2 ON t1.a = t2.a
+) s JOIN subquery_projection t3 ON s.x = t3.a
+WHERE s.x = 2;
+----
+2 2 0
+
+statement ok
+DROP TABLE subquery_projection;
+
+statement ok
+reset datafusion.optimizer.prefer_hash_join;

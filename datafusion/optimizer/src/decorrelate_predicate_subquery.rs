@@ -810,7 +810,11 @@ fn subquery_output_expr(subquery: &LogicalPlan, i: usize) -> Result<Expr> {
 }
 
 /// Sets [`Join::null_aware_value_keys`](datafusion_expr::Join::null_aware_value_keys)
-/// on a join built by [`build_join`].
+/// on a null-aware join built by [`build_join`]. Only a null-aware join reads
+/// the count, so any other join keeps it unset, as [`Join::try_new`] leaves
+/// it, and equal joins compare equal however they were built.
+///
+/// [`Join::try_new`]: datafusion_expr::Join::try_new
 fn with_null_aware_value_keys(
     plan: LogicalPlan,
     null_aware_value_keys: usize,
@@ -818,6 +822,9 @@ fn with_null_aware_value_keys(
     let LogicalPlan::Join(join) = plan else {
         return internal_err!("expected a join, got {}", plan.display());
     };
+    if !join.null_aware {
+        return Ok(LogicalPlan::Join(join));
+    }
     Ok(LogicalPlan::Join(
         join.with_null_aware_value_keys(null_aware_value_keys),
     ))
