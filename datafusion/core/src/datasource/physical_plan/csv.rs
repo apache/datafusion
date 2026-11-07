@@ -38,6 +38,7 @@ mod tests {
     use datafusion_datasource_csv::source::CsvSource;
     use futures::{StreamExt, TryStreamExt};
 
+    use crate::test_util::aggr_test_schema;
     use arrow::datatypes::*;
     use bytes::Bytes;
     use datafusion_datasource::file_scan_config::FileScanConfigBuilder;
