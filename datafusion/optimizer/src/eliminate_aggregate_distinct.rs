@@ -87,14 +87,15 @@ impl OptimizerRule for EliminateAggregateDistinct {
 /// `Insensitive`.
 ///
 /// If only some of them were stripped, a `Sensitive` `DISTINCT` could stay
-/// beside a stripped aggregate. A stripped aggregate carries an alias, and
-/// [`crate::single_distinct_to_groupby::SingleDistinctToGroupBy`] does not
-/// rewrite a node whose `aggr_expr` contains an alias. So `min(DISTINCT x),
-/// count(DISTINCT x)` would lose the rewrite that `count` needs. When every
-/// `DISTINCT` is `Insensitive`, none is left after stripping, so that rule has
-/// nothing to rewrite. This is conservative: `min(DISTINCT x),
-/// count(DISTINCT y)` keeps the `min` flag. That flag costs nothing at run
-/// time, because `min` ignores `is_distinct` when it selects its accumulator.
+/// beside a stripped aggregate, which
+/// [`crate::single_distinct_to_groupby::SingleDistinctToGroupBy`] then has to
+/// compute in its inner group by. While both keep the flag, `min(DISTINCT x),
+/// count(DISTINCT x)` reads the distinct column directly and needs no inner
+/// aggregate. When every `DISTINCT` is `Insensitive`, none is left after
+/// stripping, so that rule has nothing to rewrite. This is conservative:
+/// `min(DISTINCT x), count(DISTINCT y)` keeps the `min` flag. That flag costs
+/// nothing at run time, because `min` ignores `is_distinct` when it selects its
+/// accumulator.
 fn can_strip_every_distinct(aggr_expr: &[Expr]) -> Result<bool> {
     let mut found_distinct = false;
     let mut all_insensitive = true;
