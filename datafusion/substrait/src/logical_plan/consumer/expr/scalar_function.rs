@@ -176,8 +176,11 @@ pub fn name_to_op(name: &str) -> Option<Operator> {
         "at_arrow" => Some(Operator::AtArrow),
         "arrow_at" => Some(Operator::ArrowAt),
         "bitwise_xor" => Some(Operator::BitwiseXor),
-        "bitwise_shift_right" => Some(Operator::BitwiseShiftRight),
-        "bitwise_shift_left" => Some(Operator::BitwiseShiftLeft),
+        // `shift_left` / `shift_right` are the names used by Substrait's
+        // functions_arithmetic.yaml. The `bitwise_*` names are what DataFusion's
+        // producer writes and are kept for compatibility with existing plans.
+        "shift_right" | "bitwise_shift_right" => Some(Operator::BitwiseShiftRight),
+        "shift_left" | "bitwise_shift_left" => Some(Operator::BitwiseShiftLeft),
         _ => None,
     }
 }
@@ -561,6 +564,44 @@ mod tests {
 
         // Consume the expression and ensure we don't get an error
         let _ = consumer.consume_scalar_function(&func, &df_schema).await?;
+        Ok(())
+    }
+
+    /// Substrait's functions_arithmetic.yaml names the shift functions
+    /// `shift_left` and `shift_right`; the older `bitwise_*` names must keep working.
+    #[tokio::test]
+    async fn test_shift_function_names() -> Result<()> {
+        let cases = [
+            ("shift_left:i32_i32", "Int32(8) << Int32(1)"),
+            ("shift_right:i32_i32", "Int32(8) >> Int32(1)"),
+            ("bitwise_shift_left:i32_i32", "Int32(8) << Int32(1)"),
+            ("bitwise_shift_right:i32_i32", "Int32(8) >> Int32(1)"),
+        ];
+        let int32_arg = |value| FunctionArgument {
+            arg_type: Some(ArgType::Value(Expression {
+                rex_type: Some(RexType::Literal(Literal {
+                    nullable: false,
+                    type_variation_reference: 0,
+                    literal_type: Some(LiteralType::I32(value)),
+                })),
+            })),
+        };
+        let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
+        let df_schema = DFSchema::try_from(schema).unwrap();
+
+        for (name, expected) in cases {
+            let mut extensions = Extensions::default();
+            extensions.functions.insert(0, String::from(name));
+            let consumer =
+                DefaultSubstraitConsumer::new(&extensions, &TEST_SESSION_STATE);
+            let func = ScalarFunction {
+                function_reference: 0,
+                arguments: vec![int32_arg(8), int32_arg(1)],
+                ..Default::default()
+            };
+            let expr = consumer.consume_scalar_function(&func, &df_schema).await?;
+            assert_eq!(expr.to_string(), expected, "function name {name}");
+        }
         Ok(())
     }
 
