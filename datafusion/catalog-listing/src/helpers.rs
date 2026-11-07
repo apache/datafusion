@@ -475,10 +475,18 @@ pub fn parse_partitions_for_path<'a, I>(
 where
     I: IntoIterator<Item = &'a str>,
 {
-    let subpath = table_path.strip_prefix(file_path)?;
+    let mut subpath = table_path.strip_prefix(file_path)?.peekable();
 
     let mut part_values = vec![];
-    for (part, expected_partition) in subpath.zip(table_partition_cols) {
+    for expected_partition in table_partition_cols {
+        let part = subpath.next()?;
+        // A partition value must come from a directory, never the filename.
+        if subpath.peek().is_none() {
+            debug!(
+                "Ignoring file: file_path='{file_path}', table_path='{table_path}', missing partition directory '{expected_partition}'",
+            );
+            return None;
+        }
         match part.split_once('=') {
             Some((name, val)) if name == expected_partition => {
                 // Preserve the original value if percent-decoding produces invalid UTF-8.
@@ -875,28 +883,27 @@ mod tests {
             ("year".to_string(), DataType::Utf8),
             ("month".to_string(), DataType::Utf8),
         ];
-        let meta = ObjectMeta {
-            location: Path::from("bucket/mytable/year=2024/data.parquet"),
-            last_modified: chrono::Utc::now(),
-            size: 100,
-            e_tag: None,
-            version: None,
-        };
+        for filename in ["data.parquet", "month=02.parquet"] {
+            let meta = ObjectMeta {
+                location: Path::from(format!("bucket/mytable/year=2024/{filename}")),
+                last_modified: chrono::Utc::now(),
+                size: 100,
+                e_tag: None,
+                version: None,
+            };
 
-        let result = try_into_partitioned_file(
-            meta,
-            &partition_cols,
-            &table_path,
-            HIVE_DEFAULT_PARTITION_NAME,
-        )
-        .unwrap();
-        // File has year=2024 but no month= directory — parse_partitions_for_path
-        // returns None because the path component "data.parquet" doesn't match
-        // the expected "month=..." pattern.
-        assert!(
-            result.is_none(),
-            "Files with incomplete partition structure should be skipped"
-        );
+            let result = try_into_partitioned_file(
+                meta,
+                &partition_cols,
+                &table_path,
+                HIVE_DEFAULT_PARTITION_NAME,
+            )
+            .unwrap();
+            assert!(
+                result.is_none(),
+                "A filename must not supply the missing month partition: {filename}"
+            );
+        }
     }
 
     #[test]
