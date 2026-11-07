@@ -1723,7 +1723,11 @@ mod tests {
 
     #[test]
     fn test_parquet_encoding_round_trip() {
-        for encoding in [None, Some(DFParquetEncoding::ByteStreamSplit)] {
+        for encoding in [
+            None,
+            Some(DFParquetEncoding::ByteStreamSplit),
+            Some(DFParquetEncoding::Alp),
+        ] {
             let opts = ParquetOptions {
                 encoding,
                 ..ParquetOptions::default()

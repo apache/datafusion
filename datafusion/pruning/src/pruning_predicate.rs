@@ -1331,10 +1331,10 @@ fn is_compare_op(op: Operator) -> bool {
     )
 }
 
-// The pruning logic is based on the comparing the min/max bounds.
-// Must make sure the two type has order.
-// For example, casts from string to numbers is not correct.
-// Because the "13" is less than "3" with UTF8 comparison order.
+// Pruning casts the container's min/max statistics and compares them with the
+// literal, which is only sound when the cast keeps the order of the values,
+// e.g. not for strings to numbers ("13" < "3") or timestamps to time of day
+// (wraps at midnight). Ask the same rule that sort elimination uses.
 fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Result<()> {
     // Dictionary casts are always supported as long as the value types are supported
     let from_type = match from_type {
@@ -1349,20 +1349,7 @@ fn verify_support_type_for_prune(from_type: &DataType, to_type: &DataType) -> Re
         }
         _ => to_type,
     };
-    // Casting a timestamp to a time-of-day wraps at midnight and does not
-    // preserve ordering across day boundaries. Casting timestamp min/max
-    // statistics could therefore produce invalid bounds and prune matches.
-    if matches!(from_type, DataType::Timestamp(_, _))
-        && matches!(to_type, DataType::Time32(_) | DataType::Time64(_))
-    {
-        return plan_err!(
-            "Try Cast/Cast with from type {from_type} to type {to_type} is not supported"
-        );
-    }
-    // If both types are strings or both are not strings (number, timestamp, etc)
-    // then we can compare them.
-    // PruningPredicate does not support casting of strings to numbers and such.
-    if from_type.is_string() == to_type.is_string() {
+    if phys_expr::is_order_preserving_cast(from_type, to_type) {
         Ok(())
     } else {
         plan_err!(
@@ -5095,6 +5082,99 @@ mod tests {
         Ok(())
     }
 
+    /// Pruning casts the min/max statistics, so it may only use casts that
+    /// keep the order of the values.
+    #[test]
+    fn row_group_predicate_cast_must_preserve_order() {
+        use TimeUnit::*;
+
+        let new_york = Some(Arc::from("America/New_York"));
+        let dictionary = |value: DataType| {
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(value))
+        };
+        let cases = [
+            // 0 is false while -1 and 1 are true
+            (DataType::Int32, ScalarValue::Boolean(Some(false)), false),
+            (DataType::Float64, ScalarValue::Boolean(Some(false)), false),
+            (
+                dictionary(DataType::Int64),
+                ScalarValue::Boolean(Some(false)),
+                false,
+            ),
+            // little-endian bytes: 256 is [0, 1, ..] and 255 is [255, 0, ..]
+            (DataType::Int64, ScalarValue::Binary(Some(vec![5])), false),
+            // a named timezone can move the local date backwards
+            (
+                DataType::Timestamp(Nanosecond, new_york.clone()),
+                ScalarValue::Date32(Some(0)),
+                false,
+            ),
+            (
+                DataType::Timestamp(Nanosecond, new_york.clone()),
+                ScalarValue::Date64(Some(0)),
+                false,
+            ),
+            // a local time that a transition skips moves past later ones
+            (
+                DataType::Timestamp(Nanosecond, None),
+                ScalarValue::TimestampNanosecond(Some(0), new_york.clone()),
+                false,
+            ),
+            (
+                DataType::Int64,
+                ScalarValue::TimestampNanosecond(Some(0), None),
+                true,
+            ),
+            (DataType::Int32, ScalarValue::Date32(Some(0)), true),
+            // Parquet TIME(MICROS) read as a TIME column
+            (
+                DataType::Time64(Microsecond),
+                ScalarValue::Time64Nanosecond(Some(0)),
+                true,
+            ),
+            (
+                DataType::Utf8,
+                ScalarValue::Utf8View(Some("a".into())),
+                true,
+            ),
+            (dictionary(DataType::Utf8), ScalarValue::from("a"), true),
+            (
+                DataType::FixedSizeBinary(1),
+                ScalarValue::Binary(Some(vec![5])),
+                true,
+            ),
+            (
+                DataType::Timestamp(Nanosecond, None),
+                ScalarValue::TimestampNanosecond(Some(0), Some(Arc::from("-05:00"))),
+                true,
+            ),
+            (
+                DataType::Date32,
+                ScalarValue::TimestampSecond(Some(0), new_york),
+                true,
+            ),
+        ];
+        for (source, literal, prunable) in cases {
+            let target = literal.data_type();
+            let schema = Schema::new(vec![Field::new("c1", source.clone(), false)]);
+            for expr in [
+                cast(col("c1"), target.clone()).eq(lit(literal.clone())),
+                try_cast(col("c1"), target.clone()).eq(lit(literal.clone())),
+            ] {
+                let predicate_expr = test_build_predicate_expression(
+                    &expr,
+                    &schema,
+                    &mut RequiredColumns::new(),
+                );
+                assert_eq!(
+                    predicate_expr.to_string() != "true",
+                    prunable,
+                    "{source} -> {target}: {predicate_expr}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn row_group_predicate_date_date() -> Result<()> {
         let schema = Schema::new(vec![Field::new("c1", DataType::Date32, false)]);
@@ -7470,7 +7550,7 @@ mod tests {
     fn hash_lookup(
         column: &Arc<dyn PhysicalExpr>,
         keys: &[i64],
-    ) -> Arc<dyn PhysicalExpr> {
+    ) -> Result<Arc<dyn PhysicalExpr>> {
         let array: ArrayRef = Arc::new(Int64Array::from(keys.to_vec()));
         let bitmap = KeyRangeBitmap::try_new(
             &array,
@@ -7478,26 +7558,28 @@ mod tests {
             &ScalarValue::Int64(Some(*keys.iter().max().unwrap())),
             keys.len(),
         );
-        Arc::new(HashTableLookupExpr::new(
+        Ok(Arc::new(HashTableLookupExpr::new(
             vec![Arc::clone(column)],
             SeededRandomState::with_seed(1),
-            Arc::new(Map::HashMap(Box::new(JoinHashMapU32::with_capacity(1)))),
+            None,
+            vec![Some(Arc::new(Map::HashMap(Box::new(
+                JoinHashMapU32::with_capacity(1),
+            ))))],
             "hash_lookup".to_string(),
             bitmap.map(Arc::new),
-        ))
+        )?))
     }
 
     #[test]
-    fn test_hash_lookup_pruning_via_min_max() {
+    fn test_hash_lookup_pruning_via_min_max() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int64, true)]));
         let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
         // Gapped keys: 10,20,30 then a far-away 100000, so the bitmap is sparse.
-        let lookup = hash_lookup(&column, &[10, 20, 30, 100_000]);
+        let lookup = hash_lookup(&column, &[10, 20, 30, 100_000])?;
 
         let predicate = PruningPredicateBuilder::new()
             .with_file_schema(Arc::clone(&schema))
-            .try_build(lookup)
-            .unwrap();
+            .try_build(lookup)?;
 
         // An opaque lookup yields no literal guarantees, so `contained()` is never
         // consulted and every exclusion below comes from the min/max rewrite.
@@ -7511,10 +7593,11 @@ mod tests {
             ),
         );
 
-        let result = predicate.prune(&statistics).unwrap();
+        let result = predicate.prune(&statistics)?;
         // Containers 0 and 2 sit in the gap between 30 and 100000; container 1
         // holds 20. The bitmap excludes the first and third.
         assert_eq!(result, vec![false, true, false]);
+        Ok(())
     }
 
     #[rstest]
@@ -7528,18 +7611,17 @@ mod tests {
         #[case] file_type: DataType,
         #[case] cast_type: DataType,
         #[case] pruned: bool,
-    ) {
+    ) -> Result<()> {
         let schema =
             Arc::new(Schema::new(vec![Field::new("b", file_type.clone(), true)]));
         let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
         let cast_column: Arc<dyn PhysicalExpr> =
             Arc::new(phys_expr::CastExpr::new(column, cast_type, None));
-        let lookup = hash_lookup(&cast_column, &[10, 20, 30, 100_000]);
+        let lookup = hash_lookup(&cast_column, &[10, 20, 30, 100_000])?;
 
         let predicate = PruningPredicateBuilder::new()
             .with_file_schema(Arc::clone(&schema))
-            .try_build(lookup)
-            .unwrap();
+            .try_build(lookup)?;
 
         let to_file_type = |values: Vec<Option<i64>>| -> ArrayRef {
             let values: ArrayRef = Arc::new(values.into_iter().collect::<Int64Array>());
@@ -7552,7 +7634,7 @@ mod tests {
                 .with_max(to_file_type(vec![Some(8000), Some(25), Some(60000)])),
         );
 
-        let result = predicate.prune(&statistics).unwrap();
+        let result = predicate.prune(&statistics)?;
         // Containers 0 and 2 sit in the gap between 30 and 100000; container 1
         // holds 20. A working cast excludes the first and third; a declined one
         // falls back to keeping every container.
@@ -7562,10 +7644,11 @@ mod tests {
             vec![true, true, true]
         };
         assert_eq!(result, expected);
+        Ok(())
     }
 
     #[test]
-    fn test_partition_routed_hash_lookup_pruning() {
+    fn test_partition_routed_hash_lookup_pruning() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("b", DataType::Int32, true)]));
         let column: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::Column::new("b", 0));
         let literal = |value: ScalarValue| -> Arc<dyn PhysicalExpr> {
@@ -7573,29 +7656,25 @@ mod tests {
         };
         // One branch per build partition, each holding its own slice of the build
         // side, as `build_partitioned_filter` produces them.
-        let case: Arc<dyn PhysicalExpr> = Arc::new(
-            phys_expr::CaseExpr::try_new(
-                Some(literal(ScalarValue::UInt64(Some(0)))),
-                vec![
-                    (
-                        literal(ScalarValue::UInt64(Some(0))),
-                        hash_lookup(&column, &[10, 20, 30]),
-                    ),
-                    (
-                        literal(ScalarValue::UInt64(Some(1))),
-                        hash_lookup(&column, &[40, 50, 60]),
-                    ),
-                ],
-                // Partitions with no build rows reject everything routed to them.
-                Some(literal(ScalarValue::Boolean(Some(false)))),
-            )
-            .unwrap(),
-        );
+        let case: Arc<dyn PhysicalExpr> = Arc::new(phys_expr::CaseExpr::try_new(
+            Some(literal(ScalarValue::UInt64(Some(0)))),
+            vec![
+                (
+                    literal(ScalarValue::UInt64(Some(0))),
+                    hash_lookup(&column, &[10, 20, 30])?,
+                ),
+                (
+                    literal(ScalarValue::UInt64(Some(1))),
+                    hash_lookup(&column, &[40, 50, 60])?,
+                ),
+            ],
+            // Partitions with no build rows reject everything routed to them.
+            Some(literal(ScalarValue::Boolean(Some(false)))),
+        )?);
 
         let predicate = PruningPredicateBuilder::new()
             .with_file_schema(Arc::clone(&schema))
-            .try_build(case)
-            .unwrap();
+            .try_build(case)?;
 
         let statistics = TestStatistics::new().with(
             "b",
@@ -7605,10 +7684,11 @@ mod tests {
             ),
         );
 
-        let result = predicate.prune(&statistics).unwrap();
+        let result = predicate.prune(&statistics)?;
         // Container 1 ([15,25]) holds 20 from the first branch and container 2
         // ([45,55]) holds 50 from the second, so a branch may match in each. The
         // other two intersect neither branch, nor the `ELSE`.
         assert_eq!(result, vec![false, true, true, false]);
+        Ok(())
     }
 }

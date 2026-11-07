@@ -105,9 +105,7 @@ SELECT evaluations();
 ----
 10
 
-# https://github.com/apache/datafusion/issues/26910
-# Known bug: the preimage rewrite of `floor(x) = 3` copies `x`, so a volatile
-# `x` is evaluated two times. The count must be 10.
+# Volatile in a predicate.
 
 query I
 SELECT count(*) FROM t WHERE floor(counted_volatile(b)) = 3;
@@ -117,7 +115,7 @@ SELECT count(*) FROM t WHERE floor(counted_volatile(b)) = 3;
 query I
 SELECT evaluations();
 ----
-20
+10
 
 # `x BETWEEN low AND high` evaluates `x` two times. This is accepted behaviour,
 # Postgres does the same: https://github.com/apache/datafusion/issues/25457

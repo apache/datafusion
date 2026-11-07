@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Crate Configuration
@@ -50,7 +37,17 @@ And with features
 datafusion = { git = "https://github.com/apache/datafusion", branch = "main", default-features = false, features = ["unicode_expressions"] }
 ```
 
+The version on `main` is a pre-release of the next major version, such as
+`57.0.0-dev` (see the `version` in the workspace [`Cargo.toml`]).
+
+Cargo matches a pre-release version exactly, so if
+you specify a `version`, the requirement must include the `-dev` suffix
+(for example `version = "57.0.0-dev"`). A requirement such as `version = "57"`
+will not match.
+
 More on [Cargo dependencies](https://doc.rust-lang.org/cargo/reference/specifying-dependencies.html#specifying-dependencies)
+
+[`cargo.toml`]: https://github.com/apache/datafusion/blob/main/Cargo.toml
 
 ## Optimizing Builds
 

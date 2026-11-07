@@ -1,0 +1,45 @@
+name Q14
+group null_aware_join
+
+load sql_benchmarks/null_aware_join/init/load.sql
+
+# Correctness canary: the NOT IN result must match a reference count that does
+# not use NOT IN. It holds for every NAJ_ROWS. `hk` is NOT NULL on both sides, so
+# a subquery row makes an outer tuple UNKNOWN or TRUE exactly when `hk` matches
+# and `id_n50` is NULL on either side or equal; the row is kept only when no
+# such subquery row exists.
+assert I
+SELECT count(*) = (
+  SELECT count(*)
+  FROM small_outer o
+  WHERE NOT EXISTS (
+    SELECT 1 FROM small_inner i
+    WHERE i.z < 500
+      AND i.hk = o.hk
+      AND (o.id_n50 IS NULL OR i.id_n50 IS NULL OR i.id_n50 = o.id_n50)
+  )
+)
+FROM small_outer o
+WHERE (o.id_n50, o.hk) NOT IN (
+  SELECT i.id_n50, i.hk FROM small_inner i WHERE i.z < 500
+);
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q14: uncorrelated multi-column NOT IN whose NOT NULL element `hk` is a scope
+-- key with one hot value among many rare ones, with 50% NULL in the other
+-- element on both sides. The NULL-valued outer rows of the hot scope each pair
+-- with its many subquery rows, while the rare ones pair with one row each: the
+-- join must not walk the hot scope once per outer row. The filter halves the
+-- subquery side, so the outer side is probed. Compare with Q13, whose scopes
+-- are all equally large.
+SELECT count(*)
+FROM small_outer o
+WHERE (o.id_n50, o.hk) NOT IN (
+  SELECT i.id_n50, i.hk FROM small_inner i WHERE i.z < 500
+);
+
+cleanup sql_benchmarks/null_aware_join/init/cleanup.sql
