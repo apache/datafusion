@@ -16,6 +16,8 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{ExprSchemable, Operator, and, build_join_schema};
 
+/// Optimizer rule that uses filter predicates to replace cross joins with
+/// inner joins when join keys can be found.
 #[derive(Default, Debug)]
 pub struct EliminateCrossJoin;
 

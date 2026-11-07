@@ -35,7 +35,6 @@ use crate::spill::get_record_batch_memory_size;
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 use crate::statistics::{ChildStats, StatisticsArgs, with_per_partition_fetch};
-use crate::stream::ReservationStream;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use crate::topk::TopK;
 use crate::topk::TopKDynamicFilters;
@@ -1052,17 +1051,6 @@ impl ExternalSorter {
             reservation
                 .try_resize(total_sorted_size - workspace.size())
                 .map_err(Self::err_with_oom_context)?;
-
-            if workspace.size() == 0 {
-                return Ok(Box::pin(ReservationStream::new(
-                    Arc::clone(&schema),
-                    Box::pin(RecordBatchStreamAdapter::new(
-                        Arc::clone(&schema),
-                        futures::stream::iter(sorted_batches.into_iter().map(Ok)),
-                    )),
-                    reservation,
-                )) as SendableRecordBatchStream);
-            }
 
             // Return borrowed workspace first so the merge's cursors can reuse
             // it immediately. Both reservations also release on stream drop.
