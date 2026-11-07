@@ -2825,8 +2825,44 @@ FROM leaf_split ORDER BY v;
 [h!, i!] 250 epsilon 5
 [g!] 300 delta 4
 
+# A leaf expression inside the lambda body, rather than beside it: the split has
+# to find it through `LambdaExpr` before the parameter rebase even applies.
+query ?IT
+SELECT array_transform(arr, x -> x + file_row_index()) AS a, s['value'] AS v, s['label'] AS l
+FROM leaf_split ORDER BY v;
+----
+[1, 2, 3] 100 alpha
+[8] 150 gamma
+[5, 6] 200 beta
+[14] 250 epsilon
+[10, 11, 12] 300 delta
+
 statement ok
 SET datafusion.sql_parser.dialect = generic;
+
+# A source that does not absorb the projection keeps the plan unchanged: the
+# split must not add a projection nobody can use. A memory table refuses
+# because `all_alias_free_columns` rejects the aliased `get_field`, and that is
+# the default for any node that does not override `try_swapping_with_projection`.
+statement ok
+CREATE TABLE leaf_split_mem AS
+SELECT column1 AS id, column2 AS s FROM VALUES
+    (1, {value: 100}), (2, {value: 200}), (3, {value: 150}),
+    (4, {value: 300}), (5, {value: 250});
+
+query TT
+EXPLAIN SELECT s['value'] AS v, id + 1 AS w FROM leaf_split_mem;
+----
+logical_plan
+01)Projection: get_field(leaf_split_mem.s, Utf8("value")) AS v, leaf_split_mem.id + Int64(1) AS w
+02)--TableScan: leaf_split_mem projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: partitions=1, partition_sizes=[3]
+
+statement ok
+DROP TABLE leaf_split_mem;
 
 statement ok
 SET datafusion.execution.batch_size = 8192;

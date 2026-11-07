@@ -67,18 +67,19 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
             .map(|t| t.data)?;
 
         // Push what can already descend, then split the projections that are
-        // stuck above a `RepartitionExec`, then clean up once more: the split
-        // can leave an outer projection that is now only column references.
+        // stuck above a `RepartitionExec`. The split needs no cleanup pass of
+        // its own: the outer projection it leaves either keeps every expression
+        // a plain column, and is then no narrower than the widened child, or it
+        // narrows and holds a computed one. `RepartitionExec` declines both, it
+        // is not removable because it renames, and nothing else moved.
         let plan = plan.transform_down(remove_unnecessary_projections).data()?;
-        let plan = plan
-            .transform_down(|plan| {
-                Ok(match try_split_leaf_projection(&plan)? {
-                    Some(new_plan) => Transformed::yes(new_plan),
-                    None => Transformed::no(plan),
-                })
+        plan.transform_down(|plan| {
+            Ok(match try_split_leaf_projection(&plan)? {
+                Some(new_plan) => Transformed::yes(new_plan),
+                None => Transformed::no(plan),
             })
-            .data()?;
-        plan.transform_down(remove_unnecessary_projections).data()
+        })
+        .data()
     }
 
     fn name(&self) -> &str {
@@ -585,8 +586,10 @@ fn try_split_leaf_projection(
 /// Collects the distinct outermost [`ExpressionPlacement::MoveTowardsLeafNodes`]
 /// sub-expressions of `exprs`.
 ///
-/// Nested leaf expressions are not collected separately: `s['a']['b']` is one
-/// unit to hand to the source, not two.
+/// Recursion stops at a leaf, so one nested inside another is not collected too:
+/// that would add a column no expression reads, and read more of the struct than
+/// the outer leaf needs. Plain SQL does not reach it, because the logical
+/// optimizer folds nested field access into a single call.
 fn collect_leaf_exprs(exprs: &[ProjectionExpr]) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
     let mut leaves: Vec<Arc<dyn PhysicalExpr>> = vec![];
     for proj_expr in exprs {

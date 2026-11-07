@@ -9,7 +9,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::memory::MemorySourceConfig;
-use datafusion::datasource::physical_plan::CsvSource;
+use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::{ParquetReadOptions, SessionContext};
 use datafusion_common::config::{ConfigOptions, CsvOptions};
@@ -1955,5 +1955,83 @@ async fn split_keeps_field_metadata() -> Result<()> {
         Some(&"v".to_string())
     );
 
+    Ok(())
+}
+
+/// The split only handles round robin partitioning, because hash and range keys
+/// reference columns by index and would have to be remapped against the
+/// rewritten child schema. No SQL reaches this shape, so the test builds it:
+/// above a join, the leaf is already extracted into its own projection below the
+/// join, and nothing else puts a projection on a hash repartition.
+#[tokio::test]
+async fn split_declines_hash_repartition() -> Result<()> {
+    let schema: SchemaRef = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Int64, true),
+        Field::new(
+            "s",
+            DataType::Struct(vec![Field::new("value", DataType::Int64, true)].into()),
+            true,
+        ),
+    ]));
+    let config = FileScanConfigBuilder::new(
+        ObjectStoreUrl::parse("test:///").unwrap(),
+        Arc::new(ParquetSource::new(Arc::clone(&schema))),
+    )
+    .with_file(PartitionedFile::new("x".to_string(), 100))
+    .build();
+    // Parquet absorbs a leaf projection, so the split would commit here if the
+    // partitioning check did not stop it first.
+    let hash = Arc::new(RepartitionExec::try_new(
+        DataSourceExec::from_data_source(config),
+        Partitioning::Hash(vec![col("id", &schema)?], 4),
+    )?);
+
+    let leaf: Arc<dyn PhysicalExpr> = Arc::new(ScalarFunctionExpr::new(
+        "get_field",
+        datafusion_functions::core::get_field(),
+        vec![
+            col("s", &schema)?,
+            Arc::new(Literal::new(ScalarValue::from("value"))),
+        ],
+        Arc::new(Field::new("v", DataType::Int64, true)),
+        Arc::new(ConfigOptions::default()),
+    ));
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        vec![
+            ProjectionExpr {
+                expr: leaf,
+                alias: "v".to_string(),
+            },
+            ProjectionExpr {
+                expr: binary(
+                    col("id", &schema)?,
+                    Operator::Plus,
+                    Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+                    &schema,
+                )?,
+                alias: "w".to_string(),
+            },
+        ],
+        hash,
+    )?);
+
+    let optimized = ProjectionPushdown::new()
+        .optimize(Arc::clone(&projection), &ConfigOptions::default())?;
+    let actual = displayable(optimized.as_ref())
+        .indent(true)
+        .to_string()
+        .trim()
+        .to_string();
+
+    // Unchanged. Without the check the scan absorbs the leaf and the hash keys
+    // are left indexing the old schema.
+    assert_snapshot!(
+        actual,
+        @r"
+    ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+      RepartitionExec: partitioning=Hash([id@0], 4), input_partitions=1
+        DataSourceExec: file_groups={1 group: [[x]]}, projection=[id, s], file_type=parquet
+    "
+    );
     Ok(())
 }

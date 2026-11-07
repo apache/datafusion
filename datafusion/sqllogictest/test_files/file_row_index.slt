@@ -240,6 +240,29 @@ FROM parquet_table ORDER BY column1
 3 4 40
 4 5 50
 
+# The single column is what the values above cannot show: both outputs would
+# also agree if the marker were read twice.
+query TT
+EXPLAIN SELECT file_row_index(), file_row_index() + 1, column1 FROM parquet_table
+----
+logical_plan
+01)Projection: file_row_index(), file_row_index() + Int64(1), parquet_table.column1
+02)--TableScan: parquet_table projection=[column1]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 as file_row_index(), __datafusion_leaf_0@1 + 1 as file_row_index() + Int64(1), column1@0 as column1]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[column1, CAST(__datafusion_file_row_index@1 AS Int64;N) as __datafusion_leaf_0], file_type=parquet
+
+# `ORDER BY ... LIMIT` is a TopK that sorts on a column the split produced,
+# with `preserve_partitioning=[true]`, so it runs above the repartition on the
+# rewritten schema. No dynamic filter reaches the scan here: that needs the
+# sort key to be the computed sibling rather than the rewritten marker.
+query II
+SELECT file_row_index() AS r, column1 + 1 FROM parquet_table ORDER BY r DESC LIMIT 2
+----
+4 51
+3 41
+
 # Shapes that already worked must keep working: the leaf rules extract from
 # `Filter`, `Sort` and `Aggregate`, so those never depended on this fix.
 query I
@@ -273,7 +296,8 @@ SELECT file_row_index(), column1 FROM parquet_table ORDER BY column1
 4 50
 
 # Raising `batch_size` above the row count removes the repartition. This must
-# keep working, and it is also the control that proves trap 1 above is real.
+# keep working, and it is also the control showing that `batch_size` is what
+# triggers the repartition.
 statement ok
 SET datafusion.execution.batch_size = 8192;
 
