@@ -7878,6 +7878,57 @@ physical_plan
 statement ok
 reset datafusion.explain.physical_plan_only;
 
+# Same, with `k` a per-partition constant that is not derived from a filter
+# (one row per partition), at more than one target partition.
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+query IIII
+SELECT k, c, total, DENSE_RANK() OVER (ORDER BY total DESC, k) AS r
+FROM (
+  SELECT k, c, SUM(c) OVER (PARTITION BY k) AS total
+  FROM (SELECT SUM(v) AS k, COUNT(*) AS c FROM per_partition_constant)
+);
+----
+3 2 2 1
+
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+# When a projection drops the leading constant, it can no longer prove the
+# ordering that its input has, so the sort stays above the projection.
+query II
+SELECT total, DENSE_RANK() OVER (ORDER BY total DESC) AS r
+FROM (
+  SELECT SUM(s) OVER (PARTITION BY k) AS total
+  FROM (SELECT lower(g) AS k, SUM(v) AS s FROM per_partition_constant WHERE g = 'a' GROUP BY lower(g))
+);
+----
+1 1
+
+# The same when the proof depends on any other dropped column, without a
+# constant: `[k, a, c]` with `a = CAST(c AS DATE)` has `[k, c]`, but not after
+# `a` is dropped.
+statement ok
+CREATE TABLE ordered_through_cast(k VARCHAR, a DATE, c TIMESTAMP) AS VALUES
+  ('a', DATE '2026-01-02', TIMESTAMP '2026-01-02 05:00:00'),
+  ('a', DATE '2026-01-01', TIMESTAMP '2026-01-01 09:00:00'),
+  ('a', DATE '2026-01-02', TIMESTAMP '2026-01-02 01:00:00'),
+  ('b', DATE '2026-01-03', TIMESTAMP '2026-01-03 01:00:00');
+
+query TPI
+SELECT k, c, ROW_NUMBER() OVER (ORDER BY k, c) AS r
+FROM (SELECT k, a, c FROM ordered_through_cast WHERE a = CAST(c AS DATE) ORDER BY k, a, c LIMIT 10)
+ORDER BY r;
+----
+a 2026-01-01T09:00:00 1
+a 2026-01-02T01:00:00 2
+a 2026-01-02T05:00:00 3
+b 2026-01-03T01:00:00 4
+
+statement ok
+DROP TABLE ordered_through_cast;
+
 statement ok
 DROP TABLE per_partition_constant;
 

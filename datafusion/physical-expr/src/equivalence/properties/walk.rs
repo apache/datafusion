@@ -43,8 +43,8 @@ pub(super) struct SortKeyWalk<'a> {
     /// found by [`EquivalenceProperties::implied_ordering`] as the walk goes.
     implied: Vec<LexOrdering>,
     /// For each ordering (the normal orderings of `props`, then `implied`),
-    /// the index of its head. Empty until the first pin, so that a walk with
-    /// nothing pinned allocates nothing; until then every head is at index 0.
+    /// the index of its head. Empty until a head moves, so that a walk that
+    /// moves no head allocates nothing; until then every head is at index 0.
     head_idxs: Vec<usize>,
 }
 
@@ -295,6 +295,10 @@ impl<'a> SortKeyWalk<'a> {
         let class = self.props.eq_group.get_equivalence_class(expr);
         if class.is_some_and(|class| class.constant.is_some()) {
             return true;
+        }
+        // A column is only fixed if it is pinned or constant:
+        if expr.is::<Column>() {
+            return false;
         }
         // A volatile expression can change from row to row, even when all of
         // its inputs are fixed:

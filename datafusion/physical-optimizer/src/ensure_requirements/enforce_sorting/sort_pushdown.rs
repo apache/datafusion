@@ -1318,10 +1318,28 @@ fn handle_projection_pushdown(
     // (expressed in the projection's output schema) must be remapped into the
     // child schema before being pushed down. Forwarding `score@1` unchanged
     // could refer to a different input column and sort on the wrong key.
-    Ok(
+    let Some(requirements) =
         remap_requirement_through_projection(projection_exec, parent_required)
-            .map(|requirements| vec![Some(requirements)]),
-    )
+    else {
+        return Ok(None);
+    };
+    // If the input already has this ordering, no sort will be added below the
+    // projection. The parent still needs the projection to prove it, which it
+    // may not be able to do: the proof can depend on a column that it drops,
+    // such as a leading per-partition constant. Keep the sort above the
+    // projection in that case.
+    if projection_exec
+        .input()
+        .equivalence_properties()
+        .ordering_satisfy_requirement(requirements.first().clone())?
+        && !projection_exec
+            .properties()
+            .equivalence_properties()
+            .ordering_satisfy_requirement(parent_required.first().clone())?
+    {
+        return Ok(None);
+    }
+    Ok(Some(vec![Some(requirements)]))
 }
 
 #[cfg(test)]
