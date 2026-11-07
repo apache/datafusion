@@ -694,3 +694,15 @@ DEALLOCATE my_plan
 
 statement ok
 drop table keys_t
+
+statement ok
+PREPARE union_coercion(INT) AS SELECT CAST($1 AS INT) AS x UNION ALL SELECT 2.5 AS x;
+
+query R rowsort
+EXECUTE union_coercion(1);
+----
+1
+2.5
+
+statement ok
+DEALLOCATE union_coercion;
