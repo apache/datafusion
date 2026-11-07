@@ -5,8 +5,10 @@
 //! Create a stream that do a multi level merge stream
 
 use crate::metrics::BaselineMetrics;
+use crate::spill::spill_pieces::recorded_size;
 use crate::{EmptyRecordBatchStream, SpillManager};
 use arrow::array::RecordBatch;
+use datafusion_common::config::SpillCompression;
 use std::fmt::{Debug, Formatter};
 use std::mem;
 use std::pin::Pin;
@@ -21,7 +23,6 @@ use crate::sorts::builder::try_grow_reservation_to_at_least;
 use crate::sorts::sort::get_reserved_bytes_for_record_batch_size;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
 use crate::spill::gc_view_arrays;
-use crate::spill::spill_manager::GetSlicedSize;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
 use datafusion_execution::{RecordBatchStream, SendableRecordBatchStream};
 use datafusion_physical_expr_common::sort_expr::LexOrdering;
@@ -144,6 +145,8 @@ pub(crate) struct MultiLevelMergeBuilder {
     reservation: MemoryReservation,
     /// Workspace retained across retries and intermediate spill passes.
     merge_pool: Option<Arc<MergeMemoryPool>>,
+    /// Bound on the size of each batch written to intermediate spill files.
+    spill_max_batch_bytes: Option<usize>,
     /// Leave memory for the aggregate consuming the merged spill rows.
     reserve_replay_headroom: bool,
     /// Avoid merging more runs than needed before the final replay pass.
@@ -187,11 +190,20 @@ impl MultiLevelMergeBuilder {
             batch_size,
             reservation,
             merge_pool: None,
+            spill_max_batch_bytes: None,
             reserve_replay_headroom: false,
             size_intermediate_merges: false,
             enable_round_robin_tie_breaker,
             fetch,
         }
+    }
+
+    pub(super) fn with_spill_max_batch_bytes(
+        mut self,
+        spill_max_batch_bytes: Option<usize>,
+    ) -> Self {
+        self.spill_max_batch_bytes = spill_max_batch_bytes;
+        self
     }
 
     pub(super) fn with_merge_pool(mut self, pool: Option<Arc<MergeMemoryPool>>) -> Self {
@@ -281,6 +293,7 @@ impl MultiLevelMergeBuilder {
                 .spill_record_batch_stream_and_return_max_batch_stats(
                     &mut stream,
                     "MultiLevelMergeBuilder intermediate spill",
+                    self.spill_max_batch_bytes,
                 )
                 .await?
             else {
@@ -738,14 +751,16 @@ impl MultiLevelMergeBuilder {
             let mut all_singletons = true;
             let mut max_is_singleton = false;
             let mut decoded_max = 0;
+            let compressed =
+                self.spill_manager.compression != SpillCompression::Uncompressed;
             max_batch_rows = 0;
             while let Some(batch) = source.next().await {
                 let batch = batch?;
                 max_batch_rows = max_batch_rows.max(batch.num_rows());
                 all_singletons &= batch.num_rows() == 1;
-                decoded_max = decoded_max.max(batch.get_sliced_size()?);
+                decoded_max = decoded_max.max(recorded_size(&batch, compressed)?);
                 if batch.num_rows() == 1
-                    && gc_view_arrays(&batch)?.get_sliced_size()? >= old_max
+                    && recorded_size(&gc_view_arrays(&batch)?, compressed)? >= old_max
                 {
                     max_is_singleton = true;
                     break;
@@ -800,6 +815,7 @@ impl MultiLevelMergeBuilder {
             .spill_record_batch_stream_and_return_max_batch_stats(
                 &mut halved,
                 "MultiLevelMergeBuilder split skewed spill",
+                self.spill_max_batch_bytes,
             )
             .await?;
 
@@ -894,11 +910,14 @@ fn split_batch_in_half(batch: RecordBatch) -> Vec<RecordBatch> {
     vec![batch.slice(0, mid), batch.slice(mid, num_rows - mid)]
 }
 
+/// The fewest spill files a merge reads at once.
+pub(super) const MIN_SPILL_MERGE_FAN_IN: usize = 2;
+
 fn effective_spill_merge_fan_in(configured_fan_in: usize) -> usize {
     if configured_fan_in == 0 {
         usize::MAX
     } else {
-        configured_fan_in.max(2)
+        configured_fan_in.max(MIN_SPILL_MERGE_FAN_IN)
     }
 }
 
@@ -1642,7 +1661,7 @@ mod tests {
         )?;
         let batch = source.next().await.unwrap()?;
         assert_eq!(batch.num_rows(), 1);
-        assert!(gc_view_arrays(&batch)?.get_sliced_size()? < stored_max);
+        assert!(recorded_size(&gc_view_arrays(&batch)?, false)? < stored_max);
         drop((source, batch));
 
         // The stale estimate needs four batches for the minimum merge. Test
