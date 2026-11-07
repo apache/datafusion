@@ -10,7 +10,7 @@ use crate::spill::get_record_batch_memory_size;
 use crate::spill::spill_manager::GetSlicedSize;
 use arrow::array::{
     ArrayRef, Decimal128Array, DictionaryArray, Int8Array, Int64Array, StringArray,
-    StringViewArray,
+    StringViewArray, record_batch,
 };
 use arrow::compute::{SortOptions, concat_batches};
 use arrow::datatypes::{DataType, Field, Int8Type, Schema};
@@ -277,6 +277,58 @@ async fn test_spill_preserves_merge_workspace_after_limit_decreases_multithreade
 }
 
 #[tokio::test]
+async fn test_small_batch_spill_preserves_workspace_after_limit_decreases() -> Result<()>
+{
+    let batches = [
+        record_batch!(("key", Int64, [4, 2]))?,
+        record_batch!(("key", Int64, [3, 1]))?,
+    ];
+    let schema = batches[0].schema();
+    let input_bytes = batches
+        .iter()
+        .map(get_reserved_bytes_for_record_batch)
+        .sum::<Result<usize>>()?;
+    let options = ExecutionOptions::default();
+    assert!(input_bytes < options.sort_in_place_threshold_bytes);
+    let pool = AdjustablePool::new(MERGE_BYTES + input_bytes);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+        .build_arc()?;
+    let mut sorter = ExternalSorter::new(
+        0,
+        Arc::clone(&schema),
+        [PhysicalSortExpr::new_default(Arc::new(Column::new(
+            "key", 0,
+        )))]
+        .into(),
+        options.batch_size.get(),
+        MERGE_BYTES,
+        options.sort_in_place_threshold_bytes,
+        options.spill_compression,
+        &ExecutionPlanMetricsSet::new(),
+        Arc::clone(&runtime),
+    )?;
+    for batch in batches {
+        sorter.insert_batch(batch).await?;
+    }
+
+    // Existing workspace remains usable, but cannot be acquired again.
+    pool.set_limit(MERGE_BYTES - 1);
+    sorter.sort_and_spill_in_mem_batches().await?;
+    assert_eq!(pool.reserved(), MERGE_BYTES);
+
+    let stream = sorter.sort().await?;
+    drop(sorter);
+    let output: Vec<RecordBatch> = stream.try_collect().await?;
+    assert_eq!(
+        concat_batches(&schema, &output)?,
+        record_batch!(("key", Int64, [1, 2, 3, 4]))?
+    );
+    assert_released(&pool, &runtime).await;
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_spill_workspace_does_not_hide_insufficient_memory() -> Result<()> {
     let fixture = fixture()?;
     let capacity =
@@ -356,6 +408,49 @@ fn aliased_batches() -> Result<(Vec<RecordBatch>, LexOrdering)> {
         .collect::<Result<Vec<_>>>()?;
     let ordering = [PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)))].into();
     Ok((batches, ordering))
+}
+
+#[tokio::test]
+async fn test_small_batch_spill_falls_back_when_concat_cannot_grow() -> Result<()> {
+    let (batches, ordering) = aliased_batches()?;
+    let schema = batches[0].schema();
+    let input_bytes = batches
+        .iter()
+        .map(get_reserved_bytes_for_record_batch)
+        .sum::<Result<usize>>()?;
+    let concatenated = concat_batches(&schema, &batches)?;
+    // Copying the two aliased columns creates a larger reservation.
+    assert!(get_reserved_bytes_for_record_batch(&concatenated)? > input_bytes);
+    let expected = sort_batch(&concatenated, &ordering, None)?;
+    let pool = AdjustablePool::new(input_bytes + MERGE_BYTES);
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::clone(&pool) as Arc<dyn MemoryPool>)
+        .build_arc()?;
+    let mut sorter = ExternalSorter::new(
+        0,
+        Arc::clone(&schema),
+        ordering,
+        256,
+        MERGE_BYTES,
+        usize::MAX, // Attempt concatenation before falling back to separate runs.
+        SpillCompression::Uncompressed,
+        &ExecutionPlanMetricsSet::new(),
+        Arc::clone(&runtime),
+    )?;
+    for batch in batches {
+        sorter.insert_batch(batch).await?;
+    }
+
+    // The full pool cannot fund concatenation while retaining spill workspace.
+    assert_eq!(pool.reserved(), pool.capacity);
+    sorter.sort_and_spill_in_mem_batches().await?;
+    assert_eq!(pool.reserved(), MERGE_BYTES);
+    let stream = sorter.sort().await?;
+    drop(sorter);
+    let output: Vec<RecordBatch> = stream.try_collect().await?;
+    assert_eq!(concat_batches(&schema, &output)?, expected);
+    assert_released(&pool, &runtime).await;
+    Ok(())
 }
 
 #[tokio::test]
