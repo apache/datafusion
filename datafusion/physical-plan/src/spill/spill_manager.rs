@@ -32,6 +32,9 @@ pub struct SpillManager {
     batch_read_buffer_capacity: usize,
     /// general-purpose compression options
     pub(crate) compression: SpillCompression,
+    /// Upper bound on the in-memory size of each written batch, see
+    /// [`Self::with_max_batch_bytes`].
+    max_batch_bytes: Option<usize>,
 }
 
 impl SpillManager {
@@ -42,6 +45,7 @@ impl SpillManager {
             schema,
             batch_read_buffer_capacity: 2,
             compression: SpillCompression::default(),
+            max_batch_bytes: None,
         }
     }
 
@@ -56,6 +60,33 @@ impl SpillManager {
     pub fn with_compression_type(mut self, spill_compression: SpillCompression) -> Self {
         self.compression = spill_compression;
         self
+    }
+
+    /// Bounds the in-memory size of every batch written through this manager.
+    ///
+    /// Meant for managers that write sorted runs for a spill merge
+    /// ([`StreamingMergeBuilder::with_sorted_spill_files`]): the merge reserves
+    /// memory for the largest batch of each run, so a bound keeps the smallest
+    /// merge within a known amount whatever the row width. DataFusion's sort uses
+    /// `sort_spill_reservation_bytes / 4`; its aggregate also uses at most an
+    /// eighth of the state it held when it first spilled.
+    ///
+    /// A larger appended batch is written as several batches in the same row
+    /// order, so a reader gets more batches back than were appended. Readers that
+    /// expect one batch per append must not use a bounded manager. One row can
+    /// still exceed the bound, and so can batches with a column that cannot be
+    /// split by rows (dictionaries or run-end encoded arrays below the top level,
+    /// unions and list views).
+    ///
+    /// [`StreamingMergeBuilder::with_sorted_spill_files`]: crate::sorts::streaming_merge::StreamingMergeBuilder::with_sorted_spill_files
+    pub fn with_max_batch_bytes(mut self, max_batch_bytes: usize) -> Self {
+        self.max_batch_bytes = Some(max_batch_bytes);
+        self
+    }
+
+    /// See [`Self::with_max_batch_bytes`].
+    pub fn max_batch_bytes(&self) -> Option<usize> {
+        self.max_batch_bytes
     }
 
     /// Returns the schema for batches managed by this SpillManager
@@ -127,32 +158,29 @@ impl SpillManager {
         Ok(file.map(|f| (f, max_record_batch_size)))
     }
 
-    /// Spill a stream of `RecordBatch`es and return the file, maximum batch memory,
-    /// and maximum batch row count.
-    pub(crate) async fn spill_record_batch_stream_and_return_max_batch_stats(
+    /// Spill a stream of `RecordBatch`es and return the file and the size of the
+    /// largest batch written.
+    pub(crate) async fn spill_record_batch_stream_and_return_max_batch_memory(
         &self,
         stream: &mut SendableRecordBatchStream,
         request_description: &str,
-    ) -> Result<Option<(Arc<dyn SpillFile>, usize, usize)>> {
+    ) -> Result<Option<(Arc<dyn SpillFile>, usize)>> {
         use futures::StreamExt;
 
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
         let result = async {
             let mut max_record_batch_size = 0;
-            let mut max_batch_rows = 0;
 
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
                 let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
-
                 max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
-                max_batch_rows = max_batch_rows.max(batch.num_rows());
             }
 
             let file = in_progress_file.finish_async().await?;
 
-            Ok(file.map(|f| (f, max_record_batch_size, max_batch_rows)))
+            Ok(file.map(|f| (f, max_record_batch_size)))
         }
         .await;
 
@@ -439,7 +467,7 @@ mod tests {
             Box::pin(RecordBatchStreamAdapter::new(schema, input));
 
         let error = manager
-            .spill_record_batch_stream_and_return_max_batch_stats(
+            .spill_record_batch_stream_and_return_max_batch_memory(
                 &mut stream,
                 "abort-test",
             )

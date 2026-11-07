@@ -18,7 +18,7 @@ use std::sync::Mutex;
 
 #[derive(Debug, Clone, Copy)]
 enum PressurePoint {
-    ReplayHeadroom,
+    HeadroomRelease,
     IntermediateEof,
 }
 
@@ -76,7 +76,7 @@ impl MemoryPool for CompetingMemoryPool {
         }
         let mut active = self.active.lock().unwrap();
         *active |= match self.pressure_point {
-            PressurePoint::ReplayHeadroom => reservation.size() > 0,
+            PressurePoint::HeadroomRelease => reservation.size() > 0,
             PressurePoint::IntermediateEof => reservation.size() == 0,
         };
         if *active {
@@ -100,7 +100,7 @@ impl MemoryPool for CompetingMemoryPool {
 }
 
 #[rstest::rstest]
-#[case::headroom_release(PressurePoint::ReplayHeadroom)]
+#[case::headroom_release(PressurePoint::HeadroomRelease)]
 #[case::intermediate_eof(PressurePoint::IntermediateEof)]
 #[tokio::test]
 async fn intermediate_sizing_does_not_add_rewrites_under_contention(
@@ -109,79 +109,68 @@ async fn intermediate_sizing_does_not_add_rewrites_under_contention(
     #[values(8, 9)] runs: usize,
 ) -> Result<()> {
     const ROWS: usize = 128;
-    let mut rewrites = Vec::new();
-    for size_intermediate_merges in [false, true] {
-        let env = Arc::new(RuntimeEnv::default());
-        let schema = test_schema();
-        let spill_manager = build_spill_manager(&env, &schema);
-        let spilled_rows = spill_manager.metrics.spilled_rows.clone();
-        let files: Vec<_> = (0..runs)
-            .map(|run| {
-                make_sorted_spill_file(
-                    &spill_manager,
-                    &schema,
-                    (0..ROWS).map(|row| (row * runs + run) as i64).collect(),
-                )
-            })
-            .collect();
-        let batch_memory = files[0].max_record_batch_memory;
-        // Seven runs initially fit with read-ahead and equal replay headroom.
-        // The competing partition takes released bytes until only two or three
-        // runs would fit a fresh admission. Both runs use the same release hook.
-        let competing_pool = Arc::new(CompetingMemoryPool::new(
-            8 * 7 * batch_memory,
-            8 * (7 - final_fan_in) * batch_memory,
-            pressure_point,
-        ));
-        let pool = Arc::clone(&competing_pool) as Arc<dyn MemoryPool>;
-        let builder =
-            build_merge_builder(spill_manager, Arc::clone(&schema), files, &pool, ROWS)
-                .with_replay_headroom(true)
-                .with_intermediate_merge_sizing(size_intermediate_merges.then_some(ROWS));
-        let mut stream = builder.create_spillable_merge_stream();
-        let first = stream.try_next().await?.expect("nonempty merge");
-        if matches!(pressure_point, PressurePoint::IntermediateEof)
-            && size_intermediate_merges
-            && runs == 8
-        {
-            // Sizing these eight runs retains the admitted buffers across the
-            // intermediate EOF. The contender cannot take them before the final
-            // merge is admitted, so this boundary must not have fired yet.
-            assert_eq!(competing_pool.contender.size(), 0);
-        } else {
-            assert_eq!(
-                competing_pool.contender.size(),
-                competing_pool.contender_target
-            );
-        }
-        let mut batches = vec![first];
-        batches.extend(stream.try_collect::<Vec<_>>().await?);
-        let merged = concat_batches(&schema, &batches)?;
-        let expected = Int64Array::from_iter_values(0..(runs * ROWS) as i64);
-        assert_eq!(merged.column(0).as_primitive::<Int64Type>(), &expected);
-        rewrites.push(spilled_rows.value() - runs * ROWS);
+    let env = Arc::new(RuntimeEnv::default());
+    let schema = test_schema();
+    let spill_manager = build_spill_manager(&env, &schema);
+    let spilled_rows = spill_manager.metrics.spilled_rows.clone();
+    let files: Vec<_> = (0..runs)
+        .map(|run| {
+            make_sorted_spill_file(
+                &spill_manager,
+                &schema,
+                (0..ROWS).map(|row| (row * runs + run) as i64).collect(),
+            )
+        })
+        .collect();
+    let batch_memory = files[0].max_record_batch_memory;
+    // Seven runs initially fit with read-ahead and equal headroom.
+    // The competing partition takes released bytes until only two or three
+    // runs would fit a fresh admission. Both runs use the same release hook.
+    let competing_pool = Arc::new(CompetingMemoryPool::new(
+        8 * 7 * batch_memory,
+        8 * (7 - final_fan_in) * batch_memory,
+        pressure_point,
+    ));
+    let pool = Arc::clone(&competing_pool) as Arc<dyn MemoryPool>;
+    let builder =
+        build_merge_builder(spill_manager, Arc::clone(&schema), files, &pool, ROWS);
+    let mut stream = builder.create_spillable_merge_stream();
+    let first = stream.try_next().await?.expect("nonempty merge");
+    if matches!(pressure_point, PressurePoint::IntermediateEof) && runs == 8 {
+        // Sizing these eight runs retains the admitted buffers across the
+        // intermediate EOF. The contender cannot take them before the final
+        // merge is admitted, so this boundary must not have fired yet.
+        assert_eq!(competing_pool.contender.size(), 0);
+    } else {
         assert_eq!(
             competing_pool.contender.size(),
             competing_pool.contender_target
         );
-        assert_eq!(pool.reserved(), competing_pool.contender.size());
-        competing_pool.contender.free();
-        assert_eq!(pool.reserved(), 0);
-        assert_eq!(env.disk_manager.spilling_progress().active_files_count, 0);
-        assert_eq!(env.disk_manager.used_disk_space(), 0);
     }
+    let mut batches = vec![first];
+    batches.extend(stream.try_collect::<Vec<_>>().await?);
+    let merged = concat_batches(&schema, &batches)?;
+    let expected = Int64Array::from_iter_values(0..(runs * ROWS) as i64);
+    assert_eq!(merged.column(0).as_primitive::<Int64Type>(), &expected);
+    let rewrites = spilled_rows.value() - runs * ROWS;
     assert_eq!(
-        rewrites[0],
-        if runs == 9 && final_fan_in == 2 { 9 } else { 7 } * ROWS
+        competing_pool.contender.size(),
+        competing_pool.contender_target
     );
+    assert_eq!(pool.reserved(), competing_pool.contender.size());
+    competing_pool.contender.free();
+    assert_eq!(pool.reserved(), 0);
+    assert_eq!(env.disk_manager.spilling_progress().active_files_count, 0);
+    assert_eq!(env.disk_manager.used_disk_space(), 0);
+    // Merging every admitted run first rewrites seven runs, or nine when the
+    // contender leaves room for only two final inputs.
+    let unsized_rewrites = if runs == 9 && final_fan_in == 2 { 9 } else { 7 } * ROWS;
     assert!(
-        rewrites[1] <= rewrites[0],
-        "sizing rewrote {} rows versus {} without sizing under {pressure_point:?}",
-        rewrites[1],
-        rewrites[0],
+        rewrites <= unsized_rewrites,
+        "sizing rewrote {rewrites} rows versus {unsized_rewrites} without sizing under {pressure_point:?}",
     );
     if runs == 8 {
-        assert_eq!(rewrites[1], 6 * ROWS);
+        assert_eq!(rewrites, 6 * ROWS);
     }
     Ok(())
 }
@@ -206,18 +195,12 @@ async fn sized_merge_retains_reservation_until_builder_drop() -> Result<()> {
     let competing_pool = Arc::new(CompetingMemoryPool::new(
         8 * 7 * batch_memory,
         8 * 5 * batch_memory,
-        PressurePoint::ReplayHeadroom,
+        PressurePoint::HeadroomRelease,
     ));
     let pool = Arc::clone(&competing_pool) as Arc<dyn MemoryPool>;
     let mut builder =
-        build_merge_builder(spill_manager, Arc::clone(&schema), files, &pool, ROWS)
-            .with_replay_headroom(true)
-            .with_intermediate_merge_sizing(Some(ROWS));
-    let MergeStep::Stream { stream, .. } =
-        builder.merge_sorted_runs_within_mem_limit(false)?
-    else {
-        panic!("six inputs should be selected for the intermediate merge");
-    };
+        build_merge_builder(spill_manager, Arc::clone(&schema), files, &pool, ROWS);
+    let stream = builder.merge_sorted_runs_within_mem_limit()?;
     assert_eq!(builder.sorted_spill_files.len(), 2);
     let retained = 4 * 7 * batch_memory;
     assert_eq!(builder.reservation.size(), retained);

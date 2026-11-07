@@ -30,7 +30,7 @@ macro_rules! primitive_merge_helper {
 }
 
 macro_rules! merge_helper {
-    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
+    ($t:ty, $sort:ident, $streams:ident, $schema:ident, $tracking_metrics:ident, $batch_size:ident, $max_batch_bytes:ident, $fetch:ident, $reservation:ident, $enable_round_robin_tie_breaker:ident) => {{
         let streams =
             FieldCursorStream::<$t>::new($sort, $streams, $reservation.new_empty());
         return Ok(SortPreservingMergeStream::new(
@@ -42,6 +42,7 @@ macro_rules! merge_helper {
             $reservation,
             $enable_round_robin_tie_breaker,
         )
+        .with_max_batch_bytes($max_batch_bytes)
         .into_stream());
     }};
 }
@@ -83,9 +84,7 @@ pub struct StreamingMergeBuilder<'a> {
     fetch: Option<usize>,
     reservation: Option<MemoryReservation>,
     merge_pool: Option<Arc<MergeMemoryPool>>,
-    /// Leave memory for the aggregate consuming the merged spill rows.
-    reserve_replay_headroom: bool,
-    min_spill_batch_rows: Option<usize>,
+    max_batch_bytes: Option<usize>,
     enable_round_robin_tie_breaker: bool,
 }
 
@@ -151,23 +150,11 @@ impl<'a> StreamingMergeBuilder<'a> {
         self
     }
 
-    /// Leave room for aggregate replay by checking that the pool can admit
-    /// merge buffers plus equal headroom. Release the headroom before replay.
-    pub(crate) fn with_replay_headroom(mut self) -> Self {
-        self.reserve_replay_headroom = true;
-        self
-    }
-
-    /// Limit intermediate rewrites when the retained buffer reservation can
-    /// also admit the final replay pass with its headroom.
-    /// `min_spill_batch_rows` is the minimum largest-batch row count across input
-    /// runs. A run without a full batch disables sizing for the whole replay,
-    /// since merging short batches can increase the intermediate run's budget.
-    pub(crate) fn with_intermediate_merge_sizing(
-        mut self,
-        min_spill_batch_rows: Option<usize>,
-    ) -> Self {
-        self.min_spill_batch_rows = min_spill_batch_rows;
+    /// Emit a batch once it holds about this many bytes, even if it has fewer
+    /// than `batch_size` rows. Set by [`MultiLevelMergeBuilder`] for merges of
+    /// spilled runs.
+    pub(super) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
+        self.max_batch_bytes = max_batch_bytes;
         self
     }
 
@@ -204,8 +191,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             batch_size,
             reservation,
             merge_pool,
-            reserve_replay_headroom,
-            min_spill_batch_rows,
+            max_batch_bytes,
             fetch,
             expressions,
             enable_round_robin_tie_breaker,
@@ -247,8 +233,6 @@ impl<'a> StreamingMergeBuilder<'a> {
                 enable_round_robin_tie_breaker,
             )
             .with_merge_pool(merge_pool)
-            .with_replay_headroom(reserve_replay_headroom)
-            .with_intermediate_merge_sizing(min_spill_batch_rows)
             .create_spillable_merge_stream());
         }
 
@@ -268,12 +252,12 @@ impl<'a> StreamingMergeBuilder<'a> {
             let sort = expressions[0].clone();
             let data_type = sort.expr.data_type(schema.as_ref())?;
             downcast_primitive! {
-                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker),
-                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::Utf8View => merge_helper!(StringViewArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
-                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, fetch, reservation, enable_round_robin_tie_breaker)
+                data_type => (primitive_merge_helper, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker),
+                DataType::Utf8 => merge_helper!(StringArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::Utf8View => merge_helper!(StringViewArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::LargeUtf8 => merge_helper!(LargeStringArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::Binary => merge_helper!(BinaryArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
+                DataType::LargeBinary => merge_helper!(LargeBinaryArray, sort, streams, schema, metrics, batch_size, max_batch_bytes, fetch, reservation, enable_round_robin_tie_breaker)
                 _ => {}
             }
         }
@@ -293,6 +277,7 @@ impl<'a> StreamingMergeBuilder<'a> {
             reservation,
             enable_round_robin_tie_breaker,
         )
+        .with_max_batch_bytes(max_batch_bytes)
         .into_stream())
     }
 }

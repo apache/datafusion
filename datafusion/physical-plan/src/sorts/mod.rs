@@ -9,7 +9,7 @@ mod cursor;
 mod merge;
 #[cfg(test)]
 mod merge_trace;
-mod multi_level_merge;
+pub(crate) mod multi_level_merge;
 pub mod partial_sort;
 pub mod partitioned_topk;
 pub mod sort;
