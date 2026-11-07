@@ -7,10 +7,16 @@
 use std::sync::Arc;
 
 use crate::PhysicalExpr;
-use arrow::array::{ArrayRef, BooleanArray};
-use arrow::record_batch::RecordBatch;
-use datafusion_common::{Result, ScalarValue};
+use arrow::array::{ArrayRef, BooleanArray, NullArray, new_null_array};
+use arrow::compute::FilterBuilder;
+use arrow::datatypes::{DataType, Field, Fields, Schema, SchemaRef};
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+use datafusion_common::cast::as_boolean_array;
+use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_physical_expr::expressions::Literal;
+use datafusion_physical_expr::utils::collect_columns;
+use datafusion_physical_expr_common::utils::scatter;
+use itertools::Itertools;
 
 /// Largest literal array, in bytes, that an [`AggregateArgument`] keeps for
 /// later batches.
@@ -68,6 +74,10 @@ impl AggregateArgument {
     /// Evaluates the argument for the rows of `batch` where `selection` is
     /// true, returning one value per row of `batch`.
     ///
+    /// `selected` holds those rows, as returned by [`AggregateFilter::select`].
+    /// Like [`PhysicalExpr::evaluate_selection`], the argument is evaluated
+    /// only against them, so rejected rows cannot raise errors.
+    ///
     /// Rows where `selection` is not true may hold any value, because the
     /// selection is also passed to [`GroupsAccumulator::convert_to_state`],
     /// which ignores them.
@@ -77,16 +87,154 @@ impl AggregateArgument {
         &mut self,
         batch: &RecordBatch,
         selection: &BooleanArray,
+        selected: &RecordBatch,
     ) -> Result<ArrayRef> {
-        match &mut self.literal {
-            Some(literal) if selection.has_true() => {
-                literal.array_of_size(batch.num_rows())
-            }
-            _ => self
-                .expr
-                .evaluate_selection(batch, selection)?
-                .into_array_of_size(batch.num_rows()),
+        let num_rows = batch.num_rows();
+        if selected.num_rows() == num_rows {
+            return self.evaluate(batch);
         }
+        if selected.num_rows() == 0 {
+            // A fallible expression may fail even for an empty batch, so it
+            // is not evaluated.
+            let data_type = self.expr.data_type(batch.schema_ref())?;
+            return Ok(new_null_array(&data_type, num_rows));
+        }
+        match &mut self.literal {
+            Some(literal) => literal.array_of_size(num_rows),
+            None => scatter(selection, self.evaluate(selected)?.as_ref()),
+        }
+    }
+}
+
+/// The `FILTER` clause of one aggregate function, such as `x > 0` in
+/// `SUM(y) FILTER (WHERE x > 0)`.
+///
+/// The arguments of the aggregate are evaluated only for the rows the filter
+/// selects, so those rows are copied out of each input batch first: evaluating
+/// the arguments for every row could raise errors for rejected rows, such as
+/// division by zero in `SUM(1 / x) FILTER (WHERE x <> 0)`.
+///
+/// Only the input columns that the arguments read are copied. A query may have
+/// many filtered aggregates over a wide input, and copying every column for
+/// every aggregate would dominate the cost of the aggregation.
+pub(in crate::aggregates) struct AggregateFilter {
+    predicate: Arc<dyn PhysicalExpr>,
+    /// Sorted indices of the input columns that the arguments read.
+    argument_columns: Vec<usize>,
+    /// The input schema last passed to [`Self::select`], and the schema of the
+    /// batches it returns for that input.
+    selected_schema: Option<(SchemaRef, SchemaRef)>,
+}
+
+impl AggregateFilter {
+    pub(in crate::aggregates) fn new(
+        predicate: Arc<dyn PhysicalExpr>,
+        arguments: &[AggregateArgument],
+    ) -> Self {
+        let argument_columns = arguments
+            .iter()
+            .flat_map(|argument| collect_columns(argument.expr()))
+            .map(|column| column.index())
+            .sorted_unstable()
+            .dedup()
+            .collect();
+        Self {
+            predicate,
+            argument_columns,
+            selected_schema: None,
+        }
+    }
+
+    pub(in crate::aggregates) fn predicate(&self) -> &Arc<dyn PhysicalExpr> {
+        &self.predicate
+    }
+
+    /// Evaluates the filter predicate for every row of `batch`.
+    pub(in crate::aggregates) fn evaluate(
+        &self,
+        batch: &RecordBatch,
+    ) -> Result<BooleanArray> {
+        let selection = self
+            .predicate
+            .evaluate(batch)?
+            .into_array(batch.num_rows())?;
+        Ok(as_boolean_array(&selection)?.clone())
+    }
+
+    /// Returns the rows of `batch` where `selection` is true, for evaluating
+    /// the arguments of the aggregate.
+    ///
+    /// Only the columns that the arguments read are copied. The other columns
+    /// are replaced by [`NullArray`]s, which hold no data, so the column
+    /// indices in the arguments remain valid.
+    pub(in crate::aggregates) fn select(
+        &mut self,
+        batch: &RecordBatch,
+        selection: &BooleanArray,
+    ) -> Result<RecordBatch> {
+        let schema = batch.schema_ref();
+        // As in `filter_record_batch`, optimizing the filter pays off only
+        // when it is applied to several arrays.
+        let optimize = match self.argument_columns.as_slice() {
+            [] => false,
+            [index] => schema.fields().get(*index).is_some_and(|field| {
+                FilterBuilder::is_optimize_beneficial(field.data_type())
+            }),
+            _ => true,
+        };
+        let mut builder = FilterBuilder::new(selection);
+        if optimize {
+            builder = builder.optimize();
+        }
+        let predicate = builder.build();
+
+        let num_rows = predicate.count();
+        // Every column the arguments do not read shares one placeholder.
+        let placeholder: ArrayRef = Arc::new(NullArray::new(num_rows));
+        let mut columns = vec![placeholder; batch.num_columns()];
+        for &index in &self.argument_columns {
+            let Some(column) = batch.columns().get(index) else {
+                return internal_err!(
+                    "Aggregate argument references column {index}, but the input has {} columns",
+                    batch.num_columns()
+                );
+            };
+            columns[index] = predicate.filter(column.as_ref())?;
+        }
+
+        let options = RecordBatchOptions::new().with_row_count(Some(num_rows));
+        Ok(RecordBatch::try_new_with_options(
+            self.selected_schema(schema),
+            columns,
+            &options,
+        )?)
+    }
+
+    /// Returns `schema` with the fields of columns that the arguments do not
+    /// read changed to [`DataType::Null`].
+    fn selected_schema(&mut self, schema: &SchemaRef) -> SchemaRef {
+        if let Some((input, selected)) = &self.selected_schema
+            && input == schema
+        {
+            return Arc::clone(selected);
+        }
+
+        let fields = schema
+            .fields()
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                if self.argument_columns.binary_search(&index).is_ok() {
+                    Arc::clone(field)
+                } else {
+                    Arc::new(Field::new(field.name(), DataType::Null, true))
+                }
+            })
+            .collect::<Fields>();
+        let selected =
+            Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()));
+        self.selected_schema = Some((Arc::clone(schema), Arc::clone(&selected)));
+        selected
     }
 }
 
@@ -122,9 +270,11 @@ impl LiteralArray {
 mod tests {
     use super::*;
 
-    use arrow::array::{AsArray, Int32Array};
-    use arrow::datatypes::{DataType, Field, Int32Type, Schema};
-    use datafusion_physical_expr::expressions::{col, lit};
+    use arrow::array::{AsArray, Int32Array, StringArray};
+    use arrow::compute::filter_record_batch;
+    use arrow::datatypes::Int32Type;
+    use datafusion_expr::Operator;
+    use datafusion_physical_expr::expressions::{binary, col, lit};
 
     fn batch(num_rows: usize) -> RecordBatch {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, true)]));
@@ -193,29 +343,106 @@ mod tests {
         Ok(())
     }
 
+    /// `evaluate_selection` matches [`PhysicalExpr::evaluate_selection`],
+    /// and does not evaluate the argument for rejected rows.
     #[test]
-    fn literal_selection_matches_evaluate_selection() -> Result<()> {
+    fn selection_matches_physical_expr_evaluate_selection() -> Result<()> {
+        // a = [0, 1, 2]
         let batch = batch(3);
-        let expr = lit(7i32);
-        let mut argument = AggregateArgument::new(Arc::clone(&expr));
-
-        for selection in [
-            BooleanArray::from(vec![true, true, true]),
+        let schema = batch.schema();
+        let a = col("a", &schema)?;
+        // Every selection rejects the first row, where `10 / a` fails.
+        let selections = [
+            BooleanArray::from(vec![false, true, true]),
             BooleanArray::from(vec![false, true, false]),
+            BooleanArray::from(vec![None, Some(true), Some(true)]),
             BooleanArray::from(vec![Some(false), None, Some(true)]),
             BooleanArray::from(vec![false, false, false]),
             BooleanArray::from(vec![None, Some(false), None]),
+        ];
+        let all_rows = BooleanArray::from(vec![true, true, true]);
+
+        for (expr, fallible) in [
+            (lit(7i32), false),
+            (Arc::clone(&a), false),
+            (binary(lit(10i32), Operator::Divide, a, &schema)?, true),
         ] {
-            let expected = expr
-                .evaluate_selection(&batch, &selection)?
-                .into_array(batch.num_rows())?;
-            let actual = argument.evaluate_selection(&batch, &selection)?;
-            assert_eq!(
-                actual.as_ref(),
-                expected.as_ref(),
-                "selection {selection:?}"
-            );
+            let mut argument = AggregateArgument::new(Arc::clone(&expr));
+            let mut filter =
+                AggregateFilter::new(lit(true), std::slice::from_ref(&argument));
+            let all_rows = (!fallible).then_some(&all_rows);
+            for selection in selections.iter().chain(all_rows) {
+                let expected = expr
+                    .evaluate_selection(&batch, selection)?
+                    .into_array(batch.num_rows())?;
+                let selected = filter.select(&batch, selection)?;
+                let actual = argument.evaluate_selection(&batch, selection, &selected)?;
+                assert_eq!(
+                    actual.as_ref(),
+                    expected.as_ref(),
+                    "{expr} with selection {selection:?}"
+                );
+            }
         }
+        Ok(())
+    }
+
+    #[test]
+    fn filter_selects_only_argument_columns() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 3, 4])),
+                Arc::new(StringArray::from(vec!["w", "x", "y", "z"])),
+                Arc::new(Int32Array::from(vec![10, 20, 30, 40])),
+            ],
+        )?;
+        let selection =
+            BooleanArray::from(vec![Some(true), Some(false), None, Some(true)]);
+        let expected = filter_record_batch(&batch, &selection)?;
+
+        // `c + a` reads columns 0 and 2, so column 1 is not copied.
+        let expr = binary(
+            col("c", &schema)?,
+            Operator::Plus,
+            col("a", &schema)?,
+            &schema,
+        )?;
+        let mut argument = AggregateArgument::new(expr);
+        let mut filter = AggregateFilter::new(lit(true), std::slice::from_ref(&argument));
+        let selected = filter.select(&batch, &selection)?;
+        assert_eq!(selected.num_rows(), 2);
+        assert_eq!(selected.column(0), expected.column(0));
+        assert_eq!(selected.column(2), expected.column(2));
+        assert_eq!(selected.column(1).data_type(), &DataType::Null);
+        assert_eq!(selected.column(1).len(), 2);
+        assert_eq!(selected.schema().field(1).name(), "b");
+        assert_eq!(
+            argument.evaluate(&selected)?.as_ref(),
+            argument.evaluate(&expected)?.as_ref()
+        );
+
+        // The schema of the selected rows is reused for later batches.
+        let next = filter.select(&batch, &BooleanArray::from(vec![true; 4]))?;
+        assert_eq!(next.num_rows(), 4);
+        assert!(Arc::ptr_eq(selected.schema_ref(), next.schema_ref()));
+
+        // `COUNT(*)` reads no columns.
+        let mut filter =
+            AggregateFilter::new(lit(true), &[AggregateArgument::new(lit(1))]);
+        let selected = filter.select(&batch, &selection)?;
+        assert_eq!(selected.num_rows(), 2);
+        assert!(
+            selected
+                .columns()
+                .iter()
+                .all(|column| column.data_type() == &DataType::Null)
+        );
         Ok(())
     }
 }

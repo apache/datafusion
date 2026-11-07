@@ -7220,6 +7220,247 @@ mod tests {
         Ok(())
     }
 
+    /// Aggregate argument that reads `column` and records the data types of
+    /// the columns of every batch it is evaluated against.
+    #[derive(Debug)]
+    struct RecordingArgument {
+        column: Arc<dyn PhysicalExpr>,
+        batch_types: Arc<Mutex<Vec<Vec<DataType>>>>,
+    }
+
+    impl PartialEq for RecordingArgument {
+        fn eq(&self, other: &Self) -> bool {
+            self.column.eq(&other.column)
+        }
+    }
+
+    impl Eq for RecordingArgument {}
+
+    impl std::hash::Hash for RecordingArgument {
+        fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+            self.column.hash(state);
+        }
+    }
+
+    impl std::fmt::Display for RecordingArgument {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "recording({})", self.column)
+        }
+    }
+
+    impl PhysicalExpr for RecordingArgument {
+        fn data_type(&self, input_schema: &Schema) -> Result<DataType> {
+            self.column.data_type(input_schema)
+        }
+
+        fn nullable(&self, input_schema: &Schema) -> Result<bool> {
+            self.column.nullable(input_schema)
+        }
+
+        fn evaluate(
+            &self,
+            batch: &RecordBatch,
+        ) -> Result<datafusion_expr::ColumnarValue> {
+            self.batch_types.lock().push(
+                batch
+                    .columns()
+                    .iter()
+                    .map(|column| column.data_type().clone())
+                    .collect(),
+            );
+            self.column.evaluate(batch)
+        }
+
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.column]
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            mut children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(Arc::new(Self {
+                column: children.swap_remove(0),
+                batch_types: Arc::clone(&self.batch_types),
+            }))
+        }
+
+        fn fmt_sql(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "recording({})", self.column)
+        }
+    }
+
+    /// An aggregate `FILTER` must copy only the input columns that the
+    /// aggregate's arguments read: the other columns reach the arguments as
+    /// `Null` placeholders. Covers the ungrouped stream, both compacting hash
+    /// aggregation paths, and skip-partial state conversion.
+    #[tokio::test]
+    async fn aggregate_filter_copies_only_argument_columns() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, true),
+            Field::new("val", DataType::Int64, true),
+            Field::new("payload", DataType::Utf8, true),
+            Field::new("keep", DataType::Boolean, true),
+        ]));
+        // Every batch keeps some rows and rejects others, so each path filters.
+        let batch = |keys: [i32; 4], vals: [i64; 4], keep: [Option<bool>; 4]| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(keys.to_vec())),
+                    Arc::new(Int64Array::from(vals.to_vec())),
+                    Arc::new(StringArray::from(vec!["unused"; 4])),
+                    Arc::new(BooleanArray::from(keep.to_vec())),
+                ],
+            )
+        };
+        let input_data = vec![
+            batch(
+                [1, 2, 3, 4],
+                [10, 20, 30, 40],
+                [Some(true), Some(false), None, Some(true)],
+            )?,
+            batch(
+                [5, 6, 7, 8],
+                [50, 60, 70, 80],
+                [Some(false), Some(true), Some(false), Some(true)],
+            )?,
+        ];
+        let argument_columns_only = vec![
+            DataType::Null,
+            DataType::Int64,
+            DataType::Null,
+            DataType::Null,
+        ];
+
+        let skip_partial_config = SessionConfig::default()
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                &ScalarValue::Int64(Some(2)),
+            )
+            .set(
+                "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+                &ScalarValue::Float64(Some(0.1)),
+            );
+        // (mode, grouped, session config, rows converted to state by skip-partial)
+        let cases = [
+            (AggregateMode::Single, false, SessionConfig::default(), 0),
+            (AggregateMode::Single, true, SessionConfig::default(), 0),
+            (AggregateMode::Partial, true, SessionConfig::default(), 0),
+            (AggregateMode::Partial, true, skip_partial_config, 4),
+        ];
+        // Every case evaluates the argument once per input batch, against the
+        // selected rows of the argument column only.
+        let expected_batch_types = cases
+            .iter()
+            .map(|(mode, grouped, _, skipped_rows)| {
+                let batch_types = vec![argument_columns_only.clone(); input_data.len()];
+                (*mode, *grouped, *skipped_rows, batch_types)
+            })
+            .collect::<Vec<_>>();
+        let mut outputs = vec![];
+        let mut batch_types_per_case = vec![];
+        for (mode, grouped, session_config, skipped_rows) in cases {
+            let batch_types = Arc::new(Mutex::new(vec![]));
+            let argument: Arc<dyn PhysicalExpr> = Arc::new(RecordingArgument {
+                column: col("val", &schema)?,
+                batch_types: Arc::clone(&batch_types),
+            });
+            let aggr_expr = vec![
+                AggregateExprBuilder::new(sum_udaf(), vec![argument])
+                    .schema(Arc::clone(&schema))
+                    .alias("SUM(val)")
+                    .build()
+                    .map(Arc::new)?,
+            ];
+            let group_by = if grouped {
+                PhysicalGroupBy::new_single(vec![(
+                    col("key", &schema)?,
+                    "key".to_string(),
+                )])
+            } else {
+                PhysicalGroupBy::default()
+            };
+            let input = TestMemoryExec::try_new_exec(
+                std::slice::from_ref(&input_data),
+                Arc::clone(&schema),
+                None,
+            )?;
+            let aggregate_exec = Arc::new(AggregateExec::try_new(
+                mode,
+                group_by,
+                aggr_expr,
+                vec![Some(col("keep", &schema)?)],
+                input,
+                Arc::clone(&schema),
+            )?);
+
+            let ctx =
+                Arc::new(TaskContext::default().with_session_config(session_config));
+            let output = collect(aggregate_exec.execute(0, ctx)?).await?;
+            outputs.push(batches_to_sort_string(&output));
+
+            let metrics = aggregate_exec.metrics().unwrap();
+            assert_eq!(
+                metrics
+                    .sum_by_name("skipped_aggregation_rows")
+                    .map_or(0, |rows| rows.as_usize()),
+                skipped_rows,
+                "{mode:?}"
+            );
+            let batch_types = batch_types.lock().clone();
+            batch_types_per_case.push((mode, grouped, skipped_rows, batch_types));
+        }
+
+        assert_eq!(batch_types_per_case, expected_batch_types);
+
+        assert_snapshot!(outputs.join("\n"), @r"
+        +----------+
+        | SUM(val) |
+        +----------+
+        | 190      |
+        +----------+
+        +-----+----------+
+        | key | SUM(val) |
+        +-----+----------+
+        | 1   | 10       |
+        | 2   |          |
+        | 3   |          |
+        | 4   | 40       |
+        | 5   |          |
+        | 6   | 60       |
+        | 7   |          |
+        | 8   | 80       |
+        +-----+----------+
+        +-----+---------------+
+        | key | SUM(val)[sum] |
+        +-----+---------------+
+        | 1   | 10            |
+        | 2   |               |
+        | 3   |               |
+        | 4   | 40            |
+        | 5   |               |
+        | 6   | 60            |
+        | 7   |               |
+        | 8   | 80            |
+        +-----+---------------+
+        +-----+---------------+
+        | key | SUM(val)[sum] |
+        +-----+---------------+
+        | 1   | 10            |
+        | 2   |               |
+        | 3   |               |
+        | 4   | 40            |
+        | 5   |               |
+        | 6   | 60            |
+        | 7   |               |
+        | 8   | 80            |
+        +-----+---------------+
+        ");
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_partial_hash_stream_skip_aggregation_after_threshold() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![

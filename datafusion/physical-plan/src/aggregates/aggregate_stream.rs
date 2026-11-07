@@ -4,7 +4,7 @@
 
 //! Aggregate without grouping columns
 
-use crate::aggregates::aggregate_argument::AggregateArgument;
+use crate::aggregates::aggregate_argument::{AggregateArgument, AggregateFilter};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     aggregate_sub_metrics,
@@ -33,7 +33,6 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::AggregateExec;
-use crate::filter::batch_filter;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use futures::stream::{Stream, StreamExt};
 
@@ -56,7 +55,7 @@ struct AggregateStreamInner {
     mode: AggregateMode,
     input: SendableRecordBatchStream,
     aggregate_arguments: Vec<Vec<AggregateArgument>>,
-    filter_expressions: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
+    filters: Vec<Option<AggregateFilter>>,
     aggregate_argument_metrics: AggregateArgumentMetrics,
     aggregate_accumulator_metrics: AggregateAccumulatorMetrics,
 
@@ -290,13 +289,22 @@ impl AggregateStream {
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(context))?;
 
-        let aggregate_arguments = aggregate_expressions(agg.aggr_expr(), &agg.mode, 0)?
-            .into_iter()
-            .map(|exprs| exprs.into_iter().map(AggregateArgument::new).collect())
-            .collect();
-        let filter_expressions = match agg.mode.input_mode() {
-            AggregateInputMode::Raw => agg_filter_expr,
-            AggregateInputMode::Partial => vec![None; agg.aggr_expr().len()].into(),
+        let aggregate_arguments: Vec<Vec<_>> =
+            aggregate_expressions(agg.aggr_expr(), &agg.mode, 0)?
+                .into_iter()
+                .map(|exprs| exprs.into_iter().map(AggregateArgument::new).collect())
+                .collect();
+        let filters = match agg.mode.input_mode() {
+            AggregateInputMode::Raw => agg_filter_expr
+                .iter()
+                .zip(&aggregate_arguments)
+                .map(|(filter, arguments)| {
+                    filter.as_ref().map(|predicate| {
+                        AggregateFilter::new(Arc::clone(predicate), arguments)
+                    })
+                })
+                .collect(),
+            AggregateInputMode::Partial => agg.aggr_expr().iter().map(|_| None).collect(),
         };
         let aggregate_labels = agg
             .aggr_expr()
@@ -355,7 +363,7 @@ impl AggregateStream {
             input,
             baseline_metrics,
             aggregate_arguments,
-            filter_expressions,
+            filters,
             aggregate_argument_metrics,
             aggregate_accumulator_metrics,
             accumulators,
@@ -380,7 +388,7 @@ impl AggregateStream {
                                 &batch,
                                 &mut this.accumulators,
                                 &mut this.aggregate_arguments,
-                                &this.filter_expressions,
+                                &mut this.filters,
                                 &this.aggregate_argument_metrics,
                                 &this.aggregate_accumulator_metrics,
                             )
@@ -470,14 +478,15 @@ fn aggregate_batch(
     batch: &RecordBatch,
     accumulators: &mut [AccumulatorItem],
     arguments: &mut [Vec<AggregateArgument>],
-    filters: &[Option<Arc<dyn PhysicalExpr>>],
+    filters: &mut [Option<AggregateFilter>],
     aggregate_argument_metrics: &AggregateArgumentMetrics,
     aggregate_accumulator_metrics: &AggregateAccumulatorMetrics,
 ) -> Result<usize> {
     let mut allocated = 0usize;
 
     // 1.1 iterate accumulators and respective expressions together
-    // 1.2 filter the batch if necessary
+    // 1.2 select the rows passing the aggregate FILTER, if any (only the
+    //     columns the arguments read are copied)
     // 1.3 evaluate expressions
     // 1.4 update / merge accumulators with the expressions' values
 
@@ -491,7 +500,10 @@ fn aggregate_batch(
             // 1.2 and 1.3
             let values = aggregate_argument_metrics.time(index, || {
                 let batch = match filter {
-                    Some(filter) => Cow::Owned(batch_filter(batch, filter)?),
+                    Some(filter) => {
+                        let selection = filter.evaluate(batch)?;
+                        Cow::Owned(filter.select(batch, &selection)?)
+                    }
                     None => Cow::Borrowed(batch),
                 };
                 arguments
