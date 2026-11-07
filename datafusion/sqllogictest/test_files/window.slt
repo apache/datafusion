@@ -7949,6 +7949,37 @@ a 2026-01-01 2026-01-01T09:00:00 1
 a 2026-01-02 2026-01-02T01:00:00 2
 a 2026-01-02 2026-01-02T05:00:00 3
 
+# The same when a projection drops `a`: the implied `[c]` is stored, so the
+# projection can prove it and no sort is added above the projection.
+query TPI
+SELECT k, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT lower(k) AS k, a, c FROM ordered_through_cast WHERE k = 'a' AND a = CAST(c AS DATE) ORDER BY k, a, c LIMIT 10)
+ORDER BY r;
+----
+a 2026-01-01T09:00:00 1
+a 2026-01-02T01:00:00 2
+a 2026-01-02T05:00:00 3
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT k, c, ROW_NUMBER() OVER (ORDER BY c) AS r
+FROM (SELECT lower(k) AS k, a, c FROM ordered_through_cast WHERE k = 'a' AND a = CAST(c AS DATE) ORDER BY k, a, c LIMIT 10)
+ORDER BY r;
+----
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, c@1 as c, row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as r]
+02)--BoundedWindowAggExec: wdw=[row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "row_number() ORDER BY [ordered_through_cast.c ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----ProjectionExec: expr=[k@0 as k, c@2 as c]
+04)------SortExec: TopK(fetch=10), expr=[a@1 ASC NULLS LAST, c@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[lower(k@0) as k, a@1 as a, c@2 as c]
+06)----------FilterExec: k@0 = a AND a@1 = CAST(c@2 AS Date32)
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
 # And when a merge of partitions is added above the sort, which keeps only its
 # merge key.
 statement ok

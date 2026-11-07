@@ -386,6 +386,93 @@ mod tests {
         Ok(())
     }
 
+    /// A normal ordering can keep a leading per-partition constant, and the
+    /// equality behind it still counts: with `k` such a constant and
+    /// `CAST(c AS DATE) = a`, the ordering `[k, a, c]` implies `[c]`, whichever
+    /// order the constant, the equality and the ordering are added in.
+    #[test]
+    fn implied_ordering_behind_a_leading_constant() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("a", DataType::Date32, true),
+            Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let [k, a, c] = ["k", "a", "c"].map(|name| col(name, &schema).unwrap());
+        let cast_c = Arc::new(CastExpr::new_with_target_field(
+            Arc::clone(&c),
+            Arc::new(Field::new("c", DataType::Date32, true)),
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+        let ordering =
+            [&k, &a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
+        let constant = || ConstExpr::new(Arc::clone(&k), AcrossPartitions::Heterogeneous);
+
+        let mut constant_equality_ordering =
+            EquivalenceProperties::new(Arc::clone(&schema));
+        constant_equality_ordering.add_constants([constant()])?;
+        constant_equality_ordering
+            .add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
+        constant_equality_ordering.add_ordering(ordering.clone())?;
+
+        let mut constant_ordering_equality =
+            EquivalenceProperties::new(Arc::clone(&schema));
+        constant_ordering_equality.add_constants([constant()])?;
+        constant_ordering_equality.add_ordering(ordering.clone())?;
+        constant_ordering_equality
+            .add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
+
+        let mut equality_ordering_constant =
+            EquivalenceProperties::new(Arc::clone(&schema));
+        equality_ordering_constant.add_equal_conditions(cast_c, Arc::clone(&a))?;
+        equality_ordering_constant.add_ordering(ordering)?;
+        equality_ordering_constant.add_constants([constant()])?;
+
+        for properties in [
+            constant_equality_ordering,
+            constant_ordering_equality,
+            equality_ordering_constant,
+        ] {
+            assert!(
+                properties
+                    .ordering_satisfy([PhysicalSortExpr::new_default(Arc::clone(&c))])?
+            );
+        }
+        Ok(())
+    }
+
+    /// An implied ordering can imply another: with `CAST(c AS DATE) = a` and
+    /// `CAST(a AS DATE64) = d`, the ordering `[d, a, c]` implies `[a, c]`,
+    /// which implies `[c]`.
+    #[test]
+    fn implied_orderings_chain() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("d", DataType::Date64, true),
+            Field::new("a", DataType::Date32, true),
+            Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let [d, a, c] = ["d", "a", "c"].map(|name| col(name, &schema).unwrap());
+        let cast = |expr: &Arc<dyn PhysicalExpr>, data_type| {
+            Arc::new(CastExpr::new_with_target_field(
+                Arc::clone(expr),
+                Arc::new(Field::new("cast", data_type, true)),
+                None,
+            )) as Arc<dyn PhysicalExpr>
+        };
+
+        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+        properties.add_equal_conditions(Arc::clone(&a), cast(&c, DataType::Date32))?;
+        properties.add_equal_conditions(cast(&a, DataType::Date64), Arc::clone(&d))?;
+        properties.add_ordering(
+            [&d, &a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
+        )?;
+
+        assert!(
+            properties
+                .ordering_satisfy([PhysicalSortExpr::new_default(Arc::clone(&c))])?
+        );
+        Ok(())
+    }
+
     /// `add_ordering` reports what it cannot derive instead of dropping it:
     /// here `c` is not in the schema, so its type is unknown.
     #[test]

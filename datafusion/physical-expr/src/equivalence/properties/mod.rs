@@ -400,7 +400,7 @@ impl EquivalenceProperties {
         // them ran last.
         let mut implied = vec![];
         for ordering in &normal_orderings {
-            implied.extend(self.implied_ordering(&ordering[0], ordering[1..].iter())?);
+            implied.extend(self.implied_by(ordering)?);
         }
         self.oeq_class.extend(orderings);
         // Normalize given orderings to update the cache:
@@ -583,10 +583,25 @@ impl EquivalenceProperties {
         let mut new_orderings = vec![];
         for idx in ordering_idxs {
             let ordering = &self.oeq_cache.normal_cls[*idx];
-            new_orderings
-                .extend(self.implied_ordering(&ordering[0], ordering[1..].iter())?);
+            new_orderings.extend(self.implied_by(ordering)?);
         }
         self.add_orderings(new_orderings)
+    }
+
+    /// Returns what the normal ordering `ordering` implies, looking past the
+    /// constants that a normal ordering can keep (those that differ between
+    /// partitions): within a partition they have one value.
+    fn implied_by(
+        &self,
+        ordering: &LexOrdering,
+    ) -> Result<Option<Vec<PhysicalSortExpr>>> {
+        let mut rest = ordering.iter().filter(|sort_expr| {
+            self.eq_group.is_expr_constant(&sort_expr.expr).is_none()
+        });
+        match rest.next() {
+            Some(leading) => self.implied_ordering(leading, rest),
+            None => Ok(None),
+        }
     }
 
     /// Returns the ordering that the normal ordering `[leading, rest..]`
