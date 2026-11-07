@@ -11984,12 +11984,18 @@ impl serde::Serialize for JsonScanExecNode {
         if self.newline_delimited.is_some() {
             len += 1;
         }
+        if self.coerce_primitive.is_some() {
+            len += 1;
+        }
         let mut struct_ser = serializer.serialize_struct("datafusion.JsonScanExecNode", len)?;
         if let Some(v) = self.base_conf.as_ref() {
             struct_ser.serialize_field("baseConf", v)?;
         }
         if let Some(v) = self.newline_delimited.as_ref() {
             struct_ser.serialize_field("newlineDelimited", v)?;
+        }
+        if let Some(v) = self.coerce_primitive.as_ref() {
+            struct_ser.serialize_field("coercePrimitive", v)?;
         }
         struct_ser.end()
     }
@@ -12005,12 +12011,15 @@ impl<'de> serde::Deserialize<'de> for JsonScanExecNode {
             "baseConf",
             "newline_delimited",
             "newlineDelimited",
+            "coerce_primitive",
+            "coercePrimitive",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             BaseConf,
             NewlineDelimited,
+            CoercePrimitive,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -12034,6 +12043,7 @@ impl<'de> serde::Deserialize<'de> for JsonScanExecNode {
                         match value {
                             "baseConf" | "base_conf" => Ok(GeneratedField::BaseConf),
                             "newlineDelimited" | "newline_delimited" => Ok(GeneratedField::NewlineDelimited),
+                            "coercePrimitive" | "coerce_primitive" => Ok(GeneratedField::CoercePrimitive),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -12055,6 +12065,7 @@ impl<'de> serde::Deserialize<'de> for JsonScanExecNode {
             {
                 let mut base_conf__ = None;
                 let mut newline_delimited__ = None;
+                let mut coerce_primitive__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
                         GeneratedField::BaseConf => {
@@ -12069,11 +12080,18 @@ impl<'de> serde::Deserialize<'de> for JsonScanExecNode {
                             }
                             newline_delimited__ = map_.next_value()?;
                         }
+                        GeneratedField::CoercePrimitive => {
+                            if coerce_primitive__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("coercePrimitive"));
+                            }
+                            coerce_primitive__ = map_.next_value()?;
+                        }
                     }
                 }
                 Ok(JsonScanExecNode {
                     base_conf: base_conf__,
                     newline_delimited: newline_delimited__,
+                    coerce_primitive: coerce_primitive__,
                 })
             }
         }
