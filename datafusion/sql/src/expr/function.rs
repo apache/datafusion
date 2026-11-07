@@ -609,6 +609,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 Some(false)
             });
 
+            let window_frame_explicit = window.window_frame.is_some();
             let window_frame = window
                 .window_frame
                 .as_ref()
@@ -666,6 +667,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     partition_by,
                     order_by,
                     window_frame,
+                    window_frame_explicit,
                     filter,
                     null_treatment,
                     distinct: function_args.distinct,
@@ -684,6 +686,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     partition_by,
                     order_by,
                     window_frame,
+                    window_frame_explicit,
                     filter,
                     null_treatment,
                     distinct,
@@ -696,6 +699,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         partition_by,
                         order_by,
                         window_frame,
+                        window_frame_explicit,
                         filter,
                         null_treatment,
                         distinct,

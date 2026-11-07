@@ -1241,7 +1241,7 @@ pub struct WindowFunction {
     pub params: WindowFunctionParams,
 }
 
-#[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
+#[derive(Clone, Debug)]
 pub struct WindowFunctionParams {
     /// List of expressions to feed to the functions as arguments
     pub args: Vec<Expr>,
@@ -1251,12 +1251,60 @@ pub struct WindowFunctionParams {
     pub order_by: Vec<Sort>,
     /// Window frame
     pub window_frame: WindowFrame,
+    /// Whether the frame was specified explicitly rather than derived from ORDER BY.
+    pub window_frame_explicit: bool,
     /// Optional filter expression (FILTER (WHERE ...))
     pub filter: Option<Box<Expr>>,
     /// Specifies how NULL value is treated: ignore or respect
     pub null_treatment: Option<NullTreatment>,
     /// Distinct flag
     pub distinct: bool,
+}
+
+type WindowFunctionSemanticFields<'a> = (
+    &'a Vec<Expr>,
+    &'a Vec<Expr>,
+    &'a Vec<Sort>,
+    &'a WindowFrame,
+    &'a Option<Box<Expr>>,
+    &'a Option<NullTreatment>,
+    &'a bool,
+);
+
+impl WindowFunctionParams {
+    // Provenance affects future builder calls, but not the meaning of the
+    // already-resolved window expression.
+    fn semantic_fields(&self) -> WindowFunctionSemanticFields<'_> {
+        (
+            &self.args,
+            &self.partition_by,
+            &self.order_by,
+            &self.window_frame,
+            &self.filter,
+            &self.null_treatment,
+            &self.distinct,
+        )
+    }
+}
+
+impl PartialEq for WindowFunctionParams {
+    fn eq(&self, other: &Self) -> bool {
+        self.semantic_fields() == other.semantic_fields()
+    }
+}
+
+impl Eq for WindowFunctionParams {}
+
+impl PartialOrd for WindowFunctionParams {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.semantic_fields().partial_cmp(&other.semantic_fields())
+    }
+}
+
+impl Hash for WindowFunctionParams {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.semantic_fields().hash(state);
+    }
 }
 
 impl WindowFunction {
@@ -1270,6 +1318,7 @@ impl WindowFunction {
                 partition_by: Vec::default(),
                 order_by: Vec::default(),
                 window_frame: WindowFrame::new(None),
+                window_frame_explicit: false,
                 filter: None,
                 null_treatment: None,
                 distinct: false,
@@ -2655,6 +2704,7 @@ impl NormalizeEq for Expr {
                             filter: self_filter,
                             null_treatment: self_null_treatment,
                             distinct: self_distinct,
+                            ..
                         },
                 } = left.as_ref();
                 let WindowFunction {
@@ -2668,6 +2718,7 @@ impl NormalizeEq for Expr {
                             filter: other_filter,
                             null_treatment: other_null_treatment,
                             distinct: other_distinct,
+                            ..
                         },
                 } = other.as_ref();
 
@@ -2928,6 +2979,7 @@ impl HashNode for Expr {
                             filter,
                             null_treatment,
                             distinct,
+                            ..
                         },
                 } = window_fun.as_ref();
                 fun.hash(state);
@@ -3286,6 +3338,7 @@ impl Display for SchemaDisplay<'_> {
                             filter,
                             null_treatment,
                             distinct,
+                            ..
                         } = params;
 
                         // Write function name and open parenthesis
@@ -3718,6 +3771,7 @@ impl Display for Expr {
                             filter,
                             null_treatment,
                             distinct,
+                            ..
                         } = params;
 
                         fmt_function(f, &fun.to_string(), *distinct, args, true)?;
