@@ -360,6 +360,8 @@ There should also be a test in `integration-tests.rs` that tests the rule as par
 The `EXPLAIN VERBOSE` command can be used to show the effect of each optimization rule on a query.
 
 In the following example, the `type_coercion` and `simplify_expressions` passes have simplified the plan so that it returns the constant `"3.2"` rather than doing a computation at execution time.
+The rule names shown in the output are listed, in the order the rules run, in the
+documentation of [`Analyzer`], [`Optimizer`], and [`PhysicalOptimizer`].
 
 ```text
 > explain verbose select cast(1 + 2.2 as string) as foo;
