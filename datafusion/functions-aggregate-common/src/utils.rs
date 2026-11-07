@@ -12,7 +12,6 @@ use arrow::datatypes::{
 use datafusion_common::cast::{as_list_array, as_primitive_array};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::utils::memory::estimate_memory_size;
 use datafusion_common::{
     HashSet, Result, ScalarValue, exec_err, internal_datafusion_err,
 };
@@ -244,10 +243,62 @@ impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
         Ok(())
     }
 
-    /// Mirrors [`Accumulator::size`].
+    /// Returns the size in bytes, including `Self` and the hash table's
+    /// retained allocation. This includes unused capacity and control bytes.
     pub fn size(&self) -> usize {
-        let num_elements = self.values.len();
-        let fixed_size = size_of_val(self) + size_of_val(&self.values);
-        estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
+        size_of_val(self) + self.values.allocation_size()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aggregate::avg_distinct::{
+        DecimalDistinctAvgAccumulator, Float64DistinctAvgAccumulator,
+    };
+    use crate::aggregate::count_distinct::FloatDistinctCountAccumulator;
+    use crate::aggregate::sum_distinct::DistinctSumAccumulator;
+    use arrow::datatypes::{Decimal128Type, Float64Type};
+
+    #[test]
+    fn distinct_buffer_size_tracks_retained_capacity() {
+        for capacity in [0, 1, 3, 7, 8, 14, 1024, 10_000] {
+            let mut buffer = GenericDistinctBuffer::<Float64Type>::new(DataType::Float64);
+            let fixed = size_of_val(&buffer);
+            assert_eq!(buffer.size(), fixed);
+
+            buffer.values.reserve(capacity);
+            let reserved = buffer.size();
+            assert!(reserved >= fixed + buffer.values.capacity() * size_of::<f64>());
+            buffer
+                .values
+                .extend((0..capacity.min(3)).map(|i| Hashable(i as f64)));
+            assert_eq!(buffer.size(), reserved);
+            buffer.values.clear();
+            assert_eq!(buffer.size(), reserved);
+        }
+    }
+
+    #[test]
+    fn nested_distinct_accumulators_count_inline_fields_once() {
+        let accumulators: [Box<dyn Accumulator>; 4] = [
+            Box::new(FloatDistinctCountAccumulator::<Float64Type>::new()),
+            Box::new(DistinctSumAccumulator::<Float64Type>::new(
+                DataType::Float64,
+            )),
+            Box::new(Float64DistinctAvgAccumulator::default()),
+            Box::new(
+                DecimalDistinctAvgAccumulator::<Decimal128Type>::with_decimal_params(
+                    0, 38, 0,
+                ),
+            ),
+        ];
+        for accumulator in accumulators {
+            assert_eq!(
+                accumulator.size(),
+                size_of_val(accumulator.as_ref()),
+                "{accumulator:?}"
+            );
+        }
     }
 }

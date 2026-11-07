@@ -736,7 +736,8 @@ impl Accumulator for DistinctVarianceAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + self.distinct_values.size()
+        size_of_val(self) - size_of_val(&self.distinct_values)
+            + self.distinct_values.size()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {
@@ -755,6 +756,14 @@ mod tests {
     use datafusion_expr::EmitTo;
 
     use super::*;
+
+    #[test]
+    fn distinct_variance_size_counts_inline_fields_once() {
+        for stat_type in [StatsType::Sample, StatsType::Population] {
+            let accumulator = DistinctVarianceAccumulator::new(stat_type);
+            assert_eq!(accumulator.size(), size_of_val(&accumulator));
+        }
+    }
 
     #[test]
     fn update_batch_ignores_nulls() -> Result<()> {

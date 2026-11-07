@@ -7,7 +7,6 @@
 //!
 //! [`Int64Array`]: arrow::array::Int64Array
 //! [`Float64Array`]: arrow::array::Float64Array
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::size_of_val;
@@ -21,10 +20,9 @@ use arrow::array::types::ArrowPrimitiveType;
 use arrow::datatypes::DataType;
 use datafusion_common::hash_utils::RandomState;
 
-use datafusion_common::ScalarValue;
 use datafusion_common::cast::{as_boolean_array, as_list_array, as_primitive_array};
 use datafusion_common::utils::SingleRowListArrayBuilder;
-use datafusion_common::utils::memory::estimate_memory_size;
+use datafusion_common::{HashSet, ScalarValue};
 use datafusion_expr_common::accumulator::Accumulator;
 
 use crate::utils::GenericDistinctBuffer;
@@ -112,10 +110,7 @@ where
     }
 
     fn size(&self) -> usize {
-        let num_elements = self.values.len();
-        let fixed_size = size_of_val(self) + size_of_val(&self.values);
-
-        estimate_memory_size::<T::Native>(num_elements, fixed_size).unwrap()
+        size_of_val(self) + self.values.allocation_size()
     }
 }
 
@@ -157,7 +152,7 @@ impl<T: ArrowPrimitiveType + Debug> Accumulator for FloatDistinctCountAccumulato
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) + self.values.size()
+        size_of_val(self) - size_of_val(&self.values) + self.values.size()
     }
 }
 
@@ -613,8 +608,138 @@ impl Accumulator for BooleanDistinctCountAccumulator {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::Int64Array;
-    use arrow::datatypes::Int64Type;
+    use arrow::array::{Decimal128Array, Decimal256Array, Int32Array, Int64Array};
+    use arrow::datatypes::{Decimal128Type, Decimal256Type, Int32Type, Int64Type, i256};
+
+    fn check_matching_buffer_sizes<T>(data_type: DataType)
+    where
+        T: ArrowPrimitiveType + Send + Debug,
+        T::Native: Eq + Hash,
+    {
+        for capacity in [0, 1, 3, 4, 7, 8, 14, 15, 128, 1024, 8192] {
+            let mut primitive = PrimitiveDistinctCountAccumulator::<T>::new(&data_type);
+            let mut generic = GenericDistinctBuffer::<T>::new(data_type.clone());
+            primitive.values.reserve(capacity);
+            generic.values.reserve(capacity);
+            assert_eq!(primitive.values.capacity(), generic.values.capacity());
+            assert_eq!(
+                primitive.size() - size_of_val(&primitive),
+                generic.size() - size_of_val(&generic),
+                "{} with reserve({capacity})",
+                std::any::type_name::<T>()
+            );
+        }
+    }
+
+    #[test]
+    fn primitive_and_generic_sizes_agree_for_matching_capacity() {
+        check_matching_buffer_sizes::<Int32Type>(DataType::Int32);
+        check_matching_buffer_sizes::<Int64Type>(DataType::Int64);
+        check_matching_buffer_sizes::<Decimal128Type>(DataType::Decimal128(38, 0));
+        check_matching_buffer_sizes::<Decimal256Type>(DataType::Decimal256(76, 0));
+    }
+
+    fn check_update_and_merge<T>(input: ArrayRef)
+    where
+        T: ArrowPrimitiveType + Send + Debug,
+        T::Native: Eq + Hash,
+    {
+        let mut direct = PrimitiveDistinctCountAccumulator::<T>::new(input.data_type());
+        direct.update_batch(std::slice::from_ref(&input)).unwrap();
+        assert_eq!(direct.evaluate().unwrap(), ScalarValue::Int64(Some(4)));
+
+        let mut merged = PrimitiveDistinctCountAccumulator::<T>::new(input.data_type());
+        // Keep enough spare capacity to merge overlapping states without growing.
+        merged.values.reserve(input.len() * 4);
+        let reserved_size = merged.size();
+        merged.update_batch(&[input.slice(0, 3)]).unwrap();
+        let mut partial = PrimitiveDistinctCountAccumulator::<T>::new(input.data_type());
+        partial
+            .update_batch(&[input.slice(3, input.len() - 3)])
+            .unwrap();
+        let state = partial
+            .state()
+            .unwrap()
+            .iter()
+            .map(|value| value.to_array().unwrap())
+            .collect::<Vec<_>>();
+        merged.merge_batch(&state).unwrap();
+        merged.merge_batch(&state).unwrap();
+        assert_eq!(merged.evaluate().unwrap(), direct.evaluate().unwrap());
+        assert_eq!(merged.size(), reserved_size);
+        merged.values.clear();
+        assert_eq!(merged.evaluate().unwrap(), ScalarValue::Int64(Some(0)));
+        assert_eq!(merged.size(), reserved_size);
+    }
+
+    #[test]
+    fn update_and_merge_preserve_distinct_primitive_values() {
+        check_update_and_merge::<Int32Type>(Arc::new(Int32Array::from(vec![
+            Some(i32::MIN),
+            Some(i32::MAX),
+            Some(0),
+            Some(-1),
+            Some(i32::MAX),
+            None,
+        ])));
+        check_update_and_merge::<Int64Type>(Arc::new(Int64Array::from(vec![
+            Some(i64::MIN),
+            Some(i64::MAX),
+            Some(0),
+            Some(-1),
+            Some(i64::MAX),
+            None,
+        ])));
+        let wide = 10_i128.pow(35);
+        check_update_and_merge::<Decimal128Type>(Arc::new(
+            Decimal128Array::from(vec![
+                Some(wide),
+                Some(-wide),
+                Some(0),
+                Some(-1),
+                Some(wide),
+                None,
+            ])
+            .with_precision_and_scale(38, 0)
+            .unwrap(),
+        ));
+        let wide: i256 = i256::from_i128(1) << 200_u32;
+        check_update_and_merge::<Decimal256Type>(Arc::new(
+            Decimal256Array::from(vec![
+                Some(wide),
+                Some(-wide),
+                Some(i256::ZERO),
+                Some(i256::MINUS_ONE),
+                Some(wide),
+                None,
+            ])
+            .with_precision_and_scale(76, 0)
+            .unwrap(),
+        ));
+    }
+
+    #[test]
+    fn empty_size_does_not_include_a_hash_table_allocation() {
+        let acc = PrimitiveDistinctCountAccumulator::<Int64Type>::new(&DataType::Int64);
+        assert_eq!(acc.size(), size_of_val(&acc));
+    }
+
+    #[test]
+    fn size_accounts_for_reserved_capacity() {
+        let mut acc =
+            PrimitiveDistinctCountAccumulator::<Int64Type>::new(&DataType::Int64);
+        let initial = acc.size();
+        acc.values.reserve(10_000);
+        let reserved = acc.size();
+        assert!(reserved >= initial + acc.values.capacity() * size_of::<i64>());
+
+        // Changing the number of values without reallocating must not change
+        // the reported allocation, including when the reserved table is empty.
+        acc.values.extend(0..128);
+        assert_eq!(acc.size(), reserved);
+        acc.values.clear();
+        assert_eq!(acc.size(), reserved);
+    }
 
     #[test]
     fn update_batch_null_free_fast_path_agrees_with_general_path() {

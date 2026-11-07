@@ -44,7 +44,7 @@ impl Accumulator for DictionaryCountAccumulator {
     }
 
     fn size(&self) -> usize {
-        self.inner.size()
+        size_of_val(self) + self.inner.size()
     }
 
     fn state(&mut self) -> datafusion_common::Result<Vec<ScalarValue>> {
@@ -53,5 +53,20 @@ impl Accumulator for DictionaryCountAccumulator {
 
     fn merge_batch(&mut self, states: &[ArrayRef]) -> datafusion_common::Result<()> {
         self.inner.merge_batch(states)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::aggregate::count_distinct::FloatDistinctCountAccumulator;
+    use arrow::datatypes::Float64Type;
+
+    #[test]
+    fn size_includes_boxed_accumulator_and_wrapper() {
+        let inner = FloatDistinctCountAccumulator::<Float64Type>::new();
+        let expected = size_of::<DictionaryCountAccumulator>() + size_of_val(&inner);
+        let accumulator = DictionaryCountAccumulator::new(Box::new(inner));
+        assert_eq!(accumulator.size(), expected);
     }
 }
