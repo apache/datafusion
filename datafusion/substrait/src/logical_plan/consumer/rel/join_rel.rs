@@ -3,9 +3,13 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::logical_plan::consumer::SubstraitConsumer;
-use datafusion::common::{Column, JoinType, NullEquality, not_impl_err, plan_err};
+use datafusion::common::{
+    Column, DFSchema, JoinType, NullEquality, not_impl_err, plan_err,
+};
 use datafusion::logical_expr::requalify_sides_if_needed;
-use datafusion::logical_expr::utils::split_conjunction_owned;
+use datafusion::logical_expr::utils::{
+    find_valid_equijoin_key_pair, split_conjunction_owned,
+};
 use datafusion::logical_expr::{
     BinaryExpr, Expr, LogicalPlan, LogicalPlanBuilder, Operator,
 };
@@ -38,13 +42,14 @@ pub async fn from_join_rel(
     match &join.expression.as_ref() {
         Some(expr) => {
             let on = consumer.consume_expression(expr, &in_join_schema).await?;
-            // The join expression can contain both equal and non-equal ops.
-            // As of datafusion 31.0.0, the equal and non equal join conditions are in separate fields.
-            // So we extract each part as follows:
-            // - If an Eq or IsNotDistinctFrom op is encountered, add the left column, right column and is_null_equal_nulls to `join_ons` vector
-            // - Otherwise we add the expression to join_filter (use conjunction if filter already exists)
+            // Extract equality comparisons across inputs as join keys. Same-input
+            // comparisons must remain filters, including on the preserved side of an outer join.
             let (join_ons, null_equality, join_filter) =
-                split_eq_and_noneq_join_predicate_with_nulls_equality(on);
+                split_eq_and_noneq_join_predicate_with_nulls_equality(
+                    on,
+                    left.schema(),
+                    right.schema(),
+                )?;
             let (left_cols, right_cols): (Vec<_>, Vec<_>) =
                 itertools::multiunzip(join_ons);
             left.join_detailed(
@@ -70,9 +75,13 @@ pub async fn from_join_rel(
     }
 }
 
+type JoinPredicateParts = (Vec<(Column, Column)>, NullEquality, Option<Expr>);
+
 fn split_eq_and_noneq_join_predicate_with_nulls_equality(
     filter: Expr,
-) -> (Vec<(Column, Column)>, NullEquality, Option<Expr>) {
+    left_schema: &DFSchema,
+    right_schema: &DFSchema,
+) -> datafusion::common::Result<JoinPredicateParts> {
     let exprs = split_conjunction_owned(filter);
 
     let mut eq_keys: Vec<(Column, Column)> = vec![];
@@ -85,20 +94,30 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
                 left,
                 op: op @ (Operator::Eq | Operator::IsNotDistinctFrom),
                 right,
-            }) => match (*left, *right) {
-                (Expr::Column(l), Expr::Column(r)) => match op {
-                    Operator::Eq => eq_keys.push((l, r)),
-                    Operator::IsNotDistinctFrom => indistinct_keys.push((l, r)),
-                    _ => unreachable!(),
-                },
-                (left, right) => {
-                    accum_filters.push(Expr::BinaryExpr(BinaryExpr {
-                        left: Box::new(left),
+            }) => {
+                let join_key_pair = match (&*left, &*right) {
+                    (Expr::Column(_), Expr::Column(_)) => find_valid_equijoin_key_pair(
+                        &left,
+                        &right,
+                        left_schema,
+                        right_schema,
+                    )?,
+                    _ => None,
+                };
+
+                match join_key_pair {
+                    Some((Expr::Column(l), Expr::Column(r))) => match op {
+                        Operator::Eq => eq_keys.push((l, r)),
+                        Operator::IsNotDistinctFrom => indistinct_keys.push((l, r)),
+                        _ => unreachable!(),
+                    },
+                    _ => accum_filters.push(Expr::BinaryExpr(BinaryExpr {
+                        left,
                         op,
-                        right: Box::new(right),
-                    }));
+                        right,
+                    })),
                 }
-            },
+            }
             _ => accum_filters.push(expr),
         }
     }
@@ -125,7 +144,7 @@ fn split_eq_and_noneq_join_predicate_with_nulls_equality(
         };
 
     let join_filter = accum_filters.into_iter().reduce(Expr::and);
-    (join_keys, null_equality, join_filter)
+    Ok((join_keys, null_equality, join_filter))
 }
 
 fn from_substrait_jointype(join_type: i32) -> datafusion::common::Result<JoinType> {
@@ -151,6 +170,7 @@ fn from_substrait_jointype(join_type: i32) -> datafusion::common::Result<JoinTyp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use datafusion::arrow::datatypes::{DataType, Field, Schema};
 
     fn col(name: &str) -> Expr {
         Expr::Column(Column::from_name(name))
@@ -171,11 +191,37 @@ mod tests {
             .join(", ")
     }
 
+    fn input_schemas() -> (DFSchema, DFSchema) {
+        let schema = |names: &[&str]| {
+            DFSchema::try_from(Schema::new(
+                names
+                    .iter()
+                    .map(|name| Field::new(*name, DataType::Int32, true))
+                    .collect::<Vec<_>>(),
+            ))
+            .unwrap()
+        };
+
+        (
+            schema(&["a", "a_l", "b_l", "id_l", "val_l"]),
+            schema(&["b", "a_r", "b_r", "id_r", "val_r"]),
+        )
+    }
+
+    fn split(filter: Expr) -> JoinPredicateParts {
+        let (left_schema, right_schema) = input_schemas();
+        split_eq_and_noneq_join_predicate_with_nulls_equality(
+            filter,
+            &left_schema,
+            &right_schema,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn split_only_eq_keys() {
         let expr = col("a").eq(col("b"));
-        let (keys, null_eq, filter) =
-            split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
+        let (keys, null_eq, filter) = split(expr);
 
         assert_eq!(fmt_keys(&keys), "a = b");
         assert_eq!(null_eq, NullEquality::NullEqualsNothing);
@@ -185,8 +231,7 @@ mod tests {
     #[test]
     fn split_only_indistinct_keys() {
         let expr = indistinct(col("a"), col("b"));
-        let (keys, null_eq, filter) =
-            split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
+        let (keys, null_eq, filter) = split(expr);
 
         assert_eq!(fmt_keys(&keys), "a = b");
         assert_eq!(null_eq, NullEquality::NullEqualsNull);
@@ -200,9 +245,7 @@ mod tests {
     fn split_mixed_eq_and_indistinct_demotes_indistinct_to_filter() {
         let expr =
             indistinct(col("val_l"), col("val_r")).and(col("id_l").eq(col("id_r")));
-
-        let (keys, null_eq, filter) =
-            split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
+        let (keys, null_eq, filter) = split(expr);
 
         assert_eq!(fmt_keys(&keys), "id_l = id_r");
         assert_eq!(null_eq, NullEquality::NullEqualsNothing);
@@ -219,9 +262,7 @@ mod tests {
         let expr = indistinct(col("a_l"), col("a_r"))
             .and(indistinct(col("b_l"), col("b_r")))
             .and(col("id_l").eq(col("id_r")));
-
-        let (keys, null_eq, filter) =
-            split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
+        let (keys, null_eq, filter) = split(expr);
 
         assert_eq!(fmt_keys(&keys), "id_l = id_r");
         assert_eq!(null_eq, NullEquality::NullEqualsNothing);
@@ -238,11 +279,29 @@ mod tests {
             None,
         )
         .eq(col("b"));
-
-        let (keys, _, filter) =
-            split_eq_and_noneq_join_predicate_with_nulls_equality(expr);
+        let (keys, _, filter) = split(expr);
 
         assert!(keys.is_empty());
         assert_eq!(filter.unwrap().to_string(), "Utf8(\"x\") = b");
+    }
+
+    #[test]
+    fn split_same_side_indistinct_comparison_to_filter() {
+        let expr = indistinct(col("a"), col("a_l"));
+        let (keys, null_eq, filter) = split(expr);
+
+        assert!(keys.is_empty());
+        assert_eq!(null_eq, NullEquality::NullEqualsNothing);
+        assert_eq!(filter.unwrap().to_string(), "a IS NOT DISTINCT FROM a_l");
+    }
+
+    #[test]
+    fn split_reversed_cross_input_equality_to_key() {
+        let expr = col("b").eq(col("a"));
+        let (keys, null_eq, filter) = split(expr);
+
+        assert_eq!(fmt_keys(&keys), "a = b");
+        assert_eq!(null_eq, NullEquality::NullEqualsNothing);
+        assert!(filter.is_none());
     }
 }
