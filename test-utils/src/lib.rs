@@ -12,6 +12,7 @@ use rand::{Rng, SeedableRng};
 
 pub mod array_gen;
 mod data_gen;
+pub mod fuzz;
 mod string_gen;
 pub mod tpcds;
 pub mod tpch;
