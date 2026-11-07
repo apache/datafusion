@@ -336,3 +336,27 @@ impl PhysicalOptimizer {
         Self { rules }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::PhysicalOptimizer;
+    use datafusion_common::test_util::documented_rule_names;
+
+    /// Verifies the rule table in the [`PhysicalOptimizer`] docs matches the
+    /// rules (and their order) returned by [`PhysicalOptimizer::new`]
+    #[test]
+    fn physical_rules_match_documented_order() {
+        let rules: Vec<_> = PhysicalOptimizer::new()
+            .rules
+            .iter()
+            .map(|rule| rule.name().to_string())
+            .collect();
+
+        let documented = documented_rule_names(
+            include_str!("optimizer.rs"),
+            "/// # Built-in Physical Optimizer Rules",
+        );
+
+        assert_eq!(documented, rules);
+    }
+}

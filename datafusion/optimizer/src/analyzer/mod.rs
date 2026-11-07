@@ -64,10 +64,10 @@ pub trait AnalyzerRule: Debug {
 /// The rules are applied in the following order. Note: the list may change
 /// between releases.
 ///
-/// | rule                        | summary                                                                   |
-/// | --------------------------- | ------------------------------------------------------------------------- |
-/// | [`ResolveGroupingFunction`] | Rewrites `GROUPING(...)` into expressions over the internal grouping id.  |
-/// | [`TypeCoercion`]            | Adds implicit casts so operators and functions receive valid input types. |
+/// | rule (name in EXPLAIN plan) | struct name                 | summary                                                                   |
+/// | --------------------------- | --------------------------- | ------------------------------------------------------------------------- |
+/// | `resolve_grouping_function` | [`ResolveGroupingFunction`] | Rewrites `GROUPING(...)` into expressions over the internal grouping id.  |
+/// | `type_coercion`             | [`TypeCoercion`]            | Adds implicit casts so operators and functions receive valid input types. |
 #[derive(Clone, Debug)]
 pub struct Analyzer {
     /// Expr --> Function writes to apply prior to analysis passes
@@ -164,5 +164,29 @@ impl Analyzer {
         log_plan("Final analyzed plan", &new_plan);
         debug!("Analyzer took {} ms", start_time.elapsed().as_millis());
         Ok(new_plan)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Analyzer;
+    use datafusion_common::test_util::documented_rule_names;
+
+    /// Verifies the rule table in the [`Analyzer`] docs matches the rules
+    /// (and their order) returned by [`Analyzer::new`]
+    #[test]
+    fn analyzer_rules_match_documented_order() {
+        let rules: Vec<_> = Analyzer::new()
+            .rules
+            .iter()
+            .map(|rule| rule.name().to_string())
+            .collect();
+
+        let documented = documented_rule_names(
+            include_str!("mod.rs"),
+            "/// # Built-in Analyzer Rules",
+        );
+
+        assert_eq!(documented, rules);
     }
 }

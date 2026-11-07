@@ -835,8 +835,27 @@ mod tests {
     use crate::optimizer::Optimizer;
     use crate::test::{test_table_scan, test_table_scan_with_name};
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
+    use datafusion_common::test_util::documented_rule_names;
 
     use super::ApplyOrder;
+
+    /// Verifies the rule table in the [`Optimizer`] docs matches the rules
+    /// (and their order) returned by [`Optimizer::new`]
+    #[test]
+    fn optimizer_rules_match_documented_order() {
+        let rules: Vec<_> = Optimizer::new()
+            .rules
+            .iter()
+            .map(|rule| rule.name().to_string())
+            .collect();
+
+        let documented = documented_rule_names(
+            include_str!("optimizer.rs"),
+            "/// # Built-in Optimizer Rules",
+        );
+
+        assert_eq!(documented, rules);
+    }
 
     #[test]
     fn skip_failing_rule() {
