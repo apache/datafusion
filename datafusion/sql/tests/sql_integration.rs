@@ -4272,6 +4272,7 @@ impl ScalarUDFImpl for DummyUDF {
 
 fn parse_decimals_parser_options() -> ParserOptions {
     ParserOptions {
+        dialect: Default::default(),
         parse_float_as_decimal: true,
         enable_ident_normalization: false,
         support_varchar_with_length: false,
@@ -4284,6 +4285,7 @@ fn parse_decimals_parser_options() -> ParserOptions {
 
 fn ident_normalization_parser_options_no_ident_normalization() -> ParserOptions {
     ParserOptions {
+        dialect: Default::default(),
         parse_float_as_decimal: true,
         enable_ident_normalization: false,
         support_varchar_with_length: false,
@@ -4296,6 +4298,7 @@ fn ident_normalization_parser_options_no_ident_normalization() -> ParserOptions 
 
 fn ident_normalization_parser_options_ident_normalization() -> ParserOptions {
     ParserOptions {
+        dialect: Default::default(),
         parse_float_as_decimal: true,
         enable_ident_normalization: true,
         support_varchar_with_length: false,

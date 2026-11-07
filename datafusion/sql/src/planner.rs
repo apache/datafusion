@@ -12,7 +12,7 @@ use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
 use arrow_schema::extension::{Json, Uuid};
 use datafusion_common::TableReference;
-use datafusion_common::config::SqlParserOptions;
+use datafusion_common::config::{Dialect, SqlParserOptions};
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
@@ -31,6 +31,8 @@ use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 /// SQL parser options
 #[derive(Debug, Clone, Copy)]
 pub struct ParserOptions {
+    /// SQL dialect used for dialect-specific literal semantics.
+    pub dialect: Dialect,
     /// Whether to parse float as decimal.
     pub parse_float_as_decimal: bool,
     /// Whether to normalize identifiers.
@@ -60,6 +62,7 @@ impl ParserOptions {
     /// ```
     pub fn new() -> Self {
         Self {
+            dialect: Dialect::Generic,
             parse_float_as_decimal: false,
             enable_ident_normalization: true,
             support_varchar_with_length: true,
@@ -140,6 +143,7 @@ impl Default for ParserOptions {
 impl From<&SqlParserOptions> for ParserOptions {
     fn from(options: &SqlParserOptions) -> Self {
         Self {
+            dialect: options.dialect,
             parse_float_as_decimal: options.parse_float_as_decimal,
             enable_ident_normalization: options.enable_ident_normalization,
             support_varchar_with_length: options.support_varchar_with_length,

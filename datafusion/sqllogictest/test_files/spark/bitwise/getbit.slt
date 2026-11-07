@@ -44,10 +44,10 @@ SELECT getbit(0, 0);
 0
 
 ## Test edge cases
-statement error DataFusion error: Arrow error: Compute error: bit_get: position -1 is out of bounds. Expected pos < 64 and pos >= 0
+statement error DataFusion error: Arrow error: Compute error: bit_get: position -1 is out of bounds. Expected pos < 32 and pos >= 0
 SELECT getbit(11, -1);
 
-statement error DataFusion error: Arrow error: Compute error: bit_get: position 64 is out of bounds. Expected pos < 64 and pos >= 0
+statement error DataFusion error: Arrow error: Compute error: bit_get: position 64 is out of bounds. Expected pos < 32 and pos >= 0
 SELECT getbit(11, 64);
 
 ## Test null inputs

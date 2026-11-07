@@ -667,19 +667,7 @@ impl SessionState {
     fn get_parser_options(&self) -> ParserOptions {
         let sql_parser_options = &self.config().options().sql_parser;
 
-        ParserOptions {
-            parse_float_as_decimal: sql_parser_options.parse_float_as_decimal,
-            enable_ident_normalization: sql_parser_options.enable_ident_normalization,
-            enable_options_value_normalization: sql_parser_options
-                .enable_options_value_normalization,
-            support_varchar_with_length: sql_parser_options.support_varchar_with_length,
-            map_string_types_to_utf8view: sql_parser_options.map_string_types_to_utf8view,
-            collect_spans: sql_parser_options.collect_spans,
-            default_null_ordering: sql_parser_options
-                .default_null_ordering
-                .as_str()
-                .into(),
-        }
+        ParserOptions::from(sql_parser_options)
     }
 
     /// Creates a [`LogicalPlan`] from the provided SQL string. This

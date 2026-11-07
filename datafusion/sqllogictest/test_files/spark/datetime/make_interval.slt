@@ -13,14 +13,14 @@ SELECT
   y, m, w, d, h, mi, s,
   make_interval(y, m, w, d, h, mi, s) AS interval
 FROM VALUES
-  (NULL,2,   3,   4,   5,   6,   7.5),
-  (1,   NULL,3,   4,   5,   6,   7.5),
-  (1,   2,   NULL,4,   5,   6,   7.5),
-  (1,   2,   3,   NULL,5,   6,   7.5),
-  (1,   2,   3,   4,   NULL,6,   7.5),
-  (1,   2,   3,   4,   5,   NULL,7.5),
+  (NULL,2,   3,   4,   5,   6,   7.5e0),
+  (1,   NULL,3,   4,   5,   6,   7.5e0),
+  (1,   2,   NULL,4,   5,   6,   7.5e0),
+  (1,   2,   3,   NULL,5,   6,   7.5e0),
+  (1,   2,   3,   4,   NULL,6,   7.5e0),
+  (1,   2,   3,   4,   5,   NULL,7.5e0),
   (1,   2,   3,   4,   5,   6,   CAST(NULL AS DOUBLE)),
-  (1,   1,   1,   1,   1,   1,   1.0)
+  (1,   1,   1,   1,   1,   1,   1e0)
 AS v(y, m, w, d, h, mi, s);
 ----
 NULL 2 3 4 5 6 7.5 NULL

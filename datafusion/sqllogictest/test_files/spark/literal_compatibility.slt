@@ -1,0 +1,162 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Spark 4.2 widens DECIMAL with FLOAT or DOUBLE to DOUBLE, including non-finite values.
+query RT
+SELECT x, arrow_typeof(x) FROM VALUES (CAST('NaN' AS DOUBLE)), (1.0), (CAST('Infinity' AS DOUBLE)), (CAST('-Infinity' AS DOUBLE)), (NULL) AS t(x);
+----
+NaN Float64
+1 Float64
+Infinity Float64
+-Infinity Float64
+NULL Float64
+
+query TR
+SELECT arrow_typeof(x), x FROM VALUES (1.25), (CAST(2.5 AS FLOAT)), (3) AS t(x);
+----
+Float64 1.25
+Float64 2.5
+Float64 3
+
+query TR
+SELECT arrow_typeof(x), x FROM VALUES (CAST(2.5 AS FLOAT)), (1.25) AS t(x);
+----
+Float64 2.5
+Float64 1.25
+
+# Computed decimals and typed nulls participate in type inference too.
+query TR
+SELECT arrow_typeof(x), x FROM VALUES (1.20 + 2.30), (CAST(NULL AS FLOAT)) AS t(x);
+----
+Float64 3.5
+Float64 NULL
+
+query TR
+SELECT arrow_typeof(x), x FROM VALUES (CAST(NULL AS DECIMAL(4,2))), (2.5e0) AS t(x);
+----
+Float64 NULL
+Float64 2.5
+
+# Widen each column independently. Decimal-only columns keep their scale.
+query RTRT
+SELECT x, arrow_typeof(x), y, arrow_typeof(y) FROM VALUES (1.25, 1.25), (2.5e0, 2.5), (NULL, NULL) AS t(x, y);
+----
+1.25 Float64 1.25 Decimal128(3, 2)
+2.5 Float64 2.50 Decimal128(3, 2)
+NULL Float64 NULL Decimal128(3, 2)
+
+statement error Inconsistent data length across values list
+VALUES (1.0, 2), (1e0);
+
+# Explicit destination types still control INSERT coercion.
+statement ok
+CREATE TABLE literal_compat_target (x DECIMAL(5, 2));
+
+statement ok
+INSERT INTO literal_compat_target VALUES (1.25), (2e0);
+
+query RT rowsort
+SELECT x, arrow_typeof(x) FROM literal_compat_target;
+----
+1.25 Decimal128(5, 2)
+2.00 Decimal128(5, 2)
+
+statement ok
+DROP TABLE literal_compat_target;
+
+# Spark passes its Decimal object to java.util.Formatter, not a java.math.BigDecimal.
+statement error Invalid conversion type.*Decimal
+SELECT format_string('%f', 1.5);
+
+statement error Invalid conversion type.*Decimal
+SELECT format_string('%e', 1.5);
+
+statement error Invalid conversion type.*Decimal
+SELECT format_string('%G', 1.5);
+
+statement error Invalid conversion type.*Decimal
+SELECT printf('%f', 1.5);
+
+# String conversion uses the scaled decimal representation, including Java's exponent threshold.
+query T
+SELECT format_string('%s|%S|%s|%s', 1.20, -0.0120, 0.00000001, CAST(0 AS DECIMAL(10,8)));
+----
+1.20|-0.0120|1E-8|0E-8
+
+query T
+SELECT format_string('%8.3s', 12.345);
+----
+     12.
+
+query T
+SELECT format_string('%s', x) FROM VALUES (1.20), (-2.50), (NULL) AS t(x);
+----
+1.20
+-2.50
+null
+
+query T
+SELECT format_string(fmt, 1.20) FROM VALUES ('%s'), ('%8s'), (NULL) AS t(fmt);
+----
+1.20
+    1.20
+NULL
+
+query T
+SELECT format_string(fmt, x) FROM VALUES ('%s', 1.20), ('%S', -2.50), (NULL, 3.00) AS t(fmt,x);
+----
+1.20
+-2.50
+NULL
+
+# A later invalid row fails the evaluation instead of returning a partial result.
+statement error Invalid conversion type.*Decimal
+SELECT format_string(fmt, x) FROM VALUES ('%s', 1.20), ('%f', 2.30) AS t(fmt,x);
+
+query T
+SELECT format_string('%1$f|%1$E|%1$G|%1$A|%1$d|%1$X|%1$c|%1$tY', CAST(NULL AS DECIMAL(4,2)));
+----
+null|NULL|NULL|NULL|null|NULL|null|null
+
+query T
+SELECT format_string('%b|%B|%b|%B', 1.20, 1.20, CAST(NULL AS DECIMAL(4,2)), CAST(NULL AS DECIMAL(4,2)));
+----
+true|TRUE|false|FALSE
+
+# Array evaluation preserves typed-null behavior and repeated argument references.
+query T
+SELECT format_string('%1$E|%<s|%1$B', x) FROM VALUES (CAST(NULL AS DECIMAL(4,2))), (NULL) AS t(x);
+----
+NULL|null|FALSE
+NULL|null|FALSE
+
+statement error Invalid conversion type.*Decimal
+SELECT format_string('%f', x) FROM VALUES (CAST(NULL AS DECIMAL(4,2))), (1.20) AS t(x);
+
+# ANSI mode does not change these conversions.
+statement ok
+SET datafusion.execution.enable_ansi_mode = true;
+
+query R
+SELECT try_sum(x) FROM VALUES (CAST('NaN' AS DOUBLE)), (1.0) AS t(x);
+----
+NaN
+
+statement error Invalid conversion type.*Decimal
+SELECT format_string('%f', 1.5);
+
+statement ok
+SET datafusion.execution.enable_ansi_mode = false;
+
+# The generic dialect retains its existing decimal-preferring VALUES rules.
+statement ok
+SET datafusion.sql_parser.dialect = 'generic';
+
+query T
+SELECT arrow_typeof(x) FROM VALUES (CAST(1 AS DOUBLE)), (CAST(1.0 AS DECIMAL(2,1))) AS t(x) LIMIT 1;
+----
+Decimal128(30, 15)
+
+statement ok
+SET datafusion.sql_parser.dialect = 'spark';

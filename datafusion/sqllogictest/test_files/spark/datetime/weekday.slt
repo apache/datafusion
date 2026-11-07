@@ -110,7 +110,7 @@ statement error Function 'weekday' requires Date, but received String
 SELECT weekday('not-a-date');
 
 # Error: wrong argument type (integer)
-statement error Function 'weekday' requires Date, but received Int64
+statement error Function 'weekday' requires Date, but received Int32
 SELECT weekday(123);
 
 # Error: no arguments

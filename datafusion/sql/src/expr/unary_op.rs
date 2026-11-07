@@ -83,9 +83,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     // Optimization: if it's a number literal, we apply the negative operator
                     // here directly to calculate the new literal.
                     SQLExpr::Value(ValueWithSpan {
-                        value: Value::Number(n, _),
+                        value: Value::Number(n, long),
                         span: _,
-                    }) => self.parse_sql_number(&n, true),
+                    }) => self.parse_sql_number(&n, true, long),
                     SQLExpr::Interval(interval) => {
                         self.sql_interval_to_expr(true, interval)
                     }

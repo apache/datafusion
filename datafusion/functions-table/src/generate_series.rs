@@ -754,7 +754,7 @@ impl TableFunctionImpl for GenerateSeriesFuncImpl {
         match &exprs[0] {
             Expr::Literal(
                 // Default to int64 for null
-                ScalarValue::Null | ScalarValue::Int64(_),
+                ScalarValue::Null | ScalarValue::Int32(_) | ScalarValue::Int64(_),
                 _,
             ) => self.call_int64(exprs),
             Expr::Literal(s, _) if matches!(s.data_type(), DataType::Timestamp(_, _)) => {
@@ -780,6 +780,9 @@ impl GenerateSeriesFuncImpl {
         for (expr_index, expr) in exprs.iter().enumerate() {
             match expr {
                 Expr::Literal(ScalarValue::Null, _) => {}
+                Expr::Literal(ScalarValue::Int32(Some(n)), _) => {
+                    normalize_args.push(i64::from(*n));
+                }
                 Expr::Literal(ScalarValue::Int64(Some(n)), _) => normalize_args.push(*n),
                 other => {
                     return plan_err!(

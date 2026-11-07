@@ -154,7 +154,7 @@ statement error Function 'monthname' requires Date, but received String
 SELECT monthname('not-a-date');
 
 # Error: wrong argument type (integer)
-statement error Function 'monthname' requires Date, but received Int64
+statement error Function 'monthname' requires Date, but received Int32
 SELECT monthname(123);
 
 # Error: no arguments

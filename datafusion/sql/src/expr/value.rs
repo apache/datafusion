@@ -35,7 +35,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         param_data_types: &[Option<FieldRef>],
     ) -> Result<Expr> {
         match value {
-            Value::Number(n, _) => self.parse_sql_number(&n, false),
+            Value::Number(n, long) => self.parse_sql_number(&n, false, long),
             Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => Ok(lit(s)),
             Value::Null => Ok(Expr::Literal(ScalarValue::Null, None)),
             Value::Boolean(n) => Ok(lit(n)),
@@ -60,6 +60,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         unsigned_number: &str,
         negative: bool,
+        long: bool,
     ) -> Result<Expr> {
         // remove underscores, since the Rust parser used here does not support them
         let signed_number = if !negative && !unsigned_number.contains('_') {
@@ -83,6 +84,37 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         } else {
             &signed_number
         };
+
+        if self.options.dialect == datafusion_common::config::Dialect::Spark {
+            if long {
+                return signed_number.parse::<i64>().map(lit).map_err(|_| {
+                    datafusion_common::plan_datafusion_err!(
+                        "BIGINT literal {signed_number} is out of range"
+                    )
+                });
+            }
+            if let Ok(n) = signed_number.parse::<i64>() {
+                return Ok(match i32::try_from(n) {
+                    Ok(n) => lit(n),
+                    Err(_) => lit(n),
+                });
+            }
+            // Spark treats scientific notation as DOUBLE, but unsuffixed decimal
+            // literals and integers exceeding BIGINT as DECIMAL.
+            if signed_number.contains(['e', 'E']) {
+                return match signed_number.parse::<f64>() {
+                    Ok(n) if n.is_finite() => Ok(lit(n)),
+                    _ => plan_err!("DOUBLE literal {signed_number} is out of range"),
+                };
+            }
+            let decimal = parse_decimal(unsigned_number, negative)?;
+            if matches!(decimal, Expr::Literal(ScalarValue::Decimal256(..), _)) {
+                return plan_err!(
+                    "Spark decimal literal exceeds the maximum precision of 38"
+                );
+            }
+            return Ok(decimal);
+        }
 
         // Try to parse as i64 first, then u64 if negative is false, then decimal or f64
 
