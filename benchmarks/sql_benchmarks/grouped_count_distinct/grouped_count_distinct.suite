@@ -1,4 +1,4 @@
-description = "Grouped COUNT(DISTINCT) across argument types, integer/string/composite grouping keys, distinct cardinalities and skew; compare --partitions 1, 4 and 12"
+description = "Grouped COUNT(DISTINCT) across types, cardinalities, skew and duplicate-heavy groups; compare --partitions 1, 4 and 12 with DATAFUSION_OPTIMIZER_SINGLE_DISTINCT_PREFER_NATIVE=false/true"
 
 [[options]]
 name = "rows"

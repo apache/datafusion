@@ -7,5 +7,7 @@ SELECT value % 2000 AS g,
        CAST((value * 48271) % 999983 AS VARCHAR) AS string_x,
        CAST((value * 48271) % 999983 AS DOUBLE) AS float_x,
        CASE WHEN value % 100 < 90 THEN 0 ELSE value % 8 END AS skew_g,
-       CAST(CASE WHEN value % 100 < 90 THEN 0 ELSE value % 8 END AS VARCHAR) AS string_g
+       CAST(CASE WHEN value % 100 < 90 THEN 0 ELSE value % 8 END AS VARCHAR) AS string_g,
+       value % 1000000 AS many_g,
+       value % 2 AS dup_x
 FROM range(${GROUPED_DISTINCT_ROWS:-4000000});

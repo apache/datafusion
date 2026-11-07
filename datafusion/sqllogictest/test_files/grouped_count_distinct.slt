@@ -2,8 +2,9 @@
 # SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 # SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-# With one target partition, grouped integer DISTINCT counts keep their
-# specialized accumulator. Multiple partitions retain distributed deduplication.
+# With the opt-in enabled and one target partition, grouped integer DISTINCT
+# counts keep their specialized accumulator. Multiple target partitions retain
+# distributed deduplication.
 # String and floating-point DISTINCT arguments still use the two-phase rewrite.
 
 statement ok
@@ -23,6 +24,26 @@ INSERT INTO numeric_counts VALUES
 
 statement ok
 SET datafusion.explain.logical_plan_only = true;
+
+# The default preserves the rewrite, even with one target partition.
+query TT
+EXPLAIN SELECT g, count(DISTINCT x) FROM numeric_counts GROUP BY g;
+----
+logical_plan
+01)Projection: numeric_counts.g, count(alias1) AS count(DISTINCT numeric_counts.x)
+02)--Aggregate: groupBy=[[numeric_counts.g]], aggr=[[count(alias1)]]
+03)----Aggregate: groupBy=[[numeric_counts.g, numeric_counts.x AS alias1]], aggr=[[]]
+04)------TableScan: numeric_counts projection=[g, x]
+
+query II rowsort
+SELECT g, count(DISTINCT x) FROM numeric_counts GROUP BY g;
+----
+1 2
+2 0
+3 1
+
+statement ok
+SET datafusion.optimizer.single_distinct_prefer_native = true;
 
 query TT
 EXPLAIN SELECT g, count(DISTINCT x) FROM numeric_counts GROUP BY g;
@@ -163,7 +184,55 @@ query II
 SELECT g, count(DISTINCT x) FROM numeric_counts WHERE g = 42 GROUP BY g;
 ----
 
-# The same session must switch back to the rewrite when partitions increase.
+# One target partition can still merge native states from several input partitions.
+query II rowsort
+SELECT g, count(DISTINCT x)
+FROM (SELECT g, x FROM numeric_counts UNION ALL SELECT g, x FROM numeric_counts)
+GROUP BY g;
+----
+1 2
+2 0
+3 1
+
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT g, count(DISTINCT x)
+FROM (SELECT g, x FROM numeric_counts UNION ALL SELECT g, x FROM numeric_counts)
+GROUP BY g;
+----
+physical_plan
+01)AggregateExec: mode=Final, gby=[g@0 as g], aggr=[count(DISTINCT x)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(DISTINCT x)]
+04)------UnionExec
+05)--------DataSourceExec: partitions=1, partition_sizes=[1]
+06)--------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
+# Turning the opt-in off in the same session restores the rewrite.
+statement ok
+SET datafusion.optimizer.single_distinct_prefer_native = false;
+
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT g, count(DISTINCT x) FROM numeric_counts GROUP BY g;
+----
+logical_plan
+01)Projection: numeric_counts.g, count(alias1) AS count(DISTINCT numeric_counts.x)
+02)--Aggregate: groupBy=[[numeric_counts.g]], aggr=[[count(alias1)]]
+03)----Aggregate: groupBy=[[numeric_counts.g, numeric_counts.x AS alias1]], aggr=[[]]
+04)------TableScan: numeric_counts projection=[g, x]
+
+statement ok
+SET datafusion.optimizer.single_distinct_prefer_native = true;
+
+# Even with the opt-in enabled, increasing target partitions restores the rewrite.
 statement ok
 SET datafusion.execution.target_partitions = 4;
 
@@ -218,8 +287,40 @@ query TI
 SELECT g, count(DISTINCT x) FROM parallel_counts WHERE x = 101 GROUP BY g;
 ----
 
+# This table retains its four input partitions when the target is reduced to one.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+query TI rowsort
+SELECT g, count(DISTINCT x) FROM parallel_counts GROUP BY g;
+----
+NULL 10
+hot 80
+null_values 0
+
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT g, count(DISTINCT x) FROM parallel_counts GROUP BY g;
+----
+physical_plan
+01)AggregateExec: mode=Final, gby=[g@0 as g], aggr=[count(DISTINCT parallel_counts.x)]
+02)--CoalescePartitionsExec
+03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(DISTINCT parallel_counts.x)]
+04)------DataSourceExec: partitions=4, partition_sizes=[4, 3, 3, 3]
+
+statement ok
+SET datafusion.explain.physical_plan_only = false;
+
 statement ok
 DROP TABLE parallel_counts;
 
 statement ok
 DROP TABLE numeric_counts;
+
+statement ok
+SET datafusion.optimizer.single_distinct_prefer_native = false;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;

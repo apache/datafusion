@@ -68,6 +68,9 @@ use datafusion_expr::{
 /// `sum` of no rows is NULL.
 ///
 /// See `rewrite_pays_for_count` for when the `count` is allowed.
+/// With `single_distinct_prefer_native` enabled and one target partition, grouped
+/// all-DISTINCT aggregates stay native if every function explicitly supports a
+/// specialized `GroupsAccumulator` for its argument types.
 #[derive(Default, Debug)]
 pub struct SingleDistinctToGroupBy {}
 
@@ -160,10 +163,16 @@ fn is_single_distinct_agg(
     // partitions, the rewrite also distributes deduplication by both keys;
     // keeping DISTINCT instead repartitions lists of values by group and merges
     // them in the final accumulator. That can concentrate work on a few groups.
-    // Native accumulator support alone does not establish that this is cheaper.
+    // Even one target partition can have multiple input partitions (e.g. UNION
+    // ALL or an existing partitioned table), requiring Partial/Final state merging.
+    // This is opt-in: the rule cannot see memory limits or cost the input, and
+    // native DISTINCT must fit each group's distinct values in memory.
     if use_native_grouped_distinct
         && distinct_aggs.len() == aggregate_count
-        && all_have_groups_accumulators(&distinct_aggs, input_schema)?
+        // An unknown answer must preserve the existing rewrite.
+        && distinct_groups_support(&distinct_aggs, input_schema)?
+            .iter()
+            .all(|support| *support == Some(true))
     {
         return Ok(false);
     }
@@ -173,21 +182,21 @@ fn is_single_distinct_agg(
     Ok(true)
 }
 
-fn all_have_groups_accumulators(
+/// Each distinct aggregate's specialized GroupsAccumulator support for its types.
+fn distinct_groups_support(
     distinct_aggs: &[(&Arc<AggregateUDF>, &[Expr])],
     input_schema: &DFSchema,
-) -> Result<bool> {
-    for (func, args) in distinct_aggs {
-        let arg_types = args
-            .iter()
-            .map(|arg| arg.get_type(input_schema))
-            .collect::<Result<Vec<_>>>()?;
-        // An unknown answer must preserve the existing rewrite.
-        if func.groups_accumulator_supported_for_types(&arg_types, true) != Some(true) {
-            return Ok(false);
-        }
-    }
-    Ok(true)
+) -> Result<Vec<Option<bool>>> {
+    distinct_aggs
+        .iter()
+        .map(|(func, args)| {
+            let arg_types = args
+                .iter()
+                .map(|arg| arg.get_type(input_schema))
+                .collect::<Result<Vec<_>>>()?;
+            Ok(func.groups_accumulator_supported_for_types(&arg_types, true))
+        })
+        .collect()
 }
 
 /// Whether the rewrite is worth extending to a plan that only qualifies because
@@ -215,16 +224,7 @@ fn rewrite_pays_for_count(
     distinct_aggs: &[(&Arc<AggregateUDF>, &[Expr])],
     input_schema: &DFSchema,
 ) -> Result<bool> {
-    for (func, args) in distinct_aggs {
-        let arg_types = args
-            .iter()
-            .map(|arg| arg.get_type(input_schema))
-            .collect::<Result<Vec<_>>>()?;
-        if func.groups_accumulator_supported_for_types(&arg_types, true) == Some(false) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(distinct_groups_support(distinct_aggs, input_schema)?.contains(&Some(false)))
 }
 
 /// Check if the first expr is [Expr::GroupingSet].
@@ -262,7 +262,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 input.schema(),
                 count_rollup.as_ref(),
                 !group_expr.is_empty()
-                    && config.options().execution.target_partitions == 1,
+                    && config.options().execution.target_partitions == 1
+                    && config.options().optimizer.single_distinct_prefer_native,
             )? && !contains_grouping_set(&group_expr) =>
             {
                 let group_size = group_expr.len();
