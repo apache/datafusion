@@ -1,0 +1,192 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# configMatrix: datafusion.optimizer.max_passes=0,3
+
+# Regression test for https://github.com/apache/datafusion/issues/27164.
+statement ok
+CREATE TABLE target AS SELECT 1 AS id;
+
+query I
+SELECT d.id FROM target AS d WHERE d.id = 1;
+----
+1
+
+query I
+DELETE FROM target AS d WHERE d.id = 1;
+----
+1
+
+query I
+SELECT COUNT(*) FROM target;
+----
+0
+
+statement ok
+DROP TABLE target;
+
+statement ok
+CREATE TABLE delete_alias (id BIGINT);
+
+statement ok
+INSERT INTO delete_alias VALUES (1), (2), (3), (NULL);
+
+# The alias hides the original name, including its qualified forms.
+statement error No field named delete_alias\.id
+DELETE FROM delete_alias AS d WHERE delete_alias.id = 1;
+
+statement error No field named public\.delete_alias\.id
+DELETE FROM public.delete_alias AS d WHERE public.delete_alias.id = 1;
+
+statement error No field named datafusion\.public\.delete_alias\.id
+DELETE FROM datafusion.public.delete_alias AS d WHERE datafusion.public.delete_alias.id = 1;
+
+statement error No field named other\.id
+DELETE FROM delete_alias AS d WHERE other.id = 1;
+
+# Target aliases do not add support for column renaming or multi-table DELETE.
+statement error DELETE target alias column lists are not supported
+DELETE FROM delete_alias AS d(other_id) WHERE d.other_id = 1;
+
+statement error DELETE FROM only supports single table
+DELETE FROM delete_alias AS d, delete_alias AS s WHERE d.id = s.id;
+
+statement error DELETE FROM only supports single table, got: joins
+DELETE FROM delete_alias AS d JOIN delete_alias AS s ON d.id = s.id;
+
+statement error Using clause not supported
+DELETE FROM delete_alias AS d USING delete_alias AS s WHERE d.id = s.id;
+
+statement error Delete-returning clause not yet supported
+DELETE FROM delete_alias AS d WHERE d.id = 1 RETURNING id;
+
+# Planning and an always-false predicate must leave every row intact.
+statement ok
+EXPLAIN DELETE FROM delete_alias AS d WHERE d.id = 1;
+
+query I
+DELETE FROM delete_alias AS d WHERE d.id = 1 AND false;
+----
+0
+
+query I rowsort
+SELECT id FROM delete_alias;
+----
+1
+2
+3
+NULL
+
+# Unquoted aliases normalize just like SELECT aliases. The actual target
+# remains the schema-qualified table, not a table named after the alias.
+query I
+DELETE FROM public.delete_alias AS D WHERE d.id = 1;
+----
+1
+
+query I rowsort
+SELECT id FROM delete_alias;
+----
+2
+3
+NULL
+
+# An implicit alias also works on a fully qualified target.
+query I
+DELETE FROM datafusion.public.delete_alias d WHERE d.id = 2;
+----
+1
+
+query I rowsort
+SELECT id FROM delete_alias;
+----
+3
+NULL
+
+# Unqualified columns remain valid; NULL predicates do not delete rows.
+query I
+DELETE FROM delete_alias AS d WHERE id = 3;
+----
+1
+
+query I
+SELECT id FROM delete_alias;
+----
+NULL
+
+query I
+DELETE FROM delete_alias AS d;
+----
+1
+
+query I
+SELECT COUNT(*) FROM delete_alias;
+----
+0
+
+statement ok
+DROP TABLE delete_alias;
+
+# Quoted table, column, and alias names retain their case.
+statement ok
+CREATE TABLE "DeleteTarget" ("Id" INT);
+
+statement ok
+INSERT INTO "DeleteTarget" VALUES (1), (2);
+
+statement error No field named d\.
+DELETE FROM "DeleteTarget" AS "D" WHERE d."Id" = 1;
+
+query I
+DELETE FROM "DeleteTarget" AS "D" WHERE "D"."Id" = 1;
+----
+1
+
+query I
+SELECT "Id" FROM "DeleteTarget";
+----
+2
+
+# A quoted alias containing a dot is one identifier, not a qualified name.
+query I
+DELETE FROM "DeleteTarget" AS "D.with.dot" WHERE "D.with.dot"."Id" = 2;
+----
+1
+
+query I
+SELECT COUNT(*) FROM "DeleteTarget";
+----
+0
+
+statement ok
+DROP TABLE "DeleteTarget";
+
+# Alias normalization respects the session's identifier configuration.
+statement ok
+SET datafusion.sql_parser.enable_ident_normalization = false;
+
+statement ok
+CREATE TABLE DeleteCase (Id INT);
+
+statement ok
+INSERT INTO DeleteCase VALUES (1), (2);
+
+statement error No field named d\.
+DELETE FROM DeleteCase AS D WHERE d.Id = 1;
+
+query I
+DELETE FROM DeleteCase AS D WHERE D.Id = 1;
+----
+1
+
+query I
+SELECT Id FROM DeleteCase;
+----
+2
+
+statement ok
+DROP TABLE DeleteCase;
+
+statement ok
+RESET datafusion.sql_parser.enable_ident_normalization;
