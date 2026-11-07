@@ -120,12 +120,12 @@ impl DatafusionArrowPredicate {
         rows_matched: metrics::Count,
         time: metrics::Time,
     ) -> Result<Self> {
-        let physical_expr =
-            reassign_expr_columns(candidate.expr, &candidate.read_plan.projected_schema)?;
+        let (projection_mask, projected_schema) = candidate.read_plan.into_parts();
+        let physical_expr = reassign_expr_columns(candidate.expr, &projected_schema)?;
 
         Ok(Self {
             physical_expr,
-            projection_mask: candidate.read_plan.projection_mask,
+            projection_mask,
             rows_pruned,
             rows_matched,
             time,
@@ -500,11 +500,11 @@ pub(crate) fn prebuild_row_filter_candidates(
         .map(|candidate| {
             let physical_expr = reassign_expr_columns(
                 Arc::clone(&candidate.expr),
-                &candidate.read_plan.projected_schema,
+                candidate.read_plan.projected_schema(),
             )?;
             Ok(PrebuiltRowFilterCandidate {
                 physical_expr,
-                projection_mask: candidate.read_plan.projection_mask.clone(),
+                projection_mask: candidate.read_plan.projection_mask().clone(),
                 required_bytes: candidate.required_bytes,
             })
         })
@@ -619,7 +619,7 @@ mod test {
 
         let expected_mask =
             ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [list_index]);
-        assert_eq!(candidate.read_plan.projection_mask, expected_mask);
+        assert_eq!(candidate.read_plan.projection_mask(), &expected_mask);
     }
 
     #[test]
@@ -1153,7 +1153,8 @@ mod test {
         let expected_mask =
             ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [3]);
         assert_eq!(
-            candidate.read_plan.projection_mask, expected_mask,
+            candidate.read_plan.projection_mask(),
+            &expected_mask,
             "projection_mask should select only leaf 3 for col_b"
         );
     }
@@ -1309,7 +1310,8 @@ mod test {
         let expected_mask =
             ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1]);
         assert_eq!(
-            candidate.read_plan.projection_mask, expected_mask,
+            candidate.read_plan.projection_mask(),
+            &expected_mask,
             "projection_mask should select only the accessed struct field leaf"
         );
 
@@ -1344,7 +1346,7 @@ mod test {
         // Clip the unused sibling, but preserve the failing `label` conversion.
         let expected_mask =
             ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1, 2]);
-        assert_eq!(candidate.read_plan.projection_mask, expected_mask);
+        assert_eq!(candidate.read_plan.projection_mask(), &expected_mask);
         let DataType::Struct(physical_fields) = file_schema.field(1).data_type() else {
             unreachable!("s is a struct")
         };
@@ -1356,7 +1358,7 @@ mod test {
                     physical_fields.iter().take(2).cloned().collect(),
                 ));
         assert_eq!(
-            candidate.read_plan.projected_schema.as_ref(),
+            candidate.read_plan.projected_schema().as_ref(),
             &Schema::new(vec![clipped_field])
         );
         assert_eq!(
@@ -1373,10 +1375,10 @@ mod test {
             &file_schema,
             metadata.file_metadata().schema_descr(),
         );
-        assert_eq!(projection_plan.projection_mask, expected_mask);
+        assert_eq!(projection_plan.projection_mask(), &expected_mask);
         assert_eq!(
-            projection_plan.projected_schema,
-            candidate.read_plan.projected_schema
+            projection_plan.projected_schema(),
+            candidate.read_plan.projected_schema()
         );
 
         let mut row_filter = DatafusionArrowPredicate::try_new(
@@ -1412,13 +1414,13 @@ mod test {
                 .expect("building narrow cast candidate")
                 .expect("a clipped struct cast must remain evaluable");
         assert_eq!(
-            candidate.read_plan.projection_mask,
-            ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1]),
+            candidate.read_plan.projection_mask(),
+            &ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [1]),
             "the read must be clipped to the leaf the cast target names"
         );
-        assert_eq!(candidate.read_plan.projected_schema.fields().len(), 1);
+        assert_eq!(candidate.read_plan.projected_schema().fields().len(), 1);
         assert_eq!(
-            candidate.read_plan.projected_schema.field(0).data_type(),
+            candidate.read_plan.projected_schema().field(0).data_type(),
             &narrow_cast_type,
             "sibling leaves must be pruned from the filter schema"
         );
@@ -1564,7 +1566,8 @@ mod test {
         let expected_mask =
             ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [2]);
         assert_eq!(
-            candidate.read_plan.projection_mask, expected_mask,
+            candidate.read_plan.projection_mask(),
+            &expected_mask,
             "projection_mask should select only leaf 2 for s.outer.inner, skipping sibling and cousin leaves"
         );
     }
@@ -1740,13 +1743,14 @@ mod test {
         let expected_mask =
             ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0, 1]);
         assert_eq!(
-            candidate.read_plan.projection_mask, expected_mask,
+            candidate.read_plan.projection_mask(),
+            &expected_mask,
             "projection_mask should include only the two accessed sibling leaves"
         );
 
         let s_field = candidate
             .read_plan
-            .projected_schema
+            .projected_schema()
             .field_with_name("s")
             .unwrap();
         let expected_pruned: Fields = vec![
@@ -1857,13 +1861,14 @@ mod test {
         let expected_mask =
             ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0, 1]);
         assert_eq!(
-            candidate.read_plan.projection_mask, expected_mask,
+            candidate.read_plan.projection_mask(),
+            &expected_mask,
             "projection_mask should drop cousin and un-accessed sibling leaves"
         );
 
         let s_field = candidate
             .read_plan
-            .projected_schema
+            .projected_schema()
             .field_with_name("s")
             .unwrap();
         let expected_inner: Fields = vec![
@@ -1983,13 +1988,14 @@ mod test {
         let expected_mask =
             ProjectionMask::leaves(metadata.file_metadata().schema_descr(), [0, 2]);
         assert_eq!(
-            candidate.read_plan.projection_mask, expected_mask,
+            candidate.read_plan.projection_mask(),
+            &expected_mask,
             "projection_mask should keep one leaf from each disjoint subtree"
         );
 
         let s_field = candidate
             .read_plan
-            .projected_schema
+            .projected_schema()
             .field_with_name("s")
             .unwrap();
         let expected_outer: Fields =
