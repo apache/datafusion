@@ -722,15 +722,7 @@ impl SharedBuildAccumulator {
                 }) => {
                     real_partition_ids.push(partition_id);
                     keys_have_null |= partition_keys_have_null;
-                    let mergeable = match &pushdown {
-                        PushdownStrategy::Map(map, _) => {
-                            let map: &Map = map;
-                            matches!(map, Map::HashMap(_))
-                        }
-                        PushdownStrategy::InList(_) => true,
-                        PushdownStrategy::Empty => false,
-                    };
-                    members = members.filter(|_| mergeable).map(|mut members| {
+                    members = members.map(|mut members| {
                         members.push((partition_id, pushdown.clone(), bounds.clone()));
                         members
                     });
