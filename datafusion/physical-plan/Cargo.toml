@@ -136,6 +136,11 @@ name = "spill_io"
 
 [[bench]]
 harness = false
+name = "sort_spill"
+required-features = ["test_utils"]
+
+[[bench]]
+harness = false
 name = "sort_preserving_merge"
 
 [[bench]]

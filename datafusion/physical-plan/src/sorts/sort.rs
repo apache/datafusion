@@ -308,6 +308,9 @@ struct ExternalSorter {
     /// How much memory to reserve for performing in-memory sort/merges
     /// prior to spilling.
     sort_spill_reservation_bytes: usize,
+    /// Other partitions of this sort run alongside this one and share its
+    /// memory pool.
+    has_sibling_partitions: bool,
     /// Shared by the owning SortExec's partitions. Initialized on the runtime
     /// that polls the sort, which may differ from the one calling `execute`.
     sort_concurrency: Arc<OnceLock<SortConcurrency>>,
@@ -371,8 +374,15 @@ impl ExternalSorter {
             batch_size,
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
+            has_sibling_partitions: false,
             sort_concurrency: Arc::new(OnceLock::new()),
         })
+    }
+
+    /// Record whether other partitions of this sort share its memory pool.
+    fn with_sibling_partitions(mut self, has_sibling_partitions: bool) -> Self {
+        self.has_sibling_partitions = has_sibling_partitions;
+        self
     }
 
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
@@ -430,6 +440,19 @@ impl ExternalSorter {
                 .with_fetch(None)
                 .with_reservation(self.merge_reservation.take())
                 .with_merge_pool(Arc::clone(&self.merge_pool))
+                // Other partitions of this sort, still buffering input, share
+                // the pool with this merge, and may hold nothing at the moment
+                // it seats its runs. Seating every run the pool admits would
+                // leave them nothing, so keep headroom while they exist or
+                // anyone else holds memory in the pool. A lone partition with
+                // the pool to itself seats every run that fits: the operator
+                // consuming its output reserves nothing before its first
+                // batch, and keeping headroom for it would cost an extra merge
+                // pass whether or not it ever needs the memory.
+                .with_fan_in_headroom(
+                    Arc::clone(&self.runtime.memory_pool),
+                    self.has_sibling_partitions,
+                )
                 .build()
         } else {
             // Final output needs no reserve for future spills. Return unused
@@ -1829,7 +1852,10 @@ impl ExecutionPlan for SortExec {
                     context.session_config().spill_compression(),
                     &self.metrics_set,
                     context.runtime_env(),
-                )?;
+                )?
+                .with_sibling_partitions(
+                    self.input.output_partitioning().partition_count() > 1,
+                );
                 sorter.sort_concurrency = Arc::clone(&self.sort_concurrency);
                 Ok(Box::pin(RecordBatchStreamAdapter::new(
                     self.schema(),
