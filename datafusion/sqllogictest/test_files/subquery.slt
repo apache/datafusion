@@ -4678,3 +4678,101 @@ DROP TABLE p26572;
 
 statement ok
 RESET datafusion.execution.batch_size;
+
+# Two equal `SubqueryAlias` nodes in one subquery share an entry in the
+# decorrelation maps, so the second `t2 AS s` would replace what the first
+# one records. These error instead of returning wrong rows.
+# See https://github.com/apache/datafusion/issues/26692
+statement ok
+CREATE TABLE t26692 (a INT, b INT) AS VALUES (1, 1), (2, 2), (3, NULL);
+
+statement ok
+CREATE TABLE t26692_2 (a INT, b INT) AS VALUES (1, 1), (3, 30), (2, NULL);
+
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT t.a FROM t26692 t, t26692_2 AS s
+WHERE EXISTS (
+  SELECT 1 FROM (SELECT * FROM t26692_2 AS s WHERE s.a = t.a) x
+  CROSS JOIN t26692_2 AS s
+);
+
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT t.a FROM t26692 t, t26692_2 AS s
+WHERE NOT EXISTS (
+  SELECT 1 FROM (SELECT * FROM t26692_2 AS s WHERE s.a = t.a) x
+  CROSS JOIN t26692_2 AS s
+);
+
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression InSubquery
+SELECT t.a FROM t26692 t, t26692_2 AS s
+WHERE t.a IN (
+  SELECT x.a FROM (SELECT * FROM t26692_2 AS s WHERE s.b = t.b) x
+  CROSS JOIN t26692_2 AS s
+);
+
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT t.a, (
+  SELECT count(*) FROM (SELECT * FROM t26692_2 AS s WHERE s.a = t.a) x
+  CROSS JOIN t26692_2 AS s
+) FROM t26692 t, t26692_2 AS s;
+
+# The plain `t26692_2 AS s` comes first here, and the correlated one below
+# it fills the entry they share.
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression ScalarSubquery
+SELECT t.a, (
+  SELECT count(*) FROM t26692_2 AS s
+  CROSS JOIN (SELECT * FROM t26692_2 AS s WHERE s.a = t.a) x
+) FROM t26692 t;
+
+# The `LIMIT` of an `EXISTS` subquery is removed before its input is visited.
+query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression Exists
+SELECT t.a FROM t26692 t, t26692_2 AS s
+WHERE EXISTS (
+  SELECT 1 FROM (SELECT * FROM t26692_2 AS s WHERE s.a = t.a) x
+  CROSS JOIN t26692_2 AS s
+  LIMIT 1
+);
+
+# The same table twice without a shared alias still decorrelates.
+query I
+SELECT t.a FROM t26692 t
+WHERE EXISTS (
+  SELECT 1 FROM (SELECT * FROM t26692_2 WHERE t26692_2.a = t.a) x
+  CROSS JOIN t26692_2
+)
+ORDER BY 1;
+----
+1
+2
+3
+
+query I
+SELECT t.a FROM t26692 t
+WHERE EXISTS (
+  SELECT 1 FROM (SELECT * FROM t26692_2 WHERE t26692_2.a = t.a) x
+  CROSS JOIN (SELECT * FROM t26692_2 WHERE t26692_2.b = t.b) y
+)
+ORDER BY 1;
+----
+1
+
+query I
+SELECT t.a FROM t26692 t, t26692_2 AS s
+WHERE EXISTS (SELECT 1 FROM t26692_2 AS s WHERE s.a = t.a)
+ORDER BY 1;
+----
+1
+1
+1
+2
+2
+2
+3
+3
+3
+
+statement ok
+DROP TABLE t26692;
+
+statement ok
+DROP TABLE t26692_2;
