@@ -6,6 +6,7 @@
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use async_trait::async_trait;
+use datafusion_common::TableVersion;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -136,6 +137,14 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         }
 
         self.factory.try_new(name).await
+    }
+
+    async fn table_at(
+        &self,
+        name: &str,
+        version: &TableVersion,
+    ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
+        self.inner.table_at(name, version).await
     }
 
     fn register_table(

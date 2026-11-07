@@ -16,9 +16,15 @@ use sqlparser::ast::*;
 // This avoids a second normalization/conversion pass after visiting the AST.
 struct RelationVisitor {
     relations: BTreeSet<TableReference>,
+    versioned_relations: BTreeSet<(TableReference, TableVersion)>,
     all_ctes: BTreeSet<TableReference>,
     ctes_in_scope: Vec<TableReference>,
     enable_ident_normalization: bool,
+    /// The names of the table factors with a time travel clause that are
+    /// being visited, innermost last. These names are recorded in
+    /// `versioned_relations`, so they are skipped when visited as relations.
+    /// Only used for pointer comparison.
+    versioned_names: Vec<*const ObjectName>,
 }
 
 impl RelationVisitor {
@@ -39,13 +45,81 @@ impl RelationVisitor {
             Err(e) => ControlFlow::Break(e),
         }
     }
+
+    /// Record the reference to `relation` with a time travel clause, such as
+    /// `VERSION AS OF 3`, if it's not a CTE reference.
+    fn insert_versioned_relation(
+        &mut self,
+        relation: &ObjectName,
+        version: &TableVersion,
+    ) -> ControlFlow<DataFusionError> {
+        match object_name_to_table_reference(
+            relation.clone(),
+            self.enable_ident_normalization,
+        ) {
+            Ok(relation) => {
+                if !self.ctes_in_scope.contains(&relation) {
+                    self.versioned_relations.insert((relation, version.clone()));
+                }
+                ControlFlow::Continue(())
+            }
+            Err(e) => ControlFlow::Break(e),
+        }
+    }
+}
+
+/// Returns the name and time travel clause of `table_factor`, if it is a
+/// table with a time travel clause, such as `t VERSION AS OF 3`
+fn versioned_table(table_factor: &TableFactor) -> Option<(&ObjectName, &TableVersion)> {
+    match table_factor {
+        TableFactor::Table {
+            name,
+            args: None,
+            version: Some(version),
+            ..
+        } => Some((name, version)),
+        _ => None,
+    }
 }
 
 impl Visitor for RelationVisitor {
     type Break = DataFusionError;
 
     fn pre_visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<Self::Break> {
+        if self
+            .versioned_names
+            .iter()
+            .any(|name| std::ptr::eq(*name, relation))
+        {
+            return ControlFlow::Continue(());
+        }
+
         self.insert_relation(relation)
+    }
+
+    fn pre_visit_table_factor(
+        &mut self,
+        table_factor: &TableFactor,
+    ) -> ControlFlow<Self::Break> {
+        if let Some((name, version)) = versioned_table(table_factor) {
+            // The table name is also visited as a relation. Skip exactly that
+            // node, so it is not recorded without its version as well. Other
+            // relations within this table factor, such as those in a subquery
+            // in the time travel clause, are still recorded.
+            self.versioned_names.push(name);
+            self.insert_versioned_relation(name, version)?;
+        }
+        ControlFlow::Continue(())
+    }
+
+    fn post_visit_table_factor(
+        &mut self,
+        table_factor: &TableFactor,
+    ) -> ControlFlow<Self::Break> {
+        if versioned_table(table_factor).is_some() {
+            self.versioned_names.pop();
+        }
+        ControlFlow::Continue(())
     }
 
     fn pre_visit_query(&mut self, q: &Query) -> ControlFlow<Self::Break> {
@@ -129,8 +203,25 @@ fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) -> Re
     Ok(())
 }
 
+/// Tables, views and CTEs referenced in a SQL statement, as collected by
+/// [`resolve_table_references_with_versions`].
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct TableReferences {
+    /// Tables and views referenced without a time travel clause
+    pub tables: Vec<TableReference>,
+    /// Tables and views referenced with a time travel clause, such as
+    /// `VERSION AS OF 3`, together with that clause
+    pub versioned_tables: Vec<(TableReference, TableVersion)>,
+    /// CTE aliases that were defined and possibly referenced
+    pub ctes: Vec<TableReference>,
+}
+
 /// Collects all tables and views referenced in the SQL statement. CTEs are collected separately.
 /// This can be used to determine which tables need to be in the catalog for a query to be planned.
+///
+/// Tables referenced with a time travel clause, such as `VERSION AS OF 3`,
+/// are included without their version. Use
+/// [`resolve_table_references_with_versions`] to also obtain those versions.
 ///
 /// # Returns
 ///
@@ -167,24 +258,197 @@ pub fn resolve_table_references(
     statement: &crate::parser::Statement,
     enable_ident_normalization: bool,
 ) -> Result<(Vec<TableReference>, Vec<TableReference>)> {
+    let visitor = visit_relations(statement, enable_ident_normalization)?;
+    let mut relations = visitor.relations;
+    relations.extend(visitor.versioned_relations.into_iter().map(|(r, _)| r));
+    Ok((
+        relations.into_iter().collect(),
+        visitor.all_ctes.into_iter().collect(),
+    ))
+}
+
+/// Collects all tables, views and CTEs referenced in the SQL statement, like
+/// [`resolve_table_references`], and also the time travel clauses of tables,
+/// such as `VERSION AS OF 3`.
+///
+/// A table referenced with a time travel clause is only included in
+/// [`TableReferences::tables`] if it is also referenced without one.
+///
+/// ## Example
+///
+/// ```
+/// # use datafusion_sql::parser::DFParserBuilder;
+/// # use datafusion_sql::resolve::resolve_table_references_with_versions;
+/// # use datafusion_sql::sqlparser::dialect::DatabricksDialect;
+/// let query = "SELECT * FROM foo JOIN bar VERSION AS OF 3 ON foo.id = bar.id";
+/// let statement = DFParserBuilder::new(query)
+///     .with_dialect(&DatabricksDialect {})
+///     .build()
+///     .unwrap()
+///     .parse_statements()
+///     .unwrap()
+///     .pop_back()
+///     .unwrap();
+/// let references = resolve_table_references_with_versions(&statement, true).unwrap();
+/// assert_eq!(references.tables.len(), 1);
+/// assert_eq!(references.tables[0].to_string(), "foo");
+/// assert_eq!(references.versioned_tables.len(), 1);
+/// assert_eq!(references.versioned_tables[0].0.to_string(), "bar");
+/// assert_eq!(references.versioned_tables[0].1.to_string(), "VERSION AS OF 3");
+/// ```
+pub fn resolve_table_references_with_versions(
+    statement: &crate::parser::Statement,
+    enable_ident_normalization: bool,
+) -> Result<TableReferences> {
+    let visitor = visit_relations(statement, enable_ident_normalization)?;
+    Ok(TableReferences {
+        tables: visitor.relations.into_iter().collect(),
+        versioned_tables: visitor.versioned_relations.into_iter().collect(),
+        ctes: visitor.all_ctes.into_iter().collect(),
+    })
+}
+
+fn visit_relations(
+    statement: &crate::parser::Statement,
+    enable_ident_normalization: bool,
+) -> Result<RelationVisitor> {
     let mut visitor = RelationVisitor {
         relations: BTreeSet::new(),
+        versioned_relations: BTreeSet::new(),
         all_ctes: BTreeSet::new(),
         ctes_in_scope: vec![],
         enable_ident_normalization,
+        versioned_names: vec![],
     };
-
     visit_statement(statement, &mut visitor)?;
-
-    Ok((
-        visitor.relations.into_iter().collect(),
-        visitor.all_ctes.into_iter().collect(),
-    ))
+    Ok(visitor)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn parse_snowflake(query: &str) -> crate::parser::Statement {
+        use crate::parser::DFParserBuilder;
+        use sqlparser::dialect::SnowflakeDialect;
+
+        DFParserBuilder::new(query)
+            .with_dialect(&SnowflakeDialect {})
+            .build()
+            .unwrap()
+            .parse_statements()
+            .unwrap()
+            .pop_back()
+            .unwrap()
+    }
+
+    #[test]
+    fn resolve_table_references_with_versions_collects_versions() {
+        let statement = parse_snowflake(
+            "SELECT * FROM a \
+             JOIN b AT (VERSION => 1) ON true \
+             JOIN B AT (VERSION => 1) ON true \
+             JOIN b TIMESTAMP AS OF now() ON true \
+             WHERE a.x IN (SELECT x FROM c VERSION AS OF 2)",
+        );
+        let references =
+            resolve_table_references_with_versions(&statement, true).unwrap();
+        let tables: Vec<_> = references.tables.iter().map(|t| t.to_string()).collect();
+        assert_eq!(tables, ["a"]);
+        let versioned: Vec<_> = references
+            .versioned_tables
+            .iter()
+            .map(|(t, v)| format!("{t} {v}"))
+            .collect();
+        assert_eq!(
+            versioned,
+            [
+                "b TIMESTAMP AS OF now()",
+                "b AT(VERSION => 1)",
+                "c VERSION AS OF 2"
+            ]
+        );
+        assert!(references.ctes.is_empty());
+
+        // `resolve_table_references` returns all tables, without versions
+        let (tables, ctes) = resolve_table_references(&statement, true).unwrap();
+        let tables: Vec<_> = tables.iter().map(|t| t.to_string()).collect();
+        assert_eq!(tables, ["a", "b", "c"]);
+        assert_eq!(ctes, references.ctes);
+    }
+
+    #[test]
+    fn resolve_table_references_with_versions_mixed() {
+        // A table referenced both with and without a time travel clause
+        let statement = parse_snowflake(
+            "SELECT * FROM t AS cur JOIN t VERSION AS OF 1 AS old ON true",
+        );
+        let references =
+            resolve_table_references_with_versions(&statement, true).unwrap();
+        let tables: Vec<_> = references.tables.iter().map(|t| t.to_string()).collect();
+        assert_eq!(tables, ["t"]);
+        let versioned: Vec<_> = references
+            .versioned_tables
+            .iter()
+            .map(|(t, v)| format!("{t} {v}"))
+            .collect();
+        assert_eq!(versioned, ["t VERSION AS OF 1"]);
+    }
+
+    #[test]
+    fn resolve_table_references_with_versions_subquery_in_version() {
+        // Tables in a subquery in the time travel clause are still recorded.
+        // Planning reports an error for the non-constant version.
+        let tables_of = |query: &str| {
+            let references =
+                resolve_table_references_with_versions(&parse_snowflake(query), true)
+                    .unwrap();
+            let tables: Vec<_> =
+                references.tables.iter().map(|t| t.to_string()).collect();
+            let versioned: Vec<_> = references
+                .versioned_tables
+                .iter()
+                .map(|(t, _)| t.to_string())
+                .collect();
+            (tables, versioned)
+        };
+
+        let (tables, versioned) =
+            tables_of("SELECT * FROM t TIMESTAMP AS OF (SELECT max(ts) FROM log)");
+        assert_eq!(tables, ["log"]);
+        assert_eq!(versioned, ["t"]);
+
+        let (tables, versioned) = tables_of(
+            "SELECT * FROM t AT (VERSION => (SELECT max(v) FROM a JOIN b ON true))",
+        );
+        assert_eq!(tables, ["a", "b"]);
+        assert_eq!(versioned, ["t"]);
+
+        let (tables, versioned) = tables_of(
+            "SELECT * FROM t AT (VERSION => \
+             (SELECT max(v) FROM log VERSION AS OF 1 JOIN a ON true))",
+        );
+        assert_eq!(tables, ["a"]);
+        assert_eq!(versioned, ["log", "t"]);
+    }
+
+    #[test]
+    fn resolve_table_references_with_versions_skips_ctes() {
+        // A versioned reference to a CTE is not a table reference. Planning
+        // reports an error for it.
+        let statement = parse_snowflake(
+            "WITH t AS (SELECT * FROM t VERSION AS OF 1) SELECT * FROM t VERSION AS OF 2",
+        );
+        let references =
+            resolve_table_references_with_versions(&statement, true).unwrap();
+        let versioned: Vec<_> = references
+            .versioned_tables
+            .iter()
+            .map(|(t, v)| format!("{t} {v}"))
+            .collect();
+        assert_eq!(versioned, ["t VERSION AS OF 1"]);
+        assert_eq!(references.ctes.len(), 1);
+    }
 
     #[test]
     fn resolve_table_references_shadowed_cte() {

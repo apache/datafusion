@@ -1,0 +1,368 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+##########
+## Time travel queries
+##
+## The test context registers a schema `versioned` containing a table `t` with
+## three versions:
+##
+## | version | committed at         | rows                   |
+## |---------|----------------------|------------------------|
+## | 1       | 2024-01-01T00:00:00Z | (1, a)                 |
+## | 2       | 2024-02-01T00:00:00Z | (1, a), (2, b)         |
+## | 3       | 2024-03-01T00:00:00Z | (1, a), (2, b), (3, c) |
+##
+## Version 1 is tagged 'first' and version 3 is tagged 'latest'.
+##########
+
+# The generic dialect does not parse time travel clauses (yet)
+statement error DataFusion error: SQL error: ParserError
+SELECT * FROM versioned.t VERSION AS OF 1
+
+# The Snowflake dialect parses all supported time travel syntaxes
+statement ok
+set datafusion.sql_parser.dialect = 'Snowflake';
+
+# Without a time travel clause, the current version is read
+query IT rowsort
+SELECT * FROM versioned.t
+----
+1 a
+2 b
+3 c
+
+##########
+## Versions
+##########
+
+query IT rowsort
+SELECT * FROM versioned.t VERSION AS OF 1
+----
+1 a
+
+query IT rowsort
+SELECT * FROM versioned.t AT (VERSION => 2)
+----
+1 a
+2 b
+
+# Version names are case insensitive
+query IT rowsort
+SELECT * FROM versioned.t at (version => 2)
+----
+1 a
+2 b
+
+# Versions can be any scalar value, such as a tag
+query IT rowsort
+SELECT * FROM versioned.t AT (VERSION => 'first')
+----
+1 a
+
+# Versions are constant expressions that are evaluated during planning
+query IT rowsort
+SELECT * FROM versioned.t AT (VERSION => 1 + 1)
+----
+1 a
+2 b
+
+query IT rowsort
+SELECT * FROM versioned.t AT (VERSION => concat('lat', 'est'))
+----
+1 a
+2 b
+3 c
+
+##########
+## Timestamps
+##########
+
+query IT rowsort
+SELECT * FROM versioned.t TIMESTAMP AS OF '2024-01-15'
+----
+1 a
+
+query IT rowsort
+SELECT * FROM versioned.t FOR SYSTEM_TIME AS OF '2024-02-15T12:00:00Z'
+----
+1 a
+2 b
+
+# A timestamp in another time zone is converted to UTC
+query IT rowsort
+SELECT * FROM versioned.t AT (TIMESTAMP => '2024-02-29T23:30:00-01:00')
+----
+1 a
+2 b
+3 c
+
+query IT rowsort
+SELECT * FROM versioned.t AT (TIMESTAMP => '2024-03-01'::timestamp)
+----
+1 a
+2 b
+3 c
+
+query IT rowsort
+SELECT * FROM versioned.t AT (TIMESTAMP => now() - INTERVAL '1 hour')
+----
+1 a
+2 b
+3 c
+
+# The syntax produced by the unparser
+query IT rowsort
+SELECT * FROM versioned.t AT(TIMESTAMP => CAST('2024-01-01T00:00:00+00:00' AS TIMESTAMP WITH TIME ZONE))
+----
+1 a
+
+query IT rowsort
+SELECT * FROM versioned.t AT (TIMESTAMP => DATE '2024-02-01')
+----
+1 a
+2 b
+
+##########
+## Combining versions
+##########
+
+# The time travel clause does not change how columns are qualified
+query IT rowsort
+SELECT t.id, t.name FROM versioned.t VERSION AS OF 2 WHERE t.id > 1
+----
+2 b
+
+query IT rowsort
+SELECT * FROM versioned.t AT (VERSION => 1) AS old WHERE old.id = 1
+----
+1 a
+
+# Different versions of the same table can be read in one query
+query ITT rowsort
+SELECT cur.id, cur.name, old.name
+FROM versioned.t AS cur
+LEFT JOIN versioned.t AT (VERSION => 2) AS old ON cur.id = old.id
+----
+1 a a
+2 b b
+3 c NULL
+
+query IT rowsort
+SELECT * FROM versioned.t EXCEPT SELECT * FROM versioned.t AT (VERSION => 1)
+----
+2 b
+3 c
+
+query I
+SELECT count(*) FROM versioned.t
+WHERE id IN (SELECT id FROM versioned.t TIMESTAMP AS OF '2024-01-01')
+----
+1
+
+# The same version requested with different syntaxes
+query I
+SELECT count(*) FROM versioned.t VERSION AS OF 2 a
+JOIN versioned.t AT (VERSION => 2) b ON a.id = b.id
+JOIN versioned.t TIMESTAMP AS OF '2024-02-01' c ON a.id = c.id
+----
+2
+
+# Scans of different versions of a table must not be treated as equal, for
+# example when the optimizer deduplicates identical subqueries
+query II
+SELECT
+  (SELECT count(*) FROM versioned.t AT (VERSION => 1)) AS v1,
+  (SELECT count(*) FROM versioned.t AT (VERSION => 2)) AS v2
+----
+1 2
+
+query II
+SELECT
+  (SELECT max(id) FROM versioned.t AT (VERSION => 1)) + 0 AS v1,
+  (SELECT max(id) FROM versioned.t AT (VERSION => 2)) + 0 AS v2
+----
+1 2
+
+query I
+SELECT count(*) FROM versioned.t
+WHERE id IN (SELECT id FROM versioned.t AT (VERSION => 1))
+   OR id IN (SELECT id FROM versioned.t AT (VERSION => 2))
+----
+2
+
+# Views capture the version they were defined with
+statement ok
+CREATE VIEW first_version AS SELECT * FROM versioned.t AT (VERSION => 'first');
+
+query IT rowsort
+SELECT * FROM first_version
+----
+1 a
+
+statement ok
+DROP VIEW first_version;
+
+##########
+## EXPLAIN shows the resolved version
+##########
+
+query TT
+EXPLAIN SELECT * FROM versioned.t AT (VERSION => 1 + 1)
+----
+logical_plan TableScan: versioned.t@2 projection=[id, name]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The tag 'first' resolves to version 1
+query TT
+EXPLAIN SELECT name FROM versioned.t AT (VERSION => 'first') WHERE id = 1
+----
+logical_plan
+01)Projection: versioned.t.name
+02)--Filter: versioned.t.id = Int64(1)
+03)----TableScan: versioned.t@1 projection=[id, name]
+physical_plan
+01)FilterExec: id@0 = 1, projection=[name@1]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The timestamp resolves to version 1, the latest version committed before it
+query TT
+EXPLAIN SELECT * FROM versioned.t TIMESTAMP AS OF '2024-01-15T12:30:00+01:00'
+----
+logical_plan TableScan: versioned.t@1 projection=[id, name]
+physical_plan DataSourceExec: partitions=1, partition_sizes=[1]
+
+##########
+## Errors
+##########
+
+statement error DataFusion error: Error during planning: Table t has no version 7
+SELECT * FROM versioned.t VERSION AS OF 7
+
+statement error DataFusion error: Error during planning: Table t has no tag 'nope'
+SELECT * FROM versioned.t AT (VERSION => 'nope')
+
+statement error DataFusion error: Error during planning: Table t did not exist at 2023-01-01T00:00:00Z
+SELECT * FROM versioned.t TIMESTAMP AS OF '2023-01-01'
+
+statement error DataFusion error: Error during planning: table 'datafusion.versioned.unknown@1' not found
+SELECT * FROM versioned.unknown VERSION AS OF 1
+
+# Catalogs must return a table that reports the version it reads
+statement error DataFusion error: Error during planning: The source of table 'versioned.no_version@1' must report the version it reads
+SELECT * FROM versioned.no_version VERSION AS OF 1
+
+# Tables that do not support time travel
+statement ok
+CREATE TABLE plain AS VALUES (1);
+
+statement error DataFusion error: This feature is not implemented: Time travel is not supported for table 'plain@1'
+SELECT * FROM plain VERSION AS OF 1
+
+statement ok
+DROP TABLE plain;
+
+# The version must be a non-null constant
+statement error DataFusion error: Schema error: No field named id\.
+SELECT * FROM versioned.t AT (VERSION => id)
+
+statement error DataFusion error: Error during planning: Time travel version must evaluate to a non-null constant, got: NULL
+SELECT * FROM versioned.t AT (VERSION => NULL)
+
+statement error DataFusion error: Error during planning: Time travel version must evaluate to a non-null constant
+SELECT * FROM versioned.t AT (VERSION => random())
+
+statement error Error parsing timestamp from 'yesterday'
+SELECT * FROM versioned.t AT (TIMESTAMP => 'yesterday')
+
+# Unsupported time travel clauses
+statement error DataFusion error: This feature is not implemented: Unsupported time travel clause: AT\(OFFSET => -60\)
+SELECT * FROM versioned.t AT (OFFSET => -60)
+
+statement error DataFusion error: This feature is not implemented: Unsupported time travel clause: BEFORE\(STATEMENT => 'abc'\)
+SELECT * FROM versioned.t BEFORE (STATEMENT => 'abc')
+
+statement error DataFusion error: This feature is not implemented: Unsupported time travel clause: AT\(VERSION => 1, TIMESTAMP => '2024-01-01'\)
+SELECT * FROM versioned.t AT (VERSION => 1, TIMESTAMP => '2024-01-01')
+
+# Time travel is not supported for CTEs
+statement error DataFusion error: Error during planning: Time travel is not supported for CTE 'c'
+WITH c AS (SELECT 1) SELECT * FROM c VERSION AS OF 1
+
+# Time travel is not supported for DML targets
+statement error DataFusion error: This feature is not implemented: Time travel is not supported for DELETE targets
+DELETE FROM versioned.t VERSION AS OF 1
+
+##########
+## Prepared statements
+##########
+
+# Constant time travel clauses are resolved when the statement is prepared
+statement ok
+PREPARE versioned_lookup AS
+SELECT name FROM versioned.t AT (VERSION => concat('fir', 'st')) WHERE id = $1;
+
+query T
+EXECUTE versioned_lookup(1)
+----
+a
+
+query T
+EXECUTE versioned_lookup(2)
+----
+
+statement ok
+DEALLOCATE versioned_lookup;
+
+# Parameters are not supported in time travel clauses
+statement error DataFusion error: This feature is not implemented: Parameters are not supported in time travel clauses: versioned\.t
+PREPARE p AS SELECT * FROM versioned.t AT (VERSION => $1)
+
+# Clauses that depend on the time of execution would be evaluated when the
+# statement is prepared instead
+statement error DataFusion error: This feature is not implemented: Time travel clauses in prepared statements must not depend on the time of execution, such as with now\(\): AT\(TIMESTAMP => now\(\) \- INTERVAL '1 hour'\)
+PREPARE p AS SELECT * FROM versioned.t AT (TIMESTAMP => now() - INTERVAL '1 hour')
+
+# Also within subqueries and DML statements
+statement error DataFusion error: This feature is not implemented: Time travel clauses in prepared statements must not depend on the time of execution
+PREPARE p AS SELECT * FROM (SELECT * FROM versioned.t AT (TIMESTAMP => now()))
+
+statement ok
+CREATE TABLE copied (id BIGINT, name VARCHAR);
+
+statement error DataFusion error: This feature is not implemented: Time travel clauses in prepared statements must not depend on the time of execution
+PREPARE p AS INSERT INTO copied SELECT * FROM versioned.t AT (TIMESTAMP => now())
+
+statement ok
+DROP TABLE copied;
+
+##########
+## Other dialects
+##########
+
+statement ok
+set datafusion.sql_parser.dialect = 'Databricks';
+
+query IT rowsort
+SELECT * FROM versioned.t VERSION AS OF 2
+----
+1 a
+2 b
+
+query IT rowsort
+SELECT * FROM versioned.t TIMESTAMP AS OF '2024-01-15'
+----
+1 a
+
+statement ok
+set datafusion.sql_parser.dialect = 'BigQuery';
+
+query IT rowsort
+SELECT * FROM versioned.t FOR SYSTEM_TIME AS OF '2024-02-15'
+----
+1 a
+2 b
+
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';

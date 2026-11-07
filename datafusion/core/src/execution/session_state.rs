@@ -19,9 +19,7 @@ use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-#[cfg(feature = "sql")]
-use arrow_schema::DataType;
-use arrow_schema::FieldRef;
+use arrow_schema::{DataType, FieldRef, TimeUnit};
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::information_schema::{
     INFORMATION_SCHEMA, InformationSchemaProvider,
@@ -34,8 +32,8 @@ use datafusion_common::config::{ConfigExtension, ConfigOptions, TableOptions};
 use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
-    DFSchema, DataFusionError, ResolvedTableReference, TableReference, config_err,
-    exec_err, plan_datafusion_err, plan_err,
+    DFSchema, DataFusionError, ResolvedTableReference, ScalarValue, TableReference,
+    TableVersion, config_err, exec_err, internal_err, plan_datafusion_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
@@ -45,7 +43,7 @@ use datafusion_expr::TableSource;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion_expr::planner::ExprPlanner;
+use datafusion_expr::planner::{ExprPlanner, TableVersionExpr};
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
 use datafusion_expr::registry::{
@@ -54,7 +52,7 @@ use datafusion_expr::registry::{
 };
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    AggregateUDF, Explain, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
+    AggregateUDF, Explain, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF, cast,
 };
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
@@ -640,14 +638,29 @@ impl SessionState {
         &self,
         statement: Statement,
     ) -> datafusion_common::Result<LogicalPlan> {
-        let references = self.resolve_table_references(&statement)?;
+        let references = datafusion_sql::resolve::resolve_table_references_with_versions(
+            &statement,
+            self.config()
+                .options()
+                .sql_parser
+                .enable_ident_normalization,
+        )?;
 
         let mut provider = SessionContextProvider {
             state: self,
-            tables: HashMap::with_capacity(references.len()),
+            tables: HashMap::with_capacity(references.tables.len()),
+            versioned_tables: HashMap::with_capacity(references.versioned_tables.len()),
         };
 
-        for reference in references {
+        // A `RelationPlanner` may handle a time travel clause itself, starting
+        // from the current version of the table, so also fetch that version.
+        // Without relation planners, the current version would go unused.
+        let mut tables = references.tables;
+        if !self.relation_planners().is_empty() {
+            tables.extend(references.versioned_tables.iter().map(|(t, _)| t.clone()));
+        }
+
+        for reference in tables {
             let resolved = self.resolve_table_ref(reference);
             if let Entry::Vacant(v) = provider.tables.entry(resolved) {
                 let resolved = v.key();
@@ -659,8 +672,99 @@ impl SessionState {
             }
         }
 
+        let versions =
+            self.evaluate_table_versions(&provider, references.versioned_tables);
+        for key in versions {
+            if let Entry::Vacant(v) = provider.versioned_tables.entry(key) {
+                let (resolved, version) = v.key();
+                if let Ok(schema) = self.schema_for_ref(resolved.clone()) {
+                    match schema.table_at(&resolved.table, version).await {
+                        Ok(Some(table)) => {
+                            v.insert(Ok(provider_as_source(table)));
+                        }
+                        Ok(None) => {}
+                        Err(e) => {
+                            v.insert(Err(Arc::new(e)));
+                        }
+                    }
+                }
+            }
+        }
+
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
         query.statement_to_plan(statement)
+    }
+
+    /// Evaluates the time travel clauses of `versioned_tables` ahead of
+    /// planning, so the referenced table versions can be fetched from the
+    /// catalog.
+    ///
+    /// Clauses that fail to evaluate are skipped: a [`RelationPlanner`] may
+    /// handle them, and otherwise the SQL planner reports the same error.
+    #[cfg(feature = "sql")]
+    fn evaluate_table_versions(
+        &self,
+        provider: &SessionContextProvider<'_>,
+        versioned_tables: Vec<(TableReference, sqlparser::ast::TableVersion)>,
+    ) -> Vec<(ResolvedTableReference, TableVersion)> {
+        let query = SqlToRel::new_with_options(provider, self.get_parser_options());
+        versioned_tables
+            .into_iter()
+            .filter_map(|(reference, version)| {
+                let version = query
+                    .sql_table_version_to_expr(version, &mut PlannerContext::new())
+                    .and_then(|version| self.evaluate_table_version(version))
+                    .ok()?;
+                Some((self.resolve_table_ref(reference), version))
+            })
+            .collect()
+    }
+
+    /// Evaluates the expression of a time travel clause, such as
+    /// `VERSION AS OF <expr>`, to a constant [`TableVersion`].
+    ///
+    /// The expression must not reference any columns. Functions such as
+    /// `now()` are evaluated using this session's query execution start time.
+    /// Timestamps are converted to nanoseconds in the UTC time zone.
+    pub fn evaluate_table_version(
+        &self,
+        version: TableVersionExpr,
+    ) -> datafusion_common::Result<TableVersion> {
+        let simplify_context = SimplifyContext::builder()
+            .with_config_options(Arc::clone(self.config_options()))
+            .with_query_execution_start_time(
+                self.execution_props().query_execution_start_time,
+            )
+            .build();
+        let simplifier = ExprSimplifier::new(simplify_context);
+        let (expr, is_timestamp) = match version {
+            TableVersionExpr::Version(expr) => (expr, false),
+            TableVersionExpr::Timestamp(expr) => (
+                cast(
+                    expr,
+                    DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
+                ),
+                true,
+            ),
+        };
+        let expr = simplifier.coerce(expr, &DFSchema::empty())?;
+        let value = match simplifier.simplify(expr)? {
+            Expr::Literal(value, _) if !value.is_null() => value,
+            expr => {
+                return plan_err!(
+                    "Time travel version must evaluate to a non-null constant, got: {expr}"
+                );
+            }
+        };
+        match value {
+            ScalarValue::TimestampNanosecond(Some(ns), _) if is_timestamp => {
+                Ok(TableVersion::Timestamp(ns))
+            }
+            value if !is_timestamp => Ok(TableVersion::Version(value)),
+            value => {
+                internal_err!("Expected a timestamp time travel version, got: {value:?}")
+            }
+        }
     }
 
     #[cfg(feature = "sql")]
@@ -731,6 +835,7 @@ impl SessionState {
         let provider = SessionContextProvider {
             state: self,
             tables: HashMap::new(),
+            versioned_tables: HashMap::new(),
         };
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
@@ -2117,7 +2222,16 @@ impl From<SessionState> for SessionStateBuilder {
 struct SessionContextProvider<'a> {
     state: &'a SessionState,
     tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
+    /// Tables referenced with a time travel clause. Lookup errors are kept
+    /// and only reported if the planner actually needs the table, as a
+    /// [`RelationPlanner`] may handle the time travel clause itself.
+    versioned_tables:
+        HashMap<(ResolvedTableReference, TableVersion), VersionedTableSource>,
 }
+
+/// The result of looking up a specific version of a table
+#[cfg(feature = "sql")]
+type VersionedTableSource = Result<Arc<dyn TableSource>, Arc<DataFusionError>>;
 
 #[cfg(feature = "sql")]
 impl ContextProvider for SessionContextProvider<'_> {
@@ -2146,6 +2260,26 @@ impl ContextProvider for SessionContextProvider<'_> {
             .get(&name)
             .cloned()
             .ok_or_else(|| plan_datafusion_err!("table '{name}' not found"))
+    }
+
+    fn evaluate_table_version(
+        &self,
+        version: TableVersionExpr,
+    ) -> datafusion_common::Result<TableVersion> {
+        self.state.evaluate_table_version(version)
+    }
+
+    fn get_table_source_at(
+        &self,
+        name: TableReference,
+        version: &TableVersion,
+    ) -> datafusion_common::Result<Arc<dyn TableSource>> {
+        let name = self.state.resolve_table_ref(name);
+        match self.versioned_tables.get(&(name.clone(), version.clone())) {
+            Some(Ok(table)) => Ok(Arc::clone(table)),
+            Some(Err(e)) => Err(DataFusionError::Shared(Arc::clone(e))),
+            None => plan_err!("table '{name}@{version}' not found"),
+        }
     }
 
     fn get_table_function_source(
@@ -2613,6 +2747,7 @@ mod tests {
             let provider = SessionContextProvider {
                 state,
                 tables: HashMap::new(),
+                versioned_tables: HashMap::new(),
             };
 
             let sql = "[1,2,3]";
@@ -2643,6 +2778,7 @@ mod tests {
         let provider = SessionContextProvider {
             state: &state,
             tables: HashMap::new(),
+            versioned_tables: HashMap::new(),
         };
 
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);

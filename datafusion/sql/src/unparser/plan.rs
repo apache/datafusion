@@ -8,6 +8,7 @@ use super::{
         BuilderError, DerivedRelationBuilder, QueryBuilder, RelationBuilder,
         SelectBuilder, TableRelationBuilder, TableWithJoinsBuilder,
     },
+    dialect::TableVersionStyle,
     rewrite::{
         TableAliasRewriter, inject_column_aliases_into_subquery, normalize_union_schema,
         rewrite_plan_for_sort_on_non_projected_fields,
@@ -30,7 +31,7 @@ use crate::unparser::{
 };
 use crate::utils::UNNEST_PLACEHOLDER;
 use datafusion_common::{
-    Column, DFSchema, DataFusionError, Result, ScalarValue, TableReference,
+    Column, DFSchema, DataFusionError, Result, ScalarValue, TableReference, TableVersion,
     assert_or_internal_err, internal_datafusion_err, internal_err, not_impl_err,
     tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion},
     utils::combine_limit,
@@ -869,6 +870,12 @@ impl Unparser<'_> {
                     self.new_ident_quoted_if_needs(scan.table_name.table().to_string()),
                 );
                 builder.name(ast::ObjectName::from(table_parts));
+                builder.version(
+                    scan.source
+                        .version()
+                        .map(|v| self.table_version_to_sql(v))
+                        .transpose()?,
+                );
                 relation.table(builder);
 
                 Ok(())
@@ -2335,6 +2342,52 @@ impl Unparser<'_> {
         flatten.outer(unnest.options.preserve_nulls());
 
         Ok(Some(flatten))
+    }
+
+    /// Converts the time travel clause of a table scan to SQL, using the
+    /// syntax of the dialect
+    fn table_version_to_sql(&self, version: &TableVersion) -> Result<ast::TableVersion> {
+        let value = self.expr_to_sql(&Expr::Literal(version.value(), None))?;
+        Ok(match (self.dialect.table_version_style(), version) {
+            (TableVersionStyle::At, _) => {
+                let name = match version {
+                    TableVersion::Version(_) => "VERSION",
+                    TableVersion::Timestamp(_) => "TIMESTAMP",
+                };
+                ast::TableVersion::Function(ast::Expr::Function(ast::Function {
+                    name: ast::ObjectName::from(vec![Ident::new("AT")]),
+                    uses_odbc_syntax: false,
+                    parameters: ast::FunctionArguments::None,
+                    args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                        duplicate_treatment: None,
+                        args: vec![ast::FunctionArg::Named {
+                            name: Ident::new(name),
+                            arg: ast::FunctionArgExpr::Expr(value),
+                            operator: ast::FunctionArgOperator::RightArrow,
+                        }],
+                        clauses: vec![],
+                    }),
+                    filter: None,
+                    null_treatment: None,
+                    over: None,
+                    within_group: vec![],
+                }))
+            }
+            (TableVersionStyle::AsOf, TableVersion::Version(_)) => {
+                ast::TableVersion::VersionAsOf(value)
+            }
+            (TableVersionStyle::AsOf, TableVersion::Timestamp(_)) => {
+                ast::TableVersion::TimestampAsOf(value)
+            }
+            (TableVersionStyle::ForSystemTime, TableVersion::Timestamp(_)) => {
+                ast::TableVersion::ForSystemTimeAsOf(value)
+            }
+            (TableVersionStyle::ForSystemTime, TableVersion::Version(_)) => {
+                return not_impl_err!(
+                    "This dialect does not support time travel to version {version}"
+                );
+            }
+        })
     }
 
     fn is_scan_with_pushdown(scan: &TableScan) -> bool {
