@@ -2394,18 +2394,27 @@ mod tests {
     }
 
     /// Casts the sorted `samples` to `target` with the strict cast that
-    /// `CastExpr` runs by default, and returns the first pair of converted
-    /// values whose order the cast reverses. Each value is cast on its own,
-    /// and values that fail to convert are skipped: `is_order_preserving_cast`
-    /// does not cover them.
-    fn order_violation(samples: &ArrayRef, target: &DataType) -> Option<String> {
+    /// `CastExpr` runs by default (`safe = false`) or the cast that
+    /// `TryCastExpr` runs (`safe = true`), and returns the first pair of
+    /// converted values whose order the cast reverses. Each value is cast on
+    /// its own, and values that fail to convert are skipped:
+    /// `is_order_preserving_cast` does not cover them.
+    fn order_violation(
+        samples: &ArrayRef,
+        target: &DataType,
+        safe: bool,
+    ) -> Option<String> {
         use arrow::array::make_comparator;
         use arrow::compute::SortOptions;
 
+        let options = CastOptions {
+            safe,
+            format_options: DEFAULT_FORMAT_OPTIONS,
+        };
         let converted = (0..samples.len())
             .filter_map(|i| {
                 let value = ColumnarValue::Array(samples.slice(i, 1));
-                match value.cast_to(target, None) {
+                match value.cast_to(target, Some(&options)) {
                     Ok(ColumnarValue::Array(output)) if output.is_valid(0) => {
                         Some((i, output))
                     }
@@ -2431,11 +2440,12 @@ mod tests {
         })
     }
 
-    /// Checks `is_order_preserving_cast` against the strict cast that
-    /// `CastExpr` runs: every pair it accepts must keep the order of the sample
-    /// values that convert.
-    /// Pruning and sort elimination both rely on this rule, so a wrong entry
-    /// drops matching rows or returns unsorted output.
+    /// Checks `is_order_preserving_cast` against the casts that `CastExpr` and
+    /// `TryCastExpr` run: every pair it accepts must keep the order of the
+    /// sample values that convert.
+    /// Pruning (for both casts) and sort elimination (for the strict cast) rely
+    /// on this rule, so a wrong entry drops matching rows or returns unsorted
+    /// output.
     #[test]
     fn test_order_preserving_cast_matches_cast_kernel() {
         use TimeUnit::*;
@@ -2490,8 +2500,11 @@ mod tests {
                 {
                     continue;
                 }
-                if let Some(e) = order_violation(&samples, target) {
-                    violations.push(format!("{source} -> {target}: {e}"));
+                for safe in [false, true] {
+                    if let Some(e) = order_violation(&samples, target, safe) {
+                        violations
+                            .push(format!("{source} -> {target} (safe={safe}): {e}"));
+                    }
                 }
             }
         }
@@ -2511,7 +2524,7 @@ mod tests {
             assert!(!is_order_preserving_cast(&source, &target));
             let samples = order_samples(&source).unwrap();
             assert!(
-                order_violation(&samples, &target).is_some(),
+                order_violation(&samples, &target, false).is_some(),
                 "{source} -> {target}: no sample exposes the reversed order"
             );
         }
