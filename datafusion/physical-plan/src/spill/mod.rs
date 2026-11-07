@@ -686,9 +686,10 @@ impl IPCStreamEncoder {
     ///
     /// `arrow-ipc` must be compiled with the `lz4` and `zstd` features
     /// (declared explicitly in `datafusion-physical-plan/Cargo.toml`). If
-    /// those features are absent, `try_with_compression` will return an
-    /// error at runtime for [`SpillCompression::Lz4Frame`] and
-    /// [`SpillCompression::Zstd`] variants. The Cargo dependency keeps this
+    /// those features are absent, `try_with_compression` and
+    /// `try_with_compression_level` will return an error at runtime for
+    /// [`SpillCompression::Lz4Frame`] and [`SpillCompression::Zstd`]
+    /// variants. The Cargo dependency keeps this
     /// contract local and build-visible during Cargo feature resolution,
     /// rather than relying solely on workspace-level feature unification;
     /// see #21917.
@@ -707,8 +708,16 @@ impl IPCStreamEncoder {
         let mut write_options =
             IpcWriteOptions::try_new(alignment, false, metadata_version)?;
 
-        let compression_type = Option::<CompressionType>::from(spill_compression);
-        write_options = write_options.try_with_compression(compression_type)?;
+        let (compression_type, compression_level) = match spill_compression {
+            SpillCompression::Zstd(level) => {
+                (Some(CompressionType::ZSTD), Some(level as i32))
+            }
+            SpillCompression::Lz4Frame => (Some(CompressionType::LZ4_FRAME), None),
+            SpillCompression::Uncompressed => (None, None),
+        };
+        write_options = write_options
+            .try_with_compression(compression_type)?
+            .try_with_compression_level(compression_level)?;
 
         // Lengths take as much space as offsets when uncompressed
         let lengths_schema = compression_type
@@ -1942,7 +1951,9 @@ mod tests {
                 .with_compression_type(SpillCompression::Lz4Frame);
         let zstd_spill_manager =
             SpillManager::new(env, zstd_metrics, Arc::clone(&schema))
-                .with_compression_type(SpillCompression::Zstd);
+                .with_compression_type(SpillCompression::Zstd(
+                    SpillCompression::DEFAULT_ZSTD_LEVEL,
+                ));
         let uncompressed_spill_file = uncompressed_spill_manager
             .spill_record_batch_and_finish(&batches, "Test")?
             .unwrap();
@@ -1988,6 +1999,47 @@ mod tests {
             batch_count,
         )
         .await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_spill_compression_zstd_level() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        let values =
+            (0..64 * 1024u32).map(|i| (i.wrapping_mul(2654435761) >> 7) as i32 % 1024);
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from_iter_values(values))],
+        )?;
+        let num_rows = batch.num_rows();
+        let batches = [batch];
+        let env = Arc::new(RuntimeEnv::default());
+
+        let spill = |zstd_level: u32| -> Result<(SpillManager, Arc<dyn SpillFile>)> {
+            let spill_manager = SpillManager::new(
+                Arc::clone(&env),
+                SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
+                Arc::clone(&schema),
+            )
+            .with_compression_type(SpillCompression::Zstd(zstd_level));
+            let file = spill_manager
+                .spill_record_batch_and_finish(&batches, "ZSTD_Level_Test")?
+                .unwrap();
+            Ok((spill_manager, file))
+        };
+
+        let (_, default_file) = spill(SpillCompression::DEFAULT_ZSTD_LEVEL)?;
+        let default_bytes = std::fs::read(default_file.path().unwrap())?;
+
+        for level in [1, 19] {
+            let (spill_manager, file) = spill(level)?;
+            assert_ne!(
+                std::fs::read(file.path().unwrap())?,
+                default_bytes,
+                "level {level}"
+            );
+            validate(&spill_manager, file, num_rows, Arc::clone(&schema), 1).await?;
+        }
         Ok(())
     }
 
@@ -2792,7 +2844,7 @@ mod tests {
     #[rstest::rstest]
     #[case(SpillCompression::Uncompressed)]
     #[case(SpillCompression::Lz4Frame)]
-    #[case(SpillCompression::Zstd)]
+    #[case(SpillCompression::Zstd(SpillCompression::DEFAULT_ZSTD_LEVEL))]
     #[tokio::test]
     async fn test_spill_prunes_unused_nested_dictionary_values(
         #[case] compression: SpillCompression,

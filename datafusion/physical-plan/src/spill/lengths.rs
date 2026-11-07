@@ -240,7 +240,10 @@ mod tests {
             ("utf8", utf8),
         ])?;
         let batches = [batch.slice(3, 500), batch.slice(998, 2), batch.slice(0, 0)];
-        for compression in [SpillCompression::Lz4Frame, SpillCompression::Zstd] {
+        for compression in [
+            SpillCompression::Lz4Frame,
+            SpillCompression::Zstd(SpillCompression::DEFAULT_ZSTD_LEVEL),
+        ] {
             let spill_manager = spill_manager(batch.schema(), compression);
             let spill_file = spill_manager
                 .spill_record_batch_and_finish(&batches, "Test")?
@@ -262,7 +265,10 @@ mod tests {
             vec![Arc::new(StringArray::from_iter_values(values))],
         )?;
 
-        let spill_manager = spill_manager(Arc::clone(&schema), SpillCompression::Zstd);
+        let spill_manager = spill_manager(
+            Arc::clone(&schema),
+            SpillCompression::Zstd(SpillCompression::DEFAULT_ZSTD_LEVEL),
+        );
         spill_manager
             .spill_record_batch_and_finish(std::slice::from_ref(&batch), "Test")?;
         let spilled = spill_manager.metrics.spilled_bytes.value();
@@ -292,8 +298,10 @@ mod tests {
                 Arc::clone(&schema),
                 vec![Arc::new(StringArray::from_iter_values(values))],
             )?;
-            let spill_manager =
-                spill_manager(Arc::clone(&schema), SpillCompression::Zstd);
+            let spill_manager = spill_manager(
+                Arc::clone(&schema),
+                SpillCompression::Zstd(SpillCompression::DEFAULT_ZSTD_LEVEL),
+            );
             let spill_file = spill_manager
                 .spill_record_batch_and_finish(std::slice::from_ref(&batch), "Test")?
                 .unwrap();
