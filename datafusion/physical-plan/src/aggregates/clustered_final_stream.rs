@@ -14,12 +14,12 @@ use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_execution::{TaskContext, TryEmitter, async_try_stream};
 use futures::stream::StreamExt;
 
-use super::AggregateExec;
 use super::aggregate_hash_table::{
     ClusteredAggregateTable, ClusteredAggregateTableMetrics, FinalMarker,
 };
 use super::order::GroupClusteringMode;
 use super::spill::AggregateSpill;
+use super::{AggregateExec, incoming_state_batch_reservation_bytes};
 use crate::SendableRecordBatchStream;
 use crate::aggregates::AggregateMode;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
@@ -323,11 +323,32 @@ impl Aggregating {
 
         while let Some(batch) = self.input.next().await.transpose()? {
             let timer = elapsed_compute.timer();
+            let batch_memory = incoming_state_batch_reservation_bytes(&batch);
+            let admission = if batch_memory > 0 {
+                reservation.try_grow(batch_memory)
+            } else {
+                Ok(())
+            };
+            match admission {
+                Ok(()) => {}
+                Err(e @ DataFusionError::ResourcesExhausted(_)) => {
+                    let Some(spill_context) = self.spill_context.as_mut() else {
+                        return Err(e);
+                    };
+                    if self.table.is_empty() {
+                        return Err(e);
+                    }
+                    spill_context.sort_and_spill(self.table.take_state_batch()?)?;
+                    reservation.try_resize(self.table.memory_size())?;
+                    reservation.try_grow(batch_memory)?;
+                }
+                Err(e) => return Err(e),
+            }
             self.table.aggregate_batch(&batch)?;
 
-            // Check the reservation before taking completed groups, as the partial
-            // stream does, so spilling is unchanged. Without spilling, the refusal
-            // is returned below only if no group is complete.
+            // Replace the input-batch reservation with the table footprint before
+            // taking completed groups, as the partial stream does. A table growth
+            // refusal can still be resolved by emitting completed groups.
             let oom = match reservation.try_resize(self.reservation_size()) {
                 Ok(()) => None,
                 Err(oom @ DataFusionError::ResourcesExhausted(_)) => {
@@ -767,5 +788,18 @@ mod tests {
             sum_over_sorted_input(AggregateMode::Final, &["k"], single_key_batches())?;
         let limit = held_memory(&plan).await?;
         assert_resources_exhausted_under_limit(&plan, limit).await
+    }
+
+    #[tokio::test]
+    async fn clustered_final_reserves_incoming_state_batch() -> Result<()> {
+        // Many partial SUM states for one key merge to a small final state.
+        let plan = sum_over_sorted_input(
+            AggregateMode::Final,
+            &["k"],
+            vec![vec![vec![1; 16_384]]],
+        )?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_resources_exhausted_under_limit(&plan, 64 * 1024).await?;
+        assert_output_unchanged_under_limit(&plan, 1024 * 1024).await
     }
 }

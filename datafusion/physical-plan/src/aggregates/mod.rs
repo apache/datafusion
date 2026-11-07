@@ -217,6 +217,20 @@ mod skip_partial;
 mod spill;
 mod topk;
 
+/// Bounded batches passing between operators are not charged to the memory pool.
+/// Partial-state batches larger than this may hold input-sized values and must
+/// be reserved while the final aggregate merges them.
+const MAX_IN_FLIGHT_STATE_BATCH_BYTES: usize = 64 * 1024;
+
+fn incoming_state_batch_reservation_bytes(batch: &RecordBatch) -> usize {
+    let bytes = datafusion_common::utils::memory::get_record_batch_memory_size(batch);
+    if bytes > MAX_IN_FLIGHT_STATE_BATCH_BYTES {
+        bytes
+    } else {
+        0
+    }
+}
+
 /// Hard-coded seed for aggregations to ensure hash values differ from `RepartitionExec`, avoiding collisions.
 const AGGREGATION_HASH_SEED: datafusion_common::hash_utils::RandomState =
     // This seed is chosen to be a large 64-bit number
