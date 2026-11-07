@@ -1519,7 +1519,7 @@ fn fsl_values_row_number(list_size: i32, array_len: usize) -> Result<Int32Array>
     note = "use `datafusion_common::float_semantics::normalize_floats` instead"
 )]
 pub fn normalize_float_zero(array: &ArrayRef) -> ArrayRef {
-    crate::float_semantics::normalize_floats(array)
+    crate::float_semantics::normalize(Arc::clone(array))
 }
 
 pub use crate::float_semantics::has_float_leaf;
