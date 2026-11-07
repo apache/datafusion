@@ -839,6 +839,25 @@ SELECT t1_id FROM t1 WHERE EXISTS (SELECT DISTINCT s.t2_id FROM (SELECT t2_id FR
 22
 44
 
+#exists_subquery_with_non_equality_filter_below_distinct
+#de-correlated, the pulled up `t2_id` becomes an extra DISTINCT key, which only
+#adds duplicate rows, and EXISTS ignores duplicates. See #25808.
+query I rowsort
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT DISTINCT t2_int FROM t2 WHERE t2_id < t1_id)
+----
+22
+33
+44
+
+#in_subquery_with_non_equality_filter_below_distinct
+#de-correlated, IN ignores duplicates as well. For t1_id = 33, both
+#(44, 3) and (55, 3) match, yet 33 is returned once.
+query I rowsort
+SELECT t1_id FROM t1 WHERE t1_int IN (SELECT DISTINCT t2_int FROM t2 WHERE t2_id > t1_id)
+----
+11
+33
+
 #exists_subquery_with_limit_below_group_by
 #de-correlated, a grouping has rows exactly when its input has rows
 query I rowsort
