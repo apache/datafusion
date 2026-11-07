@@ -22,8 +22,9 @@ use super::{AggregateExec, AggregateMode};
 use crate::SendableRecordBatchStream;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::sorts::IncrementalSortIterator;
+use crate::sorts::multi_level_merge::max_spill_batch_bytes;
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
-use crate::spill::spill_manager::SpillManager;
+use crate::spill::spill_manager::{GetSlicedSize, SpillManager};
 
 /// Spill configuration and accumulated runs of one grouped aggregation stream.
 ///
@@ -175,12 +176,19 @@ impl AggregateSpill {
             return internal_err!("{label}: spill expression is empty");
         };
 
+        let session_config = context.session_config();
         let spill_manager = SpillManager::new(
             context.runtime_env(),
             spill_metrics,
             Arc::clone(spill_schema),
         )
-        .with_compression_type(context.session_config().spill_compression());
+        .with_compression_type(session_config.spill_compression())
+        .with_max_batch_bytes(max_spill_batch_bytes(
+            session_config
+                .options()
+                .execution
+                .sort_spill_reservation_bytes,
+        ));
 
         Ok(Self {
             replay_agg,
@@ -209,6 +217,11 @@ impl AggregateSpill {
         let Some(state_batch) = state_batch else {
             return Ok(());
         };
+
+        if self.spills.is_empty() {
+            self.spill_manager =
+                bound_spill_batches_by_first_spill(&self.spill_manager, &state_batch)?;
+        }
 
         let max_batch_rows = state_batch.num_rows().min(self.batch_size);
         let sorted_iter = IncrementalSortIterator::new(
@@ -306,4 +319,22 @@ impl AggregateSpill {
         )?;
         Ok(replay.into_stream())
     }
+}
+
+/// Bounds the batches of an aggregate's sorted spill runs by the state of its
+/// first spill.
+///
+/// Unlike the sort, the merge of an aggregate's runs holds no workspace of its
+/// own. The batches are bounded so that the smallest merge, plus as much again
+/// for the replay, fits in what the aggregate held when memory first ran out.
+/// Later spills, such as the remainder spilled at the end of the input, can
+/// hold much less, so they do not lower the bound.
+pub(super) fn bound_spill_batches_by_first_spill(
+    spill_manager: &SpillManager,
+    first_spill: &RecordBatch,
+) -> Result<SpillManager> {
+    let held = first_spill.get_sliced_size()?;
+    let bound = max_spill_batch_bytes(held / 2)
+        .min(spill_manager.max_batch_bytes().unwrap_or(usize::MAX));
+    Ok(spill_manager.clone().with_max_batch_bytes(bound))
 }
