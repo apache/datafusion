@@ -39,7 +39,9 @@ use datafusion::prelude::SessionContext;
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::stats::Precision;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, internal_err};
+use datafusion_common::{
+    DataFusionError, Result, assert_contains, internal_datafusion_err, internal_err,
+};
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::{TableSchema, TableSchemaBuilder};
 use datafusion_expr::ColumnarValue;
@@ -1211,4 +1213,26 @@ fn roundtrip_parquet_exec_range_output_partitioning_utf8view_split_points() -> R
     );
 
     Ok(())
+}
+
+/// Decoding an `AvroScan` node returns an error rather than panicking, with or
+/// without the `avro` feature.
+#[test]
+fn avro_scan_decode_returns_error() {
+    let node = PhysicalPlanNode {
+        physical_plan_type: Some(
+            protobuf::physical_plan_node::PhysicalPlanType::AvroScan(
+                protobuf::AvroScanExecNode::default(),
+            ),
+        ),
+    };
+    let ctx = SessionContext::new();
+    let err = node
+        .try_into_physical_plan(&ctx.task_ctx(), &DefaultPhysicalExtensionCodec {})
+        .unwrap_err();
+
+    #[cfg(feature = "avro")]
+    assert_contains!(err.to_string(), "missing required field 'base_conf'");
+    #[cfg(not(feature = "avro"))]
+    assert_contains!(err.to_string(), "`avro` feature is not enabled");
 }
