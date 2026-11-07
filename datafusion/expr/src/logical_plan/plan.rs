@@ -29,6 +29,7 @@ use crate::logical_plan::materialized_cte::{
     MaterializedCte, MaterializedCtePlan, MaterializedCteScan,
 };
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
+use crate::type_coercion::other::coerce_union_type;
 use crate::utils::{
     check_aggregate_and_window_nesting, check_no_window_functions,
     enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
@@ -45,7 +46,7 @@ use crate::{
 use crate::logical_plan::information_schema::ColumnsDetail;
 use crate::statistics::StatisticsRequest;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
 use datafusion_common::metadata::{
@@ -3542,9 +3543,11 @@ impl Union {
     }
 
     /// Constructs new Union instance deriving schema from inputs.
-    /// Inputs do not have to have matching types and produced schema will
-    /// take type from the first input.
-    // TODO (https://github.com/apache/datafusion/issues/14380): Avoid creating uncoerced union at all.
+    /// Infers common output types without inserting casts into the inputs.
+    /// If a common type cannot be inferred, keeps the first input's type so
+    /// the analyzer can resolve or reject the inputs later.
+    // TODO (https://github.com/apache/datafusion/issues/14380): Inputs are still
+    // uncast until the analyzer runs.
     pub fn try_new_with_loose_types(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, true, false)?;
         Ok(Union { inputs, schema })
@@ -3553,6 +3556,11 @@ impl Union {
     /// Constructs a new Union instance that combines rows from different tables by name,
     /// instead of by position. This means that the specified inputs need not have schemas
     /// that are all the same width.
+    ///
+    /// Like [`Self::try_new_with_loose_types`], this infers common output types
+    /// without inserting casts. Missing columns contribute `NULL` at their input
+    /// position. For example, a missing `Dictionary(Int32, Utf8)` column and a
+    /// present one produce `Utf8` in either input order.
     pub fn try_new_by_name(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, true, true)?;
         let inputs = Self::rewrite_inputs_from_schema(&schema, inputs)?;
@@ -3596,9 +3604,8 @@ impl Union {
 
     /// Constructs new Union instance deriving schema from inputs.
     ///
-    /// If `loose_types` is true, inputs do not need to have matching types and
-    /// the produced schema will use the type from the first input.
-    /// TODO (<https://github.com/apache/datafusion/issues/14380>): This is not necessarily reasonable behavior.
+    /// If `loose_types` is true, infers common types where possible without
+    /// inserting casts. Otherwise, input types must match exactly.
     ///
     /// If `by_name` is `true`, input schemas need not be the same width. That is,
     /// the constructed schema follows `UNION BY NAME` semantics.
@@ -3622,60 +3629,62 @@ impl Union {
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
     ) -> Result<DFSchemaRef> {
-        type FieldData<'a> = (&'a DataType, bool, Vec<&'a Metadata>, usize);
-        let mut cols: Vec<(&str, FieldData)> = Vec::new();
-        for input in inputs.iter() {
+        let mut cols: Vec<(&str, Vec<Option<&Field>>)> = Vec::new();
+        for (input_index, input) in inputs.iter().enumerate() {
             for field in input.schema().fields() {
-                if let Some((_, (data_type, is_nullable, metadata, occurrences))) =
+                if let Some((_, fields)) =
                     cols.iter_mut().find(|(name, _)| name == field.name())
                 {
-                    if !loose_types && *data_type != field.data_type() {
-                        return plan_err!(
-                            "Found different types for field {}",
-                            field.name()
-                        );
-                    }
-
-                    metadata.push(field.metadata());
-                    // If the field is nullable in any one of the inputs,
-                    // then the field in the final schema is also nullable.
-                    *is_nullable |= field.is_nullable();
-                    *occurrences += 1;
+                    fields[input_index] = Some(field.as_ref());
                 } else {
-                    cols.push((
-                        field.name(),
-                        (
-                            field.data_type(),
-                            field.is_nullable(),
-                            vec![field.metadata()],
-                            1,
-                        ),
-                    ));
+                    let mut fields = vec![None; inputs.len()];
+                    fields[input_index] = Some(field.as_ref());
+                    cols.push((field.name(), fields));
                 }
             }
         }
 
+        // The analyzer sees missing fields as NULL literals in the alignment
+        // projections. Include them so both passes infer the same type.
+        let null_field = Field::new("", DataType::Null, true);
         let union_fields = cols
             .into_iter()
-            .map(
-                |(name, (data_type, is_nullable, unmerged_metadata, occurrences))| {
-                    // If the final number of occurrences of the field is less
-                    // than the number of inputs (i.e. the field is missing from
-                    // one or more inputs), then it must be treated as nullable.
-                    let final_is_nullable = if occurrences == inputs.len() {
-                        is_nullable
-                    } else {
-                        true
-                    };
-
-                    let mut field =
-                        Field::new(name, data_type.clone(), final_is_nullable);
-                    field.set_metadata(merge_metadata_for_union(unmerged_metadata));
-
-                    (None, Arc::new(field))
-                },
-            )
-            .collect::<Vec<(Option<TableReference>, _)>>();
+            .map(|(name, fields)| {
+                let first_type = fields
+                    .iter()
+                    .flatten()
+                    .next()
+                    .expect("column has at least one input field")
+                    .data_type();
+                let data_type = if loose_types {
+                    coerce_union_type(
+                        fields.iter().map(|field| field.unwrap_or(&null_field)),
+                    )
+                    .unwrap_or_else(|_| first_type.clone())
+                } else {
+                    if fields
+                        .iter()
+                        .flatten()
+                        .any(|field| field.data_type() != first_type)
+                    {
+                        return plan_err!("Found different types for field {name}");
+                    }
+                    first_type.clone()
+                };
+                let nullable = fields
+                    .iter()
+                    .any(|field| field.is_none_or(|field| field.is_nullable()));
+                let metadata = merge_metadata_for_union(
+                    fields.iter().flatten().map(|field| field.metadata()),
+                );
+                Ok((
+                    None,
+                    Arc::new(
+                        Field::new(name, data_type, nullable).with_metadata(metadata),
+                    ),
+                ))
+            })
+            .collect::<Result<Vec<(Option<TableReference>, _)>>>()?;
 
         let union_schema_metadata = merge_metadata_for_union(
             inputs.iter().map(|input| input.schema().metadata()),
@@ -3716,14 +3725,13 @@ impl Union {
                 let base_name = first_field.name().to_string();
 
                 let data_type = if loose_types {
-                    // TODO apply type coercion here, or document why it's better to defer
-                    // temporarily use the data type from the left input and later rely on the analyzer to
-                    // coerce the two schemas into a common one.
-                    first_field.data_type()
+                    coerce_union_type(fields.iter().map(|field| field.as_ref()))
+                        .unwrap_or_else(|_| first_field.data_type().clone())
                 } else {
-                    fields.iter().skip(1).try_fold(
-                        first_field.data_type(),
-                        |acc, field| {
+                    fields
+                        .iter()
+                        .skip(1)
+                        .try_fold(first_field.data_type(), |acc, field| {
                             if acc != field.data_type() {
                                 return plan_err!(
                                     "UNION field {i} have different type in inputs: \
@@ -3733,8 +3741,8 @@ impl Union {
                                 );
                             }
                             Ok(acc)
-                        },
-                    )?
+                        })?
+                        .clone()
                 };
                 let nullable = fields.iter().any(|field| field.is_nullable());
 
@@ -3747,7 +3755,7 @@ impl Union {
                     base_name
                 };
 
-                let mut field = Field::new(&name, data_type.clone(), nullable);
+                let mut field = Field::new(&name, data_type, nullable);
                 let field_metadata =
                     merge_metadata_for_union(fields.iter().map(|field| field.metadata()));
                 field.set_metadata(field_metadata);
@@ -4655,6 +4663,11 @@ pub struct Join {
     /// after them are correlation scope keys of a correlated subquery. A NULL
     /// in a value key follows SQL three-valued logic across the whole tuple,
     /// while the scope keys only select which subquery rows are compared.
+    ///
+    /// `0` leaves the count unset, which is the default of [`Self::try_new`]
+    /// and the `LogicalPlanBuilder` join methods. Physical planning accepts an
+    /// unset count only for a single-key join, a scalar `NOT IN`, and rejects
+    /// it for more keys: no default can tell which of them are value keys.
     pub null_aware_value_keys: usize,
 }
 
@@ -4883,7 +4896,7 @@ impl Join {
             schema: Arc::new(join_schema),
             null_equality,
             null_aware,
-            null_aware_value_keys: 1,
+            null_aware_value_keys: 0,
         })
     }
 
@@ -5523,6 +5536,7 @@ mod tests {
         GroupingSet, binary_expr, col, exists, in_subquery, lit, placeholder,
         scalar_subquery,
     };
+    use arrow::datatypes::Metadata;
     use datafusion_common::metadata::ScalarAndMetadata;
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
@@ -7233,7 +7247,7 @@ mod tests {
                 schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equality: NullEquality::NullEqualsNothing,
                 null_aware: false,
-                null_aware_value_keys: 1,
+                null_aware_value_keys: 0,
             }))
         }
 
@@ -7763,6 +7777,53 @@ mod tests {
         let rebuilt = unnest_plan.with_new_exprs(vec![], inputs)?;
         assert_eq!(rebuilt.schema(), unnest_plan.schema());
 
+        Ok(())
+    }
+
+    #[test]
+    fn union_infers_types_without_rewriting_inputs() -> Result<()> {
+        let input = |data_type, nullable, source: &str| {
+            table_scan(
+                Some(source),
+                &Schema::new(vec![
+                    Field::new("x", data_type, nullable)
+                        .with_metadata(Metadata::new().with("source", source)),
+                ]),
+                None,
+            )?
+            .build()
+            .map(Arc::new)
+        };
+        let left = input(DataType::Int16, false, "left")?;
+        let right = input(DataType::Int64, true, "right")?;
+        let inputs = vec![Arc::clone(&left), Arc::clone(&right)];
+        let union = Union::try_new_with_loose_types(inputs.clone())?;
+        assert_eq!(union.inputs, inputs);
+        assert_eq!(union.schema.field(0).name(), "x");
+        assert_eq!(union.schema.field(0).data_type(), &DataType::Int64);
+        assert!(union.schema.field(0).is_nullable());
+        assert_eq!(
+            union
+                .schema
+                .field(0)
+                .metadata()
+                .get("source")
+                .map(String::as_str),
+            Some("right")
+        );
+        assert!(Union::try_new(inputs.clone()).is_err());
+        assert!(Union::try_new_with_loose_types(vec![Arc::clone(&left)]).is_err());
+
+        // Keep the original type when a later input prevents builtin inference.
+        // A custom analyzer can still resolve the raw inputs without earlier casts.
+        let incompatible = input(DataType::Boolean, false, "third")?;
+        let inputs = vec![left, right, incompatible];
+        for union in [
+            Union::try_new_with_loose_types(inputs.clone())?,
+            Union::try_new_by_name(inputs)?,
+        ] {
+            assert_eq!(union.schema.field(0).data_type(), &DataType::Int16);
+        }
         Ok(())
     }
 }

@@ -349,6 +349,35 @@ fn build_join(
         .alias(subquery_alias.to_string())?
         .build()?;
 
+    // A HAVING or outer-only filter recorded from above the aggregate cannot
+    // be rewritten into the join when the output column gets a compensation
+    // CASE below. Kept in the ON, a row the condition rejects looks unmatched
+    // and falls back to the empty-input default, which is the issue's wrong 0. Checked
+    // in the compensation CASE instead, the condition would have to be
+    // evaluated twice, against the defaults for an unmatched row and against
+    // the actual output for a matched one, and neither evaluation is right
+    // for the rows the other one covers. The gate looks at the output column
+    // alone because the map also holds aggregates that appear only in the
+    // HAVING, whose NULL defaults need no CASE; an output whose own default
+    // is NULL (the subquery projects `max`, say) keeps filtering in the ON as
+    // before, which is correct there because an unmatched row is NULL either
+    // way. Rather than guess, reject the query.
+    let output_name = subquery_plan.schema().field(0).name();
+    let output_needs_compensation = match collected_count_expr_map
+        .as_ref()
+        .and_then(|expr_map| expr_map.get(output_name))
+    {
+        Some(default_expr) => {
+            !evaluates_to_null(default_expr.clone(), default_expr.column_refs())?
+        }
+        None => false,
+    };
+    if output_needs_compensation && !pull_up.having_like_join_filters.is_empty() {
+        return plan_err!(
+            "Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns, and this rewrite cannot evaluate it against both the group and the empty input without risking wrong results. Move the condition outside the subquery"
+        );
+    }
+
     let join_filter_opt = build_join_filter(
         pull_up.join_filters,
         pull_up.correlated_subquery_cols_map.values().flatten(),
