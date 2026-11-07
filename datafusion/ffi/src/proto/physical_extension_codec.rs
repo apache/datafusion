@@ -100,14 +100,9 @@ pub struct FFI_PhysicalExtensionCodec {
     /// the foreign interface.
     pub library_marker_id: extern "C" fn() -> usize,
 
-    /// Decode bytes into an execution plan, forwarding the active scalar
-    /// subquery results scope (if any) from the caller's decode context so a
-    /// `ScalarSubqueryExpr` decoded on this side of the boundary shares the
-    /// same populated results as the `ScalarSubqueryExec` that owns them.
-    ///
-    /// Added after the original fields, at the end of the struct, so that
-    /// older code built against this `repr(C)` struct without this field
-    /// still sees every field it knows about at its original offset.
+    /// Decode bytes into an execution plan, forwarding the caller's scalar
+    /// subquery results so a `ScalarSubqueryExpr` decoded on this side reads
+    /// the same values as the `ScalarSubqueryExec` that owns them.
     try_decode_with_ctx: unsafe extern "C" fn(
         &Self,
         buf: SSlice<u8>,
@@ -514,15 +509,12 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
     }
 }
 
-/// Fixtures shared by the in-process unit tests in this module and the
-/// cross-library integration test in
-/// `datafusion/ffi/tests/ffi_physical_extension_codec.rs`.
+/// An extension plan and codec for the cross-library integration test.
 ///
-/// Gated on `feature = "integration-tests"` (in addition to `test`) so the
-/// external integration-test binary, which links this crate as an ordinary
-/// dependency rather than compiling it with `cfg(test)`, can still reach
-/// these types through `datafusion_ffi::proto::physical_extension_codec::fixtures`.
-#[cfg(any(test, feature = "integration-tests"))]
+/// These live in this crate because the test `dlopen`s this crate's cdylib and
+/// asks it for the codec, so the cdylib has to be able to build one. The
+/// feature keeps them out of ordinary builds.
+#[cfg(feature = "integration-tests")]
 pub mod fixtures {
     use std::sync::Arc;
 
@@ -729,33 +721,18 @@ pub(crate) mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use datafusion_common::{Result, exec_err};
     use datafusion_execution::TaskContext;
-    use datafusion_expr::physical_planning_context::{
-        ScalarSubqueryResults, SubqueryIndex,
-    };
     use datafusion_expr::ptr_eq::arc_ptr_eq;
     use datafusion_expr::{AggregateUDF, ScalarUDF, WindowUDF, WindowUDFImpl};
     use datafusion_functions::math::abs::AbsFunc;
     use datafusion_functions_aggregate::sum::Sum;
     use datafusion_functions_window::rank::{Rank, RankType};
-    use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
-    use datafusion_physical_plan::empty::EmptyExec as RealEmptyExec;
-    use datafusion_physical_plan::scalar_subquery::{
-        ScalarSubqueryExec, ScalarSubqueryLink,
-    };
-    use datafusion_physical_plan::{ExecutionPlan, PhysicalExpr};
-    use datafusion_proto::bytes::{
-        physical_plan_from_bytes_with_proto_converter,
-        physical_plan_to_bytes_with_proto_converter,
-    };
+    use datafusion_physical_plan::ExecutionPlan;
     use datafusion_proto::physical_plan::{
         DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
         PhysicalProtoConverterExtension,
     };
 
     use crate::execution_plan::tests::EmptyExec;
-    use crate::proto::physical_extension_codec::fixtures::{
-        ScalarSubqueryExprExec, ScalarSubqueryExprExecCodec,
-    };
     use crate::proto::physical_extension_codec::{
         FFI_PhysicalExtensionCodec, ForeignPhysicalExtensionCodec,
     };
@@ -1112,100 +1089,5 @@ pub(crate) mod tests {
             .try_into()
             .expect("rebound codec resolves");
         assert_eq!(task_ctx.session_id(), ctx_b.task_ctx().session_id());
-    }
-
-    /// The decode context's active scalar subquery results scope must reach a
-    /// `ScalarSubqueryExpr` decoded by a codec that is forced foreign through
-    /// the FFI boundary, not just a local one. Without the fix, the far side
-    /// always decodes with a root context (no scope), so the embedded
-    /// `ScalarSubqueryExpr` fails to deserialize.
-    ///
-    /// This only mocks the foreign path in-process (see
-    /// `mock_foreign_marker_id`): both the codec and the results handle are
-    /// marked foreign by overwriting `library_marker_id`, but every call
-    /// still runs in this same compilation unit. The cross-library
-    /// integration test `test_ffi_physical_extension_codec_scalar_subquery_cross_library`
-    /// in `datafusion/ffi/tests/ffi_physical_extension_codec.rs` exercises the
-    /// same scenario through a genuinely separate `dlopen`'d copy of this
-    /// crate, so the results handle actually round-trips through
-    /// `ForeignScalarSubqueryResultsBackend` rather than taking the
-    /// local-bypass fast path.
-    #[test]
-    fn ffi_physical_extension_codec_forced_foreign_scalar_subquery_roundtrip()
-    -> Result<()> {
-        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
-        let subquery_schema =
-            Arc::new(Schema::new(vec![Field::new("x", DataType::Int64, true)]));
-
-        let results = ScalarSubqueryResults::new(1);
-        let sq_expr: Arc<dyn PhysicalExpr> = Arc::new(ScalarSubqueryExpr::new(
-            DataType::Int64,
-            true,
-            SubqueryIndex::new(0),
-            results.clone(),
-        ));
-        let extension_plan: Arc<dyn ExecutionPlan> =
-            Arc::new(ScalarSubqueryExprExec::new(
-                sq_expr,
-                Arc::new(RealEmptyExec::new(Arc::clone(&schema))),
-            ));
-        let plan: Arc<dyn ExecutionPlan> = Arc::new(ScalarSubqueryExec::new(
-            extension_plan,
-            vec![ScalarSubqueryLink {
-                plan: Arc::new(RealEmptyExec::new(subquery_schema)),
-                index: SubqueryIndex::new(0),
-            }],
-            results,
-        ));
-
-        let bytes = physical_plan_to_bytes_with_proto_converter(
-            Arc::clone(&plan),
-            &ScalarSubqueryExprExecCodec,
-            &DefaultPhysicalProtoConverter {},
-        )?;
-
-        let (ctx, task_ctx_provider) = crate::util::tests::test_session_and_ctx();
-        let mut ffi_codec = FFI_PhysicalExtensionCodec::new(
-            Arc::new(ScalarSubqueryExprExecCodec),
-            None,
-            task_ctx_provider,
-        );
-        ffi_codec.library_marker_id = crate::mock_foreign_marker_id;
-        let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&ffi_codec).into();
-
-        let deserialized = physical_plan_from_bytes_with_proto_converter(
-            bytes.as_ref(),
-            ctx.task_ctx().as_ref(),
-            foreign_codec.as_ref(),
-            &DefaultPhysicalProtoConverter {},
-        )?;
-
-        let sq_exec = deserialized
-            .downcast_ref::<ScalarSubqueryExec>()
-            .expect("expected ScalarSubqueryExec");
-        let decoded_extension = sq_exec
-            .input()
-            .downcast_ref::<ScalarSubqueryExprExec>()
-            .expect(
-                "expected ScalarSubqueryExprExec decoded through the forced-foreign codec",
-            );
-        let decoded_sq_expr = decoded_extension
-            .expr
-            .downcast_ref::<ScalarSubqueryExpr>()
-            .expect("expected ScalarSubqueryExpr");
-
-        // The expression decoded by the forced-foreign codec must observe
-        // values written to the host's ScalarSubqueryExec results container.
-        assert_eq!(decoded_sq_expr.results().get(SubqueryIndex::new(0)), None);
-        sq_exec.results().set(
-            SubqueryIndex::new(0),
-            datafusion_common::ScalarValue::Int64(Some(42)),
-        )?;
-        assert_eq!(
-            decoded_sq_expr.results().get(SubqueryIndex::new(0)),
-            Some(datafusion_common::ScalarValue::Int64(Some(42)))
-        );
-
-        Ok(())
     }
 }

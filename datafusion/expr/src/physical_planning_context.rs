@@ -110,16 +110,11 @@ impl SubqueryIndex {
     }
 }
 
-/// An alternate backing store for a [`ScalarSubqueryResults`] container.
+/// Where a [`ScalarSubqueryResults`] container keeps its slots.
 ///
-/// A results container normally owns its slots directly (see
-/// [`ScalarSubqueryResults::new`]). This trait lets a container instead
-/// forward `get`/`set`/`clear` to some other shared container, which is how
-/// `datafusion-ffi` bridges the results of a `ScalarSubqueryExec` across a
-/// non-Rust-ABI boundary: the far side of the boundary gets a
-/// [`ScalarSubqueryResults`] backed by a proxy that calls back into the
-/// near side's real container for every operation, so both sides observe the
-/// same populated values.
+/// The slots are normally held in memory next to the plan. `datafusion-ffi`
+/// implements this to forward each operation back over an FFI boundary, so a
+/// plan decoded on the far side reads the values populated on the near side.
 pub trait ScalarSubqueryResultsBackend:
     fmt::Debug + Send + Sync + std::panic::RefUnwindSafe
 {
@@ -133,10 +128,45 @@ pub trait ScalarSubqueryResultsBackend:
     fn clear(&self);
 }
 
-#[derive(Clone)]
-enum ScalarSubqueryResultsRepr {
-    Local(Arc<Vec<Mutex<Option<ScalarValue>>>>),
-    Remote(Arc<dyn ScalarSubqueryResultsBackend>),
+/// The in-memory backend behind [`ScalarSubqueryResults::new`].
+struct LocalResults(Vec<Mutex<Option<ScalarValue>>>);
+
+impl fmt::Debug for LocalResults {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|slot| slot.lock().unwrap().clone()))
+            .finish()
+    }
+}
+
+impl ScalarSubqueryResultsBackend for LocalResults {
+    fn get(&self, index: usize) -> Option<ScalarValue> {
+        self.0.get(index)?.lock().unwrap().clone()
+    }
+
+    fn set(&self, index: usize, value: ScalarValue) -> Result<()> {
+        let Some(slot) = self.0.get(index) else {
+            return internal_err!(
+                "ScalarSubqueryResults: result index {index} is out of bounds"
+            );
+        };
+
+        let mut slot = slot.lock().unwrap();
+        if slot.is_some() {
+            return internal_err!(
+                "ScalarSubqueryResults: result for index {index} was already populated"
+            );
+        }
+        *slot = Some(value);
+
+        Ok(())
+    }
+
+    fn clear(&self) {
+        for slot in &self.0 {
+            *slot.lock().unwrap() = None;
+        }
+    }
 }
 
 /// Shared results container for uncorrelated scalar subqueries.
@@ -147,7 +177,7 @@ enum ScalarSubqueryResultsRepr {
 /// the plan is reset for re-execution.
 #[derive(Clone)]
 pub struct ScalarSubqueryResults {
-    repr: ScalarSubqueryResultsRepr,
+    backend: Arc<dyn ScalarSubqueryResultsBackend>,
 }
 
 impl Default for ScalarSubqueryResults {
@@ -159,101 +189,40 @@ impl Default for ScalarSubqueryResults {
 impl ScalarSubqueryResults {
     /// Creates a new shared results container with `n` empty slots.
     pub fn new(n: usize) -> Self {
-        Self {
-            repr: ScalarSubqueryResultsRepr::Local(Arc::new(
-                (0..n).map(|_| Mutex::new(None)).collect(),
-            )),
-        }
+        Self::from_backend(Arc::new(LocalResults(
+            (0..n).map(|_| Mutex::new(None)).collect(),
+        )))
     }
 
-    /// Creates a results container that forwards every operation to
-    /// `backend`, for example a proxy that reaches across an FFI boundary to
-    /// a real container owned by the other side.
+    /// Creates a results container whose slots live in `backend`.
     pub fn from_backend(backend: Arc<dyn ScalarSubqueryResultsBackend>) -> Self {
-        Self {
-            repr: ScalarSubqueryResultsRepr::Remote(backend),
-        }
+        Self { backend }
     }
 
     /// Returns the scalar value stored at `index`, if it has been populated.
     pub fn get(&self, index: SubqueryIndex) -> Option<ScalarValue> {
-        match &self.repr {
-            ScalarSubqueryResultsRepr::Local(slots) => {
-                let slot = slots.get(index.as_usize())?;
-                slot.lock().unwrap().clone()
-            }
-            ScalarSubqueryResultsRepr::Remote(backend) => backend.get(index.as_usize()),
-        }
+        self.backend.get(index.as_usize())
     }
 
     /// Stores `value` in the slot at `index`.
     pub fn set(&self, index: SubqueryIndex, value: ScalarValue) -> Result<()> {
-        match &self.repr {
-            ScalarSubqueryResultsRepr::Local(slots) => {
-                let Some(slot) = slots.get(index.as_usize()) else {
-                    return internal_err!(
-                        "ScalarSubqueryResults: result index {} is out of bounds",
-                        index.as_usize()
-                    );
-                };
-
-                let mut slot = slot.lock().unwrap();
-                if slot.is_some() {
-                    return internal_err!(
-                        "ScalarSubqueryResults: result for index {} was already populated",
-                        index.as_usize()
-                    );
-                }
-                *slot = Some(value);
-
-                Ok(())
-            }
-            ScalarSubqueryResultsRepr::Remote(backend) => {
-                backend.set(index.as_usize(), value)
-            }
-        }
+        self.backend.set(index.as_usize(), value)
     }
 
     /// Clears all populated results so the container can be reused.
     pub fn clear(&self) {
-        match &self.repr {
-            ScalarSubqueryResultsRepr::Local(slots) => {
-                for slot in slots.iter() {
-                    *slot.lock().unwrap() = None;
-                }
-            }
-            ScalarSubqueryResultsRepr::Remote(backend) => backend.clear(),
-        }
+        self.backend.clear()
     }
 
     /// Returns true if `this` and `other` point to the same shared container.
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
-        match (&this.repr, &other.repr) {
-            (
-                ScalarSubqueryResultsRepr::Local(a),
-                ScalarSubqueryResultsRepr::Local(b),
-            ) => Arc::ptr_eq(a, b),
-            (
-                ScalarSubqueryResultsRepr::Remote(a),
-                ScalarSubqueryResultsRepr::Remote(b),
-            ) => Arc::ptr_eq(a, b),
-            _ => false,
-        }
+        Arc::ptr_eq(&this.backend, &other.backend)
     }
 }
 
 impl fmt::Debug for ScalarSubqueryResults {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.repr {
-            ScalarSubqueryResultsRepr::Local(slots) => f
-                .debug_list()
-                .entries(slots.iter().map(|slot| slot.lock().unwrap().clone()))
-                .finish(),
-            ScalarSubqueryResultsRepr::Remote(backend) => f
-                .debug_tuple("ScalarSubqueryResults::Remote")
-                .field(backend)
-                .finish(),
-        }
+        self.backend.fmt(f)
     }
 }
 
@@ -267,12 +236,7 @@ impl Eq for ScalarSubqueryResults {}
 
 impl Hash for ScalarSubqueryResults {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        match &self.repr {
-            ScalarSubqueryResultsRepr::Local(slots) => Arc::as_ptr(slots).hash(state),
-            ScalarSubqueryResultsRepr::Remote(backend) => {
-                Arc::as_ptr(backend).hash(state)
-            }
-        }
+        Arc::as_ptr(&self.backend).cast::<()>().hash(state);
     }
 }
 

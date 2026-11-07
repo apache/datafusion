@@ -18,20 +18,12 @@ use stabby::vec::Vec as SVec;
 use crate::util::{FFI_Option, FFI_Result};
 use crate::{df_result, sresult, sresult_return};
 
-/// A stable struct for sharing the shared results container of a
-/// `ScalarSubqueryExec` across FFI boundaries.
+/// Shares a [`ScalarSubqueryResults`] container across an FFI boundary, so a
+/// `ScalarSubqueryExpr` decoded on the far side reads the values the
+/// `ScalarSubqueryExec` on the near side populates.
 ///
-/// Unlike most FFI wrappers in this crate, which stand in for a whole
-/// `dyn Trait` object, this one stands in for a single
-/// [`ScalarSubqueryResults`] value: the active scope that a
-/// `PhysicalExtensionCodec` on the near side of the boundary passes to
-/// `try_decode_with_ctx` so a `ScalarSubqueryExpr` decoded on the far side
-/// reads the same populated values as the `ScalarSubqueryExec` that owns
-/// them.
-///
-/// `ScalarValue`s cross the boundary as prost-encoded bytes, the same wire
-/// format `PhysicalExtensionCodec::try_decode`/`try_encode` already use, so
-/// this struct never assumes a stable memory layout for `ScalarValue` itself.
+/// `ScalarValue`s cross as encoded bytes, so this does not rely on their
+/// memory layout being stable across the boundary.
 #[repr(C)]
 #[derive(Debug)]
 pub struct FFI_ScalarSubqueryResults {
@@ -82,13 +74,10 @@ impl FFI_ScalarSubqueryResults {
 
 /// The wire form a [`ScalarValue`] crosses the FFI boundary in.
 ///
-/// `datafusion_proto::protobuf::ScalarValue` alone is not a type-preserving
-/// transport: it has no dedicated variant for every `DataType` (`Float16`,
-/// for example, is encoded as `Float32Value`), so decoding it back can yield
-/// a `ScalarValue` of a different, widened type. Carrying the original
-/// `DataType` alongside the encoded value lets [`decode_scalar_value`] cast
-/// back down to it, so a foreign `ScalarSubqueryExpr` observes the same type
-/// it was declared with.
+/// `datafusion_proto::protobuf::ScalarValue` has no variant for every
+/// `DataType` — a `Float16` encodes as `Float32Value` — so a round trip
+/// through it can widen the type. The `DataType` travels alongside so the
+/// value can be cast back to the one it was declared with.
 #[derive(Clone, PartialEq, Message)]
 struct ScalarValueEnvelope {
     #[prost(message, optional, tag = "1")]

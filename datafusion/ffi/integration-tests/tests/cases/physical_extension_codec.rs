@@ -28,30 +28,12 @@ mod tests {
         DefaultPhysicalProtoConverter, PhysicalExtensionCodec, PhysicalPlanDecodeContext,
     };
 
-    /// The decode context's active scalar-subquery results scope must reach
-    /// a `ScalarSubqueryExpr` decoded by the real, production
-    /// `PhysicalExtensionCodec::try_decode_with_ctx` entry point when the
-    /// codec is foreign *for real*.
+    /// A plan decoded by a genuinely foreign codec must read the scalar
+    /// subquery results the host populated.
     ///
-    /// The codec here is built inside a separately `dlopen`'d copy of this
-    /// crate's cdylib (see [`get_scalar_subquery_expr_exec_codec`]), so
-    /// converting it to `Arc<dyn PhysicalExtensionCodec>` takes the real
-    /// `ForeignPhysicalExtensionCodec` branch, and calling
-    /// `try_decode_with_ctx` on it dispatches through the same
-    /// `try_decode_with_ctx_fn_wrapper` any foreign codec goes through in
-    /// production - not a bespoke test-only entry point. That makes
-    /// `ForeignPhysicalExtensionCodec::try_decode_with_ctx` wrap this test's
-    /// live `ScalarSubqueryResults` in a genuinely foreign
-    /// `FFI_ScalarSubqueryResults`, so the decoded expression reads through
-    /// `ForeignScalarSubqueryResultsBackend`.
-    ///
-    /// The decoded plan comes back as a `ForeignExecutionPlan`, opaque to
-    /// this side - there is no generic `FFI_PhysicalExpr` wrapper to pull the
-    /// embedded `ScalarSubqueryExpr` back out directly. Executing it instead
-    /// (through the real `FFI_ExecutionPlan`/`FFI_RecordBatchStream`
-    /// machinery every `ExecutionPlan` already has) carries the value back
-    /// out as an ordinary `RecordBatch`, which is where the host-value
-    /// assertion happens.
+    /// The codec comes from a separately `dlopen`'d copy of this crate, so
+    /// the decode takes the same path a real foreign codec takes rather than
+    /// a test-only one.
     #[tokio::test]
     async fn test_ffi_physical_extension_codec_scalar_subquery_cross_library()
     -> Result<(), DataFusionError> {
