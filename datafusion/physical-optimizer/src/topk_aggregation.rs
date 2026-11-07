@@ -62,43 +62,29 @@ use itertools::Itertools;
 /// └────────────────────────────┘             └────────────────────────────┘
 /// ```
 ///
-/// Without this rule the aggregate computes the aggregates for all groups in the input
-/// and the sort discards all but `N` of them afterwards.
+/// Without this rule the aggregate computes the aggregates for **all** groups
+/// in the input but then the sort discards all but `N` of them afterward.
 ///
-/// This rule pushes the limit and sort direction into the `AggregateExec` via
-/// [`AggregateExec::try_optimize_topk`]. The aggregate then runs the
-/// `GroupedTopKAggregateStream`, which keeps only the best `N` groups in a
+/// `GroupedTopKAggregateStream` instead keeps only the best `N` groups in a
 /// bounded priority map instead of a hash table. The `SortExec` is kept to
 /// enforce the final ordering and row count.
 ///
-/// The optimization only applies when the aggregate has a single group key and
-/// either no aggregate expressions, or a single `MIN` / `MAX` aggregate that is
-/// the sort key. See the "Grouped TopK aggregation" section of the
+/// The optimization applies when 
+/// 1. the aggregate has a single group key and either no aggregate expressions, or a single `MIN` / `MAX` aggregate that is
+/// the sort key. 
+/// 
+/// See the "Grouped TopK aggregation" section of the
 /// [`aggregates`](datafusion_physical_plan::aggregates) module documentation
-/// for details on the eligible query shapes and the runtime implementation.
+/// for more details.
 ///
 /// # Identifying the optimization in `EXPLAIN` output
 ///
 /// When this rule applies, the `AggregateExec` lines in the physical plan show
-/// a `lim=[N]` entry:
+/// a `lim=[N]` entry for example:
 ///
 /// ```text
-/// SortPreservingMergeExec: [max(traces.timestamp)@1 DESC], fetch=4
-///   SortExec: TopK(fetch=4), expr=[max(traces.timestamp)@1 DESC], preserve_partitioning=[true]
-///     AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], lim=[4]
-///       RepartitionExec: partitioning=Hash([trace_id@0], 4), input_partitions=1
-///         AggregateExec: mode=Partial, gby=[trace_id@0 as trace_id], aggr=[max(traces.timestamp)], lim=[4]
-///           DataSourceExec: partitions=1, partition_sizes=[1]
+///     AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(...)], lim=[4] <-- LIM
 /// ```
-///
-/// `EXPLAIN ANALYZE` additionally reports the `topk_maintenance_time` metric
-/// for aggregates that run the Grouped TopK implementation.
-///
-/// # Configuration
-///
-/// This rule is controlled by the
-/// [`datafusion.optimizer.enable_topk_aggregation`](datafusion_common::config::OptimizerOptions::enable_topk_aggregation)
-/// configuration setting, which defaults to `true`.
 #[derive(Debug)]
 pub struct TopKAggregation {}
 
