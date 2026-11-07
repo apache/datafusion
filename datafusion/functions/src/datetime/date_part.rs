@@ -438,13 +438,19 @@ fn part_normalization(part: &str) -> &str {
         .unwrap_or(part)
 }
 
+/// Seconds in an interval's `months`, as PostgreSQL and DuckDB count them:
+/// each whole year is 365.25 days and each leftover month is 30 days.
+fn months_to_seconds(months: i32) -> f64 {
+    const SECONDS_PER_YEAR: i64 = 31_557_600; // 365.25 days
+    const SECONDS_PER_MONTH: i64 = 2_592_000; // 30 days
+
+    let months = months as i64;
+    // `/` and `%` truncate toward zero, so negative intervals mirror positive ones.
+    (months / 12 * SECONDS_PER_YEAR + months % 12 * SECONDS_PER_MONTH) as f64
+}
+
 fn epoch(array: &dyn Array) -> Result<ArrayRef> {
     const SECONDS_IN_A_DAY: f64 = 86400_f64;
-    // Note: Month-to-second conversion uses 30 days as an approximation.
-    // This matches PostgreSQL's behavior for interval epoch extraction,
-    // but does not represent exact calendar months (which vary 28-31 days).
-    // See: https://doxygen.postgresql.org/datatype_2timestamp_8h.html
-    const DAYS_PER_MONTH: f64 = 30_f64;
 
     let f: Float64Array = match array.data_type() {
         Timestamp(Second, _) => as_timestamp_second_array(array)?.unary(|x| x as f64),
@@ -469,14 +475,15 @@ fn epoch(array: &dyn Array) -> Result<ArrayRef> {
         Time64(Nanosecond) => {
             as_time64_nanosecond_array(array)?.unary(|x| x as f64 / 1_000_000_000_f64)
         }
-        Interval(ArrowIntervalUnit::YearMonth) => as_interval_ym_array(array)?
-            .unary(|x| x as f64 * DAYS_PER_MONTH * SECONDS_IN_A_DAY),
+        Interval(ArrowIntervalUnit::YearMonth) => {
+            as_interval_ym_array(array)?.unary(months_to_seconds)
+        }
         Interval(ArrowIntervalUnit::DayTime) => as_interval_dt_array(array)?.unary(|x| {
             x.days as f64 * SECONDS_IN_A_DAY + x.milliseconds as f64 / 1_000_f64
         }),
         Interval(ArrowIntervalUnit::MonthDayNano) => {
             as_interval_mdn_array(array)?.unary(|x| {
-                x.months as f64 * DAYS_PER_MONTH * SECONDS_IN_A_DAY
+                months_to_seconds(x.months)
                     + x.days as f64 * SECONDS_IN_A_DAY
                     + x.nanoseconds as f64 / 1_000_000_000_f64
             })
@@ -985,6 +992,21 @@ mod tests {
                 .unwrap();
             assert_eq!(field.data_type(), &DataType::Int32);
             assert!(field.is_nullable());
+        }
+    }
+
+    #[test]
+    fn test_months_to_seconds() {
+        // (months, seconds) as PostgreSQL 18 and DuckDB return them
+        for (months, seconds) in [
+            (0, 0.0),
+            (11, 28_512_000.0),
+            (12, 31_557_600.0),
+            (14, 36_741_600.0),
+            (-14, -36_741_600.0),
+            (24, 63_115_200.0),
+        ] {
+            assert_eq!(super::months_to_seconds(months), seconds, "{months} months");
         }
     }
 }
