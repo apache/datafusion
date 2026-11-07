@@ -7,8 +7,10 @@
 use super::roundtrip_test;
 use datafusion::arrow::compute::kernels::sort::SortOptions;
 use datafusion::arrow::datatypes::{DataType, Field, Schema};
+use datafusion::functions_aggregate::array_agg::array_agg_udaf;
 use datafusion::functions_aggregate::count::count_udaf;
 use datafusion::functions_aggregate::sum::sum_udaf;
+use datafusion::functions_window::lead_lag::lag_udwf;
 use datafusion::functions_window::nth_value::nth_value_udwf;
 use datafusion::functions_window::row_number::row_number_udwf;
 use datafusion::physical_expr::aggregate::AggregateExprBuilder;
@@ -186,6 +188,135 @@ fn roundtrip_window_distinct() -> Result<()> {
 
     roundtrip_test(Arc::new(WindowAggExec::try_new(
         vec![distinct_count_expr, distinct_sum_expr],
+        input,
+        false,
+    )?))
+}
+
+#[test]
+fn roundtrip_window_filter() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Boolean, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    let plain_count = Arc::new(PlainAggregateWindowExpr::new(
+        AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema)?])
+            .schema(Arc::clone(&schema))
+            .alias("count(a) FILTER (WHERE b)")
+            .build()
+            .map(Arc::new)?,
+        &[],
+        &[],
+        Arc::new(WindowFrame::new(None)),
+        Some(col("b", &schema)?),
+    ));
+
+    let bounded_frame = WindowFrame::new_bounds(
+        datafusion_expr::WindowFrameUnits::Rows,
+        WindowFrameBound::Preceding(ScalarValue::UInt64(Some(1))),
+        WindowFrameBound::CurrentRow,
+    );
+    let sliding_count = Arc::new(SlidingAggregateWindowExpr::new(
+        AggregateExprBuilder::new(count_udaf(), vec![col("a", &schema)?])
+            .schema(Arc::clone(&schema))
+            .alias("count(a) FILTER (WHERE b) ROWS 1 PRECEDING")
+            .build()
+            .map(Arc::new)?,
+        &[],
+        &[],
+        Arc::new(bounded_frame),
+        Some(col("b", &schema)?),
+    ));
+
+    let input = Arc::new(EmptyExec::new(schema));
+
+    roundtrip_test(Arc::new(WindowAggExec::try_new(
+        vec![plain_count, sliding_count],
+        input,
+        false,
+    )?))
+}
+
+#[test]
+fn roundtrip_window_udf_ignore_nulls_and_reversed() -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, true)]));
+
+    let lag_ignore_nulls = create_udwf_window_expr(
+        &lag_udwf(),
+        &[col("a", &schema)?],
+        &schema,
+        "lag(a) IGNORE NULLS".to_string(),
+        true,
+    )?;
+    let reversed_lag = create_udwf_window_expr(
+        &lag_udwf(),
+        &[col("a", &schema)?],
+        &schema,
+        "lag(a)".to_string(),
+        false,
+    )?
+    .reverse_expr()
+    .expect("lag is reversible");
+
+    let order_by = [PhysicalSortExpr::new(
+        col("a", &schema)?,
+        SortOptions::default(),
+    )];
+    let window_exprs = [lag_ignore_nulls, reversed_lag]
+        .into_iter()
+        .map(|expr| {
+            Arc::new(StandardWindowExpr::new(
+                expr,
+                &[],
+                &order_by,
+                Arc::new(WindowFrame::new(Some(false))),
+            )) as _
+        })
+        .collect();
+
+    let input = Arc::new(EmptyExec::new(schema));
+
+    roundtrip_test(Arc::new(BoundedWindowAggExec::try_new(
+        window_exprs,
+        input,
+        InputOrderMode::Sorted,
+        false,
+    )?))
+}
+
+#[test]
+fn roundtrip_window_aggregate_ordering() -> Result<()> {
+    let field_a = Field::new("a", DataType::Int64, false);
+    let field_b = Field::new("b", DataType::Int64, false);
+    let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+
+    let array_agg = AggregateExprBuilder::new(array_agg_udaf(), vec![col("a", &schema)?])
+        .schema(Arc::clone(&schema))
+        .alias("array_agg(a ORDER BY b DESC)")
+        .order_by(vec![PhysicalSortExpr::new(
+            col("b", &schema)?,
+            SortOptions::new(true, false),
+        )])
+        .build()?;
+    let reversed_array_agg = array_agg.reverse_expr().expect("array_agg is reversible");
+
+    let window_exprs = [array_agg, reversed_array_agg]
+        .into_iter()
+        .map(|aggregate| {
+            Arc::new(PlainAggregateWindowExpr::new(
+                Arc::new(aggregate),
+                &[],
+                &[],
+                Arc::new(WindowFrame::new(None)),
+                None,
+            )) as _
+        })
+        .collect();
+
+    let input = Arc::new(EmptyExec::new(schema));
+
+    roundtrip_test(Arc::new(WindowAggExec::try_new(
+        window_exprs,
         input,
         false,
     )?))

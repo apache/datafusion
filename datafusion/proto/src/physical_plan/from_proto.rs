@@ -10,12 +10,11 @@ use arrow::array::RecordBatch;
 use arrow::compute::SortOptions;
 use arrow::datatypes::{Field, Schema};
 use arrow::ipc::reader::StreamReader;
-use datafusion_common::{DataFusionError, Result, internal_datafusion_err, not_impl_err};
+use datafusion_common::{DataFusionError, Result, not_impl_err};
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::{FunctionRegistry, TaskContext};
-use datafusion_expr::WindowFunctionDefinition;
 use datafusion_physical_expr::expressions::{LambdaExpr, LambdaVariable};
 use datafusion_physical_expr::scalar_subquery::ScalarSubqueryExpr;
 use datafusion_physical_expr::{
@@ -32,7 +31,7 @@ use datafusion_physical_plan::proto::{
     ProtoDecoderRegistry, decode_physical_expr, physical_expr_names,
 };
 use datafusion_physical_plan::repartition::RangeExpr;
-use datafusion_physical_plan::windows::{create_window_expr, schema_add_window_field};
+use datafusion_physical_plan::windows::decode_physical_window_expr;
 use datafusion_physical_plan::{Partitioning, PhysicalExpr, WindowExpr};
 use datafusion_proto_common::common::proto_error;
 
@@ -117,64 +116,14 @@ pub fn parse_physical_window_expr(
     input_schema: &Schema,
     proto_converter: &dyn PhysicalProtoConverterExtension,
 ) -> Result<Arc<dyn WindowExpr>> {
-    let window_node_expr =
-        parse_physical_exprs(&proto.args, ctx, input_schema, proto_converter)?;
-    let partition_by =
-        parse_physical_exprs(&proto.partition_by, ctx, input_schema, proto_converter)?;
-
-    let order_by =
-        parse_physical_sort_exprs(&proto.order_by, ctx, input_schema, proto_converter)?;
-
-    let window_frame = proto
-        .window_frame
-        .as_ref()
-        .map(|wf| datafusion_expr::WindowFrame::try_from(wf.clone()))
-        .transpose()
-        .map_err(|e| internal_datafusion_err!("{e}"))?
-        .ok_or_else(|| {
-            internal_datafusion_err!("Missing required field 'window_frame' in protobuf")
-        })?;
-
-    let fun = if let Some(window_func) = proto.window_function.as_ref() {
-        match window_func {
-            protobuf::physical_window_expr_node::WindowFunction::UserDefinedAggrFunction(udaf_name) => {
-                WindowFunctionDefinition::AggregateUDF(match &proto.fun_definition {
-                    Some(buf) => ctx.codec().try_decode_udaf(udaf_name, buf)?,
-                    None => ctx
-                        .task_ctx()
-                        .udaf(udaf_name)
-                        .or_else(|_| ctx.codec().try_decode_udaf(udaf_name, &[]))?,
-                })
-            }
-            protobuf::physical_window_expr_node::WindowFunction::UserDefinedWindowFunction(udwf_name) => {
-                WindowFunctionDefinition::WindowUDF(match &proto.fun_definition {
-                    Some(buf) => ctx.codec().try_decode_udwf(udwf_name, buf)?,
-                    None => ctx
-                        .task_ctx()
-                        .udwf(udwf_name)
-                        .or_else(|_| ctx.codec().try_decode_udwf(udwf_name, &[]))?
-                })
-            }
-        }
-    } else {
-        return Err(proto_error("Missing required field in protobuf"));
+    let decoder = ConverterPlanDecoder {
+        ctx,
+        proto_converter,
     };
-
-    let name = proto.name.clone();
-    // TODO: Remove extended_schema if functions are all UDAF
-    let extended_schema =
-        schema_add_window_field(&window_node_expr, input_schema, &fun, &name)?;
-    create_window_expr(
-        &fun,
-        name,
-        &window_node_expr,
-        &partition_by,
-        &order_by,
-        Arc::new(window_frame),
-        extended_schema,
-        proto.ignore_nulls,
-        proto.distinct,
-        None,
+    decode_physical_window_expr(
+        proto,
+        &ExecutionPlanDecodeCtx::new(&decoder),
+        input_schema,
     )
 }
 

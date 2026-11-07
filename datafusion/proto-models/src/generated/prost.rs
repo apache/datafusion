@@ -1687,7 +1687,7 @@ pub mod physical_expr_node {
         TryCast(::prost::alloc::boxed::Box<super::PhysicalTryCastNode>),
         /// window expressions
         #[prost(message, tag = "15")]
-        WindowExpr(super::PhysicalWindowExprNode),
+        WindowExpr(::prost::alloc::boxed::Box<super::PhysicalWindowExprNode>),
         /// was PhysicalDateTimeIntervalExprNode date_time_interval_expr = 17;
         #[prost(message, tag = "16")]
         ScalarUdf(super::PhysicalScalarUdfNode),
@@ -1832,6 +1832,12 @@ pub struct PhysicalWindowExprNode {
     pub ignore_nulls: bool,
     #[prost(bool, tag = "12")]
     pub distinct: bool,
+    #[prost(message, optional, boxed, tag = "13")]
+    pub filter: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalExprNode>>,
+    #[prost(bool, tag = "14")]
+    pub is_reversed: bool,
+    #[prost(message, repeated, tag = "15")]
+    pub ordering_req: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
     #[prost(oneof = "physical_window_expr_node::WindowFunction", tags = "3, 10")]
     pub window_function: ::core::option::Option<
         physical_window_expr_node::WindowFunction,
