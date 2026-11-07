@@ -18,9 +18,8 @@ use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use itertools::Itertools;
 
-/// An optimizer rule that switches eligible aggregations to the specialized
-/// "Grouped TopK" aggregation implementation when only the first `N` groups are
-/// needed.
+/// An optimizer rule that transforms Sort + Limit above a grouped Aggregate to use
+/// a more efficient Grouped TopK aggregation implementation when possible.
 ///
 /// Queries such as
 ///
@@ -33,8 +32,36 @@ use itertools::Itertools;
 /// ```
 ///
 /// are planned as a `SortExec` with a `fetch` (a "TopK" sort) above an
-/// `AggregateExec`. Without this rule the aggregate retains every group in its
-/// hash table and the sort discards all but `N` of them afterwards.
+/// `AggregateExec`. This rule rewrites the plan on the left into the plan on
+/// the right:
+///
+/// ```text
+///          Before                                        After
+///
+/// ┌────────────────────────────┐             ┌────────────────────────────┐
+/// │ SortExec: TopK(fetch=10)   │             │ SortExec: TopK(fetch=10)   │
+/// │ expr=[max(timestamp) DESC] │             │ expr=[max(timestamp) DESC] │
+/// └────────────────────────────┘             └────────────────────────────┘
+///               ▲                                          ▲
+///               │ every group                              │ at most 10 groups
+///               │                                          │
+/// ┌────────────────────────────┐             ┌────────────────────────────┐
+/// │ AggregateExec              │             │ AggregateExec, lim=[10]    │
+/// │ gby=[trace_id]             │             │ gby=[trace_id]             │
+/// │ aggr=[max(timestamp)]      │  ────────▶  │ aggr=[max(timestamp)]      │
+/// │                            │             │                            │
+/// │ hash table holding         │             │ priority map holding only  │
+/// │ every group                │             │ the 10 best groups         │
+/// └────────────────────────────┘             └────────────────────────────┘
+///               ▲                                          ▲
+///               │                                          │
+/// ┌────────────────────────────┐             ┌────────────────────────────┐
+/// │ input                      │             │ input                      │
+/// └────────────────────────────┘             └────────────────────────────┘
+/// ```
+///
+/// Without this rule the aggregate retains every group in its hash table and
+/// the sort discards all but `N` of them afterwards.
 ///
 /// This rule pushes the limit and sort direction into the `AggregateExec` via
 /// [`AggregateExec::try_optimize_topk`]. The aggregate then runs the
