@@ -10,8 +10,9 @@ use arrow::array::{
     Array, ArrayRef, BooleanArray, DictionaryArray, FixedSizeListArray,
     FixedSizeListBuilder, Float16Array, Float32Array, Float64Array, Int8Array,
     Int16Array, Int32Array, Int32Builder, Int64Array, LargeListArray, ListArray,
-    ListBuilder, RecordBatch, StringArray, StringBuilder, StructBuilder, UInt8Array,
-    UInt16Array, UInt32Array, UInt32Builder, UInt64Array, UnionArray, record_batch,
+    ListBuilder, NullArray, RecordBatch, StringArray, StringBuilder, StructBuilder,
+    UInt8Array, UInt16Array, UInt32Array, UInt32Builder, UInt64Array, UnionArray,
+    record_batch,
 };
 use arrow::buffer::ScalarBuffer;
 use arrow::datatypes::{
@@ -7591,6 +7592,89 @@ async fn test_dataframe_from_columns_with_iterator() -> Result<()> {
 }
 
 #[tokio::test]
+async fn test_dataframe_from_columns_nullability_follows_data() -> Result<()> {
+    let no_nulls: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let with_nulls: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None, Some(3)]));
+    // Built from `Option`s but holds no nulls: nullability follows the data,
+    // not the constructor.
+    let optional_no_nulls: ArrayRef =
+        Arc::new(StringArray::from(vec![Some("a"), Some("b"), Some("c")]));
+
+    let df = DataFrame::from_columns([
+        ("no_nulls", no_nulls),
+        ("with_nulls", with_nulls),
+        ("optional_no_nulls", optional_no_nulls),
+    ])?;
+
+    let schema = df.schema();
+    assert!(
+        !schema
+            .field_with_unqualified_name("no_nulls")?
+            .is_nullable()
+    );
+    assert!(
+        schema
+            .field_with_unqualified_name("with_nulls")?
+            .is_nullable()
+    );
+    assert!(
+        !schema
+            .field_with_unqualified_name("optional_no_nulls")?
+            .is_nullable()
+    );
+
+    // The plan schema and the schema of the produced batches must agree.
+    let batches = df.clone().collect().await?;
+    assert_eq!(batches[0].schema().as_ref(), df.schema().as_arrow());
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_from_columns_dictionary_logical_nulls() -> Result<()> {
+    // Keys have no nulls but the dictionary values do: `null_count()` is 0,
+    // yet `is_nullable()` is true because logical nulls may be present.
+    // This is why `is_nullable()` is used rather than `null_count() > 0`.
+    let values = StringArray::from(vec![Some("a"), None]);
+    let keys = Int32Array::from(vec![0, 1, 0]);
+    let dict = DictionaryArray::<Int32Type>::try_new(keys, Arc::new(values))?;
+    assert_eq!(dict.null_count(), 0);
+    let dict: ArrayRef = Arc::new(dict);
+
+    let df = DataFrame::from_columns([("d", dict)])?;
+    assert!(df.schema().field_with_unqualified_name("d")?.is_nullable());
+    assert_eq!(df.filter(col("d").is_null())?.count().await?, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_from_columns_empty_and_null_arrays() -> Result<()> {
+    let empty: ArrayRef = Arc::new(Int32Array::from(Vec::<i32>::new()));
+    let df = DataFrame::from_columns([("a", empty)])?;
+    assert!(!df.schema().field_with_unqualified_name("a")?.is_nullable());
+    assert_eq!(df.count().await?, 0);
+
+    // `NullArray::is_nullable()` is true for any non-empty array.
+    let nulls: ArrayRef = Arc::new(NullArray::new(3));
+    let df = DataFrame::from_columns([("n", nulls)])?;
+    assert!(df.schema().field_with_unqualified_name("n")?.is_nullable());
+    assert_eq!(df.count().await?, 3);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_from_columns_non_nullable_enables_simplification() -> Result<()> {
+    // The point of the tighter schema: `a IS NULL` on a non-nullable column
+    // folds to `false` and the filter is eliminated entirely.
+    let a: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
+    let plan = DataFrame::from_columns([("a", a)])?
+        .filter(col("a").is_null())?
+        .into_optimized_plan()?;
+    let display = plan.display_indent().to_string();
+    assert!(display.contains("EmptyRelation"), "{display}");
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_dataframe_macro() -> Result<()> {
     let bools = [true, false, true];
     let i8s = [-1_i8, 0, 1];
@@ -7680,6 +7764,14 @@ async fn test_dataframe_macro() -> Result<()> {
     assert_eq!(df_empty.schema().fields().len(), 0);
     assert_eq!(df_empty.count().await?, 0);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_dataframe_macro_nullability() -> Result<()> {
+    let df = dataframe!("a" => vec![1, 2, 3], "b" => vec![Some(1), None, Some(3)])?;
+    assert!(!df.schema().field_with_unqualified_name("a")?.is_nullable());
+    assert!(df.schema().field_with_unqualified_name("b")?.is_nullable());
     Ok(())
 }
 
