@@ -322,18 +322,16 @@ impl FileSource for CsvSource {
         datafusion_physical_plan::apply_expression_roots(self.projection.source.iter(), f)
     }
 
-    /// Emit a `CsvScan` node wrapping the shared base config and CSV options.
+    /// Emit a `CsvSourceNode` carrying the CSV options.
     #[cfg(feature = "proto")]
-    fn try_to_proto(
+    fn try_to_proto_file_source(
         &self,
-        base: &FileScanConfig,
-        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
-    ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::FileSourceNode>> {
         use datafusion_proto_models::protobuf;
-        use protobuf::physical_plan_node::PhysicalPlanType;
+        use protobuf::file_source_node::FileSourceType;
 
-        let node = protobuf::CsvScanExecNode {
-            base_conf: Some(base.try_to_proto(ctx)?),
+        let node = protobuf::CsvSourceNode {
             has_header: self.has_header(),
             delimiter: proto_byte_to_string(self.delimiter(), "delimiter")?,
             quote: proto_byte_to_string(self.quote(), "quote")?,
@@ -341,7 +339,7 @@ impl FileSource for CsvSource {
                 .escape()
                 .map(|escape| {
                     Ok::<_, DataFusionError>(
-                        protobuf::csv_scan_exec_node::OptionalEscape::Escape(
+                        protobuf::csv_source_node::OptionalEscape::Escape(
                             proto_byte_to_string(escape, "escape")?,
                         ),
                     )
@@ -351,7 +349,7 @@ impl FileSource for CsvSource {
                 .comment()
                 .map(|comment| {
                     Ok::<_, DataFusionError>(
-                        protobuf::csv_scan_exec_node::OptionalComment::Comment(
+                        protobuf::csv_source_node::OptionalComment::Comment(
                             proto_byte_to_string(comment, "comment")?,
                         ),
                     )
@@ -361,8 +359,8 @@ impl FileSource for CsvSource {
             truncate_rows: self.truncate_rows(),
             terminator: self.terminator().map(|terminator| vec![terminator]),
         };
-        Ok(Some(protobuf::PhysicalPlanNode {
-            physical_plan_type: Some(PhysicalPlanType::CsvScan(node)),
+        Ok(Some(protobuf::FileSourceNode {
+            file_source_type: Some(FileSourceType::Csv(node)),
         }))
     }
 }
@@ -593,14 +591,12 @@ fn proto_bytes_to_byte(bytes: &[u8], description: &str) -> Result<u8> {
 
 #[cfg(feature = "proto")]
 impl CsvSource {
-    /// Reconstructs a `DataSourceExec` from a protobuf `CsvScan`.
-    ///
-    /// Payloads without a terminator use the default newline terminator.
+    /// Reconstructs a `DataSourceExec` from a legacy protobuf `CsvScan`.
+    #[deprecated(since = "56.0.0", note = "use `try_from_proto_file_source` instead")]
     pub fn try_from_proto(
         node: &datafusion_proto_models::protobuf::PhysicalPlanNode,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
     ) -> Result<Arc<dyn ExecutionPlan>> {
-        use datafusion_common::config::CsvOptions;
         use datafusion_datasource::file_scan_config::FileScanConfig;
         use datafusion_datasource::source::DataSourceExec;
         use datafusion_proto_models::protobuf;
@@ -610,51 +606,65 @@ impl CsvSource {
         else {
             return datafusion_common::internal_err!("PhysicalPlanNode is not a CsvScan");
         };
-
         let base_conf = scan.base_conf.as_ref().ok_or_else(|| {
             datafusion_common::internal_datafusion_err!(
                 "CsvScanExecNode is missing required field 'base_conf'"
             )
         })?;
+        let source_node = protobuf::CsvSourceNode::from(scan);
+        let source = Self::try_from_proto_file_source(&source_node, base_conf, ctx)?;
+        let conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
+        Ok(DataSourceExec::from_data_source(conf))
+    }
 
-        let escape = match &scan.optional_escape {
-            Some(protobuf::csv_scan_exec_node::OptionalEscape::Escape(escape)) => {
+    /// Reconstructs a `CsvSource` from its protobuf representation. `base`
+    /// is the enclosing scan's shared config, used for the table schema.
+    ///
+    /// Payloads without a terminator use the default newline terminator.
+    pub fn try_from_proto_file_source(
+        node: &datafusion_proto_models::protobuf::CsvSourceNode,
+        base: &datafusion_proto_models::protobuf::FileScanExecConf,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanDecodeCtx<'_>,
+    ) -> Result<Arc<dyn FileSource>> {
+        use datafusion_common::config::CsvOptions;
+        use datafusion_datasource::file_scan_config::FileScanConfig;
+        use datafusion_proto_models::protobuf;
+
+        let escape = match &node.optional_escape {
+            Some(protobuf::csv_source_node::OptionalEscape::Escape(escape)) => {
                 Some(proto_str_to_byte(escape, "escape")?)
             }
             None => None,
         };
-        let comment = match &scan.optional_comment {
-            Some(protobuf::csv_scan_exec_node::OptionalComment::Comment(comment)) => {
+        let comment = match &node.optional_comment {
+            Some(protobuf::csv_source_node::OptionalComment::Comment(comment)) => {
                 Some(proto_str_to_byte(comment, "comment")?)
             }
             None => None,
         };
-        let terminator = scan
+        let terminator = node
             .terminator
             .as_deref()
             .map(|terminator| proto_bytes_to_byte(terminator, "terminator"))
             .transpose()?;
 
-        let table_schema = FileScanConfig::parse_table_schema_from_proto(base_conf)?;
+        let table_schema = FileScanConfig::parse_table_schema_from_proto(base)?;
 
         let csv_options = CsvOptions {
-            has_header: Some(scan.has_header),
-            delimiter: proto_str_to_byte(&scan.delimiter, "delimiter")?,
-            quote: proto_str_to_byte(&scan.quote, "quote")?,
-            newlines_in_values: Some(scan.newlines_in_values),
-            truncated_rows: Some(scan.truncate_rows),
+            has_header: Some(node.has_header),
+            delimiter: proto_str_to_byte(&node.delimiter, "delimiter")?,
+            quote: proto_str_to_byte(&node.quote, "quote")?,
+            newlines_in_values: Some(node.newlines_in_values),
+            truncated_rows: Some(node.truncate_rows),
             ..Default::default()
         };
-        let source = Arc::new(
+        Ok(Arc::new(
             CsvSource::new(table_schema)
                 .with_csv_options(csv_options)
                 .with_escape(escape)
                 .with_comment(comment)
                 .with_terminator(terminator),
-        );
-
-        let conf = FileScanConfig::try_from_proto(base_conf, ctx, source)?;
-        Ok(DataSourceExec::from_data_source(conf))
+        ))
     }
 }
 

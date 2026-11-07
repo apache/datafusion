@@ -1259,15 +1259,35 @@ impl DataSource for FileScanConfig {
     }
 
     /// Serialize this file scan by delegating to the concrete
-    /// [`FileSource`]'s
-    /// [`try_to_proto`](crate::file::FileSource::try_to_proto) hook, passing
-    /// `self` as the shared spine it needs to emit the base config.
+    /// [`FileSource`]'s deprecated [`FileSource::try_to_proto`] hook.
     #[cfg(feature = "proto")]
+    #[expect(deprecated)]
     fn try_to_proto(
         &self,
         ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
         self.file_source().try_to_proto(self, ctx)
+    }
+
+    /// Encode the shared base config alongside the concrete [`FileSource`]'s
+    /// [`FileSourceNode`](datafusion_proto_models::protobuf::FileSourceNode).
+    #[cfg(feature = "proto")]
+    fn try_to_proto_source(
+        &self,
+        ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::DataSourceNode>> {
+        use datafusion_proto_models::protobuf;
+        let Some(source) = self.file_source().try_to_proto_file_source(ctx)? else {
+            return Ok(None);
+        };
+        Ok(Some(protobuf::DataSourceNode {
+            source_type: Some(protobuf::data_source_node::SourceType::File(
+                protobuf::FileScanNode {
+                    base: Some(FileScanConfig::try_to_proto(self, ctx)?),
+                    source: Some(source),
+                },
+            )),
+        }))
     }
 }
 

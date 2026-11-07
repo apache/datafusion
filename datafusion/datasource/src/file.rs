@@ -389,11 +389,32 @@ pub trait FileSource: Any + Send + Sync {
     /// [`PhysicalPlanNode`]: datafusion_proto_models::protobuf::PhysicalPlanNode
     /// [`FileScanConfig`]: crate::file_scan_config::FileScanConfig
     #[cfg(feature = "proto")]
+    #[deprecated(
+        since = "56.0.0",
+        note = "implement `try_to_proto_file_source` instead"
+    )]
     fn try_to_proto(
         &self,
         _base: &FileScanConfig,
         _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalPlanNode>> {
+        Ok(None)
+    }
+
+    /// Serialize the format-specific part of this file source into a
+    /// [`FileSourceNode`], if it knows how. The shared [`FileScanConfig`]
+    /// encodes the format-agnostic base alongside it.
+    ///
+    /// * `Ok(None)` (the default) — the caller falls back to the deprecated
+    ///   [`Self::try_to_proto`] hook and then to the extension codec.
+    /// * `Ok(Some(node))` — fully serialized.
+    ///
+    /// [`FileSourceNode`]: datafusion_proto_models::protobuf::FileSourceNode
+    #[cfg(feature = "proto")]
+    fn try_to_proto_file_source(
+        &self,
+        _ctx: &datafusion_physical_plan::proto::ExecutionPlanEncodeCtx<'_>,
+    ) -> Result<Option<datafusion_proto_models::protobuf::FileSourceNode>> {
         Ok(None)
     }
 }
