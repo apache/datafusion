@@ -1343,3 +1343,21 @@ create database cat;
 
 statement ok
 drop database cat;
+
+##########
+# A pipeline-breaking operator on an unbounded input should be reported with
+# its EXPLAIN-style one-line form, not the operator's Debug representation.
+##########
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE ordering_on_unbounded (
+  a0 INT, a INT, b INT, c INT, d INT
+) STORED AS CSV
+LOCATION '../core/tests/data/window_2.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement error Error during planning: Cannot execute pipeline breaking queries, operator: SortExec: TopK\(fetch=1\), expr=\[d@4 ASC NULLS LAST\], preserve_partitioning=\[false\]
+SELECT * FROM ordering_on_unbounded ORDER BY d LIMIT 1;
+
+statement ok
+DROP TABLE ordering_on_unbounded;
