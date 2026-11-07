@@ -707,6 +707,113 @@ logical_plan
 05)--------TableScan: t_uniq projection=[x]
 
 ##########
+## GROUP BY a key and a column the key does not determine
+##
+## `item` has PRIMARY KEY `i_item_sk`. Joined with `sales`, item 1 has two
+## dates, so `GROUP BY i_item_sk, s_date` forms the groups (1, 100), (1, 101)
+## and (2, 100): the pair is a key of the output, `i_item_sk` alone is not.
+##########
+
+statement ok
+CREATE TABLE item (i_item_sk INT, i_desc VARCHAR, PRIMARY KEY (i_item_sk))
+AS VALUES (1, 'a'), (2, 'b');
+
+statement ok
+CREATE TABLE sales (s_item_sk INT, s_date INT) AS VALUES (1, 100), (1, 101), (2, 100);
+
+statement ok
+CREATE TABLE orders (o_item_sk INT, o_amount INT) AS VALUES (1, 10), (2, 20);
+
+statement ok
+CREATE VIEW item_dates AS
+SELECT i_item_sk, s_date FROM item JOIN sales ON i_item_sk = s_item_sk
+GROUP BY i_item_sk, s_date;
+
+# 8.1 Each order row joins once per matching group, so the order of item 1
+# counts twice. The join must stay an inner join, not become a semi join.
+query I
+SELECT sum(o_amount) FROM orders JOIN item_dates ON o_item_sk = i_item_sk;
+----
+40
+
+query TT
+EXPLAIN SELECT sum(o_amount) FROM orders JOIN item_dates ON o_item_sk = i_item_sk;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(CAST(orders.o_amount AS Int64))]]
+02)--Projection: orders.o_amount
+03)----Inner Join: orders.o_item_sk = item_dates.i_item_sk
+04)------TableScan: orders projection=[o_item_sk, o_amount]
+05)------SubqueryAlias: item_dates
+06)--------Projection: item.i_item_sk
+07)----------Aggregate: groupBy=[[item.i_item_sk, sales.s_date]], aggr=[[]]
+08)------------Projection: item.i_item_sk, sales.s_date
+09)--------------Inner Join: item.i_item_sk = sales.s_item_sk
+10)----------------TableScan: item projection=[i_item_sk]
+11)----------------TableScan: sales projection=[s_item_sk, s_date]
+
+# 8.2 GROUP BY the key alone: `i_item_sk` is a key of the output, so the
+# join is still converted to a semi join.
+query I
+SELECT sum(o_amount) FROM orders
+JOIN (SELECT i_item_sk FROM item JOIN sales ON i_item_sk = s_item_sk GROUP BY i_item_sk) f
+  ON o_item_sk = f.i_item_sk;
+----
+30
+
+query TT
+EXPLAIN SELECT sum(o_amount) FROM orders
+JOIN (SELECT i_item_sk FROM item JOIN sales ON i_item_sk = s_item_sk GROUP BY i_item_sk) f
+  ON o_item_sk = f.i_item_sk;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(CAST(orders.o_amount AS Int64))]]
+02)--Projection: orders.o_amount
+03)----LeftSemi Join: orders.o_item_sk = f.i_item_sk
+04)------TableScan: orders projection=[o_item_sk, o_amount]
+05)------SubqueryAlias: f
+06)--------Aggregate: groupBy=[[item.i_item_sk]], aggr=[[]]
+07)----------LeftSemi Join: item.i_item_sk = sales.s_item_sk
+08)------------TableScan: item projection=[i_item_sk]
+09)------------TableScan: sales projection=[s_item_sk]
+
+# 8.3 `i_item_sk` does not determine `s_date`, so an outer GROUP BY must keep
+# `s_date` and its three groups.
+query II
+SELECT i_item_sk, count(*) FROM item_dates GROUP BY i_item_sk, s_date
+ORDER BY i_item_sk;
+----
+1 1
+1 1
+2 1
+
+# 8.4 The planner adds `i_desc`, which `i_item_sk` determines, to the inner
+# GROUP BY. `i_desc` is an extraneous column of the inner aggregate's key and
+# is removed from it, so the key still exists after the projection removes
+# `i_desc`, and `c` can be selected.
+query III
+SELECT i_item_sk, s_date, c
+FROM (SELECT i_item_sk, s_date, count(*) AS c FROM item JOIN sales ON i_item_sk = s_item_sk
+      GROUP BY i_item_sk, s_date) q
+GROUP BY i_item_sk, s_date ORDER BY i_item_sk, s_date;
+----
+1 100 1
+1 101 1
+2 100 1
+
+statement ok
+DROP VIEW item_dates;
+
+statement ok
+DROP TABLE item;
+
+statement ok
+DROP TABLE sales;
+
+statement ok
+DROP TABLE orders;
+
+##########
 ## Cleanup
 ##########
 

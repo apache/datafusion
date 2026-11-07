@@ -453,31 +453,23 @@ pub fn aggregate_functional_dependencies(
     let mut aggregate_func_dependencies = vec![];
     let aggr_fields = aggr_schema.fields();
     // Association covers the whole table:
-    let target_indices = (0..aggr_schema.fields().len()).collect::<Vec<_>>();
+    let all_output_indices = (0..aggr_schema.fields().len()).collect::<Vec<_>>();
     // Get functional dependencies of the schema:
     let func_dependencies = aggr_input_schema.functional_dependencies();
     // The loop below only re-expresses input dependencies. Skip it when the
     // input has none. The GROUP BY-key dependency below always runs.
     if !func_dependencies.is_empty() {
-        // Compare the columns covered by every dependency, whatever its NULL
-        // semantics: leaving out the ones that do not hold across NULLs would
-        // hide GROUP BY expressions this determinant does not cover and
-        // upgrade its mode to `Single` wrongly.
-        let existing_target_indices = get_target_indices_from_dependencies(
-            func_dependencies.iter(),
-            group_by_input_indices,
-        );
         for FunctionalDependence {
             source_indices,
             nullable,
             null_equality,
-            mode,
+            mode: input_mode,
             ..
         } in &func_dependencies.deps
         {
             // Indices into the GROUP BY list for this determinant:
-            let mut new_source_indices = vec![];
-            let mut new_source_input_indices = vec![];
+            let mut source_output_indices = vec![];
+            let mut grouped_source_indices = vec![];
             for (idx, input_idx) in group_by_input_indices.iter().enumerate() {
                 // When one of the input determinant columns is a GROUP BY
                 // expression, add the index of the GROUP BY expression as a new
@@ -486,42 +478,55 @@ pub fn aggregate_functional_dependencies(
                     && source_indices.contains(input_idx)
                     // A key column can be in the GROUP BY list more than one
                     // time (`x, x AS k`). Count it one time.
-                    && !new_source_input_indices.contains(&Some(*input_idx))
+                    && !grouped_source_indices.contains(&Some(*input_idx))
                 {
-                    new_source_indices.push(idx);
-                    new_source_input_indices.push(Some(*input_idx));
+                    source_output_indices.push(idx);
+                    grouped_source_indices.push(Some(*input_idx));
                 }
             }
-            let new_target_indices = get_target_indices_from_dependencies(
+            let determined_input_indices = get_target_indices_from_dependencies(
                 func_dependencies.iter(),
-                &new_source_input_indices,
-            );
-            let mode = if existing_target_indices == new_target_indices
-                && new_target_indices.is_some()
-            {
-                // If dependency covers all GROUP BY expressions, mode will be `Single`:
-                Dependency::Single
+                &grouped_source_indices,
+            )
+            .unwrap_or_default();
+            // Dependencies are tracked for columns only, so a computed
+            // expression is never counted as determined, even when its inputs
+            // are.
+            let mut determined_output_indices = vec![];
+            for (output_idx, input_idx) in group_by_input_indices.iter().enumerate() {
+                if let Some(input_idx) = input_idx
+                    && determined_input_indices.contains(input_idx)
+                {
+                    determined_output_indices.push(output_idx);
+                }
+            }
+            // A determinant is a key of the output, and so determines the
+            // aggregate values too, if it is a key of the input or determines
+            // every GROUP BY expression.
+            let is_output_key = *input_mode == Dependency::Single
+                || determined_output_indices.len() == group_by_input_indices.len();
+            let (output_mode, output_target_indices) = if is_output_key {
+                (Dependency::Single, all_output_indices.clone())
             } else {
-                // Otherwise, existing mode is preserved:
-                *mode
+                (*input_mode, determined_output_indices)
             };
             // All of the composite indices occur in the GROUP BY expression:
-            if new_source_indices.len() == source_indices.len() {
+            if source_output_indices.len() == source_indices.len() {
                 // GROUP BY treats NULLs as equal: a determinant covering the
                 // complete grouping key gets at most one output row per NULL too.
                 let output_null_equality =
-                    if new_source_indices.len() == group_by_input_indices.len() {
+                    if source_output_indices.len() == group_by_input_indices.len() {
                         NullEquality::NullEqualsNull
                     } else {
                         *null_equality
                     };
                 aggregate_func_dependencies.push(
                     FunctionalDependence::new(
-                        new_source_indices,
-                        target_indices.clone(),
+                        source_output_indices,
+                        output_target_indices,
                         *nullable,
                     )
-                    .with_mode(mode)
+                    .with_mode(output_mode)
                     .with_null_equality(output_null_equality),
                 );
             }
@@ -532,7 +537,19 @@ pub fn aggregate_functional_dependencies(
     // aggregation:
     if !group_by_input_indices.is_empty() {
         let count = group_by_input_indices.len();
-        let source_indices = (0..count).collect::<Vec<_>>();
+        // Remove extraneous columns (the GROUP BY expressions that the others
+        // determine) from the key, so that the key still exists after a
+        // projection removes them.
+        let source_indices = match get_required_group_by_exprs_indices(
+            aggr_input_schema,
+            group_by_input_indices,
+        ) {
+            Some(mut indices) => {
+                indices.sort_unstable();
+                indices
+            }
+            None => (0..count).collect(),
+        };
         let nullable = source_indices
             .iter()
             .any(|idx| aggr_fields[*idx].is_nullable());
@@ -544,6 +561,8 @@ pub fn aggregate_functional_dependencies(
             // The following simple comparison is working well because
             // GROUP BY expressions come here as a prefix.
             item.source_indices.iter().all(|idx| idx < &count)
+                // Only a key determines the aggregate values:
+                && item.mode == Dependency::Single
                 // A dependency that is not valid across NULLs cannot replace
                 // the whole GROUP BY key dependency:
                 && item.is_valid_across_nulls(aggr_schema)
@@ -551,7 +570,7 @@ pub fn aggregate_functional_dependencies(
             // Add a new functional dependency associated with the whole table:
             // Use nullable property of the GROUP BY expression:
             aggregate_func_dependencies.push(
-                FunctionalDependence::new(source_indices, target_indices, nullable)
+                FunctionalDependence::new(source_indices, all_output_indices, nullable)
                     .with_mode(Dependency::Single)
                     // Grouping collapses NULL keys into a single group:
                     .with_null_equality(NullEquality::NullEqualsNull),
