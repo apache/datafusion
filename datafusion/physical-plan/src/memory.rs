@@ -257,10 +257,13 @@ impl LazyMemoryExec {
         Ok(())
     }
 
-    pub fn add_ordering(&mut self, ordering: impl IntoIterator<Item = PhysicalSortExpr>) {
+    pub fn add_ordering(
+        &mut self,
+        ordering: impl IntoIterator<Item = PhysicalSortExpr>,
+    ) -> Result<()> {
         Arc::make_mut(&mut self.cache)
             .eq_properties
-            .add_orderings(std::iter::once(ordering));
+            .add_orderings(std::iter::once(ordering))
     }
 
     /// Get the batch generators
