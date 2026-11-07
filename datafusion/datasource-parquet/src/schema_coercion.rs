@@ -16,9 +16,10 @@
 //! build the string array itself. It only validates UTF-8 for columns carrying
 //! the `UTF8` logical annotation, which such a column by definition does not,
 //! so invalid bytes surface as an invalid string array rather than an error.
-//! That is long-standing behaviour for top-level and struct fields; it is not
-//! extended to map children, whose positional matching is newer, so binary map
-//! values keep going through the validating cast instead.
+//! This coercion therefore only applies to top-level fields, where it is
+//! long-standing behaviour. Nested binary fields (struct fields, list elements
+//! and map keys and values) are never read as strings: they keep going through
+//! the validating cast instead. The view coercions still apply at every level.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -179,28 +180,25 @@ fn coerce_data_type(
         (BinaryView, Binary | LargeBinary) => Some(BinaryView),
         // Struct children match by name
         (Struct(table_fields), Struct(file_fields)) => {
-            coerce_fields_by_name(table_fields, file_fields, binary_to_string, enable_rle)
+            coerce_fields_by_name(table_fields, file_fields, false, enable_rle)
                 .map(Struct)
         }
         // List-like children match by position, regardless of their names.
         // The container kind and FixedSizeList width always come from the file.
         (List(table_child), List(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle).map(List)
+            coerce_child(table_child, file_child, enable_rle).map(List)
         }
         (LargeList(table_child), LargeList(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(LargeList)
+            coerce_child(table_child, file_child, enable_rle).map(LargeList)
         }
         (ListView(table_child), ListView(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(ListView)
+            coerce_child(table_child, file_child, enable_rle).map(ListView)
         }
         (LargeListView(table_child), LargeListView(file_child)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
-                .map(LargeListView)
+            coerce_child(table_child, file_child, enable_rle).map(LargeListView)
         }
         (FixedSizeList(table_child, _), FixedSizeList(file_child, size)) => {
-            coerce_child(table_child, file_child, binary_to_string, enable_rle)
+            coerce_child(table_child, file_child, enable_rle)
                 .map(|child| FixedSizeList(child, *size))
         }
         // Map keys and values match by position: Parquet always names them
@@ -220,17 +218,16 @@ fn coerce_data_type(
 }
 
 /// Coerce a single nested child field, keeping everything but its data type
-/// from `file_child`.
+/// from `file_child`. Nested binary is never read as a string (see module docs).
 fn coerce_child(
     table_child: &FieldRef,
     file_child: &FieldRef,
-    binary_to_string: bool,
     enable_rle: bool,
 ) -> Option<FieldRef> {
     coerce_data_type(
         table_child.data_type(),
         file_child.data_type(),
-        binary_to_string,
+        false,
         enable_rle,
     )
     .map(|new_type| field_with_new_type(file_child, new_type))
@@ -257,7 +254,7 @@ fn coerce_map_entries(
     }
 
     let fields = coerce_fields(file_fields, |idx, file_child| {
-        coerce_child(&table_fields[idx], file_child, false, false)
+        coerce_child(&table_fields[idx], file_child, false)
     })?;
 
     Some(field_with_new_type(file_entries, DataType::Struct(fields)))
@@ -1281,30 +1278,8 @@ mod tests {
         };
         for (table_type, file_types) in [
             (
-                DataType::Utf8,
-                vec![
-                    DataType::Binary,
-                    DataType::LargeBinary,
-                    DataType::BinaryView,
-                ],
-            ),
-            (
-                DataType::LargeUtf8,
-                vec![
-                    DataType::Binary,
-                    DataType::LargeBinary,
-                    DataType::BinaryView,
-                ],
-            ),
-            (
                 DataType::Utf8View,
-                vec![
-                    DataType::Binary,
-                    DataType::LargeBinary,
-                    DataType::BinaryView,
-                    DataType::Utf8,
-                    DataType::LargeUtf8,
-                ],
+                vec![DataType::Utf8, DataType::LargeUtf8],
             ),
             (
                 DataType::BinaryView,
@@ -1318,6 +1293,31 @@ mod tests {
                     apply_file_schema_type_coercions(&table_schema, &file_schema),
                     Some(table_schema)
                 );
+            }
+        }
+        // Nested binary fields are never read as strings
+        let list_schema = |data_type| {
+            Schema::new(vec![Field::new_list(
+                "list",
+                Field::new_list_field(data_type, true),
+                true,
+            )])
+        };
+        for table_type in [DataType::Utf8, DataType::LargeUtf8, DataType::Utf8View] {
+            for file_type in [
+                DataType::Binary,
+                DataType::LargeBinary,
+                DataType::BinaryView,
+            ] {
+                for schema in [nested_schema, list_schema] {
+                    assert_eq!(
+                        apply_file_schema_type_coercions(
+                            &schema(table_type.clone()),
+                            &schema(file_type.clone())
+                        ),
+                        None
+                    );
+                }
             }
         }
         let file_schema = nested_schema(DataType::Int32);

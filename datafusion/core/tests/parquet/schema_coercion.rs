@@ -5,9 +5,10 @@
 use std::sync::Arc;
 
 use arrow::array::{
-    ArrayRef, DictionaryArray, Float32Array, Int64Array, RecordBatch, StringArray,
-    types::Int32Type,
+    ArrayRef, BinaryArray, DictionaryArray, Float32Array, Int64Array, ListArray,
+    RecordBatch, StringArray, StructArray, types::Int32Type,
 };
+use arrow::buffer::OffsetBuffer;
 use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::datasource::physical_plan::ParquetSource;
 use datafusion::physical_plan::collect;
@@ -130,6 +131,47 @@ async fn multi_parquet_coercion_projection() {
     | 2  | Boo   | 20.0 |
     +----+-------+------+
     ");
+}
+
+/// Nested binary fields read as strings go through the validating cast, so
+/// invalid UTF-8 is an error rather than an invalid string array.
+#[tokio::test]
+async fn nested_binary_read_as_string_rejects_invalid_utf8() {
+    let list = ListArray::new(
+        Arc::new(Field::new("element", DataType::Binary, true)),
+        OffsetBuffer::new(vec![0, 2].into()),
+        Arc::new(BinaryArray::from(vec![b"one".as_slice(), &[0xff]])),
+        None,
+    );
+    let strukt = StructArray::from(vec![(
+        Arc::new(Field::new("value", DataType::Binary, true)),
+        Arc::new(BinaryArray::from(vec![&[0xff_u8][..]])) as ArrayRef,
+    )]);
+    let string_list =
+        DataType::List(Arc::new(Field::new("element", DataType::Utf8, true)));
+    let string_struct =
+        DataType::Struct(vec![Field::new("value", DataType::Utf8, true)].into());
+
+    for (column, table_type) in [
+        (Arc::new(list) as ArrayRef, string_list),
+        (Arc::new(strukt) as ArrayRef, string_struct),
+    ] {
+        let batch = RecordBatch::try_from_iter([("c", column)]).unwrap();
+        let (meta, _files) = store_parquet(vec![batch]).unwrap();
+        let table_schema = Arc::new(Schema::new(vec![Field::new("c", table_type, true)]));
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(ParquetSource::new(table_schema)),
+        )
+        .with_file_group(meta.into_iter().map(Into::into).collect())
+        .build();
+
+        let task_ctx = SessionContext::new().task_ctx();
+        let err = collect(DataSourceExec::from_data_source(config), task_ctx)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("non UTF-8 data"), "{err}");
+    }
 }
 
 /// Writes `batches` to a temporary parquet file
