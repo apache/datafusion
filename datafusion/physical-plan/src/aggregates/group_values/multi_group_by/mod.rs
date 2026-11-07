@@ -1014,9 +1014,7 @@ fn make_group_column(field: &Field) -> Result<Box<dyn GroupColumn>> {
             let inner = make_group_column(&new_field)?;
             macro_rules! dict_col {
                 ($T:ty) => {
-                    Box::new(dictionary::DictionaryGroupValuesColumn::<$T>::new(
-                        inner, &new_field,
-                    ))
+                    Box::new(dictionary::DictionaryGroupValuesColumn::<$T>::new(inner))
                 };
             }
             let col: Box<dyn GroupColumn> = match key_dt.as_ref() {
