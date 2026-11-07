@@ -4,6 +4,7 @@
 
 //! Defines the FIRST_VALUE/LAST_VALUE aggregations.
 
+use std::borrow::Cow;
 use std::fmt::Debug;
 use std::hash::Hash;
 use std::mem::size_of_val;
@@ -431,6 +432,16 @@ struct FirstLastGroupsAccumulator<S: ValueState> {
     // and `update_batch` takes the comparison-free fast path.
     is_input_pre_ordered: bool,
     default_orderings: Vec<ScalarValue>,
+    // The time zone of each ordering column that is a time zone aware
+    // timestamp, `None` for every other column.
+    //
+    // Such columns are stored in `orderings` without their time zone.
+    // Comparison does not depend on it (the values are UTC instants), and a
+    // `ScalarValue::Timestamp*(_, Some(tz))` holds an `Arc<str>` shared by
+    // every partition, so cloning and dropping one per updated group makes
+    // the threads contend on its reference count. The time zone is put back
+    // on the arrays returned by `state`.
+    ordering_timezones: Vec<Option<Arc<str>>>,
 }
 
 impl<S: ValueState> FirstLastGroupsAccumulator<S> {
@@ -442,9 +453,21 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
         pick_first_in_group: bool,
         is_input_pre_ordered: bool,
     ) -> Result<Self> {
+        let ordering_timezones: Vec<_> = ordering_dtypes
+            .iter()
+            .map(|dt| match dt {
+                DataType::Timestamp(_, tz) => tz.clone(),
+                _ => None,
+            })
+            .collect();
         let default_orderings = ordering_dtypes
             .iter()
-            .map(ScalarValue::try_from)
+            .map(|dt| match dt {
+                DataType::Timestamp(unit, _) => {
+                    ScalarValue::try_from(DataType::Timestamp(*unit, None))
+                }
+                _ => ScalarValue::try_from(dt),
+            })
             .collect::<Result<_>>()?;
 
         let sort_options = get_sort_options(&ordering_req);
@@ -463,7 +486,27 @@ impl<S: ValueState> FirstLastGroupsAccumulator<S> {
             touched_groups_buf: Vec::new(),
             pick_first_in_group,
             is_input_pre_ordered,
+            ordering_timezones,
         })
+    }
+
+    /// Returns `columns` with the time zone removed from the ordering columns
+    /// (`columns[1..=ordering_req.len()]`) that have one. See
+    /// `ordering_timezones`.
+    fn strip_ordering_timezones<'a>(
+        &self,
+        columns: &'a [ArrayRef],
+    ) -> Cow<'a, [ArrayRef]> {
+        if self.ordering_timezones.iter().all(Option::is_none) {
+            return Cow::Borrowed(columns);
+        }
+        let mut columns = columns.to_vec();
+        for (column, tz) in columns[1..].iter_mut().zip(&self.ordering_timezones) {
+            if tz.is_some() {
+                *column = with_timezone_opt(column, None);
+            }
+        }
+        Cow::Owned(columns)
     }
 
     fn should_update_state(
@@ -767,6 +810,8 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         total_num_groups: usize,
     ) -> Result<()> {
         self.resize_states(total_num_groups);
+        let values_and_order_cols = self.strip_ordering_timezones(values_and_order_cols);
+        let values_and_order_cols = values_and_order_cols.as_ref();
 
         if self.is_input_pre_ordered {
             return self.update_batch_pre_ordered(
@@ -829,8 +874,13 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
 
             ordering_cols
         };
-        for ordering_col in ordering_cols {
-            result.push(ScalarValue::iter_to_array(ordering_col)?);
+        for (ordering_col, tz) in ordering_cols.into_iter().zip(&self.ordering_timezones)
+        {
+            let array = ScalarValue::iter_to_array(ordering_col)?;
+            result.push(match tz {
+                Some(tz) => with_timezone_opt(&array, Some(Arc::clone(tz))),
+                None => array,
+            });
         }
 
         result.push(Arc::new(BooleanArray::new(is_sets, None)));
@@ -845,6 +895,8 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
         total_num_groups: usize,
     ) -> Result<()> {
         self.resize_states(total_num_groups);
+        let values = self.strip_ordering_timezones(values);
+        let values = values.as_ref();
 
         let mut ordering_buf = Vec::with_capacity(self.ordering_req.len());
 
@@ -881,6 +933,7 @@ impl<S: ValueState + 'static> GroupsAccumulator for FirstLastGroupsAccumulator<S
             + self.size_of_orderings
             + self.extreme_of_each_group_buf.0.capacity() * size_of::<usize>()
             + self.extreme_of_each_group_buf.1.capacity() / 8
+            + self.ordering_timezones.capacity() * size_of::<Option<Arc<str>>>()
     }
 
     fn shrink_to_fit(&mut self) {
@@ -1579,6 +1632,38 @@ fn filter_states_according_to_is_set(
         .collect()
 }
 
+/// Returns a timestamp `array` with its time zone replaced by `tz`, without
+/// changing its values (unlike a cast); other arrays are returned unchanged.
+fn with_timezone_opt(array: &ArrayRef, tz: Option<Arc<str>>) -> ArrayRef {
+    match array.data_type() {
+        DataType::Timestamp(TimeUnit::Second, _) => Arc::new(
+            array
+                .as_primitive::<TimestampSecondType>()
+                .clone()
+                .with_timezone_opt(tz),
+        ),
+        DataType::Timestamp(TimeUnit::Millisecond, _) => Arc::new(
+            array
+                .as_primitive::<TimestampMillisecondType>()
+                .clone()
+                .with_timezone_opt(tz),
+        ),
+        DataType::Timestamp(TimeUnit::Microsecond, _) => Arc::new(
+            array
+                .as_primitive::<TimestampMicrosecondType>()
+                .clone()
+                .with_timezone_opt(tz),
+        ),
+        DataType::Timestamp(TimeUnit::Nanosecond, _) => Arc::new(
+            array
+                .as_primitive::<TimestampNanosecondType>()
+                .clone()
+                .with_timezone_opt(tz),
+        ),
+        _ => Arc::clone(array),
+    }
+}
+
 /// Combines array refs and their corresponding orderings to construct `SortColumn`s.
 fn convert_to_sort_cols(arrs: &[ArrayRef], sort_exprs: &LexOrdering) -> Vec<SortColumn> {
     arrs.iter()
@@ -1595,7 +1680,10 @@ mod tests {
     use std::iter::repeat_with;
 
     use arrow::{
-        array::{BooleanArray, Int64Array, ListArray, PrimitiveArray, StringArray},
+        array::{
+            BooleanArray, Int64Array, ListArray, PrimitiveArray, StringArray,
+            TimestampMicrosecondArray,
+        },
         buffer::NullBuffer,
         compute::SortOptions,
         datatypes::Schema,
@@ -1812,6 +1900,80 @@ mod tests {
             group_acc.compute_size_of_orderings()
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_group_acc_timezone_ordering() -> Result<()> {
+        let tz: Arc<str> = Arc::from("+02:00");
+        let ts_type = DataType::Timestamp(TimeUnit::Microsecond, Some(Arc::clone(&tz)));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("v", DataType::Int64, true),
+            Field::new("ts", ts_type.clone(), true),
+        ]));
+        let sort_keys = [PhysicalSortExpr {
+            expr: col("ts", &schema)?,
+            options: SortOptions::default(),
+        }];
+        let new_acc = |pick_first_in_group| {
+            FirstLastGroupsAccumulator::try_new(
+                PrimitiveValueState::<Int64Type>::new(DataType::Int64),
+                sort_keys.clone().into(),
+                false,
+                std::slice::from_ref(&ts_type),
+                pick_first_in_group,
+                false,
+            )
+        };
+        let ts = |values: Vec<Option<i64>>| -> ArrayRef {
+            Arc::new(
+                TimestampMicrosecondArray::from(values)
+                    .with_timezone_opt(Some(Arc::clone(&tz))),
+            )
+        };
+
+        for (pick_first_in_group, expected) in [(true, [1, 5]), (false, [3, 4])] {
+            let mut partial = new_acc(pick_first_in_group)?;
+            partial.update_batch(
+                &[
+                    Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5])),
+                    ts(vec![Some(10), Some(20), Some(30), Some(15), Some(5)]),
+                ],
+                &[0, 0, 0, 1, 1],
+                None,
+                2,
+            )?;
+            // The ordering values are kept without the time zone ...
+            assert!(
+                partial.orderings.iter().flatten().all(|v| matches!(
+                    v,
+                    ScalarValue::TimestampMicrosecond(Some(_), None)
+                ))
+            );
+            assert_eq!(
+                partial.size_of_orderings,
+                partial.compute_size_of_orderings()
+            );
+
+            // ... and the state carries it again, with unchanged values, also
+            // when it is emitted in parts.
+            let first = partial.state(EmitTo::First(1))?;
+            let rest = partial.state(EmitTo::All)?;
+            assert_eq!(first[1].data_type(), &ts_type);
+            assert_eq!(rest[1].data_type(), &ts_type);
+
+            let mut last = new_acc(pick_first_in_group)?;
+            last.merge_batch(&first, &[0], 1)?;
+            last.merge_batch(&rest, &[1], 2)?;
+            let other = vec![
+                Arc::new(Int64Array::from(vec![6, 7])) as ArrayRef,
+                ts(vec![Some(25), Some(10)]),
+                Arc::new(BooleanArray::from(vec![true, true])),
+            ];
+            last.merge_batch(&other, &[0, 1], 2)?;
+            let result = last.evaluate(EmitTo::All)?;
+            assert_eq!(result.as_primitive::<Int64Type>().values(), &expected);
+        }
         Ok(())
     }
 
