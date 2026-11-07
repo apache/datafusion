@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -234,6 +221,13 @@ impl SessionConfig {
         self.options.catalog.information_schema
     }
 
+    /// Get [`partition_information_schema`]
+    ///
+    /// [`partition_information_schema`]: datafusion_common::config::CatalogOptions::partition_information_schema
+    pub fn partition_information_schema(&self) -> bool {
+        self.options.catalog.partition_information_schema
+    }
+
     /// Get [`create_default_catalog_and_schema`]
     ///
     /// [`create_default_catalog_and_schema`]: datafusion_common::config::CatalogOptions::create_default_catalog_and_schema
@@ -309,6 +303,14 @@ impl SessionConfig {
     /// [`create_default_catalog_and_schema`]: datafusion_common::config::CatalogOptions::create_default_catalog_and_schema
     pub fn with_create_default_catalog_and_schema(mut self, create: bool) -> Self {
         self.options_mut().catalog.create_default_catalog_and_schema = create;
+        self
+    }
+
+    /// Set [`partition_information_schema`]
+    ///
+    /// [`partition_information_schema`]: datafusion_common::config::CatalogOptions::partition_information_schema
+    pub fn with_partition_information_schema(mut self, partition: bool) -> Self {
+        self.options_mut().catalog.partition_information_schema = partition;
         self
     }
 
@@ -680,6 +682,39 @@ impl SessionConfig {
         T: Send + Sync + 'static,
     {
         self.extensions.get_arc::<T>()
+    }
+
+    /// Change the extension of type `T` in place, and return what `f` returns.
+    ///
+    /// If there is no extension of type `T`, `f` gets `T::default()`, which is
+    /// then attached. If the extension is shared with another config, it is
+    /// cloned first, so the other config does not change.
+    ///
+    /// Use this, not [`with_extension`](Self::with_extension), when more than
+    /// one part of an application adds to the same extension. `with_extension`
+    /// replaces the extension, so it discards what other parts added.
+    ///
+    /// # Example
+    /// ```
+    /// use datafusion_execution::config::SessionConfig;
+    ///
+    /// #[derive(Clone, Default)]
+    /// struct Names(Vec<&'static str>);
+    ///
+    /// let mut cfg = SessionConfig::default();
+    /// cfg.update_extension(|names: &mut Names| names.0.push("a"));
+    /// cfg.update_extension(|names: &mut Names| names.0.push("b"));
+    ///
+    /// assert_eq!(cfg.get_extension::<Names>().unwrap().0, ["a", "b"]);
+    /// ```
+    pub fn update_extension<T, R>(&mut self, f: impl FnOnce(&mut T) -> R) -> R
+    where
+        T: Clone + Default + Send + Sync + 'static,
+    {
+        let mut ext = self.get_extension::<T>().unwrap_or_default();
+        let result = f(Arc::make_mut(&mut ext));
+        self.set_extension(ext);
+        result
     }
 }
 

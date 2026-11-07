@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 statement ok
 COPY  (VALUES (10), (20), (30), (40), (50))
@@ -31,7 +18,7 @@ EXPLAIN SELECT file_row_index(), column1 FROM parquet_table
 logical_plan
 01)Projection: file_row_index(), parquet_table.column1
 02)--TableScan: parquet_table projection=[column1]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64) as file_row_index(), column1], file_type=parquet
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as file_row_index(), column1], file_type=parquet
 
 
 query II
@@ -78,7 +65,7 @@ logical_plan
 physical_plan
 01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--FilterExec: __datafusion_extracted_1@0 > 2, projection=[column1@1]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64) as __datafusion_extracted_1, column1], file_type=parquet
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as __datafusion_extracted_1, column1], file_type=parquet
 
 query I
 SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1
@@ -103,7 +90,7 @@ logical_plan
 physical_plan
 01)SortExec: expr=[column1@0 ASC NULLS LAST], preserve_partitioning=[false]
 02)--FilterExec: __datafusion_extracted_1@0 > 2, projection=[column1@1]
-03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64) as __datafusion_extracted_1, column1], file_type=parquet
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as __datafusion_extracted_1, column1], file_type=parquet
 
 query I
 SELECT column1 FROM parquet_table WHERE file_row_index() > 2 ORDER BY column1

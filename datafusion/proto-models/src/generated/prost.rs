@@ -442,8 +442,9 @@ pub struct JoinNode {
     #[prost(bool, tag = "9")]
     pub null_aware: bool,
     /// Number of `NOT IN` value keys of a null-aware join (see
-    /// `Join::null_aware_value_keys`). Messages predating this field decode it
-    /// as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
+    /// `Join::null_aware_value_keys`). 0 is an unset count, accepted only for a
+    /// single key. Messages predating this field decode it as 0: they can only
+    /// hold scalar `NOT IN` joins.
     #[prost(uint32, tag = "10")]
     pub null_aware_value_keys: u32,
 }
@@ -2004,6 +2005,12 @@ pub struct PhysicalExtensionExprNode {
     pub expr: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, repeated, tag = "2")]
     pub inputs: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    /// Optional type discriminator naming the extension expression, e.g.
+    /// "my_crate.MyExpr". When present and registered in the session's
+    /// ProtoDecoderRegistry, decoding is routed to that registered
+    /// decoder; otherwise it falls back to PhysicalExtensionCodec::try_decode_expr.
+    #[prost(string, optional, tag = "3")]
+    pub expr_name: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalHashExprNode {
@@ -2229,9 +2236,9 @@ pub struct HashJoinExecNode {
     #[prost(uint64, optional, tag = "12")]
     pub fetch: ::core::option::Option<u64>,
     /// Number of `NOT IN` value keys of a null-aware join (see
-    /// `HashJoinExec::null_aware_value_keys`). Messages predating this field
-    /// decode it as 0, which is read as 1: they can only hold scalar `NOT IN`
-    /// joins.
+    /// `HashJoinExec::null_aware_value_keys`). 0 is an unset count, accepted
+    /// only for a single key. Messages predating this field decode it as 0:
+    /// they can only hold scalar `NOT IN` joins.
     #[prost(uint32, tag = "13")]
     pub null_aware_value_keys: u32,
 }
@@ -2452,7 +2459,7 @@ pub struct GlobalLimitExecNode {
     /// Maximum number of rows to fetch; negative means no limit
     #[prost(int64, tag = "3")]
     pub fetch: i64,
-    /// Ordering the limit must preserve; empty means none
+    /// Deprecated since 56.0.0: no longer written, ignored when read
     #[prost(message, repeated, tag = "4")]
     pub required_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
@@ -2462,7 +2469,7 @@ pub struct LocalLimitExecNode {
     pub input: ::core::option::Option<::prost::alloc::boxed::Box<PhysicalPlanNode>>,
     #[prost(uint32, tag = "2")]
     pub fetch: u32,
-    /// Ordering the limit must preserve; empty means none
+    /// Deprecated since 56.0.0: no longer written, ignored when read
     #[prost(message, repeated, tag = "3")]
     pub required_ordering: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
 }
@@ -2754,6 +2761,13 @@ pub struct SortMergeJoinExecNode {
     pub null_equality: i32,
     #[prost(uint32, repeated, tag = "8")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+    /// Enables null-aware (`NOT IN`) semantics.
+    /// (See `SortMergeJoinExec::null_aware`)
+    ///
+    /// Currently supported only for uncorrelated `LeftAnti` joins with one
+    /// join key and no join filter.
+    #[prost(bool, tag = "9")]
+    pub null_aware: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PiecewiseMergeJoinExecNode {

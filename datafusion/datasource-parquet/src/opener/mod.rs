@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ParquetMorselizer`] state machines for opening Parquet files
 
@@ -42,8 +29,10 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use datafusion_physical_expr_adapter::rewrite::rewrite_input_file_name_in_projection;
+use datafusion_physical_expr_adapter::{
+    replace_columns_with_literals, replace_columns_with_literals_keeping_metadata,
+};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
@@ -660,6 +649,9 @@ impl ParquetOpenState {
             }
             ParquetOpenState::PruneWithStatistics(prepared) => {
                 let mut prepared_row_groups = (*prepared).prune_row_groups()?;
+                if prepared_row_groups.row_groups.is_fully_pruned() {
+                    return Ok(ParquetOpenState::Done);
+                }
                 if prepared_row_groups.should_load_page_index()? {
                     Ok(ParquetOpenState::LoadPageIndex(
                         prepared_row_groups.load_page_index().boxed(),
@@ -690,9 +682,13 @@ impl ParquetOpenState {
             ParquetOpenState::LoadBloomFilters(future) => {
                 Ok(ParquetOpenState::LoadBloomFilters(future))
             }
-            ParquetOpenState::PruneWithBloomFilters(loaded) => Ok(
-                ParquetOpenState::BuildStream(Box::new(loaded.prune_bloom_filters())),
-            ),
+            ParquetOpenState::PruneWithBloomFilters(loaded) => {
+                let pruned = loaded.prune_bloom_filters();
+                if pruned.row_groups.is_fully_pruned() {
+                    return Ok(ParquetOpenState::Done);
+                }
+                Ok(ParquetOpenState::BuildStream(Box::new(pruned)))
+            }
             ParquetOpenState::BuildStream(prepared) => {
                 Ok(ParquetOpenState::Ready(prepared.build_stream()?))
             }
@@ -928,11 +924,23 @@ impl ParquetMorselizer {
         let mut projection = self.projection.clone();
         let mut predicate = self.predicate.clone();
         if !literal_columns.is_empty() {
+            // Keep the field metadata of the replaced columns, such as extension types
+            let table_schema = self.table_schema.table_schema();
             projection = projection.try_map_exprs(|expr| {
-                replace_columns_with_literals(Arc::clone(&expr), &literal_columns)
+                replace_columns_with_literals_keeping_metadata(
+                    Arc::clone(&expr),
+                    &literal_columns,
+                    table_schema,
+                )
             })?;
             predicate = predicate
-                .map(|p| replace_columns_with_literals(p, &literal_columns))
+                .map(|p| {
+                    replace_columns_with_literals_keeping_metadata(
+                        p,
+                        &literal_columns,
+                        table_schema,
+                    )
+                })
                 .transpose()?;
         }
 
@@ -2690,6 +2698,26 @@ mod test {
         }
     }
 
+    /// Drives a [`ParquetMorselizer`] to completion and returns how many
+    /// morsels it produced.
+    async fn count_morsels(
+        morselizer: &dyn Morselizer,
+        file: PartitionedFile,
+    ) -> Result<usize> {
+        let mut planners = VecDeque::from([morselizer.plan_file(file)?]);
+        let mut morsels = 0;
+        while let Some(planner) = planners.pop_front() {
+            if let Some(mut plan) = planner.plan()? {
+                morsels += plan.take_morsels().len();
+                planners.extend(plan.take_ready_planners());
+                if let Some(pending_planner) = plan.take_pending_planner() {
+                    planners.push_front(pending_planner.await?);
+                }
+            }
+        }
+        Ok(morsels)
+    }
+
     fn constant_int_stats() -> (Statistics, SchemaRef) {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -3232,6 +3260,47 @@ mod test {
         let (num_batches, num_rows) = count_batches_and_rows(stream).await;
         assert_eq!(num_batches, 0);
         assert_eq!(num_rows, 0);
+    }
+
+    #[tokio::test]
+    async fn test_no_morsel_when_every_row_group_is_pruned() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batches = vec![
+            record_batch!(("a", Int32, vec![0, 2, 4])).unwrap(),
+            record_batch!(("a", Int32, vec![0, 2, 4])).unwrap(),
+        ];
+        let schema = batches[0].schema();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .set_bloom_filter_enabled(true)
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .build();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            batches,
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new("test.parquet".to_string(), data_size as u64);
+
+        let morsels = |expr: Expr| {
+            let morselizer = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(Arc::clone(&schema))
+                .with_predicate(logical2physical(&expr, &schema))
+                .with_row_group_stats_pruning(true)
+                .with_enable_bloom_filter(true)
+                .build();
+            let file = file.clone();
+            async move { count_morsels(&morselizer, file).await.unwrap() }
+        };
+
+        // Statistics prune both row groups.
+        assert_eq!(morsels(col("a").gt(lit(10))).await, 0);
+        // Statistics keep both row groups; their Bloom filters prune both.
+        assert_eq!(morsels(col("a").eq(lit(1))).await, 0);
+        assert_eq!(morsels(col("a").eq(lit(2))).await, 1);
     }
 
     #[tokio::test]

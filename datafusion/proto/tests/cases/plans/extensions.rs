@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Extension `ExecutionPlan`s that decode through the session's name-keyed
 //! registry rather than through a `PhysicalExtensionCodec`.
@@ -32,7 +19,7 @@ use datafusion::execution::TaskContext;
 use datafusion::physical_plan::empty::EmptyExec;
 use datafusion::physical_plan::proto::{
     ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx, ExtensionPlanFromProto,
-    ProtoDecoderRegistry, register_execution_plan,
+    ProtoDecoderRegistry,
 };
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, ExecutionPlan, PhysicalExpr, PlanProperties,
@@ -436,10 +423,8 @@ fn extension_of(node: &PhysicalPlanNode) -> &PhysicalExtensionNode {
 
 #[test]
 fn extension_plan_round_trips_with_no_codec_at_all() -> Result<()> {
-    let config =
-        session_with(&["worker-1", "worker-2"]).with_extension(registry(|registry| {
-            register_execution_plan::<ShuffleExec>(registry)
-        })?);
+    let config = session_with(&["worker-1", "worker-2"])
+        .with_extension(registry(ShuffleExec::register_proto)?);
     let ctx = SessionContext::new_with_config(config);
     // The default codec decodes nothing: whatever survives came from the
     // registry.
@@ -474,7 +459,7 @@ fn extension_plan_decode_reads_session_state() -> Result<()> {
     let codec = DefaultPhysicalExtensionCodec {};
     let writer = SessionContext::new_with_config(
         session_with(&["writer-only"])
-            .with_extension(registry(register_execution_plan::<ShuffleExec>)?),
+            .with_extension(registry(ShuffleExec::register_proto)?),
     );
     let node = encode(
         Arc::new(ShuffleExec {
@@ -493,9 +478,8 @@ fn extension_plan_decode_reads_session_state() -> Result<()> {
     // Decoding on a *different* session rebuilds the pool from that session,
     // proving the pool never rode the wire.
     let reader = SessionContext::new_with_config(
-        session_with(&["reader-a", "reader-b"]).with_extension(registry(|registry| {
-            register_execution_plan::<ShuffleExec>(registry)
-        })?),
+        session_with(&["reader-a", "reader-b"])
+            .with_extension(registry(ShuffleExec::register_proto)?),
     );
     let decoded = decode(&node, &reader, &codec)?;
     let decoded = decoded
@@ -508,8 +492,8 @@ fn extension_plan_decode_reads_session_state() -> Result<()> {
 #[test]
 fn independent_extension_plans_coexist_without_a_composed_codec() -> Result<()> {
     let config = session_with(&["worker-1"]).with_extension(registry(|registry| {
-        register_execution_plan::<ShuffleExec>(registry)?;
-        register_execution_plan::<SamplerExec>(registry)
+        ShuffleExec::register_proto(registry)?;
+        SamplerExec::register_proto(registry)
     })?);
     let ctx = SessionContext::new_with_config(config);
     let codec = DefaultPhysicalExtensionCodec {};
@@ -545,8 +529,7 @@ fn codec_encoded_extension_plans_are_unaffected() -> Result<()> {
     // as before the registry existed. The session registers an unrelated plan
     // to prove the registry does not interfere.
     let ctx = SessionContext::new_with_config(
-        SessionConfig::new()
-            .with_extension(registry(register_execution_plan::<SamplerExec>)?),
+        SessionConfig::new().with_extension(registry(SamplerExec::register_proto)?),
     );
     let codec = LegacyCodec {};
 
@@ -564,9 +547,8 @@ fn codec_encoded_extension_plans_are_unaffected() -> Result<()> {
 
 #[test]
 fn a_registered_name_wins_over_a_codec_that_claims_everything() -> Result<()> {
-    let config = session_with(&["worker-1"]).with_extension(registry(|registry| {
-        register_execution_plan::<ShuffleExec>(registry)
-    })?);
+    let config = session_with(&["worker-1"])
+        .with_extension(registry(ShuffleExec::register_proto)?);
     let ctx = SessionContext::new_with_config(config);
     // This codec would decode *any* payload into a `LegacyExec`; the name must
     // route around it.
@@ -594,7 +576,7 @@ fn a_named_plan_the_session_does_not_know_reports_the_missing_registration() -> 
     let codec = DefaultPhysicalExtensionCodec {};
     let writer = SessionContext::new_with_config(
         session_with(&["worker-1"])
-            .with_extension(registry(register_execution_plan::<ShuffleExec>)?),
+            .with_extension(registry(ShuffleExec::register_proto)?),
     );
     let node = encode(
         Arc::new(ShuffleExec {
@@ -614,8 +596,7 @@ fn a_named_plan_the_session_does_not_know_reports_the_missing_registration() -> 
     // and the error has to point at the missing registration rather than at the
     // codec's generic complaint.
     let reader = SessionContext::new_with_config(
-        SessionConfig::new()
-            .with_extension(registry(register_execution_plan::<SamplerExec>)?),
+        SessionConfig::new().with_extension(registry(SamplerExec::register_proto)?),
     );
     let err = decode(&node, &reader, &codec)
         .expect_err("an unregistered plan name must fail to decode");
@@ -639,9 +620,8 @@ fn a_registered_decoder_failing_does_not_fall_back_to_the_codec() -> Result<()> 
     // the codec after a registered decoder failed would resurrect exactly the
     // wrong decode this replaces: `GreedyCodec` would happily turn a corrupt
     // ShuffleExec into a LegacyExec.
-    let config = session_with(&["worker-1"]).with_extension(registry(|registry| {
-        register_execution_plan::<ShuffleExec>(registry)
-    })?);
+    let config = session_with(&["worker-1"])
+        .with_extension(registry(ShuffleExec::register_proto)?);
     let ctx = SessionContext::new_with_config(config);
 
     let node = PhysicalPlanNode {
@@ -665,9 +645,8 @@ fn a_registered_decoder_failing_does_not_fall_back_to_the_codec() -> Result<()> 
 
 #[test]
 fn the_plan_name_survives_the_wire_and_is_absent_for_old_writers() -> Result<()> {
-    let config = session_with(&["worker-1"]).with_extension(registry(|registry| {
-        register_execution_plan::<ShuffleExec>(registry)
-    })?);
+    let config = session_with(&["worker-1"])
+        .with_extension(registry(ShuffleExec::register_proto)?);
     let ctx = SessionContext::new_with_config(config);
     let codec = DefaultPhysicalExtensionCodec {};
 
@@ -720,9 +699,8 @@ fn a_named_plan_can_still_be_decoded_by_a_codec() -> Result<()> {
     // when the session has a registry with other plans in it: a codec that
     // understands the payload still decodes it, which is what keeps a mixed
     // fleet (some nodes upgraded, some not) working.
-    let config = SessionConfig::new().with_extension(registry(|registry| {
-        register_execution_plan::<SamplerExec>(registry)
-    })?);
+    let config =
+        SessionConfig::new().with_extension(registry(SamplerExec::register_proto)?);
     let ctx = SessionContext::new_with_config(config);
     let node = PhysicalPlanNode {
         physical_plan_type: Some(PhysicalPlanType::Extension(PhysicalExtensionNode {
@@ -744,8 +722,7 @@ fn the_codecs_own_error_survives_the_missing_registration_hint() -> Result<()> {
     // registration, and a caller matching on the error kind must still see the
     // kind the codec chose.
     let ctx = SessionContext::new_with_config(
-        SessionConfig::new()
-            .with_extension(registry(register_execution_plan::<SamplerExec>)?),
+        SessionConfig::new().with_extension(registry(SamplerExec::register_proto)?),
     );
     let node = PhysicalPlanNode {
         physical_plan_type: Some(PhysicalPlanType::Extension(PhysicalExtensionNode {

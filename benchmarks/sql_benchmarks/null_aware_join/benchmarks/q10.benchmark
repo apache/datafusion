@@ -23,9 +23,9 @@ expect_plan HashJoinExec
 
 run
 -- Q10: uncorrelated multi-column NOT IN over nullable keys that hold no NULL.
--- A tuple NOT IN always decides UNKNOWN per build row (the outer side), but
--- without NULLs there is no candidate pair to check, so this is the floor for
--- the multi-column shape.
+-- A tuple NOT IN decides UNKNOWN per row (here per outer row, as the join is
+-- swapped to build on the subquery), but without NULLs there is no candidate
+-- pair to check, so this is the floor for the multi-column shape.
 SELECT count(*)
 FROM small_outer o
 WHERE (o.id_n0, o.z) NOT IN (SELECT i.id_n0, i.z FROM small_inner i);

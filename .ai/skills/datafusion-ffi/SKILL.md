@@ -197,21 +197,21 @@ Templates: `test_ffi_table_provider_local_bypass` and `test_round_trip_ffi_table
 
 What unit tests catch: Rust-level correctness (translation logic, lifetime bugs, leaks under valgrind/miri, Send/Sync, error propagation, codec round-trips). What they **cannot** catch: real ABI bugs. Both producer and consumer share `#[repr(C)]` layout because they are the exact same struct definition in memory.
 
-#### b. Cross-library integration tests (`tests/ffi_*.rs`, gated by the `integration-tests` feature)
+#### b. Cross-library integration tests (`integration-tests/tests/`, gated by the `integration-tests` feature)
 
-The crate is published as `crate-type = ["cdylib", "rlib"]`. The integration tests in `datafusion/ffi/tests/` use `libloading` to `dlopen` the crate's own `cdylib` and call `datafusion_ffi_get_module` — a `#[unsafe(no_mangle)] extern "C"` entry point defined in `src/tests/mod.rs` and gated by `#[cfg(feature = "integration-tests")]`. The test executable links against the rlib (consumer side); the dlopen'd cdylib is the producer side. Even though both are built from the same source, they are independent compilation outputs going through the actual FFI symbol path.
+The integration tests live in the unpublished `datafusion-ffi-integration-tests` crate in `datafusion/ffi/integration-tests/`, so that `datafusion-ffi` itself is a plain rlib. That crate is built as a `cdylib` that exports `datafusion_ffi_get_module` — a `#[unsafe(no_mangle)] extern "C"` entry point defined in `src/tests/mod.rs` and gated by `#[cfg(feature = "integration-tests")]`. Its tests use `libloading` to `dlopen` that `cdylib`. The test executable links against the `datafusion-ffi` rlib (consumer side); the dlopen'd cdylib is the producer side. Even though both are built from the same source, they are independent compilation outputs going through the actual FFI symbol path.
 
 Run with:
 
 ```bash
-cargo test -p datafusion-ffi --features integration-tests
+cargo test -p datafusion-ffi -p datafusion-ffi-integration-tests --features integration-tests
 ```
 
 To add coverage for a new wrapper:
 
 1. **Add a constructor** in `src/tests/<area>.rs` (or a new file there). Return a populated `FFI_X` from a known-good native type.
 2. **Wire it into `ForeignLibraryModule`** in `src/tests/mod.rs`: add a field of type `extern "C" fn(...) -> FFI_X` and populate it in `datafusion_ffi_get_module`. This struct is the cross-library contract. Adding a field is itself an ABI change for the test module; integration tests will rebuild the cdylib automatically.
-3. **Add the test** in `tests/ffi_<area>.rs` under `#[cfg(feature = "integration-tests")] mod tests { … }`. Call `datafusion_ffi::tests::utils::get_module()` to load the cdylib, invoke your constructor through the returned `ForeignLibraryModule`, convert into `Arc<dyn X>`, and exercise every method.
+3. **Add the test** in `integration-tests/tests/cases/<area>.rs`, registered in `cases/mod.rs`, under `mod tests { … }`. Call `datafusion_ffi::tests::utils::get_module()` to load the cdylib, invoke your constructor through the returned `ForeignLibraryModule`, convert into `Arc<dyn X>`, and exercise every method.
 
 When adding a method to an existing wrapper, reuse an existing fixture and constructor when a small trait-method override can cover it. This applies both to omitted default methods and methods newly added to the trait. Add a dedicated test type or `ForeignLibraryModule` field only when the existing fixtures cannot cover the method.
 
@@ -347,7 +347,7 @@ When reviewing a PR that touches `datafusion/ffi/`:
 7. **Stabby types** for strings/vecs; crate-local `FFI_Option`/`FFI_Result` for optional/fallible payloads?
 8. **Async** uses `FfiFuture` + `.into_ffi()`, never blocking?
 9. **Codec** present on any method that ships an `Expr` / plan?
-10. **Unit tests** include both local-bypass and `mock_foreign_marker_id` forced-foreign cases? **Integration tests** in `tests/ffi_*.rs` exist for any wrapper that takes/returns non-trivial FFI types, and for *every* layout change? `cargo test -p datafusion-ffi --features integration-tests` must pass before merging an ABI-affecting PR.
+10. **Unit tests** include both local-bypass and `mock_foreign_marker_id` forced-foreign cases? **Integration tests** in `integration-tests/tests/` exist for any wrapper that takes/returns non-trivial FFI types, and for *every* layout change? `cargo test -p datafusion-ffi -p datafusion-ffi-integration-tests --features integration-tests` must pass before merging an ABI-affecting PR.
 11. **No `datafusion` runtime dep** crept into `Cargo.toml`?
 12. **`Arc::clone(&x)`** everywhere — no implicit `x.clone()` on `Arc` (the lint will reject it but worth pre-flagging).
 13. **`cargo clippy --all-targets --all-features -- -D warnings`** clean on the crate?

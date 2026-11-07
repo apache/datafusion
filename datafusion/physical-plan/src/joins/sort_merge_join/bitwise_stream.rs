@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Sort-merge join stream specialized for semi/anti/mark joins.
 //!
@@ -123,15 +110,18 @@ use std::cmp::Ordering;
 use std::sync::Arc;
 
 use crate::EmptyRecordBatchStream;
-use crate::joins::utils::{JoinFilter, JoinKeyComparator, compare_join_arrays};
+use crate::joins::sort_merge_join::exec::NullAwareMode;
+use crate::joins::utils::{JoinFilter, JoinKeyComparator};
 use crate::metrics::{
     BaselineMetrics, Count, ExecutionPlanMetricsSet, Gauge, MetricBuilder, Time,
 };
 use crate::spill::in_progress_spill_file::InProgressSpillFile;
 use crate::spill::spill_manager::SpillManager;
 use crate::stream::{ObservedStream, RecordBatchStreamAdapter};
-use arrow::array::{Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch};
-use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch, not};
+use arrow::array::{
+    Array, ArrayRef, BooleanArray, BooleanBufferBuilder, RecordBatch, RecordBatchOptions,
+};
+use arrow::compute::{BatchCoalescer, SortOptions, and, filter_record_batch, not};
 use arrow::datatypes::SchemaRef;
 use arrow::util::bit_chunk_iterator::UnalignedBitChunk;
 use arrow::util::bit_util::apply_bitwise_binary_op;
@@ -198,6 +188,48 @@ fn find_key_group_end(cmp: &JoinKeyComparator, from: usize, len: usize) -> usize
     lo
 }
 
+/// Applies SQL NOT IN semantics to the unmatched outer rows.
+fn null_aware_left_anti_selection(
+    unmatched: BooleanArray,
+    outer_key: &dyn Array,
+    subquery_state: SubqueryState,
+) -> Result<BooleanArray> {
+    match subquery_state {
+        SubqueryState::Empty => Ok(unmatched),
+        SubqueryState::NonEmptyNoNull => match outer_key.logical_nulls() {
+            // All outer keys are non-NULL, so unmatched rows can be kept.
+            None => Ok(unmatched),
+            Some(nulls) => {
+                // With a nonempty RHS containing no NULL keys, NOT IN keeps only
+                // unmatched outer rows whose keys are non-NULL. Combine the
+                // unmatched mask with the outer key validity bitmap to exclude
+                // NULL keys, for which NOT IN evaluates to UNKNOWN.
+                let valids = BooleanArray::new(nulls.inner().clone(), None);
+                and(&unmatched, &valids).map_err(DataFusionError::from)
+            }
+        },
+        SubqueryState::Pending | SubqueryState::HasNull => {
+            internal_err!("Cannot emit null-aware anti rows before RHS validation")
+        }
+    }
+}
+
+/// State of the right-side subquery used by a null-aware `LeftAnti` join.
+///
+/// Determined before emitting left rows, using a single right partition
+/// sorted with NULLS FIRST.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SubqueryState {
+    /// The right input has not been inspected yet.
+    Pending,
+    /// The right input contains no rows.
+    Empty,
+    /// The right input contains rows but no NULL keys.
+    NonEmptyNoNull,
+    /// The right input contains at least one NULL key.
+    HasNull,
+}
+
 /// Sort-Merge join stream for Semi/Anti/Mark joins.
 ///
 /// Named "bitwise" because it tracks outer-row matches via a per-batch
@@ -246,6 +278,8 @@ pub(crate) struct BitwiseSortMergeJoinStream {
     filter: Option<JoinFilter>,
     sort_options: Vec<SortOptions>,
     null_equality: NullEquality,
+    null_aware: Option<NullAwareMode>,
+    subquery_state: SubqueryState,
     // Decomposed from JoinType: when RightSemi/RightAnti, outer=right,
     // inner=left, so we swap sides when building the filter batch.
     outer_is_left: bool,
@@ -285,11 +319,20 @@ pub(crate) struct BitwiseSortMergeJoinStream {
 }
 
 impl BitwiseSortMergeJoinStream {
+    /// Creates a sort-merge join stream for semi, anti, and mark joins.
+    ///
+    /// # Preconditions
+    ///
+    /// If `null_aware` is `Some`, the mode and join configuration must satisfy
+    /// the requirements of [`NullAwareMode::try_new`].
+    /// `SortMergeJoinExec::execute` performs this validation before creating
+    /// the stream.
     #[expect(clippy::too_many_arguments)]
     pub fn try_new(
         schema: SchemaRef,
         sort_options: Vec<SortOptions>,
         null_equality: NullEquality,
+        null_aware: Option<NullAwareMode>,
         outer: SendableRecordBatchStream,
         inner: SendableRecordBatchStream,
         on_outer: Vec<PhysicalExprRef>,
@@ -345,6 +388,8 @@ impl BitwiseSortMergeJoinStream {
             filter,
             sort_options,
             null_equality,
+            null_aware,
+            subquery_state: SubqueryState::Pending,
             outer_is_left,
             coalescer: BatchCoalescer::new(Arc::clone(&schema), batch_size)
                 .with_biggest_coalesce_batch_size(Some(batch_size / 2)),
@@ -586,7 +631,15 @@ impl BitwiseSortMergeJoinStream {
                 }
             }
             JoinType::LeftAnti | JoinType::RightAnti => {
-                let selection = not(&BooleanArray::new(matched_buf, None))?;
+                let unmatched = not(&BooleanArray::new(matched_buf, None))?;
+                let selection = match self.null_aware {
+                    None => unmatched,
+                    Some(NullAwareMode::LeftAnti) => null_aware_left_anti_selection(
+                        unmatched,
+                        self.outer_key_arrays[0].as_ref(),
+                        self.subquery_state,
+                    )?,
+                };
                 let filtered = filter_record_batch(&batch, &selection)?;
                 if filtered.num_rows() > 0 {
                     self.coalescer.push_batch(filtered)?;
@@ -1103,12 +1156,56 @@ impl BitwiseSortMergeJoinStream {
         }
     }
 
+    /// Initializes the inner input's empty/NULL summary for null-aware joins.
+    async fn initialize_null_aware(&mut self) -> Result<()> {
+        if self.subquery_state != SubqueryState::Pending {
+            return Ok(());
+        }
+
+        match self.null_aware {
+            None => return Ok(()),
+            Some(NullAwareMode::LeftAnti) => {}
+        }
+
+        if !self.next_inner_batch().await? {
+            self.subquery_state = SubqueryState::Empty;
+            return Ok(());
+        }
+
+        // Keep the first nonempty inner batch at offset 0 for the merge scan.
+        // The complete right input must be sorted with NULLS FIRST.
+        let first_key_is_null = self.inner_key_arrays[0]
+            .logical_nulls()
+            .is_some_and(|null_keys| null_keys.is_null(0));
+
+        self.subquery_state = if first_key_is_null {
+            SubqueryState::HasNull
+        } else {
+            SubqueryState::NonEmptyNoNull
+        };
+
+        Ok(())
+    }
+
     /// Main loop: a classic merge-scan over the two sorted inputs, emitting
     /// output batches as they complete.
     async fn join(
         &mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
+        self.initialize_null_aware().await?;
+        match self.null_aware {
+            None => {}
+            Some(NullAwareMode::LeftAnti)
+                if self.subquery_state == SubqueryState::HasNull =>
+            {
+                // NOT IN cannot be TRUE for any outer row when the inner
+                // input contains a NULL key. (following NOT IN semantics)
+                return Ok(());
+            }
+            Some(NullAwareMode::LeftAnti) => {}
+        }
+
         // The `has_current_*` / `has_completed_batch` fast paths keep async
         // state machinery out of the per-key-group hot path; the awaiting
         // helpers are only entered at batch boundaries.
@@ -1226,30 +1323,15 @@ fn keys_match(
     null_equality: NullEquality,
 ) -> Result<bool> {
     debug_assert!(left_arrays.iter().all(|a| a.len() == 1));
-    if left_arrays
-        .iter()
-        .any(|array| array.data_type().is_floating())
-    {
-        // The scalar comparator's partial_cmp panics on NaN. Match the merge
-        // scan's floating-point equality, including its signed-zero handling.
-        let right_keys = slice_keys(right_arrays, 0);
-        return Ok(JoinKeyComparator::new(
-            left_arrays,
-            &right_keys,
-            sort_options,
-            null_equality,
-        )?
-        .is_equal(0, 0));
-    }
-    let cmp = compare_join_arrays(
-        left_arrays,
-        0,
-        right_arrays,
-        0,
-        sort_options,
-        null_equality,
-    )?;
-    Ok(cmp == Ordering::Equal)
+    // Use the merge scan's comparator so every key type it supports, and its
+    // floating-point equality (NaN, signed zero), also applies across batches.
+    // Slicing the right side to one row keeps construction independent of the
+    // batch size.
+    let right_keys = slice_keys(right_arrays, 0);
+    Ok(
+        JoinKeyComparator::new(left_arrays, &right_keys, sort_options, null_equality)?
+            .is_equal(0, 0),
+    )
 }
 
 /// Evaluate the join filter for one inner row against a slice of outer rows.
@@ -1306,7 +1388,11 @@ fn evaluate_filter_for_inner_row(
         }
     }
 
-    let filter_batch = RecordBatch::try_new(Arc::clone(filter.schema()), columns)?;
+    let filter_batch = RecordBatch::try_new_with_options(
+        Arc::clone(filter.schema()),
+        columns,
+        &RecordBatchOptions::new().with_row_count(Some(num_outer_rows)),
+    )?;
     let result = filter
         .expression()
         .evaluate(&filter_batch)?

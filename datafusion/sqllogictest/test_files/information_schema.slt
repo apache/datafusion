@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Verify the information schema does not exit by default
 statement error DataFusion error: Error during planning: table 'datafusion.information_schema.tables' not found
@@ -23,8 +10,12 @@ SELECT * from information_schema.tables
 statement error DataFusion error: Error during planning: table 'datafusion.information_schema.schemata' not found
 SELECT * from information_schema.schemata
 
-statement error DataFusion error: Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
-show all
+# SHOW resolves its content directly (like DESCRIBE/SHOW COLUMNS), so it
+# works regardless of whether information_schema is enabled.
+query TT
+SHOW datafusion.catalog.information_schema
+----
+datafusion.catalog.information_schema false
 
 # Turn it on
 
@@ -213,22 +204,20 @@ datafusion.catalog.has_header true
 datafusion.catalog.information_schema true
 datafusion.catalog.location NULL
 datafusion.catalog.newlines_in_values false
+datafusion.catalog.partition_information_schema false
 datafusion.execution.batch_size 8192
 datafusion.execution.coalesce_batches true
 datafusion.execution.collect_statistics true
 datafusion.execution.enable_ansi_mode false
 datafusion.execution.enable_file_stream_work_stealing true
-datafusion.execution.enable_join_integer_prefilter false
 datafusion.execution.enable_migration_aggregate true
 datafusion.execution.enable_nlj_coordinated_fallback true
 datafusion.execution.enable_recursive_ctes true
 datafusion.execution.enforce_batch_size_in_joins false
 datafusion.execution.hash_join_buffering_capacity 0
-datafusion.execution.join_integer_prefilter_max_key_range 262144
-datafusion.execution.join_integer_prefilter_min_pruning_ratio 0.5
-datafusion.execution.join_integer_prefilter_sample_rows 12288
 datafusion.execution.keep_partition_by_columns false
 datafusion.execution.listing_table_factory_infer_partitions true
+datafusion.execution.listing_table_hive_default_partition_name __HIVE_DEFAULT_PARTITION__
 datafusion.execution.listing_table_ignore_subdirectory true
 datafusion.execution.max_buffered_batches_per_output_file 2
 datafusion.execution.max_spill_file_size_bytes 134217728
@@ -321,6 +310,7 @@ datafusion.optimizer.enable_leaf_expression_pushdown true
 datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery true
 datafusion.optimizer.enable_piecewise_merge_join false
 datafusion.optimizer.enable_round_robin_repartition true
+datafusion.optimizer.enable_row_number_to_aggregate false
 datafusion.optimizer.enable_sort_pushdown true
 datafusion.optimizer.enable_topk_aggregation true
 datafusion.optimizer.enable_topk_dynamic_filter_pushdown true
@@ -382,22 +372,20 @@ datafusion.catalog.has_header true Default value for `format.has_header` for `CR
 datafusion.catalog.information_schema true Should DataFusion provide access to `information_schema` virtual tables for displaying schema information
 datafusion.catalog.location NULL Location scanned to load tables for `default` schema
 datafusion.catalog.newlines_in_values false Specifies whether newlines in (quoted) CSV values are supported. This is the default value for `format.newlines_in_values` for `CREATE EXTERNAL TABLE` if not specified explicitly in the statement. Parsing newlines in quoted values may be affected by execution behaviour such as parallel file scanning. Setting this to `true` ensures that newlines in values are parsed successfully, which may reduce performance.
+datafusion.catalog.partition_information_schema false When set together with `information_schema`, the `information_schema` of each catalog only describes the objects in that catalog. When not set, the `information_schema` of each catalog describes all catalogs.
 datafusion.execution.batch_size 8192 Default batch size while creating new batches, it's especially useful for buffer-in-memory batches since creating tiny batches would result in too much metadata memory consumption
 datafusion.execution.coalesce_batches true When set to true, record batches will be examined between each operator and small batches will be coalesced into larger batches. This is helpful when there are highly selective filters or joins that could produce tiny output batches. The target batch size is determined by the configuration setting
 datafusion.execution.collect_statistics true Should DataFusion collect statistics when first creating a table. Has no effect after the table is created. Defaults to true.
 datafusion.execution.enable_ansi_mode false Whether to enable ANSI SQL mode. The flag is experimental and relevant only for DataFusion Spark built-in functions When `enable_ansi_mode` is set to `true`, the query engine follows ANSI SQL semantics for expressions, casting, and error handling. This means: - **Strict type coercion rules:** implicit casts between incompatible types are disallowed. - **Standard SQL arithmetic behavior:** operations such as division by zero,   numeric overflow, or invalid casts raise runtime errors rather than returning   `NULL` or adjusted values. - **Consistent ANSI behavior** for string concatenation, comparisons, and `NULL` handling. When `enable_ansi_mode` is `false` (the default), the engine uses a more permissive, non-ANSI mode designed for user convenience and backward compatibility. In this mode: - Implicit casts between types are allowed (e.g., string to integer when possible). - Arithmetic operations are more lenient — for example, `abs()` on the minimum   representable integer value returns the input value instead of raising overflow. - Division by zero or invalid casts may return `NULL` instead of failing. # Default `false` — ANSI SQL mode is disabled by default.
 datafusion.execution.enable_file_stream_work_stealing true When `true` (the default), DataFusion's built-in file scans dynamically rebalance files across partitions at query execution time: a partition that goes idle reads files (or byte-range morsels) originally assigned to a sibling partition, which keeps all partitions busy in a single process. Executors that depend on the plan-time partition assignment — such as Ballista and datafusion-distributed, which run each partition as an isolated task and never poll the siblings — should set this to `false` so each partition reads only its own file group and no runtime reassignment occurs.
-datafusion.execution.enable_join_integer_prefilter false Enable an exact integer membership prefilter for hash joins with a single integer key when the build side uses a hash table and the join is not null-aware. It skips lookups for absent keys while retaining NULLs and probe rows for the original join logic.
 datafusion.execution.enable_migration_aggregate true Whether aggregation uses the implementation from the major refactor completed in the 56.0.0 release. When set to `false`, aggregation falls back to the implementation used before 55.0.0. The fallback exists only as a workaround for bugs in the new implementation and will be removed, together with this option, after the 56.0.0 release. See <https://github.com/apache/datafusion/issues/22710> for details.
 datafusion.execution.enable_nlj_coordinated_fallback true Enables the memory-limited fallback for `NestedLoopJoinExec` join types that emit unmatched left rows in the final output (LEFT, LEFT SEMI, LEFT ANTI, LEFT MARK, FULL) when the right side has multiple partitions. This fallback shares left-side state (the current left chunk, the visited bitmap and the probe-thread counter) across all right-side partitions, which assumes every partition runs in the same process. Distributed engines that execute each output partition as an independent task (e.g. Ballista, datafusion-distributed) give each task its own copy of this state and poll only one partition, so the cross-partition counter never reaches zero and the fallback would stall. Such engines should set this to `false`: the coordinated fallback is then disabled for left-emitting multi-partition joins, which instead fail with a resource-exhaustion error under memory pressure rather than deadlocking. Single-partition and non-left-emitting joins are unaffected and always keep the fallback.
 datafusion.execution.enable_recursive_ctes true Should DataFusion support recursive CTEs
 datafusion.execution.enforce_batch_size_in_joins false Should DataFusion enforce batch size in joins or not. By default, DataFusion will not enforce batch size in joins. Enforcing batch size in joins can reduce memory usage when joining large tables with a highly-selective join filter, but is also slightly slower. Note: this option currently only applies to the symmetric hash join.
 datafusion.execution.hash_join_buffering_capacity 0 How many bytes to buffer in the probe side of hash joins while the build side is concurrently being built. Without this, hash joins will wait until the full materialization of the build side before polling the probe side. This is useful in scenarios where the query is not completely CPU bounded, allowing to do some early work concurrently and reducing the latency of the query. Note that when hash join buffering is enabled, the probe side will start eagerly polling data, not giving time for the producer side of dynamic filters to produce any meaningful predicate. Queries with dynamic filters might see performance degradation. Disabled by default, set to a number greater than 0 for enabling it.
-datafusion.execution.join_integer_prefilter_max_key_range 262144 Maximum number of integer values covered by the join prefilter bitmap (`max_key - min_key + 1`). Zero disables bitmap construction. Larger ranges fall back to normal hash table lookups.
-datafusion.execution.join_integer_prefilter_min_pruning_ratio 0.5 The integer prefilter must prune more than this fraction of all sampled probe rows, including NULLs, to keep filtering. Must be finite and in [0, 1], validated when executing the join.
-datafusion.execution.join_integer_prefilter_sample_rows 12288 Minimum input probe rows in each integer prefilter sampling window, including NULLs. Must be greater than zero. Windows end at batch boundaries. Unprofitable samples initially pause for 10 times this many input rows; consecutive failures double the pause up to 128 times. A profitable sample resets the pause to 10 times this many rows.
 datafusion.execution.keep_partition_by_columns false Should DataFusion keep the columns used for partition_by in the output RecordBatches
 datafusion.execution.listing_table_factory_infer_partitions true Should a `ListingTable` created through the `ListingTableFactory` infer table partitions from Hive compliant directories. Defaults to true (partition columns are inferred and will be represented in the table schema).
+datafusion.execution.listing_table_hive_default_partition_name __HIVE_DEFAULT_PARTITION__ The directory name Hive compliant writers use in place of a null partition value, e.g. `/table/date=__HIVE_DEFAULT_PARTITION__/data.parquet`. Partition values equal to this name are read as NULL, as Hive, Spark and Impala do, and partitioned writes reject them. Corresponds to Hive's `hive.exec.default.partition.name`. Set this to the empty string to read and write such values as the literal directory name instead.
 datafusion.execution.listing_table_ignore_subdirectory true Should sub directories be ignored when scanning directories for data files. Defaults to true (ignores subdirectories), consistent with Hive. Note that this setting does not affect reading partitioned tables (e.g. `/table/year=2021/month=01/data.parquet`).
 datafusion.execution.max_buffered_batches_per_output_file 2 This is the maximum number of RecordBatches buffered for each output file being worked. Higher values can potentially give faster write performance at the cost of higher peak memory consumption. This budget is split evenly between two independent points in the write pipeline (see the demuxer diagram in #7791): how many files can be in flight from the demuxer to a writer task, and how many RecordBatches are buffered for a single file's writer. Must be at least 2 so each half gets at least 1 unit of buffering - 0 or 1 would leave one side with a zero-capacity channel and panic at write time.
 datafusion.execution.max_spill_file_size_bytes 134217728 Maximum size in bytes for individual spill files before rotating to a new file. When operators spill data to disk (e.g., RepartitionExec), they write multiple batches to the same file until this size limit is reached, then rotate to a new file. This reduces syscall overhead compared to one-file-per-batch while preventing files from growing too large. A larger value reduces file creation overhead but may hold more disk space. A smaller value creates more files but allows finer-grained space reclamation as files can be deleted once fully consumed. Now only `RepartitionExec` supports this spill file rotation feature, other spilling operators may create spill files larger than the limit. Default: 128 MB
@@ -410,8 +398,8 @@ datafusion.execution.parquet.bloom_filter_fpp NULL (writing) Sets bloom filter f
 datafusion.execution.parquet.bloom_filter_ndv NULL (writing) Sets bloom filter number of distinct values. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.bloom_filter_on_read true (reading) Use any available bloom filters when reading parquet files
 datafusion.execution.parquet.bloom_filter_on_write false (writing) Write bloom filters for all columns when creating parquet files
-datafusion.execution.parquet.coerce_int96 NULL (reading) If true, parquet reader will read columns of physical type int96 as originating from a different resolution than nanosecond. This is useful for reading data from systems like Spark which stores microsecond resolution timestamps in an int96 allowing it to write values with a larger date range than 64-bit timestamps with nanosecond resolution.
-datafusion.execution.parquet.coerce_int96_tz NULL (reading) Optional timezone applied to INT96 columns when `coerce_int96` is set. When `Some`, INT96 columns coerce to `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default `Timestamp(<coerce_int96>, None)`. Spark and other systems write INT96 values as UTC-adjusted instants, so callers that need the resulting Arrow type to be timezone-aware (e.g. for Spark `TimestampType` semantics) should set this to `"UTC"`. No effect when `coerce_int96` is `None`.
+datafusion.execution.parquet.coerce_int96 NULL (reading) If set, parquet reader will read columns of physical type int96 as originating from this resolution instead of nanosecond. Valid values are: ns, us, ms, and s. This is useful for reading data from systems like Spark which store microsecond resolution timestamps in an int96, allowing them to write values with a larger date range than 64-bit timestamps with nanosecond resolution.
+datafusion.execution.parquet.coerce_int96_tz NULL (reading) Optional timezone applied to INT96 columns when `coerce_int96` is set. When `Some`, INT96 columns coerce to `Timestamp(<coerce_int96>, Some(<tz>))` instead of the default `Timestamp(<coerce_int96>, None)`. Spark and other systems write INT96 values as UTC-adjusted instants, so callers that need the resulting Arrow type to be timezone-aware (e.g. for Spark `TimestampType` semantics) should set this to `"UTC"`. No effect when `coerce_int96` is `None`, but the value is still validated when it is set.
 datafusion.execution.parquet.column_index_truncate_length 64 (writing) Sets column index truncate length
 datafusion.execution.parquet.compression zstd(3) (writing) Sets default parquet compression codec. Valid values are: uncompressed, snappy, gzip(level), brotli(level), lz4, zstd(level), and lz4_raw. These values are not case sensitive. If NULL, uses default parquet writer setting Note that this default setting is not the same as the default parquet writer setting.
 datafusion.execution.parquet.content_defined_chunking.enabled false (writing) EXPERIMENTAL: Enable content-defined chunking (CDC) when writing parquet files. When enabled, parallel writing is automatically disabled since the chunker state must persist across row groups.
@@ -425,7 +413,7 @@ datafusion.execution.parquet.dictionary_enabled true (writing) Sets if dictionar
 datafusion.execution.parquet.dictionary_page_size_limit 1048576 (writing) Sets best effort maximum dictionary page size, in bytes
 datafusion.execution.parquet.enable_page_index true (reading) If true, reads the Parquet data page level metadata (the Page Index), if present, to reduce the I/O and number of rows decoded.
 datafusion.execution.parquet.enable_rle_to_dictionary false (reading) If true, top-level string and binary Parquet columns with dictionary pages are inferred and scanned as `Dictionary<Int32, Utf8>` / `Dictionary<Int32, Binary>` instead of their plain value type. This applies only when DataFusion infers the table schema. Tables with a user-supplied schema are not promoted because the Parquet footer is not read at DDL time, so dictionary pages cannot be detected per column. See <https://github.com/apache/datafusion/issues/24112>
-datafusion.execution.parquet.encoding NULL (writing)  Sets default encoding for any column. Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, and byte_stream_split. These values are not case sensitive. If NULL, uses default parquet writer setting
+datafusion.execution.parquet.encoding NULL (writing)  Sets default encoding for any column. Valid values are: plain, plain_dictionary, rle, bit_packed, delta_binary_packed, delta_length_byte_array, delta_byte_array, rle_dictionary, byte_stream_split, and alp. These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.force_filter_selections false (reading) Force the use of RowSelections for filter results, when pushdown_filters is enabled. If false, the reader will automatically choose between a RowSelection and a Bitmap based on the number and pattern of selected rows.
 datafusion.execution.parquet.max_in_list_size 20 Maximum number of input values in an `IN (...)` list eligible for min/max pruning. Lists above this cap, or a cap of 0, skip this rewrite; other predicates and Bloom-filter pruning remain available. Within the cap, nonempty lists of at most 20 values use the existing per-value rewrite. Larger literal lists use a compact representation when the column type is string, variable-length binary, integer, decimal, date, time, timestamp, or duration. This applies to both `IN` and `NOT IN`, including lists with NULL members. `NOT IN` with NULL and all-NULL `IN` lists cannot match any rows. Compact lists containing NULL do not use the fully-matched-row-group optimization. Floating-point and other lists retain the existing per-value rewrite, so raising the cap can make those predicates expensive to build and evaluate. Defaults to 20.
 datafusion.execution.parquet.max_predicate_cache_size NULL (reading) The maximum predicate cache size, in bytes. When `pushdown_filters` is enabled, sets the maximum memory used to cache the results of predicate evaluation between filter evaluation and output generation. Decreasing this value will reduce memory usage, but may increase IO and CPU usage. None means use the default parquet reader setting. 0 means no caching.
@@ -440,7 +428,7 @@ datafusion.execution.parquet.reorder_filters false (reading) If true, filter exp
 datafusion.execution.parquet.row_group_range_assignment start_offset (reading) Which byte range of a split file reads each row group. `start_offset` picks the range containing the row group's start. `midpoint` picks the range containing its midpoint, as Spark does, which spreads large row groups more evenly across ranges.
 datafusion.execution.parquet.schema_force_view_types true (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`, and `Binary/BinaryLarge` with `BinaryView`. The parquet reader is optimized for reading `Utf8View` and `BinaryView`, so such queries are significantly faster than reading `Utf8`/`Binary` and then casting to the view types.
 datafusion.execution.parquet.skip_arrow_metadata false (writing) Skip encoding the embedded arrow metadata in the KV_meta This is analogous to the `ArrowWriterOptions::with_skip_arrow_metadata`. Refer to <https://docs.rs/parquet/53.3.0/parquet/arrow/arrow_writer/struct.ArrowWriterOptions.html#method.with_skip_arrow_metadata>
-datafusion.execution.parquet.skip_metadata true (reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata
+datafusion.execution.parquet.skip_metadata true (reading) If true, the parquet reader skip the optional embedded metadata that may be in the file Schema. This setting can help avoid schema conflicts when querying multiple parquet files with schemas containing compatible types but different metadata. Arrow extension types (the `ARROW:extension:name` and `ARROW:extension:metadata` field metadata) are kept, because they are part of the type of a column
 datafusion.execution.parquet.statistics_enabled page (writing) Sets if statistics are enabled for any column Valid values are: "none", "chunk", and "page" These values are not case sensitive. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.statistics_truncate_length 64 (writing) Sets statistics truncate length. If NULL, uses default parquet writer setting
 datafusion.execution.parquet.write_batch_size 1024 (writing) Sets write_batch_size in rows
@@ -490,6 +478,7 @@ datafusion.optimizer.enable_leaf_expression_pushdown true When set to true, the 
 datafusion.optimizer.enable_physical_uncorrelated_scalar_subquery true When set to true, uncorrelated scalar subqueries are left in the logical plan and executed by `ScalarSubqueryExec` during physical execution. When set to false, all scalar subqueries (including uncorrelated ones) are rewritten to left joins by the `ScalarSubqueryToJoin` optimizer rule. Note disabling this option is not recommended. It restores pre <https://github.com/apache/datafusion/pull/21240> behavior, which silently produces incorrect results for multi-row subqueries and does not support scalar subqueries in ORDER BY / JOIN ON / aggregate-function arguments. This option is intended as a temporary escape hatch for distributed execution frameworks and is planned to be removed in a future DataFusion release.
 datafusion.optimizer.enable_piecewise_merge_join false When set to true, piecewise merge join is enabled. PiecewiseMergeJoin is currently experimental. Physical planner will opt for PiecewiseMergeJoin when there is only one range filter.
 datafusion.optimizer.enable_round_robin_repartition true When set to true, the physical plan optimizer will try to add round robin repartitioning to increase parallelism to leverage more CPU cores
+datafusion.optimizer.enable_row_number_to_aggregate false When set to true, the optimizer will rewrite a "top-1 per group" pattern of the form `Filter(row_number() = 1)` over a `PARTITION BY` window into an `Aggregate(first_value(... ORDER BY ...) GROUP BY partition)`. This avoids buffering / fully sorting the input, which is especially beneficial on wide payloads. Disabled by default because on nested/wide value types the aggregate only becomes memory efficient once the columnar nested-type `GroupsAccumulator` fast path is available; enabling it without that support can route wide payloads onto the slow per-group accumulator path.
 datafusion.optimizer.enable_sort_pushdown true Enable sort pushdown optimization. When enabled, attempts to push sort requirements down to data sources that can natively handle them (e.g., by reversing file/row group read order). Returns **inexact ordering**: Sort operator is kept for correctness, but optimized input enables early termination for TopK queries (ORDER BY ... LIMIT N), providing significant speedup. Memory: No additional overhead (only changes read order). Future: Will add option to detect perfectly sorted data and eliminate Sort completely. Default: true
 datafusion.optimizer.enable_topk_aggregation true When set to true, the optimizer will attempt to perform limit operations during aggregations, if possible
 datafusion.optimizer.enable_topk_dynamic_filter_pushdown true When set to true, the optimizer will attempt to push down TopK dynamic filters into the file scan phase.
@@ -678,13 +667,25 @@ datafusion information_schema tables VIEW
 datafusion information_schema views VIEW
 
 
+query TT
+EXPLAIN SHOW TABLES
+----
+logical_plan ShowTables
+physical_plan StreamingTableExec: partition_sizes=1, projection=[table_catalog, table_schema, table_name, table_type]
+
+
 # information_schema_show_tables_no_information_schema
+#
+# SHOW TABLES reuses the information_schema.tables machinery directly, so it
+# works regardless of whether information_schema is enabled; it just won't
+# list the information_schema tables themselves when disabled.
 
 statement ok
 set datafusion.catalog.information_schema = false;
 
-statement error Error during planning: SHOW TABLES is not supported unless information_schema is enabled
+query TTTT rowsort
 SHOW TABLES
+----
 
 statement ok
 set datafusion.catalog.information_schema = true;
@@ -722,12 +723,17 @@ SHOW EXTENDED COLUMNS FROM t;
 datafusion public t i 0 NULL NO Int32 NULL NULL 32 2 NULL NULL NULL
 
 # information_schema_show_columns_no_information_schema
+#
+# SHOW COLUMNS resolves the table directly (like DESCRIBE), so it works
+# regardless of whether information_schema is enabled.
 
 statement ok
 set datafusion.catalog.information_schema = false;
 
-statement error Error during planning: SHOW COLUMNS is not supported unless information_schema is enabled
+query TTTTTT
 SHOW COLUMNS FROM t
+----
+datafusion public t i Int32 NO
 
 statement ok
 set datafusion.catalog.information_schema = true;
@@ -758,16 +764,25 @@ SHOW SOMETHING_UNKNOWN;
 statement ok
 DROP TABLE t;
 
-# show_unsupported_when_information_schema_off
+# show_variable_when_information_schema_off
+#
+# SHOW resolves its content directly, so it still works (and still rejects
+# unknown variable names) regardless of whether information_schema is
+# enabled.
 
 statement ok
 set datafusion.catalog.information_schema = false;
 
-statement error Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
+statement error DataFusion error: Error during planning: 'something' is not a variable which can be viewed with 'SHOW'
 SHOW SOMETHING
 
-statement error Error during planning: SHOW \[VARIABLE\] is not supported unless information_schema is enabled
+statement error DataFusion error: Error during planning: 'something' is not a variable which can be viewed with 'SHOW'
 SHOW SOMETHING VERBOSE
+
+query TT
+SHOW datafusion.catalog.information_schema
+----
+datafusion.catalog.information_schema false
 
 statement ok
 set datafusion.catalog.information_schema = true;
@@ -1053,5 +1068,7 @@ set datafusion.execution.target_partitions = 4;
 statement ok
 reset datafusion.execution.planning_concurrency;
 
+# The SLT runner pins `created_by` to `datafusion` instead of using the default
+# (which includes the DataFusion version), so set it back explicitly.
 statement ok
-reset datafusion.execution.parquet.created_by;
+set datafusion.execution.parquet.created_by = datafusion;
