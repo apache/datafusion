@@ -10,10 +10,11 @@ use crate::leaf_resolver::LeafResolver;
 use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp::eq;
-use arrow::compute::{and, sum};
+use arrow::compute::{SortOptions, and, cast, sum};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
+use datafusion_common::utils::compare_rows;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, HashSet, Result, ScalarValue, Statistics,
     internal_datafusion_err,
@@ -22,7 +23,7 @@ use datafusion_execution::cache::cache_manager::{
     CachedFileMetadataEntry, FileMetadata, FileMetadataCache,
 };
 use datafusion_functions_aggregate_common::min_max::{MaxAccumulator, MinAccumulator};
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{CastExpr, Column};
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
 use datafusion_physical_plan::Accumulator;
 use log::debug;
@@ -39,6 +40,7 @@ use parquet::file::metadata::{
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use std::any::Any;
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 /// Minimum fraction of row groups that must report NDV statistics for the
@@ -1181,71 +1183,276 @@ pub(crate) fn lex_ordering_to_sorting_columns(
         .collect()
 }
 
-/// Extracts ordering information from Parquet metadata.
+/// Extracts the common leading sort keys whose order holds across every row group.
 ///
-/// This function reads the sorting_columns from the first row group's metadata
-/// and converts them into a [`LexOrdering`] that can be used by the query engine.
-///
-/// # Arguments
-/// * `metadata` - The Parquet metadata containing sorting_columns information
-/// * `schema` - The Arrow schema to use for column lookup
-///
-/// # Returns
-/// * `Ok(Some(ordering))` if valid ordering information was found
-/// * `Ok(None)` if no sorting columns were specified or they couldn't be resolved
+/// Parquet declares ordering within each row group. File ordering also requires
+/// ordered boundaries between row groups. Unknown or incompatible metadata
+/// leaves only the leading sort keys that can be proved.
 pub fn ordering_from_parquet_metadata(
     metadata: &ParquetMetaData,
     schema: &SchemaRef,
 ) -> Result<Option<LexOrdering>> {
-    // Get the sorting columns from the first row group metadata.
-    // If no row groups exist or no sorting columns are specified, return None.
-    let sorting_columns = metadata
+    let groups = metadata
         .row_groups()
-        .first()
-        .and_then(|rg| rg.sorting_columns())
-        .filter(|cols| !cols.is_empty());
-
-    let Some(sorting_columns) = sorting_columns else {
+        .iter()
+        .filter(|group| group.num_rows() > 0)
+        .collect::<Vec<_>>();
+    let Some(first) = groups.first() else {
         return Ok(None);
     };
-
-    let parquet_schema = metadata.file_metadata().schema_descr();
-
-    let sort_exprs =
-        sorting_columns_to_physical_exprs(sorting_columns, parquet_schema, schema);
-
-    if sort_exprs.is_empty() {
+    let mut sorting_columns = first
+        .sorting_columns()
+        .map(Vec::as_slice)
+        .unwrap_or_default();
+    for group in &groups[1..] {
+        let columns = group
+            .sorting_columns()
+            .map(Vec::as_slice)
+            .unwrap_or_default();
+        let prefix = sorting_columns
+            .iter()
+            .zip(columns)
+            .take_while(|(left, right)| left == right)
+            .count();
+        sorting_columns = &sorting_columns[..prefix];
+    }
+    if sorting_columns.is_empty() {
         return Ok(None);
     }
 
-    Ok(LexOrdering::new(sort_exprs))
+    let file_metadata = metadata.file_metadata();
+    let parquet_schema = file_metadata.schema_descr();
+    let Ok(physical_schema) =
+        parquet_to_arrow_schema(parquet_schema, file_metadata.key_value_metadata())
+    else {
+        return Ok(None);
+    };
+    let resolver = LeafResolver::new(parquet_schema, &physical_schema);
+    let mut ordering = Vec::with_capacity(sorting_columns.len());
+    let mut separated = vec![false; groups.len() - 1];
+    for column in sorting_columns {
+        let Some(column_index) = usize::try_from(column.column_idx).ok() else {
+            break;
+        };
+        let Some(parquet_column) = parquet_schema.columns().get(column_index) else {
+            break;
+        };
+        if parquet_column.max_rep_level() != 0
+            || matches!(
+                parquet_column.sort_order(),
+                SortOrder::UNDEFINED | SortOrder::INT96_TIMESTAMP
+            )
+        {
+            break;
+        }
+        // A leaf name alone can identify a different top-level field. Nested
+        // keys need a field-access expression; never promote keys after one.
+        let [name] = parquet_column.path().parts() else {
+            break;
+        };
+        if resolver.leaf_index(name) != Some(column_index) {
+            break;
+        }
+        let Some((index, field)) = schema.column_with_name(name) else {
+            break;
+        };
+        let Ok(physical_field) = physical_schema.field_with_name(name) else {
+            break;
+        };
+        let data_type = ordering_value_type(field.data_type());
+        let physical_type = ordering_value_type(physical_field.data_type());
+        // A lossy cast can merge leading keys and invalidate later keys.
+        if data_type.is_nested() || !CastExpr::check_bigger_cast(data_type, physical_type)
+        {
+            break;
+        }
+        let options = SortOptions {
+            descending: column.descending,
+            nulls_first: column.nulls_first,
+        };
+        if !row_group_sort_bounds(
+            metadata,
+            &groups,
+            column_index,
+            physical_field,
+            data_type,
+            options,
+            &mut separated,
+        )
+        .unwrap_or_else(|error| {
+            debug!("Cannot validate Parquet sort order: {error}");
+            false
+        }) {
+            break;
+        }
+        ordering.push(PhysicalSortExpr::new(
+            Arc::new(Column::new(name, index)),
+            options,
+        ));
+    }
+    Ok(LexOrdering::new(ordering))
 }
 
-/// Converts Parquet sorting columns to physical sort expressions.
-fn sorting_columns_to_physical_exprs(
-    sorting_columns: &[SortingColumn],
-    parquet_schema: &SchemaDescriptor,
-    arrow_schema: &SchemaRef,
-) -> Vec<PhysicalSortExpr> {
-    use arrow::compute::SortOptions;
+fn ordering_value_type(data_type: &DataType) -> &DataType {
+    match data_type {
+        DataType::Dictionary(_, value) => ordering_value_type(value),
+        _ => data_type,
+    }
+}
 
-    sorting_columns
-        .iter()
-        .filter_map(|sc| {
-            let parquet_column = parquet_schema.column(sc.column_idx as usize);
-            let name = parquet_column.name();
+/// Refine boundaries still tied on earlier keys. A strict earlier boundary
+/// remains ordered regardless of the later keys' statistics.
+fn row_group_sort_bounds<'a>(
+    metadata: &'a ParquetMetaData,
+    groups: &[&'a RowGroupMetaData],
+    column_index: usize,
+    physical_field: &'a Field,
+    data_type: &DataType,
+    options: SortOptions,
+    separated: &mut [bool],
+) -> Result<bool> {
+    let is_float = matches!(
+        ordering_value_type(physical_field.data_type()),
+        DataType::Float16 | DataType::Float32 | DataType::Float64
+    );
+    if separated.iter().all(|value| *value) && !is_float {
+        return Ok(true);
+    }
+    if groups.iter().any(|group| {
+        group
+            .columns()
+            .get(column_index)
+            .is_none_or(|column| column.num_values() != group.num_rows())
+    }) {
+        return Ok(false);
+    }
+    let file_metadata = metadata.file_metadata();
+    let parquet_schema = file_metadata.schema_descr();
+    let converter = StatisticsConverter::from_column_index(
+        column_index,
+        physical_field,
+        parquet_schema,
+    )?
+    .with_missing_null_counts_as_zero(false);
+    let mins = cast(
+        converter.row_group_mins(groups.iter().copied())?.as_ref(),
+        data_type,
+    )?;
+    let maxes = cast(
+        converter.row_group_maxes(groups.iter().copied())?.as_ref(),
+        data_type,
+    )?;
+    let null_counts = converter.row_group_null_counts(groups.iter().copied())?;
+    let null_count = |index: usize| {
+        if parquet_schema.column(column_index).max_def_level() == 0 {
+            Some(0)
+        } else {
+            null_counts
+                .is_valid(index)
+                .then(|| null_counts.value(index))
+        }
+    };
+    let all_null =
+        |index: usize| null_count(index) == Some(groups[index].num_rows() as u64);
+    let column_order = file_metadata
+        .column_orders()
+        .and_then(|orders| orders.get(column_index));
+    let sort_order = parquet_schema.column(column_index).sort_order();
+    let modern_order_matches = column_order
+        == Some(&ColumnOrder::TYPE_DEFINED_ORDER(sort_order))
+        || is_float
+            && matches!(
+                column_order,
+                Some(
+                    ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)
+                        | ColumnOrder::IEEE_754_TOTAL_ORDER
+                )
+            );
+    let bounds_trusted = |index: usize| {
+        groups[index]
+            .column(column_index)
+            .statistics()
+            .is_some_and(|stats| {
+                if stats.is_min_max_deprecated() {
+                    sort_order == SortOrder::SIGNED
+                } else {
+                    modern_order_matches
+                }
+            })
+    };
+    if is_float {
+        // TYPE_ORDER can equate signed zeros. NaNs can be absent from bounds
+        // even with IEEE_754_TOTAL_ORDER, including whole-file statistics.
+        for (index, group) in groups.iter().enumerate() {
+            if all_null(index) {
+                continue;
+            }
+            if !bounds_trusted(index)
+                || group
+                    .column(column_index)
+                    .statistics()
+                    .and_then(ParquetStatistics::nan_count_opt)
+                    != Some(0)
+                || column_order != Some(&ColumnOrder::IEEE_754_TOTAL_ORDER)
+                    && !float_bounds_exclude_zero(&mins, &maxes, index)?
+            {
+                return Ok(false);
+            }
+        }
+    }
+    let null = ScalarValue::try_new_null(data_type)?;
+    let bound = |index: usize, lower: bool| -> Result<Option<ScalarValue>> {
+        if null_count(index).is_some_and(|count| count > groups[index].num_rows() as u64)
+        {
+            return Ok(None);
+        }
+        // Unknown null counts include NULL in the possible range. A missing
+        // min/max value, unlike this typed NULL, is not a known NULL endpoint.
+        if all_null(index) || lower == options.nulls_first && null_count(index) != Some(0)
+        {
+            return Ok(Some(null.clone()));
+        }
+        let values = if lower != options.descending {
+            &mins
+        } else {
+            &maxes
+        };
+        if values.is_null(index) || !bounds_trusted(index) {
+            return Ok(None);
+        }
+        Ok(Some(ScalarValue::try_from_array(values.as_ref(), index)?))
+    };
+    for (index, already_separated) in separated.iter_mut().enumerate() {
+        if *already_separated {
+            continue;
+        }
+        let (Some(upper), Some(lower)) = (bound(index, false)?, bound(index + 1, true)?)
+        else {
+            return Ok(false);
+        };
+        match compare_rows(&[upper], &[lower], &[options])? {
+            Ordering::Less => *already_separated = true,
+            Ordering::Equal => {}
+            Ordering::Greater => return Ok(false),
+        }
+    }
+    Ok(true)
+}
 
-            // Find the column in the arrow schema
-            let (index, _) = arrow_schema.column_with_name(name)?;
-
-            let expr = Arc::new(Column::new(name, index));
-            let options = SortOptions {
-                descending: sc.descending,
-                nulls_first: sc.nulls_first,
-            };
-            Some(PhysicalSortExpr::new(expr, options))
-        })
-        .collect()
+fn float_bounds_exclude_zero(
+    mins: &ArrayRef,
+    maxes: &ArrayRef,
+    index: usize,
+) -> Result<bool> {
+    let min =
+        ScalarValue::try_from_array(mins.as_ref(), index)?.cast_to(&DataType::Float64)?;
+    let max = ScalarValue::try_from_array(maxes.as_ref(), index)?
+        .cast_to(&DataType::Float64)?;
+    Ok(matches!(
+        (min, max),
+        (ScalarValue::Float64(Some(min)), ScalarValue::Float64(Some(max)))
+            if !min.is_nan() && !max.is_nan() && (min > 0.0 || max < 0.0)
+    ))
 }
 
 #[cfg(test)]
@@ -1458,6 +1665,258 @@ mod tests {
             );
 
             ParquetMetaData::new(file_meta, row_groups)
+        }
+
+        #[test]
+        fn test_ordering_requires_common_row_group_prefix() -> Result<()> {
+            // Arrange
+            let descriptor = create_schema_descr(2);
+            let schema = create_arrow_schema(2);
+            let first = SortingColumn {
+                column_idx: 0,
+                descending: false,
+                nulls_first: true,
+            };
+            let second = SortingColumn {
+                column_idx: 1,
+                ..first
+            };
+            let ordering = vec![first.clone(), second.clone()];
+            for (later_order, expected_length) in [
+                (None, 0),
+                (Some(vec![first.clone()]), 1),
+                (
+                    Some(vec![
+                        first,
+                        SortingColumn {
+                            descending: true,
+                            ..second
+                        },
+                    ]),
+                    1,
+                ),
+                (Some(ordering.clone()), 2),
+            ] {
+                let mut groups = Vec::new();
+                for (min, order) in [(1, Some(ordering.clone())), (3, later_order)] {
+                    let stats = ParquetStatistics::int32(
+                        Some(min),
+                        Some(min + 1),
+                        None,
+                        Some(0),
+                        true,
+                    );
+                    groups.push(
+                        create_row_group_with_stats(
+                            &descriptor,
+                            vec![Some(stats.clone()), Some(stats)],
+                            2,
+                        )
+                        .into_builder()
+                        .set_sorting_columns(order)
+                        .build()?,
+                    );
+                }
+                groups.insert(
+                    0,
+                    create_row_group_with_stats(&descriptor, vec![None, None], 0),
+                );
+                let metadata = create_parquet_metadata(Arc::clone(&descriptor), groups);
+
+                // Act
+                let result = ordering_from_parquet_metadata(&metadata, &schema)?;
+
+                // Assert
+                assert_eq!(
+                    result.as_ref().map_or(0, |order| order.len()),
+                    expected_length,
+                );
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn test_ordering_does_not_confuse_duplicate_column_names() -> Result<()> {
+            use parquet::schema::parser::parse_message_type;
+
+            // Arrange
+            let descriptor =
+                Arc::new(SchemaDescriptor::new(Arc::new(parse_message_type(
+                    "message schema { OPTIONAL INT32 id; OPTIONAL INT32 id; }",
+                )?)));
+            let schema = Arc::new(parquet_to_arrow_schema(&descriptor, None)?);
+            for column_index in [0, 1] {
+                let group = create_row_group_with_stats(&descriptor, vec![None, None], 2)
+                    .into_builder()
+                    .set_sorting_columns(Some(vec![SortingColumn {
+                        column_idx: column_index,
+                        descending: false,
+                        nulls_first: true,
+                    }]))
+                    .build()?;
+                let metadata =
+                    create_parquet_metadata(Arc::clone(&descriptor), vec![group]);
+
+                // Act
+                let ordering = ordering_from_parquet_metadata(&metadata, &schema)?;
+
+                // Assert
+                assert_eq!(ordering.is_some(), column_index == 0);
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn test_ordering_preserves_only_safe_projected_keys() -> Result<()> {
+            // Arrange
+            let descriptor = create_schema_descr(2);
+            let group = create_row_group_with_stats(&descriptor, vec![None, None], 2)
+                .into_builder()
+                .set_sorting_columns(Some(
+                    (0..2)
+                        .map(|column_idx| SortingColumn {
+                            column_idx,
+                            descending: false,
+                            nulls_first: true,
+                        })
+                        .collect(),
+                ))
+                .build()?;
+            let metadata = create_parquet_metadata(descriptor, vec![group]);
+            let first = Field::new("col_0", DataType::Int32, true);
+            let second = Field::new("col_1", DataType::Int32, true);
+            for (fields, expected_length) in [
+                (vec![first], 1),
+                (vec![second.clone()], 0),
+                (
+                    vec![Field::new("col_0", DataType::Float32, true), second.clone()],
+                    0,
+                ),
+                (
+                    vec![Field::new("col_0", DataType::Float64, true), second],
+                    2,
+                ),
+            ] {
+                let schema = Arc::new(Schema::new(fields));
+
+                // Act
+                let ordering = ordering_from_parquet_metadata(&metadata, &schema)?;
+
+                // Assert
+                assert_eq!(
+                    ordering.as_ref().map_or(0, |order| order.len()),
+                    expected_length,
+                    "{schema:?}"
+                );
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn test_ordering_float_comparison_orders() -> Result<()> {
+            use parquet::file::metadata::FileMetaData;
+            use parquet::file::statistics::ValueStatistics;
+            use parquet::schema::parser::parse_message_type;
+
+            // Arrange
+            let descriptor = Arc::new(SchemaDescriptor::new(Arc::new(
+                parse_message_type("message schema { OPTIONAL DOUBLE col_0; }")?,
+            )));
+            let schema = Arc::new(parquet_to_arrow_schema(&descriptor, None)?);
+            let numeric_order = ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED);
+            for (minimum, column_order, nan_count, expected) in [
+                (-0.0, numeric_order, Some(0), false),
+                (1.0, numeric_order, Some(0), true),
+                (1.0, numeric_order, None, false),
+                (-0.0, ColumnOrder::IEEE_754_TOTAL_ORDER, Some(0), true),
+            ] {
+                let mut groups = Vec::new();
+                for (min, max) in [(minimum, 2.0), (3.0, 4.0)] {
+                    let stats = ParquetStatistics::Double(
+                        ValueStatistics::new(Some(min), Some(max), None, Some(0), false)
+                            .with_nan_count(nan_count),
+                    );
+                    groups.push(
+                        create_row_group_with_stats(&descriptor, vec![Some(stats)], 2)
+                            .into_builder()
+                            .set_sorting_columns(Some(vec![SortingColumn {
+                                column_idx: 0,
+                                descending: false,
+                                nulls_first: true,
+                            }]))
+                            .build()?,
+                    );
+                }
+                let metadata = ParquetMetaData::new(
+                    FileMetaData::new(
+                        1,
+                        4,
+                        None,
+                        None,
+                        Arc::clone(&descriptor),
+                        Some(vec![column_order]),
+                    ),
+                    groups,
+                );
+
+                // Act
+                let ordering = ordering_from_parquet_metadata(&metadata, &schema)?;
+
+                // Assert
+                assert_eq!(ordering.is_some(), expected, "{column_order:?}");
+            }
+            Ok(())
+        }
+
+        #[test]
+        fn test_ordering_requires_row_group_bounds() -> Result<()> {
+            use parquet::schema::parser::parse_message_type;
+
+            // Arrange
+            let descriptor = Arc::new(SchemaDescriptor::new(Arc::new(
+                parse_message_type("message schema { OPTIONAL INT32 col_0; }")?,
+            )));
+            let stats =
+                |min, max, nulls| ParquetStatistics::int32(min, max, None, nulls, true);
+            for (right_stats, expected) in [
+                (Some(stats(Some(3), Some(4), Some(0))), true),
+                (None, false),
+                (Some(stats(None, Some(4), Some(0))), false),
+                (Some(stats(Some(3), Some(4), None)), false),
+                (
+                    Some(ParquetStatistics::int32(
+                        Some(3),
+                        Some(4),
+                        None,
+                        Some(0),
+                        false,
+                    )),
+                    false,
+                ),
+            ] {
+                let groups = [Some(stats(Some(1), Some(2), Some(0))), right_stats]
+                    .into_iter()
+                    .map(|stats| {
+                        create_row_group_with_stats(&descriptor, vec![stats], 2)
+                            .into_builder()
+                            .set_sorting_columns(Some(vec![SortingColumn {
+                                column_idx: 0,
+                                descending: false,
+                                nulls_first: true,
+                            }]))
+                            .build()
+                    })
+                    .collect::<parquet::errors::Result<Vec<_>>>()?;
+                let metadata = create_parquet_metadata(Arc::clone(&descriptor), groups);
+
+                // Act
+                let ordering =
+                    ordering_from_parquet_metadata(&metadata, &create_arrow_schema(1))?;
+
+                // Assert
+                assert_eq!(ordering.is_some(), expected);
+            }
+            Ok(())
         }
 
         #[test]
