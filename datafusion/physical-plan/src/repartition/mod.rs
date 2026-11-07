@@ -20,7 +20,7 @@ use super::{
 };
 use crate::coalesce::LimitedBatchCoalescer;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
-use crate::hash_utils::create_hashes;
+use crate::hash_utils::CachingArrayHasher;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
@@ -49,7 +49,7 @@ use datafusion_common::{
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, RangePartitioning};
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
@@ -613,6 +613,8 @@ impl RepartitionExecState {
                 // preserve_order depends on partition index to start from 0
                 if preserve_order { 0 } else { i },
                 num_input_partitions,
+                MemoryConsumer::new(format!("{name} hash cache[{i}]"))
+                    .register(context.memory_pool()),
             ));
 
             // In a separate task, wait for each input to be done
@@ -644,6 +646,7 @@ enum BatchPartitionerState {
         partition_reducer: StrengthReducedU64,
         hash_buffer: Vec<u64>,
         indices: Vec<Vec<u32>>,
+        hasher: CachingArrayHasher,
     },
     RoundRobin {
         num_partitions: usize,
@@ -1031,15 +1034,31 @@ impl BatchPartitioner {
             return internal_err!("Hash repartition requires at least one partition");
         }
 
+        let hasher = CachingArrayHasher::new(
+            exprs.len(),
+            REPARTITION_RANDOM_STATE.random_state().clone(),
+        );
         Ok(Self {
             state: BatchPartitionerState::Hash {
                 exprs,
                 partition_reducer: StrengthReducedU64::new(num_partitions as u64),
                 hash_buffer: vec![],
                 indices: vec![vec![]; num_partitions],
+                hasher,
             },
             timer,
         })
+    }
+
+    /// Accounts the retained dictionary hash cache in `reservation`. If the
+    /// pool refuses it, drops the cache so later batches pay the uncached cost.
+    fn reserve_hash_cache(&mut self, reservation: &MemoryReservation) {
+        if let BatchPartitionerState::Hash { hasher, .. } = &mut self.state
+            && reservation.try_resize(hasher.size()).is_err()
+        {
+            hasher.clear();
+            reservation.resize(hasher.size());
+        }
     }
 
     /// Create a new [`BatchPartitioner`] for round-robin repartitioning.
@@ -1251,6 +1270,7 @@ impl BatchPartitioner {
                     partition_reducer,
                     hash_buffer,
                     indices,
+                    hasher,
                 } => {
                     // Tracking time required for distributing indexes across output partitions
                     let timer = self.timer.timer();
@@ -1261,11 +1281,7 @@ impl BatchPartitioner {
                     hash_buffer.clear();
                     hash_buffer.resize(batch.num_rows(), 0);
 
-                    create_hashes(
-                        &arrays,
-                        REPARTITION_RANDOM_STATE.random_state(),
-                        hash_buffer,
-                    )?;
+                    hasher.create_hashes(&arrays, hash_buffer)?;
 
                     for v in indices.iter_mut() {
                         v.clear();
@@ -2278,6 +2294,7 @@ impl RepartitionExec {
     /// output partitions based on the desired partitioning
     ///
     /// `output_channels` holds the output sending channels for each output partition
+    #[expect(clippy::too_many_arguments)]
     async fn pull_from_input(
         mut stream: SendableRecordBatchStream,
         mut output_channels: HashMap<usize, OutputChannel>,
@@ -2286,6 +2303,7 @@ impl RepartitionExec {
         metrics: RepartitionMetrics,
         input_partition: usize,
         num_input_partitions: usize,
+        hash_cache_reservation: MemoryReservation,
     ) -> Result<()> {
         let mut partitioner = match (partitioning, range_router) {
             (Partitioning::Range(range_partitioning), Some(router)) => {
@@ -2344,6 +2362,7 @@ impl RepartitionExec {
                 }
                 timer.done();
             }
+            partitioner.reserve_hash_cache(&hash_cache_reservation);
 
             // If the input stream is endless, we may spin forever and
             // never yield back to tokio.  See
@@ -2646,6 +2665,7 @@ mod tests {
 
     use super::*;
     use crate::empty::EmptyExec;
+    use crate::hash_utils::create_hashes;
     use crate::projection::ProjectionExpr;
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::test::TestMemoryExec;
@@ -2661,10 +2681,10 @@ mod tests {
     };
 
     use arrow::array::{
-        Array, ArrayRef, Decimal128Array, Int64Array, StringArray,
-        TimestampNanosecondArray, UInt32Array,
+        Array, ArrayRef, Decimal128Array, DictionaryArray, Int32Array, Int64Array,
+        StringArray, TimestampNanosecondArray, UInt32Array,
     };
-    use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
+    use arrow::datatypes::{DataType, Field, Int32Type, Schema, TimeUnit};
     use datafusion_common::ScalarValue;
     use datafusion_common::cast::{as_string_array, as_uint32_array};
     use datafusion_common::config::SpillCompression;
@@ -2865,6 +2885,57 @@ mod tests {
         );
     }
 
+    #[test]
+    fn hash_partitioner_caches_and_reserves_dictionary_hashes() -> Result<()> {
+        use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("key", dictionary_type, true)]));
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "bb", "ccc"]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![0, 1, 2]),
+                Arc::clone(&values),
+            )?)],
+        )?;
+        let cached = |partitioner: &BatchPartitioner| {
+            let BatchPartitionerState::Hash { hasher, .. } = &partitioner.state else {
+                unreachable!()
+            };
+            (hasher.size(), hasher.dictionary_hashes(0).map(|(v, _)| v))
+        };
+
+        // The pool has room: the cache is kept and reserved.
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024));
+        let reservation = MemoryConsumer::new("cache").register(&pool);
+        let mut partitioner = BatchPartitioner::new_hash_partitioner(
+            vec![col("key", &schema)?],
+            4,
+            metrics::Time::new(),
+        )?;
+        partitioner
+            .partition_iter(batch.clone())?
+            .collect::<Result<Vec<_>>>()?;
+        partitioner.reserve_hash_cache(&reservation);
+        let (size, cached_values) = cached(&partitioner);
+        assert!(Arc::ptr_eq(&cached_values.unwrap(), &values));
+        assert!(size >= 3 * size_of::<u64>());
+        assert_eq!(pool.reserved(), size);
+
+        // The pool has no room: the cache is dropped, partitioning still works.
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(8));
+        let reservation = MemoryConsumer::new("cache").register(&pool);
+        partitioner.reserve_hash_cache(&reservation);
+        assert!(cached(&partitioner).1.is_none());
+        partitioner
+            .partition_iter(batch)?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(())
+    }
+
     #[tokio::test]
     async fn one_to_many_round_robin() -> Result<()> {
         // define input partitions
@@ -2948,6 +3019,65 @@ mod tests {
         assert_eq!(8, output_partitions.len());
         assert_eq!(total_rows, 8 * 50 * 3);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn hash_partition_reuses_dictionary_values_across_batches() -> Result<()> {
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", dictionary_type, true),
+            Field::new("id", DataType::UInt32, false),
+        ]));
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "bb", "ccc"]));
+        let make_batch = |keys: Vec<Option<i32>>, ids: Vec<u32>| -> Result<RecordBatch> {
+            let dictionary: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(keys),
+                Arc::clone(&values),
+            )?);
+            Ok(RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![dictionary, Arc::new(UInt32Array::from(ids))],
+            )?)
+        };
+        let batches = vec![
+            make_batch(vec![Some(0), Some(1), Some(2), None], vec![0, 1, 2, 3])?,
+            make_batch(vec![Some(2), Some(0), None, Some(1)], vec![4, 5, 6, 7])?,
+        ];
+
+        let mut expected = vec![Vec::new(); 4];
+        for batch in &batches {
+            let mut hashes = vec![0; batch.num_rows()];
+            create_hashes(
+                [batch.column(0)],
+                REPARTITION_RANDOM_STATE.random_state(),
+                &mut hashes,
+            )?;
+            let ids = as_uint32_array(batch.column(1))?;
+            for (hash, id) in hashes.into_iter().zip(ids.values().iter().copied()) {
+                expected[(hash % 4) as usize].push(id);
+            }
+        }
+
+        let output = repartition(
+            &schema,
+            vec![batches],
+            Partitioning::Hash(vec![col("key", &schema)?], 4),
+        )
+        .await?;
+        let mut actual = vec![Vec::new(); 4];
+        for (partition, batches) in output.iter().enumerate() {
+            for batch in batches {
+                actual[partition]
+                    .extend(as_uint32_array(batch.column(1))?.values().iter().copied());
+            }
+        }
+        for values in expected.iter_mut().chain(actual.iter_mut()) {
+            values.sort_unstable();
+        }
+
+        assert_eq!(actual, expected);
         Ok(())
     }
 
