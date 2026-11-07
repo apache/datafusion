@@ -101,3 +101,7 @@ name = "from_utc_timestamp"
 [[bench]]
 harness = false
 name = "stack"
+
+[[bench]]
+harness = false
+name = "at_least_n_non_nulls"
