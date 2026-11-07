@@ -710,7 +710,11 @@ impl FileFormat for ParquetFormat {
 
         let sink = Arc::new(
             ParquetSink::new(conf, self.options.clone())
-                .with_sorting_columns(sorting_columns),
+                .with_sorting_columns(sorting_columns)
+                // Nothing on this path reads `ParquetSink::written`, and keeping
+                // every file's metadata would grow memory with the number of
+                // files a statement writes.
+                .with_retain_written_metadata(false),
         );
 
         Ok(Arc::new(DataSinkExec::new(input, sink, order_requirements)) as _)

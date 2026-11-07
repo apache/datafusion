@@ -1696,6 +1696,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parquet_sink_write_without_retained_metadata() -> Result<()> {
+        let field_a = Field::new("a", DataType::Utf8, false);
+        let field_b = Field::new("b", DataType::Utf8, false);
+        let schema = Arc::new(Schema::new(vec![field_a, field_b]));
+        let object_store_url = ObjectStoreUrl::local_filesystem();
+
+        let file_sink_config = FileSinkConfig {
+            original_url: String::default(),
+            object_store_url: object_store_url.clone(),
+            file_group: FileGroup::new(vec![PartitionedFile::new("/tmp".to_string(), 1)]),
+            table_paths: vec![ListingTableUrl::parse("file:///")?],
+            output_schema: schema.clone(),
+            table_partition_cols: vec![],
+            insert_op: InsertOp::Overwrite,
+            keep_partition_by_columns: false,
+            file_extension: "parquet".into(),
+            file_output_mode: FileOutputMode::Automatic,
+        };
+        let parquet_sink = Arc::new(
+            ParquetSink::new(file_sink_config, TableParquetOptions::default())
+                .with_retain_written_metadata(false),
+        );
+
+        let col_a: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar"]));
+        let col_b: ArrayRef = Arc::new(StringArray::from(vec!["baz", "baz"]));
+        let batch = RecordBatch::try_from_iter(vec![("a", col_a), ("b", col_b)])?;
+
+        let rows_written = FileSink::write_all(
+            parquet_sink.as_ref(),
+            Box::pin(RecordBatchStreamAdapter::new(
+                schema,
+                futures::stream::iter(vec![Ok(batch)]),
+            )),
+            &build_ctx(object_store_url.as_ref()),
+        )
+        .await?;
+
+        assert_eq!(rows_written, 2, "the file is still written and counted");
+        assert!(
+            parquet_sink.written().is_empty(),
+            "no file metadata is retained"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn parquet_sink_write_memory_reservation() -> Result<()> {
         async fn test_memory_reservation(global: ParquetOptions) -> Result<()> {
             let field_a = Field::new("a", DataType::Utf8, false);
