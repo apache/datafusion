@@ -170,6 +170,42 @@ For local SQLite test instructions, see the [instructions in the documentation].
 [instructions in the documentation]: https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-sqlite
 [extended.yml]: https://github.com/apache/datafusion/blob/main/.github/workflows/extended.yml
 
+## Rust Integration Tests
+
+There are several public interface tests for the DataFusion library in the [tests](https://github.com/apache/datafusion/tree/main/datafusion/core/tests) directory.
+
+You can run these tests individually using `cargo` as normal command such as
+
+```shell
+cargo test -p datafusion --test parquet_integration
+```
+
+## Fuzz testing
+
+Fuzz testing generates random inputs and configurations, then checks that a property holds for every generated case. For example, an optimized operator should produce the same results as a reference implementation.
+
+### Fuzzing unit tests
+
+For fuzzing unit tests, such as tests for a single operator or an internal utility:
+
+- If the test is small (easy to set up and takes a few seconds), keep it as a unit test.
+- If the test is large (requires a fuzzing driver and takes more than 10 seconds), it must implement the [`FuzzTest` trait][fuzz framework] and run through the [central fuzz-test entry point]. See the [spill-pool fuzzer] for a reference implementation.
+
+[fuzz framework]: https://github.com/apache/datafusion/blob/main/test-utils/src/fuzz.rs
+[central fuzz-test entry point]: https://github.com/apache/datafusion/blob/main/datafusion/fuzz/tests/fuzz.rs
+[spill-pool fuzzer]: https://github.com/apache/datafusion/blob/main/datafusion/fuzz/tests/suites/spill_pool.rs
+
+### SQL fuzz testing
+
+For SQL fuzzing of more complex queries, use [datafusion-fuzzer], which is currently maintained outside the core DataFusion repository. See [its documentation][datafusion-fuzzer-docs] for details.
+
+[datafusion-fuzzer]: https://github.com/datafusion-contrib/datafusion-fuzzer
+[datafusion-fuzzer-docs]: https://github.com/datafusion-contrib/datafusion-fuzzer/blob/main/README.md
+
+---
+
+The following sections cover **non-functional tests and checks** for CI workflows, documentation, and repository maintenance.
+
 ## CI Workflow Tests
 
 The Rust workflow validator and fork status bridge have regression tests.
@@ -185,28 +221,6 @@ node --test ci/scripts/test_fork_ci_status.cjs
 
 The validator tests remove guards and add an invalid job dependency in memory.
 The bridge tests use stubbed GitHub API responses and make no network requests.
-
-## Rust Integration Tests
-
-There are several public interface tests for the DataFusion library in the [tests](https://github.com/apache/datafusion/tree/main/datafusion/core/tests) directory.
-
-You can run these tests individually using `cargo` as normal command such as
-
-```shell
-cargo test -p datafusion --test parquet_integration
-```
-
-## SQL "Fuzz" testing
-
-DataFusion uses the [SQLancer] for "fuzz" testing: it generates random SQL
-queries and execute them against DataFusion to find bugs.
-
-The code is in the [datafusion-sqllancer] repository, and we welcome further
-contributions. Kudos to [@2010YOUY01] for the initial implementation.
-
-[sqlancer]: https://github.com/sqlancer/sqlancer
-[datafusion-sqllancer]: https://github.com/datafusion-contrib/datafusion-sqllancer
-[@2010youy01]: https://github.com/2010YOUY01
 
 ## Documentation Examples
 
