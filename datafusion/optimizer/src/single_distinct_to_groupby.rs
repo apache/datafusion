@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use crate::optimizer::ApplyOrder;
 use crate::{OptimizerConfig, OptimizerRule};
+use arrow::datatypes::DataType;
 
 use datafusion_common::{
     DFSchema, DataFusionError, HashSet, Result, assert_or_internal_err,
@@ -17,7 +18,7 @@ use datafusion_expr::builder::project;
 use datafusion_expr::expr::AggregateFunctionParams;
 use datafusion_expr::expr_schema::ExprSchemable;
 use datafusion_expr::{
-    AggregateUDF, Expr, cast, col,
+    AggregateUDF, DistinctHandling, Expr, cast, col,
     expr::AggregateFunction,
     lit,
     logical_plan::{Aggregate, LogicalPlan},
@@ -107,11 +108,49 @@ impl CountRollup {
     }
 }
 
-/// Check whether all aggregate exprs are distinct on a single field.
+/// Returns `true` for fixed-width primitive types where single-phase distinct
+/// accumulation avoids heap allocation churn.
+fn is_fixed_width_type(dt: &DataType) -> bool {
+    matches!(
+        dt,
+        DataType::Boolean
+            | DataType::Int8
+            | DataType::Int16
+            | DataType::Int32
+            | DataType::Int64
+            | DataType::UInt8
+            | DataType::UInt16
+            | DataType::UInt32
+            | DataType::UInt64
+            | DataType::Float16
+            | DataType::Float32
+            | DataType::Float64
+            | DataType::Date32
+            | DataType::Date64
+            | DataType::Time32(_)
+            | DataType::Time64(_)
+            | DataType::Timestamp(_, _)
+            | DataType::Duration(_)
+            | DataType::Interval(_)
+            | DataType::Decimal128(_, _)
+            | DataType::Decimal256(_, _)
+    )
+}
+
+/// Check whether all aggregate exprs are eligible for the single-distinct-to-group-by rewrite.
+///
+/// When `prefer_memory` is true, the rewrite is skipped only for `GROUP BY` queries
+/// on fixed-width primitive types, where it reliably reduces peak memory without
+/// regressing throughput. Variable-length types (strings, binary) and un-grouped
+/// aggregates always continue with the 2-phase rewrite.
+/// Aggregates with [`DistinctHandling::Unsupported`] (e.g. `approx_median`) cannot
+/// run natively with `DISTINCT` and are always rewritten.
 fn is_single_distinct_agg(
     aggr_expr: &[Expr],
     input_schema: &DFSchema,
     count_rollup: Option<&CountRollup>,
+    prefer_memory: bool,
+    has_group_by: bool,
 ) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
@@ -154,6 +193,37 @@ fn is_single_distinct_agg(
     if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
         return Ok(false);
     }
+
+    // Aggregates with DistinctHandling::Unsupported (e.g. approx_median) cannot
+    // run natively with DISTINCT; they must always be rewritten.
+    if distinct_aggs
+        .iter()
+        .any(|(func, _)| func.distinct_handling() == DistinctHandling::Unsupported)
+    {
+        return Ok(true);
+    }
+
+    // When prefer_memory is set, skip the rewrite only when it actually helps:
+    //   - The query has a GROUP BY. Without it, the 2-phase rewrite is the only
+    //     way to parallelize un-grouped distinct work across threads; disabling it
+    //     forces everything onto a single partition (1.6x–3.4x slowdown).
+    //   - The distinct argument is a fixed-width primitive type. For variable-length
+    //     types (Utf8, Binary, …) single-phase accumulators suffer heavy per-value
+    //     heap allocation churn that increases both memory and latency.
+    if prefer_memory && has_group_by {
+        // Resolve the data type of each distinct argument.
+        let all_fixed_width = distinct_aggs.iter().all(|(_, args)| {
+            args.iter().all(|arg| {
+                arg.get_type(input_schema)
+                    .map(|dt| is_fixed_width_type(&dt))
+                    .unwrap_or(false)
+            })
+        });
+        if all_fixed_width {
+            return Ok(false);
+        }
+    }
+
     if has_count_rollup && !rewrite_pays_for_count(&distinct_aggs, input_schema)? {
         return Ok(false);
     }
@@ -219,6 +289,10 @@ impl OptimizerRule for SingleDistinctToGroupBy {
         if !matches!(plan, LogicalPlan::Aggregate(_)) {
             return Ok(Transformed::no(plan));
         }
+        let prefer_memory = config
+            .options()
+            .optimizer
+            .single_distinct_aggregation_prefer_memory;
         let count_rollup = CountRollup::try_new(config);
         match plan {
             LogicalPlan::Aggregate(Aggregate {
@@ -231,6 +305,8 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 &aggr_expr,
                 input.schema(),
                 count_rollup.as_ref(),
+                prefer_memory,
+                !group_expr.is_empty(),
             )? && !contains_grouping_set(&group_expr) =>
             {
                 let group_size = group_expr.len();
@@ -569,11 +645,19 @@ mod tests {
 
     impl RegistryOptimizerContext {
         fn new() -> Self {
+            Self::with_prefer_memory(false)
+        }
+
+        fn with_prefer_memory(prefer_memory: bool) -> Self {
             let mut registry = MemoryFunctionRegistry::new();
             registry.register_udaf(count_udaf()).unwrap();
             registry.register_udaf(sum_udaf()).unwrap();
+
+            let mut opts = ConfigOptions::new();
+            opts.optimizer.single_distinct_aggregation_prefer_memory = prefer_memory;
+
             Self {
-                inner: OptimizerContext::new(),
+                inner: OptimizerContext::new_with_config_options(Arc::new(opts)),
                 registry,
             }
         }
@@ -607,6 +691,24 @@ mod tests {
             let optimizer = Optimizer::with_rules(vec![rule]);
             let optimized_plan = optimizer
                 .optimize($plan, &RegistryOptimizerContext::new(), |_, _| {})
+                .expect("failed to optimize plan");
+            insta::assert_snapshot!(optimized_plan.display_indent_schema(), @ $expected);
+
+            Ok::<(), DataFusionError>(())
+        }};
+    }
+
+    macro_rules! assert_optimized_plan_equal_with_context {
+        (
+            $ctx:expr,
+            $plan:expr,
+            @ $expected:literal $(,)?
+        ) => {{
+            let rule: Arc<dyn crate::OptimizerRule + Send + Sync> =
+                Arc::new(SingleDistinctToGroupBy::new());
+            let optimizer = Optimizer::with_rules(vec![rule]);
+            let optimized_plan = optimizer
+                .optimize($plan, &$ctx, |_, _| {})
                 .expect("failed to optimize plan");
             insta::assert_snapshot!(optimized_plan.display_indent_schema(), @ $expected);
 
@@ -1329,5 +1431,170 @@ mod tests {
 
         assert_eq!(plan.schema().as_ref(), optimized_plan.schema().as_ref());
         Ok(())
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    struct UnsupportedUdaf {
+        signature: Signature,
+    }
+
+    impl UnsupportedUdaf {
+        fn new() -> Self {
+            Self {
+                signature: Signature::exact(
+                    vec![DataType::UInt32],
+                    Volatility::Immutable,
+                ),
+            }
+        }
+    }
+
+    impl AggregateUDFImpl for UnsupportedUdaf {
+        fn name(&self) -> &str {
+            "unsupported"
+        }
+
+        fn signature(&self) -> &Signature {
+            &self.signature
+        }
+
+        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
+            Ok(DataType::UInt32)
+        }
+
+        fn accumulator(
+            &self,
+            _acc_args: AccumulatorArgs,
+        ) -> Result<Box<dyn Accumulator>> {
+            unimplemented!("not needed for optimizer tests")
+        }
+
+        fn distinct_handling(&self) -> DistinctHandling {
+            DistinctHandling::Unsupported
+        }
+    }
+
+    fn unsupported_distinct(expr: Expr) -> Expr {
+        Expr::AggregateFunction(AggregateFunction::new_udf(
+            Arc::new(AggregateUDF::from(UnsupportedUdaf::new())),
+            vec![expr],
+            true,
+            None,
+            vec![],
+            None,
+        ))
+    }
+
+    #[test]
+    fn single_distinct_aggregation_prefer_memory_default_rewrites_lone_distinct()
+    -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn single_distinct_aggregation_prefer_memory_true_skips_rewrite_for_groups_accumulator()
+    -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_prefer_memory(true);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Aggregate: groupBy=[[test.a]], aggr=[[count(DISTINCT test.b)]] [a:UInt32, count(DISTINCT test.b):Int64]
+          TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    // prefer_memory=true must NOT skip the rewrite when there is no GROUP BY:
+    // without the 2-phase path DataFusion cannot parallelize un-grouped distinct
+    // work and the whole aggregation is forced onto a single thread.
+    fn single_distinct_aggregation_prefer_memory_true_rewrites_when_no_group_by()
+    -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        // No GROUP BY: only a bare count(DISTINCT b).
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(Vec::<Expr>::new(), vec![count_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_prefer_memory(true);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Projection: count(alias1) AS count(DISTINCT test.b) [count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[]], aggr=[[count(alias1)]] [count(alias1):Int64]
+            Aggregate: groupBy=[[test.b AS alias1]], aggr=[[]] [alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    // prefer_memory=true must NOT skip the rewrite for Utf8 columns.
+    // Single-phase distinct on strings causes heavy per-value heap allocation churn
+    // and actually increases peak memory compared to the 2-phase rewrite.
+    fn single_distinct_aggregation_prefer_memory_true_rewrites_for_utf8() -> Result<()> {
+        // test_table_scan_utf8_b() has column `b` as Utf8.
+        let table_scan = test_table_scan_utf8_b()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_prefer_memory(true);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:Utf8]
+              TableScan: test [a:UInt32, b:Utf8, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    fn single_distinct_aggregation_prefer_memory_true_still_rewrites_unsupported()
+    -> Result<()> {
+        let table_scan = test_table_scan()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![unsupported_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_prefer_memory(true);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Projection: test.a, unsupported(alias1) AS unsupported(DISTINCT test.b) [a:UInt32, unsupported(DISTINCT test.b):UInt32;N]
+          Aggregate: groupBy=[[test.a]], aggr=[[unsupported(alias1)]] [a:UInt32, unsupported(alias1):UInt32;N]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
+              TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
     }
 }
