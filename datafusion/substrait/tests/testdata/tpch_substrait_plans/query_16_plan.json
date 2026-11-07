@@ -754,36 +754,7 @@
                 }
               },
               "groupings": [{
-                "groupingExpressions": [{
-                  "selection": {
-                    "directReference": {
-                      "structField": {
-                      }
-                    },
-                    "rootReference": {
-                    }
-                  }
-                }, {
-                  "selection": {
-                    "directReference": {
-                      "structField": {
-                        "field": 1
-                      }
-                    },
-                    "rootReference": {
-                    }
-                  }
-                }, {
-                  "selection": {
-                    "directReference": {
-                      "structField": {
-                        "field": 2
-                      }
-                    },
-                    "rootReference": {
-                    }
-                  }
-                }]
+                "expressionReferences": [0, 1, 2]
               }],
               "measures": [{
                 "measure": {
@@ -808,6 +779,36 @@
                       }
                     }
                   }]
+                }
+              }],
+              "groupingExpressions": [{
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                    }
+                  },
+                  "rootReference": {
+                  }
+                }
+              }, {
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                      "field": 1
+                    }
+                  },
+                  "rootReference": {
+                  }
+                }
+              }, {
+                "selection": {
+                  "directReference": {
+                    "structField": {
+                      "field": 2
+                    }
+                  },
+                  "rootReference": {
+                  }
                 }
               }]
             }
