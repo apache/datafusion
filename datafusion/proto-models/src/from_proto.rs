@@ -22,7 +22,7 @@ use datafusion_common::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use datafusion_common::utils::usize_from_wire;
 use datafusion_common::{
     JoinConstraint, JoinType, NullEquality, RecursionUnnestOption, TableReference,
-    UnnestOptions,
+    TableVersion, UnnestOptions,
 };
 use datafusion_proto_common::FromProtoError as Error;
 
@@ -95,6 +95,24 @@ impl TryFrom<protobuf::TableReference> for TableReference {
                 schema,
                 table,
             }) => Ok(TableReference::full(catalog, schema, table)),
+        }
+    }
+}
+
+impl TryFrom<&protobuf::TableVersion> for TableVersion {
+    type Error = Error;
+
+    fn try_from(value: &protobuf::TableVersion) -> Result<Self, Self::Error> {
+        use protobuf::table_version::TableVersionEnum;
+        match value
+            .table_version_enum
+            .as_ref()
+            .ok_or_else(|| Error::required("table_version_enum"))?
+        {
+            TableVersionEnum::Version(value) => {
+                Ok(TableVersion::Version(value.try_into()?))
+            }
+            TableVersionEnum::Timestamp(ns) => Ok(TableVersion::Timestamp(*ns)),
         }
     }
 }

@@ -204,7 +204,7 @@ GROUP BY customer_id;
 FROM from_item [, ...]
 
 from_item:
-  table_name [[AS] alias [(column_alias [, ...])]]
+  table_name [time_travel] [[AS] alias [(column_alias [, ...])]]
 | (query) [[AS] alias [(column_alias [, ...])]]
 | VALUES (expression [, ...]) [, ...] [[AS] alias [(column_alias [, ...])]]
 | table_function(argument [, ...]) [[AS] alias [(column_alias [, ...])]]
@@ -288,6 +288,53 @@ outer variant offered by other engines (Spark `explode_outer`, Hive `EXPLODE OUT
 unnest plan node carries a single null-handling mode for all its output
 columns, so a mix would be ambiguous. The planner returns an error in that
 case.
+
+### Time travel
+
+A time travel clause reads a table as it existed at an earlier version or point
+in time:
+
+```text
+time_travel:
+  VERSION AS OF expression
+| AT (VERSION => expression)
+| TIMESTAMP AS OF expression
+| FOR SYSTEM_TIME AS OF expression
+| AT (TIMESTAMP => expression)
+```
+
+The expression is evaluated once during planning and must be a constant. It can
+use functions such as `now()`, but cannot reference columns or parameters such as
+`$1`. A version can be any value that the catalog understands, such as a snapshot
+id or a tag. A timestamp is converted to a `TIMESTAMP` in the UTC time zone.
+
+In a prepared statement, the expression is evaluated when the statement is
+prepared rather than when it is executed. It therefore cannot use functions that
+depend on the time of execution, such as `now()`.
+
+```sql
+SELECT * FROM orders VERSION AS OF 42;
+SELECT * FROM orders AT (VERSION => 'release-1');
+SELECT * FROM orders TIMESTAMP AS OF '2024-01-01T00:00:00Z';
+SELECT * FROM orders AT (TIMESTAMP => now() - INTERVAL '1 day') AS yesterday;
+```
+
+Different versions of a table can be used in the same query:
+
+```sql
+SELECT cur.id
+FROM orders AS cur
+JOIN orders AT (VERSION => 41) AS prev ON cur.id = prev.id
+WHERE cur.status <> prev.status;
+```
+
+Time travel requires a catalog that supports it (see
+[`SchemaProvider::table_at`]); the built-in in-memory and listing tables do not.
+Time travel clauses are currently only parsed by the `Snowflake`, `Databricks`,
+`BigQuery` and `MsSQL` dialects (see `datafusion.sql_parser.dialect`), and not
+every dialect supports every syntax.
+
+[`schemaprovider::table_at`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.SchemaProvider.html#method.table_at
 
 ## WHERE clause
 

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::session::Session;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::{Constraints, Statistics, not_impl_err};
+use datafusion_common::{Constraints, Statistics, TableVersion, not_impl_err};
 use datafusion_common::{DFSchemaRef, Result, internal_err};
 use datafusion_expr::Expr;
 use datafusion_expr::statistics::StatisticsRequest;
@@ -68,6 +68,24 @@ pub trait TableProvider: Any + Debug + Sync + Send {
 
     /// Get the default value for a column, if available.
     fn get_column_default(&self, _column: &str) -> Option<&Expr> {
+        None
+    }
+
+    /// The version of the table this provider reads, for time travel
+    /// queries such as `SELECT * FROM t VERSION AS OF 3`.
+    ///
+    /// Providers returned by [`SchemaProvider::table_at`] must report the
+    /// version they read. This may differ from the requested version: for
+    /// example, `TIMESTAMP AS OF '2024-01-15'` may resolve to the snapshot
+    /// with id `3`, committed before that time. Reporting the resolved
+    /// version shows it in `EXPLAIN`, and lets scans of the same snapshot
+    /// compare equal regardless of how it was requested.
+    ///
+    /// Defaults to `None`, meaning the version is unknown or the table is not
+    /// versioned.
+    ///
+    /// [`SchemaProvider::table_at`]: crate::SchemaProvider::table_at
+    fn version(&self) -> Option<&TableVersion> {
         None
     }
 

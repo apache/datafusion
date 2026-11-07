@@ -12,8 +12,8 @@ use async_trait::async_trait;
 use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{
-    Constraints, DFSchema, SchemaExt, SplitPoint, Statistics, internal_datafusion_err,
-    plan_err, project_schema,
+    Constraints, DFSchema, SchemaExt, SplitPoint, Statistics, TableVersion,
+    internal_datafusion_err, plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_groups::FileGroup;
@@ -197,6 +197,8 @@ pub struct ListingTable {
     /// validation. Constant for the table, so computed once here instead of per
     /// file.
     file_schema_fingerprint: Arc<SchemaFingerprint>,
+    /// The version of the table this provider reads, if versioned
+    version: Option<TableVersion>,
 }
 
 impl ListingTable {
@@ -270,6 +272,7 @@ impl ListingTable {
             column_defaults: HashMap::new(),
             expr_adapter_factory: config.expr_adapter_factory,
             file_schema_fingerprint,
+            version: None,
         };
 
         Ok(table)
@@ -303,6 +306,13 @@ impl ListingTable {
     /// Specify the SQL definition for this table, if any
     pub fn with_definition(mut self, definition: Option<String>) -> Self {
         self.definition = definition;
+        self
+    }
+
+    /// Set the version of the table this provider reads, for time travel
+    /// queries. See [`TableProvider::version`].
+    pub fn with_version(mut self, version: Option<TableVersion>) -> Self {
+        self.version = version;
         self
     }
 
@@ -506,6 +516,10 @@ impl TableProvider for ListingTable {
 
     fn constraints(&self) -> Option<&Constraints> {
         Some(&self.constraints)
+    }
+
+    fn version(&self) -> Option<&TableVersion> {
+        self.version.as_ref()
     }
 
     fn table_type(&self) -> TableType {

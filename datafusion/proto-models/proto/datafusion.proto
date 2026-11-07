@@ -93,6 +93,8 @@ message ListingTableScanNode {
   optional uint64 fetch = 17;
   // Optional number of rows to skip.
   optional uint64 skip = 18;
+  // The version of the table to read, for time travel queries.
+  TableVersion version = 19;
 }
 
 message ViewTableScanNode {
@@ -106,6 +108,8 @@ message ViewTableScanNode {
   optional uint64 fetch = 7;
   // Optional number of rows to skip.
   optional uint64 skip = 8;
+  // The version of the table to read, for time travel queries.
+  TableVersion version = 9;
 }
 
 // Logical Plan to Scan a CustomTableProvider registered at runtime
@@ -120,6 +124,8 @@ message CustomTableScanNode {
   optional uint64 fetch = 7;
   // Optional number of rows to skip.
   optional uint64 skip = 8;
+  // The version of the table to read, for time travel queries.
+  TableVersion version = 9;
 }
 
 message ProjectionNode {
@@ -880,6 +886,16 @@ message TableReference {
     BareTableReference bare = 1;
     PartialTableReference partial = 2;
     FullTableReference full = 3;
+  }
+}
+
+// A version of a table, for time travel queries
+message TableVersion {
+  oneof table_version_enum {
+    // A catalog specific version identifier, such as a snapshot id or a tag
+    datafusion_common.ScalarValue version = 1;
+    // A point in time, in nanoseconds since the Unix epoch (UTC)
+    int64 timestamp = 2;
   }
 }
 
@@ -1765,6 +1781,8 @@ message EmptyTableScanNode {
   datafusion_common.Schema schema = 2;
   ProjectionColumns projection = 3;
   repeated LogicalExprNode filters = 4;
+  // The version of the table to read, for time travel queries.
+  TableVersion version = 5;
 }
 
 enum GenerateSeriesName {
