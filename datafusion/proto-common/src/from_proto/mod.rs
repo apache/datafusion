@@ -317,7 +317,9 @@ impl TryFrom<&protobuf::arrow_type::ArrowTypeEnum> for DataType {
 
                 // Default to index based type ids if not explicitly provided
                 let union_fields = if union.type_ids.is_empty() {
-                    UnionFields::from_fields(union_fields)
+                    UnionFields::try_from_fields(union_fields).map_err(|e| {
+                        DataFusionError::from(e).context("Deserializing Union DataType")
+                    })?
                 } else {
                     let type_ids = union.type_ids.iter().map(|i| *i as i8);
                     UnionFields::try_new(type_ids, union_fields).map_err(|e| {
@@ -520,27 +522,61 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 )
                 .map_err(|e| arrow_datafusion_err!(e))
                 .map_err(|e| e.context("Decoding nested ScalarValue value"))?;
-                let arr = record_batch.column(0);
+                let arr = record_batch.columns().first().ok_or_else(|| {
+                    Error::General(
+                        "No column in record batch while deserializing nested ScalarValue"
+                            .to_string(),
+                    )
+                })?;
+                let mismatch = |kind: &str| {
+                    Error::General(format!(
+                        "Unexpected array type {} for {kind} while deserializing nested ScalarValue",
+                        arr.data_type()
+                    ))
+                };
                 match value {
-                    Value::ListValue(_) => {
-                        Self::List(arr.as_list::<i32>().to_owned().into())
-                    }
-                    Value::LargeListValue(_) => {
-                        Self::LargeList(arr.as_list::<i64>().to_owned().into())
-                    }
-                    Value::FixedSizeListValue(_) => {
-                        Self::FixedSizeList(arr.as_fixed_size_list().to_owned().into())
-                    }
-                    Value::ListViewValue(_) => {
-                        Self::ListView(arr.as_list_view::<i32>().to_owned().into())
-                    }
-                    Value::LargeListViewValue(_) => {
-                        Self::LargeListView(arr.as_list_view::<i64>().to_owned().into())
-                    }
-                    Value::StructValue(_) => {
-                        Self::Struct(arr.as_struct().to_owned().into())
-                    }
-                    Value::MapValue(_) => Self::Map(arr.as_map().to_owned().into()),
+                    Value::ListValue(_) => Self::List(
+                        arr.as_list_opt::<i32>()
+                            .ok_or_else(|| mismatch("ListValue"))?
+                            .to_owned()
+                            .into(),
+                    ),
+                    Value::LargeListValue(_) => Self::LargeList(
+                        arr.as_list_opt::<i64>()
+                            .ok_or_else(|| mismatch("LargeListValue"))?
+                            .to_owned()
+                            .into(),
+                    ),
+                    Value::FixedSizeListValue(_) => Self::FixedSizeList(
+                        arr.as_fixed_size_list_opt()
+                            .ok_or_else(|| mismatch("FixedSizeListValue"))?
+                            .to_owned()
+                            .into(),
+                    ),
+                    Value::ListViewValue(_) => Self::ListView(
+                        arr.as_list_view_opt::<i32>()
+                            .ok_or_else(|| mismatch("ListViewValue"))?
+                            .to_owned()
+                            .into(),
+                    ),
+                    Value::LargeListViewValue(_) => Self::LargeListView(
+                        arr.as_list_view_opt::<i64>()
+                            .ok_or_else(|| mismatch("LargeListViewValue"))?
+                            .to_owned()
+                            .into(),
+                    ),
+                    Value::StructValue(_) => Self::Struct(
+                        arr.as_struct_opt()
+                            .ok_or_else(|| mismatch("StructValue"))?
+                            .to_owned()
+                            .into(),
+                    ),
+                    Value::MapValue(_) => Self::Map(
+                        arr.as_map_opt()
+                            .ok_or_else(|| mismatch("MapValue"))?
+                            .to_owned()
+                            .into(),
+                    ),
                     _ => unreachable!(),
                 }
             }
@@ -549,15 +585,15 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 null_type.try_into().map_err(Error::DataFusionError)?
             }
             Value::Decimal32Value(val) => {
-                let array = vec_to_array(val.value.clone());
+                let array = vec_to_array(val.value.clone(), "Decimal32Value")?;
                 Self::Decimal32(Some(i32::from_be_bytes(array)), val.p as u8, val.s as i8)
             }
             Value::Decimal64Value(val) => {
-                let array = vec_to_array(val.value.clone());
+                let array = vec_to_array(val.value.clone(), "Decimal64Value")?;
                 Self::Decimal64(Some(i64::from_be_bytes(array)), val.p as u8, val.s as i8)
             }
             Value::Decimal128Value(val) => {
-                let array = vec_to_array(val.value.clone());
+                let array = vec_to_array(val.value.clone(), "Decimal128Value")?;
                 Self::Decimal128(
                     Some(i128::from_be_bytes(array)),
                     val.p as u8,
@@ -565,7 +601,7 @@ impl TryFrom<&protobuf::ScalarValue> for ScalarValue {
                 )
             }
             Value::Decimal256Value(val) => {
-                let array = vec_to_array(val.value.clone());
+                let array = vec_to_array(val.value.clone(), "Decimal256Value")?;
                 Self::Decimal256(
                     Some(i256::from_be_bytes(array)),
                     val.p as u8,
@@ -1126,8 +1162,12 @@ impl TryFrom<&protobuf::CsvOptions> for CsvOptions {
     ) -> datafusion_common::Result<Self, Self::Error> {
         Ok(CsvOptions {
             has_header: proto_opts.has_header.first().map(|h| *h != 0),
-            delimiter: proto_opts.delimiter[0],
-            quote: proto_opts.quote[0],
+            delimiter: *proto_opts.delimiter.first().ok_or_else(|| {
+                plan_datafusion_err!("CsvOptions: missing required field 'delimiter'")
+            })?,
+            quote: *proto_opts.quote.first().ok_or_else(|| {
+                plan_datafusion_err!("CsvOptions: missing required field 'quote'")
+            })?,
             terminator: proto_opts.terminator.first().copied(),
             escape: proto_opts.escape.first().copied(),
             double_quote: proto_opts.double_quote.first().map(|h| *h != 0),
@@ -1417,10 +1457,12 @@ pub fn parse_i32_to_interval_unit(
         .map_err(|_| Error::unknown("IntervalUnit", *value))
 }
 
-// panic here because no better way to convert from Vec to Array
-fn vec_to_array<T, const N: usize>(v: Vec<T>) -> [T; N] {
-    v.try_into().unwrap_or_else(|v: Vec<T>| {
-        panic!("Expected a Vec of length {} but it was {}", N, v.len())
+fn vec_to_array<const N: usize>(v: Vec<u8>, field: &str) -> Result<[u8; N], Error> {
+    v.try_into().map_err(|v: Vec<u8>| {
+        Error::General(format!(
+            "Expected {N} bytes for {field} but got {}",
+            v.len()
+        ))
     })
 }
 
@@ -1920,5 +1962,179 @@ mod tests {
         assert!(!opts.global.content_defined_chunking.enabled);
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
         assert!(!recovered.global.content_defined_chunking.enabled);
+    }
+
+    #[test]
+    fn decimal_value_of_wrong_length_is_an_error() {
+        use datafusion_common::ScalarValue;
+        use datafusion_common::arrow::datatypes::i256;
+
+        use crate::protobuf_common::scalar_value::Value;
+
+        for (scalar, expected) in [
+            (
+                ScalarValue::Decimal32(Some(123), 9, 2),
+                "General error: Expected 4 bytes for Decimal32Value but got 3",
+            ),
+            (
+                ScalarValue::Decimal64(Some(123), 18, 2),
+                "General error: Expected 8 bytes for Decimal64Value but got 7",
+            ),
+            (
+                ScalarValue::Decimal128(Some(123), 38, 2),
+                "General error: Expected 16 bytes for Decimal128Value but got 15",
+            ),
+            (
+                ScalarValue::Decimal256(Some(i256::from(123)), 76, 2),
+                "General error: Expected 32 bytes for Decimal256Value but got 31",
+            ),
+        ] {
+            let mut proto =
+                crate::protobuf_common::ScalarValue::try_from(&scalar).unwrap();
+            assert_eq!(ScalarValue::try_from(&proto).unwrap(), scalar);
+
+            let bytes = match proto.value.as_mut().unwrap() {
+                Value::Decimal32Value(v) => &mut v.value,
+                Value::Decimal64Value(v) => &mut v.value,
+                Value::Decimal128Value(v) => &mut v.value,
+                Value::Decimal256Value(v) => &mut v.value,
+                other => panic!("unexpected encoding {other:?}"),
+            };
+            bytes.pop();
+            let err = ScalarValue::try_from(&proto).unwrap_err();
+            assert_eq!(err.to_string(), expected);
+        }
+    }
+
+    #[test]
+    fn nested_value_whose_batch_disagrees_with_its_kind_is_an_error() {
+        use datafusion_common::ScalarValue;
+        use datafusion_common::arrow::datatypes::{DataType, Field};
+        use datafusion_common::scalar::ScalarStructBuilder;
+
+        use crate::protobuf_common::scalar_value::Value;
+
+        let encode = |scalar: &ScalarValue| {
+            let proto = crate::protobuf_common::ScalarValue::try_from(scalar).unwrap();
+            assert_eq!(&ScalarValue::try_from(&proto).unwrap(), scalar);
+            match proto.value {
+                Some(Value::ListValue(v) | Value::StructValue(v)) => v,
+                other => panic!("unexpected encoding {other:?}"),
+            }
+        };
+        let list = encode(&ScalarValue::List(ScalarValue::new_list_nullable(
+            &[ScalarValue::Int32(Some(1))],
+            &DataType::Int32,
+        )));
+        let strct = encode(
+            &ScalarStructBuilder::new()
+                .with_scalar(
+                    Field::new("a", DataType::Int32, false),
+                    ScalarValue::Int32(Some(1)),
+                )
+                .build()
+                .unwrap(),
+        );
+
+        for (value, kind) in [
+            (Value::ListValue(strct), "ListValue"),
+            (Value::LargeListValue(list.clone()), "LargeListValue"),
+            (
+                Value::FixedSizeListValue(list.clone()),
+                "FixedSizeListValue",
+            ),
+            (Value::ListViewValue(list.clone()), "ListViewValue"),
+            (
+                Value::LargeListViewValue(list.clone()),
+                "LargeListViewValue",
+            ),
+            (Value::StructValue(list.clone()), "StructValue"),
+            (Value::MapValue(list.clone()), "MapValue"),
+        ] {
+            let proto = crate::protobuf_common::ScalarValue { value: Some(value) };
+            let err = ScalarValue::try_from(&proto).unwrap_err().to_string();
+            assert!(
+                err.contains(&format!(
+                    "for {kind} while deserializing nested ScalarValue"
+                )),
+                "{err}"
+            );
+        }
+
+        let no_columns = crate::protobuf_common::ScalarNestedValue {
+            schema: Some(crate::protobuf_common::Schema::default()),
+            ..list
+        };
+        let proto = crate::protobuf_common::ScalarValue {
+            value: Some(Value::ListValue(no_columns)),
+        };
+        assert_eq!(
+            ScalarValue::try_from(&proto).unwrap_err().to_string(),
+            "General error: No column in record batch while deserializing nested ScalarValue"
+        );
+    }
+
+    #[test]
+    fn union_of_more_than_128_fields_without_type_ids_is_an_error() {
+        use datafusion_common::arrow::datatypes::{DataType, Field};
+
+        use crate::protobuf_common::arrow_type::ArrowTypeEnum;
+
+        let union = |children: usize| crate::protobuf_common::ArrowType {
+            arrow_type_enum: Some(ArrowTypeEnum::Union(crate::protobuf_common::Union {
+                union_types: (0..children)
+                    .map(|i| {
+                        let field = Field::new(format!("f{i}"), DataType::Int32, true);
+                        crate::protobuf_common::Field::try_from(&field).unwrap()
+                    })
+                    .collect(),
+                union_mode: crate::protobuf_common::UnionMode::Sparse as i32,
+                type_ids: vec![],
+            })),
+        };
+
+        assert!(matches!(
+            DataType::try_from(&union(128)).unwrap(),
+            DataType::Union(fields, _) if fields.len() == 128
+        ));
+        let err = DataType::try_from(&union(129)).unwrap_err().to_string();
+        assert!(err.contains("Deserializing Union DataType"), "{err}");
+        assert!(
+            err.contains("UnionFields cannot contain more than 128 fields"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn csv_options_without_delimiter_or_quote_is_an_error() {
+        use datafusion_common::config::CsvOptions;
+
+        let proto =
+            crate::protobuf_common::CsvOptions::try_from(&CsvOptions::default()).unwrap();
+        let recovered = CsvOptions::try_from(&proto).unwrap();
+        assert_eq!(recovered.delimiter, b',');
+        assert_eq!(recovered.quote, b'"');
+
+        let no_delimiter = crate::protobuf_common::CsvOptions {
+            delimiter: vec![],
+            ..proto.clone()
+        };
+        assert_eq!(
+            CsvOptions::try_from(&no_delimiter)
+                .unwrap_err()
+                .strip_backtrace(),
+            "Error during planning: CsvOptions: missing required field 'delimiter'"
+        );
+
+        let no_quote = crate::protobuf_common::CsvOptions {
+            quote: vec![],
+            ..proto
+        };
+        assert_eq!(
+            CsvOptions::try_from(&no_quote)
+                .unwrap_err()
+                .strip_backtrace(),
+            "Error during planning: CsvOptions: missing required field 'quote'"
+        );
     }
 }
