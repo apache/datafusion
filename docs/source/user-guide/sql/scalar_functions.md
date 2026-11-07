@@ -4681,7 +4681,7 @@ array_subtract(array1, array2)
 
 ### `array_sum`
 
-Returns the sum of the elements of the input array, computed as `array[0] + array[1] + ...`. NULL elements are skipped (per SQL aggregate convention). Returns NULL if the input row is NULL, every element is NULL, or the array is empty.
+Returns the sum of the elements of the input array, computed as `array[0] + array[1] + ...`. NULL elements are skipped (per SQL aggregate convention). Returns NULL if the input row is NULL, every element is NULL, or the array is empty. The result type follows the `sum` aggregate function: `Int64` for signed integer arrays, `UInt64` for unsigned integer arrays, and a decimal with 10 more digits of precision (up to the maximum) for decimal arrays. Integer sums wrap on overflow, as `sum` does. Other arrays are summed as `Float64`.
 
 ```sql
 array_sum(array)
