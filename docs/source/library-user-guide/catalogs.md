@@ -203,6 +203,77 @@ impl SchemaProvider for Schema {
 }
 ```
 
+### Time travel
+
+Time travel queries, such as `SELECT * FROM t VERSION AS OF 3` or
+`SELECT * FROM t TIMESTAMP AS OF '2024-01-01'`, read a table as it existed at an
+earlier version or point in time. DataFusion evaluates the version expression
+during planning and passes the resulting [`TableVersion`] to
+`SchemaProvider::table_at`. A `TableVersion` is either a `Version`, holding any
+`ScalarValue` such as a snapshot id or a tag, or a `Timestamp` in nanoseconds
+since the Unix epoch (UTC).
+
+The default implementation of `table_at` returns a "not implemented" error.
+Schema providers that support time travel return a table provider that reads the
+requested version of the table.
+
+The returned provider must report the version it reads from
+`TableProvider::version`. This may differ from the requested version: a tag or a
+timestamp typically resolves to a snapshot id. The built-in providers, such as
+`ListingTable` and `MemTable`, report the version set with `with_version`:
+
+```rust
+# use async_trait::async_trait;
+# use std::sync::Arc;
+# use arrow::datatypes::DataType;
+# use datafusion::catalog::{MemTable, TableProvider, SchemaProvider};
+# use datafusion::common::{Result, ScalarValue, TableVersion};
+#
+# #[derive(Debug)]
+# struct Schema {}
+#
+# impl Schema {
+#     fn snapshot(&self, _name: &str, _id: i64) -> Result<Option<MemTable>> { todo!() }
+#     fn latest_snapshot_before(&self, _nanos: i64) -> Result<i64> { todo!() }
+# }
+#
+#[async_trait]
+impl SchemaProvider for Schema {
+    async fn table_at(
+        &self,
+        name: &str,
+        version: &TableVersion,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        // Resolve the requested version to a snapshot id
+        let id = match version {
+            TableVersion::Version(value) => {
+                i64::try_from(value.cast_to(&DataType::Int64)?)?
+            }
+            TableVersion::Timestamp(nanos) => self.latest_snapshot_before(*nanos)?,
+        };
+        let Some(table) = self.snapshot(name, id)? else {
+            return Ok(None);
+        };
+        // Report the snapshot that is read
+        let table = table.with_version(Some(TableVersion::Version(ScalarValue::from(id))));
+        Ok(Some(Arc::new(table)))
+    }
+
+#    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> { todo!() }
+#    fn table_names(&self) -> Vec<std::string::String> { todo!() }
+#    fn table_exist(&self, _: &str) -> bool { todo!() }
+}
+```
+
+EXPLAIN shows the version that each table scan reads. Scans of the same version
+compare equal, however that version was requested:
+
+```text
+TableScan: t@3 projection=[id, name]
+```
+
+[`tableversion`]: https://docs.rs/datafusion/latest/datafusion/common/enum.TableVersion.html
+
 ## Implementing `MemoryCatalogProvider`
 
 As mentioned, the `CatalogProvider` can manage the schemas in a catalog, and the `MemoryCatalogProvider` is a simple implementation of the `CatalogProvider` trait. It stores schemas in a `DashMap`. With that the `CatalogProvider` trait can be implemented.

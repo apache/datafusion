@@ -5,19 +5,24 @@
 //! Tests for the RelationPlanner extension point
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use arrow::array::{Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
+use async_trait::async_trait;
 use datafusion::catalog::memory::MemTable;
+use datafusion::catalog::{SchemaProvider, TableProvider};
 use datafusion::common::test_util::batches_to_string;
 use datafusion::prelude::*;
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{DFSchema, Result, ScalarValue, TableVersion, not_impl_err};
 use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::planner::{
     PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
 };
-use datafusion_sql::sqlparser::ast::{TableAlias, TableFactor};
+use datafusion_sql::sqlparser::ast::{
+    TableAlias, TableFactor, TableVersion as SQLTableVersion,
+};
 use insta::assert_snapshot;
 
 // ============================================================================
@@ -337,6 +342,51 @@ fn create_context_with_catalog_table(
     ctx
 }
 
+/// A schema with a single table `t`, which counts how often the current and
+/// a specific version of `t` are looked up.
+#[derive(Debug)]
+struct CountingSchema {
+    table: Arc<dyn TableProvider>,
+    /// Whether `table_at` is implemented, or returns "not implemented" like
+    /// catalogs that predate it
+    supports_time_travel: bool,
+    table_calls: AtomicUsize,
+    table_at_calls: AtomicUsize,
+}
+
+#[async_trait]
+impl SchemaProvider for CountingSchema {
+    fn table_names(&self) -> Vec<String> {
+        vec!["t".to_string()]
+    }
+
+    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
+        self.table_calls.fetch_add(1, Ordering::SeqCst);
+        Ok((name == "t").then(|| Arc::clone(&self.table)))
+    }
+
+    async fn table_at(
+        &self,
+        name: &str,
+        version: &TableVersion,
+    ) -> Result<Option<Arc<dyn TableProvider>>> {
+        self.table_at_calls.fetch_add(1, Ordering::SeqCst);
+        if !self.supports_time_travel {
+            return not_impl_err!("Time travel is not supported");
+        }
+        if name != "t" {
+            return Ok(None);
+        }
+        let table = MemTable::try_new(self.table.schema(), vec![vec![]])?
+            .with_version(Some(version.clone()));
+        Ok(Some(Arc::new(table)))
+    }
+
+    fn table_exist(&self, name: &str) -> bool {
+        name == "t"
+    }
+}
+
 /// Create a SessionContext with a simple single-column Int64 table.
 ///
 /// Useful for basic tests that need a real catalog table.
@@ -365,6 +415,44 @@ fn create_context_with_simple_table(
 // ============================================================================
 // TESTS: Ordered from Basic to Complex
 // ============================================================================
+
+/// Example planner that implements time travel itself, for tables whose
+/// catalog does not support [`SchemaProvider::table_at`]. It emulates version
+/// `n` of a table by only returning the rows with an `id` of at most `n`.
+///
+/// [`SchemaProvider::table_at`]: datafusion::catalog::SchemaProvider::table_at
+#[derive(Debug)]
+struct EmulatedVersionPlanner;
+
+impl RelationPlanner for EmulatedVersionPlanner {
+    fn plan_relation(
+        &self,
+        relation: TableFactor,
+        context: &mut dyn RelationPlannerContext,
+    ) -> Result<RelationPlanning> {
+        let TableFactor::Table {
+            name,
+            alias,
+            args: None,
+            version: Some(SQLTableVersion::VersionAsOf(version)),
+            ..
+        } = relation
+        else {
+            return Ok(RelationPlanning::Original(Box::new(relation)));
+        };
+        let table_ref = context.object_name_to_table_reference(name)?;
+        let version = context.sql_to_expr(version, &DFSchema::empty())?;
+        let source = context
+            .context_provider()
+            .get_table_source(table_ref.clone())?;
+        let plan = LogicalPlanBuilder::scan(table_ref, source, None)?
+            .filter(col("id").lt_eq(version))?
+            .build()?;
+        Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+            plan, alias,
+        ))))
+    }
+}
 
 /// Comprehensive test suite for RelationPlanner extension point.
 /// Tests are ordered from simplest smoke test to most complex scenarios.
@@ -702,6 +790,91 @@ mod tests {
             error_msg.contains("premium feature") && error_msg.contains("DataFusion Pro"),
             "Expected custom rejection message, got: {error_msg}"
         );
+    }
+
+    // A RelationPlanner can handle time travel clauses itself, for tables
+    // whose catalog does not support time travel.
+    #[tokio::test]
+    async fn planner_handles_time_travel() {
+        let ctx =
+            create_context_with_catalog_table("t", vec![1, 2, 3], vec!["a", "b", "c"])
+                .with_planner(EmulatedVersionPlanner);
+        ctx.sql("SET datafusion.sql_parser.dialect = 'Databricks'")
+            .await
+            .unwrap();
+
+        let result =
+            execute_sql_to_string(&ctx, "SELECT * FROM t VERSION AS OF 2 ORDER BY id")
+                .await;
+        assert_snapshot!(result, @r"
+        +----+------+
+        | id | name |
+        +----+------+
+        | 1  | a    |
+        | 2  | b    |
+        +----+------+
+        ");
+
+        // Without the planner, the catalog's lack of time travel support is
+        // reported
+        let ctx =
+            create_context_with_catalog_table("t", vec![1, 2, 3], vec!["a", "b", "c"]);
+        ctx.sql("SET datafusion.sql_parser.dialect = 'Databricks'")
+            .await
+            .unwrap();
+        let error = execute_sql(&ctx, "SELECT * FROM t VERSION AS OF 2")
+            .await
+            .expect_err("time travel should not be supported");
+        assert_snapshot!(error.strip_backtrace(), @"This feature is not implemented: Time travel is not supported for table 't@2'");
+    }
+
+    // The current version of a table referenced with a time travel clause is
+    // only fetched when a RelationPlanner may handle the time travel clause
+    // itself, whether or not the catalog implements `table_at`.
+    #[tokio::test]
+    async fn time_travel_fetches_current_version_only_for_planners() {
+        for (supports_time_travel, with_planner) in
+            [(true, false), (true, true), (false, false), (false, true)]
+        {
+            let case = format!(
+                "supports_time_travel={supports_time_travel}, with_planner={with_planner}"
+            );
+            let mut ctx =
+                create_context_with_catalog_table("unused", vec![1, 2], vec!["a", "b"]);
+            if with_planner {
+                ctx = ctx.with_planner(EmulatedVersionPlanner);
+            }
+            ctx.sql("SET datafusion.sql_parser.dialect = 'Databricks'")
+                .await
+                .unwrap();
+            let table = ctx.table_provider("unused").await.unwrap();
+            let schema = Arc::new(CountingSchema {
+                table,
+                supports_time_travel,
+                table_calls: AtomicUsize::new(0),
+                table_at_calls: AtomicUsize::new(0),
+            });
+            ctx.catalog("datafusion")
+                .unwrap()
+                .register_schema("counting", Arc::clone(&schema) as _)
+                .unwrap();
+
+            let result =
+                execute_sql(&ctx, "SELECT * FROM counting.t VERSION AS OF 1").await;
+            // Planned by the planner if registered, and by DataFusion
+            // otherwise
+            assert_eq!(
+                result.is_ok(),
+                supports_time_travel || with_planner,
+                "{case}: {result:?}"
+            );
+            assert_eq!(
+                schema.table_calls.load(Ordering::SeqCst),
+                usize::from(with_planner),
+                "{case}"
+            );
+            assert_eq!(schema.table_at_calls.load(Ordering::SeqCst), 1, "{case}");
+        }
     }
 
     // SamplingJoinPlanner recursively calls `context.plan()` on both sides of a

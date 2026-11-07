@@ -7,7 +7,7 @@
 use crate::{Expr, LogicalPlan};
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraints, Result};
+use datafusion_common::{Constraints, Result, TableVersion};
 
 use std::{any::Any, borrow::Cow};
 
@@ -119,6 +119,20 @@ pub trait TableSource: Any + Sync + Send {
 
     /// Get the default value for a column, if available.
     fn get_column_default(&self, _column: &str) -> Option<&Expr> {
+        None
+    }
+
+    /// The version of the table this source reads, for time travel queries
+    /// such as `SELECT * FROM t VERSION AS OF 3`. `None` means the version is
+    /// unknown or the table is not versioned.
+    ///
+    /// Sources returned by [`ContextProvider::get_table_source_at`] must
+    /// report the version they read, which may differ from the requested
+    /// version. See [`TableProvider::version`].
+    ///
+    /// [`TableProvider::version`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.version
+    /// [`ContextProvider::get_table_source_at`]: crate::planner::ContextProvider::get_table_source_at
+    fn version(&self) -> Option<&TableVersion> {
         None
     }
 }

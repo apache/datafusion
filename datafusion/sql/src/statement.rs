@@ -853,6 +853,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .map(|t| self.convert_data_type_to_field(&t))
                     .collect::<Result<_>>()?;
 
+                self.check_prepared_table_versions(&statement)?;
+
                 // Create planner context with parameters
                 let mut planner_context = PlannerContext::new()
                     .with_prepare_param_data_types(
@@ -1648,11 +1650,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if !table_factor.joins.is_empty() {
             return not_impl_err!("DELETE FROM only supports single table, got: joins");
         }
-        let TableFactor::Table { name, .. } = table_factor.relation else {
+        let TableFactor::Table { name, version, .. } = table_factor.relation else {
             return not_impl_err!(
                 "DELETE FROM only supports single table, got: {table_factor:?}"
             );
         };
+        if version.is_some() {
+            return not_impl_err!("Time travel is not supported for DELETE targets");
+        }
 
         Ok(name)
     }
@@ -2322,6 +2327,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         predicate_expr: Option<SQLExpr>,
     ) -> Result<LogicalPlan> {
         let (table_name, table_alias) = match &table.relation {
+            TableFactor::Table {
+                version: Some(_), ..
+            } => {
+                return not_impl_err!("Time travel is not supported for UPDATE targets");
+            }
             TableFactor::Table { name, alias, .. } => (name.clone(), alias.clone()),
             _ => plan_err!("Cannot update non-table relation!")?,
         };

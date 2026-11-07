@@ -11,7 +11,7 @@
 use datafusion_common::DataFusionError;
 use datafusion_common::display::{PlanType, StringifiedPlan};
 use datafusion_common::{
-    JoinConstraint, JoinType, NullEquality, TableReference, UnnestOptions,
+    JoinConstraint, JoinType, NullEquality, TableReference, TableVersion, UnnestOptions,
 };
 
 use crate::generated::datafusion_common::EmptyMessage;
@@ -111,6 +111,21 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
             },
             plan: stringified_plan.plan.to_string(),
         }
+    }
+}
+
+impl TryFrom<&TableVersion> for protobuf::TableVersion {
+    type Error = datafusion_proto_common::ToProtoError;
+
+    fn try_from(version: &TableVersion) -> Result<Self, Self::Error> {
+        use protobuf::table_version::TableVersionEnum;
+        let table_version_enum = match version {
+            TableVersion::Version(value) => TableVersionEnum::Version(value.try_into()?),
+            TableVersion::Timestamp(ns) => TableVersionEnum::Timestamp(*ns),
+        };
+        Ok(protobuf::TableVersion {
+            table_version_enum: Some(table_version_enum),
+        })
     }
 }
 

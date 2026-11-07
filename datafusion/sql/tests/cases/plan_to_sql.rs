@@ -2,12 +2,12 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::datatypes::{DataType, Field, Schema};
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{
-    Column, DFSchema, DFSchemaRef, DataFusionError, Result, TableReference,
-    assert_contains,
+    Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
+    TableVersion, assert_contains,
 };
 use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion_expr::test::function_stub::{
@@ -15,10 +15,10 @@ use datafusion_expr::test::function_stub::{
 };
 use datafusion_expr::{
     ColumnarValue, EmptyRelation, Expr, Extension, LogicalPlan, LogicalPlanBuilder,
-    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScanBuilder, Union,
-    UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility, WindowFrame,
-    WindowFunctionDefinition, cast, col, exists, in_subquery, lit, scalar_subquery,
-    table_scan, wildcard,
+    ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, TableScanBuilder,
+    TableSource, Union, UserDefinedLogicalNode, UserDefinedLogicalNodeCore, Volatility,
+    WindowFrame, WindowFunctionDefinition, cast, col, exists, in_subquery, lit,
+    scalar_subquery, table_scan, wildcard,
 };
 use datafusion_functions::unicode;
 use datafusion_functions_aggregate::grouping::grouping_udaf;
@@ -31,6 +31,7 @@ use datafusion_sql::unparser::dialect::{
     BigQueryDialect, CustomDialectBuilder, DefaultDialect as UnparserDefaultDialect,
     DefaultDialect, Dialect as UnparserDialect, MySqlDialect as UnparserMySqlDialect,
     PostgreSqlDialect as UnparserPostgreSqlDialect, SnowflakeDialect, SqliteDialect,
+    TableVersionStyle,
 };
 use datafusion_sql::unparser::{Unparser, expr_to_sql, plan_to_sql};
 use insta::assert_snapshot;
@@ -1687,6 +1688,77 @@ fn test_table_scan_alias() -> Result<()> {
         table_scan_with_pushdown_all,
         @"SELECT a.id FROM (SELECT a.id, a.age FROM t1 AS a WHERE (a.id > 1) LIMIT 10) AS a"
     );
+    Ok(())
+}
+
+#[test]
+fn test_table_scan_version_to_sql() -> Result<()> {
+    let schema = Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("age", DataType::Utf8, false),
+    ]);
+    /// A source that reads a specific version of a table
+    struct VersionedSource {
+        schema: SchemaRef,
+        version: TableVersion,
+    }
+
+    impl TableSource for VersionedSource {
+        fn schema(&self) -> SchemaRef {
+            Arc::clone(&self.schema)
+        }
+
+        fn version(&self) -> Option<&TableVersion> {
+            Some(&self.version)
+        }
+    }
+
+    let scan = |version: TableVersion, filters: Vec<Expr>| -> Result<LogicalPlan> {
+        let source = Arc::new(VersionedSource {
+            schema: Arc::new(schema.clone()),
+            version,
+        });
+        Ok(LogicalPlan::TableScan(
+            TableScanBuilder::new("t1", source)
+                .with_filters(filters)
+                .build()?,
+        ))
+    };
+    let version = TableVersion::Version(ScalarValue::Int64(Some(3)));
+    let tag = TableVersion::Version(ScalarValue::from("v1"));
+    // 2024-01-01T00:00:00Z
+    let timestamp = TableVersion::Timestamp(1_704_067_200_000_000_000);
+
+    let sql = plan_to_sql(&scan(version.clone(), vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 AT(VERSION => 3)");
+    let sql = plan_to_sql(&scan(tag.clone(), vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 AT(VERSION => 'v1')");
+    let sql = plan_to_sql(&scan(timestamp.clone(), vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 AT(TIMESTAMP => CAST('2024-01-01T00:00:00+00:00' AS TIMESTAMP WITH TIME ZONE))");
+
+    // The version is kept when filters are pushed down into the scan
+    let sql = plan_to_sql(&scan(version.clone(), vec![col("id").eq(lit("a"))])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 AT(VERSION => 3) WHERE (t1.id = 'a')");
+
+    let as_of = CustomDialectBuilder::new()
+        .with_table_version_style(TableVersionStyle::AsOf)
+        .build();
+    let unparser = Unparser::new(&as_of);
+    let sql = unparser.plan_to_sql(&scan(version.clone(), vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 VERSION AS OF 3");
+    let sql = unparser.plan_to_sql(&scan(timestamp.clone(), vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 TIMESTAMP AS OF CAST('2024-01-01T00:00:00+00:00' AS TIMESTAMP WITH TIME ZONE)");
+
+    let big_query = BigQueryDialect {};
+    let unparser = Unparser::new(&big_query);
+    let sql = unparser.plan_to_sql(&scan(timestamp, vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM `t1` FOR SYSTEM_TIME AS OF CAST('2024-01-01T00:00:00+00:00' AS TIMESTAMP)");
+    let err = unparser
+        .plan_to_sql(&scan(version, vec![])?)
+        .unwrap_err()
+        .strip_backtrace();
+    assert_snapshot!(err, @"This feature is not implemented: This dialect does not support time travel to version 3");
+
     Ok(())
 }
 

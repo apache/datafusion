@@ -17,7 +17,7 @@ use crate::{
 use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    DFSchema, Result, TableReference, config::ConfigOptions,
+    DFSchema, Result, TableReference, TableVersion, config::ConfigOptions,
     file_options::file_type::FileType, not_impl_err,
 };
 #[cfg(feature = "sql")]
@@ -31,6 +31,29 @@ use sqlparser::ast::{Expr as SQLExpr, Ident, ObjectName, TableAlias, TableFactor
 pub trait ContextProvider {
     /// Returns a table by reference, if it exists
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
+
+    /// Evaluates the expression of a time travel clause, such as
+    /// `VERSION AS OF <expr>`, to a constant [`TableVersion`].
+    ///
+    /// The expression must not reference any columns, but may call functions
+    /// such as `now()`.
+    fn evaluate_table_version(&self, _version: TableVersionExpr) -> Result<TableVersion> {
+        not_impl_err!("Time travel queries are not supported")
+    }
+
+    /// Returns a specific version of a table by reference, if it exists.
+    ///
+    /// The returned source must report the version it reads from
+    /// [`TableSource::version`], otherwise planning fails. This may differ
+    /// from the requested `version`. See [`TableVersion`] for the time travel
+    /// syntaxes that resolve to this.
+    fn get_table_source_at(
+        &self,
+        name: TableReference,
+        version: &TableVersion,
+    ) -> Result<Arc<dyn TableSource>> {
+        not_impl_err!("Time travel is not supported for table '{name}@{version}'")
+    }
 
     /// Return the type of a file based on its extension (e.g. `.parquet`)
     ///
@@ -133,6 +156,18 @@ pub trait ContextProvider {
 
     /// Return all window function names
     fn udwf_names(&self) -> Vec<String>;
+}
+
+/// The unevaluated form of a [`TableVersion`], as written in a time travel
+/// clause such as `VERSION AS OF <expr>` or `TIMESTAMP AS OF <expr>`.
+///
+/// See [`ContextProvider::evaluate_table_version`].
+#[derive(Debug, Clone, PartialEq)]
+pub enum TableVersionExpr {
+    /// Evaluates to a [`TableVersion::Version`]
+    Version(Expr),
+    /// Evaluates to a [`TableVersion::Timestamp`]
+    Timestamp(Expr),
 }
 
 /// Customize planning of SQL AST expressions to [`Expr`]s
