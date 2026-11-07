@@ -62,6 +62,7 @@ use datafusion_execution::memory_pool::{
     MemoryConsumer, MemoryPool, MemoryReservation, MergeMemoryPool,
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_physical_expr::EquivalenceProperties;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
@@ -1350,9 +1351,23 @@ impl SortExec {
     /// If `preserve_partitioning` is false, sorts and merges all
     /// input partitions producing a single, sorted partition.
     pub fn with_preserve_partitioning(mut self, preserve_partitioning: bool) -> Self {
+        let changed = self.preserve_partitioning != preserve_partitioning;
         self.preserve_partitioning = preserve_partitioning;
-        Arc::make_mut(&mut self.cache).partitioning =
-            Self::output_partitioning_helper(&self.input, self.preserve_partitioning);
+        let cache = Arc::make_mut(&mut self.cache);
+        // Whether the sort merges its input partitions decides which input facts
+        // survive, so recompute them.
+        if changed {
+            cache.set_eq_properties(
+                Self::compute_eq_properties(
+                    &self.input,
+                    self.expr.clone(),
+                    preserve_partitioning,
+                )
+                .unwrap(),
+            );
+        }
+        cache.partitioning =
+            Self::output_partitioning_helper(&self.input, preserve_partitioning);
         if self.fetch.is_some() {
             self.rebuild_filter_for_current_partitioning();
         }
@@ -1522,6 +1537,26 @@ impl SortExec {
         }
     }
 
+    /// Calculates the equivalence properties of the sort's output; i.e. resets
+    /// the ordering equivalence class with the new ordering.
+    fn compute_eq_properties(
+        input: &Arc<dyn ExecutionPlan>,
+        sort_exprs: LexOrdering,
+        preserve_partitioning: bool,
+    ) -> Result<EquivalenceProperties> {
+        let mut eq_properties = input.equivalence_properties().clone();
+        // A sort that does not preserve partitioning merges its input partitions into one.
+        // Constants whose value differs between partitions, and orderings that hold only within
+        // each partition, do not hold for the merged output.
+        if !preserve_partitioning && input.output_partitioning().partition_count() > 1 {
+            eq_properties.clear_orderings();
+            eq_properties.clear_groupings();
+            eq_properties.clear_per_partition_constants();
+        }
+        eq_properties.reorder(sort_exprs)?;
+        Ok(eq_properties)
+    }
+
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
     /// It also returns the common sort prefix between the input and the sort expressions.
     fn compute_properties(
@@ -1558,10 +1593,8 @@ impl SortExec {
             }
         };
 
-        // Calculate equivalence properties; i.e. reset the ordering equivalence
-        // class with the new ordering:
-        let mut eq_properties = input.equivalence_properties().clone();
-        eq_properties.reorder(sort_exprs)?;
+        let eq_properties =
+            Self::compute_eq_properties(input, sort_exprs, preserve_partitioning)?;
 
         // Get output partitioning:
         let output_partitioning =
@@ -2495,6 +2528,7 @@ mod tests {
         BlockingExec, TestStream, assert_strong_count_converges_to_zero,
     };
     use crate::test::{assert_is_pending, make_partition};
+    use crate::union::UnionExec;
     use crate::{collect, collect_partitioned};
 
     use arrow::array::*;
@@ -2518,7 +2552,9 @@ mod tests {
         AsyncSpillWriter, SpillFile, SpillWriter, TempFileFactory,
     };
     use datafusion_physical_expr::expressions::{Column, Literal};
-    use datafusion_physical_expr::{DynamicFilterTracking, EquivalenceProperties};
+    use datafusion_physical_expr::{
+        AcrossPartitions, DynamicFilterTracking, EquivalenceProperties,
+    };
 
     use datafusion_physical_expr_common::metrics::MetricValue;
     use futures::{FutureExt, Stream, TryStreamExt};
@@ -4890,5 +4926,75 @@ mod tests {
         assert_snapshot!(pushed_down.to_string(), @"DynamicFilter [ true ]");
 
         Ok(())
+    }
+
+    /// Per-partition facts hold for a sort that preserves partitioning, but not for
+    /// one that merges partitions.
+    #[test]
+    fn sort_equivalence_properties_respect_partition_preservation() -> Result<()> {
+        let input = union_with_per_partition_constant_id()?;
+        let id = col_expr("id", 0);
+        let by_id_ts = sort_by(&[("id", 0), ("ts", 1)]);
+        let by_ts = sort_by(&[("ts", 1)]);
+
+        let assert_properties =
+            |sort: &SortExec,
+             ordering: &LexOrdering,
+             constant: Option<AcrossPartitions>| {
+                let properties = sort.properties();
+                assert_eq!(properties.output_ordering(), Some(ordering));
+                assert_eq!(
+                    properties.equivalence_properties().is_expr_constant(&id),
+                    constant
+                );
+            };
+
+        // Merging: `id` is no longer constant, so the full `[id, ts]` ordering is reported.
+        let sort = SortExec::new(by_id_ts.clone(), input);
+        assert_properties(&sort, &by_id_ts, None);
+
+        // Per partition: `id` is constant, so `[id, ts]` simplifies to `[ts]`.
+        let sort = sort.with_preserve_partitioning(true);
+        assert_properties(&sort, &by_ts, Some(AcrossPartitions::Heterogeneous));
+
+        // Switching back recomputes the merged properties.
+        let sort = sort.with_preserve_partitioning(false);
+        assert_properties(&sort, &by_id_ts, None);
+
+        Ok(())
+    }
+
+    /// Two partitions, each pre-sorted on `ts`, with a different literal `id`:
+    ///   Partition 0: SELECT 'b' AS id, ts FROM scan
+    ///   Partition 1: SELECT 'a' AS id, ts FROM scan
+    fn union_with_per_partition_constant_id() -> Result<Arc<dyn ExecutionPlan>> {
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("ts", DataType::Int32, false)]));
+
+        let arm = |id: &str| -> Result<Arc<dyn ExecutionPlan>> {
+            let scan = TestMemoryExec::try_new(&[vec![]], Arc::clone(&schema), None)?
+                .try_with_sort_information(vec![sort_by(&[("ts", 0)])])?;
+            let scan = Arc::new(TestMemoryExec::update_cache(&Arc::new(scan)));
+            let projection = [
+                (lit(id), "id".to_string()),
+                (col_expr("ts", 0), "ts".to_string()),
+            ];
+            Ok(Arc::new(ProjectionExec::try_new(projection, scan)?))
+        };
+
+        UnionExec::try_new(vec![arm("b")?, arm("a")?])
+    }
+
+    fn col_expr(name: &str, index: usize) -> Arc<dyn PhysicalExpr> {
+        Arc::new(Column::new(name, index))
+    }
+
+    fn sort_by(columns: &[(&str, usize)]) -> LexOrdering {
+        LexOrdering::new(
+            columns.iter().map(|(name, index)| {
+                PhysicalSortExpr::new_default(col_expr(name, *index))
+            }),
+        )
+        .unwrap()
     }
 }
