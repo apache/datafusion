@@ -2268,6 +2268,7 @@ dependencies = [
  "datafusion-execution",
  "datafusion-expr",
  "datafusion-ffi",
+ "datafusion-physical-expr",
  "datafusion-physical-expr-common",
  "datafusion-physical-optimizer",
  "datafusion-physical-plan",
