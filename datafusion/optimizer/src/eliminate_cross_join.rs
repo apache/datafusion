@@ -16,6 +16,8 @@ use datafusion_expr::logical_plan::{
 use datafusion_expr::utils::{can_hash, find_valid_equijoin_key_pair};
 use datafusion_expr::{ExprSchemable, Operator, and, build_join_schema};
 
+/// Optimizer rule that uses filter predicates to replace cross joins with
+/// inner joins when join keys can be found.
 #[derive(Default, Debug)]
 pub struct EliminateCrossJoin;
 
@@ -345,7 +347,7 @@ fn find_inner_join(
                 schema: join_schema,
                 null_equality,
                 null_aware: false,
-                null_aware_value_keys: 1,
+                null_aware_value_keys: 0,
             }));
         }
     }
@@ -369,7 +371,7 @@ fn find_inner_join(
         join_constraint: JoinConstraint::On,
         null_equality,
         null_aware: false,
-        null_aware_value_keys: 1,
+        null_aware_value_keys: 0,
     }))
 }
 
@@ -1443,7 +1445,7 @@ mod tests {
             schema: join_schema,
             null_equality: NullEquality::NullEqualsNull, // Test preservation
             null_aware: false,
-            null_aware_value_keys: 1,
+            null_aware_value_keys: 0,
         });
 
         // Apply filter that can create join conditions
