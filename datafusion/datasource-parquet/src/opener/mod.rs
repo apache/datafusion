@@ -62,6 +62,7 @@ use datafusion_pruning::{FilePruner, PruningPredicate, PruningPredicateBuilder};
 
 #[cfg(feature = "parquet_encryption")]
 use datafusion_common::config::EncryptionFactoryOptions;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool};
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use futures::{FutureExt, StreamExt, future::BoxFuture, stream::BoxStream};
@@ -296,6 +297,11 @@ pub(super) struct ParquetMorselizer {
     pub row_group_range_assignment: RowGroupRangeAssignment,
     /// Whether to read row groups in reverse order
     pub reverse_row_groups: bool,
+    /// Whether to also reverse the rows of each row group, making a reversed
+    /// scan exactly ordered. Buffers one decoded row group at a time.
+    pub reverse_rows: bool,
+    /// Pool charged for the row group a `reverse_rows` scan buffers.
+    pub memory_pool: Option<Arc<dyn MemoryPool>>,
     /// Optional sort order used to reorder row groups by their min/max statistics.
     pub sort_order_for_reorder: Option<LexOrdering>,
     /// Per-scan virtual-column state (validation already performed). `None`
@@ -492,6 +498,8 @@ struct PreparedParquetOpen {
     enable_rle_to_dictionary: bool,
     row_group_range_assignment: RowGroupRangeAssignment,
     reverse_row_groups: bool,
+    reverse_rows: bool,
+    memory_pool: Option<Arc<dyn MemoryPool>>,
     sort_order_for_reorder: Option<LexOrdering>,
     preserve_order: bool,
     #[cfg(feature = "parquet_encryption")]
@@ -1014,6 +1022,8 @@ impl ParquetMorselizer {
             enable_rle_to_dictionary: self.enable_rle_to_dictionary,
             row_group_range_assignment: self.row_group_range_assignment,
             reverse_row_groups: self.reverse_row_groups,
+            reverse_rows: self.reverse_rows,
+            memory_pool: self.memory_pool.clone(),
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             preserve_order: self.preserve_order,
             #[cfg(feature = "parquet_encryption")]
@@ -1426,6 +1436,32 @@ impl RowGroupsPrunedParquetOpen {
                 return Ok(true);
             }
         }
+        // A row-reversing scan under a limit reads only the tail of the first
+        // row group it reaches when that row group's output is known up
+        // front (see `PreparedAccessPlan::select_tail_for_limit`). The
+        // offset index lets the decoder skip the pages ahead of that tail
+        // instead of fetching the whole column chunk. `row_groups` is still
+        // in file order here (the reversal happens when the stream is
+        // built), so the row group a reversed scan reaches first is the
+        // last one.
+        let prepared = &self.prepared.loaded.prepared;
+        if prepared.reverse_rows
+            && let Some(limit) = prepared.limit
+            && let Some(first_read) = row_groups.row_group_indexes().last()
+        {
+            let row_group = parquet_metadata.row_group(first_read);
+            let output_known =
+                prepared.predicate.is_none() || row_groups.is_fully_matched()[first_read];
+            if output_known
+                && i64::try_from(limit).is_ok_and(|limit| limit < row_group.num_rows())
+                && row_group
+                    .columns()
+                    .iter()
+                    .any(|column| column.offset_index_offset().is_some())
+            {
+                return Ok(true);
+            }
+        }
         let Some(page_pruning_predicate) = self.prepared.page_pruning_predicate.as_ref()
         else {
             return Ok(false);
@@ -1631,8 +1667,13 @@ impl RowGroupsPrunedParquetOpen {
         let file_metadata = Arc::clone(reader_metadata.metadata());
         let rg_metadata = file_metadata.row_groups();
 
-        // Prune by limit if limit is set and limit order is not sensitive
-        if let (Some(limit), false) = (prepared.limit, prepared.preserve_order) {
+        // Prune by limit if limit is set and limit order is not sensitive.
+        // Limits are counted in decode order, which a row reversal does not
+        // follow: the rows a reversed scan keeps are the last ones of each
+        // row group, so it gives up limit-based pruning and the decoder
+        // limit and leaves the limit to the file stream.
+        let decode_order_limit = prepared.limit.filter(|_| !prepared.reverse_rows);
+        if let (Some(limit), false) = (decode_order_limit, prepared.preserve_order) {
             row_groups.prune_by_limit(limit, rg_metadata, &prepared.file_metrics);
         }
 
@@ -1658,7 +1699,7 @@ impl RowGroupsPrunedParquetOpen {
                     if prepared.preserve_order {
                         None
                     } else {
-                        prepared.limit
+                        decode_order_limit
                     },
                 );
             access_plan = page_pruning_result.access_plan;
@@ -1708,6 +1749,17 @@ impl RowGroupsPrunedParquetOpen {
                 if prepared.reverse_row_groups {
                     prepared_plan = prepared_plan.reverse();
                 }
+                // A row-reversing scan keeps the last rows of each row group,
+                // so under a limit it reads only those.
+                if prepared.reverse_rows
+                    && let Some(limit) = prepared.limit
+                {
+                    prepared_plan = prepared_plan.select_tail_for_limit(
+                        limit,
+                        prepared.predicate.is_none(),
+                        rg_metadata,
+                    );
+                }
                 Ok(prepared_plan)
             };
 
@@ -1751,7 +1803,7 @@ impl RowGroupsPrunedParquetOpen {
                 batch_size: prepared.batch_size,
                 arrow_reader_metrics: &arrow_reader_metrics,
                 force_filter_selections: prepared.force_filter_selections,
-                decoder_limit: prepared.limit,
+                decoder_limit: decode_order_limit,
             };
 
             let prepared_access_plan = prepare_access_plan(access_plan)?;
@@ -1910,6 +1962,20 @@ impl RowGroupsPrunedParquetOpen {
             filter_installed,
             row_filter_skipped_fully_matched,
             byte_progress,
+            reverse_rows: prepared.reverse_rows,
+            reverse_limit: prepared.limit.filter(|_| prepared.reverse_rows),
+            reversed_batches: Vec::new(),
+            reversed_reservation: prepared
+                .memory_pool
+                .as_ref()
+                .filter(|_| prepared.reverse_rows)
+                .map(|pool| {
+                    MemoryConsumer::new(format!(
+                        "ParquetReverseRowGroup[{}]",
+                        prepared.partition_index
+                    ))
+                    .register(pool)
+                }),
         }
         .into_stream();
 
@@ -2156,6 +2222,7 @@ mod test {
     use arrow::buffer::BooleanBuffer;
     use arrow::datatypes::{DataType, Field, Int32Type, Schema, SchemaRef};
     use bytes::{BufMut, BytesMut};
+    use datafusion_common::DataFusionError;
     use datafusion_common::{
         ColumnStatistics, ScalarValue, Statistics, assert_contains, internal_err,
         stats::Precision,
@@ -2168,6 +2235,7 @@ mod test {
         CachedFileMetadataEntry, FileMetadataCache,
     };
     use datafusion_execution::cache::default_cache::DefaultCache;
+    use datafusion_execution::memory_pool::GreedyMemoryPool;
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{Expr, col, lit};
     use datafusion_functions::core::expr_fn::get_field;
@@ -2228,6 +2296,8 @@ mod test {
         enable_rle_to_dictionary: bool,
         row_group_range_assignment: RowGroupRangeAssignment,
         reverse_row_groups: bool,
+        reverse_rows: bool,
+        memory_pool: Option<Arc<dyn MemoryPool>>,
         preserve_order: bool,
     }
 
@@ -2448,6 +2518,8 @@ mod test {
                 enable_rle_to_dictionary: false,
                 row_group_range_assignment: RowGroupRangeAssignment::default(),
                 reverse_row_groups: false,
+                reverse_rows: false,
+                memory_pool: None,
                 preserve_order: false,
             }
         }
@@ -2557,6 +2629,24 @@ mod test {
             self
         }
 
+        /// Set the flag that reverses rows within each row group.
+        fn with_reverse_rows(mut self, enable: bool) -> Self {
+            self.reverse_rows = enable;
+            self
+        }
+
+        /// Set the decoder batch size.
+        fn with_batch_size(mut self, batch_size: usize) -> Self {
+            self.batch_size = batch_size;
+            self
+        }
+
+        /// Set the pool charged for buffered row groups.
+        fn with_memory_pool(mut self, memory_pool: Arc<dyn MemoryPool>) -> Self {
+            self.memory_pool = Some(memory_pool);
+            self
+        }
+
         /// Set whether the scan must preserve file order.
         fn with_preserve_order(mut self, enable: bool) -> Self {
             self.preserve_order = enable;
@@ -2654,6 +2744,8 @@ mod test {
                 enable_rle_to_dictionary: self.enable_rle_to_dictionary,
                 row_group_range_assignment: self.row_group_range_assignment,
                 reverse_row_groups: self.reverse_row_groups,
+                reverse_rows: self.reverse_rows,
+                memory_pool: self.memory_pool.clone(),
                 sort_order_for_reorder: None,
                 virtual_state,
             })
@@ -4436,6 +4528,267 @@ mod test {
 
         // Both should have the same number of batches since there's only one row group
         assert_eq!(batches_forward, batches_reverse);
+    }
+
+    /// Writes `test.parquet` with values 1..=12 in row groups of 4 rows.
+    async fn write_twelve_rows_in_three_row_groups(
+        store: &Arc<dyn ObjectStore>,
+    ) -> (SchemaRef, PartitionedFile) {
+        let batch =
+            record_batch!(("a", Int32, (1..=12).map(Some).collect::<Vec<_>>())).unwrap();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(4))
+            .build();
+        let data_len = write_parquet_batches(
+            Arc::clone(store),
+            "test.parquet",
+            vec![batch.clone()],
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+        (batch.schema(), file)
+    }
+
+    /// With `reverse_rows`, each row group is emitted back to front, so the
+    /// whole file comes out exactly reversed. A batch size smaller than the
+    /// row group makes each row group span several batches, which must be
+    /// reversed as a whole rather than one batch at a time.
+    #[tokio::test]
+    async fn test_exact_reverse_scan_reverses_rows_within_row_groups() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = write_twelve_rows_in_three_row_groups(&store).await;
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_projection_indices(&[0])
+            .with_batch_size(3)
+            .with_reverse_row_groups(true)
+            .with_reverse_rows(true)
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+
+        assert_eq!(
+            collect_int32_values(stream).await,
+            (1..=12).rev().collect::<Vec<_>>()
+        );
+    }
+
+    /// A limit is counted in decode order, which the row reversal does not
+    /// follow, so a reversed scan must not hand it to the decoder: the rows
+    /// it keeps are the last ones of each row group, not the first. With no
+    /// predicate every row group's output is known, so only its last
+    /// `limit` rows are selected; the file stream stops after the first
+    /// `limit` rows of the output.
+    #[tokio::test]
+    async fn test_exact_reverse_scan_does_not_limit_in_decode_order() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = write_twelve_rows_in_three_row_groups(&store).await;
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_projection_indices(&[0])
+            .with_limit(2)
+            .with_reverse_row_groups(true)
+            .with_reverse_rows(true)
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+
+        assert_eq!(collect_int32_values(stream).await, [12, 11, 8, 7, 4, 3]);
+    }
+
+    /// A limit larger than the first row group read spans the row group
+    /// boundary: row group `9..=12` is taken whole, the next one (`5..=8`)
+    /// is cut to the 2 rows still needed (`7, 8`), and the walk stops, so
+    /// row group `1..=4` is read as is and only its last `limit` rows are
+    /// kept. The file stream stops after the first 6 rows, which are exactly
+    /// `12..=7`.
+    #[tokio::test]
+    async fn test_exact_reverse_scan_limit_spans_row_groups() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = write_twelve_rows_in_three_row_groups(&store).await;
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_projection_indices(&[0])
+            .with_limit(6)
+            .with_batch_size(3)
+            .with_reverse_row_groups(true)
+            .with_reverse_rows(true)
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+        let values = collect_int32_values(stream).await;
+
+        assert_eq!(values[..6], [12, 11, 10, 9, 8, 7]);
+        assert_eq!(values, [12, 11, 10, 9, 8, 7, 4, 3, 2, 1]);
+    }
+
+    /// Under a pushed-down filter a row group's output is known only when
+    /// statistics prove every row passes. Row group `9..=12` is fully
+    /// matched by `a > 5` and is cut to its last 3 rows up front; `5..=8` is
+    /// not, so it is decoded and filtered, and only its last 3 surviving
+    /// rows are kept; `1..=4` has none.
+    #[tokio::test]
+    async fn test_exact_reverse_scan_with_limit_and_filter() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = write_twelve_rows_in_three_row_groups(&store).await;
+        let predicate = logical2physical(&col("a").gt(lit(5)), &schema);
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_limit(3)
+            .with_batch_size(2)
+            .with_reverse_row_groups(true)
+            .with_reverse_rows(true)
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+
+        assert_eq!(collect_int32_values(stream).await, [12, 11, 10, 8, 7, 6]);
+    }
+
+    /// Selecting a row group's tail means the rows ahead of it are never
+    /// read: with one row per page and the offset index loaded, a limited
+    /// reverse scan fetches fewer bytes than reading the row group whole.
+    #[tokio::test]
+    async fn test_exact_reverse_scan_with_limit_skips_leading_pages() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batch =
+            record_batch!(("a", Int32, (1..=12).map(Some).collect::<Vec<_>>())).unwrap();
+        let props = WriterProperties::builder()
+            .set_data_page_row_count_limit(1)
+            .set_write_batch_size(1)
+            .build();
+        let data_len = write_parquet_batches(
+            Arc::clone(&store),
+            "test.parquet",
+            vec![batch.clone()],
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new(
+            "test.parquet".to_string(),
+            u64::try_from(data_len).unwrap(),
+        );
+
+        let scan = async |limit: Option<usize>| {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let mut builder = ParquetMorselizerBuilder::new()
+                .with_store(Arc::clone(&store))
+                .with_schema(batch.schema())
+                .with_projection_indices(&[0])
+                .with_enable_page_index(true)
+                .with_metrics(metrics.clone())
+                .with_reverse_row_groups(true)
+                .with_reverse_rows(true);
+            if let Some(limit) = limit {
+                builder = builder.with_limit(limit);
+            }
+            let stream = open_file(&builder.build(), file.clone()).await.unwrap();
+            let values = collect_int32_values(stream).await;
+            (values, counter_metric_value(&metrics, "bytes_scanned"))
+        };
+
+        let (all_values, all_bytes) = scan(None).await;
+        let (tail_values, tail_bytes) = scan(Some(2)).await;
+
+        assert_eq!(all_values, (1..=12).rev().collect::<Vec<_>>());
+        assert_eq!(tail_values, [12, 11]);
+        assert!(
+            tail_bytes < all_bytes,
+            "limited scan read {tail_bytes} bytes, full scan {all_bytes}"
+        );
+    }
+
+    /// The buffered row group is charged to the memory pool, so a pool too
+    /// small for it fails the scan with a resources error instead of
+    /// letting the process grow.
+    #[tokio::test]
+    async fn test_exact_reverse_scan_fails_when_memory_pool_is_exhausted() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = write_twelve_rows_in_three_row_groups(&store).await;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1));
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_projection_indices(&[0])
+            .with_reverse_row_groups(true)
+            .with_reverse_rows(true)
+            .with_memory_pool(pool)
+            .build();
+        let mut stream = open_file(&opener, file).await.unwrap();
+
+        let err = stream.next().await.unwrap().unwrap_err();
+        assert!(
+            matches!(err.find_root(), DataFusionError::ResourcesExhausted(_)),
+            "expected a resources error, got {err}"
+        );
+    }
+
+    /// The reservation follows the batches held for the current row group:
+    /// it is non-zero while a reversed row group is being emitted and back
+    /// to zero once the scan has emitted everything.
+    #[tokio::test]
+    async fn test_exact_reverse_scan_releases_memory_reservation() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = write_twelve_rows_in_three_row_groups(&store).await;
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(usize::MAX));
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_projection_indices(&[0])
+            .with_batch_size(2)
+            .with_reverse_row_groups(true)
+            .with_reverse_rows(true)
+            .with_memory_pool(Arc::clone(&pool))
+            .build();
+        let mut stream = open_file(&opener, file).await.unwrap();
+
+        // First batch of the first row group: its second batch is still held.
+        stream.next().await.unwrap().unwrap();
+        assert!(pool.reserved() > 0);
+
+        while let Some(batch) = stream.next().await {
+            batch.unwrap();
+        }
+        assert_eq!(pool.reserved(), 0);
+    }
+
+    /// Rows removed by a pushed-down filter are dropped before the reversal,
+    /// and the survivors still come out back to front.
+    #[tokio::test]
+    async fn test_exact_reverse_scan_with_pushdown_filter() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let (schema, file) = write_twelve_rows_in_three_row_groups(&store).await;
+        let predicate = logical2physical(&col("a").gt(lit(5)), &schema);
+
+        let opener = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(schema)
+            .with_projection_indices(&[0])
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_batch_size(3)
+            .with_reverse_row_groups(true)
+            .with_reverse_rows(true)
+            .build();
+        let stream = open_file(&opener, file).await.unwrap();
+
+        assert_eq!(
+            collect_int32_values(stream).await,
+            (6..=12).rev().collect::<Vec<_>>()
+        );
     }
 
     #[tokio::test]

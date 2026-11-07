@@ -97,6 +97,29 @@ impl FileScanConfig {
 
         new_config.file_source = new_file_source;
 
+        // Exact reverse: the source reads every file back to front, rows
+        // within each row group included, so with each group's files
+        // reversed too the scan emits the declared orderings reversed.
+        // Re-validate against the reversed groups before keeping them;
+        // if the ordering does not hold, clear it and the caller falls
+        // back to `Inexact`, which keeps the `SortExec`.
+        if reverse_file_groups && is_exact {
+            new_config.output_ordering = self
+                .output_ordering
+                .iter()
+                .filter_map(|ordering| {
+                    LexOrdering::new(ordering.iter().map(|expr| expr.reverse()))
+                })
+                .collect();
+            if !new_config
+                .eq_properties()
+                .ordering_satisfy(order.iter().cloned())?
+            {
+                new_config.output_ordering = vec![];
+            }
+            return Ok(new_config);
+        }
+
         // Sort files within groups by statistics when not reversing
         let all_non_overlapping = if !reverse_file_groups {
             if let Some(sort_order) = LexOrdering::new(order.iter().cloned()) {
@@ -120,8 +143,8 @@ impl FileScanConfig {
         } else {
             // When reversing, files are already reversed above. We skip
             // statistics-based sorting here because it would undo the reversal.
-            // Note: reverse path is always Inexact, so all_non_overlapping
-            // is not used (is_exact is false).
+            // The exact reverse path returned above, so this is `Inexact`
+            // and `all_non_overlapping` is not used.
             false
         };
 
@@ -161,8 +184,14 @@ impl FileScanConfig {
             // stream isn't ordered, so `output_ordering` must be dropped.
             (false, _) => false,
             // Source already had validated ordering and the post-sort
-            // files still don't overlap — Exact carries through.
-            (true, true) => true,
+            // files still don't overlap — Exact carries through, provided
+            // the forward ordering really satisfies the request. A source
+            // that claims `Exact` by reading backwards relies on the file
+            // groups being reversed above; if they were not, the declared
+            // ordering does not describe its output, so do not keep it.
+            (true, true) => new_config
+                .eq_properties()
+                .ordering_satisfy(order.iter().cloned())?,
             // Source returned `Inexact`; re-validate against the
             // reordered file groups to decide whether to upgrade.
             //
