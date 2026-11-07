@@ -9,15 +9,18 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use super::ProjectionMapping;
-use crate::expressions::Literal;
+use crate::expressions::{Column, Literal};
 use crate::physical_expr::add_offset_to_expr;
 use crate::projection::ProjectionTargets;
+use crate::scalar_subquery::ScalarSubqueryExpr;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Result, ScalarValue};
 use datafusion_expr::sort_properties::SortProperties;
-use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use datafusion_physical_expr_common::physical_expr::{
+    format_physical_expr_list, is_volatile,
+};
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -172,6 +175,14 @@ pub struct EquivalenceClass {
 }
 
 impl EquivalenceClass {
+    /// Keeps what still holds on a join side whose unmatched rows are padded
+    /// with NULLs: padded columns stay equal to each other, but constants and
+    /// computed members do not (`coalesce(a, 0)` is 0 where `a` is NULL).
+    fn null_pad(&mut self) {
+        self.constant = None;
+        self.exprs.retain(|expr| expr.is::<Column>());
+    }
+
     // Create a new equivalence class from a pre-existing collection.
     pub fn new(exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>) -> Self {
         let mut class = Self::default();
@@ -621,8 +632,8 @@ impl EquivalenceGroup {
         aug_mapping: &AugmentedMapping,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        // Literals don't need to be projected
-        if expr.downcast_ref::<Literal>().is_some() {
+        // These leaves do not read columns from the projected input schema.
+        if expr.is::<Literal>() || expr.is::<ScalarSubqueryExpr>() {
             return Some(Arc::clone(expr));
         }
 
@@ -732,7 +743,11 @@ impl EquivalenceGroup {
     pub fn project(&self, mapping: &ProjectionMapping) -> Self {
         let projected_classes = self.iter().map(|cls| {
             let new_exprs = self.project_expressions(mapping, cls.iter());
-            EquivalenceClass::new(new_exprs.flatten())
+            let mut projected = EquivalenceClass::new(new_exprs.flatten());
+            // Projection changes column references, not constant values or how
+            // they are distributed across partitions.
+            projected.constant = projected.constant.or_else(|| cls.constant.clone());
+            projected
         });
 
         // The key is the source expression, and the value is the equivalence
@@ -740,6 +755,7 @@ impl EquivalenceGroup {
         let mut new_constants = vec![];
         let mut new_classes =
             IndexMap::<_, EquivalenceClass>::with_capacity(mapping.len());
+        let mut augmented = None;
         for (source, targets) in mapping.iter() {
             // We need to find equivalent projected expressions. For example,
             // consider a table with columns `[a, b, c]` with `a` == `b`, and
@@ -750,6 +766,15 @@ impl EquivalenceGroup {
             let cls = new_classes.entry(normalized_expr).or_default();
             for (target, _) in targets.iter() {
                 cls.push(Arc::clone(target));
+            }
+            // Retain deterministic expressions as equalities so orderings derived
+            // through strict functions can be inferred after a merge clears orderings.
+            if !source.children().is_empty() && !is_volatile(source) {
+                let augmented = augmented
+                    .get_or_insert_with(|| self.augment_projection_mapping(mapping));
+                if let Some(projected) = Self::project_expr_indirect(augmented, source) {
+                    cls.push(projected);
+                }
             }
             // Save new constants arising from the projection:
             if let Some(across) = self.is_expr_constant(source) {
@@ -837,10 +862,10 @@ impl EquivalenceGroup {
                         .cloned()
                         .map(|mut cls| {
                             // Rows without a match on the left side are
-                            // padded with NULLs, so its constants no
-                            // longer hold.
+                            // padded with NULLs, so its constants and computed
+                            // equalities no longer hold.
                             if matches!(join_type, JoinType::Right | JoinType::Full) {
-                                cls.constant = None;
+                                cls.null_pad();
                             }
                             cls
                         })
@@ -850,13 +875,13 @@ impl EquivalenceGroup {
                                 .map(|cls| {
                                     let mut cls = cls.try_with_offset(left_size as _)?;
                                     // Rows without a match on the right side are
-                                    // padded with NULLs, so its constants no
-                                    // longer hold.
+                                    // padded with NULLs, so its constants and computed
+                                    // equalities no longer hold.
                                     if matches!(
                                         join_type,
                                         JoinType::Left | JoinType::Full
                                     ) {
-                                        cls.constant = None;
+                                        cls.null_pad();
                                     }
                                     Ok(cls)
                                 })
@@ -1310,6 +1335,49 @@ mod tests {
         let second_normalized = projected.normalize_expr(col("b+c", &projected_schema)?);
 
         assert!(first_normalized.eq(&second_normalized));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_preserves_constant_metadata() -> Result<()> {
+        let schema = abc_schema();
+        let expr = binary(col("b", &schema)?, Operator::Divide, lit(2i32), &schema)?;
+        let mapping = ProjectionMapping::from_indices(&[1], &schema)?;
+        let dropped_mapping = ProjectionMapping::from_indices(&[0], &schema)?;
+        let projected_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 0));
+        let projected_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&projected_b),
+            Operator::Divide,
+            lit(2i32),
+        ));
+
+        for across in [
+            AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(2)))),
+            AcrossPartitions::Uniform(None),
+            AcrossPartitions::Heterogeneous,
+        ] {
+            let mut group = EquivalenceGroup::default();
+            // The class has no literal member, so `EquivalenceClass::new` cannot
+            // restore the constant.
+            group.add_constant(ConstExpr::new(Arc::clone(&expr), across.clone()));
+
+            let mut projected = group.project(&mapping);
+            assert_eq!(
+                projected.is_expr_constant(&projected_expr),
+                Some(across.clone())
+            );
+            // A constant expression does not imply that its argument is constant.
+            assert_eq!(projected.is_expr_constant(&projected_b), None);
+            assert!(group.project(&dropped_mapping).is_empty());
+
+            let heterogeneous = across == AcrossPartitions::Heterogeneous;
+            assert_eq!(projected.clear_per_partition_constants(), heterogeneous);
+            assert_eq!(
+                projected.is_expr_constant(&projected_expr),
+                (!heterogeneous).then_some(across)
+            );
+        }
 
         Ok(())
     }

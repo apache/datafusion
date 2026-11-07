@@ -1,0 +1,39 @@
+name Q13
+group null_aware_join
+
+load sql_benchmarks/null_aware_join/init/load.sql
+
+# Correctness canary: the NOT IN result must match a reference count that does
+# not use NOT IN. It holds for every NAJ_ROWS. `k` is NOT NULL on both sides, so
+# a subquery row makes an outer tuple UNKNOWN or TRUE exactly when `k` matches
+# and `id_n50` is NULL on either side or equal; the row is kept only when no
+# such subquery row exists.
+assert I
+SELECT count(*) = (
+  SELECT count(*)
+  FROM small_outer o
+  WHERE NOT EXISTS (
+    SELECT 1 FROM small_inner i
+    WHERE i.k = o.k
+      AND (o.id_n50 IS NULL OR i.id_n50 IS NULL OR i.id_n50 = o.id_n50)
+  )
+)
+FROM small_outer o
+WHERE (o.id_n50, o.k) NOT IN (SELECT i.id_n50, i.k FROM small_inner i);
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q13: uncorrelated multi-column NOT IN whose NOT NULL element `k` has only
+-- 16 distinct values, with 50% NULL in the other element on both sides. `k` is
+-- a scope key, so each scope holds 1/16 of each side and most of its rows are
+-- NULL-valued: the join must not keep pairing rows whose `NOT IN` is already
+-- known to be UNKNOWN. Compare with Q11 and Q12, whose scope key `z` has 1000
+-- distinct values.
+SELECT count(*)
+FROM small_outer o
+WHERE (o.id_n50, o.k) NOT IN (SELECT i.id_n50, i.k FROM small_inner i);
+
+cleanup sql_benchmarks/null_aware_join/init/cleanup.sql
