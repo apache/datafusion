@@ -320,7 +320,8 @@ impl RelationPlanner for TableSamplePlanner {
             with_ordinality,
             partitions,
             json_path,
-            index_hints,
+            index_directives,
+            inheritance,
         } = relation
         else {
             return Ok(RelationPlanning::Original(Box::new(relation)));
@@ -371,7 +372,8 @@ impl RelationPlanner for TableSamplePlanner {
             with_ordinality,
             partitions,
             json_path,
-            index_hints,
+            index_directives,
+            inheritance,
         };
         let input = context.plan(base_relation)?;
 
