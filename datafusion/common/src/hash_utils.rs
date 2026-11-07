@@ -4,6 +4,8 @@
 
 //! Functionality used both on logical and physical plans
 
+#[cfg(not(feature = "force_hash_collisions"))]
+use crate::utils::compact_oversized_dictionary;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -656,7 +658,11 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
 ) -> Result<()> {
     // Hash each dictionary value once, and then use that computed
     // hash for each key value to avoid a potentially expensive
-    // redundant hashing for large dictionary elements (e.g. strings)
+    // redundant hashing for large dictionary elements (e.g. strings).
+    // A dictionary with many more values than rows (e.g. a slice) is first
+    // reduced to the values its rows reference.
+    let compacted = compact_oversized_dictionary(array)?;
+    let array = compacted.as_ref().unwrap_or(array);
     let dict_values = array.values();
     let mut dict_hashes = vec![0; dict_values.len()];
     create_hashes([dict_values], random_state, &mut dict_hashes)?;
@@ -671,6 +677,8 @@ fn hash_dictionary_with_child_hashing<K: ArrowDictionaryKeyType>(
     hashes_buffer: &mut [u64],
     multi_col: bool,
 ) -> Result<()> {
+    let compacted = compact_oversized_dictionary(array)?;
+    let array = compacted.as_ref().unwrap_or(array);
     let dict_values = array.values();
     let mut dict_hashes = vec![0; dict_values.len()];
     child_hashing.create_hashes([dict_values], &mut dict_hashes)?;
@@ -1834,6 +1842,91 @@ mod tests {
         // different strings should map to different hash values
         assert_ne!(strings[0], strings[2]);
         assert_ne!(dict_hashes[0], dict_hashes[2]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_with_more_rows_than_the_key_type_holds() {
+        fn check<K: ArrowDictionaryKeyType>(distinct_keys: usize) {
+            let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+                (0..20_000).map(|i| format!("v{i}")),
+            ));
+            let keys: ScalarBuffer<K::Native> = (0..300)
+                .map(|i| K::Native::usize_as(i % distinct_keys))
+                .collect();
+            let keys = PrimitiveArray::<K>::new(keys, None);
+            let dict: ArrayRef =
+                Arc::new(DictionaryArray::try_new(keys, values).unwrap());
+            let decoded = arrow::compute::cast(&dict, &DataType::Utf8).unwrap();
+            let random_state = RandomState::with_seed(0);
+
+            let mut dict_hashes = vec![0; dict.len()];
+            create_hashes([&dict], &random_state, &mut dict_hashes).unwrap();
+            let mut decoded_hashes = vec![0; dict.len()];
+            create_hashes([&decoded], &random_state, &mut decoded_hashes).unwrap();
+            assert_eq!(dict_hashes, decoded_hashes);
+        }
+        check::<UInt8Type>(250);
+        check::<Int8Type>(120);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_does_not_copy_a_value_per_row() {
+        // 64 copies of this value wouldn't fit in `i32` offsets
+        let long = "x".repeat(34 * 1024 * 1024);
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..5000).map(|i| if i == 0 { long.as_str() } else { "short" }),
+        ));
+        let dict: ArrayRef = Arc::new(
+            DictionaryArray::try_new(Int32Array::from(vec![0; 64]), values).unwrap(),
+        );
+        let single: ArrayRef = Arc::new(StringArray::from(vec![long.as_str()]));
+        let random_state = RandomState::with_seed(0);
+
+        let mut dict_hashes = vec![0; dict.len()];
+        create_hashes([&dict], &random_state, &mut dict_hashes).unwrap();
+        let mut single_hash = vec![0; 1];
+        create_hashes([&single], &random_state, &mut single_hash).unwrap();
+        assert_eq!(dict_hashes, vec![single_hash[0]; 64]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_slices_with_more_values_than_rows() {
+        use crate::utils::MAX_DICTIONARY_VALUES_PER_ROW;
+
+        let values: ArrayRef = Arc::new(StringArray::from_iter(
+            (0..200).map(|i| (i != 2).then(|| format!("v{i}"))),
+        ));
+        let keys = Int8Array::from_iter((0..48).map(|i| (i % 7 != 1).then_some(i)));
+        let dict: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values).unwrap());
+        let ints: ArrayRef = Arc::new(Int32Array::from_iter_values(0..48));
+        let random_state = RandomState::with_seed(0);
+
+        let mut single = vec![0; dict.len()];
+        create_hashes([&dict], &random_state, &mut single).unwrap();
+        let mut multi = vec![0; dict.len()];
+        create_hashes([&ints, &dict], &random_state, &mut multi).unwrap();
+
+        for (offset, len) in [(0, 2), (1, 2), (8, 1), (46, 2)] {
+            let slice = dict.slice(offset, len);
+            assert!(
+                slice.as_any_dictionary().values().len()
+                    > MAX_DICTIONARY_VALUES_PER_ROW * len
+            );
+            let mut hashes = vec![0; len];
+            create_hashes([&slice], &random_state, &mut hashes).unwrap();
+            assert_eq!(hashes, single[offset..offset + len]);
+
+            let ints = ints.slice(offset, len);
+            let mut hashes = vec![0; len];
+            create_hashes([&ints, &slice], &random_state, &mut hashes).unwrap();
+            assert_eq!(hashes, multi[offset..offset + len]);
+        }
     }
 
     #[test]
