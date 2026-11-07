@@ -18,12 +18,78 @@ use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use itertools::Itertools;
 
-/// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
+/// An optimizer rule that transforms Sort + Limit above a grouped Aggregate to use
+/// a more efficient Grouped TopK aggregation implementation when possible.
+///
+/// For example a query like
+///
+/// ```sql
+/// SELECT trace_id, MAX(timestamp)
+/// FROM traces
+/// GROUP BY trace_id
+/// ORDER BY MAX(timestamp) DESC
+/// LIMIT 10
+/// ```
+///
+/// Is planned as a `SortExec` with a `fetch` above an `AggregateExec` (left). After this rule
+/// the `AggregateExec` is transformed to a [`GroupedTopKAggregateStream`] that retains only
+/// the best `N` groups (right).
+///
+/// [`GroupedTopKAggregateStream`]: datafusion_physical_plan::aggregates#4-grouped-topk-aggregation
+///
+/// ```text
+///          Before                                        After
+///
+/// ┌────────────────────────────┐             ┌────────────────────────────┐
+/// │ SortExec: TopK(fetch=10)   │             │ SortExec: TopK(fetch=10)   │
+/// │ expr=[max(timestamp) DESC] │             │ expr=[max(timestamp) DESC] │
+/// └────────────────────────────┘             └────────────────────────────┘
+///               ▲                                          ▲
+///               │ every group                              │ at most 10 groups
+///               │                                          │
+/// ┌────────────────────────────┐             ┌────────────────────────────┐
+/// │ AggregateExec              │             │ AggregateExec, lim=[10]    │
+/// │ gby=[trace_id]             │             │ gby=[trace_id]             │
+/// │ aggr=[max(timestamp)]      │  ────────▶  │ aggr=[max(timestamp)]      │
+/// │                            │             │                            │
+/// │ hash table holding         │             │ priority map holding only  │
+/// │ every group                │             │ the 10 best groups         │
+/// └────────────────────────────┘             └────────────────────────────┘
+///               ▲                                          ▲
+///               │                                          │
+/// ┌────────────────────────────┐             ┌────────────────────────────┐
+/// │ input                      │             │ input                      │
+/// └────────────────────────────┘             └────────────────────────────┘
+/// ```
+///
+/// Without this rule the aggregate computes the aggregates for **all** groups
+/// in the input but then the sort discards all but `N` of them afterward.
+///
+/// `GroupedTopKAggregateStream` instead keeps only the best `N` groups in a
+/// bounded priority map instead of a hash table. The `SortExec` is kept to
+/// enforce the final ordering and row count.
+///
+/// The optimization applies when 
+/// 1. the aggregate has a single group key and either no aggregate expressions, or a single `MIN` / `MAX` aggregate that is
+/// the sort key. 
+/// 
+/// See the "Grouped TopK aggregation" section of the
+/// [`aggregates`](datafusion_physical_plan::aggregates) module documentation
+/// for more details.
+///
+/// # Identifying the optimization in `EXPLAIN` output
+///
+/// When this rule applies, the `AggregateExec` lines in the physical plan show
+/// a `lim=[N]` entry for example:
+///
+/// ```text
+///     AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(...)], lim=[4] <-- LIM
+/// ```
 #[derive(Debug)]
 pub struct TopKAggregation {}
 
 impl TopKAggregation {
-    /// Create a new `LimitAggregation`
+    /// Create a new `TopKAggregation`
     pub fn new() -> Self {
         Self {}
     }
@@ -131,4 +197,4 @@ impl PhysicalOptimizerRule for TopKAggregation {
     }
 }
 
-// see `aggregate.slt` for tests
+// see `aggregates_topk.slt` for tests
