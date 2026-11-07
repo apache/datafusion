@@ -5,10 +5,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::utils::{
-    add_sort_above_with_distribution, is_sort, is_sort_preserving_merge, is_union,
-    is_window,
-};
+use crate::utils::{add_sort_above_with_distribution, is_sort, is_union, is_window};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -524,13 +521,9 @@ fn pushdown_requirement_to_children(
         } else {
             Ok(None)
         }
-    } else if plan.is::<SortPreservingMergeExec>() && plan.fetch().is_some() {
-        // Why we decline pushdown here:
-        // 1. SPM merges using only its own keys, so pushing additional
-        //    parent keys down cannot be preserved anyway.
-        // 2. The subquery did not explicitly request the parent's sort, so forcing
-        //    it on the entire dataset before a fetch is an unnecessary cost.
-        // 3. Decline pushdown so the parent sort is not dropped and orders the fetched rows.
+    } else if plan.is::<SortPreservingMergeExec>() {
+        // A merge orders rows across partitions only by its own keys, and this
+        // function doesn't rewrite them. Keep the finer parent sort above it.
         Ok(None)
     } else if is_union(plan) {
         // `UnionExec` does not have real sort requirements for its input, we
@@ -586,21 +579,6 @@ fn pushdown_requirement_to_children(
         // Keep sorts above RepartitionExec even when a single input partition
         // lets it preserve order; pushing the sort below it provides no benefit.
         Ok(None)
-    } else if is_sort_preserving_merge(plan) {
-        let new_ordering = LexOrdering::from(parent_required.first().clone());
-        let mut spm_eqs = plan.equivalence_properties().clone();
-        let old_ordering = spm_eqs.output_ordering().unwrap();
-        // Sort preserving merge will have new ordering, one requirement above is pushed down to its below.
-        let change = spm_eqs.reorder(new_ordering)?;
-        if !change || spm_eqs.ordering_satisfy(old_ordering)? {
-            // Can push-down through SortPreservingMergeExec, because parent requirement is finer
-            // than SortPreservingMergeExec output ordering.
-            Ok(Some(vec![Some(parent_required)]))
-        } else {
-            // Do not push-down through SortPreservingMergeExec when
-            // ordering requirement invalidates requirement of sort preserving merge exec.
-            Ok(None)
-        }
     } else if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
         handle_hash_join(hash_join, parent_required)
     } else {
