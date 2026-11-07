@@ -13,7 +13,7 @@ use arrow::datatypes::{DataType, Schema};
 use datafusion_common::internal_datafusion_err;
 use datafusion_common::{
     Result, internal_err,
-    tree_node::{Transformed, TransformedResult, TreeNode},
+    tree_node::{Transformed, TransformedResult, TreeNode, TreeNodeRecursion},
 };
 
 use crate::expressions::lit;
@@ -68,7 +68,7 @@ pub struct DynamicFilterPhysicalExpr {
     /// when the inner generation hasn't changed (common — updates fire once
     /// per HashJoin build or once per TopK threshold refresh, but `evaluate`
     /// is called per batch), the cache serves the remapped expression
-    /// without re-running the `transform_up` tree walk in
+    /// without re-running the tree walk in
     /// [`Self::remap_children`]. Invalidated by the generation bump in
     /// `update()` or `update_from()`, and populated with `None` on
     /// `with_new_children` (each derived filter owns its own cache).
@@ -234,15 +234,19 @@ impl DynamicFilterPhysicalExpr {
         if let Some(remapped_children) = remapped_children {
             // Remap the children to the new children
             // of the expression.
-            expr.transform_up(|child| {
+            // Visit parents first: one child may contain another (e.g. sort
+            // keys `CASE WHEN b ... END` and `b`), and remapping the inner one
+            // first would stop the outer one from matching.
+            expr.transform_down(|child| {
                 // Check if this is any of our original children
                 if let Some(pos) =
                     children.iter().position(|c| c.as_ref() == child.as_ref())
                 {
                     // If so, remap it to the current children
-                    // of the expression.
+                    // of the expression. The replacement already refers to
+                    // the new input, so do not look for children inside it.
                     let new_child = Arc::clone(&remapped_children[pos]);
-                    Ok(Transformed::yes(new_child))
+                    Ok(Transformed::new(new_child, true, TreeNodeRecursion::Jump))
                 } else {
                     // Otherwise, just return the expression
                     Ok(Transformed::no(child))
