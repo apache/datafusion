@@ -432,6 +432,8 @@ jobs:
       - uses: runs-on/action@284bff869d4a825f778ac7c38e50f1e31ef198fd  # v2.6.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
+          # Measure coverage at the PR head commit, not the merge commit.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           submodules: true
           fetch-depth: 1
       - name: Setup Rust toolchain
