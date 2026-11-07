@@ -24016,6 +24016,15 @@ impl serde::Serialize for PhysicalWindowExprNode {
         if self.distinct {
             len += 1;
         }
+        if self.filter.is_some() {
+            len += 1;
+        }
+        if self.is_reversed {
+            len += 1;
+        }
+        if !self.ordering_req.is_empty() {
+            len += 1;
+        }
         if self.window_function.is_some() {
             len += 1;
         }
@@ -24045,6 +24054,15 @@ impl serde::Serialize for PhysicalWindowExprNode {
         }
         if self.distinct {
             struct_ser.serialize_field("distinct", &self.distinct)?;
+        }
+        if let Some(v) = self.filter.as_ref() {
+            struct_ser.serialize_field("filter", v)?;
+        }
+        if self.is_reversed {
+            struct_ser.serialize_field("isReversed", &self.is_reversed)?;
+        }
+        if !self.ordering_req.is_empty() {
+            struct_ser.serialize_field("orderingReq", &self.ordering_req)?;
         }
         if let Some(v) = self.window_function.as_ref() {
             match v {
@@ -24079,6 +24097,11 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
             "ignore_nulls",
             "ignoreNulls",
             "distinct",
+            "filter",
+            "is_reversed",
+            "isReversed",
+            "ordering_req",
+            "orderingReq",
             "user_defined_aggr_function",
             "userDefinedAggrFunction",
             "user_defined_window_function",
@@ -24095,6 +24118,9 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
             FunDefinition,
             IgnoreNulls,
             Distinct,
+            Filter,
+            IsReversed,
+            OrderingReq,
             UserDefinedAggrFunction,
             UserDefinedWindowFunction,
         }
@@ -24126,6 +24152,9 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                             "funDefinition" | "fun_definition" => Ok(GeneratedField::FunDefinition),
                             "ignoreNulls" | "ignore_nulls" => Ok(GeneratedField::IgnoreNulls),
                             "distinct" => Ok(GeneratedField::Distinct),
+                            "filter" => Ok(GeneratedField::Filter),
+                            "isReversed" | "is_reversed" => Ok(GeneratedField::IsReversed),
+                            "orderingReq" | "ordering_req" => Ok(GeneratedField::OrderingReq),
                             "userDefinedAggrFunction" | "user_defined_aggr_function" => Ok(GeneratedField::UserDefinedAggrFunction),
                             "userDefinedWindowFunction" | "user_defined_window_function" => Ok(GeneratedField::UserDefinedWindowFunction),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -24155,6 +24184,9 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                 let mut fun_definition__ = None;
                 let mut ignore_nulls__ = None;
                 let mut distinct__ = None;
+                let mut filter__ = None;
+                let mut is_reversed__ = None;
+                let mut ordering_req__ = None;
                 let mut window_function__ = None;
                 while let Some(k) = map_.next_key()? {
                     match k {
@@ -24208,6 +24240,24 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                             }
                             distinct__ = Some(map_.next_value()?);
                         }
+                        GeneratedField::Filter => {
+                            if filter__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("filter"));
+                            }
+                            filter__ = map_.next_value()?;
+                        }
+                        GeneratedField::IsReversed => {
+                            if is_reversed__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("isReversed"));
+                            }
+                            is_reversed__ = Some(map_.next_value()?);
+                        }
+                        GeneratedField::OrderingReq => {
+                            if ordering_req__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("orderingReq"));
+                            }
+                            ordering_req__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::UserDefinedAggrFunction => {
                             if window_function__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("userDefinedAggrFunction"));
@@ -24231,6 +24281,9 @@ impl<'de> serde::Deserialize<'de> for PhysicalWindowExprNode {
                     fun_definition: fun_definition__,
                     ignore_nulls: ignore_nulls__.unwrap_or_default(),
                     distinct: distinct__.unwrap_or_default(),
+                    filter: filter__,
+                    is_reversed: is_reversed__.unwrap_or_default(),
+                    ordering_req: ordering_req__.unwrap_or_default(),
                     window_function: window_function__,
                 })
             }
