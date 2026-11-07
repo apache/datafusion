@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt;
 use std::hash::Hash;
@@ -392,38 +379,67 @@ fn is_fixed_offset(tz: &str) -> bool {
     tz == "UTC" || tz.starts_with(['+', '-'])
 }
 
-/// Whether successful casts preserve order when conversion failures return errors.
-/// Unlike `check_bigger_cast`, this allows precision loss and is not sufficient
-/// for propagating distinct counts or the ordering of subsequent sort keys.
-fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) -> bool {
-    use arrow::datatypes::TimeUnit::*;
+fn is_binary(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        Binary | LargeBinary | BinaryView | FixedSizeBinary(_)
+    )
+}
+
+/// Temporal types stored as a count of units since the epoch (or midnight),
+/// which a cast from or to a number reads or writes as that count.
+fn is_temporal_count(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        Date32 | Date64 | Timestamp(_, _) | Time32(_) | Time64(_) | Duration(_)
+    )
+}
+
+/// Whether the cast never reverses the order of two values that both convert:
+/// `a <= b` implies `cast(a) <= cast(b)`. Precision loss may merge values, so
+/// this is not sufficient for propagating distinct counts or the ordering of
+/// subsequent sort keys (see [`CastExpr::check_bigger_cast`] for that).
+///
+/// Values that fail to convert are not covered: callers must account for the
+/// error or NULL a failure produces.
+pub fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) -> bool {
     if source_type == target_type
         || (source_type.is_numeric() || *source_type == Boolean)
             && target_type.is_numeric()
+        // Changing the string or binary encoding keeps the byte order.
+        || source_type.is_string() && target_type.is_string()
+        || is_binary(source_type) && is_binary(target_type)
+        || source_type.is_numeric() && is_temporal_count(target_type)
+        || is_temporal_count(source_type) && target_type.is_numeric()
     {
         return true;
     }
     // Temporal casts are not generally monotonic: extracting time-of-day wraps
     // at midnight, and timezone transitions can reverse the local date.
     match (source_type, target_type) {
-        (Date32 | Date64, Date32 | Date64)
-        | (Date32 | Date64, Timestamp(_, None))
-        | (Timestamp(_, None), Date32) => true,
-        (Timestamp(_, Some(tz)), Date32) => is_fixed_offset(tz),
-        // Arrow converts timestamps to Date64 by scaling the epoch value,
-        // whereas Date32 extracts the date in the timestamp's timezone.
-        (Timestamp(_, _), Date64) => true,
-        // Only admit scaling that cannot wrap on overflow. Time64 widening
-        // and narrowing to Time32 do not currently check overflow in Arrow.
-        (Time32(Second | Millisecond), Time32(Second | Millisecond))
-        | (Time32(Second | Millisecond), Time64(Microsecond | Nanosecond))
-        | (Time64(Nanosecond), Time64(Microsecond))
-        | (Duration(_), Duration(_)) => true,
-        (Timestamp(_, from_tz), Timestamp(_, to_tz)) => {
-            // Adding a timezone to naive timestamps interprets local times;
-            // other timezone changes only change metadata on the epoch value.
-            from_tz.is_some() || to_tz.as_deref().is_none_or(is_fixed_offset)
+        (Date32 | Date64, Date32 | Date64) | (Timestamp(_, None), Date32 | Date64) => {
+            true
         }
+        // Both date types take the date in the timestamp's timezone.
+        (Timestamp(_, Some(tz)), Date32 | Date64) => is_fixed_offset(tz),
+        // Arrow checks every scaling that can overflow, so a value that does
+        // not fit fails to convert instead of wrapping.
+        (Time32(_) | Time64(_), Time32(_) | Time64(_)) | (Duration(_), Duration(_)) => {
+            true
+        }
+        // Changing the timezone only changes metadata on the epoch value.
+        (Timestamp(_, Some(_)), Timestamp(_, _)) => true,
+        // Adding a timezone reads a naive timestamp (or a Date64, which may
+        // hold any time of day) as a local time. Arrow moves a local time that
+        // a transition skips forward by the length of the gap, past the local
+        // times just after the gap, so only a fixed offset keeps the order.
+        (Timestamp(_, None) | Date64, Timestamp(_, tz)) => {
+            tz.as_deref().is_none_or(is_fixed_offset)
+        }
+        // A Date32 reads as local midnight. A skipped midnight moves forward
+        // by the gap, and no gap is longer than a day, so it never passes the
+        // next midnight.
+        (Date32, Timestamp(_, _)) => true,
         _ => false,
     }
 }
@@ -712,28 +728,6 @@ fn can_propagate_cast_constraints(source: &DataType, target: &DataType) -> bool 
         || (source.is_integer() && target.is_integer())
         // NaN bounds are unbounded; finite Float32 values widen exactly.
         || (*source == Float32 && *target == Float64)
-        || is_decimal_widening(source, target)
-}
-
-/// Whether a decimal-to-decimal cast keeps every value exactly, i.e. the target
-/// has at least as many fractional and integer digits as the source. Casting
-/// bounds back to the source then rounds to a neighboring representable value,
-/// which never excludes a valid input.
-fn is_decimal_widening(source: &DataType, target: &DataType) -> bool {
-    fn precision_scale(data_type: &DataType) -> Option<(i16, i16)> {
-        match data_type {
-            Decimal32(p, s) | Decimal64(p, s) | Decimal128(p, s) | Decimal256(p, s) => {
-                Some((*p as i16, *s as i16))
-            }
-            _ => None,
-        }
-    }
-    match (precision_scale(source), precision_scale(target)) {
-        (Some((source_p, source_s)), Some((target_p, target_s))) => {
-            target_s >= source_s && target_p - target_s >= source_p - source_s
-        }
-        _ => false,
-    }
 }
 
 #[cfg(feature = "proto")]
@@ -955,11 +949,6 @@ mod tests {
             (Int32, Float64, true),
             (Float32, Float64, true),
             (Decimal128(4, 1), Decimal128(4, 1), true),
-            (Decimal128(4, 1), Decimal128(6, 2), true),
-            (Decimal128(15, 2), Decimal128(30, 15), true),
-            (Decimal32(9, 2), Decimal128(20, 4), true),
-            (Decimal128(6, 2), Decimal128(6, 3), false),
-            (Decimal128(6, 2), Decimal128(8, 1), false),
         ] {
             let schema = Schema::new(vec![Field::new("x", source.clone(), true)]);
             let expr = CastExpr::new(col("x", &schema)?, target.clone(), None);
@@ -976,76 +965,6 @@ mod tests {
                 Some(expected),
                 "{source} -> {target}"
             );
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn test_decimal_widening_constraint_boundaries() -> Result<()> {
-        fn decimal(data_type: &DataType, value: i128) -> ScalarValue {
-            match data_type {
-                Decimal32(p, s) => ScalarValue::Decimal32(Some(value as i32), *p, *s),
-                Decimal64(p, s) => ScalarValue::Decimal64(Some(value as i64), *p, *s),
-                Decimal128(p, s) => ScalarValue::Decimal128(Some(value), *p, *s),
-                Decimal256(p, s) => {
-                    ScalarValue::Decimal256(Some(i256::from_i128(value)), *p, *s)
-                }
-                _ => unreachable!(),
-            }
-        }
-
-        // (source, target, scale factor, extreme unscaled source value)
-        for (source, target, factor, extreme) in [
-            (Decimal128(3, 2), Decimal128(5, 3), 10, 999),
-            // Cross-width widening:
-            (Decimal32(4, 2), Decimal128(10, 4), 100, 9999),
-            (Decimal64(5, 1), Decimal256(10, 3), 100, 99999),
-            // Negative scale:
-            (Decimal128(3, -1), Decimal128(5, 0), 10, 999),
-        ] {
-            // Source values near zero and near the extremes of the precision:
-            let values: Vec<i128> = (-5..=5)
-                .chain(extreme - 5..=extreme)
-                .chain(-extreme..=-extreme + 5)
-                .collect();
-            // Output bounds at, between, and just past the widened values,
-            // including past the source's extremes, so casting back rounds in
-            // both directions and overflows:
-            let mut bounds: Vec<i128> = values
-                .iter()
-                .flat_map(|v| {
-                    let w = v * factor;
-                    [w - factor, w - 1, w, w + 1, w + factor / 2, w + factor]
-                })
-                .collect();
-            bounds.sort_unstable();
-            bounds.dedup();
-
-            let schema =
-                Arc::new(Schema::new(vec![Field::new("x", source.clone(), false)]));
-            let expr = CastExpr::new(col("x", &schema)?, target.clone(), None);
-            let input = Interval::make_unbounded(&source)?;
-            for (i, lower) in bounds.iter().enumerate() {
-                for upper in &bounds[i..] {
-                    let output = Interval::try_new(
-                        decimal(&target, *lower),
-                        decimal(&target, *upper),
-                    )?;
-                    let propagated =
-                        expr.propagate_constraints(&output, &[&input])?.unwrap();
-                    assert_eq!(propagated.len(), 1);
-                    for value in &values {
-                        if output.contains_value(decimal(&target, value * factor))? {
-                            assert!(
-                                propagated[0].contains_value(decimal(&source, *value))?,
-                                "{source} -> {target}: input={value}, output={output}, \
-                                 propagated={:?}",
-                                propagated[0]
-                            );
-                        }
-                    }
-                }
-            }
         }
         Ok(())
     }
@@ -2296,11 +2215,16 @@ mod tests {
             (Date64, Date32, true),
             (Date32, Timestamp(Nanosecond, None), true),
             (Date64, Timestamp(Second, None), true),
+            (Date32, Timestamp(Second, timezone.clone()), true),
+            (Date64, Timestamp(Second, Some("+08:00".into())), true),
+            (Date64, Timestamp(Second, timezone.clone()), false),
             (Timestamp(Second, None), Date32, true),
+            (Timestamp(Second, None), Date64, true),
             (Timestamp(Second, Some("UTC".into())), Date32, true),
             (Timestamp(Second, Some("+08:00".into())), Date32, true),
+            (Timestamp(Second, Some("+08:00".into())), Date64, true),
             (Timestamp(Second, timezone.clone()), Date32, false),
-            (Timestamp(Second, timezone.clone()), Date64, true),
+            (Timestamp(Second, timezone.clone()), Date64, false),
             (Timestamp(Second, None), Timestamp(Nanosecond, None), true),
             (Timestamp(Nanosecond, None), Timestamp(Second, None), true),
             (
@@ -2329,8 +2253,8 @@ mod tests {
             (Time32(Millisecond), Time32(Second), true),
             (Time32(Second), Time64(Nanosecond), true),
             (Time64(Nanosecond), Time64(Microsecond), true),
-            (Time64(Microsecond), Time64(Nanosecond), false),
-            (Time64(Nanosecond), Time32(Second), false),
+            (Time64(Microsecond), Time64(Nanosecond), true),
+            (Time64(Nanosecond), Time32(Second), true),
             (Duration(Second), Duration(Nanosecond), true),
             (Duration(Nanosecond), Duration(Second), true),
             (Null, Timestamp(Second, None), false),
@@ -2371,6 +2295,250 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Sorted, distinct, non-null sample values of `data_type`, obtained by
+    /// casting a fixed set of seeds and keeping the values that convert.
+    fn order_samples(data_type: &DataType) -> Option<ArrayRef> {
+        use arrow::array::{
+            BooleanArray, FixedSizeBinaryArray, Float64Array, TimestampSecondArray,
+            UInt32Array, make_comparator,
+        };
+        use arrow::compute::{
+            SortOptions, concat, filter, is_not_null, sort_to_indices, take,
+        };
+
+        let seeds: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![
+                i64::MIN,
+                -2_147_483_649,
+                -129,
+                -1,
+                0,
+                1,
+                9,
+                10,
+                127,
+                128,
+                255,
+                256,
+                // As dates, 2011-12-29 to 2011-12-31: Pacific/Apia skipped
+                // all of 2011-12-30.
+                15_337,
+                15_338,
+                15_339,
+                86_399,
+                // America/Goose_Bay fell back from 00:01 to 23:01 the previous
+                // day at this instant, so the local date goes backwards.
+                562_129_259,
+                562_129_260,
+                2_147_483_647,
+                i64::MAX,
+            ])),
+            Arc::new(Float64Array::from(vec![
+                f64::NEG_INFINITY,
+                -1.5,
+                -0.5,
+                0.0,
+                0.5,
+                1.7,
+                1e300,
+                f64::INFINITY,
+            ])),
+            Arc::new(StringArray::from(vec!["", "-1", "0", "1", "10", "9", "a"])),
+            Arc::new(BooleanArray::from(vec![false, true])),
+            Arc::new(
+                FixedSizeBinaryArray::try_from_iter(
+                    ["abcd", "abce", "zzzz"].into_iter().map(str::as_bytes),
+                )
+                .expect("valid fixed size binary"),
+            ),
+            Arc::new(TimestampSecondArray::from(vec![
+                // 23:00, 00:00 and 01:00 around midnight
+                82_800,
+                86_400,
+                90_000,
+                // Local times around the America/New_York transitions of
+                // 2024: before, inside and after the skipped hour in March and
+                // the repeated hour in November.
+                1_710_035_999,
+                1_710_037_800,
+                1_710_039_600,
+                1_730_595_599,
+                1_730_597_400,
+                1_730_599_200,
+            ])),
+        ];
+        // Cast each seed on its own, so one value that fails to convert does
+        // not discard the others.
+        let parts = seeds
+            .iter()
+            .flat_map(|seed| (0..seed.len()).map(|i| seed.slice(i, 1)))
+            .filter_map(|seed| arrow::compute::cast(&seed, data_type).ok())
+            .map(|array| filter(&array, &is_not_null(&array).unwrap()).unwrap())
+            .filter(|array| !array.is_empty())
+            .collect::<Vec<_>>();
+        if parts.is_empty() {
+            return None;
+        }
+        let parts = parts.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+        let all = concat(&parts).unwrap();
+        let sorted =
+            take(&all, &sort_to_indices(&all, None, None).unwrap(), None).unwrap();
+        let cmp = make_comparator(&sorted, &sorted, SortOptions::default()).unwrap();
+        let distinct = (0..sorted.len())
+            .filter(|&i| i == 0 || cmp(i - 1, i).is_ne())
+            .map(|i| i as u32)
+            .collect::<UInt32Array>();
+        Some(take(&sorted, &distinct, None).unwrap())
+    }
+
+    /// Casts the sorted `samples` to `target` with the strict cast that
+    /// `CastExpr` runs by default (`safe = false`) or the cast that
+    /// `TryCastExpr` runs (`safe = true`), and returns the first pair of
+    /// converted values whose order the cast reverses. Each value is cast on
+    /// its own, and values that fail to convert are skipped:
+    /// `is_order_preserving_cast` does not cover them.
+    fn order_violation(
+        samples: &ArrayRef,
+        target: &DataType,
+        safe: bool,
+    ) -> Option<String> {
+        use arrow::array::make_comparator;
+        use arrow::compute::SortOptions;
+
+        let options = CastOptions {
+            safe,
+            format_options: DEFAULT_FORMAT_OPTIONS,
+        };
+        let converted = (0..samples.len())
+            .filter_map(|i| {
+                let value = ColumnarValue::Array(samples.slice(i, 1));
+                match value.cast_to(target, Some(&options)) {
+                    Ok(ColumnarValue::Array(output)) if output.is_valid(0) => {
+                        Some((i, output))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        converted.windows(2).find_map(|w| {
+            let ((i, left), (j, right)) = (&w[0], &w[1]);
+            let cmp = make_comparator(left, right, SortOptions::default()).unwrap();
+            cmp(0, 0).is_gt().then(|| {
+                let value = |array: &ArrayRef, i| {
+                    ScalarValue::try_from_array(array, i).unwrap().to_string()
+                };
+                format!(
+                    "{} -> {}, but {} -> {}",
+                    value(samples, *i),
+                    value(left, 0),
+                    value(samples, *j),
+                    value(right, 0),
+                )
+            })
+        })
+    }
+
+    /// Checks `is_order_preserving_cast` against the casts that `CastExpr` and
+    /// `TryCastExpr` run: every pair it accepts must keep the order of the
+    /// sample values that convert.
+    /// Pruning (for both casts) and sort elimination (for the strict cast) rely
+    /// on this rule, so a wrong entry drops matching rows or returns unsorted
+    /// output.
+    #[test]
+    fn test_order_preserving_cast_matches_cast_kernel() {
+        use TimeUnit::*;
+        use arrow::array::{AsArray, Date32Array};
+
+        let tz = |unit, tz: &str| Timestamp(unit, Some(tz.into()));
+        let types = [
+            Boolean,
+            Int8,
+            Int16,
+            Int32,
+            Int64,
+            UInt8,
+            UInt16,
+            UInt32,
+            UInt64,
+            Float32,
+            Float64,
+            Decimal128(10, 2),
+            Decimal256(40, 2),
+            Utf8,
+            LargeUtf8,
+            Utf8View,
+            Binary,
+            LargeBinary,
+            BinaryView,
+            FixedSizeBinary(4),
+            Date32,
+            Date64,
+            Timestamp(Second, None),
+            Timestamp(Nanosecond, None),
+            tz(Millisecond, "UTC"),
+            tz(Second, "+05:00"),
+            tz(Second, "America/New_York"),
+            tz(Second, "America/Goose_Bay"),
+            tz(Second, "Pacific/Apia"),
+            Time32(Second),
+            Time32(Millisecond),
+            Time64(Microsecond),
+            Time64(Nanosecond),
+            Duration(Second),
+            Duration(Nanosecond),
+        ];
+        let mut violations = vec![];
+        for source in &types {
+            let Some(samples) = order_samples(source) else {
+                continue;
+            };
+            for target in &types {
+                if !can_cast_types(source, target)
+                    || !is_order_preserving_cast(source, target)
+                {
+                    continue;
+                }
+                for safe in [false, true] {
+                    if let Some(e) = order_violation(&samples, target, safe) {
+                        violations
+                            .push(format!("{source} -> {target} (safe={safe}): {e}"));
+                    }
+                }
+            }
+        }
+        assert!(violations.is_empty(), "{}", violations.join("\n"));
+
+        // The samples are able to expose the casts the rule rejects.
+        for (source, target) in [
+            (Utf8, Int32),
+            (Int32, Boolean),
+            (Int16, Binary),
+            (Timestamp(Second, None), Time32(Second)),
+            (tz(Second, "+05:00"), Time64(Nanosecond)),
+            (tz(Second, "America/Goose_Bay"), Date32),
+            (tz(Second, "America/Goose_Bay"), Date64),
+            (Timestamp(Second, None), tz(Second, "America/New_York")),
+        ] {
+            assert!(!is_order_preserving_cast(&source, &target));
+            let samples = order_samples(&source).unwrap();
+            assert!(
+                order_violation(&samples, &target, false).is_some(),
+                "{source} -> {target}: no sample exposes the reversed order"
+            );
+        }
+
+        // The samples reach the edge of the Date32 entry: a skipped day starts
+        // at the same instant as the day after it.
+        let skipped =
+            ColumnarValue::Array(Arc::new(Date32Array::from(vec![15_338, 15_339])))
+                .cast_to(&tz(Second, "Pacific/Apia"), None)
+                .unwrap()
+                .into_array(2)
+                .unwrap();
+        let skipped = skipped.as_primitive::<TimestampSecondType>();
+        assert_eq!(skipped.value(0), skipped.value(1));
     }
 
     #[test]

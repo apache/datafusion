@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Float semantics for DataFusion.
 //!
@@ -21,19 +8,20 @@
 //! i.e. IEEE 754 totalOrder. DataFusion deviates from that in one
 //! respect: `+0.0` and `-0.0` are equal, hash the same and fall into the same
 //! group. See [`normalize_float`], [`normalize_floats`] and
-//! [`normalize_float_scalar`]. Ordering still follows totalOrder, so
+//! [`ScalarValue::normalize`]. Ordering still follows totalOrder, so
 //! [`compare_floats`] sorts `-0.0` before `+0.0`.
 //!
 //! Every comparison, hash or grouping boundary should be built from these
 //! helpers rather than inspecting float bits itself:
 //!
 //! - Equality and grouping: normalize first ([`normalize_float`],
-//!   [`normalize_floats`], [`normalize_float_scalar`]), then compare bits or
+//!   [`normalize_floats`], [`ScalarValue::normalize`]), then compare bits or
 //!   call Arrow's `eq`, `RowConverter` or `make_comparator`. Hash
 //!   [`hash_input`].
 //! - Ordering: use [`compare_floats`], [`float_lt`] or [`float_gt`]. Sorting
 //!   does not normalize yet, so `-0.0` still sorts before `+0.0`.
 //!
+//! [`ScalarValue::normalize`]: crate::ScalarValue::normalize
 
 use std::cmp::Ordering;
 use std::sync::Arc;
@@ -43,8 +31,6 @@ use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Float16Type, Float32Type, Float64Type,
 };
 use half::f16;
-
-use crate::ScalarValue;
 
 /// The floating point types the functions in this module are defined for:
 /// [`f16`](struct@f16), [`f32`] and [`f64`].
@@ -179,17 +165,6 @@ where
     Arc::new(arr.unary::<_, T>(normalize_float))
 }
 
-/// Applies [`normalize_float`] to a `Float16`, `Float32` or `Float64` scalar.
-/// Other scalars are returned as is.
-pub fn normalize_float_scalar(scalar: ScalarValue) -> ScalarValue {
-    match scalar {
-        ScalarValue::Float16(Some(v)) => ScalarValue::Float16(Some(normalize_float(v))),
-        ScalarValue::Float32(Some(v)) => ScalarValue::Float32(Some(normalize_float(v))),
-        ScalarValue::Float64(Some(v)) => ScalarValue::Float64(Some(normalize_float(v))),
-        other => other,
-    }
-}
-
 /// Whether `data_type` is a float or contains a float at any depth of its
 /// nested children.
 pub fn has_float_leaf(data_type: &DataType) -> bool {
@@ -214,8 +189,12 @@ pub fn has_float_leaf(data_type: &DataType) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::array::{Float16Array, Float32Array, Float64Array, Int32Array, ListArray};
-    use arrow::datatypes::Int32Type;
+    use crate::{Result, ScalarValue};
+    use arrow::array::{
+        DictionaryArray, Float16Array, Float32Array, Float64Array, Int8Array, Int32Array,
+        ListArray,
+    };
+    use arrow::datatypes::{Field, Int8Type, Int32Type};
 
     #[test]
     fn normalize_float_folds_negative_zero() {
@@ -322,26 +301,98 @@ mod tests {
     }
 
     #[test]
-    fn normalize_float_scalar_folds_negative_zero() {
+    fn normalize_floats_in_dictionary_arrays_and_scalars() -> Result<()> {
+        let nan = f64::from_bits(0x7ff8_0000_0000_0001);
+        let keys = Int8Array::from(vec![Some(0), Some(1), None, Some(2)]);
+        let array: ArrayRef = Arc::new(DictionaryArray::try_new(
+            keys.clone(),
+            Arc::new(Float64Array::from(vec![-0.0, nan, 1.0])),
+        )?);
+
+        let normalized = normalize_floats(&array);
+        let dictionary = normalized.as_dictionary::<Int8Type>();
+        assert_eq!(dictionary.keys(), &keys);
+        let values = dictionary.values().as_primitive::<Float64Type>();
+        assert_eq!(values.value(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(values.value(1).to_bits(), nan.to_bits());
+        assert_eq!(values.value(2), 1.0);
+
+        assert!(Arc::ptr_eq(&normalize_floats(&normalized), &normalized));
+
         assert_eq!(
-            normalize_float_scalar(ScalarValue::Float64(Some(-0.0))),
-            ScalarValue::Float64(Some(0.0))
+            ScalarValue::try_from_array(&array, 0)?.normalize(),
+            ScalarValue::try_from_array(&normalized, 0)?
         );
-        assert_eq!(
-            normalize_float_scalar(ScalarValue::Float32(Some(-0.0))),
-            ScalarValue::Float32(Some(0.0))
+
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_preserves_union_and_run_metadata() -> Result<()> {
+        use arrow::datatypes::{UnionFields, UnionMode};
+
+        let run_ends = Arc::new(Field::new("ends", DataType::Int32, false));
+        let values = Arc::new(Field::new("samples", DataType::Float64, true));
+        let fields = UnionFields::try_new(
+            [7, 42],
+            [
+                Field::new(
+                    "runs",
+                    DataType::RunEndEncoded(Arc::clone(&run_ends), Arc::clone(&values)),
+                    true,
+                ),
+                Field::new("other", DataType::Int32, true),
+            ],
+        )?;
+        let nan = f64::from_bits(0x7ff8_0000_0000_0001);
+        for mode in [UnionMode::Sparse, UnionMode::Dense] {
+            let wrap = |value| {
+                ScalarValue::Union(
+                    Some((
+                        7,
+                        Box::new(ScalarValue::RunEndEncoded(
+                            Arc::clone(&run_ends),
+                            Arc::clone(&values),
+                            Box::new(ScalarValue::Float64(value)),
+                        )),
+                    )),
+                    fields.clone(),
+                    mode,
+                )
+            };
+            for (value, expected) in [
+                (Some(-0.0), Some(0.0)),
+                (Some(nan), Some(nan)),
+                (None, None),
+            ] {
+                assert_eq!(wrap(value).normalize(), wrap(expected));
+            }
+            let null = ScalarValue::Union(None, fields.clone(), mode);
+            assert_eq!(null.clone().normalize(), null);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn normalize_preserves_sliced_list() {
+        let nan = f64::from_bits(0x7ff8_0000_0000_0001);
+        let list = Arc::new(
+            ListArray::from_iter_primitive::<Float64Type, _, _>([
+                Some(vec![Some(99.0)]),
+                Some(vec![Some(-0.0), Some(nan), None]),
+                Some(vec![Some(42.0)]),
+            ])
+            .slice(1, 1),
         );
-        assert_eq!(
-            normalize_float_scalar(ScalarValue::Float16(Some(f16::NEG_ZERO))),
-            ScalarValue::Float16(Some(f16::ZERO))
-        );
-        assert_eq!(
-            normalize_float_scalar(ScalarValue::Float64(None)),
-            ScalarValue::Float64(None)
-        );
-        assert_eq!(
-            normalize_float_scalar(ScalarValue::Int32(Some(0))),
-            ScalarValue::Int32(Some(0))
-        );
+        let ScalarValue::List(normalized) = ScalarValue::List(list).normalize() else {
+            panic!("normalization must preserve the scalar variant");
+        };
+        assert_eq!(normalized.len(), 1);
+        let child = normalized.value(0);
+        let child = child.as_primitive::<Float64Type>();
+        assert_eq!(child.len(), 3);
+        assert_eq!(child.value(0).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(child.value(1).to_bits(), nan.to_bits());
+        assert!(child.is_null(2));
     }
 }

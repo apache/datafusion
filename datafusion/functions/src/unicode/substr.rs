@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -31,6 +18,7 @@ use datafusion_common::cast::as_int64_array;
 use datafusion_common::types::{
     NativeType, logical_int32, logical_int64, logical_string,
 };
+use datafusion_common::utils::map_dictionary_values;
 use datafusion_common::{Result, exec_err};
 use datafusion_expr::{
     Coercion, ColumnarValue, Documentation, EncodingPreservation, ScalarFunctionArgs,
@@ -150,17 +138,13 @@ impl ScalarUDFImpl for SubstrFunc {
                 .all(|v| matches!(v, ColumnarValue::Scalar(_)))
         {
             // Fast path: substr the N_distinct values, reuse the keys.
-            let dict = array.as_any_dictionary();
-            let values = Arc::clone(dict.values());
-            let mut inner = Vec::with_capacity(args.args.len());
-            inner.push(ColumnarValue::Array(values));
-            inner.extend_from_slice(&args.args[1..]);
-            // Values that no valid row references can still fail (e.g. a
-            // negative length), so fall back to the row-wise path on error.
-            if let Ok(new_values) = make_scalar_function(substr, vec![])(&inner) {
-                let new_values = new_values.into_array(dict.values().len())?;
-                return Ok(ColumnarValue::Array(dict.with_values(new_values)));
-            }
+            let result = map_dictionary_values(array, |values| {
+                let mut inner = Vec::with_capacity(args.args.len());
+                inner.push(ColumnarValue::Array(Arc::clone(values)));
+                inner.extend_from_slice(&args.args[1..]);
+                make_scalar_function(substr, vec![])(&inner)?.into_array(values.len())
+            })?;
+            return Ok(ColumnarValue::Array(result));
         }
 
         make_scalar_function(substr, vec![])(&args.args)

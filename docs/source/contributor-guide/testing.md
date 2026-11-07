@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Testing
@@ -73,6 +60,26 @@ cargo nextest run
 [testing organization]: https://doc.rust-lang.org/book/ch11-03-test-organization.html
 [the book]: https://doc.rust-lang.org/book/
 [cargo-nextest]: https://nexte.st/
+
+### Code coverage
+
+The [Codecov] bot posts a coverage report on GitHub pull requests with:
+
+- `all-tests`: coverage from the workspace test suite.
+- `sqllogictests`: coverage from SQLLogicTests alone.
+
+We [prefer end-to-end tests](#choosing-what-kind-of-test-to-write) because they are
+easier to maintain and verify final results through the full query pipeline,
+including optimizer passes. The SLT report helps ensure good coverage from these
+tests alone.
+
+Coverage helps find missing tests; high coverage does not guarantee good tests:
+
+- **Do:** Enumerate edge cases to build comprehensive tests, then check the
+  coverage report for gaps.
+- **Don't:** Use Codecov to choose a minimal set of tests that covers a new feature.
+
+[codecov]: https://app.codecov.io/gh/apache/datafusion
 
 ## Choosing What Kind of Test to Write
 
@@ -410,6 +417,19 @@ cargo bench --bench BENCHMARK_NAME
 A full list of benchmarks can be found [here](https://github.com/apache/datafusion/tree/main/datafusion/core/benches).
 
 _[cargo-criterion](https://github.com/bheisler/cargo-criterion) may also be used for more advanced reporting._
+
+### Microbenchmark health checks (local-only)
+
+Runs each microbenchmark case once to catch runtime panics, without measuring performance:
+
+```shell
+cargo xtask ci step test microbenchmarks
+```
+
+The suite took about 10 minutes in CI, so execution is local-only, including on
+release branches; no hosted workflow or required check is provided. Runtime failures
+may go unnoticed until a local run. When changing benchmark fixtures, setup, or APIs,
+run the affected benchmarks and include the commands and results in your PR.
 
 ### Parquet SQL Benchmarks
 

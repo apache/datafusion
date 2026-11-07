@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Introduction
@@ -275,6 +262,9 @@ such a pull request and adds a `Rust (fork)` check that links to the run on
 your fork. The merge queue runs the full workflow on the merged result before
 a pull request merges, so a green fork run does not replace it.
 
+macOS tests skip fork runs to avoid runner timeouts. They remain required in the
+merge queue, and other upstream coverage is unchanged.
+
 To make this work:
 
 1. Before you push your branch, open the **Actions** tab on your fork.
@@ -284,3 +274,17 @@ To make this work:
    synced fork builds much faster.
 3. Rebase your branch before you push. The fork run tests your branch as it
    is, while the merge queue tests it merged with `main`.
+
+#### Obsolete Merge Queue Runs
+
+The **Merge queue cleanup** workflow finds unfinished merge queue CI runs whose
+queue branch was removed or now points to a different commit. It scans when a
+new merge group is created and every 15 minutes.
+
+Cleanup keeps runs for active groups, commits already in their target branch,
+and rerun attempts. Contributors can rerun an obsolete job to investigate a
+failure. A failed check alone does not cause cancellation.
+
+The workflow only reports candidates until a maintainer sets the repository
+Actions variable `MERGE_QUEUE_CLEANUP_ENABLED` to `true`. Manual runs default
+to `dry_run`. To stop cancellation, remove the variable or set it to `false`.

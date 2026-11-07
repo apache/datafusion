@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Join related functionality used both on logical and physical plans
 
@@ -2365,15 +2352,39 @@ pub fn update_hash(
 ) -> Result<()> {
     // evaluate the keys
     let keys_values = evaluate_expressions_to_arrays(on, batch)?;
+    update_hash_from_values(
+        &keys_values,
+        hash_map,
+        offset,
+        random_state,
+        hashes_buffer,
+        deleted_offset,
+        fifo_hashmap,
+        null_equality,
+    )
+}
 
+/// [`update_hash`] over the key columns `keys_values` that `on` evaluates to,
+/// with one entry of `hashes_buffer` for each of their rows.
+#[expect(clippy::too_many_arguments)]
+pub(crate) fn update_hash_from_values(
+    keys_values: &[ArrayRef],
+    hash_map: &mut dyn JoinHashMapType,
+    offset: usize,
+    random_state: &RandomState,
+    hashes_buffer: &mut [u64],
+    deleted_offset: usize,
+    fifo_hashmap: bool,
+    null_equality: NullEquality,
+) -> Result<()> {
     // calculate the hash values
-    let hash_values = create_hashes(&keys_values, random_state, hashes_buffer)?;
+    let hash_values = create_hashes(keys_values, random_state, hashes_buffer)?;
 
     // For usual JoinHashmap, the implementation is void.
-    hash_map.extend_zero(batch.num_rows());
+    hash_map.extend_zero(hash_values.len());
 
     // Unmatchable NULL-key rows are filtered out below.
-    let valid_keys = matchable_join_keys(&keys_values, null_equality);
+    let valid_keys = matchable_join_keys(keys_values, null_equality);
 
     // Updating JoinHashMap from hash values iterator
     let hash_values_iter = hash_values

@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 statement ok
 set datafusion.catalog.information_schema = true;
@@ -45,9 +32,34 @@ my_catalog my_schema table_with_many_types large_utf8_col 3 NULL NO LargeUtf8 NU
 my_catalog my_schema table_with_many_types timestamp_nanos 6 NULL NO Timestamp(ns) NULL NULL NULL NULL NULL NULL NULL
 my_catalog my_schema table_with_many_types utf8_col 2 NULL YES Utf8 NULL 2147483647 NULL NULL NULL NULL NULL
 
+###########
+# numeric_precision, numeric_precision_radix and numeric_scale for the
+# remaining numeric types
+###########
+
+statement ok
+CREATE TABLE t2 AS SELECT
+  arrow_cast(1, 'Int8') AS int8_col,
+  arrow_cast(1, 'Int16') AS int16_col,
+  arrow_cast(1.0, 'Float32') AS float32_col,
+  arrow_cast(1.5, 'Decimal128(10, 2)') AS decimal128_col,
+  arrow_cast(1.5, 'Decimal256(40, 5)') AS decimal256_col;
+
+query TTTTITTTIIIIIIT rowsort
+SELECT * from information_schema.columns WHERE table_name = 't2';
+----
+my_catalog my_schema t2 decimal128_col 3 NULL NO Decimal128(10, 2) NULL NULL 10 10 2 NULL NULL
+my_catalog my_schema t2 decimal256_col 4 NULL NO Decimal256(40, 5) NULL NULL NULL NULL NULL NULL NULL
+my_catalog my_schema t2 float32_col 2 NULL NO Float32 NULL NULL 24 2 NULL NULL NULL
+my_catalog my_schema t2 int16_col 1 NULL NO Int16 NULL NULL 16 2 NULL NULL NULL
+my_catalog my_schema t2 int8_col 0 NULL NO Int8 NULL NULL 8 2 NULL NULL NULL
+
 # Cleanup
 statement ok
 drop table t1
+
+statement ok
+drop table t2
 
 statement ok
 drop table table_with_many_types
