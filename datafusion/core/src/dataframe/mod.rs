@@ -2853,49 +2853,41 @@ impl DataFrame {
             .collect()
     }
 
-    /// Create a DataFrame from named Arrow arrays.
+    /// Create a `DataFrame` from named Arrow arrays in a new, default
+    /// [`SessionContext`].
     ///
-    /// # Example
+    /// # Deprecated
+    ///
+    /// Use [`SessionContext::read_columns`] instead. This method creates its
+    /// own `SessionContext`, so the returned `DataFrame` does not see the
+    /// functions, tables, configuration or runtime of any session the caller
+    /// already has. Calling `read_columns` on an existing context binds the
+    /// `DataFrame` to that session:
     ///
     /// ```
     /// use std::sync::Arc;
-    /// use arrow::array::{ArrayRef, Int32Array, StringArray};
-    /// use datafusion::prelude::DataFrame;
+    /// use arrow::array::{ArrayRef, Int32Array};
+    /// use datafusion::prelude::*;
     /// # use datafusion::error::Result;
-    /// # use datafusion_common::assert_batches_sorted_eq;
-    /// # #[tokio::main]
-    /// # async fn main() -> Result<()> {
+    /// # fn main() -> Result<()> {
     /// let id: ArrayRef = Arc::new(Int32Array::from(vec![1, 2, 3]));
-    /// let name: ArrayRef = Arc::new(StringArray::from(vec!["foo", "bar", "baz"]));
-    /// let df = DataFrame::from_columns([("id", id), ("name", name)])?;
-    /// let expected = vec![
-    ///     "+----+------+",
-    ///     "| id | name |",
-    ///     "+----+------+",
-    ///     "| 1  | foo  |",
-    ///     "| 2  | bar  |",
-    ///     "| 3  | baz  |",
-    ///     "+----+------+",
-    /// ];
-    /// # assert_batches_sorted_eq!(expected, &df.collect().await?);
+    /// let ctx = SessionContext::new();
+    /// // before: DataFrame::from_columns([("id", id)])?
+    /// let df = ctx.read_columns([("id", id)])?;
     /// # Ok(())
     /// # }
     /// ```
+    ///
+    /// To build a `DataFrame` from literal values without a context, see the
+    /// [`dataframe!`] macro.
+    ///
+    /// [`dataframe!`]: macro@crate::dataframe
+    #[deprecated(since = "56.0.0", note = "use `SessionContext::read_columns` instead")]
     pub fn from_columns<'a, I>(columns: I) -> Result<Self>
     where
         I: IntoIterator<Item = (&'a str, ArrayRef)>,
     {
-        let (fields, arrays): (Vec<_>, Vec<_>) = columns
-            .into_iter()
-            .map(|(name, array)| {
-                (Field::new(name, array.data_type().clone(), true), array)
-            })
-            .unzip();
-        let schema = Arc::new(Schema::new(fields));
-        let batch = RecordBatch::try_new(schema, arrays)?;
-        let ctx = SessionContext::new();
-        let df = ctx.read_batch(batch)?;
-        Ok(df)
+        SessionContext::new().read_columns(columns)
     }
 }
 
@@ -2944,7 +2936,7 @@ macro_rules! dataframe {
     }};
 
     ($($name:expr => $data:expr),+ $(,)?) => {{
-        use datafusion::prelude::DataFrame;
+        use datafusion::prelude::SessionContext;
         use datafusion::common::test_util::IntoArrayRef;
 
         let columns = [
@@ -2953,7 +2945,8 @@ macro_rules! dataframe {
             )+
         ];
 
-        DataFrame::from_columns(columns)
+        let ctx = SessionContext::new();
+        ctx.read_columns(columns)
     }};
 }
 
