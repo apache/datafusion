@@ -278,3 +278,25 @@ SET datafusion.optimizer.max_passes = 3;
 
 statement ok
 SET datafusion.explain.logical_plan_only = false;
+
+# Equal join keys need not be interchangeable inside deterministic functions:
+# atan2 distinguishes negative and positive zero, but the join matches them.
+statement ok
+CREATE TABLE negative_zero AS SELECT CAST('-0.0' AS DOUBLE) AS k;
+
+statement ok
+CREATE TABLE positive_zero AS SELECT CAST('0.0' AS DOUBLE) AS k;
+
+query I
+SELECT count(*)
+FROM (SELECT * FROM negative_zero WHERE atan2(0.0, k) > 1) a
+JOIN positive_zero b ON a.k = b.k;
+----
+1
+
+query I
+SELECT count(*)
+FROM positive_zero a
+JOIN (SELECT * FROM negative_zero WHERE atan2(0.0, k) > 1) b ON a.k = b.k;
+----
+1
