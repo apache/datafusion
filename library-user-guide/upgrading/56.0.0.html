@@ -1903,6 +1903,30 @@ until the method is removed, as callers of the deprecated method still use them.
 </div>
 <p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/18882">issue #18882</a> for details.</p>
 </section>
+<section id="createfunction-argument-and-return-types-are-fieldrefs">
+<h3><code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> argument and return types are <code class="docutils literal notranslate"><span class="pre">FieldRef</span></code>s<a class="headerlink" href="#createfunction-argument-and-return-types-are-fieldrefs" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">OperateFunctionArg::data_type</span></code> is replaced by <code class="docutils literal notranslate"><span class="pre">OperateFunctionArg::field</span></code>, and
+<code class="docutils literal notranslate"><span class="pre">CreateFunction::return_type</span></code> by <code class="docutils literal notranslate"><span class="pre">CreateFunction::return_field</span></code>. Both are now
+<code class="docutils literal notranslate"><span class="pre">FieldRef</span></code>s instead of <code class="docutils literal notranslate"><span class="pre">DataType</span></code>s, so <code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">FUNCTION</span></code> can declare argument
+and return types that need field metadata, such as extension types
+(<code class="docutils literal notranslate"><span class="pre">CREATE</span> <span class="pre">FUNCTION</span> <span class="pre">f(id</span> <span class="pre">UUID)</span> <span class="pre">RETURNS</span> <span class="pre">UUID</span> <span class="pre">...</span></code>). The argument field is named
+after the argument, or <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code> if the argument has no name. The return field has
+the name <code class="docutils literal notranslate"><span class="pre">&quot;&quot;</span></code>.</p>
+<p><strong>Migration guide:</strong></p>
+<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="c1">// Before</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">arg_types</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">args</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">a</span><span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="n">data_type</span><span class="p">.</span><span class="n">clone</span><span class="p">()).</span><span class="n">collect</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">return_type</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">definition</span><span class="p">.</span><span class="n">return_type</span><span class="p">;</span>
+
+<span class="c1">// After</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">arg_types</span><span class="p">:</span><span class="w"> </span><span class="nb">Vec</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">args</span><span class="p">.</span><span class="n">iter</span><span class="p">().</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">a</span><span class="o">|</span><span class="w"> </span><span class="n">a</span><span class="p">.</span><span class="n">field</span><span class="p">.</span><span class="n">data_type</span><span class="p">().</span><span class="n">clone</span><span class="p">()).</span><span class="n">collect</span><span class="p">();</span>
+<span class="kd">let</span><span class="w"> </span><span class="n">return_type</span><span class="p">:</span><span class="w"> </span><span class="nb">Option</span><span class="o">&lt;</span><span class="n">DataType</span><span class="o">&gt;</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">definition</span>
+<span class="w">    </span><span class="p">.</span><span class="n">return_field</span>
+<span class="w">    </span><span class="p">.</span><span class="n">map</span><span class="p">(</span><span class="o">|</span><span class="n">field</span><span class="o">|</span><span class="w"> </span><span class="n">field</span><span class="p">.</span><span class="n">data_type</span><span class="p">().</span><span class="n">clone</span><span class="p">());</span>
+</pre></div>
+</div>
+<p><code class="docutils literal notranslate"><span class="pre">CreateFunction::try_new</span></code> takes <code class="docutils literal notranslate"><span class="pre">Option&lt;FieldRef&gt;</span></code> for the return type.</p>
+<p>See <a class="reference external" href="https://github.com/apache/datafusion/issues/18235">issue #18235</a> for details.</p>
+</section>
 </section>
 </section>
 
@@ -2020,6 +2044,7 @@ until the method is removed, as callers of the deprecated method still use them.
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#logicalplan-map-expressions-re-derives-a-projection-s-schema"><code class="docutils literal notranslate"><span class="pre">LogicalPlan::map_expressions</span></code> re-derives a <code class="docutils literal notranslate"><span class="pre">Projection</span></code>’s schema</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sanitycheckplan-is-deprecated-and-no-longer-in-the-default-physical-optimizer-rules"><code class="docutils literal notranslate"><span class="pre">SanityCheckPlan</span></code> is deprecated and no longer in the default physical optimizer rules</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#aggregateudfimpl-is-nullable-is-deprecated"><code class="docutils literal notranslate"><span class="pre">AggregateUDFImpl::is_nullable</span></code> is deprecated</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#createfunction-argument-and-return-types-are-fieldrefs"><code class="docutils literal notranslate"><span class="pre">CreateFunction</span></code> argument and return types are <code class="docutils literal notranslate"><span class="pre">FieldRef</span></code>s</a></li>
 </ul>
 </li>
 </ul>
