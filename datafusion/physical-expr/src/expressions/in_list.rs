@@ -19,8 +19,8 @@ use arrow::compute::kernels::boolean::{not, or_kleene};
 use arrow::compute::kernels::cmp::eq as arrow_eq;
 use arrow::datatypes::*;
 
+use datafusion_common::float_semantics::normalize_floats;
 use datafusion_common::tree_node::TreeNode;
-use datafusion_common::utils::{normalize_float_zero, normalize_float_zero_scalar};
 use datafusion_common::{
     DFSchema, Result, ScalarValue, assert_or_internal_err, exec_err,
 };
@@ -72,12 +72,10 @@ fn supports_arrow_eq(dt: &DataType) -> bool {
     }
 }
 
-fn normalize_in_list_float_zero_value(value: ColumnarValue) -> ColumnarValue {
+fn normalize_in_list_value(value: ColumnarValue) -> ColumnarValue {
     match value {
-        ColumnarValue::Array(array) => ColumnarValue::Array(normalize_float_zero(&array)),
-        ColumnarValue::Scalar(scalar) => {
-            ColumnarValue::Scalar(normalize_float_zero_scalar(scalar))
-        }
+        ColumnarValue::Array(array) => ColumnarValue::Array(normalize_floats(&array)),
+        ColumnarValue::Scalar(scalar) => ColumnarValue::Scalar(scalar.normalize()),
     }
 }
 
@@ -380,13 +378,12 @@ impl PhysicalExpr for InListExpr {
                 // comparator for unsupported types (nested, RunEndEncoded, etc.).
                 // Normalize the left side once for the whole list. Doing this
                 // outside `compare_one` avoids rescanning it for every item.
-                let value =
-                    normalize_in_list_float_zero_value(value).into_array(num_rows)?;
+                let value = normalize_in_list_value(value).into_array(num_rows)?;
                 let lhs_supports_arrow_eq = supports_arrow_eq(value.data_type());
 
                 // Helper: compare value against a single list expression
                 let compare_one = |expr: &Arc<dyn PhysicalExpr>| -> Result<BooleanArray> {
-                    match normalize_in_list_float_zero_value(expr.evaluate(batch)?) {
+                    match normalize_in_list_value(expr.evaluate(batch)?) {
                         ColumnarValue::Array(array) => {
                             if lhs_supports_arrow_eq
                                 && supports_arrow_eq(array.data_type())
@@ -1300,20 +1297,28 @@ mod tests {
             Arc::new(schema.clone()),
             vec![Arc::new(Int32Array::from(vec![0, 0, 0]))],
         )?;
-        let needle = lit(ScalarValue::Dictionary(
-            Box::new(DataType::Int16),
-            Box::new(ScalarValue::Dictionary(
-                Box::new(DataType::Int8),
-                Box::new(ScalarValue::Int32(Some(2))),
-            )),
-        ));
+        for (value, list) in [
+            (ScalarValue::Int32(Some(2)), vec![lit(1_i32), lit(2_i32)]),
+            (
+                ScalarValue::Float64(Some(-0.0)),
+                vec![lit(0.0_f64), lit(1.0_f64)],
+            ),
+        ] {
+            let needle = lit(ScalarValue::Dictionary(
+                Box::new(DataType::Int16),
+                Box::new(ScalarValue::Dictionary(
+                    Box::new(DataType::Int8),
+                    Box::new(value),
+                )),
+            ));
 
-        let expr = in_list(needle, vec![lit(1_i32), lit(2_i32)], &false, &schema)?;
-        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
-        assert_eq!(
-            as_boolean_array(&result),
-            &BooleanArray::from(vec![true, true, true])
-        );
+            let expr = in_list(needle, list, &false, &schema)?;
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(
+                as_boolean_array(&result),
+                &BooleanArray::from(vec![true, true, true])
+            );
+        }
 
         Ok(())
     }

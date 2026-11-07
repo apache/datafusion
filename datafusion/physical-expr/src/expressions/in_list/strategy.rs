@@ -10,6 +10,7 @@ use arrow::datatypes::{
     ArrowPrimitiveType, DataType, Float16Type, Float32Type, Float64Type,
 };
 use datafusion_common::Result;
+use datafusion_common::float_semantics::FloatSemantics;
 
 use super::array_static_filter::ArrayStaticFilter;
 use super::byte_view_filter::instantiate_byte_view_filter;
@@ -53,9 +54,10 @@ pub(super) fn instantiate_static_filter(
 }
 
 /// SQL membership equates the zero signs, while the primitive filters compare bits.
-fn add_missing_signed_zero<T: ArrowPrimitiveType>(
-    in_array: ArrayRef,
-) -> Result<ArrayRef> {
+fn add_missing_signed_zero<T: ArrowPrimitiveType>(in_array: ArrayRef) -> Result<ArrayRef>
+where
+    T::Native: FloatSemantics,
+{
     let array = in_array.as_primitive::<T>();
     let positive_zero = T::Native::ZERO;
     let negative_zero = positive_zero.neg_wrapping();
@@ -63,7 +65,7 @@ fn add_missing_signed_zero<T: ArrowPrimitiveType>(
     let mut negative_present = false;
     for value in array.iter().flatten() {
         positive_present = positive_present || value.is_eq(positive_zero);
-        negative_present = negative_present || value.is_eq(negative_zero);
+        negative_present = negative_present || value.needs_normalization();
         if positive_present && negative_present {
             return Ok(in_array);
         }
@@ -84,7 +86,7 @@ fn view_types_match(needle_type: &DataType, list_type: &DataType) -> bool {
         && dictionary_value_type(needle_type) == list_type
 }
 
-pub(super) fn dictionary_value_type(mut data_type: &DataType) -> &DataType {
+fn dictionary_value_type(mut data_type: &DataType) -> &DataType {
     while let DataType::Dictionary(_, value_type) = data_type {
         data_type = value_type;
     }
@@ -197,7 +199,10 @@ mod tests {
 
     #[test]
     fn static_float_filters_match_both_zeros_at_cutoffs() -> Result<()> {
-        fn check<T: BranchlessFilterType>() -> Result<()> {
+        fn check<T: BranchlessFilterType>() -> Result<()>
+        where
+            T::Native: FloatSemantics,
+        {
             let positive_zero = T::Native::ZERO;
             let negative_zero = positive_zero.neg_wrapping();
             let needles = PrimitiveArray::<T>::from_iter([

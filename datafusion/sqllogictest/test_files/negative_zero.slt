@@ -274,6 +274,14 @@ SELECT [0.0] = [-0.0] AS eq,
 ----
 true false true
 
+# Four constants keep the static membership filter. Nested scalar inputs
+# must match their own values, including negative zero.
+query BB
+SELECT [-0.0] IN ([-0.0], [1.0], [2.0], [3.0]),
+       [-0.0] NOT IN ([-0.0], [1.0], [2.0], [3.0]);
+----
+true false
+
 statement ok
 CREATE TABLE nested_zeros(id INT, a DOUBLE[]) AS VALUES (1, [0.0]), (2, [-0.0]);
 

@@ -16,8 +16,8 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::float_semantics::has_float_leaf;
 use datafusion_common::nested_struct::has_one_of_more_common_fields;
-use datafusion_common::utils::has_float_leaf;
 use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, exec_datafusion_err, internal_err,
 };
