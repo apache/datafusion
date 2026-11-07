@@ -45,16 +45,15 @@ mod tests {
     use datafusion_datasource::{PartitionedFile, TableSchemaBuilder};
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_datasource_parquet::{
-        DefaultParquetFileReaderFactory, ParquetFileReaderFactory, ParquetFormat,
+        CreateReaderArgs, DefaultParquetFileReaderFactory, ParquetFileReaderFactory,
+        ParquetFormat,
     };
     use datafusion_execution::object_store::ObjectStoreUrl;
     use datafusion_expr::{Expr, col, lit, when};
     use datafusion_physical_expr::planner::logical2physical;
     use datafusion_physical_plan::analyze::AnalyzeExecBuilder;
     use datafusion_physical_plan::collect;
-    use datafusion_physical_plan::metrics::{
-        ExecutionPlanMetricsSet, MetricValue, MetricsSet,
-    };
+    use datafusion_physical_plan::metrics::{MetricValue, MetricsSet};
     use datafusion_physical_plan::{ExecutionPlan, ExecutionPlanProperties};
 
     use chrono::{TimeZone, Utc};
@@ -2436,24 +2435,16 @@ mod tests {
     }
 
     impl ParquetFileReaderFactory for TrackingParquetFileReaderFactory {
-        fn create_reader(
+        fn create_reader_with_args(
             &self,
-            partition_index: usize,
-            partitioned_file: PartitionedFile,
-            metadata_size_hint: Option<usize>,
-            metrics: &ExecutionPlanMetricsSet,
+            args: CreateReaderArgs,
         ) -> Result<Box<dyn parquet::arrow::async_reader::AsyncFileReader + Send>>
         {
             self.metadata_size_hint_calls
                 .lock()
                 .unwrap()
-                .push(metadata_size_hint);
-            self.inner.create_reader(
-                partition_index,
-                partitioned_file,
-                metadata_size_hint,
-                metrics,
-            )
+                .push(args.metadata_size_hint());
+            self.inner.create_reader_with_args(args)
         }
     }
 
