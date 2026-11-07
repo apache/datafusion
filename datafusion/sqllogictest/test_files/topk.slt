@@ -811,3 +811,104 @@ drop table nested_progress;
 
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+# The TopK dynamic filter must keep `-0.0` rows when the threshold is `0.0`
+# (and vice versa): the heap orders `-0.0` before `0.0`, but comparisons treat
+# them as equal. https://github.com/apache/datafusion/issues/26618
+#
+# The expected rows assume -0.0 sorts before 0.0 (the current order).
+# They will change when -0.0 and 0.0 are treated as equal when sorting,
+# see https://github.com/apache/datafusion/issues/26138
+statement ok
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+create table float_zero (x double, y int) as values (0.0, 1), (-0.0, 7);
+
+statement ok
+insert into float_zero values (-0.0, 5);
+
+# `-0.0` is displayed as `0`; `y` tells the rows apart.
+query RI
+select x, y from float_zero order by x, y;
+----
+0 5
+0 7
+0 1
+
+query RI
+select x, y from float_zero order by x, y limit 2;
+----
+0 5
+0 7
+
+statement ok
+create table float_zero_desc (x double, y int) as values (-0.0, 1), (0.0, 7);
+
+statement ok
+insert into float_zero_desc values (0.0, 5);
+
+query RI
+select x, y from float_zero_desc order by x desc, y limit 2;
+----
+0 5
+0 7
+
+statement ok
+create table float_zero_ree as select arrow_cast(column1, 'RunEndEncoded("run_ends": non-null Int32, "values": Float64)') x, column2 y from (values (0.0, 1), (-0.0, 7));
+
+statement ok
+insert into float_zero_ree select arrow_cast(-0.0, 'RunEndEncoded("run_ends": non-null Int32, "values": Float64)'), 5;
+
+query I
+select y from float_zero_ree order by x, y limit 2;
+----
+5
+7
+
+# The filter also prunes files and row groups in the scan.
+query I
+copy (select * from (values (0.0, 1), (-0.0, 7)) t(x, y)) to 'test_files/scratch/topk/float_zero/a.parquet';
+----
+2
+
+query I
+copy (select * from (values (-0.0, 5)) t(x, y)) to 'test_files/scratch/topk/float_zero/b.parquet';
+----
+1
+
+statement ok
+create external table float_zero_pq stored as parquet location 'test_files/scratch/topk/float_zero/';
+
+query I
+select y from float_zero_pq order by x, y limit 2;
+----
+5
+7
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+query I
+select y from float_zero_pq order by x, y limit 2;
+----
+5
+7
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+drop table float_zero;
+
+statement ok
+drop table float_zero_desc;
+
+statement ok
+drop table float_zero_ree;
+
+statement ok
+drop table float_zero_pq;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
