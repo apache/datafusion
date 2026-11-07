@@ -151,6 +151,145 @@ ORDER BY column1
 statement ok
 DROP TABLE parquet_two_files;
 
+# A leaf expression must still reach the scan when its projection also holds a
+# `KeepInPlace` one; see `try_split_leaf_projection` in
+# `datafusion/physical-optimizer/src/projection_pushdown.rs`. These need a
+# repartition, so `batch_size` is below the row count: do not raise it and do
+# not add a bare `LIMIT`, or the queries pass against broken code.
+
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+# The marker wrapped in arithmetic.
+query II
+SELECT file_row_index() + 1, column1 FROM parquet_table ORDER BY column1
+----
+1 10
+2 20
+3 30
+4 40
+5 50
+
+# The marker is BARE here. An unrelated computed column in the same projection
+# is enough, because the flag is a property of the whole projection.
+query II
+SELECT file_row_index(), column1 + 1 FROM parquet_table ORDER BY column1
+----
+0 11
+1 21
+2 31
+3 41
+4 51
+
+# Not specific to arithmetic: any enclosing expression has the same effect.
+query TI
+SELECT arrow_typeof(file_row_index()), column1 FROM parquet_table ORDER BY column1
+----
+Int64 10
+Int64 20
+Int64 30
+Int64 40
+Int64 50
+
+# The sibling marker behaves the same way. Compared against a predicate rather
+# than printed, so the expectation does not depend on the absolute file path.
+query BI
+SELECT length(input_file_name()) > 0, column1 FROM parquet_table ORDER BY column1
+----
+true 10
+true 20
+true 30
+true 40
+true 50
+
+# Both markers in one projection, each inside an enclosing expression.
+query BI
+SELECT input_file_name() IS NOT NULL AND file_row_index() >= 0, column1
+FROM parquet_table ORDER BY column1
+----
+true 10
+true 20
+true 30
+true 40
+true 50
+
+# A bare `input_file_name()` beside a computed column: the same trigger as the
+# `file_row_index()` case above. Asserted through the plan rather than the
+# values, because the value is an absolute path.
+query TT
+EXPLAIN SELECT input_file_name(), column1 + 1 FROM parquet_table
+----
+logical_plan
+01)Projection: input_file_name(), CAST(parquet_table.column1 AS Int64) + Int64(1)
+02)--TableScan: parquet_table projection=[column1]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 as input_file_name(), CAST(column1@0 AS Int64) + 1 as parquet_table.column1 + Int64(1)]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[column1, input_file_name() as __datafusion_leaf_0], file_type=parquet
+
+# The same marker twice. Both calls are one expression, so the split gives them
+# a single column and the marker is evaluated once per row, not twice. Both
+# outputs must still agree with each other.
+query III
+SELECT file_row_index(), file_row_index() + 1, column1
+FROM parquet_table ORDER BY column1
+----
+0 1 10
+1 2 20
+2 3 30
+3 4 40
+4 5 50
+
+# Shapes that already worked must keep working: the leaf rules extract from
+# `Filter`, `Sort` and `Aggregate`, so those never depended on this fix.
+query I
+SELECT column1 FROM parquet_table WHERE file_row_index() + 1 = 3
+----
+30
+
+query I
+SELECT column1 FROM parquet_table ORDER BY file_row_index() + 1
+----
+10
+20
+30
+40
+50
+
+query I
+SELECT sum(file_row_index() + 1) FROM parquet_table
+----
+15
+
+# A bare marker on its own is unaffected: no `KeepInPlace` expression shares
+# the projection, so nothing is inserted beneath it.
+query II
+SELECT file_row_index(), column1 FROM parquet_table ORDER BY column1
+----
+0 10
+1 20
+2 30
+3 40
+4 50
+
+# Raising `batch_size` above the row count removes the repartition. This must
+# keep working, and it is also the control that proves trap 1 above is real.
+statement ok
+SET datafusion.execution.batch_size = 8192;
+
+query II
+SELECT file_row_index() + 1, column1 FROM parquet_table ORDER BY column1
+----
+1 10
+2 20
+3 30
+4 40
+5 50
+
+# `target_partitions = 1` also removes the repartition, but is not covered here:
+# `RESET` restores the global default rather than the harness value, which the
+# harness rejects as leftover configuration.
+
 statement ok
 DROP TABLE parquet_table;
 
