@@ -167,7 +167,7 @@ fn collect_concat_to_like_string(parts: &[Hir]) -> Option<String> {
 }
 
 /// Returns a str represented by `Literal` if it contains a valid utf8
-/// sequence and is safe for like (has no '%' and '_')
+/// sequence and is safe for like (has no `%`, `_` or `\`)
 fn like_str_from_literal(l: &Literal) -> Option<&str> {
     // if not utf8, no good
     let s = std::str::from_utf8(&l.0).ok()?;
@@ -187,8 +187,10 @@ fn str_from_literal(l: &Literal) -> Option<&str> {
     Some(s)
 }
 
+/// Returns true if `c` has no special meaning in a `LIKE` pattern. `\` is the
+/// implicit escape character of `LIKE`.
 fn is_safe_for_like(c: char) -> bool {
-    (c != '%') && (c != '_')
+    !matches!(c, '%' | '_' | '\\')
 }
 
 /// Returns true if the elements in a `Concat` pattern are:
@@ -272,15 +274,24 @@ fn partial_anchored_literal_to_like(v: &[Hir]) -> Option<String> {
 }
 
 /// Extracts a string literal expression assuming that [`is_anchored_literal`]
-/// returned true.
-fn anchored_literal_to_expr(v: &[Hir], string_scalar: &StringScalar) -> Option<Expr> {
+/// returned true. When `for_like` is true, the literal must be safe for `LIKE`.
+fn anchored_literal_to_expr(
+    v: &[Hir],
+    string_scalar: &StringScalar,
+    for_like: bool,
+) -> Option<Expr> {
     match v.len() {
         2 => Some(string_scalar.to_expr("")),
         3 => {
             let HirKind::Literal(l) = v[1].kind() else {
                 return None;
             };
-            like_str_from_literal(l).map(|s| string_scalar.to_expr(s))
+            let s = if for_like {
+                like_str_from_literal(l)
+            } else {
+                str_from_literal(l)
+            };
+            s.map(|s| string_scalar.to_expr(s))
         }
         _ => None,
     }
@@ -347,7 +358,7 @@ fn lower_simple(
             ));
         }
         HirKind::Concat(inner) if is_anchored_literal(inner) => {
-            return anchored_literal_to_expr(inner, string_scalar).map(|right| {
+            return anchored_literal_to_expr(inner, string_scalar, mode.i).map(|right| {
                 if mode.i {
                     // Case-insensitive: use ILIKE for exact match (no wildcards)
                     mode.expr(Box::new(left.clone()), Box::new(right))
