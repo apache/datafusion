@@ -559,7 +559,7 @@ impl ExternalSorter {
         let mut sorted_stream = self
             .in_mem_sort_stream(
                 false,
-                // No coalescing on the spill path: it raises per-run peak memory.
+                // No byte-sized coalescing on the spill path: it raises peak memory.
                 false,
             )
             .await?;
@@ -679,12 +679,13 @@ impl ExternalSorter {
     ///
     ///   in_mem_batches
     /// ```
-    /// `coalesce_runs` merges buffered batches into fewer, larger sorted runs to
-    /// reduce merge fan-in. Disabled on the spill path to keep peak memory low.
+    /// Where possible, small batches are concatenated into runs of at least
+    /// `batch_size` rows, except for the final run. `coalesce_large_runs` also
+    /// allows larger, byte-sized runs for single-column final output.
     async fn in_mem_sort_stream(
         &mut self,
         is_output_stream: bool,
-        coalesce_runs: bool,
+        coalesce_large_runs: bool,
     ) -> Result<SendableRecordBatchStream> {
         if self.in_mem_batches.is_empty() {
             let empty_stream =
@@ -730,15 +731,13 @@ impl ExternalSorter {
 
         // For single-column sorts, coalesce the buffered batches into fewer,
         // larger runs to cut the merge fan-in (where the cheap per-key compare is
-        // dominated by per-stream cursor/merge overhead). Multi-column sorts are
-        // left as one run per batch: the row-format merge of many small runs
-        // beats sorting a few large runs with the lexicographic comparator.
+        // dominated by per-stream cursor/merge overhead). All sorts also coalesce
+        // small batches to reach `batch_size`, including before spilling.
         let batches = std::mem::take(&mut self.in_mem_batches);
-        let runs = if coalesce_runs && self.expr.len() == 1 {
-            self.coalesce_in_mem_batches_into_runs(batches)?
-        } else {
-            batches
-        };
+        let runs = self.coalesce_in_mem_batches_into_runs(
+            batches,
+            coalesce_large_runs && self.expr.len() == 1,
+        )?;
 
         let concurrency = SortConcurrency::for_current_runtime(&self.sort_concurrency);
         let streams = if let Some(concurrency) = concurrency {
@@ -851,60 +850,93 @@ impl ExternalSorter {
         Box::pin(RecordBatchStreamAdapter::new(schema, batches))
     }
 
-    /// Concatenates `batches` into fewer, larger runs, each bounded by
-    /// `sort_in_place_threshold_bytes`, to reduce merge fan-in. `self.reservation`
-    /// is resized to the coalesced footprint so the caller's per-run splits stay
-    /// exact.
+    /// Tries to concatenate `batches` into runs of at least `batch_size` rows,
+    /// except for the final run. With `coalesce_large_runs`,
+    /// runs also grow toward `sort_in_place_threshold_bytes` to reduce merge fan-in.
+    /// `self.reservation` is resized to the coalesced footprint so the caller's
+    /// per-run splits stay exact.
+    /// Keeps the original batches if concatenation fails or the memory pool
+    /// cannot accommodate the combined footprint.
     fn coalesce_in_mem_batches_into_runs(
         &mut self,
         batches: Vec<RecordBatch>,
+        coalesce_large_runs: bool,
     ) -> Result<Vec<RecordBatch>> {
+        if !coalesce_large_runs
+            && batches
+                .iter()
+                .all(|batch| batch.num_rows() >= self.batch_size)
+        {
+            return Ok(batches);
+        }
         let target = self.sort_in_place_threshold_bytes.max(1);
         let mut runs: Vec<RecordBatch> = Vec::new();
-        let mut group: Vec<RecordBatch> = Vec::new();
+        let mut group: Vec<&RecordBatch> = Vec::new();
+        let mut group_rows = 0usize;
         let mut group_bytes = 0usize;
         // Count the buffers the batches share as when they were buffered
         let mut counter = self.new_buffered_batches_counter();
 
         // Flush a group into a run, skipping the copy for a single-batch group.
-        let flush = |group: &mut Vec<RecordBatch>,
+        let flush = |group: &mut Vec<&RecordBatch>,
                      runs: &mut Vec<RecordBatch>,
                      schema: &SchemaRef|
          -> Result<()> {
             match group.len() {
                 0 => {}
-                1 => runs.push(group.pop().unwrap()),
+                1 => runs.push(group.pop().cloned().unwrap()),
                 _ => {
-                    runs.push(concat_batches(schema, group.iter())?);
+                    runs.push(concat_batches(schema, group.iter().copied())?);
                     group.clear();
                 }
             }
             Ok(())
         };
 
-        for batch in batches {
-            let bytes =
-                get_reserved_bytes_for_next_record_batch(&batch, counter.as_mut())?;
-            if !group.is_empty() && group_bytes.saturating_add(bytes) > target {
-                flush(&mut group, &mut runs, &self.schema)?;
+        // Keep the input batches until their replacement fits the reservation.
+        // Concatenation can need more memory when it breaks shared input buffers.
+        // Array offset and dictionary-key limits can also reject a combined run.
+        for batch in &batches {
+            let bytes = if coalesce_large_runs {
+                get_reserved_bytes_for_next_record_batch(batch, counter.as_mut())?
+            } else {
+                0
+            };
+            if group_rows >= self.batch_size
+                && (!coalesce_large_runs || group_bytes.saturating_add(bytes) > target)
+            {
+                if flush(&mut group, &mut runs, &self.schema).is_err() {
+                    return Ok(batches);
+                }
+                group_rows = 0;
                 group_bytes = 0;
             }
+            group_rows += batch.num_rows();
             group_bytes += bytes;
             group.push(batch);
         }
-        flush(&mut group, &mut runs, &self.schema)?;
+        if flush(&mut group, &mut runs, &self.schema).is_err() {
+            return Ok(batches);
+        }
 
-        // Realign the reservation: concatenation may shift the footprint slightly.
+        // Realign the reservation to the coalesced footprint.
         let mut counter = self.new_buffered_batches_counter();
         let total: usize = runs
             .iter()
             .map(|run| get_reserved_bytes_for_next_record_batch(run, counter.as_mut()))
             .sum::<Result<usize>>()?;
-        self.reservation
-            .try_resize(total)
-            .map_err(Self::err_with_oom_context)?;
-
-        Ok(runs)
+        match self.reservation.try_resize(total) {
+            Ok(()) => Ok(runs),
+            Err(error)
+                if matches!(
+                    error.find_root(),
+                    DataFusionError::ResourcesExhausted(_)
+                ) =>
+            {
+                Ok(batches)
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Returns a counter for sizing batches that are buffered together, or
@@ -1281,6 +1313,9 @@ pub fn sort_batch_chunked(
 ///
 /// Support sorting datasets that are larger than the memory allotted
 /// by the memory manager, by spilling to disk.
+///
+/// Adjacent small batches may be combined into larger runs before sorting,
+/// including when spilling, to reduce sort and merge overhead.
 ///
 /// On multithreaded Tokio runtimes, large inputs are sorted in batches on
 /// separate tasks before merging. All partitions share a task limit capped by
@@ -2960,6 +2995,100 @@ mod tests {
             "The sort should have returned all memory used back to the memory manager"
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn coalesce_small_runs_preserves_rows_and_full_batches() -> Result<()> {
+        let batches = vec![
+            record_batch!(("a", Int32, [9, 8]), ("b", Int32, [0, 1]))?,
+            record_batch!(("a", Int32, [7, 6]), ("b", Int32, [2, 3]))?,
+            record_batch!(("a", Int32, [5, 4, 3, 2]), ("b", Int32, [4, 5, 6, 7]))?,
+            record_batch!(("a", Int32, [1]), ("b", Int32, [8]))?,
+        ];
+        let schema = batches[0].schema();
+        let expected = concat_batches(&schema, &batches)?;
+        let full_batch = batches[2].clone();
+        let mut sorter = ExternalSorter::new(
+            0,
+            Arc::clone(&schema),
+            [
+                PhysicalSortExpr::new_default(col("a", &schema)?),
+                PhysicalSortExpr::new_default(col("b", &schema)?),
+            ]
+            .into(),
+            4,
+            0,
+            0,
+            SpillCompression::Uncompressed,
+            &ExecutionPlanMetricsSet::new(),
+            Arc::new(RuntimeEnv::default()),
+        )?;
+        for batch in batches {
+            sorter.insert_batch(batch).await?;
+        }
+        let batches = std::mem::take(&mut sorter.in_mem_batches);
+        let runs = sorter.coalesce_in_mem_batches_into_runs(batches, false)?;
+        assert_eq!(
+            runs.iter().map(RecordBatch::num_rows).collect::<Vec<_>>(),
+            vec![4, 4, 1]
+        );
+        assert_eq!(concat_batches(&schema, &runs)?, expected);
+        // A full input batch remains a run without copying its arrays.
+        assert!(Arc::ptr_eq(runs[1].column(0), full_batch.column(0)));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_small_run_coalescing_falls_back_on_dictionary_overflow() -> Result<()> {
+        let mut batches = Vec::new();
+        for (start, rows) in [(0, 100), (100, 200)] {
+            let key: ArrayRef =
+                Arc::new(Int32Array::from_iter_values((start..start + rows).rev()));
+            let payload: ArrayRef = Arc::new(DictionaryArray::<UInt8Type>::try_new(
+                UInt8Array::from_iter_values((0..rows).rev().map(|i| i as u8)),
+                Arc::new(StringArray::from_iter_values(
+                    (start..start + rows).map(|i| i.to_string()),
+                )),
+            )?);
+            batches.push(RecordBatch::try_from_iter([
+                ("key", key),
+                ("payload", payload),
+            ])?);
+        }
+        let schema = batches[0].schema();
+        let sort = Arc::new(SortExec::new(
+            [
+                PhysicalSortExpr::new_default(col("key", &schema)?),
+                PhysicalSortExpr::new_default(col("payload", &schema)?),
+            ]
+            .into(),
+            TestMemoryExec::try_new_exec(&[batches], schema, None)?,
+        ));
+        let task_ctx = Arc::new(
+            TaskContext::default().with_session_config(
+                SessionConfig::new()
+                    .with_batch_size(128)
+                    .with_sort_in_place_threshold_bytes(0),
+            ),
+        );
+
+        // All 300 values fit in separate output batches, but not one UInt8 dictionary.
+        let output = collect(sort, task_ctx).await?;
+        let mut actual = Vec::new();
+        for batch in output {
+            let keys = batch.column(0).as_primitive::<Int32Type>();
+            let payload = batch.column(1).as_dictionary::<UInt8Type>();
+            let values = payload.values().as_string::<i32>();
+            actual.extend((0..batch.num_rows()).map(|row| {
+                (
+                    keys.value(row),
+                    values.value(payload.keys().value(row) as usize).to_owned(),
+                )
+            }));
+        }
+        let expected: Vec<_> = (0..300).map(|i| (i, i.to_string())).collect();
+        assert_eq!(actual, expected);
         Ok(())
     }
 

@@ -359,6 +359,45 @@ fn aliased_batches() -> Result<(Vec<RecordBatch>, LexOrdering)> {
 }
 
 #[tokio::test]
+async fn test_small_run_coalescing_falls_back_when_memory_is_full() -> Result<()> {
+    let (batches, ordering) = aliased_batches()?;
+    let schema = batches[0].schema();
+    let expected = sort_batch(&concat_batches(&schema, &batches)?, &ordering, None)?;
+    let input_bytes = batches
+        .iter()
+        .map(get_reserved_bytes_for_record_batch)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .sum::<usize>();
+    let workspace = 4096;
+    let capacity = input_bytes + workspace;
+    let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(capacity));
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_pool(Arc::clone(&pool))
+        .build_arc()?;
+    let mut sorter = ExternalSorter::new(
+        0,
+        Arc::clone(&schema),
+        ordering,
+        256,
+        workspace,
+        0,
+        SpillCompression::Uncompressed,
+        &ExecutionPlanMetricsSet::new(),
+        runtime,
+    )?;
+    for batch in batches {
+        sorter.insert_batch(batch).await?;
+    }
+    // Concatenation breaks the columns' aliases, but the pool has no room to grow.
+    assert_eq!(pool.reserved(), capacity);
+    sorter.sort_and_spill_in_mem_batches().await?;
+    let output: Vec<RecordBatch> = sorter.sort().await?.try_collect().await?;
+    assert_eq!(concat_batches(&schema, &output)?, expected);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_concat_sort_releases_unused_merge_workspace() -> Result<()> {
     let (batches, ordering) = aliased_batches()?;
     let schema = batches[0].schema();
