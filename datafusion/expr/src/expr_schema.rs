@@ -23,6 +23,7 @@ use arrow::datatypes::FieldRef;
 use arrow::datatypes::{DataType, Field};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::FieldExt;
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{
     Column, DataFusionError, ExprSchema, Result, ScalarValue, Spans, TableReference,
     not_impl_err, plan_datafusion_err, plan_err,
@@ -703,11 +704,26 @@ impl ExprSchemable for Expr {
                     ))),
                 }
             }
+            Expr::Case(case) => {
+                let fields = case
+                    .when_then_expr
+                    .iter()
+                    .map(|(_, then)| then)
+                    .chain(case.else_expr.iter())
+                    .map(|expr| expr.to_field(schema).map(|(_, field)| field))
+                    .collect::<Result<Vec<_>>>()?;
+                let metadata =
+                    coerced_fields_metadata(fields.iter().map(|f| f.as_ref()))?;
+                Ok(Arc::new(metadata.add_to_field(Field::new(
+                    &schema_name,
+                    self.get_type(schema)?,
+                    self.nullable(schema)?,
+                ))))
+            }
             Expr::Like(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::Between(_)
-            | Expr::Case(_)
             | Expr::InList(_)
             | Expr::InSubquery(_)
             | Expr::SetComparison(_)
