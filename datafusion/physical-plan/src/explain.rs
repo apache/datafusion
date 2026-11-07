@@ -260,7 +260,7 @@ impl ExplainExec {
             stringified_plans
                 .iter()
                 .map(stringified_plan_from_proto)
-                .collect(),
+                .collect::<Result<Vec<_>>>()?,
             *verbose,
         )))
     }
@@ -340,7 +340,7 @@ fn stringified_plan_to_proto(
 #[cfg(feature = "proto")]
 fn stringified_plan_from_proto(
     stringified_plan: &datafusion_proto_models::protobuf::StringifiedPlan,
-) -> StringifiedPlan {
+) -> Result<StringifiedPlan> {
     use datafusion_common::display::PlanType;
     use datafusion_proto_models::protobuf::plan_type::PlanTypeEnum::{
         AnalyzedLogicalPlan, FinalAnalyzedLogicalPlan, FinalLogicalPlan,
@@ -353,16 +353,17 @@ fn stringified_plan_from_proto(
         AnalyzedLogicalPlanType, OptimizedLogicalPlanType, OptimizedPhysicalPlanType,
     };
 
-    StringifiedPlan {
-        plan_type: match stringified_plan
-            .plan_type
-            .as_ref()
-            .and_then(|plan_type| plan_type.plan_type_enum.as_ref())
-            .unwrap_or_else(|| {
-                panic!(
-                    "Cannot create protobuf::StringifiedPlan from {stringified_plan:?}"
-                )
-            }) {
+    let plan_type_enum = stringified_plan
+        .plan_type
+        .as_ref()
+        .and_then(|plan_type| plan_type.plan_type_enum.as_ref())
+        .ok_or_else(|| {
+            datafusion_common::internal_datafusion_err!(
+                "ExplainExec is missing required field 'plan_type' of a 'stringified_plans' entry"
+            )
+        })?;
+    Ok(StringifiedPlan {
+        plan_type: match plan_type_enum {
             InitialLogicalPlan(_) => PlanType::InitialLogicalPlan,
             AnalyzedLogicalPlan(AnalyzedLogicalPlanType { analyzer_name }) => {
                 PlanType::AnalyzedLogicalPlan {
@@ -390,7 +391,7 @@ fn stringified_plan_from_proto(
             PhysicalPlanError(_) => PlanType::PhysicalPlanError,
         },
         plan: Arc::new(stringified_plan.plan.clone()),
-    }
+    })
 }
 
 /// If this plan should be shown, given the previous plan that was
