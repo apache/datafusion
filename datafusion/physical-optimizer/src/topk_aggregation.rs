@@ -65,23 +65,9 @@ use itertools::Itertools;
 /// Without this rule, the aggregate computes the aggregates for **all** groups
 /// in the input, and the sort then discards all but `N` of them.
 ///
-/// `GroupedTopKAggregateStream` instead keeps only the best `N` groups in a
-/// bounded priority map rather than a hash table. The `SortExec` is kept to
-/// enforce the final ordering and row count.
-///
-/// The optimization applies when all of the following hold:
-///
-/// 1. The `SortExec` has a `fetch` (`LIMIT`) and sorts by a single column.
-/// 2. Every operator between the `SortExec` and the `AggregateExec` preserves
-///    cardinality (for example `ProjectionExec` or `RepartitionExec`).
-/// 3. The aggregate has a single group key, no grouping sets, and no `FILTER`
-///    clauses.
-/// 4. Either there are no aggregate expressions and the sort column is the
-///    group key (a `DISTINCT`-style query), or there is exactly one `MIN` or
-///    `MAX` aggregate and it is the sort column. `MIN` and `MAX` are supported
-///    because a group's rank can only improve as more rows are seen.
-/// 5. The group key and sort column have types supported by the priority map
-///    (primitive types and strings).
+/// `GroupedTopKAggregateStream` keeps only the best `N` groups in a
+/// priority map rather than a hash table and the `SortExec` simply
+/// enforces the final ordering and row count.
 ///
 /// See the "Grouped TopK aggregation" section of the
 /// [`aggregates`](mod@datafusion_physical_plan::aggregates) module documentation
@@ -97,13 +83,8 @@ use itertools::Itertools;
 /// a `lim=[N]` entry, for example:
 ///
 /// ```text
-///     AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(...)], lim=[10] <-- LIM
+///     AggregateExec: ... aggr=[max(...)], lim=[10] <-- LIM
 /// ```
-///
-/// Note that `lim=[N]` is also shown for the `SELECT DISTINCT ... LIMIT N`
-/// soft limit, which uses the regular hash aggregation. The
-/// `topk_maintenance_time` metric in `EXPLAIN ANALYZE` output is only reported
-/// when the Grouped TopK implementation is used.
 #[derive(Debug)]
 pub struct TopKAggregation {}
 
