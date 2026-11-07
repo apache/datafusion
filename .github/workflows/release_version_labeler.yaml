@@ -7,20 +7,17 @@
 
 name: Release Version Labeler
 
-concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
-  cancel-in-progress: true
-
+# `pull_request_target` is disabled by ASF infra policy, so label on the push of
+# the merge commit to `main` and look up the merged pull request from it.
 on:
-  pull_request_target:
-    types:
-      - closed
+  push:
     branches:
       - main
 
 jobs:
   label:
-    if: github.event.pull_request.merged == true
+    # A fork that syncs its main branch also gets this push, and has nothing to label.
+    if: github.repository == 'apache/datafusion'
     runs-on: ubuntu-slim
     permissions:
       pull-requests: write

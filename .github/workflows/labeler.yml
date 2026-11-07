@@ -4,36 +4,56 @@
 
 name: Labeler
 
+# `pull_request_target` is disabled by ASF infra policy. This workflow runs from
+# the default branch when `pull_request_signal.yml` starts, so it never runs the
+# code of a pull request. See that file for details.
 concurrency:
-  group: ${{ github.repository }}-${{ github.head_ref || github.sha }}-${{ github.workflow }}
+  group: ${{ github.repository }}-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}-${{ github.workflow }}
   cancel-in-progress: true
 
 on:
-  pull_request_target:
-    types:
-      - opened
-      - edited
-      - synchronize
+  workflow_run:
+    workflows: ["Pull request signal"]
+    types: [requested]
+
+permissions: {}
 
 jobs:
   process:
     name: Process
     runs-on: ubuntu-slim
-    # only run for users whose permissions allow them to update PRs
-    # otherwise labeler is failing:
+    if: github.event.workflow_run.event == 'pull_request'
+    # The token of a `workflow_run` workflow can update PRs from forks.
+    # Previously `pull_request_target` was used for the same reason, see
     # https://github.com/apache/datafusion/issues/3743
     permissions:
       contents: read
       pull-requests: write
     steps:
+      # This checks out the default branch, never the pull request.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          sparse-checkout: ci/scripts
+          persist-credentials: false
+
+      # The same branch can target `main` and a release branch, so label every
+      # match. These are the current pull requests, so a delayed run for an
+      # older commit still labels the latest head.
+      - name: Find the pull requests
+        id: pr
+        uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3  # v9.0.0
+        with:
+          script: |
+            const pulls = await require('./ci/scripts/pull_requests_of_run.js')({ github, context });
+            if (pulls.length) core.setOutput('numbers', pulls.map((pull) => pull.number).join('\n'));
+            else core.info(`No open pull request for ${context.payload.workflow_run.head_sha}`);
+
       - name: Assign GitHub labels
-        if: |
-          github.event_name == 'pull_request_target' &&
-            (github.event.action == 'opened' ||
-             github.event.action == 'synchronize')
+        if: steps.pr.outputs.numbers != ''
         uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13  # v7.0.0
         with:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+          pr-number: ${{ steps.pr.outputs.numbers }}
           configuration-path: .github/workflows/labeler/labeler-config.yml
           sync-labels: true
 
