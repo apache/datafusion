@@ -2249,6 +2249,7 @@ dependencies = [
  "futures",
  "libloading",
  "log",
+ "pin-project-lite",
  "prost",
  "semver",
  "stabby",
