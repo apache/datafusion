@@ -9,6 +9,7 @@ use datafusion_datasource::projection::{ProjectionOpener, SplitProjection};
 use datafusion_physical_plan::projection::ProjectionExprs;
 use std::fmt;
 use std::io::Read;
+use std::ops::Range;
 use std::sync::Arc;
 
 use datafusion_datasource::decoder::{DecoderDeserializer, deserialize_stream};
@@ -18,7 +19,10 @@ use datafusion_datasource::{
     FileRange, ListingTableUrl, PartitionedFile, TableSchema, as_file_source,
 };
 
+use arrow::array::RecordBatch;
 use arrow::csv;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use bytes::Bytes;
 use datafusion_common::config::CsvOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{DataFusionError, Result, exec_datafusion_err};
@@ -26,15 +30,21 @@ use datafusion_common_runtime::JoinSet;
 use datafusion_datasource::file::FileSource;
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_execution::TaskContext;
+use datafusion_physical_expr_adapter::{
+    BatchAdapter, BatchAdapterFactory, DefaultPhysicalExprAdapterFactory,
+    PhysicalExprAdapterFactory,
+};
 use datafusion_physical_plan::metrics::{BaselineMetrics, ExecutionPlanMetricsSet};
 use datafusion_physical_plan::{
     DisplayFormatType, ExecutionPlan, ExecutionPlanProperties,
 };
 
 use crate::file_format::CsvDecoder;
+use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
 use object_store::buffered::BufWriter;
-use object_store::{GetOptions, GetResultPayload, ObjectStore};
+use object_store::path::Path;
+use object_store::{GetOptions, GetResultPayload, ObjectStore, ObjectStoreExt};
 use regex::Regex;
 use tokio::io::AsyncWriteExt;
 
@@ -174,28 +184,53 @@ impl CsvSource {
     pub fn newlines_in_values(&self) -> bool {
         self.options.newlines_in_values.unwrap_or(false)
     }
+
+    /// true if file columns are matched to the table schema by header name
+    pub fn match_columns_by_header(&self) -> bool {
+        self.options.match_columns_by_header.unwrap_or(false) && self.has_header()
+    }
+
+    /// Whether to match file columns to the table schema by header name
+    pub fn with_match_columns_by_header(&self, match_by_header: bool) -> Self {
+        let mut conf = self.clone();
+        conf.options.match_columns_by_header = Some(match_by_header);
+        conf
+    }
 }
 
 impl CsvSource {
-    fn open<R: Read>(&self, reader: R) -> Result<csv::Reader<R>> {
-        Ok(self.builder()?.build(reader)?)
+    fn open<R: Read>(
+        &self,
+        reader: R,
+        mapping: Option<&HeaderMapping>,
+    ) -> Result<csv::Reader<R>> {
+        Ok(self.builder(mapping)?.build(reader)?)
     }
 
-    fn builder(&self) -> Result<csv::ReaderBuilder> {
-        let mut builder =
-            csv::ReaderBuilder::new(Arc::clone(self.table_schema.file_schema()))
-                .with_delimiter(self.delimiter())
-                .with_batch_size(
-                    self.batch_size
-                        .expect("Batch size must be set before initializing builder"),
-                )
-                .with_header(self.has_header())
-                .with_quote(self.quote())
-                .with_truncated_rows(self.truncate_rows());
+    fn builder(&self, mapping: Option<&HeaderMapping>) -> Result<csv::ReaderBuilder> {
+        let (schema, projection) = match mapping {
+            Some(mapping) => (
+                Arc::clone(&mapping.physical_schema),
+                mapping.physical_projection.clone(),
+            ),
+            None => (
+                Arc::clone(self.table_schema.file_schema()),
+                self.projection.file_indices.clone(),
+            ),
+        };
+        let mut builder = csv::ReaderBuilder::new(schema)
+            .with_delimiter(self.delimiter())
+            .with_batch_size(
+                self.batch_size
+                    .expect("Batch size must be set before initializing builder"),
+            )
+            .with_header(self.has_header())
+            .with_quote(self.quote())
+            .with_truncated_rows(self.truncate_rows());
         if let Some(terminator) = self.terminator() {
             builder = builder.with_terminator(terminator);
         }
-        builder = builder.with_projection(self.projection.file_indices.clone());
+        builder = builder.with_projection(projection);
         if let Some(escape) = self.escape() {
             builder = builder.with_escape(escape)
         }
@@ -211,6 +246,217 @@ impl CsvSource {
 
         Ok(builder)
     }
+
+    fn parse_header(&self, line: &[u8]) -> Result<Vec<String>> {
+        let mut format = csv::reader::Format::default()
+            .with_header(true)
+            .with_delimiter(self.delimiter())
+            .with_quote(self.quote());
+        if let Some(terminator) = self.terminator() {
+            format = format.with_terminator(terminator);
+        }
+        if let Some(escape) = self.escape() {
+            format = format.with_escape(escape);
+        }
+        if let Some(comment) = self.comment() {
+            format = format.with_comment(comment);
+        }
+        let (schema, _) = format.infer_schema(line, Some(0))?;
+        Ok(schema.fields().iter().map(|f| f.name().clone()).collect())
+    }
+
+    /// Builds the mapping for a file whose header row is `line`, or `None` if
+    /// the file can be read positionally.
+    fn header_mapping(
+        &self,
+        line: &[u8],
+        expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
+    ) -> Result<Option<Arc<HeaderMapping>>> {
+        if line.is_empty() {
+            return Ok(None);
+        }
+        let header = self.parse_header(line)?;
+        HeaderMapping::try_new(
+            &header,
+            self.table_schema.file_schema(),
+            &self.projection.file_indices,
+            expr_adapter_factory,
+        )
+        .map(|mapping| mapping.map(Arc::new))
+    }
+}
+
+/// Maps the columns of a single CSV file onto the table's file schema by
+/// header name.
+///
+/// Only the header columns that are declared in the table are decoded; the
+/// decoded batch is then adapted to the projected file schema with the scan's
+/// [`PhysicalExprAdapterFactory`], which is the same mechanism Parquet uses
+/// to fill missing columns and reorder by name.
+#[derive(Debug)]
+struct HeaderMapping {
+    /// One field per header column, typed from the table schema where the
+    /// name is declared there
+    physical_schema: SchemaRef,
+    /// Header positions to decode, in the order of the table projection
+    physical_projection: Vec<usize>,
+    adapter: BatchAdapter,
+}
+
+impl HeaderMapping {
+    fn try_new(
+        header: &[String],
+        file_schema: &Schema,
+        file_indices: &[usize],
+        expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
+    ) -> Result<Option<Self>> {
+        let matches_positionally = header.len() == file_schema.fields().len()
+            && header
+                .iter()
+                .zip(file_schema.fields())
+                .all(|(name, field)| name == field.name());
+        if matches_positionally {
+            return Ok(None);
+        }
+
+        let physical_fields: Vec<Field> = header
+            .iter()
+            .map(|name| match file_schema.field_with_name(name) {
+                Ok(field) => field.clone(),
+                Err(_) => Field::new(name, DataType::Utf8, true),
+            })
+            .collect();
+
+        let physical_projection: Vec<usize> = file_indices
+            .iter()
+            .filter_map(|&index| {
+                let name = file_schema.field(index).name();
+                header.iter().position(|column| column == name)
+            })
+            .collect();
+
+        let physical_schema = Arc::new(Schema::new(physical_fields));
+        let decoded_schema = Arc::new(physical_schema.project(&physical_projection)?);
+        let target_schema = Arc::new(file_schema.project(file_indices)?);
+        let adapter = BatchAdapterFactory::new(target_schema)
+            .with_adapter_factory(expr_adapter_factory)
+            .make_adapter(&decoded_schema)?;
+
+        Ok(Some(Self {
+            physical_schema,
+            physical_projection,
+            adapter,
+        }))
+    }
+
+    fn remap(&self, batch: &RecordBatch) -> Result<RecordBatch> {
+        self.adapter.adapt_batch(batch)
+    }
+}
+
+/// Returns the byte range of the header row in `buf`, following the same
+/// rules as the CSV parser: a leading UTF-8 BOM is ignored, empty records are
+/// skipped, and comment lines (which always end at `\n`) are skipped. With no
+/// explicit terminator both `\r` and `\n` end a record. Returns `None` when
+/// the header is not yet complete and more input may follow.
+fn find_header_line(
+    buf: &[u8],
+    terminator: Option<u8>,
+    comment: Option<u8>,
+    eof: bool,
+) -> Option<Range<usize>> {
+    const BOM: &[u8] = b"\xef\xbb\xbf";
+    let is_terminator = |b: u8| match terminator {
+        Some(t) => b == t,
+        None => b == b'\n' || b == b'\r',
+    };
+
+    let mut start = 0;
+    if buf.starts_with(BOM) {
+        start = BOM.len();
+    } else if !eof && buf.len() < BOM.len() && BOM.starts_with(buf) {
+        return None;
+    }
+
+    loop {
+        let Some(&first) = buf.get(start) else {
+            return eof.then_some(buf.len()..buf.len());
+        };
+        if is_terminator(first) {
+            start += 1;
+        } else if comment == Some(first) {
+            match buf[start..].iter().position(|b| *b == b'\n') {
+                Some(end) => start += end + 1,
+                None if eof => return Some(buf.len()..buf.len()),
+                None => return None,
+            }
+        } else {
+            return match buf[start..].iter().position(|b| is_terminator(*b)) {
+                Some(end) => Some(start..start + end),
+                None if eof => Some(start..buf.len()),
+                None => None,
+            };
+        }
+    }
+}
+
+/// Reads the header row of `input`, returning it together with a stream that
+/// still yields every byte of `input`.
+async fn peek_header_line(
+    mut input: BoxStream<'static, Result<Bytes>>,
+    terminator: Option<u8>,
+    comment: Option<u8>,
+) -> Result<(Vec<u8>, BoxStream<'static, Result<Bytes>>)> {
+    let mut prefix = Vec::new();
+    let mut buffered = Vec::new();
+    loop {
+        let chunk = input.next().await.transpose()?;
+        let eof = chunk.is_none();
+        if let Some(chunk) = chunk {
+            prefix.extend_from_slice(&chunk);
+            buffered.push(Ok(chunk));
+        }
+        if let Some(header) = find_header_line(&prefix, terminator, comment, eof) {
+            let header = prefix[header].to_vec();
+            let buffered = futures::stream::iter(buffered);
+            let stream = if eof {
+                buffered.boxed()
+            } else {
+                buffered.chain(input).boxed()
+            };
+            return Ok((header, stream));
+        }
+    }
+}
+
+/// Reads the header row of an uncompressed file, growing the requested range
+/// until it is complete. Also returns the byte offset where the header starts.
+async fn fetch_header_line(
+    store: &dyn ObjectStore,
+    location: &Path,
+    file_size: u64,
+    terminator: Option<u8>,
+    comment: Option<u8>,
+) -> Result<(Vec<u8>, u64)> {
+    let mut len = file_size.min(64 * 1024);
+    loop {
+        let bytes = store.get_range(location, 0..len).await?;
+        let eof = len >= file_size;
+        if let Some(header) = find_header_line(&bytes, terminator, comment, eof) {
+            return Ok((bytes[header.clone()].to_vec(), header.start as u64));
+        }
+        len = (len * 2).min(file_size);
+    }
+}
+
+fn remap_stream(
+    stream: BoxStream<'static, Result<RecordBatch>>,
+    mapping: Option<Arc<HeaderMapping>>,
+) -> BoxStream<'static, Result<RecordBatch>> {
+    match mapping {
+        Some(mapping) => stream.map(move |batch| mapping.remap(&batch?)).boxed(),
+        None => stream,
+    }
 }
 
 /// A [`FileOpener`] that opens a CSV file and yields a [`FileOpenFuture`]
@@ -219,6 +465,7 @@ pub struct CsvOpener {
     file_compression_type: FileCompressionType,
     object_store: Arc<dyn ObjectStore>,
     partition_index: usize,
+    expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
 }
 
 impl CsvOpener {
@@ -233,7 +480,18 @@ impl CsvOpener {
             file_compression_type,
             object_store,
             partition_index: 0,
+            expr_adapter_factory: Arc::new(DefaultPhysicalExprAdapterFactory),
         }
+    }
+
+    /// Set the [`PhysicalExprAdapterFactory`] used to adapt files whose
+    /// columns are matched to the table schema by header name
+    pub fn with_expr_adapter_factory(
+        mut self,
+        expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
+    ) -> Self {
+        self.expr_adapter_factory = expr_adapter_factory;
+        self
     }
 }
 
@@ -250,11 +508,21 @@ impl FileSource for CsvSource {
         base_config: &FileScanConfig,
         partition_index: usize,
     ) -> Result<Arc<dyn FileOpener>> {
+        if self.options.match_columns_by_header == Some(true) && !self.has_header() {
+            log::warn!(
+                "CSV option match_columns_by_header is ignored because has_header is false; columns are matched by position"
+            );
+        }
+        let expr_adapter_factory = base_config
+            .expr_adapter_factory
+            .clone()
+            .unwrap_or_else(|| Arc::new(DefaultPhysicalExprAdapterFactory) as _);
         let mut opener = Arc::new(CsvOpener {
             config: Arc::new(self.clone()),
             file_compression_type: base_config.file_compression_type,
             object_store,
             partition_index,
+            expr_adapter_factory,
         }) as Arc<dyn FileOpener>;
         opener = ProjectionOpener::try_new(
             self.projection.clone(),
@@ -307,7 +575,11 @@ impl FileSource for CsvSource {
     fn fmt_extra(&self, t: DisplayFormatType, f: &mut fmt::Formatter) -> fmt::Result {
         match t {
             DisplayFormatType::Default | DisplayFormatType::Verbose => {
-                write!(f, ", has_header={}", self.has_header())
+                write!(f, ", has_header={}", self.has_header())?;
+                if self.match_columns_by_header() {
+                    write!(f, ", match_columns_by_header=true")?;
+                }
+                Ok(())
             }
             DisplayFormatType::TreeRender => Ok(()),
         }
@@ -360,6 +632,7 @@ impl FileSource for CsvSource {
             newlines_in_values: self.options.newlines_in_values.unwrap_or(false),
             truncate_rows: self.truncate_rows(),
             terminator: self.terminator().map(|terminator| vec![terminator]),
+            match_columns_by_header: self.match_columns_by_header(),
         };
         Ok(Some(protobuf::PhysicalPlanNode {
             physical_plan_type: Some(PhysicalPlanType::CsvScan(node)),
@@ -395,6 +668,8 @@ impl FileOpener for CsvOpener {
         // `self.config.has_header` controls whether to skip reading the 1st line header
         // If the .csv file is read in parallel and this `CsvOpener` is only reading some middle
         // partition, then don't skip first line
+        let match_by_header = self.config.match_columns_by_header();
+        let expr_adapter_factory = Arc::clone(&self.expr_adapter_factory);
         let mut csv_has_header = self.config.has_header();
         if let Some(FileRange { start, .. }) = partitioned_file.range
             && start != 0
@@ -417,6 +692,8 @@ impl FileOpener for CsvOpener {
 
         let store = Arc::clone(&self.object_store);
         let terminator = self.config.terminator();
+        let line_end = terminator.unwrap_or(b'\n');
+        let comment = self.config.comment();
 
         let baseline_metrics =
             BaselineMetrics::new(&self.config.metrics, self.partition_index);
@@ -440,18 +717,40 @@ impl FileOpener for CsvOpener {
                     )
                 })?;
 
+                // A partition may start mid-file, so the header is fetched
+                // separately. Every byte-range partition of a file repeats this
+                // small request; cache per file if that becomes costly.
+                let mapping = if match_by_header {
+                    let (header, header_start) = fetch_header_line(
+                        store.as_ref(),
+                        &location,
+                        file_size,
+                        terminator,
+                        comment,
+                    )
+                    .await?;
+                    // A partition starting within leading comment lines owns
+                    // the header row, so it has to skip it.
+                    if raw_start <= header_start {
+                        config.options.has_header = Some(true);
+                    }
+                    config.header_mapping(&header, Arc::clone(&expr_adapter_factory))?
+                } else {
+                    None
+                };
+
                 let aligned_stream = AlignedBoundaryStream::new(
                     Arc::clone(&store),
                     location.clone(),
                     raw_start,
                     raw_end,
                     file_size,
-                    terminator.unwrap_or(b'\n'),
+                    line_end,
                 )
                 .await?
                 .map_err(DataFusionError::from);
 
-                let decoder = config.builder()?.build_decoder();
+                let decoder = config.builder(mapping.as_deref())?.build_decoder();
                 let input = file_compression_type
                     .convert_stream(aligned_stream.boxed())?
                     .fuse();
@@ -459,7 +758,7 @@ impl FileOpener for CsvOpener {
                     input,
                     DecoderDeserializer::new(CsvDecoder::new(decoder)),
                 );
-                return Ok(stream.map_err(Into::into).boxed());
+                return Ok(remap_stream(stream.map_err(Into::into).boxed(), mapping));
             }
 
             // No range specified — read the entire file
@@ -469,8 +768,28 @@ impl FileOpener for CsvOpener {
             match result.payload {
                 #[cfg(not(target_arch = "wasm32"))]
                 GetResultPayload::File(file, _) => {
+                    use std::io::{BufRead, BufReader, Cursor};
+
                     let decoder = file_compression_type.convert_read(file)?;
-                    let mut reader = config.open(decoder)?;
+                    let (decoder, mapping): (Box<dyn Read + Send>, _) = if match_by_header
+                    {
+                        let mut decoder = BufReader::new(decoder);
+                        let mut prefix = Vec::new();
+                        let header = loop {
+                            let eof = decoder.read_until(line_end, &mut prefix)? == 0;
+                            if let Some(header) =
+                                find_header_line(&prefix, terminator, comment, eof)
+                            {
+                                break prefix[header].to_vec();
+                            }
+                        };
+                        let mapping = config
+                            .header_mapping(&header, Arc::clone(&expr_adapter_factory))?;
+                        (Box::new(Cursor::new(prefix).chain(decoder)), mapping)
+                    } else {
+                        (decoder, None)
+                    };
+                    let mut reader = config.open(decoder, mapping.as_deref())?;
 
                     // Use std::iter::from_fn to wrap execution of iterator's next() method.
                     let iterator = std::iter::from_fn(move || {
@@ -480,20 +799,29 @@ impl FileOpener for CsvOpener {
                         result
                     });
 
-                    Ok(futures::stream::iter(iterator)
+                    let stream = futures::stream::iter(iterator)
                         .map(|r| r.map_err(Into::into))
-                        .boxed())
+                        .boxed();
+                    Ok(remap_stream(stream, mapping))
                 }
                 GetResultPayload::Stream(s) => {
-                    let decoder = config.builder()?.build_decoder();
                     let s = s.map_err(DataFusionError::from);
-                    let input = file_compression_type.convert_stream(s.boxed())?.fuse();
+                    let mut input = file_compression_type.convert_stream(s.boxed())?;
+                    let mut mapping = None;
+                    if match_by_header {
+                        let (header, rest) =
+                            peek_header_line(input, terminator, comment).await?;
+                        mapping = config
+                            .header_mapping(&header, Arc::clone(&expr_adapter_factory))?;
+                        input = rest;
+                    }
 
+                    let decoder = config.builder(mapping.as_deref())?.build_decoder();
                     let stream = deserialize_stream(
-                        input,
+                        input.fuse(),
                         DecoderDeserializer::new(CsvDecoder::new(decoder)),
                     );
-                    Ok(stream.map_err(Into::into).boxed())
+                    Ok(remap_stream(stream.map_err(Into::into).boxed(), mapping))
                 }
             }
         }))
@@ -519,7 +847,7 @@ pub async fn plan_to_csv(
         let storeref = Arc::clone(&store);
         let plan: Arc<dyn ExecutionPlan> = Arc::clone(&plan);
         let filename = format!("{}/part-{i}.csv", parsed.prefix());
-        let file = object_store::path::Path::parse(filename)?;
+        let file = Path::parse(filename)?;
 
         let mut stream = plan.execute(i, Arc::clone(&task_ctx))?;
         join_set.spawn(async move {
@@ -643,6 +971,7 @@ impl CsvSource {
             quote: proto_str_to_byte(&scan.quote, "quote")?,
             newlines_in_values: Some(scan.newlines_in_values),
             truncated_rows: Some(scan.truncate_rows),
+            match_columns_by_header: Some(scan.match_columns_by_header),
             ..Default::default()
         };
         let source = Arc::new(
@@ -685,7 +1014,7 @@ mod tests {
 
         let data = "id,name\n1,alice\n2,N/A\n3,carol\n";
         let batch = source
-            .open(data.as_bytes())
+            .open(data.as_bytes(), None)
             .unwrap()
             .next()
             .unwrap()
@@ -713,7 +1042,7 @@ mod tests {
 
         let data = "id,value\n1,10\n2,N/A\n3,30\n";
         let batch = source
-            .open(data.as_bytes())
+            .open(data.as_bytes(), None)
             .unwrap()
             .next()
             .unwrap()
@@ -739,7 +1068,7 @@ mod tests {
 
         let data = "id,name\n1,alice\n2,N/A\n3,carol\n";
         let batch = source
-            .open(data.as_bytes())
+            .open(data.as_bytes(), None)
             .unwrap()
             .next()
             .unwrap()
@@ -758,10 +1087,231 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, true)]));
         let source = csv_source(schema, Some("("));
 
-        let err = source.open(b"id\n1\n".as_slice()).unwrap_err();
+        let err = source.open(b"id\n1\n".as_slice(), None).unwrap_err();
         assert!(
             err.to_string().contains("Unable to parse CSV null regex"),
             "unexpected error: {err}"
         );
+    }
+
+    use arrow::array::{Int32Array, RecordBatchOptions};
+
+    fn table_schema() -> Schema {
+        Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+            Field::new("c", DataType::Int32, true),
+        ])
+    }
+
+    fn header(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| name.to_string()).collect()
+    }
+
+    fn adapter_factory() -> Arc<dyn PhysicalExprAdapterFactory> {
+        Arc::new(DefaultPhysicalExprAdapterFactory)
+    }
+
+    #[test]
+    fn header_mapping_skipped_when_header_matches() -> Result<()> {
+        let mapping = HeaderMapping::try_new(
+            &header(&["a", "b", "c"]),
+            &table_schema(),
+            &[0, 2],
+            adapter_factory(),
+        )?;
+        assert!(mapping.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn header_mapping_by_name() -> Result<()> {
+        let mapping = HeaderMapping::try_new(
+            &header(&["c", "extra", "a"]),
+            &table_schema(),
+            &[0, 1, 2],
+            adapter_factory(),
+        )?
+        .unwrap();
+
+        let physical_types: Vec<_> = mapping
+            .physical_schema
+            .fields()
+            .iter()
+            .map(|f| f.data_type().clone())
+            .collect();
+        assert_eq!(
+            physical_types,
+            vec![DataType::Int32, DataType::Utf8, DataType::Int32]
+        );
+        assert_eq!(mapping.physical_projection, vec![2, 0]);
+
+        let decoded_schema = mapping.physical_schema.project(&[2, 0])?;
+        let decoded = RecordBatch::try_new(
+            Arc::new(decoded_schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(Int32Array::from(vec![10, 20])),
+            ],
+        )?;
+        let remapped = mapping.remap(&decoded)?;
+        assert_eq!(remapped.schema().as_ref(), &table_schema());
+        assert_eq!(remapped.column(1).null_count(), 2);
+        assert_eq!(
+            remapped.column(0).as_ref(),
+            &Int32Array::from(vec![1, 2]) as &dyn Array
+        );
+        assert_eq!(
+            remapped.column(2).as_ref(),
+            &Int32Array::from(vec![10, 20]) as &dyn Array
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn header_mapping_only_missing_columns() -> Result<()> {
+        let mapping = HeaderMapping::try_new(
+            &header(&["a", "c"]),
+            &table_schema(),
+            &[1],
+            adapter_factory(),
+        )?
+        .unwrap();
+        assert!(mapping.physical_projection.is_empty());
+
+        let decoded = RecordBatch::try_new_with_options(
+            Arc::new(Schema::empty()),
+            vec![],
+            &RecordBatchOptions::new().with_row_count(Some(3)),
+        )?;
+        let remapped = mapping.remap(&decoded)?;
+        assert_eq!(remapped.num_rows(), 3);
+        assert_eq!(remapped.column(0).null_count(), 3);
+        Ok(())
+    }
+
+    #[test]
+    fn header_mapping_missing_non_nullable_column() {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, false),
+        ]);
+        let err =
+            HeaderMapping::try_new(&header(&["a"]), &schema, &[0, 1], adapter_factory())
+                .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Non-nullable column 'b' is missing from the physical schema"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn parse_header_handles_quotes() -> Result<()> {
+        let source = CsvSource::new(Arc::new(table_schema()));
+        assert_eq!(
+            source.parse_header(b"\"a,1\",b\r")?,
+            vec!["a,1".to_string(), "b".to_string()]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn find_header_line_skips_comments() {
+        let comment = Some(b'#');
+        let newline = Some(b'\n');
+        assert_eq!(
+            find_header_line(b"# c1\n#c2\na,b\n1,2\n", newline, comment, false),
+            Some(9..12)
+        );
+        assert_eq!(
+            find_header_line(b"#c\na,b\n", newline, None, false),
+            Some(0..2)
+        );
+        assert_eq!(find_header_line(b"# c1\na,", newline, comment, false), None);
+        assert_eq!(
+            find_header_line(b"# c1\na,b", newline, comment, true),
+            Some(5..8)
+        );
+        assert_eq!(
+            find_header_line(b"# c1\n# c2", newline, comment, true),
+            Some(9..9)
+        );
+        assert_eq!(
+            find_header_line(b"# c1\n# c2", newline, comment, false),
+            None
+        );
+        assert_eq!(find_header_line(b"", newline, comment, true), Some(0..0));
+    }
+
+    #[test]
+    fn find_header_line_skips_leading_blank_records() {
+        assert_eq!(
+            find_header_line(b"\n\na,b\n1,2\n", Some(b'\n'), None, false),
+            Some(2..5)
+        );
+        // Without an explicit terminator both `\r` and `\n` end a record
+        assert_eq!(
+            find_header_line(b"\r\n\n\ra,b\r\n1,2\r\n", None, None, false),
+            Some(4..7)
+        );
+        // A custom terminator keeps `\n` and `\r` as ordinary bytes
+        assert_eq!(
+            find_header_line(b";;a,b\n;1,2;", Some(b';'), None, false),
+            Some(2..6)
+        );
+        // Whitespace-only lines are records, not blank lines
+        assert_eq!(
+            find_header_line(b"  \na,b\n", Some(b'\n'), None, false),
+            Some(0..2)
+        );
+        assert_eq!(find_header_line(b"\n\n", Some(b'\n'), None, false), None);
+        assert_eq!(
+            find_header_line(b"\n\n", Some(b'\n'), None, true),
+            Some(2..2)
+        );
+    }
+
+    #[test]
+    fn find_header_line_strips_bom() {
+        let comment = Some(b'#');
+        assert_eq!(
+            find_header_line(b"\xef\xbb\xbfa,b\n1,2\n", Some(b'\n'), comment, false),
+            Some(3..6)
+        );
+        assert_eq!(
+            find_header_line(b"\xef\xbb\xbf# c1\n\na,b\n", Some(b'\n'), comment, false),
+            Some(9..12)
+        );
+        // An incomplete BOM needs more input before it can be classified
+        assert_eq!(
+            find_header_line(b"\xef\xbb", Some(b'\n'), comment, false),
+            None
+        );
+        assert_eq!(
+            find_header_line(b"\xef\xbb", Some(b'\n'), comment, true),
+            Some(0..2)
+        );
+        // Only a BOM at the very start of the file is ignored
+        assert_eq!(
+            find_header_line(b"\n\xef\xbb\xbfa,b\n", Some(b'\n'), comment, false),
+            Some(1..7)
+        );
+    }
+
+    #[test]
+    fn find_header_line_comment_ends_at_newline_with_custom_terminator() {
+        assert_eq!(
+            find_header_line(b"# c1;ignored\na,b;1,2;", Some(b';'), Some(b'#'), false),
+            Some(13..16)
+        );
+    }
+
+    #[test]
+    fn match_columns_by_header_requires_header() {
+        let source = CsvSource::new(Arc::new(table_schema()))
+            .with_csv_options(CsvOptions::default().with_has_header(false))
+            .with_match_columns_by_header(true);
+        assert!(!source.match_columns_by_header());
     }
 }

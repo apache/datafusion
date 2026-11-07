@@ -1076,6 +1076,9 @@ impl TryFrom<&CsvOptions> for protobuf::CsvOptions {
             ignore_trailing_whitespace: opts
                 .ignore_trailing_whitespace
                 .map_or_else(Vec::new, |h| vec![h as u8]),
+            match_columns_by_header: opts
+                .match_columns_by_header
+                .map_or_else(Vec::new, |h| vec![h as u8]),
         })
     }
 }

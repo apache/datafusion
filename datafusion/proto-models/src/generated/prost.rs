@@ -2145,6 +2145,8 @@ pub struct CsvScanExecNode {
     /// Custom one-byte line terminator. Absent means the default newline terminator.
     #[prost(bytes = "vec", optional, tag = "9")]
     pub terminator: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bool, tag = "10")]
+    pub match_columns_by_header: bool,
     #[prost(oneof = "csv_scan_exec_node::OptionalEscape", tags = "5")]
     pub optional_escape: ::core::option::Option<csv_scan_exec_node::OptionalEscape>,
     #[prost(oneof = "csv_scan_exec_node::OptionalComment", tags = "6")]
