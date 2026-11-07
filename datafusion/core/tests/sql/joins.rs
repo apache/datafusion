@@ -688,3 +688,75 @@ async fn asof_join_unparser_preserves_right_preselection() -> Result<()> {
     }
     Ok(())
 }
+
+/// The `NOT IN` value key count of every decorrelated mark join in `sql`'s
+/// optimized plan, with whether the join is null-aware.
+async fn mark_join_value_keys(
+    ctx: &SessionContext,
+    sql: &str,
+) -> Result<Vec<(bool, usize)>> {
+    use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
+    use datafusion::logical_expr::{JoinType, LogicalPlan};
+
+    let plan = ctx.sql(sql).await?.into_optimized_plan()?;
+    let mut joins = vec![];
+    plan.apply(|plan| {
+        if let LogicalPlan::Join(join) = plan
+            && join.join_type == JoinType::LeftMark
+        {
+            joins.push((join.null_aware, join.null_aware_value_keys));
+        }
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    Ok(joins)
+}
+
+/// Decorrelation sets the value key count only on a null-aware join, which is
+/// the only one that reads it. Any other join keeps it unset (`0`), the same as a
+/// join built through `Join::try_new` or `LogicalPlanBuilder`, so equal plans
+/// compare equal however they were built.
+#[tokio::test]
+async fn decorrelated_mark_join_sets_value_keys_only_when_null_aware() -> Result<()> {
+    let ctx = SessionContext::new();
+    for (name, nullable) in [("t", false), ("n", true)] {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, nullable),
+            Field::new("b", DataType::Int32, nullable),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(Int32Array::from(vec![3, 4])),
+            ],
+        )?;
+        ctx.register_table(
+            name,
+            Arc::new(MemTable::try_new(schema, vec![vec![batch]])?),
+        )?;
+    }
+
+    // Non-nullable keys: neither the scalar nor the multi-column `IN` is
+    // null-aware.
+    for sql in [
+        "SELECT a IN (SELECT a FROM t AS s) FROM t",
+        "SELECT (a, b) IN (SELECT a, b FROM t AS s) FROM t",
+    ] {
+        assert_eq!(
+            mark_join_value_keys(&ctx, sql).await?,
+            [(false, 0)],
+            "{sql}"
+        );
+    }
+    // Nullable keys: both are null-aware and state their count.
+    assert_eq!(
+        mark_join_value_keys(&ctx, "SELECT a IN (SELECT a FROM n AS s) FROM n").await?,
+        [(true, 1)]
+    );
+    assert_eq!(
+        mark_join_value_keys(&ctx, "SELECT (a, b) IN (SELECT a, b FROM n AS s) FROM n")
+            .await?,
+        [(true, 2)]
+    );
+    Ok(())
+}
