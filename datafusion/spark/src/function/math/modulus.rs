@@ -39,7 +39,7 @@ fn negative_zero(data_type: &DataType) -> Result<Option<ArrayRef>> {
 }
 
 /// Rows of `values` that equal zero, counting `-0.0` as zero.
-fn is_zero(values: &ArrayRef) -> Result<BooleanArray> {
+pub(crate) fn is_zero(values: &ArrayRef) -> Result<BooleanArray> {
     let zero = ScalarValue::new_zero(values.data_type())?.to_array()?;
     let mask = eq(values, &Scalar::new(zero))?;
     match negative_zero(values.data_type())? {

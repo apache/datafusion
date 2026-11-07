@@ -1,0 +1,55 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# This file is part of the implementation of the datafusion-spark function library.
+# For more information, please see:
+#   https://github.com/apache/datafusion/issues/15914
+
+## Spark divides a non-DECIMAL pair as DOUBLE.
+
+query R
+SELECT 1 / 2;
+----
+0.5
+
+query RR
+SELECT 10 / 4, 3 / 2;
+----
+2.5 1.5
+
+query R
+SELECT 5 / 2.0;
+----
+2.5
+
+## Integer columns
+
+query R
+SELECT a / b FROM (VALUES (1, 2), (3, 4)) t(a, b);
+----
+0.5
+0.75
+
+## A zero divisor returns NULL, with -0.0 counting as zero
+
+query RR
+SELECT 1 / 0, 1 / 0.0;
+----
+NULL NULL
+
+query R
+SELECT 1 / CAST(-0.0 AS DOUBLE);
+----
+NULL
+
+## In ANSI mode a zero divisor raises instead
+
+statement ok
+set datafusion.execution.enable_ansi_mode = true;
+
+query error Divide by zero
+SELECT 1 / 0;
+
+statement ok
+set datafusion.execution.enable_ansi_mode = false;

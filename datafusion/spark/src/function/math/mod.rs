@@ -6,6 +6,7 @@ pub mod abs;
 pub mod atan2;
 pub mod bin;
 pub mod ceil;
+pub mod divide;
 pub mod expm1;
 pub mod factorial;
 pub mod floor;
