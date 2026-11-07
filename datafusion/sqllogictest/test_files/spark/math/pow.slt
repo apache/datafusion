@@ -194,6 +194,17 @@ NULL
 NaN
 NaN
 
+## Scalar x Array and Array x Scalar, including a NULL base
+query RR
+SELECT pow(1.0, b), pow(a, CAST('Infinity' AS DOUBLE)) FROM t1;
+----
+1 0
+1 Infinity
+1 NULL
+1 0
+NaN NaN
+NaN NaN
+
 statement ok
 DROP TABLE t1;
 

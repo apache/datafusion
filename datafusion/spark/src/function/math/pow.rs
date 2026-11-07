@@ -18,7 +18,7 @@
 //! Spark-compatible `pow` / `power` function.
 //!
 //! Unlike the default DataFusion (PostgreSQL) implementation, Spark returns
-//! `Infinity` for `pow(0, <negative>)` rather than raising an error, and
+//! an infinity for `pow(0, <negative>)` rather than raising an error, and
 //! follows `java.lang.StrictMath.pow` for the special cases.
 
 use std::sync::Arc;
@@ -36,11 +36,12 @@ use datafusion_functions::math::power::PowerFunc;
 /// Spark-compatible implementation of `pow` / `power`.
 ///
 /// Behavioural differences from the DataFusion default:
-/// - `pow(0, <negative>)` → `Infinity`  (IEEE 754 / Spark semantics)
-///   The default raises `"zero raised to a negative power is undefined"` to
-///   match PostgreSQL.
-/// - A `NaN` exponent, or a base of `1` or `-1` with an infinite exponent,
-///   gives `NaN` (`StrictMath.pow` semantics) instead of `1`.
+/// - `pow(0, <negative>)` gives an infinity instead of the default's error
+///   `"zero raised to a negative power is undefined"` (PostgreSQL): `+Infinity`
+///   for `0.0`, and for `-0.0` unless the exponent is a negative odd integer,
+///   which gives `-Infinity`.
+/// - `pow(1, NaN)` and `pow(±1, ±Infinity)` give `NaN` (`StrictMath.pow`)
+///   instead of `1`. Any other base with a `NaN` exponent already gives `NaN`.
 #[derive(Debug, PartialEq, Eq, Hash)]
 pub struct SparkPow {
     inner: PowerFunc,
