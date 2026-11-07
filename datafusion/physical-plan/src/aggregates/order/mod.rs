@@ -194,6 +194,7 @@ mod tests {
 
     use arrow::array::{Int32Array, StringArray};
     use datafusion_common::ScalarValue;
+    use datafusion_common::utils::get_row_at_idx;
 
     #[test]
     fn test_size_inline_only() -> Result<()> {
@@ -215,12 +216,18 @@ mod tests {
             GroupClustering::Partial(GroupClusteringPartial::try_new(grouping_indices)?);
         assert_eq!(group_clustering.size(), expected);
 
-        // A variable-width key checks both the scalar descriptor and its payload.
+        // A variable-width key checks retained sort-key capacity, the scalar
+        // slots, and the scalar payload.
         let key = "retained group key";
         let batch_group_values: Vec<ArrayRef> =
             vec![Arc::new(StringArray::from(vec!["a", key]))];
         group_clustering.new_groups(&batch_group_values, &[0, 1], 2)?;
-        let in_progress = expected + ScalarValue::Utf8(Some(key.to_owned())).size();
+        let group_key = get_row_at_idx(&batch_group_values, 1)?;
+        // `size_of_vec` includes the inline Vec descriptor, which
+        // `GroupClustering::size` already charges via `size_of::<Self>()`.
+        let retained_sort_key =
+            ScalarValue::size_of_vec(&group_key) - size_of::<Vec<ScalarValue>>();
+        let in_progress = expected + retained_sort_key;
         assert_eq!(group_clustering.size(), in_progress);
 
         // Completing drops the key, but retains grouping-index capacity.
