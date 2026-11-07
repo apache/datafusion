@@ -5126,6 +5126,12 @@ mod tests {
                 true,
             ),
             (DataType::Int32, ScalarValue::Date32(Some(0)), true),
+            // Parquet TIME(MICROS) read as a TIME column
+            (
+                DataType::Time64(Microsecond),
+                ScalarValue::Time64Nanosecond(Some(0)),
+                true,
+            ),
             (
                 DataType::Utf8,
                 ScalarValue::Utf8View(Some("a".into())),

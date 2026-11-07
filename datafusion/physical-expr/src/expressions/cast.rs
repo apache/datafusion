@@ -403,7 +403,6 @@ fn is_temporal_count(data_type: &DataType) -> bool {
 /// Values that fail to convert are not covered: callers must account for the
 /// error or NULL a failure produces.
 pub fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) -> bool {
-    use arrow::datatypes::TimeUnit::*;
     if source_type == target_type
         || (source_type.is_numeric() || *source_type == Boolean)
             && target_type.is_numeric()
@@ -423,12 +422,11 @@ pub fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) 
         }
         // Both date types take the date in the timestamp's timezone.
         (Timestamp(_, Some(tz)), Date32 | Date64) => is_fixed_offset(tz),
-        // Only admit scaling that cannot wrap on overflow. Time64 widening
-        // and narrowing to Time32 do not currently check overflow in Arrow.
-        (Time32(Second | Millisecond), Time32(Second | Millisecond))
-        | (Time32(Second | Millisecond), Time64(Microsecond | Nanosecond))
-        | (Time64(Nanosecond), Time64(Microsecond))
-        | (Duration(_), Duration(_)) => true,
+        // Arrow checks every scaling that can overflow, so a value that does
+        // not fit fails to convert instead of wrapping.
+        (Time32(_) | Time64(_), Time32(_) | Time64(_)) | (Duration(_), Duration(_)) => {
+            true
+        }
         // Changing the timezone only changes metadata on the epoch value.
         (Timestamp(_, Some(_)), Timestamp(_, _)) => true,
         // Adding a timezone reads a naive timestamp (or a Date64, which may
@@ -2255,8 +2253,8 @@ mod tests {
             (Time32(Millisecond), Time32(Second), true),
             (Time32(Second), Time64(Nanosecond), true),
             (Time64(Nanosecond), Time64(Microsecond), true),
-            (Time64(Microsecond), Time64(Nanosecond), false),
-            (Time64(Nanosecond), Time32(Second), false),
+            (Time64(Microsecond), Time64(Nanosecond), true),
+            (Time64(Nanosecond), Time32(Second), true),
             (Duration(Second), Duration(Nanosecond), true),
             (Duration(Nanosecond), Duration(Second), true),
             (Null, Timestamp(Second, None), false),
