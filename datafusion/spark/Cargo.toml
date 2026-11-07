@@ -19,6 +19,7 @@ all-features = true
 [features]
 default = []
 core = ["datafusion"]
+sql = ["datafusion-expr/sql", "datafusion-functions-nested/sql"]
 
 # Note: add additional linter rules in lib.rs.
 # Rust does not support workspace + new linter rules in subcrates yet
