@@ -177,6 +177,21 @@ GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
 -2117946883 d [-59] [NULL] NULL NULL
 -2098805236 c [22] [NULL] NULL NULL
 
+query IT????
+SELECT c5, c1,
+       APPROX_TOP_K(c3, 2),
+       APPROX_TOP_K(CASE WHEN c1 = 'a' THEN c3 ELSE NULL END, 2),
+       APPROX_TOP_K(c3, 2) FILTER (WHERE c1 = 'b'),
+       APPROX_TOP_K(CASE WHEN c1 = 'a' THEN c3 ELSE NULL END, 2) FILTER (WHERE c1 = 'b')
+FROM aggregate_test_100
+GROUP BY 1, 2 ORDER BY 1 LIMIT 5;
+----
+-2141999138 c [{value: -2, count: 1}] [] [] []
+-2141451704 a [{value: -72, count: 1}] [{value: -72, count: 1}] [] []
+-2138770630 b [{value: 63, count: 1}] [] [{value: 63, count: 1}] []
+-2117946883 d [{value: -59, count: 1}] [] [] []
+-2098805236 c [{value: 22, count: 1}] [] [] []
+
 # Regression test for https://github.com/apache/datafusion/issues/11846
 query TBBBB rowsort
 select v1, bool_or(v2), bool_and(v2), bool_or(v3), bool_and(v3)
@@ -323,6 +338,16 @@ SELECT c2, approx_distinct(c1), approx_distinct(c5) FROM aggregate_test_100 GROU
 3 5 19
 4 5 23
 5 5 14
+
+# Test approx_top_k for varchar / int
+query I??
+SELECT c2, approx_top_k(c1, 2), approx_top_k(c3 % 3, 2) FROM aggregate_test_100 GROUP BY c2 ORDER BY c2;
+----
+1 [{value: d, count: 7}, {value: a, count: 5}] [{value: 0, count: 8}, {value: 2, count: 6}]
+2 [{value: c, count: 7}, {value: e, count: 5}] [{value: 0, count: 7}, {value: 1, count: 6}]
+3 [{value: a, count: 6}, {value: c, count: 4}] [{value: 1, count: 6}, {value: 2, count: 6}]
+4 [{value: e, count: 7}, {value: b, count: 5}] [{value: 0, count: 9}, {value: 2, count: 5}]
+5 [{value: b, count: 5}, {value: a, count: 3}] [{value: -2, count: 5}, {value: -1, count: 4}]
 
 # Test approx_distinct for varchar(with Utf8View) / int
 statement ok
