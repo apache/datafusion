@@ -179,6 +179,8 @@ pbjson-types = "0.9"
 percent-encoding = "2.3"
 pin-project = "1"
 pin-project-lite = "^0.2.7"
+tracing = { version = "0.1.44", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3.23", default-features = false, features = ["registry", "std"] }
 # Should match arrow-flight's version of prost.
 prost = "0.14.1"
 rand = "0.9"

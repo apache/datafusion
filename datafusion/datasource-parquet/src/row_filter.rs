@@ -149,6 +149,12 @@ impl ArrowPredicate for DatafusionArrowPredicate {
                 let bool_arr = as_boolean_array(&array)?.clone();
                 let num_matched = bool_arr.true_count();
                 let num_pruned = bool_arr.len() - num_matched;
+                tracing::debug!(
+                    predicate = %self.physical_expr,
+                    rows = bool_arr.len(),
+                    rows_matched = num_matched,
+                    "Evaluate row filter"
+                );
                 self.rows_pruned.add(num_pruned);
                 self.rows_matched.add(num_matched);
                 timer.stop();
