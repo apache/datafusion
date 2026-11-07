@@ -21,7 +21,7 @@ use itertools::Itertools;
 /// An optimizer rule that transforms Sort + Limit above a grouped Aggregate to use
 /// a more efficient Grouped TopK aggregation implementation when possible.
 ///
-/// For example a query like
+/// For example, a query like
 ///
 /// ```sql
 /// SELECT trace_id, MAX(timestamp)
@@ -31,11 +31,11 @@ use itertools::Itertools;
 /// LIMIT 10
 /// ```
 ///
-/// Is planned as a `SortExec` with a `fetch` above an `AggregateExec` (left). After this rule
-/// the `AggregateExec` is transformed to a [`GroupedTopKAggregateStream`] that retains only
-/// the best `N` groups (right).
+/// is planned as a `SortExec` with a `fetch` above an `AggregateExec` (left).
+/// After this rule, the `AggregateExec` uses a [`GroupedTopKAggregateStream`]
+/// that retains only the best `N` groups (right).
 ///
-/// [`GroupedTopKAggregateStream`]: datafusion_physical_plan::aggregates#4-grouped-topk-aggregation
+/// [`GroupedTopKAggregateStream`]: mod@datafusion_physical_plan::aggregates#4-grouped-topk-aggregation
 ///
 /// ```text
 ///          Before                                        After
@@ -62,29 +62,48 @@ use itertools::Itertools;
 /// └────────────────────────────┘             └────────────────────────────┘
 /// ```
 ///
-/// Without this rule the aggregate computes the aggregates for **all** groups
-/// in the input but then the sort discards all but `N` of them afterward.
+/// Without this rule, the aggregate computes the aggregates for **all** groups
+/// in the input, and the sort then discards all but `N` of them.
 ///
 /// `GroupedTopKAggregateStream` instead keeps only the best `N` groups in a
-/// bounded priority map instead of a hash table. The `SortExec` is kept to
+/// bounded priority map rather than a hash table. The `SortExec` is kept to
 /// enforce the final ordering and row count.
 ///
-/// The optimization applies when 
-/// 1. the aggregate has a single group key and either no aggregate expressions, or a single `MIN` / `MAX` aggregate that is
-/// the sort key. 
-/// 
+/// The optimization applies when all of the following hold:
+///
+/// 1. The `SortExec` has a `fetch` (`LIMIT`) and sorts by a single column.
+/// 2. Every operator between the `SortExec` and the `AggregateExec` preserves
+///    cardinality (for example `ProjectionExec` or `RepartitionExec`).
+/// 3. The aggregate has a single group key, no grouping sets, and no `FILTER`
+///    clauses.
+/// 4. Either there are no aggregate expressions and the sort column is the
+///    group key (a `DISTINCT`-style query), or there is exactly one `MIN` or
+///    `MAX` aggregate and it is the sort column. `MIN` and `MAX` are supported
+///    because a group's rank can only improve as more rows are seen.
+/// 5. The group key and sort column have types supported by the priority map
+///    (primitive types and strings).
+///
 /// See the "Grouped TopK aggregation" section of the
-/// [`aggregates`](datafusion_physical_plan::aggregates) module documentation
+/// [`aggregates`](mod@datafusion_physical_plan::aggregates) module documentation
 /// for more details.
+///
+/// This rule is enabled by default and is controlled by the
+/// [`datafusion.optimizer.enable_topk_aggregation`](datafusion_common::config::OptimizerOptions::enable_topk_aggregation)
+/// setting.
 ///
 /// # Identifying the optimization in `EXPLAIN` output
 ///
 /// When this rule applies, the `AggregateExec` lines in the physical plan show
-/// a `lim=[N]` entry for example:
+/// a `lim=[N]` entry, for example:
 ///
 /// ```text
-///     AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(...)], lim=[4] <-- LIM
+///     AggregateExec: mode=FinalPartitioned, gby=[trace_id@0 as trace_id], aggr=[max(...)], lim=[10] <-- LIM
 /// ```
+///
+/// Note that `lim=[N]` is also shown for the `SELECT DISTINCT ... LIMIT N`
+/// soft limit, which uses the regular hash aggregation. The
+/// `topk_maintenance_time` metric in `EXPLAIN ANALYZE` output is only reported
+/// when the Grouped TopK implementation is used.
 #[derive(Debug)]
 pub struct TopKAggregation {}
 
