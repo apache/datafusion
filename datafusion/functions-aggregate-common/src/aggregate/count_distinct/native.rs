@@ -77,9 +77,21 @@ where
             // insert directly from the values buffer (mirrors `merge_batch`).
             self.values.extend(arr.values().iter().copied());
         } else {
-            arr.iter().flatten().for_each(|value| {
-                self.values.insert(value);
-            });
+            let masks = arr.nulls().unwrap().inner().bit_chunks();
+            let (chunks, remainder) = arr.values().as_chunks::<64>();
+            for (chunk, mut bits) in chunks.iter().zip(masks.iter()) {
+                while bits != 0 {
+                    let i = bits.trailing_zeros() as usize;
+                    self.values.insert(chunk[i]);
+                    bits &= bits - 1;
+                }
+            }
+            let mut bits = masks.remainder_bits();
+            while bits != 0 {
+                let i = bits.trailing_zeros() as usize;
+                self.values.insert(remainder[i]);
+                bits &= bits - 1;
+            }
         }
 
         Ok(())
