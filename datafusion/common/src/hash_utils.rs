@@ -39,7 +39,8 @@ type DictionaryHashEntry = (Weak<dyn Array>, Vec<u64>);
 pub struct CachingArrayHasher {
     /// Stored with the cache so value hashes cannot cross hash seeds.
     random_state: RandomState,
-    /// One entry per column. Weak identity avoids retaining dictionary values.
+    /// One entry per column. Weak identity avoids retaining dictionary values,
+    /// and keeps their allocation reserved so a new `Arc` can't reuse the address.
     dictionaries: Vec<Option<DictionaryHashEntry>>,
 }
 
@@ -117,9 +118,9 @@ impl CachingArrayHasher {
                             .take()
                             .map(|(_, hashes)| hashes)
                             .unwrap_or_default();
-                        hashes.resize(values.len(), 0);
                         // Fresh hashing leaves null value slots unchanged.
-                        hashes.fill(0);
+                        hashes.clear();
+                        hashes.resize(values.len(), 0);
                         hash_single_array(
                             values.as_ref(),
                             &self.random_state,
@@ -146,6 +147,11 @@ impl CachingArrayHasher {
     pub fn dictionary_hashes(&self, index: usize) -> Option<(ArrayRef, &[u64])> {
         let (values, hashes) = self.dictionaries.get(index)?.as_ref()?;
         Some((values.upgrade()?, hashes))
+    }
+
+    /// Drops all cached value hashes. Later batches rehash and refill the cache.
+    pub fn clear(&mut self) {
+        self.dictionaries.fill(None);
     }
 
     /// Returns the allocated size of the cache.
@@ -1525,11 +1531,9 @@ mod tests {
         hasher: &CachingArrayHasher,
         column_index: usize,
         expected_values: &ArrayRef,
-    ) -> *const u64 {
-        let (cached_values, value_hashes) =
-            hasher.dictionary_hashes(column_index).unwrap();
+    ) {
+        let (cached_values, _) = hasher.dictionary_hashes(column_index).unwrap();
         assert!(Arc::ptr_eq(&cached_values, expected_values));
-        value_hashes.as_ptr()
     }
 
     #[cfg(not(feature = "force_hash_collisions"))]
@@ -1546,7 +1550,7 @@ mod tests {
         assert_hashes_match(&mut hasher, &first_batch, &random_state)?;
 
         assert!(hasher.dictionary_hashes(0).is_none());
-        let value_hash_allocation = assert_cached_values(&hasher, 1, &dictionary_values);
+        assert_cached_values(&hasher, 1, &dictionary_values);
 
         // A later batch has new plain values and dictionary keys, but shares
         // the dictionary values array and therefore its cached hashes.
@@ -1555,10 +1559,7 @@ mod tests {
             string_dictionary(vec![1, 0], &dictionary_values),
         ];
         assert_hashes_match(&mut hasher, &second_batch, &random_state)?;
-        assert_eq!(
-            assert_cached_values(&hasher, 1, &dictionary_values),
-            value_hash_allocation
-        );
+        assert_cached_values(&hasher, 1, &dictionary_values);
         Ok(())
     }
 
@@ -1575,8 +1576,8 @@ mod tests {
         ];
         let mut hasher = caching_hasher(&first_batch, &random_state);
         assert_hashes_match(&mut hasher, &first_batch, &random_state)?;
-        let country_hash_allocation = assert_cached_values(&hasher, 0, &country_values);
-        let status_hash_allocation = assert_cached_values(&hasher, 1, &status_values);
+        assert_cached_values(&hasher, 0, &country_values);
+        assert_cached_values(&hasher, 1, &status_values);
 
         // Aggregation batches can rebuild one dictionary while another group
         // column continues to share its values array.
@@ -1587,14 +1588,8 @@ mod tests {
             string_dictionary(vec![0, 1], &status_values),
         ];
         assert_hashes_match(&mut hasher, &second_batch, &random_state)?;
-        assert_eq!(
-            assert_cached_values(&hasher, 0, &new_country_values),
-            country_hash_allocation
-        );
-        assert_eq!(
-            assert_cached_values(&hasher, 1, &status_values),
-            status_hash_allocation
-        );
+        assert_cached_values(&hasher, 0, &new_country_values);
+        assert_cached_values(&hasher, 1, &status_values);
         assert_eq!(hasher.dictionary_hashes(0).unwrap().1[1], 0);
 
         // Reverse the transition: the first dictionary stays shared while the
@@ -1606,14 +1601,47 @@ mod tests {
             string_dictionary(vec![1, 0], &new_status_values),
         ];
         assert_hashes_match(&mut hasher, &third_batch, &random_state)?;
-        assert_eq!(
-            assert_cached_values(&hasher, 0, &new_country_values),
-            country_hash_allocation
-        );
-        assert_eq!(
-            assert_cached_values(&hasher, 1, &new_status_values),
-            status_hash_allocation
-        );
+        assert_cached_values(&hasher, 0, &new_country_values);
+        assert_cached_values(&hasher, 1, &new_status_values);
+        Ok(())
+    }
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    #[test]
+    fn caching_array_hasher_skips_rehash_only_for_same_values_arc() -> Result<()> {
+        let random_state = RandomState::with_seed(0);
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let batch = vec![string_dictionary(vec![0, 1], &values)];
+        let mut hasher = caching_hasher(&batch, &random_state);
+        let mut hashes = vec![0; 2];
+        hasher.create_hashes(&batch, &mut hashes)?;
+        let fresh = hashes.clone();
+
+        // Poison the cached hashes: only a cache hit can return the sentinel.
+        const SENTINEL: u64 = 0xDEAD_BEEF;
+        hasher.dictionaries[0].as_mut().unwrap().1.fill(SENTINEL);
+
+        let same_arc = vec![string_dictionary(vec![1, 0], &values)];
+        hasher.create_hashes(&same_arc, &mut hashes)?;
+        assert_eq!(hashes, vec![SENTINEL; 2]);
+
+        // Equal contents behind a different `Arc` is a miss.
+        let equal_values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let new_arc = vec![string_dictionary(vec![0, 1], &equal_values)];
+        hasher.create_hashes(&new_arc, &mut hashes)?;
+        assert_eq!(hashes, fresh);
+
+        // A dropped values array must not be matched by a later allocation.
+        hasher.dictionaries[0].as_mut().unwrap().1.fill(SENTINEL);
+        drop(new_arc);
+        drop(equal_values);
+        for _ in 0..1000 {
+            let reused: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+            let batch = vec![string_dictionary(vec![0, 1], &reused)];
+            hasher.create_hashes(&batch, &mut hashes)?;
+            assert_eq!(hashes, fresh);
+            hasher.dictionaries[0].as_mut().unwrap().1.fill(SENTINEL);
+        }
         Ok(())
     }
 

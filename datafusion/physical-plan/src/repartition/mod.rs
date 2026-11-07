@@ -21,8 +21,6 @@ use super::{
 use crate::coalesce::LimitedBatchCoalescer;
 use crate::execution_plan::{CardinalityEffect, EvaluationType, SchedulingType};
 use crate::hash_utils::CachingArrayHasher;
-#[cfg(test)]
-use crate::hash_utils::create_hashes;
 use crate::metrics::{BaselineMetrics, SpillMetrics};
 use crate::projection::{ProjectionExec, all_columns, make_with_child, update_expr};
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
@@ -51,7 +49,7 @@ use datafusion_common::{
 use datafusion_common::{Result, not_impl_err};
 use datafusion_common_runtime::SpawnedTask;
 use datafusion_execution::TaskContext;
-use datafusion_execution::memory_pool::MemoryConsumer;
+use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
 use datafusion_expr::ColumnarValue;
 use datafusion_physical_expr::{EquivalenceProperties, PhysicalExpr, RangePartitioning};
 use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
@@ -615,6 +613,8 @@ impl RepartitionExecState {
                 // preserve_order depends on partition index to start from 0
                 if preserve_order { 0 } else { i },
                 num_input_partitions,
+                MemoryConsumer::new(format!("{name} hash cache[{i}]"))
+                    .register(context.memory_pool()),
             ));
 
             // In a separate task, wait for each input to be done
@@ -1048,6 +1048,17 @@ impl BatchPartitioner {
             },
             timer,
         })
+    }
+
+    /// Accounts the retained dictionary hash cache in `reservation`. If the
+    /// pool refuses it, drops the cache so later batches pay the uncached cost.
+    fn reserve_hash_cache(&mut self, reservation: &MemoryReservation) {
+        if let BatchPartitionerState::Hash { hasher, .. } = &mut self.state
+            && reservation.try_resize(hasher.size()).is_err()
+        {
+            hasher.clear();
+            reservation.resize(hasher.size());
+        }
     }
 
     /// Create a new [`BatchPartitioner`] for round-robin repartitioning.
@@ -2282,6 +2293,7 @@ impl RepartitionExec {
     /// output partitions based on the desired partitioning
     ///
     /// `output_channels` holds the output sending channels for each output partition
+    #[expect(clippy::too_many_arguments)]
     async fn pull_from_input(
         mut stream: SendableRecordBatchStream,
         mut output_channels: HashMap<usize, OutputChannel>,
@@ -2290,6 +2302,7 @@ impl RepartitionExec {
         metrics: RepartitionMetrics,
         input_partition: usize,
         num_input_partitions: usize,
+        hash_cache_reservation: MemoryReservation,
     ) -> Result<()> {
         let mut partitioner = match (partitioning, range_router) {
             (Partitioning::Range(range_partitioning), Some(router)) => {
@@ -2348,6 +2361,7 @@ impl RepartitionExec {
                 }
                 timer.done();
             }
+            partitioner.reserve_hash_cache(&hash_cache_reservation);
 
             // If the input stream is endless, we may spin forever and
             // never yield back to tokio.  See
@@ -2650,6 +2664,7 @@ mod tests {
 
     use super::*;
     use crate::empty::EmptyExec;
+    use crate::hash_utils::create_hashes;
     use crate::projection::ProjectionExpr;
     use crate::streaming::{PartitionStream, StreamingTableExec};
     use crate::test::TestMemoryExec;
@@ -2835,6 +2850,57 @@ mod tests {
             err.contains("Hash repartition requires at least one partition"),
             "actual: {err}"
         );
+    }
+
+    #[test]
+    fn hash_partitioner_caches_and_reserves_dictionary_hashes() -> Result<()> {
+        use datafusion_execution::memory_pool::{GreedyMemoryPool, MemoryPool};
+
+        let dictionary_type =
+            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
+        let schema =
+            Arc::new(Schema::new(vec![Field::new("key", dictionary_type, true)]));
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "bb", "ccc"]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(DictionaryArray::<Int32Type>::try_new(
+                Int32Array::from(vec![0, 1, 2]),
+                Arc::clone(&values),
+            )?)],
+        )?;
+        let cached = |partitioner: &BatchPartitioner| {
+            let BatchPartitionerState::Hash { hasher, .. } = &partitioner.state else {
+                unreachable!()
+            };
+            (hasher.size(), hasher.dictionary_hashes(0).map(|(v, _)| v))
+        };
+
+        // The pool has room: the cache is kept and reserved.
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(1024));
+        let reservation = MemoryConsumer::new("cache").register(&pool);
+        let mut partitioner = BatchPartitioner::new_hash_partitioner(
+            vec![col("key", &schema)?],
+            4,
+            metrics::Time::new(),
+        )?;
+        partitioner
+            .partition_iter(batch.clone())?
+            .collect::<Result<Vec<_>>>()?;
+        partitioner.reserve_hash_cache(&reservation);
+        let (size, cached_values) = cached(&partitioner);
+        assert!(Arc::ptr_eq(&cached_values.unwrap(), &values));
+        assert!(size >= 3 * size_of::<u64>());
+        assert_eq!(pool.reserved(), size);
+
+        // The pool has no room: the cache is dropped, partitioning still works.
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(8));
+        let reservation = MemoryConsumer::new("cache").register(&pool);
+        partitioner.reserve_hash_cache(&reservation);
+        assert!(cached(&partitioner).1.is_none());
+        partitioner
+            .partition_iter(batch)?
+            .collect::<Result<Vec<_>>>()?;
+        Ok(())
     }
 
     #[tokio::test]
