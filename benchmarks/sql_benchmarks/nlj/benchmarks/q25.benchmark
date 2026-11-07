@@ -1,0 +1,13 @@
+name Q25
+group nlj
+
+expect_plan NestedLoopJoinExec
+expect_plan join_type=LeftAnti
+
+run
+-- Q25: LEFT ANTI 4K x 4K | no matches; every left row probes all right rows.
+-- The maximum sum is 4096 * 4096 - 1, so matched-row skipping cannot help.
+SELECT l.value
+FROM range(4096) AS l
+LEFT ANTI JOIN range(4096) AS r
+ON l.value * 4096 + r.value >= 4096 * 4096;

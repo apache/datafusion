@@ -2166,6 +2166,8 @@ pub(crate) struct NestedLoopJoinStream {
     in_memory_probe_completion: Option<Arc<ProbeCompletion>>,
     /// Index into the left buffered batch. Used in `ProbeRight` state
     left_probe_idx: usize,
+    /// Exclusive end of the short range last observed to be unmatched.
+    left_unmatched_end: usize,
     /// Index into the left buffered batch. Used in `EmitLeftUnmatched` state
     left_emit_idx: usize,
     /// Should we go back to `BufferingLeft` state again after `EmitLeftUnmatched`
@@ -2533,6 +2535,7 @@ impl NestedLoopJoinStream {
             right_existence_probe: None,
             state: NLJState::BufferingLeft,
             left_probe_idx: 0,
+            left_unmatched_end: 0,
             left_emit_idx: 0,
             left_exhausted: false,
             handled_empty_output: false,
@@ -2790,6 +2793,7 @@ impl NestedLoopJoinStream {
         active.left_chunk_barrier.finish_chunk();
 
         self.left_probe_idx = 0;
+        self.left_unmatched_end = 0;
         if self.left_exhausted {
             self.enter_state_after_last_left_chunk();
         } else {
@@ -2818,6 +2822,28 @@ impl NestedLoopJoinStream {
         &mut self,
         cx: &mut std::task::Context<'_>,
     ) -> ControlFlow<Poll<Option<Result<RecordBatch>>>> {
+        // Left existence joins need no more probe input once every build row
+        // has a match. Spill passes must still consume the right input so it is
+        // available for replay against subsequent left chunks.
+        if !self.is_memory_limited()
+            && matches!(
+                self.join_type,
+                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
+            )
+            && let Some(left_data) = &self.buffered_left_data
+        {
+            let bitmap = left_data.bitmap().lock();
+            let full_bytes = bitmap.len() / 8;
+            let all_matched = bitmap.as_slice()[..full_bytes]
+                .iter()
+                .all(|&byte| byte == u8::MAX)
+                && (full_bytes * 8..bitmap.len()).all(|i| bitmap.get_bit(i));
+            if all_matched {
+                self.state = NLJState::ProbeEnd;
+                return ControlFlow::Continue(());
+            }
+        }
+
         let result = match self
             .right_data
             .as_mut()
@@ -2858,6 +2884,7 @@ impl NestedLoopJoinStream {
                 }
 
                 self.left_probe_idx = 0;
+                self.left_unmatched_end = 0;
                 self.state = NLJState::ProbeRight;
                 ControlFlow::Continue(())
             }
@@ -2899,6 +2926,7 @@ impl NestedLoopJoinStream {
             Ok(false) => {
                 // Left exhausted, transition to FetchingRight
                 self.left_probe_idx = 0;
+                self.left_unmatched_end = 0;
 
                 // Selectivity Metric: Update total possibilities for the batch (left_rows * right_rows)
                 // If memory-limited execution is implemented, this logic must be updated accordingly.
@@ -3284,6 +3312,7 @@ impl NestedLoopJoinStream {
     /// next state (ProbeRight)
     fn process_probe_batch(&mut self) -> Result<bool> {
         let left_data = Arc::clone(self.get_left_data()?);
+        let left_rows = left_data.batch().num_rows();
         if matches!(self.join_type, JoinType::RightSemi | JoinType::RightAnti) {
             if self.right_existence_probe.is_none() {
                 let right = self.current_right_batch.as_ref().ok_or_else(|| {
@@ -3293,8 +3322,7 @@ impl NestedLoopJoinStream {
                     Some(RightExistenceProbe::new(right, self.join_filter.as_ref())?);
             }
             let probe = self.right_existence_probe.as_mut().unwrap();
-            if probe.remaining == 0 || self.left_probe_idx >= left_data.batch().num_rows()
-            {
+            if probe.remaining == 0 || self.left_probe_idx >= left_rows {
                 let mut probe = self.right_existence_probe.take().unwrap();
                 self.current_right_batch_matched =
                     Some(BooleanArray::new(probe.matched.finish(), None));
@@ -3312,8 +3340,26 @@ impl NestedLoopJoinStream {
             .ok_or_else(|| internal_datafusion_err!("Right batch should be available"))?
             .clone();
 
+        if matches!(
+            self.join_type,
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
+        ) && self.left_probe_idx >= self.left_unmatched_end
+        {
+            let bitmap = left_data.bitmap().lock();
+            let start = (self.left_probe_idx..left_rows)
+                .find(|&idx| !bitmap.get_bit(idx))
+                .unwrap_or(left_rows);
+            self.left_probe_idx = start;
+            // Amortize the lock over a short consecutive unmatched range. Other
+            // partitions may match these rows meanwhile; probing them again is
+            // harmless. Bound the lookahead so we check shared matches regularly.
+            let end = left_rows.min(start.saturating_add(64));
+            self.left_unmatched_end =
+                (start..end).find(|&idx| bitmap.get_bit(idx)).unwrap_or(end);
+        }
+
         // stop probing, the caller will go to the next state
-        if self.left_probe_idx >= left_data.batch().num_rows() {
+        if self.left_probe_idx >= left_rows {
             return Ok(false);
         }
 
@@ -3340,10 +3386,10 @@ impl NestedLoopJoinStream {
             // Calculate max left rows to handle at once. This operator tries to handle
             // up to `datafusion.execution.batch_size` rows at once in the intermediate
             // batch.
-            let l_row_count = std::cmp::min(
-                l_row_cnt_ratio,
-                left_data.batch().num_rows() - self.left_probe_idx,
-            );
+            // Keep full ranges even if some rows already matched. Splitting
+            // around those rows can turn vectorized probes into single-row work.
+            let l_row_count =
+                std::cmp::min(l_row_cnt_ratio, left_rows - self.left_probe_idx);
 
             debug_assert!(
                 l_row_count != 0,
