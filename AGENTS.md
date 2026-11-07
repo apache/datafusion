@@ -77,7 +77,8 @@ and [Review the Performance](docs/source/contributor-guide/pr_review.md#review-t
 - A PR merges as one squashed commit titled with the PR title, so it should do only what that title says. Put unrelated renames, reformatting, refactors, and drive-by fixes in a
   separate PR.
 - Default to no comment. Comment only what the code cannot say: invariants, non-obvious constraints, and why
-  a choice that looks wrong is right. Do not restate the code or describe how it changed. New public items get
+  a choice that looks wrong is right. Do not restate the code or describe how it changed. To explain a change
+  to reviewers, leave an inline PR review comment on the changed line instead. New public items get
   a rustdoc comment with a doctest example where appropriate, and refer to other items with intra-doc
   links such as `` [`SessionContext`] `` instead of plain names. See
   [Review the Code Comments](docs/source/contributor-guide/pr_review.md#review-the-code-comments).
