@@ -8,7 +8,9 @@ use datafusion_common::utils::SingleRowListArrayBuilder;
 use datafusion_common::{Result, ScalarValue, internal_err};
 use datafusion_expr::function::{AccumulatorArgs, StateFieldsArgs};
 use datafusion_expr::utils::format_state_name;
-use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
+use datafusion_expr::{
+    Accumulator, AggregateUDFImpl, DistinctHandling, Signature, Volatility,
+};
 use datafusion_functions_aggregate::array_agg::{
     ArrayAggAccumulator, DistinctArrayAggAccumulator,
 };
@@ -92,6 +94,10 @@ impl AggregateUDFImpl for SparkCollectList {
     fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         empty_list_scalar(data_type)
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        DistinctHandling::Unsupported
+    }
 }
 
 // <https://spark.apache.org/docs/latest/api/sql/index.html#collect_set>
@@ -153,6 +159,10 @@ impl AggregateUDFImpl for SparkCollectSet {
     fn default_value(&self, data_type: &DataType) -> Result<ScalarValue> {
         empty_list_scalar(data_type)
     }
+
+    fn distinct_handling(&self) -> DistinctHandling {
+        DistinctHandling::Insensitive
+    }
 }
 
 /// Wrapper accumulator that returns an empty list instead of NULL when all inputs are NULL.
@@ -201,5 +211,22 @@ impl<T: Accumulator> Accumulator for NullToEmptyListAccumulator<T> {
 
     fn size(&self) -> usize {
         self.inner.size() + self.list_type.size()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn collect_aggregates_report_distinct_handling() {
+        assert_eq!(
+            SparkCollectList::new().distinct_handling(),
+            DistinctHandling::Unsupported
+        );
+        assert_eq!(
+            SparkCollectSet::new().distinct_handling(),
+            DistinctHandling::Insensitive
+        );
     }
 }
