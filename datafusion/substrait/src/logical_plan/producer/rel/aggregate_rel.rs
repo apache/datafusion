@@ -167,8 +167,19 @@ pub fn parse_flat_grouping_exprs(
 ) -> datafusion::common::Result<Grouping> {
     let mut expression_references = Vec::with_capacity(exprs.len());
     let mut grouping_expressions = Vec::with_capacity(exprs.len());
+    // DataFusion's Aggregate schema keeps each grouping key once
+    // (`grouping_set_to_exprlist`). Emit the same uniqueness here so the
+    // Substrait AggregateRel's output column count matches that schema;
+    // otherwise a projection built from the DataFusion plan indexes the
+    // measure columns as if the repeated keys were absent, and a round trip
+    // swaps columns (see https://github.com/apache/datafusion/issues/27058).
+    let mut seen: Vec<&Expr> = Vec::with_capacity(exprs.len());
 
     for e in exprs {
+        if seen.contains(&e) {
+            continue;
+        }
+        seen.push(e);
         let rex = producer.handle_expr(e, schema)?;
         grouping_expressions.push(rex.clone());
         let reference = ref_group_exprs.iter().position(|existing| existing == &rex);
