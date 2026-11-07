@@ -92,11 +92,61 @@ Spark SQ
 Spark S
 NULL
 
-query error Failed to decode value using base64
-SELECT unbase64('123'::string);
+# Spark decodes with java.util.Base64.getMimeDecoder: padding is optional
+# and bytes outside the base64 alphabet are skipped
+query T
+SELECT hex(unbase64('123'::string));
+----
+D76D
 
-query error Failed to decode value using base64
-SELECT unbase64('123'::bytea);
+query T
+SELECT hex(unbase64('123'::bytea));
+----
+D76D
+
+query T
+SELECT hex(unbase64(column1))
+FROM VALUES
+('12'::string),
+('YQ'::string),
+('YW Jj'::string),
+('YWJj!!'::string),
+('YWJj ZGVm'::string),
+('!!!!'::string),
+(''::string),
+(NULL::string);
+----
+D7
+61
+616263
+616263
+616263646566
+(empty)
+(empty)
+NULL
+
+query T?
+SELECT arrow_typeof(unbase64(column1)), unbase64(column1)
+FROM VALUES
+(arrow_cast(X'59513D3D', 'FixedSizeBinary(4)')),
+(arrow_cast(NULL, 'FixedSizeBinary(4)'));
+----
+Binary 61
+Binary NULL
+
+# a single dangling character does not carry a full byte
+query error Failed to decode value using base64: Last unit does not have enough valid bits
+SELECT unbase64('Y'::string);
+
+query error Failed to decode value using base64: Last unit does not have enough valid bits
+SELECT unbase64('YWJjZ'::bytea);
+
+# padding must still be well formed
+query error Failed to decode value using base64: Input byte array has wrong 4-byte ending unit
+SELECT unbase64('YQ='::string);
+
+query error Failed to decode value using base64: Input byte array has incorrect ending byte
+SELECT unbase64('YQ==YQ=='::string);
 
 query error Error during planning: Function 'unbase64' requires Binary, but received Int32 \(DataType: Int32\)
 SELECT unbase64(12::integer);
