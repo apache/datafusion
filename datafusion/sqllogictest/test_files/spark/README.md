@@ -43,6 +43,9 @@ Run `datafusion-cli --spark` to explore Spark-compatible functions
 interactively. This enables the Spark SQL dialect and registers the
 Spark-compatible function library for the CLI session.
 
+The expected results in these files come from DataFusion. To check them against
+Apache Spark 4.2, run the [PySpark runner](../../../spark/scripts/README.md).
+
 ### Finding Test Cases
 
 To verify and compare function behavior at a minimum, you can refer to the following documentation sources:
