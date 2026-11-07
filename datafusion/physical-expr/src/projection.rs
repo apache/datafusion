@@ -793,7 +793,14 @@ impl ProjectionExprs {
             };
             column_statistics.push(col_stats);
         }
-        stats.calculate_total_byte_size(output_schema);
+        let projected_byte_size = column_statistics
+            .iter()
+            .fold(Precision::Exact(0), |acc, cs| acc.add(&cs.byte_size));
+        if projected_byte_size.get_value().is_some() {
+            stats.total_byte_size = projected_byte_size;
+        } else {
+            stats.calculate_total_byte_size(output_schema);
+        }
         stats.column_statistics = column_statistics;
         Ok(stats)
     }
@@ -3515,6 +3522,50 @@ pub(crate) mod tests {
 
         // Should have 2 column statistics
         assert_eq!(output_stats.column_statistics.len(), 2);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_sums_column_byte_sizes() -> Result<()> {
+        let mut input_stats = get_stats();
+        input_stats.total_byte_size = Precision::Exact(1000);
+        input_stats.column_statistics[0].byte_size = Precision::Exact(40);
+        input_stats.column_statistics[1].byte_size = Precision::Exact(900);
+        input_stats.column_statistics[2].byte_size = Precision::Inexact(60);
+        let input_schema = get_schema();
+
+        let project = |stats: &Statistics, indices: &[usize]| -> Result<Statistics> {
+            let projection = ProjectionExprs::from_indices(indices, &input_schema);
+            projection.project_statistics(
+                stats.clone(),
+                &projection.project_schema(&input_schema)?,
+            )
+        };
+
+        // The variable-width column's byte size is known, so the total is
+        // the projected columns' sum rather than the input total.
+        assert_eq!(
+            project(&input_stats, &[1])?.total_byte_size,
+            Precision::Exact(900)
+        );
+        assert_eq!(
+            project(&input_stats, &[0, 1])?.total_byte_size,
+            Precision::Exact(940)
+        );
+        // Any inexact column byte size makes the sum inexact.
+        assert_eq!(
+            project(&input_stats, &[1, 2])?.total_byte_size,
+            Precision::Inexact(960)
+        );
+
+        // With one byte size missing, a variable-width projection keeps the
+        // input total, marked inexact.
+        input_stats.column_statistics[0].byte_size = Precision::Absent;
+        assert_eq!(
+            project(&input_stats, &[0, 1])?.total_byte_size,
+            Precision::Inexact(1000)
+        );
 
         Ok(())
     }
