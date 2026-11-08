@@ -4743,3 +4743,51 @@ DROP TABLE p26572;
 
 statement ok
 RESET datafusion.execution.batch_size;
+
+# Issue #26234: Correlated subquery confusing same-named columns of two relations
+statement ok
+CREATE TABLE t26234(k INT) AS VALUES (1), (2);
+
+# Query 1: EXISTS
+statement error .*Unsupported correlated subquery: inner relation column 'k' has ambiguous duplicate references across relations
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT 1 FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+);
+
+# Query 2: NOT EXISTS
+statement error .*Unsupported correlated subquery: inner relation column 'k' has ambiguous duplicate references across relations
+SELECT t_outer.k FROM t26234 t_outer WHERE NOT EXISTS (
+    SELECT 1 FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+);
+
+# Query 3: IN
+statement error .*Unsupported correlated subquery: inner relation column 'k' has ambiguous duplicate references across relations
+SELECT t_outer.k FROM t26234 t_outer WHERE t_outer.k IN (
+    SELECT one.k FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+);
+
+# Query 4: Scalar subquery
+statement error .*Unsupported correlated subquery: inner relation column 'k' has ambiguous duplicate references across relations
+SELECT t_outer.k, (
+    SELECT count(*) FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+) FROM t26234 t_outer ORDER BY t_outer.k;
+
+# Query 5: IN with projection from one relation and correlation from another
+statement error .*Unsupported correlated subquery: inner relation column 'k' has ambiguous duplicate references across relations
+SELECT t_outer.k FROM t26234 t_outer WHERE t_outer.k IN (
+    SELECT one.k FROM t26234 one, t26234 two WHERE two.k = t_outer.k + 1
+);
+
+# Single relation correlated column works without ambiguity
+query I
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT 1 FROM t26234 one WHERE one.k = t_outer.k
+) ORDER BY t_outer.k;
+----
+1
+2
+
+statement ok
+DROP TABLE t26234;
+
+

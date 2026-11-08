@@ -345,9 +345,12 @@ fn build_join(
         .collected_count_expr_map
         .get(&decorrelated_subquery)
         .cloned();
-    let aliased_subquery = LogicalPlanBuilder::from(decorrelated_subquery)
-        .alias(subquery_alias.to_string())?
-        .build()?;
+    let join_filter_opt = build_join_filter(
+        pull_up.join_filters,
+        pull_up.correlated_subquery_cols_map.values().flatten(),
+        decorrelated_subquery.schema(),
+        subquery_alias,
+    )?;
 
     // A HAVING or outer-only filter recorded from above the aggregate cannot
     // be rewritten into the join when the output column gets a compensation
@@ -378,11 +381,9 @@ fn build_join(
         );
     }
 
-    let join_filter_opt = build_join_filter(
-        pull_up.join_filters,
-        pull_up.correlated_subquery_cols_map.values().flatten(),
-        subquery_alias,
-    )?;
+    let aliased_subquery = LogicalPlanBuilder::from(decorrelated_subquery)
+        .alias(subquery_alias.to_string())?
+        .build()?;
 
     // When pull-up did not extract any usable join keys (a correlated subquery
     // whose predicate references only outer columns), fall back to `ON true`:

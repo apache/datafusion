@@ -1232,12 +1232,29 @@ pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
 pub(crate) fn build_join_filter<'a>(
     join_filters: Vec<Expr>,
     correlated_cols: impl IntoIterator<Item = &'a Column>,
+    subquery_schema: &DFSchema,
     subquery_alias: &str,
 ) -> Result<Option<Expr>> {
     let correlated_cols = correlated_cols
         .into_iter()
         .cloned()
         .collect::<BTreeSet<_>>();
+
+    for col in &correlated_cols {
+        let duplicate_count = subquery_schema
+            .fields()
+            .iter()
+            .filter(|f| f.name() == &col.name)
+            .count();
+        if duplicate_count > 1 {
+            return plan_err!(
+                "Unsupported correlated subquery: inner relation column '{}' has ambiguous duplicate references across relations under alias '{}'",
+                col.name,
+                subquery_alias
+            );
+        }
+    }
+
     conjunction(join_filters)
         .map(|filter| {
             replace_qualified_name(filter, &correlated_cols, subquery_alias)
@@ -1450,16 +1467,36 @@ mod tests {
 
     #[test]
     fn test_build_join_filter() -> Result<()> {
-        assert_eq!(build_join_filter(vec![], [], "sq")?, None);
+        let empty_schema = DFSchema::empty();
+        assert_eq!(build_join_filter(vec![], [], &empty_schema, "sq")?, None);
 
         let column = Column::from("t.a");
         let outer = out_ref_col(DataType::Int32, "t.a");
         let filters = vec![col("t.a").eq(outer.clone()), outer.gt(lit(1))];
+        let schema = DFSchema::from_unqualified_fields(
+            vec![arrow::datatypes::Field::new("a", DataType::Int32, true)].into(),
+            std::collections::HashMap::new(),
+        )?;
 
         assert_eq!(
-            build_join_filter(filters, [&column, &column], "sq")?,
+            build_join_filter(filters.clone(), [&column, &column], &schema, "sq")?,
             Some(col("sq.a").eq(col("t.a")).and(col("t.a").gt(lit(1))))
         );
+
+        let dup_schema = DFSchema::new_with_metadata(
+            vec![
+                (
+                    Some(datafusion_common::TableReference::bare("one")),
+                    Arc::new(arrow::datatypes::Field::new("a", DataType::Int32, true)),
+                ),
+                (
+                    Some(datafusion_common::TableReference::bare("two")),
+                    Arc::new(arrow::datatypes::Field::new("a", DataType::Int32, true)),
+                ),
+            ],
+            std::collections::HashMap::new(),
+        )?;
+        assert!(build_join_filter(filters, [&column], &dup_schema, "sq").is_err());
         Ok(())
     }
 }
