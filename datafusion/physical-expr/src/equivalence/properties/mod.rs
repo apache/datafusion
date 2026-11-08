@@ -588,20 +588,27 @@ impl EquivalenceProperties {
         self.add_orderings(new_orderings)
     }
 
-    /// Returns what the normal ordering `ordering` implies, looking past the
+    /// Returns the orderings that the normal ordering `ordering` implies. If a
+    /// key is a function of the keys after it, as `a` is in `[k, a, c]` with
+    /// `a = CAST(c AS DATE)`, rows tied on the keys before it are sorted by the
+    /// keys after it, so the ordering without that key holds: `[k, c]`. The
     /// constants that a normal ordering can keep (those that differ between
-    /// partitions): within a partition they have one value.
-    fn implied_by(
-        &self,
-        ordering: &LexOrdering,
-    ) -> Result<Option<Vec<PhysicalSortExpr>>> {
-        let mut rest = ordering.iter().filter(|sort_expr| {
-            self.eq_group.is_expr_constant(&sort_expr.expr).is_none()
-        });
-        match rest.next() {
-            Some(leading) => self.implied_ordering(leading, rest),
-            None => Ok(None),
+    /// partitions) are left out, because within a partition they have one
+    /// value.
+    fn implied_by(&self, ordering: &LexOrdering) -> Result<Vec<Vec<PhysicalSortExpr>>> {
+        let keys: Vec<_> = ordering
+            .iter()
+            .filter(|sort_expr| self.eq_group.is_expr_constant(&sort_expr.expr).is_none())
+            .collect();
+        let mut implied = vec![];
+        for (idx, key) in keys.iter().enumerate() {
+            if let Some(rest) =
+                self.implied_ordering(key, keys[idx + 1..].iter().copied())?
+            {
+                implied.push(keys[..idx].iter().copied().cloned().chain(rest).collect());
+            }
         }
+        Ok(implied)
     }
 
     /// Returns the ordering that the normal ordering `[leading, rest..]`

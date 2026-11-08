@@ -473,6 +473,88 @@ mod tests {
         Ok(())
     }
 
+    /// A key that is a function of the keys after it implies the ordering
+    /// without it, after any prefix: with `CAST(c AS DATE) = a`, the ordering
+    /// `[k, a, c]` implies `[k, c]`, whichever is added first. The implied
+    /// ordering is stored, so it holds after `a` is gone.
+    #[test]
+    fn implied_ordering_after_a_prefix() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Utf8, true),
+            Field::new("a", DataType::Date32, true),
+            Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let [k, a, c] = ["k", "a", "c"].map(|name| col(name, &schema).unwrap());
+        let cast_c = Arc::new(CastExpr::new_with_target_field(
+            Arc::clone(&c),
+            Arc::new(Field::new("c", DataType::Date32, true)),
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+        let ordering =
+            [&k, &a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
+        let implied =
+            [&k, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
+
+        let mut equality_first = EquivalenceProperties::new(Arc::clone(&schema));
+        equality_first.add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
+        equality_first.add_ordering(ordering.clone())?;
+
+        let mut ordering_first = EquivalenceProperties::new(Arc::clone(&schema));
+        ordering_first.add_ordering(ordering)?;
+        ordering_first.add_equal_conditions(cast_c, Arc::clone(&a))?;
+
+        for properties in [equality_first, ordering_first] {
+            assert!(
+                properties
+                    .oeq_class()
+                    .iter()
+                    .any(|ordering| ordering.iter().eq(implied.iter()))
+            );
+        }
+        Ok(())
+    }
+
+    /// A constant between a key and its arguments doesn't hide the equality:
+    /// with `k` a per-partition constant and `CAST(c AS DATE) = a`, the
+    /// ordering `[a, k, c]` implies `[c]`, because within a partition `k` has
+    /// one value. The constant is added first, so the normal ordering keeps it.
+    #[test]
+    fn implied_ordering_past_a_constant_between_keys() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("k", DataType::Int32, true),
+            Field::new("a", DataType::Date32, true),
+            Field::new("c", DataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+        let [k, a, c] = ["k", "a", "c"].map(|name| col(name, &schema).unwrap());
+        let cast_c = Arc::new(CastExpr::new_with_target_field(
+            Arc::clone(&c),
+            Arc::new(Field::new("c", DataType::Date32, true)),
+            None,
+        )) as Arc<dyn PhysicalExpr>;
+        let ordering =
+            [&a, &k, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
+        let constant = || ConstExpr::new(Arc::clone(&k), AcrossPartitions::Heterogeneous);
+
+        let mut equality_then_ordering = EquivalenceProperties::new(Arc::clone(&schema));
+        equality_then_ordering.add_constants([constant()])?;
+        equality_then_ordering
+            .add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
+        equality_then_ordering.add_ordering(ordering.clone())?;
+
+        let mut ordering_then_equality = EquivalenceProperties::new(Arc::clone(&schema));
+        ordering_then_equality.add_constants([constant()])?;
+        ordering_then_equality.add_ordering(ordering)?;
+        ordering_then_equality.add_equal_conditions(cast_c, Arc::clone(&a))?;
+
+        for properties in [equality_then_ordering, ordering_then_equality] {
+            assert!(
+                properties
+                    .ordering_satisfy([PhysicalSortExpr::new_default(Arc::clone(&c))])?
+            );
+        }
+        Ok(())
+    }
+
     /// `add_ordering` reports what it cannot derive instead of dropping it:
     /// here `c` is not in the schema, so its type is unknown.
     #[test]
