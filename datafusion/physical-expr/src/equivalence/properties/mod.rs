@@ -66,6 +66,8 @@ use itertools::{Either, Itertools};
 ///
 /// [`EquivalenceClass`]: crate::equivalence::EquivalenceClass
 /// [Normal form]: #normal-form
+/// [Required orderings]: #required-orderings
+/// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion-physical-plan/latest/datafusion_physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
 /// [Checking whether a requirement is satisfied]: #checking-whether-a-requirement-is-satisfied
 ///
 /// # Equivalent sort expressions
@@ -267,48 +269,73 @@ use itertools::{Either, Itertools};
 ///
 /// [`SetMonotonicity`]: datafusion_expr::SetMonotonicity
 ///
+/// # Required orderings
+///
+/// Some operators only work on sorted input. A sort merge join needs
+/// inputs sorted on the join keys, and a streaming window needs its input
+/// sorted by its `PARTITION BY` and then its `ORDER BY` expressions.
+///
+/// Each operator states this through [`ExecutionPlan::required_input_ordering`].
+///
+/// Orderings describe what the data *is*; requirements describe what an
+/// operator *needs*. The planner compares them with
+/// [`Self::ordering_satisfy_requirement`] and inserts / removes sorts so they
+/// match [Checking whether a requirement is satisfied]).
+///
 /// # Normal form
 ///
-/// Orderings and requirements are compared in *normal form*: every
+/// Orderings and requirements (see [Required orderings]) are compared in
+/// *normal form*: every
 /// expression is replaced by the first member of its equivalence class,
 /// uniform constants are removed, and so are the expressions that repeat an
 /// earlier one.
 ///
-/// For example, `a` and `b` are equal and `d` is a uniform constant, the
+/// For example, if `a` and `b` are equal and `d` is a uniform constant, the
 /// requirement `[b ASC, d DESC, c ASC, a ASC]` normalizes to `[a ASC, c ASC]`.
-///
-/// Orderings are kept in normal form in a cache along with
-/// a map from each leading expression to the orderings it leads, so that a
-/// requirement is checked against orderings in the same form.
 ///
 /// # Checking whether a requirement is satisfied
 ///
 /// The requirement `[a, b]` holds if the rows are sorted by `a`, and the rows
-/// that tie on `a` are sorted by `b`. So each key only has to be ordered
-/// among the rows that tie on the keys before it. [`Self::ordering_satisfy_requirement`]
-/// checks the keys in order. Once a key is satisfied, it is *pinned*: it is
-/// treated like a constant for the rest of the keys, so every known ordering
-/// can skip it. With orderings `[a, b]` and `[a, c]`, the requirement
-/// `[a, c]` holds: pinning `a` leaves `c` as the first unpinned expression of
-/// the second ordering. Pinning is kept in a `SortKeyWalk` (see
-/// `properties/walk.rs`), which defines its terms; the properties being read
-/// never change.
+/// that tie on `a` are sorted by `b`.
 ///
-/// A key need not appear in an ordering itself. Its order can follow from an
-/// expression that does, as [`PhysicalExpr::get_properties`] reports:
-/// `CAST(a AS BIGINT)` is sorted when `a` is, and
-/// [`Self::get_expr_properties`] exposes this.
+/// [`Self::ordering_satisfy_requirement`] checks whether a requirement is
+/// satisfied by an ordering, and is quite complex.
 ///
 /// # Discovering orderings
 ///
-/// Adding an ordering, an equality or a constant can imply orderings that
-/// were not stated. If the rows are sorted by `[c, a, b]` and `c = f(a, b)`
-/// for a function `f` that preserves the lexicographical order of its
-/// arguments, such as `c = CAST(a AS BIGINT)`, the rows are also sorted by
-/// `[a, b]`: rows with different `(a, b)` are in the order of `f(a, b)`,
-/// which is the order of `c`, and rows with equal `c` are sorted by `[a, b]`
-/// anyway. [`Self::add_ordering`], [`Self::add_equal_conditions`] and
-/// [`Self::add_constants`] look for such orderings.
+/// `EquivalenceProperties` discovers and accounts for additional orderings that
+/// may not be obvious from various additional information such as constants and
+/// equality.
+///
+/// ## Example: Ordering Implied by a `CAST`
+///
+/// Consider `SELECT a, b, CAST(a AS BIGINT) AS c FROM t ORDER BY c, b`:
+///
+/// ```text
+/// ┌───┬───┬───┐
+/// │ a │ b │ c │
+/// ├───┼───┼───┤
+/// │ 1 │ 2 │ 1 │
+/// │ 1 │ 5 │ 1 │
+/// │ 2 │ 1 │ 2 │
+/// │ 3 │ 4 │ 3 │
+/// └───┴───┴───┘
+/// ```
+///
+/// Observations:
+/// - Casting an `INT` to a `BIGINT` preserves order and never maps two
+///   different values to the same one, so rows with different `a` are in the
+///   order of `c`, which is the order of `a`.
+/// - Rows with equal `c` have equal `a`
+///
+/// Given those observations, the rows are also sorted by `[a ASC, b ASC]`,
+/// even though no operator sorted on `a`
+///
+/// This property holds in general for a function `f` that preserves the
+/// lexicographical order of its arguments (that set [`ExprProperties::preserves_lex_ordering`]).
+///
+/// See [`Self::add_ordering`], [`Self::add_equal_conditions`] and
+/// [`Self::add_constants`] for more details.
 ///
 /// # Code Example
 /// ```
@@ -325,10 +352,10 @@ use itertools::{Either, Itertools};
 /// # let col_a = col("a", &schema).unwrap();
 /// # let col_b = col("b", &schema).unwrap();
 /// # let col_c = col("c", &schema).unwrap();
-/// // This object represents data that is sorted by a ASC, c DESC
-/// // with a single constant value of b
 /// let mut eq_properties = EquivalenceProperties::new(schema);
+/// // Single constant value of b
 /// eq_properties.add_constants(vec![ConstExpr::from(col_b)]);
+/// // ORDER BY a ASC, c DESC
 /// eq_properties.add_ordering([
 ///     PhysicalSortExpr::new_default(col_a).asc(),
 ///     PhysicalSortExpr::new_default(col_c).desc(),
@@ -973,6 +1000,10 @@ impl EquivalenceProperties {
     ///    tie on `a`.
     /// 3. The orderings now start at `[b, c]` and `[d]`.
     /// 4. The function returns `true` as `[d]` satisfies `d`.
+    ///
+    /// See [Required orderings] for what a requirement is.
+    ///
+    /// [Required orderings]: EquivalenceProperties#required-orderings
     pub fn ordering_satisfy_requirement(
         &self,
         given: impl IntoIterator<Item = PhysicalSortRequirement>,
