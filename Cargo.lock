@@ -196,7 +196,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "60.1.0"
-source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c#62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=49e4234e7b0abeb5752ff5977a02f09da86a63ca#49e4234e7b0abeb5752ff5977a02f09da86a63ca"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -239,7 +239,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "60.1.0"
-source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c#62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=49e4234e7b0abeb5752ff5977a02f09da86a63ca#49e4234e7b0abeb5752ff5977a02f09da86a63ca"
 dependencies = [
  "bytes",
  "half",
@@ -272,7 +272,7 @@ dependencies = [
 [[package]]
 name = "arrow-cmp"
 version = "60.1.0"
-source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c#62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=49e4234e7b0abeb5752ff5977a02f09da86a63ca#49e4234e7b0abeb5752ff5977a02f09da86a63ca"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -297,7 +297,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "60.1.0"
-source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c#62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=49e4234e7b0abeb5752ff5977a02f09da86a63ca#49e4234e7b0abeb5752ff5977a02f09da86a63ca"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -376,7 +376,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "60.1.0"
-source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c#62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=49e4234e7b0abeb5752ff5977a02f09da86a63ca#49e4234e7b0abeb5752ff5977a02f09da86a63ca"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -402,7 +402,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "60.1.0"
-source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c#62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=49e4234e7b0abeb5752ff5977a02f09da86a63ca#49e4234e7b0abeb5752ff5977a02f09da86a63ca"
 dependencies = [
  "bitflags",
  "serde",
@@ -413,7 +413,7 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "60.1.0"
-source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c#62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=49e4234e7b0abeb5752ff5977a02f09da86a63ca#49e4234e7b0abeb5752ff5977a02f09da86a63ca"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -427,7 +427,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "60.1.0"
-source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c#62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=49e4234e7b0abeb5752ff5977a02f09da86a63ca#49e4234e7b0abeb5752ff5977a02f09da86a63ca"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
