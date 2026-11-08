@@ -246,7 +246,16 @@ impl<T: ArrowPrimitiveType> GenericDistinctBuffer<T> {
     /// Returns the size in bytes, including `Self` and the hash table's
     /// retained allocation. This includes unused capacity and control bytes.
     pub fn size(&self) -> usize {
-        size_of_val(self) + self.values.allocation_size()
+        size_of_val(self) + self.heap_size()
+    }
+
+    /// Returns the bytes retained by the hash table's heap allocation,
+    /// excluding `Self`. This includes unused capacity and control bytes.
+    ///
+    /// Use this instead of [`Self::size`] when the buffer is stored inline in
+    /// another accumulator, whose `size_of_val` already covers `Self`.
+    pub fn heap_size(&self) -> usize {
+        self.values.allocation_size()
     }
 }
 

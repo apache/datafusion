@@ -736,8 +736,7 @@ impl Accumulator for DistinctVarianceAccumulator {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.distinct_values)
-            + self.distinct_values.size()
+        size_of_val(self) + self.distinct_values.heap_size()
     }
 
     fn state(&mut self) -> Result<Vec<ScalarValue>> {

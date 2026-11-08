@@ -132,8 +132,7 @@ where
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.sum_accumulator)
-            + self.sum_accumulator.size()
+        size_of_val(self) + self.sum_accumulator.heap_size()
     }
 }
 

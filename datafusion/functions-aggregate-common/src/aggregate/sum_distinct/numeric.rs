@@ -38,6 +38,12 @@ impl<T: ArrowPrimitiveType> DistinctSumAccumulator<T> {
         self.values.values.len()
     }
 
+    /// Returns the bytes retained by the distinct values' hash table,
+    /// excluding `Self`. See [`GenericDistinctBuffer::heap_size`].
+    pub(crate) fn heap_size(&self) -> usize {
+        self.values.heap_size()
+    }
+
     /// Iterates the distinct values collected so far. `AVG(DISTINCT)` re-sums
     /// them in a wider type instead of using [`Self::evaluate`]'s input-typed
     /// sum.
@@ -72,6 +78,6 @@ impl<T: ArrowPrimitiveType + Debug> Accumulator for DistinctSumAccumulator<T> {
     }
 
     fn size(&self) -> usize {
-        size_of_val(self) - size_of_val(&self.values) + self.values.size()
+        size_of_val(self) + self.heap_size()
     }
 }
