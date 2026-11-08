@@ -2675,6 +2675,18 @@ SELECT (SELECT count(*) FROM sq_empty), (SELECT v FROM sq_values);
 ## Uncorrelated scalar subqueries in various expression contexts
 #############
 
+# VALUES rows with uncorrelated scalar subqueries
+query II
+VALUES ((SELECT min(v) FROM sq_values), 5);
+----
+1 5
+
+query II rowsort
+SELECT * FROM (VALUES ((SELECT max(v) FROM sq_values), 5), (7, (SELECT min(v) FROM sq_values))) AS t(a, b);
+----
+3 5
+7 1
+
 # HAVING clause with uncorrelated scalar subquery
 query II rowsort
 SELECT x, count(*) AS cnt FROM sq_main GROUP BY x

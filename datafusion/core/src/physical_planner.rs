@@ -847,6 +847,40 @@ impl DefaultPhysicalPlanner {
                     plan
                 }
             }
+            // A values list is evaluated while it is planned, before the scalar
+            // subqueries have run, so rows with a scalar subquery are projected
+            // from a placeholder row at execution time instead.
+            LogicalPlan::Values(Values { values, schema })
+                if values.iter().flatten().any(contains_scalar_subquery) =>
+            {
+                let placeholder: Arc<dyn ExecutionPlan> =
+                    Arc::new(PlaceholderRowExec::new(Arc::new(Schema::empty())));
+                let rows = values
+                    .iter()
+                    .map(|row| {
+                        let exprs = row
+                            .iter()
+                            .zip(schema.fields())
+                            .map(|(expr, field)| {
+                                Ok(ProjectionExpr {
+                                    expr: create_physical_expr(
+                                        expr,
+                                        schema,
+                                        execution_props,
+                                        planning_ctx,
+                                    )?,
+                                    alias: field.name().clone(),
+                                })
+                            })
+                            .collect::<Result<Vec<_>>>()?;
+                        Ok(Arc::new(ProjectionExec::try_new(
+                            exprs,
+                            Arc::clone(&placeholder),
+                        )?) as Arc<dyn ExecutionPlan>)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                UnionExec::try_new(rows)?
+            }
             LogicalPlan::Values(Values { values, schema }) => {
                 let exprs = values
                     .iter()
@@ -2992,6 +3026,11 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
     }
 
     Ok(assignments)
+}
+
+fn contains_scalar_subquery(expr: &Expr) -> bool {
+    expr.exists(|e| Ok(matches!(e, Expr::ScalarSubquery(_))))
+        .unwrap_or(false)
 }
 
 /// Check if an assignment is an identity assignment (column = column)
