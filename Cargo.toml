@@ -404,13 +404,13 @@ opt-level = 1
 
 # Pin Arrow for apache/arrow-rs#12126 benchmark validation.
 [patch.crates-io]
-arrow-array = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c" }
-arrow-buffer = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c" }
-arrow-cmp = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c" }
-arrow-data = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c" }
-arrow-ipc = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c" }
-arrow-ord = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c" }
-arrow-schema = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c" }
-arrow-select = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c" }
-arrow-string = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c" }
-parquet = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "62a3c43ff2c0a5e1d1ab7f9612823462e1374b1c" }
+arrow-array = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "83ae72c6a5966d29dcf5102d3c290dd6a9a9a23e" }
+arrow-buffer = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "83ae72c6a5966d29dcf5102d3c290dd6a9a9a23e" }
+arrow-cmp = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "83ae72c6a5966d29dcf5102d3c290dd6a9a9a23e" }
+arrow-data = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "83ae72c6a5966d29dcf5102d3c290dd6a9a9a23e" }
+arrow-ipc = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "83ae72c6a5966d29dcf5102d3c290dd6a9a9a23e" }
+arrow-ord = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "83ae72c6a5966d29dcf5102d3c290dd6a9a9a23e" }
+arrow-schema = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "83ae72c6a5966d29dcf5102d3c290dd6a9a9a23e" }
+arrow-select = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "83ae72c6a5966d29dcf5102d3c290dd6a9a9a23e" }
+arrow-string = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "83ae72c6a5966d29dcf5102d3c290dd6a9a9a23e" }
+parquet = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "83ae72c6a5966d29dcf5102d3c290dd6a9a9a23e" }
