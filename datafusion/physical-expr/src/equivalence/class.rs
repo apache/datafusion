@@ -32,7 +32,7 @@ use indexmap::{IndexMap, IndexSet};
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub enum AcrossPartitions {
     /// The constant may have different values for different partitions.
-    /// [default]
+    #[default]
     Heterogeneous,
     /// The constant has the same value across all partitions.
     ///

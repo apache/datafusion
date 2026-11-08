@@ -22,15 +22,38 @@ use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 /// order. Contiguity applies to the complete partition stream, not separately
 /// to each record batch.
 ///
+/// For example, consider the following table:
+///
+/// ```text
+/// ┌───┬───┬───┐
+/// │ a │ b │ c │
+/// ├───┼───┼───┤
+/// │ 2 │ 1 │ 5 │
+/// │ 2 │ 1 │ 3 │
+/// │ 1 │ 3 │ 4 │
+/// │ 2 │ 2 │ 1 │
+/// │ 2 │ 2 │ 2 │
+/// └───┴───┴───┘
+/// ```
+///
+/// Rows with the same `(a, b)` are contiguous, so the grouping `[a, b]`
+/// describes the table, even though the table is not sorted by `a` or by
+/// `b`: the runs appear in the order `(2, 1)`, `(1, 3)`, `(2, 2)`. The
+/// grouping `[b]` describes it too, since each value of `b` is in one run.
+/// The grouping `[a]` does not, because `a = 2` appears in two separate runs.
+///
 /// Expression order within an entry is not significant: `[a, b]` and `[b, a]`
 /// describe the same grouping. Entries do not imply properties for subsets;
-/// `[a, b]` alone says nothing about whether all rows with the same `a` are
-/// contiguous.
+/// as the table shows, `[a, b]` alone says nothing about whether all rows
+/// with the same `a` are contiguous.
 ///
-/// See [`EquivalenceProperties`] for how groupings relate to the other
-/// properties of a plan node.
+/// # See also
+/// * [`OrderingEquivalenceClass`] for the stronger property that rows are sorted.
+/// * [`EquivalenceProperties`] for how groupings relate to the
+///   other properties of a plan node.
 ///
 /// [`EquivalenceProperties`]: crate::equivalence::EquivalenceProperties
+/// [`OrderingEquivalenceClass`]: crate::equivalence::OrderingEquivalenceClass
 #[derive(Clone, Debug, Default)]
 pub struct GroupingEquivalenceClass {
     groupings: Vec<Vec<Arc<dyn PhysicalExpr>>>,

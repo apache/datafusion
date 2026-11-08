@@ -16,7 +16,9 @@ use datafusion_common::Result;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
 /// An `OrderingEquivalenceClass` keeps track of distinct alternative orderings
-/// than can describe a table. For example, consider the following table:
+/// than can describe a table.
+///
+/// For example, consider the following table:
 ///
 /// ```text
 /// ┌───┬───┬───┬───┐
@@ -30,19 +32,26 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 /// ```
 ///
 /// Here, both `[a ASC, b ASC]` and `[c DESC, d ASC]` describe the table
-/// ordering. In this case, we say that these orderings are equivalent. See
-/// [Equivalent sort expressions].
+/// ordering. We say that these orderings are equivalent. See [Equivalent sort
+/// expressions].
 ///
 /// An `OrderingEquivalenceClass` is a set of such equivalent orderings, which
-/// is represented by a vector of `LexOrdering`s. The set does not store any
-/// redundant information by enforcing the invariant that no suffix of an
-/// ordering in the equivalence class is a prefix of another ordering in the
-/// equivalence class. The set can be empty, which means that there are no
-/// orderings that describe the table.
+/// is represented by a vector of `LexOrdering`s.
+///
+/// [`GroupingEquivalenceClass`] is used when groups of equal values are
+/// contiguous, but not in order.
 ///
 /// [Equivalent sort expressions]: crate::equivalence::EquivalenceProperties#equivalent-sort-expressions
+/// [`GroupingEquivalenceClass`]: crate::equivalence::GroupingEquivalenceClass
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OrderingEquivalenceClass {
+    /// Set of equivalent orderings
+    ///
+    /// invariant: no suffix of an ordering in the equivalence class is a prefix
+    /// of another ordering in the equivalence class. This avoids redundant
+    /// information.
+    ///
+    /// If empty, means the table is unordered
     orderings: Vec<LexOrdering>,
 }
 
