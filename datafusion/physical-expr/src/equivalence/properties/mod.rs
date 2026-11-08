@@ -250,7 +250,8 @@ use itertools::{Either, Itertools};
 ///
 /// Observations:
 /// - When written with explicit defaults, this query is equivalent to
-///   `SELECT ts, x, MAX(x) OVER (ORDER BY ts RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS m`.
+///   `SELECT ts, x, MAX(x) OVER (ORDER BY ts RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS m`,
+///   so each row's frame contains every earlier row's frame.
 /// - `MAX` is set-monotonically increasing: adding rows to its input can only
 ///   raise its value or leave it unchanged (see [`SetMonotonicity`]).
 ///
@@ -271,9 +272,12 @@ use itertools::{Either, Itertools};
 /// Orderings and requirements are compared in *normal form*: every
 /// expression is replaced by the first member of its equivalence class,
 /// uniform constants are removed, and so are the expressions that repeat an
-/// earlier one. If `a` and `b` are equal and `d` is a uniform constant, the
-/// requirement `[b ASC, d DESC, c ASC, a ASC]` normalizes to
-/// `[a ASC, c ASC]`. Orderings are kept in normal form in a cache along with
+/// earlier one.
+///
+/// For example, `a` and `b` are equal and `d` is a uniform constant, the
+/// requirement `[b ASC, d DESC, c ASC, a ASC]` normalizes to `[a ASC, c ASC]`.
+///
+/// Orderings are kept in normal form in a cache along with
 /// a map from each leading expression to the orderings it leads, so that a
 /// requirement is checked against orderings in the same form.
 ///
