@@ -27,8 +27,10 @@ use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 /// `[a, b]` alone says nothing about whether all rows with the same `a` are
 /// contiguous.
 ///
-/// See [`EquivalenceProperties`](crate::equivalence::EquivalenceProperties)
-/// for how groupings relate to the other properties of a plan node.
+/// See [`EquivalenceProperties`] for how groupings relate to the other
+/// properties of a plan node.
+///
+/// [`EquivalenceProperties`]: crate::equivalence::EquivalenceProperties
 #[derive(Clone, Debug, Default)]
 pub struct GroupingEquivalenceClass {
     groupings: Vec<Vec<Arc<dyn PhysicalExpr>>>,

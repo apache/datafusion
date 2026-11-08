@@ -31,7 +31,7 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 ///
 /// Here, both `[a ASC, b ASC]` and `[c DESC, d ASC]` describe the table
 /// ordering. In this case, we say that these orderings are equivalent. See
-/// [Equivalent sort expressions](crate::equivalence::EquivalenceProperties#equivalent-sort-expressions).
+/// [Equivalent sort expressions].
 ///
 /// An `OrderingEquivalenceClass` is a set of such equivalent orderings, which
 /// is represented by a vector of `LexOrdering`s. The set does not store any
@@ -39,6 +39,8 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 /// ordering in the equivalence class is a prefix of another ordering in the
 /// equivalence class. The set can be empty, which means that there are no
 /// orderings that describe the table.
+///
+/// [Equivalent sort expressions]: crate::equivalence::EquivalenceProperties#equivalent-sort-expressions
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct OrderingEquivalenceClass {
     orderings: Vec<LexOrdering>,
@@ -219,7 +221,9 @@ impl OrderingEquivalenceClass {
     ///
     /// This is how a whole-partition window aggregate records that its value
     /// is constant within each window partition. See
-    /// [Per-partition constants from window functions](crate::equivalence::EquivalenceProperties#per-partition-constants-from-window-functions).
+    /// [Per-partition constants from window functions].
+    ///
+    /// [Per-partition constants from window functions]: crate::equivalence::EquivalenceProperties#per-partition-constants-from-window-functions
     pub fn is_expr_partial_const(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         is_partial_const(self.iter().map(|ordering| ordering.first()), expr)
     }

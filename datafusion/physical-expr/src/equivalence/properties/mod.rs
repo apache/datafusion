@@ -64,6 +64,8 @@ use itertools::{Either, Itertools};
 /// | Constraints | A primary key or unique constraint | [`Constraints`] |
 ///
 /// [`EquivalenceClass`]: crate::equivalence::EquivalenceClass
+/// [Normal form]: #normal-form
+/// [Checking whether a requirement is satisfied]: #checking-whether-a-requirement-is-satisfied
 ///
 /// # Equivalent sort expressions
 ///
@@ -113,7 +115,7 @@ use itertools::{Either, Itertools};
 /// node. For example, after the filter `a = 5`, `a` is constant. A constant
 /// never changes the order of rows, so a sort on `[a, b]` is the same as a
 /// sort on `[b]`, and a requirement that mentions `a` can drop it (see
-/// [Normal form](#normal-form)).
+/// [Normal form]).
 ///
 /// A constant is *uniform* if it has the same value in every output
 /// partition of the node, and *heterogeneous* if it has one value within each
@@ -149,7 +151,7 @@ use itertools::{Either, Itertools};
 ///   has a single value when one ordering leads with `w` in some direction
 ///   and another leads with it in the exact reverse, since rows sorted both
 ///   ways all have the same value (or are all null).
-/// - When a requirement is checked (see [below](#checking-whether-a-requirement-is-satisfied)),
+/// - When a requirement is checked (see [Checking whether a requirement is satisfied]),
 ///   pinning `k` makes `w` the leading expression of orderings in opposite
 ///   directions, so `w` is a singleton among the rows that tie on `k`.
 ///

@@ -371,9 +371,10 @@ pub(crate) fn get_partition_by_sort_exprs(
 /// constant across the table when there is no `PARTITION BY`, and otherwise
 /// has one value per window partition, which is recorded by adding `[k, w]`
 /// in all four sort directions of `w`. See
-/// [Per-partition constants from window functions](EquivalenceProperties#per-partition-constants-from-window-functions).
-/// A set-monotonic aggregate over an unbounded frame adds an ordering on its
-/// output instead.
+/// [Per-partition constants from window functions]. A set-monotonic aggregate
+/// over an unbounded frame adds an ordering on its output instead.
+///
+/// [Per-partition constants from window functions]: EquivalenceProperties#per-partition-constants-from-window-functions
 pub(crate) fn window_equivalence_properties(
     schema: &SchemaRef,
     input: &Arc<dyn ExecutionPlan>,

@@ -26,7 +26,7 @@ use itertools::Itertools;
 /// orderings it already knows satisfy a requirement, one key at a time. The
 /// walk reads the properties but never changes them: everything it learns
 /// along the way lives in the walk itself and is dropped with it. For the
-/// concepts, see [Checking whether a requirement is satisfied](EquivalenceProperties#checking-whether-a-requirement-is-satisfied).
+/// concepts, see [Checking whether a requirement is satisfied].
 ///
 /// # Why a walk
 ///
@@ -84,6 +84,8 @@ use itertools::Itertools;
 /// - [`EquivalenceProperties::get_expr_properties`] reads the properties of
 ///   an expression through a walk with nothing pinned, via
 ///   [`Self::expr_properties`].
+///
+/// [Checking whether a requirement is satisfied]: EquivalenceProperties#checking-whether-a-requirement-is-satisfied
 pub(super) struct SortKeyWalk<'a> {
     props: &'a EquivalenceProperties,
     /// Pinned expressions. Pinning a member of an equivalence class pins all
