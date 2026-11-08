@@ -10,7 +10,7 @@ Tests are critical to ensure that DataFusion is working properly and
 is not accidentally broken during refactorings. All new features
 should have test coverage and the entire test suite is run as part of CI.
 
-For CI workflows, documentation checks, and benchmarks, see [Non-Functional Tests](testing_non_functional.md).
+For CI workflows, documentation checks, and benchmarks, see [Testing Infrastructure](testing_infrastructure.md).
 
 ## Testing Quick Start
 
@@ -208,5 +208,5 @@ For SQL fuzzing of more complex queries, use [datafusion-fuzzer], which is curre
 :hidden:
 :maxdepth: 1
 
-testing_non_functional
+testing_infrastructure
 ```

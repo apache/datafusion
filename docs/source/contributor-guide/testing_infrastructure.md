@@ -4,25 +4,22 @@ SPDX-FileCopyrightText: See the NOTICE file distributed with this work for addit
 SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
-# Non-Functional Tests
+# Testing Infrastructure
 
 This page covers checks for CI workflows, documentation, repository maintenance, and benchmarks. For tests of DataFusion's query behavior, see [Testing](testing.md).
 
 ## CI Workflow Tests
 
-The Rust workflow validator and fork status bridge have regression tests.
-These tests cover skip conditions, fork run recovery, polling frequency, and
-concurrency groups for fork pushes and merge queue runs.
-They run in the `asf-yaml-check` CI job and in `./dev/rust_lint.sh`.
-Run them locally with Python, PyYAML, and Node.js 24:
+The [Rust workflow validator tests] and [fork status bridge tests] run in CI and in `./dev/rust_lint.sh`.
+Run them locally:
 
 ```shell
 python3 ci/scripts/test_rust_workflow_skips.py
 node --test ci/scripts/test_fork_ci_status.cjs
 ```
 
-The validator tests remove guards and add an invalid job dependency in memory.
-The bridge tests use stubbed GitHub API responses and make no network requests.
+[rust workflow validator tests]: https://github.com/apache/datafusion/blob/main/ci/scripts/test_rust_workflow_skips.py
+[fork status bridge tests]: https://github.com/apache/datafusion/blob/main/ci/scripts/test_fork_ci_status.cjs
 
 ## Documentation Examples
 
@@ -65,30 +62,10 @@ tested in the same way using the [doc_comment] crate. See the end of
 
 ## Documentation Link Checks
 
-`./dev/rust_lint.sh` runs the internal markdown link check. If `lychee` is
-missing, the script installs the version pinned in
-`ci/scripts/utils/tool_versions.sh`. It uses an existing installation as is,
-even if the version differs from the pin.
-
-To run the check on its own:
+[`ci/scripts/markdown_link_check.sh`] checks internal Markdown links and runs as part of `./dev/rust_lint.sh`. To run it on its own:
 
 ```shell
-source ci/scripts/utils/tool_versions.sh
-cargo install lychee --locked --version "${LYCHEE_VERSION}"
 bash ci/scripts/markdown_link_check.sh
-```
-
-Notes:
-
-- The script is run with `bash` and is compatible with the default Bash on macOS (no `mapfile` dependency).
-- The CI configuration currently checks internal markdown links only. External `http(s)` and `mailto` links are excluded to avoid flaky failures.
-- The check only reports broken links. `./dev/rust_lint.sh --write` does not change them.
-
-When a link is broken, lychee prints the file and URL/path that failed. For example:
-
-```text
-[docs/source/user-guide/cli/overview.md]:
-  [ERROR] file:///.../docs/source/user-guide/cli/missing-page.md | Cannot find file: File not found. Check if file exists and path is correct
 ```
 
 Rust doc comments are validated by rustdoc in CI and can be checked locally with:
@@ -97,28 +74,23 @@ Rust doc comments are validated by rustdoc in CI and can be checked locally with
 bash ci/scripts/rust_docs.sh
 ```
 
+[`ci/scripts/markdown_link_check.sh`]: https://github.com/apache/datafusion/blob/main/ci/scripts/markdown_link_check.sh
+
 ## ASF Status Check Validation
 
-`ci/scripts/check_asf_yaml_status_checks.py` checks that every required status
+[`ci/scripts/check_asf_yaml_status_checks.py`] checks that every required status
 check in `.asf.yaml` matches a job in `.github/workflows`.
-`ci/scripts/check_rust_workflow_skips.py` checks that `rust.yml` skips only its
+[`ci/scripts/check_rust_workflow_skips.py`] checks that `rust.yml` skips only its
 listed jobs on pushes to `main` and on pull requests from forks.
-`./dev/rust_lint.sh` runs both and needs `python3` with [PyYAML]. The [uv]
-workspace provides both:
-
-```shell
-uv run ./dev/rust_lint.sh
-```
-
-To run the checks on their own:
+`./dev/rust_lint.sh` runs both checks. To run them on their own:
 
 ```shell
 uv run python3 ci/scripts/check_asf_yaml_status_checks.py
 uv run python3 ci/scripts/check_rust_workflow_skips.py
 ```
 
-[pyyaml]: https://pypi.org/project/PyYAML/
-[uv]: https://docs.astral.sh/uv/
+[`ci/scripts/check_asf_yaml_status_checks.py`]: https://github.com/apache/datafusion/blob/main/ci/scripts/check_asf_yaml_status_checks.py
+[`ci/scripts/check_rust_workflow_skips.py`]: https://github.com/apache/datafusion/blob/main/ci/scripts/check_rust_workflow_skips.py
 
 ## Security Audit
 
@@ -155,9 +127,9 @@ CI runs two dependency checks, and `./dev/rust_lint.sh` runs both:
 
 - `ci/scripts/check_circular_dependencies.sh` fails on dependency cycles
   between DataFusion crates, including one through a dev-dependency, which
-  Cargo allows when building but which prevents publishing the crates. 
+  Cargo allows when building but which prevents publishing the crates.
 - `ci/scripts/check_unused_dependencies.sh` runs `cargo machete --with-metadata`
-  from the repository root. 
+  from the repository root.
 
 To run either check on its own:
 
@@ -165,8 +137,6 @@ To run either check on its own:
 ./ci/scripts/check_circular_dependencies.sh
 ./ci/scripts/check_unused_dependencies.sh
 ```
-
-[cargo-machete]: https://github.com/bnjbvr/cargo-machete
 
 ## Examples README Check
 
