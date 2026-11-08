@@ -160,6 +160,92 @@ use itertools::{Either, Itertools};
 /// dependency awareness, which would also remove the need for constants and
 /// constraints.
 ///
+/// ## Example: Window Functions with `PARTITION BY`
+///
+/// Consider an input sorted by `k ASC` and the window expression
+/// `SUM(x) OVER (PARTITION BY k) AS w`, which produces the following table:
+///
+/// ```text
+/// ┌───┬───┬────┐
+/// │ k │ x │ w  │
+/// ├───┼───┼────┤
+/// │ 1 │ 3 │  5 │
+/// │ 1 │ 2 │  5 │
+/// │ 2 │ 4 │ 10 │
+/// │ 2 │ 6 │ 10 │
+/// │ 3 │ 1 │  1 │
+/// └───┴───┴────┘
+/// ```
+///
+/// Observations:
+/// - `w` is not a constant because it differs between partitions.
+/// - The output is sorted by `k` (the partitioning), because DataFusion's
+///   window implementation keeps the input order.
+/// - Within each run of equal `k`, `w` has one value.
+///
+/// Given those observations, the output sorting is described by all of:
+///
+/// - `[k ASC, w ASC NULLS FIRST]`
+/// - `[k ASC, w ASC NULLS LAST]`
+/// - `[k ASC, w DESC NULLS FIRST]`
+/// - `[k ASC, w DESC NULLS LAST]`
+///
+/// ## Example: Window Functions without `PARTITION BY`
+///
+/// Consider the same input and the window expression `SUM(x) OVER () AS w`,
+/// which produces the following table:
+///
+/// ```text
+/// ┌───┬───┬────┐
+/// │ k │ x │ w  │
+/// ├───┼───┼────┤
+/// │ 1 │ 3 │ 16 │
+/// │ 1 │ 2 │ 16 │
+/// │ 2 │ 4 │ 16 │
+/// │ 2 │ 6 │ 16 │
+/// │ 3 │ 1 │ 16 │
+/// └───┴───┴────┘
+/// ```
+///
+/// Observations:
+/// - The frame of every row is the whole table, so `w` has one value.
+/// - The output is still sorted by `k`, as the input was.
+///
+/// Given those observations, `w` is added as a constant (a [`ConstExpr`])
+/// rather than as orderings.
+///
+/// ## Example: Set-Monotonic Window Functions
+///
+/// Consider an input sorted by `ts ASC` and the window expression
+/// `MAX(x) OVER (ORDER BY ts) AS m`, which produces the following table:
+///
+/// ```text
+/// ┌────┬───┬───┐
+/// │ ts │ x │ m │
+/// ├────┼───┼───┤
+/// │  1 │ 3 │ 3 │
+/// │  2 │ 1 │ 3 │
+/// │  3 │ 5 │ 5 │
+/// │  4 │ 2 │ 5 │
+/// └────┴───┴───┘
+/// ```
+///
+/// Observations:
+/// - The default frame with an `ORDER BY` is `UNBOUNDED PRECEDING` to
+///   `CURRENT ROW`, so the frame of each row contains the frames of all
+///   earlier rows.
+/// - `MAX` is set-monotonically increasing: adding rows to its input can only
+///   raise its value or leave it unchanged (see [`SetMonotonicity`]).
+///
+/// Given those observations, `m` never decreases as `ts` increases, so the
+/// output sorting is described by `[m ASC NULLS LAST]`, and with a
+/// `PARTITION BY k` it would be `[k ASC, m ASC NULLS LAST]`. A decreasing
+/// aggregate such as `MIN` yields `DESC NULLS LAST`, and a frame that shrinks
+/// instead, such as `CURRENT ROW` to `UNBOUNDED FOLLOWING`, reverses the
+/// direction.
+///
+/// [`SetMonotonicity`]: datafusion_expr::SetMonotonicity
+///
 /// # Normal form
 ///
 /// Orderings and requirements are compared in *normal form*: every
