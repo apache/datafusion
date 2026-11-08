@@ -38,10 +38,12 @@ use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use indexmap::IndexSet;
 use itertools::{Either, Itertools};
 
-/// `EquivalenceProperties` stores information about the output of a plan node
-/// that can be used to optimize the plan. Currently, it keeps track of:
+/// `EquivalenceProperties` stores information about how values are distributed
+/// across the output of a plan node that can be used to optimize the plan.
+///
+/// Currently, it tracks:
 /// - Sort expressions (orderings),
-/// - Complete expression tuples whose values are contiguous,
+/// - When all rows of equal values are contiguous for certain tuples (groupings)
 /// - Equivalent expressions; i.e. expressions known to have the same value.
 /// - Constants expressions; i.e. expressions known to contain a single constant
 ///   value.
@@ -50,18 +52,17 @@ use itertools::{Either, Itertools};
 ///
 /// [Using Ordering for Better Plans]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis/
 ///
-/// This page explains the concepts and how the pieces fit together. Each
-/// struct documents what it represents.
+/// This document explains the concepts and how the pieces fit together.
 ///
 /// # Overview
 ///
-/// | Concept | Example | Stored in |
-/// |---|---|---|
-/// | Equivalent expressions | `a` and `b` after the filter `a = b` | An [`EquivalenceGroup`] of [`EquivalenceClass`]es |
-/// | Constants | `a` after the filter `a = 5` | The `constant` of an [`EquivalenceClass`], added as a [`ConstExpr`] |
-/// | Orderings | `[a ASC, b DESC]` after a sort | An [`OrderingEquivalenceClass`] |
-/// | Groupings | `[a, b]` after a hash aggregate on `a, b` | A [`GroupingEquivalenceClass`] |
-/// | Constraints | A primary key or unique constraint | [`Constraints`] |
+/// | Concept                | Example                                   | Stored in                                                           |
+/// |------------------------|-------------------------------------------|---------------------------------------------------------------------|
+/// | Equivalent expressions | `a` and `b` after the filter `a = b`      | An [`EquivalenceGroup`] of [`EquivalenceClass`]es                   |
+/// | Constants              | `a` after the filter `a = 5`              | A [`ConstExpr`] of [`EquivalenceClass`]es |
+/// | Orderings              | `[a ASC, b DESC]` after a sort            | An [`OrderingEquivalenceClass`]                                     |
+/// | Groupings              | `[a, b]` after a hash aggregate on `a, b` | A [`GroupingEquivalenceClass`]                                      |
+/// | Constraints            | A primary key or unique constraint        | [`Constraints`]                                                     |
 ///
 /// [`EquivalenceClass`]: crate::equivalence::EquivalenceClass
 /// [Normal form]: #normal-form
@@ -83,10 +84,9 @@ use itertools::{Either, Itertools};
 /// ```
 ///
 /// In this case, both `a ASC` and `b DESC` can describe the table ordering.
-/// `EquivalenceProperties` tracks these different valid sort expressions and
-/// treat `a ASC` and `b DESC` on an equal footing. For example, if the query
-/// specifies the output sorted by EITHER `a ASC` or `b DESC`, the sort can be
-/// avoided.
+/// `EquivalenceProperties` tracks these different, valid sort expressions. For
+/// example, if the query specifies the output should be sorted by EITHER `a
+/// ASC` or `b DESC`, the sort can be avoided.
 ///
 /// # Equivalent expressions
 ///
@@ -103,11 +103,11 @@ use itertools::{Either, Itertools};
 /// └---┴---┘
 /// ```
 ///
-/// In this case,  columns `a` and `b` always have the same value. With this
-/// information, Datafusion can optimize various operations. For example, if
-/// the partition requirement is `Hash(a)` and output partitioning is
-/// `Hash(b)`, then DataFusion avoids repartitioning the data as the existing
-/// partitioning satisfies the requirement.
+/// In this case, columns `a` and `b` always have the same value. DataFusion
+/// uses this information to optimize various operations. For example, if the
+/// partition requirement is `Hash(a)` and output partitioning is `Hash(b)`,
+/// then DataFusion avoids repartitioning the data as the existing partitioning
+/// satisfies the requirement.
 ///
 /// # Constants
 ///
@@ -132,6 +132,60 @@ use itertools::{Either, Itertools};
 /// values, so the constant still discriminates the order and must be kept in
 /// an ordering. Only uniform constants are removed from orderings and
 /// requirements.
+///
+/// ## Example: Uniform Constant from a Filter
+///
+/// Consider an input sorted by `b ASC` and the filter `a = 5`, which produces
+/// the following table:
+///
+/// ```text
+/// ┌───┬───┐
+/// │ a │ b │
+/// ├───┼───┤
+/// │ 5 │ 1 │
+/// │ 5 │ 2 │
+/// │ 5 │ 4 │
+/// └───┴───┘
+/// ```
+///
+/// Observations:
+/// - Every row that passes the filter has `a = 5`, in every partition, so `a`
+///   is a uniform constant.
+/// - The rows are in the same order whether sorted by `[b ASC]`,
+///   `[a ASC, b ASC]` or `[b ASC, a DESC]`.
+///
+/// Given those observations, the filter adds `a` as a uniform [`ConstExpr`].
+/// A requirement such as `[a ASC, b ASC]` normalizes to `[b ASC]`, which the
+/// input ordering satisfies, so no sort is needed.
+///
+/// ## Example: Heterogeneous Constant from `UNION ALL`
+///
+/// Consider `SELECT 1 AS c, x FROM t1 UNION ALL SELECT 2 AS c, x FROM t2`,
+/// where each input is sorted by `x ASC` and has one partition. The union has
+/// two output partitions, one from each input:
+///
+/// ```text
+/// Partition 0   Partition 1
+/// ┌───┬───┐     ┌───┬───┐
+/// │ c │ x │     │ c │ x │
+/// ├───┼───┤     ├───┼───┤
+/// │ 1 │ 1 │     │ 2 │ 2 │
+/// │ 1 │ 3 │     │ 2 │ 5 │
+/// └───┴───┘     └───┴───┘
+/// ```
+///
+/// Observations:
+/// - Within each partition `c` has one value, but the values differ between
+///   partitions, so `c` is a heterogeneous constant.
+/// - Each partition is sorted by `[x ASC]`, and therefore also by
+///   `[c ASC, x ASC]`.
+/// - Merging the partitions by `[x ASC]` alone gives `c` values `1, 2, 1, 2`,
+///   which is not sorted by `c`.
+///
+/// Given those observations, `c` stays in the ordering `[c ASC, x ASC]`
+/// rather than being removed as a constant would be. A sort preserving merge
+/// that needs `[c ASC, x ASC]` then compares `c` first and produces
+/// `1, 1, 2, 2`, which is correct, whereas merging on `[x ASC]` would not be.
 ///
 /// # Per-partition constants from window functions
 ///
