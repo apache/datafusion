@@ -594,7 +594,7 @@ Iteration 2 returned 1781686 rows in 1947 ms
 
 Test performance of sorting large datasets
 
-This test sorts a a synthetic dataset generated during the
+This test sorts a synthetic dataset generated during the
 benchmark execution, designed to simulate sorting web server
 access logs. Such sorting is often done during data transformation
 steps.
