@@ -717,13 +717,28 @@ SELECT evaluations();
 ----
 10
 
+statement ok
+set datafusion.explain.logical_plan_only = true;
+
+# Regression for #27074: evaluate random() once per group, while pushing
+# the deterministic predicate on the grouping key below the aggregate.
+query TT
+EXPLAIN SELECT * FROM (
+  SELECT column1, COUNT(*) AS c FROM (VALUES (1), (1), (2)) GROUP BY column1
+)
+WHERE column1 = 1 AND random() < 0.5;
+----
+logical_plan
+01)Projection: column1, count(Int64(1)) AS c
+02)--Filter: random() < Float64(0.5)
+03)----Aggregate: groupBy=[[column1]], aggr=[[count(Int64(1))]]
+04)------Filter: column1 = Int64(1)
+05)--------Values: (Int64(1)), (Int64(1)), (Int64(2))
+
 # Window filter pushdown over expression PARTITION BY keys.
 #
 # A predicate that reads only the partition keys is constant within a partition,
 # so it is pushed below the window; anything else stays above it.
-
-statement ok
-set datafusion.explain.logical_plan_only = true;
 
 statement ok
 create table window_expr_key(k varchar, v int) as values
