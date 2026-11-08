@@ -384,7 +384,10 @@ fn hash_join_convert_symmetric_subrule(
             EmissionType::Incremental | EmissionType::Both
         );
         // Process only if both left and right sides are unbounded and incrementally emit.
-        if left_unbounded && right_unbounded & left_incremental & right_incremental {
+        if left_unbounded
+            && right_unbounded & left_incremental & right_incremental
+            && !hash_join.null_aware
+        {
             // Determine the partition mode based on configuration.
             let mode = if config_options.optimizer.repartition_joins {
                 StreamJoinPartitionMode::Partitioned

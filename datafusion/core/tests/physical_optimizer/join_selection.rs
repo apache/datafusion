@@ -1864,6 +1864,40 @@ fn test_not_supporting_swaps_possible_collect_left() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn test_null_aware_join_with_unbounded_inputs_stays_hash_join() -> Result<()> {
+    let source = |name| {
+        Arc::new(UnboundedExec::new(
+            None,
+            RecordBatch::new_empty(Arc::new(Schema::new(vec![Field::new(
+                name,
+                DataType::Int32,
+                true,
+            )]))),
+            2,
+        )) as Arc<dyn ExecutionPlan>
+    };
+    let (left, right) = (source("a"), source("b"));
+    let join = Arc::new(HashJoinExec::try_new(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        vec![(col("a", &left.schema())?, col("b", &right.schema())?)],
+        None,
+        &JoinType::LeftAnti,
+        None,
+        PartitionMode::CollectLeft,
+        NullEquality::NullEqualsNothing,
+        true,
+    )?) as _;
+
+    let optimized = JoinSelection::new().optimize(join, &ConfigOptions::new())?;
+    let hash_join = optimized
+        .downcast_ref::<HashJoinExec>()
+        .expect("a null-aware join must stay a HashJoinExec");
+    assert!(hash_join.null_aware);
+    Ok(())
+}
+
 fn test_join_with_maybe_swap_unbounded_case(t: TestCase) -> Result<()> {
     let left_unbounded = t.initial_sources_unbounded.0 == SourceType::Unbounded;
     let right_unbounded = t.initial_sources_unbounded.1 == SourceType::Unbounded;
