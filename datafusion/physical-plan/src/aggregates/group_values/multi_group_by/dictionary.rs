@@ -57,6 +57,8 @@ pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> 
     /// Whether the outer table guarantees each append creates a new group, so
     /// inner slots and group indices are identical.
     values_are_group_unique: bool,
+    #[cfg(test)]
+    hash_builds: usize,
     _phantom: PhantomData<K>,
 }
 
@@ -75,6 +77,8 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
             val_hashes: Vec::default(),
             cached_values: None,
             values_are_group_unique: false,
+            #[cfg(test)]
+            hash_builds: 0,
             _phantom: PhantomData,
         }
     }
@@ -161,6 +165,10 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     }
 
     fn hash_values(&mut self, values: &ArrayRef) {
+        #[cfg(test)]
+        {
+            self.hash_builds += 1;
+        }
         self.cached_values = None;
         self.val_hashes.clear();
         self.val_hashes.resize(values.len(), 0);
@@ -397,6 +405,11 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         true
     }
 
+    #[cfg(test)]
+    fn dictionary_hash_builds(&self) -> usize {
+        self.hash_builds
+    }
+
     fn vectorized_equal_to(
         &mut self,
         lhs_rows: &[usize],
@@ -622,27 +635,16 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         let emitted: ArrayRef =
             Arc::new(DictionaryArray::<K>::new(emitted_keys, compact_emit_values));
 
-        // Null deferred to last so null_inner_slot is always the highest index
-        // and check_key_overflow can subtract it without a false overflow.
+        // Preserve group order so inner slots remain equal to group indices
+        // when this is the only grouping column.
         let remaining = self.group_to_inner[n..].to_vec();
         let mut old_to_new = vec![usize::MAX; old_inner_len];
         let mut new_to_old: Vec<usize> = Vec::new();
-        let mut null_old_slot: Option<usize> = None;
         for &old in &remaining {
-            if all_inner_values.is_null(old) {
-                if null_old_slot.is_none() {
-                    null_old_slot = Some(old);
-                }
-                continue;
-            }
             if old_to_new[old] == usize::MAX {
                 old_to_new[old] = new_to_old.len();
                 new_to_old.push(old);
             }
-        }
-        if let Some(old) = null_old_slot {
-            old_to_new[old] = new_to_old.len();
-            new_to_old.push(old);
         }
 
         self.value_dedup = HashTable::new();

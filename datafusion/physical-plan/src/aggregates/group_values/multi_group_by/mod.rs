@@ -39,7 +39,7 @@ use arrow::downcast_dictionary_array;
 use datafusion_common::float_semantics::{has_float_leaf, normalize_floats};
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 #[cfg(not(feature = "force_hash_collisions"))]
-use datafusion_common::hash_utils::{combine_hashes, scatter_dictionary_hashes};
+use datafusion_common::hash_utils::{hash_column, scatter_dictionary_hashes};
 #[cfg(not(feature = "force_hash_collisions"))]
 use datafusion_common::utils::MAX_DICTIONARY_VALUES_PER_ROW;
 use datafusion_common::{Result, not_impl_err};
@@ -106,6 +106,12 @@ pub trait GroupColumn: Send + Sync {
         _groups: &mut Vec<usize>,
     ) -> bool {
         false
+    }
+
+    /// Number of times dictionary value hashes were rebuilt.
+    #[cfg(test)]
+    fn dictionary_hash_builds(&self) -> usize {
+        0
     }
 
     /// Returns the number of rows stored in this builder
@@ -247,9 +253,6 @@ pub struct GroupValuesColumn<const STREAMING: bool> {
 
     /// Whether any group column is dictionary encoded.
     has_dictionary: bool,
-
-    /// Scratch space for hashing a non-dictionary column after a cached one.
-    column_hashes_buffer: Vec<u64>,
 }
 
 /// Buffers to store intermediate results in `vectorized_append`
@@ -335,7 +338,6 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
             hashes_buffer: Default::default(),
             random_state: crate::aggregates::AGGREGATION_HASH_SEED,
             has_dictionary: !STREAMING && has_dictionary,
-            column_hashes_buffer: Default::default(),
         })
     }
 
@@ -347,21 +349,10 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
     ) -> Result<()> {
         let group_unique = self.group_values.len() == 1;
 
-        let use_cache = cols.iter().any(|array| {
-            array.as_any_dictionary_opt().is_some_and(|dictionary| {
-                let values = dictionary.values();
-                values.len() <= MAX_DICTIONARY_VALUES_PER_ROW.saturating_mul(array.len())
-                    && (group_unique || values.len() > array.len())
-            })
-        });
-        if !use_cache {
-            create_hashes(cols, &crate::aggregates::AGGREGATION_HASH_SEED, hashes)?;
-            return Ok(());
-        }
-
         for (index, (array, group_value)) in
             cols.iter().zip(&mut self.group_values).enumerate()
         {
+            let rehash = index != 0;
             let cached = array.as_any_dictionary_opt().and_then(|dictionary| {
                 let values = dictionary.values();
                 (values.len()
@@ -380,25 +371,12 @@ impl<const STREAMING: bool> GroupValuesColumn<STREAMING> {
                         dictionary,
                         value_hashes,
                         hashes,
-                        index != 0,
+                        rehash,
                     )?,
                     _ => unreachable!(),
                 }
-            } else if index == 0 {
-                create_hashes(std::slice::from_ref(array), &self.random_state, hashes)?;
             } else {
-                self.column_hashes_buffer.clear();
-                self.column_hashes_buffer.resize(hashes.len(), 0);
-                create_hashes(
-                    std::slice::from_ref(array),
-                    &self.random_state,
-                    &mut self.column_hashes_buffer,
-                )?;
-                for (hash, column_hash) in
-                    hashes.iter_mut().zip(&self.column_hashes_buffer)
-                {
-                    *hash = combine_hashes(*column_hash, *hash);
-                }
+                hash_column(array.as_ref(), &self.random_state, hashes, rehash)?;
             }
         }
         Ok(())
@@ -1206,7 +1184,6 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
             + self.emit_group_index_list_buffer.allocated_size()
             + self.vectorized_operation_buffers.size()
             + self.hashes_buffer.allocated_size()
-            + self.column_hashes_buffer.allocated_size()
     }
 
     fn is_empty(&self) -> bool {
@@ -1345,8 +1322,6 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         // Scratch for one `intern` call.
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to_fit();
-        self.column_hashes_buffer.clear();
-        self.column_hashes_buffer.shrink_to_fit();
         if !STREAMING {
             self.emit_group_index_list_buffer.clear();
             self.emit_group_index_list_buffer.shrink_to_fit();
@@ -1366,8 +1341,6 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         self.map_size = self.map.capacity() * size_of::<(u64, usize)>();
         self.hashes_buffer.clear();
         self.hashes_buffer.shrink_to(num_rows);
-        self.column_hashes_buffer.clear();
-        self.column_hashes_buffer.shrink_to(num_rows);
         // Such structures are only used in `non-streaming` case
         if !STREAMING {
             self.group_index_lists.clear();
@@ -2282,10 +2255,7 @@ mod tests {
         let mut groups = vec![];
         group_values.intern(&first, &mut groups).unwrap();
         assert_eq!(groups, [0, 1]);
-        let allocation = group_values.group_values[1]
-            .dictionary_hashes(&first_values, false)
-            .unwrap()
-            .as_ptr();
+        assert_eq!(group_values.group_values[1].dictionary_hash_builds(), 1);
 
         let reordered = vec![
             Arc::new(Int32Array::from(vec![0, 1])) as ArrayRef,
@@ -2293,13 +2263,7 @@ mod tests {
         ];
         group_values.intern(&reordered, &mut groups).unwrap();
         assert_eq!(groups, [2, 3]);
-        assert_eq!(
-            group_values.group_values[1]
-                .dictionary_hashes(&first_values, false)
-                .unwrap()
-                .as_ptr(),
-            allocation
-        );
+        assert_eq!(group_values.group_values[1].dictionary_hash_builds(), 1);
 
         let new_values: ArrayRef = Arc::new(StringArray::from(vec![
             Some("dog"),
@@ -2313,13 +2277,7 @@ mod tests {
         ];
         group_values.intern(&changed, &mut groups).unwrap();
         assert_eq!(groups, [2, 3]);
-        assert_eq!(
-            group_values.group_values[1]
-                .dictionary_hashes(&new_values, false)
-                .unwrap()
-                .as_ptr(),
-            allocation
-        );
+        assert_eq!(group_values.group_values[1].dictionary_hash_builds(), 2);
 
         let nulls = vec![
             Arc::new(Int32Array::from(vec![2, 2])) as ArrayRef,
@@ -2379,6 +2337,153 @@ mod tests {
         let after_emit = dictionary(vec![Some(0), Some(2), Some(1)], reordered_values);
         group_values.intern(&[after_emit], &mut groups).unwrap();
         assert_eq!(groups, vec![0, 1, 2]);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn single_dictionary_shared_values_new_key_falls_back() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "category",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let dictionary = |keys: Vec<i8>| -> ArrayRef {
+            Arc::new(DictionaryArray::<Int8Type>::new(
+                Int8Array::from(keys),
+                Arc::clone(&values),
+            ))
+        };
+
+        let mut groups = vec![];
+        group_values
+            .intern(&[dictionary(vec![0, 1])], &mut groups)
+            .unwrap();
+        assert_eq!(groups, [0, 1]);
+
+        group_values
+            .intern(&[dictionary(vec![1, 2, 0])], &mut groups)
+            .unwrap();
+        assert_eq!(groups, [1, 2, 0]);
+        assert_eq!(group_values.len(), 3);
+    }
+
+    #[test]
+    fn single_dictionary_direct_mapping_after_emit_first_with_null_group() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let dictionary = |keys: Vec<Option<i8>>| -> ArrayRef {
+            Arc::new(DictionaryArray::<Int8Type>::new(
+                Int8Array::from(keys),
+                Arc::clone(&values),
+            ))
+        };
+
+        let mut groups = vec![];
+        group_values
+            .intern(&[dictionary(vec![Some(0), None, Some(1)])], &mut groups)
+            .unwrap();
+        assert_eq!(groups, [0, 1, 2]);
+
+        group_values.emit(EmitTo::First(1)).unwrap();
+        group_values
+            .intern(&[dictionary(vec![Some(1), None])], &mut groups)
+            .unwrap();
+        assert_eq!(groups, [1, 0]);
+        group_values
+            .intern(&[dictionary(vec![Some(1), None])], &mut groups)
+            .unwrap();
+        assert_eq!(groups, [1, 0]);
+    }
+
+    #[test]
+    fn single_dictionary_direct_mapping_after_oversized_batches_and_emit_first() {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "d",
+            DataType::Dictionary(Box::new(DataType::Int16), Box::new(DataType::Utf8)),
+            true,
+        )]));
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
+        let mut strings: Vec<String> = (0..200).map(|i| format!("v{i}")).collect();
+        strings[0] = "a".into();
+        strings[1] = "b".into();
+        let large_values: ArrayRef = Arc::new(StringArray::from(strings));
+        let dictionary = |keys: Vec<Option<i16>>, values: &ArrayRef| -> ArrayRef {
+            Arc::new(DictionaryArray::<arrow::datatypes::Int16Type>::new(
+                arrow::array::Int16Array::from(keys),
+                Arc::clone(values),
+            ))
+        };
+
+        let mut groups = vec![];
+        group_values
+            .intern(
+                &[dictionary(vec![Some(0), None, Some(1)], &large_values)],
+                &mut groups,
+            )
+            .unwrap();
+        assert_eq!(groups, [0, 1, 2]);
+
+        group_values.emit(EmitTo::First(1)).unwrap();
+        let small_values: ArrayRef = Arc::new(StringArray::from(vec!["b"]));
+        group_values
+            .intern(
+                &[dictionary(vec![Some(0), None], &small_values)],
+                &mut groups,
+            )
+            .unwrap();
+        assert_eq!(groups, [1, 0]);
+        group_values
+            .intern(
+                &[dictionary(vec![Some(0), None], &small_values)],
+                &mut groups,
+            )
+            .unwrap();
+        assert_eq!(groups, [1, 0]);
+    }
+
+    #[test]
+    fn dictionary_hash_paths_agree_on_existing_groups() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "d",
+                DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
+                true,
+            ),
+            Field::new("i", DataType::Int32, true),
+        ]));
+        let mut group_values = GroupValuesColumn::<false>::try_new(schema).unwrap();
+        let mut groups = vec![];
+
+        let small_values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b"]));
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![0, 1, 0, 1]),
+            small_values,
+        ));
+        let integers: ArrayRef =
+            Arc::new(Int32Array::from(vec![Some(1), Some(2), None, Some(3)]));
+        group_values
+            .intern(&[dictionary, integers], &mut groups)
+            .unwrap();
+        assert_eq!(groups, [0, 1, 2, 3]);
+
+        let large_values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::<Int8Type>::new(
+            Int8Array::from(vec![0, 0]),
+            large_values,
+        ));
+        let integers: ArrayRef = Arc::new(Int32Array::from(vec![Some(1), None]));
+        group_values
+            .intern(&[dictionary, integers], &mut groups)
+            .unwrap();
+        assert_eq!(groups, [0, 2]);
+        assert_eq!(group_values.len(), 4);
     }
 
     #[test]
