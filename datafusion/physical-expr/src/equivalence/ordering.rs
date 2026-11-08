@@ -15,8 +15,7 @@ use arrow::datatypes::SchemaRef;
 use datafusion_common::Result;
 use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 
-/// An `OrderingEquivalenceClass` keeps track of distinct alternative orderings
-/// than can describe a table.
+/// Tracks distinct alternative orderings than describe a table.
 ///
 /// For example, consider the following table:
 ///
@@ -32,11 +31,10 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 /// ```
 ///
 /// Here, both `[a ASC, b ASC]` and `[c DESC, d ASC]` describe the table
-/// ordering. We say that these orderings are equivalent. See [Equivalent sort
-/// expressions].
+/// ordering, so these orderings are equivalent. See [Equivalent sort
+/// expressions] for more details.
 ///
-/// An `OrderingEquivalenceClass` is a set of such equivalent orderings, which
-/// is represented by a vector of `LexOrdering`s.
+/// An `OrderingEquivalenceClass` is a set of such equivalent orderings.
 ///
 /// [`GroupingEquivalenceClass`] is used when groups of equal values are
 /// contiguous, but not in order.
@@ -47,7 +45,7 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 pub struct OrderingEquivalenceClass {
     /// Set of equivalent orderings
     ///
-    /// invariant: no suffix of an ordering in the equivalence class is a prefix
+    /// Invariant: no suffix of an ordering in the equivalence class is a prefix
     /// of another ordering in the equivalence class. This avoids redundant
     /// information.
     ///
