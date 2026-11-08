@@ -88,6 +88,15 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     let subquery_plan = subquery.subquery.as_ref();
     let original_join_filter = join.filter.clone();
 
+    // Walk the subquery plan bottom-up, extracting correlated filter
+    // predicates into join conditions and converting ungrouped aggregates
+    // into group-by aggregates keyed on the correlation columns.
+    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
+    let rewritten_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
+    if !pull_up.can_pull_up {
+        return Ok(Transformed::no(LogicalPlan::Join(join)));
+    }
+
     // A HAVING over an ungrouped aggregate can remove the aggregate's only
     // row. The rewrite below handles neither case correctly, so leave the join
     // correlated and let the query error instead of returning wrong rows.
@@ -97,18 +106,10 @@ fn rewrite_internal(join: Join) -> Result<Transformed<LogicalPlan>> {
     // - A HAVING that reads an outer column is moved into the join condition,
     //   where the count bug handling turns its unmatched rows into a count of 0,
     //   for a left lateral join too.
-    if let Some(having) = having_over_ungrouped_aggregate(subquery_plan)
+    if pull_up.pulled_up_scalar_agg
+        && let Some(having) = having_over_ungrouped_aggregate(subquery_plan)
         && (original_join_type == JoinType::Inner || having.predicate.contains_outer())
     {
-        return Ok(Transformed::no(LogicalPlan::Join(join)));
-    }
-
-    // Walk the subquery plan bottom-up, extracting correlated filter
-    // predicates into join conditions and converting ungrouped aggregates
-    // into group-by aggregates keyed on the correlation columns.
-    let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
-    let rewritten_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
-    if !pull_up.can_pull_up {
         return Ok(Transformed::no(LogicalPlan::Join(join)));
     }
 
@@ -342,10 +343,9 @@ fn having_over_ungrouped_aggregate(plan: &LogicalPlan) -> Option<&Filter> {
         LogicalPlan::SubqueryAlias(alias) => {
             having_over_ungrouped_aggregate(&alias.input)
         }
-        LogicalPlan::Filter(filter) if feeds_ungrouped_aggregate(&filter.input) => {
-            Some(filter)
+        LogicalPlan::Filter(filter) => {
+            feeds_ungrouped_aggregate(&filter.input).then_some(filter)
         }
-        LogicalPlan::Filter(filter) => having_over_ungrouped_aggregate(&filter.input),
         _ => None,
     }
 }
