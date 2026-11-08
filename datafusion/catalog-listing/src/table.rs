@@ -1346,6 +1346,11 @@ fn prune_collected_files(
             .into_inner()
             .into_iter()
             .filter(|file| {
+                // Same check as `FilePruner::try_new`: all-`Absent` statistics
+                // cannot prune, so skip building `PrunableStatistics` for them.
+                if !file.has_statistics() {
+                    return true;
+                }
                 let Some(statistics) = &file.statistics else {
                     return true;
                 };
@@ -1644,15 +1649,15 @@ mod tests {
 
     #[test]
     fn statistics_pruning_keeps_file_on_evaluation_error() {
+        use datafusion_common::ScalarValue;
         use datafusion_expr::{col, lit};
-        // A malformed statistics type cannot establish that the file is empty.
+        // Binary bounds cannot be cast to Int64, so `prune` returns an error.
+        // A Utf8 bound does not error, so it would not reach that branch.
+        let binary = || Precision::Exact(ScalarValue::Binary(Some(vec![1])));
         assert_eq!(
             prune_test_files(
                 col("d").gt(lit(10_i64)),
-                vec![Some(bounds(
-                    Precision::Exact("invalid".into()),
-                    Precision::Exact("invalid".into())
-                ))]
+                vec![Some(bounds(binary(), binary()))]
             ),
             ["f0"]
         );

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
@@ -358,6 +345,30 @@ async fn hive_and_data_predicates_preserve_partition_groups() -> Result<()> {
         10
     );
     assert_eq!(rows(&ctx, "select * from t where p = d").await?, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn preserve_partitions_below_threshold_still_prunes() -> Result<()> {
+    let dir = fixture(
+        (0..8)
+            .map(|i| (i * 10..i * 10 + 10).map(Some).collect())
+            .collect(),
+        true,
+        true,
+    );
+    let mut config = SessionConfig::new()
+        .with_target_partitions(4)
+        .with_collect_statistics(true);
+    // Two distinct `p` values are below the threshold, so files are split normally.
+    config.options_mut().optimizer.preserve_file_partitions = 3;
+    let ctx = SessionContext::new_with_config(config);
+    let table = table(&dir, None, true, false);
+    let plan = table.scan(&ctx.state(), None, &[predicate()], None).await?;
+    assert_eq!(
+        names(scan_config(&plan)),
+        vec![vec!["f2.parquet"], vec!["f3.parquet"]]
+    );
     Ok(())
 }
 
