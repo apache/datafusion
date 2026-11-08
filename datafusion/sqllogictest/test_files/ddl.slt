@@ -1356,8 +1356,13 @@ CREATE UNBOUNDED EXTERNAL TABLE ordering_on_unbounded (
 LOCATION '../core/tests/data/window_2.csv'
 OPTIONS ('format.has_header' 'true');
 
-statement error Error during planning: Cannot execute pipeline breaking queries, operator: SortExec: TopK\(fetch=1\), expr=\[d@4 ASC NULLS LAST\], preserve_partitioning=\[false\]
+statement error
 SELECT * FROM ordering_on_unbounded ORDER BY d LIMIT 1;
+----
+DataFusion error: SanityCheckPlan
+caused by
+Error during planning: Cannot execute pipeline breaking queries, operator: SortExec: TopK(fetch=1), expr=[d@4 ASC NULLS LAST], preserve_partitioning=[false]
+
 
 statement ok
 DROP TABLE ordering_on_unbounded;
