@@ -436,6 +436,12 @@ SELECT 'ab' NOT LIKE ANY ('a%', 'c%'), 'ab' NOT LIKE ANY ('a%', '%b'), NOT 'ab' 
 ----
 true false false
 
+# A NULL pattern under negation
+query BBB
+SELECT 'ab' NOT LIKE ANY ('a%', NULL), 'ab' NOT LIKE ANY ('x%', NULL), NOT 'ab' LIKE ANY ('a%', NULL);
+----
+NULL true false
+
 query BB
 SELECT 'AB' ILIKE ANY ('a%', 'c%'), 'AB' LIKE ANY ('a%', 'c%');
 ----

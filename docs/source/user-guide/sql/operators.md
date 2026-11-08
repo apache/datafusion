@@ -668,9 +668,15 @@ Snowflake differs here: its `LIKE ANY` returns NULL when any argument is NULL,
 so `'datafusion' LIKE ANY ('dat%', NULL)` is NULL in Snowflake.
 
 The patterns must be a parenthesized list. An array of patterns, such as
-`ARRAY['dat%', '%sql']` or `make_array('dat%', '%sql')`, and a subquery are not
-supported. A volatile expression, such as `CAST(random() AS VARCHAR)`, is not
-supported either, because each pattern would see a different value.
+`ARRAY['dat%', '%sql']` or `make_array('dat%', '%sql')`, is not supported.
+Neither is a subquery that supplies the pattern list, such as
+`LIKE ANY (SELECT 'dat%')`.
+
+`expression` must not be volatile, because each pattern could see a different
+value. For example, `CAST(random() AS VARCHAR) LIKE ANY ('0%', '%')` is
+rejected. Volatile patterns are allowed. A scalar subquery without volatile
+functions, such as `(SELECT max(s) FROM t)`, can be `expression`.
+
 `LIKE ALL` and `LIKE SOME` are not supported.
 
 (op_ilike_any)=
