@@ -54,6 +54,9 @@ pub struct DictionaryGroupValuesColumn<K: ArrowDictionaryKeyType + Send + Sync> 
     /// were built for. A matching live array reuses both caches without
     /// retaining an input dictionary after its batch is released.
     cached_values: Option<Weak<dyn Array>>,
+    /// Whether the outer table guarantees each append creates a new group, so
+    /// inner slots and group indices are identical.
+    values_are_group_unique: bool,
     _phantom: PhantomData<K>,
 }
 
@@ -71,6 +74,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
             val_to_inner: Vec::default(),
             val_hashes: Vec::default(),
             cached_values: None,
+            values_are_group_unique: false,
             _phantom: PhantomData,
         }
     }
@@ -171,7 +175,8 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     fn is_cached(&self, values: &ArrayRef) -> bool {
         self.cached_values
             .as_ref()
-            .is_some_and(|cached| std::ptr::addr_eq(cached.as_ptr(), Arc::as_ptr(values)))
+            .and_then(Weak::upgrade)
+            .is_some_and(|cached| Arc::ptr_eq(&cached, values))
     }
 
     /// Makes `val_hashes` and `val_to_inner` correspond to `dict_values`,
@@ -190,6 +195,17 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         self.val_to_inner.clear();
         self.val_to_inner.resize(dict_values.len(), usize::MAX);
         self.cached_values = Some(Arc::downgrade(dict_values));
+    }
+
+    fn insert_value(&mut self, dict_values: &ArrayRef, val_idx: usize) -> Result<usize> {
+        if self.values_are_group_unique {
+            let slot = self.group_to_inner.len();
+            debug_assert_eq!(slot, self.inner.len());
+            self.inner.append_val(dict_values, val_idx)?;
+            Ok(slot)
+        } else {
+            self.find_or_insert_value(dict_values, val_idx, self.val_hashes[val_idx])
+        }
     }
 
     fn find_or_insert_value(
@@ -331,11 +347,54 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
             Some(val_idx) => {
                 let dict_values = dict.values();
                 self.sync_value_cache(dict_values);
-                self.find_or_insert_value(dict_values, val_idx, self.val_hashes[val_idx])?
+                self.insert_value(dict_values, val_idx)?
             }
         };
         self.group_to_inner.push(inner_slot);
         self.check_key_overflow()
+    }
+
+    fn dictionary_hashes<'a>(
+        &'a mut self,
+        values: &ArrayRef,
+        group_unique: bool,
+    ) -> Option<&'a [u64]> {
+        self.values_are_group_unique = group_unique;
+        self.sync_value_cache(values);
+        Some(&self.val_hashes)
+    }
+
+    fn try_map_dictionary_groups(
+        &self,
+        array: &ArrayRef,
+        groups: &mut Vec<usize>,
+    ) -> bool {
+        if !self.values_are_group_unique {
+            return false;
+        }
+
+        let dictionary = array.as_dictionary::<K>();
+        if !self.is_cached(dictionary.values()) {
+            return false;
+        }
+
+        let keys = dictionary.keys();
+        let raw_keys = keys.values();
+        let nulls = keys.nulls();
+        groups.clear();
+        for row in 0..dictionary.len() {
+            let group = if nulls.is_some_and(|nulls| nulls.is_null(row)) {
+                self.null_inner_slot.unwrap_or(usize::MAX)
+            } else {
+                self.val_to_inner[raw_keys[row].as_usize()]
+            };
+            if group == usize::MAX {
+                groups.clear();
+                return false;
+            }
+            groups.push(group);
+        }
+        true
     }
 
     fn vectorized_equal_to(
@@ -452,11 +511,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                     self.val_to_inner[val_idx] = if dict_values.is_null(val_idx) {
                         self.find_or_insert_null()?
                     } else {
-                        self.find_or_insert_value(
-                            dict_values,
-                            val_idx,
-                            self.val_hashes[val_idx],
-                        )?
+                        self.insert_value(dict_values, val_idx)?
                     };
                 }
                 self.group_to_inner.push(self.val_to_inner[val_idx]);
@@ -472,11 +527,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                         self.val_to_inner[val_idx] = if dict_values.is_null(val_idx) {
                             self.find_or_insert_null()?
                         } else {
-                            self.find_or_insert_value(
-                                dict_values,
-                                val_idx,
-                                self.val_hashes[val_idx],
-                            )?
+                            self.insert_value(dict_values, val_idx)?
                         };
                     }
                     self.val_to_inner[val_idx]
@@ -598,7 +649,12 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         self.value_dedup_size = 0;
         self.null_inner_slot = None;
 
-        self.hash_values(&all_inner_values);
+        if self.values_are_group_unique {
+            self.cached_values = None;
+            self.val_hashes.clear();
+        } else {
+            self.hash_values(&all_inner_values);
+        }
 
         for (new_slot, &old_slot) in new_to_old.iter().enumerate() {
             if all_inner_values.is_null(old_slot) {
@@ -610,11 +666,13 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
                 self.inner
                     .append_val(&all_inner_values, old_slot)
                     .expect("append value failed in take_n");
-                self.value_dedup.insert_accounted(
-                    (self.val_hashes[old_slot], new_slot),
-                    |&(entry_hash, _)| entry_hash,
-                    &mut self.value_dedup_size,
-                );
+                if !self.values_are_group_unique {
+                    self.value_dedup.insert_accounted(
+                        (self.val_hashes[old_slot], new_slot),
+                        |&(entry_hash, _)| entry_hash,
+                        &mut self.value_dedup_size,
+                    );
+                }
             }
         }
 
