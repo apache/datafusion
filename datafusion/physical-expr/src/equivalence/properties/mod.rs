@@ -84,9 +84,10 @@ use itertools::{Either, Itertools};
 /// ```
 ///
 /// In this case, both `a ASC` and `b DESC` can describe the table ordering.
-/// `EquivalenceProperties` tracks these different, valid sort expressions. For
-/// example, if the query specifies the output should be sorted by EITHER `a
-/// ASC` or `b DESC`, the sort can be avoided.
+/// `EquivalenceProperties` tracks these different valid sort expressions and
+/// treats `a ASC` and `b DESC` on an equal footing. For example, if the query
+/// specifies the output sorted by EITHER `a ASC` or `b DESC`, the sort can be
+/// avoided.
 ///
 /// # Equivalent expressions
 ///
@@ -112,26 +113,10 @@ use itertools::{Either, Itertools};
 /// # Constants
 ///
 /// A constant is an expression with a single value in the output of a plan
-/// node. For example, after the filter `a = 5`, `a` is constant. A constant
-/// never changes the order of rows, so a sort on `[a, b]` is the same as a
-/// sort on `[b]`, and a requirement that mentions `a` can drop it (see
-/// [Normal form]).
-///
-/// A constant is *uniform* if it has the same value in every output
-/// partition of the node, and *heterogeneous* if it has one value within each
-/// partition but may differ between partitions (see [`AcrossPartitions`]). A
-/// literal and the `a` of the filter `a = 5` are uniform. In the output of a
-/// `UNION ALL` whose inputs each have their own constant value of `c`, `c` is
-/// heterogeneous: each partition comes from one input, so it has one value,
-/// but the inputs differ. A `ConstExpr` created from a non-literal expression
-/// is heterogeneous unless stated otherwise, which is the safe assumption.
-///
-/// The difference matters once partitions are merged. Within a partition, a
-/// heterogeneous constant never changes the order of rows, but an operator
-/// that merges partitions, such as a sort preserving merge, sees several
-/// values, so the constant still discriminates the order and must be kept in
-/// an ordering. Only uniform constants are removed from orderings and
-/// requirements.
+/// node. A constant is *uniform* if it has the same value in every output
+/// partition, and *heterogeneous* if it has one value within each output
+/// partition but may differ between output partitions (see
+/// [`AcrossPartitions`]).
 ///
 /// ## Example: Uniform Constant from a Filter
 ///
@@ -148,21 +133,14 @@ use itertools::{Either, Itertools};
 /// └───┴───┘
 /// ```
 ///
-/// Observations:
-/// - Every row that passes the filter has `a = 5`, in every partition, so `a`
-///   is a uniform constant.
-/// - The rows are in the same order whether sorted by `[b ASC]`,
-///   `[a ASC, b ASC]` or `[b ASC, a DESC]`.
-///
-/// Given those observations, the filter adds `a` as a uniform [`ConstExpr`].
-/// A requirement such as `[a ASC, b ASC]` normalizes to `[b ASC]`, which the
-/// input ordering satisfies, so no sort is needed.
+/// The filter adds `a` as a uniform [`ConstExpr`]. If the query requests
+/// sorting on `[a ASC, b ASC]` DataFusion knows it can skip sorting.
 ///
 /// ## Example: Heterogeneous Constant from `UNION ALL`
 ///
 /// Consider `SELECT 1 AS c, x FROM t1 UNION ALL SELECT 2 AS c, x FROM t2`,
-/// where each input is sorted by `x ASC` and has one partition. The union has
-/// two output partitions, one from each input:
+/// where each input is sorted by `x ASC` and has one output partition. The
+/// union has two output partitions, one from each input:
 ///
 /// ```text
 /// Partition 0   Partition 1
@@ -175,49 +153,29 @@ use itertools::{Either, Itertools};
 /// ```
 ///
 /// Observations:
-/// - Within each partition `c` has one value, but the values differ between
-///   partitions, so `c` is a heterogeneous constant.
-/// - Each partition is sorted by `[x ASC]`, and therefore also by
+/// - Within each output partition `c` has one value, but the values differ
+///   between output partitions, so `c` is an
+///   [`AcrossPartitions::Heterogeneous`] constant.
+/// - Each output partition is sorted by `[x ASC]`, and therefore also by
 ///   `[c ASC, x ASC]`.
-/// - Merging the partitions by `[x ASC]` alone gives `c` values `1, 2, 1, 2`,
-///   which is not sorted by `c`.
+/// - However, when the output partitions are merged by `[x ASC]` alone, the
+///   result is NOT sorted by `c`, unlike with an [`AcrossPartitions::Uniform`]
+///   constant, which would have the same value in every output partition and
+///   thus be sorted by `[c ASC, x ASC]` as well.
 ///
-/// Given those observations, `c` stays in the ordering `[c ASC, x ASC]`
-/// rather than being removed as a constant would be. A sort preserving merge
-/// that needs `[c ASC, x ASC]` then compares `c` first and produces
-/// `1, 1, 2, 2`, which is correct, whereas merging on `[x ASC]` would not be.
+/// Given those observations, `c` must stay in the ordering `[c ASC, x ASC]`
+/// rather than being removed as a uniform constant would be.
 ///
-/// # Per-partition constants from window functions
+/// # Constants within a window partition
 ///
-/// Here *partition* means a window partition: the rows with equal
-/// `PARTITION BY` keys, not an execution partition. A whole-partition window
-/// aggregate such as `SUM(x) OVER (PARTITION BY k) AS w` has one value per
-/// `k`. This is not a constant, since `w` differs across the output, and it
-/// is not an ordering on its own. But within each group of rows with the same
-/// `k`, `w` has one value, so if the input is sorted by `[k]`, the output is
-/// sorted by `[k, w]` in *every* direction of `w`: ascending or descending,
-/// nulls first or last.
-///
-/// The window operator records this by adding `[k, w]` once for each of the
-/// four directions of `w`. The encoding is read back in two places:
-///
-/// - [`OrderingEquivalenceClass::is_expr_partial_const`] reports that `w`
-///   has a single value when one ordering leads with `w` in some direction
-///   and another leads with it in the exact reverse, since rows sorted both
-///   ways all have the same value (or are all null).
-/// - When a requirement is checked (see [Checking whether a requirement is satisfied]),
-///   pinning `k` makes `w` the leading expression of orderings in opposite
-///   directions, so `w` is a singleton among the rows that tie on `k`.
-///
-/// This encoding may become unnecessary if `SortOptions` can express that an
-/// expression is constant, or if `EquivalenceProperties` gains functional
-/// dependency awareness, which would also remove the need for constants and
-/// constraints.
+/// NOTE: it is important to distinguish between *window partition*, the rows
+/// with equal `PARTITION BY` keys, and *output partition*, how the data is
+/// divided up across execution units during execution.
 ///
 /// ## Example: Window Functions with `PARTITION BY`
 ///
 /// Consider an input sorted by `k ASC` and the window expression
-/// `SUM(x) OVER (PARTITION BY k) AS w`, which produces the following table:
+/// `SUM(x) OVER (PARTITION BY k) AS w`, which produces the following rows:
 ///
 /// ```text
 /// ┌───┬───┬────┐
@@ -232,10 +190,15 @@ use itertools::{Either, Itertools};
 /// ```
 ///
 /// Observations:
-/// - `w` is not a constant because it differs between partitions.
-/// - The output is sorted by `k` (the partitioning), because DataFusion's
-///   window implementation keeps the input order.
+/// - `w` is not a constant because it differs between window partitions.
+/// - The output is sorted by `k` (the window partition key), because
+///   DataFusion's window implementation keeps the input order.
 /// - Within each run of equal `k`, `w` has one value.
+///
+/// `w` is not a constant, since `w` differs across the output. However,
+/// within each group of rows with the same `k`, `w` has one value, so if the
+/// input is sorted by `[k]`, the output is sorted by `[k, w]` in *every*
+/// direction of `w`: ascending or descending, nulls first or last.
 ///
 /// Given those observations, the output sorting is described by all of:
 ///
@@ -244,10 +207,11 @@ use itertools::{Either, Itertools};
 /// - `[k ASC, w DESC NULLS FIRST]`
 /// - `[k ASC, w DESC NULLS LAST]`
 ///
+///
 /// ## Example: Window Functions without `PARTITION BY`
 ///
 /// Consider the same input and the window expression `SUM(x) OVER () AS w`,
-/// which produces the following table:
+/// which produces the following rows:
 ///
 /// ```text
 /// ┌───┬───┬────┐
@@ -270,8 +234,8 @@ use itertools::{Either, Itertools};
 ///
 /// ## Example: Set-Monotonic Window Functions
 ///
-/// Consider an input sorted by `ts ASC` and the window expression
-/// `MAX(x) OVER (ORDER BY ts) AS m`, which produces the following table:
+/// Consider an input sorted by `[ts ASC]` and the window function
+/// `MAX(x) OVER (ORDER BY ts) AS m`, which produces the following rows:
 ///
 /// ```text
 /// ┌────┬───┬───┐
@@ -285,18 +249,20 @@ use itertools::{Either, Itertools};
 /// ```
 ///
 /// Observations:
-/// - The default frame with an `ORDER BY` is `UNBOUNDED PRECEDING` to
-///   `CURRENT ROW`, so the frame of each row contains the frames of all
-///   earlier rows.
+/// - When written with explicit defaults, this query is equivalent to
+///   `SELECT ts, x, MAX(x) OVER (ORDER BY ts RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS m`.
 /// - `MAX` is set-monotonically increasing: adding rows to its input can only
 ///   raise its value or leave it unchanged (see [`SetMonotonicity`]).
 ///
 /// Given those observations, `m` never decreases as `ts` increases, so the
-/// output sorting is described by `[m ASC NULLS LAST]`, and with a
-/// `PARTITION BY k` it would be `[k ASC, m ASC NULLS LAST]`. A decreasing
-/// aggregate such as `MIN` yields `DESC NULLS LAST`, and a frame that shrinks
-/// instead, such as `CURRENT ROW` to `UNBOUNDED FOLLOWING`, reverses the
-/// direction.
+/// output sorting is described by `[ts ASC]` AND `[m ASC NULLS LAST]`,
+///
+/// If the query had a `PARTITION BY k` the ordering would be `[k ASC, m ASC NULLS LAST]`.
+///
+/// A decreasing aggregate such as `MIN` results in `DESC NULLS LAST`
+///
+/// A window frame that shrinks the rows, such as `CURRENT ROW` to `UNBOUNDED
+/// FOLLOWING`, reverses the direction.
 ///
 /// [`SetMonotonicity`]: datafusion_expr::SetMonotonicity
 ///
@@ -612,8 +578,9 @@ impl EquivalenceProperties {
         self.geq_cache.clear();
     }
 
-    /// Removes constant expressions that may change across partitions.
-    /// This method should be used when merging data from different partitions.
+    /// Removes constant expressions that may change across output partitions.
+    /// This method should be used when merging data from different output
+    /// partitions.
     pub fn clear_per_partition_constants(&mut self) {
         if self.eq_group.clear_per_partition_constants() {
             // Renormalize orderings if the equivalence group changes:
@@ -1673,7 +1640,7 @@ impl EquivalenceProperties {
     /// Returns a `Some` value if the expression is constant according to
     /// equivalence group, and `None` otherwise. The `Some` variant contains
     /// an `AcrossPartitions` value indicating whether the expression is
-    /// constant across partitions, and its actual value (if available).
+    /// constant across output partitions, and its actual value (if available).
     pub fn is_expr_constant(
         &self,
         expr: &Arc<dyn PhysicalExpr>,

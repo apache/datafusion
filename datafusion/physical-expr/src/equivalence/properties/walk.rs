@@ -302,12 +302,12 @@ impl<'a> SortKeyWalk<'a> {
             // strict:
             node.data.strictly_order_preserving = true;
         }
-        // Now, check what we know about orderings. A whole-partition window
-        // such as `SUM(x) OVER (PARTITION BY k)` adds `[k, w]` in all four
-        // directions of `w` (see "Per-partition constants from window
-        // functions" on `EquivalenceProperties`). Once `k` is pinned, `w`
-        // heads orderings in opposite directions, so it has one value among
-        // the rows that tie on `k`:
+        // Now, check what we know about orderings. A window aggregate over a
+        // whole window partition, such as `SUM(x) OVER (PARTITION BY k)`, adds
+        // `[k, w]` in all four directions of `w` (see "Constants within a
+        // window partition" on `EquivalenceProperties`). Once `k` is pinned,
+        // `w` heads orderings in opposite directions, so it has one value
+        // among the rows that tie on `k`:
         let normal_expr = self.props.eq_group.normalize_expr(Arc::clone(&node.expr));
         if self.is_fixed(&normal_expr) || is_partial_const(self.heads(), &normal_expr) {
             node.data.sort_properties = SortProperties::Singleton;
@@ -480,8 +480,8 @@ mod tests {
         Ok(())
     }
 
-    /// A window over a whole partition, such as `SUM(..) OVER (PARTITION BY
-    /// k)`, adds `[k, x]` in all four directions of `x`. Pinning `k` leaves `x`
+    /// A window over a whole window partition, such as `SUM(..) OVER
+    /// (PARTITION BY k)`, adds `[k, x]` in all four directions of `x`. Pinning `k` leaves `x`
     /// heading orderings in opposite directions, so `x` has one value, and so
     /// does `CAST(x AS BIGINT)`: `[k, CAST(x AS BIGINT)]` holds in every
     /// direction. Without the partial constant check, `x` would only be
