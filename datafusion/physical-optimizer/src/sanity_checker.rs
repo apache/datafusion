@@ -136,7 +136,7 @@ pub fn check_finiteness_requirements(
     {
         plan_err!(
             "Cannot execute pipeline breaking queries, operator: {}",
-            displayable(input).one_line()
+            displayable(input).one_line().to_string().trim_end()
         )
     } else {
         Ok(())
