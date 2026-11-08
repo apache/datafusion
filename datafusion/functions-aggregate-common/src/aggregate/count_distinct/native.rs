@@ -77,6 +77,8 @@ where
             // insert directly from the values buffer (mirrors `merge_batch`).
             self.values.extend(arr.values().iter().copied());
         } else {
+            // Fixed-size chunks align values with 64-bit validity words and help
+            // optimize the insertion loop; handle the partial tail separately.
             let masks = arr.nulls().unwrap().inner().bit_chunks();
             let (chunks, remainder) = arr.values().as_chunks::<64>();
             for (chunk, mut bits) in chunks.iter().zip(masks.iter()) {
