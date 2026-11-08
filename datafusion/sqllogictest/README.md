@@ -166,6 +166,30 @@ SELECT * from foo;
 
 Assuming it looks good, check it in!
 
+## Cookbook: Testing errors
+
+To check an error message, write it as plain text after `----`:
+
+```text
+statement error
+SELECT * FROM no_such_table;
+----
+DataFusion error: Error during planning: table 'datafusion.public.no_such_table' not found
+
+
+```
+
+The message must match exactly, and the block must end with **two** blank
+lines. With only one, the next record is read as part of the expected error:
+the test fails, and `--complete` deletes that record from the file.
+
+To fill in the message, write the query, then `----` and two blank lines, and
+run `--complete`. Avoid writing the message on the `statement error` line
+instead: it is then a regex, and `--complete` writes a one-line message there
+with every special character escaped (`TopK\(fetch=1\)`), which is hard to
+read. Use that form only to match part of a message, for example
+`statement error no_such_table`.
+
 ## Cookbook: Testing for whitespace
 
 The `sqllogictest` runner will automatically strip trailing whitespace, meaning
