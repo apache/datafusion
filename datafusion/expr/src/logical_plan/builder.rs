@@ -1441,6 +1441,7 @@ impl LogicalPlanBuilder {
             null_equality,
             null_aware,
             null_aware_value_keys: 0,
+            single: false,
         })))
     }
 

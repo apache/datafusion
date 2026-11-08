@@ -5019,4 +5019,33 @@ mod tests {
         "
         )
     }
+
+    #[test]
+    fn single_join_keeps_other_side_filters_above() -> Result<()> {
+        let left = test_table_scan_with_name("test1")?;
+        let right = test_table_scan_with_name("test2")?;
+        let LogicalPlan::Join(join) = LogicalPlanBuilder::from(left)
+            .join(right, JoinType::Left, (vec!["a"], vec!["a"]), None)?
+            .build()?
+        else {
+            unreachable!()
+        };
+        let plan = LogicalPlanBuilder::from(LogicalPlan::Join(join.with_single(true)))
+            .filter(
+                col("test1.c")
+                    .gt(lit(2u32))
+                    .and(col("test2.b").gt(lit(1u32))),
+            )?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Filter: test2.b > UInt32(1)
+          Left Join: test1.a = test2.a single
+            TableScan: test1, full_filters=[test1.c > UInt32(2)]
+            TableScan: test2
+        "
+        )
+    }
 }

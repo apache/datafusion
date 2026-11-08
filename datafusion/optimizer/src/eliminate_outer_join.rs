@@ -134,7 +134,7 @@ impl OptimizerRule for EliminateOuterJoin {
 /// or both sides, return a copy of `join` rewritten to an equivalent join type
 /// that omits those rows in the first place; otherwise return `None`.
 fn try_simplify_join(join: &Join, predicate: &Expr) -> Option<LogicalPlan> {
-    if !join.join_type.is_outer() {
+    if !join.join_type.is_outer() || join.single {
         return None;
     }
 
@@ -165,6 +165,7 @@ fn try_simplify_join(join: &Join, predicate: &Expr) -> Option<LogicalPlan> {
         null_equality: join.null_equality,
         null_aware: join.null_aware,
         null_aware_value_keys: join.null_aware_value_keys,
+        single: join.single,
     }))
 }
 
@@ -1693,6 +1694,34 @@ mod tests {
             Left Join: t1.a = t2.a
               TableScan: t1
               TableScan: t2
+        ")
+    }
+
+    #[test]
+    fn single_join_is_not_eliminated() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let LogicalPlan::Join(join) = LogicalPlanBuilder::from(t1)
+            .join(
+                t2,
+                JoinType::Left,
+                (vec![Column::from_name("a")], vec![Column::from_name("a")]),
+                None,
+            )?
+            .build()?
+        else {
+            unreachable!()
+        };
+
+        let plan = LogicalPlanBuilder::from(LogicalPlan::Join(join.with_single(true)))
+            .filter(col("t2.b").is_not_null())?
+            .build()?;
+
+        assert_optimized_plan_equal!(plan, @r"
+        Filter: t2.b IS NOT NULL
+          Left Join: t1.a = t2.a single
+            TableScan: t1
+            TableScan: t2
         ")
     }
 }

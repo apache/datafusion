@@ -20,6 +20,9 @@ pub fn from_join(
         JoinConstraint::On => {}
         JoinConstraint::Using => return not_impl_err!("join constraint: `using`"),
     }
+    if join.single {
+        return not_impl_err!("single join");
+    }
 
     let left = producer.handle_plan(join.left.as_ref())?;
     let right = producer.handle_plan(join.right.as_ref())?;

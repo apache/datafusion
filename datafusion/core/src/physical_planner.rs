@@ -30,7 +30,7 @@ use crate::physical_plan::filter::FilterExecBuilder;
 use crate::physical_plan::joins::utils as join_utils;
 use crate::physical_plan::joins::{
     AsOfJoinExec, AsOfMatchExpr, CrossJoinExec, HashJoinExecBuilder, NestedLoopJoinExec,
-    PartitionMode, SortMergeJoinExec,
+    NestedLoopJoinExecBuilder, PartitionMode, SortMergeJoinExec,
 };
 use crate::physical_plan::limit::{GlobalLimitExec, LocalLimitExec};
 use crate::physical_plan::materialized_cte::{
@@ -1460,6 +1460,7 @@ impl DefaultPhysicalPlanner {
                 null_equality,
                 null_aware,
                 null_aware_value_keys,
+                single,
                 schema: join_schema,
                 ..
             }) => {
@@ -1747,6 +1748,7 @@ impl DefaultPhysicalPlanner {
                         Arc::new(CrossJoinExec::new(physical_left, physical_right))
                     } else if num_range_filters == 1
                         && total_filters == 1
+                        && !*single
                         && session
                             .config_options()
                             .optimizer
@@ -1856,13 +1858,16 @@ impl DefaultPhysicalPlanner {
                         )?)
                     } else {
                         // there is no equal join condition, use the nested loop join
-                        Arc::new(NestedLoopJoinExec::try_new(
-                            physical_left,
-                            physical_right,
-                            join_filter,
-                            join_type,
-                            None,
-                        )?)
+                        Arc::new(
+                            NestedLoopJoinExecBuilder::new(
+                                physical_left,
+                                physical_right,
+                                *join_type,
+                            )
+                            .with_filter(join_filter)
+                            .with_single(*single)
+                            .build()?,
+                        )
                     }
                 } else if *null_aware
                     && !prefer_hash_join
@@ -1891,6 +1896,7 @@ impl DefaultPhysicalPlanner {
                     && session.config().repartition_joins()
                     && !prefer_hash_join
                     && !*null_aware
+                    && !*single
                 // Null-aware joins (e.g. `NOT IN` with a nullable subquery) that do not
                 // satisfy the conditions above must use the CollectLeft HashJoin below.
                 // SortMergeJoinExec currently supports null-aware semantics only for
@@ -1933,6 +1939,7 @@ impl DefaultPhysicalPlanner {
                         .with_null_equality(*null_equality)
                         .with_null_aware(*null_aware)
                         .with_null_aware_value_keys(*null_aware_value_keys)
+                        .with_single(*single)
                         .build()?,
                     )
                 };

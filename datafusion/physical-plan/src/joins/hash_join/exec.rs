@@ -58,8 +58,8 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{Array, ArrayRef, BooleanBufferBuilder};
-use arrow::compute::concat_batches;
+use arrow::array::{Array, ArrayRef, BooleanBufferBuilder, UInt32Array, UInt64Array};
+use arrow::compute::{concat_batches, take_record_batch};
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
@@ -72,8 +72,8 @@ use datafusion_common::utils::memory::{
     RecordBatchMemoryCounter, estimate_memory_size, get_record_batch_memory_size,
 };
 use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
-    plan_err, project_schema,
+    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, exec_err,
+    internal_err, plan_err, project_schema,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
@@ -210,12 +210,21 @@ struct JoinBuildData {
     reservation: MemoryReservation,
 }
 
+/// The probe rows matched by a `Left` single join and their build rows.
+#[derive(Default)]
+struct SingleMatches {
+    build_indices: Vec<u64>,
+    probe_rows: Vec<RecordBatch>,
+}
+
 /// A build lease and mutable bookkeeping for one join execution.
 pub(super) struct JoinLeftData {
     /// The `NOT IN` state of a null-aware join, see [`NotInBuild`].
     not_in: Option<NotInBuild>,
     /// Shared bitmap for visited left indices within this consuming join.
     visited_indices_bitmap: SharedBitmapBuilder,
+    /// Matches of a `Left` single join, emitted in the final stage.
+    single_matches: Mutex<SingleMatches>,
     /// Tracks the final probe partition and what every partition observed.
     /// See [`ProbeCompletion`] for the completion invariant.
     probe_completion: ProbeCompletion,
@@ -266,6 +275,59 @@ impl JoinLeftData {
     /// returns a reference to the visited indices bitmap
     pub(super) fn visited_indices_bitmap(&self) -> &SharedBitmapBuilder {
         &self.visited_indices_bitmap
+    }
+
+    /// Records the matches of a `Left` single join, failing on a second match.
+    pub(super) fn record_single_matches(
+        &self,
+        build_indices: &UInt64Array,
+        probe_indices: &UInt32Array,
+        probe_batch: &RecordBatch,
+    ) -> Result<()> {
+        if build_indices.is_empty() {
+            return Ok(());
+        }
+        let mut visited = self.visited_indices_bitmap.lock();
+        for &index in build_indices.values() {
+            if visited.get_bit(index as usize) {
+                return exec_err!("Scalar subquery returned more than one row");
+            }
+            visited.set_bit(index as usize, true);
+        }
+        drop(visited);
+
+        let probe_rows = take_record_batch(probe_batch, probe_indices)?;
+        self.build.reservation.try_grow(
+            get_record_batch_memory_size(&probe_rows)
+                + build_indices.len() * size_of::<u64>(),
+        )?;
+        let mut matches = self.single_matches.lock();
+        matches
+            .build_indices
+            .extend_from_slice(build_indices.values());
+        matches.probe_rows.push(probe_rows);
+        Ok(())
+    }
+
+    /// Takes the matched probe rows and, per build row, its match index.
+    pub(super) fn take_single_matches(
+        &self,
+        probe_schema: &SchemaRef,
+    ) -> Result<(RecordBatch, UInt32Array)> {
+        let SingleMatches {
+            build_indices,
+            probe_rows,
+        } = std::mem::take(&mut *self.single_matches.lock());
+        let probe_rows = concat_batches(probe_schema, &probe_rows)?;
+        let mut matches = vec![None; self.batch().num_rows()];
+        for (row, index) in build_indices.into_iter().enumerate() {
+            matches[index as usize] = Some(row as u32);
+        }
+        let matches = UInt32Array::from(matches);
+        self.build
+            .reservation
+            .try_grow(matches.get_array_memory_size())?;
+        Ok((probe_rows, matches))
     }
 
     /// returns a reference to the InList values for filter pushdown
@@ -349,6 +411,7 @@ impl HashJoinExecBuilder {
                 null_equality: NullEquality::NullEqualsNothing,
                 null_aware: false,
                 null_aware_value_keys: 0,
+                single: false,
                 dynamic_filter: None,
                 // Will be computed at when plan will be built.
                 cache: stub_properties(),
@@ -415,6 +478,13 @@ impl HashJoinExecBuilder {
     /// [`HashJoinExec::null_aware_value_keys`].
     pub fn with_null_aware_value_keys(mut self, null_aware_value_keys: usize) -> Self {
         self.exec.null_aware_value_keys = null_aware_value_keys;
+        self
+    }
+
+    /// Set single property, see [`HashJoinExec::single`].
+    pub fn with_single(mut self, single: bool) -> Self {
+        self.exec.single = single;
+        self.preserve_properties = false;
         self
     }
 
@@ -492,6 +562,15 @@ impl HashJoinExecBuilder {
         }
         // Validate null_aware flag
         exec.not_in()?;
+        if exec.single
+            && (exec.null_aware
+                || !matches!(exec.join_type, JoinType::Left | JoinType::Right))
+        {
+            return plan_err!(
+                "single joins must be Left or Right joins without null_aware, got {}",
+                exec.join_type
+            );
+        }
 
         if preserve_properties {
             return Ok(exec);
@@ -512,6 +591,7 @@ impl HashJoinExecBuilder {
             null_equality,
             null_aware,
             null_aware_value_keys,
+            single,
             dynamic_filter,
             fetch,
             // Recomputed.
@@ -540,6 +620,7 @@ impl HashJoinExecBuilder {
             &on,
             mode,
             projection.as_deref(),
+            single,
         )?;
 
         Ok(HashJoinExec {
@@ -559,6 +640,7 @@ impl HashJoinExecBuilder {
             null_equality,
             null_aware,
             null_aware_value_keys,
+            single,
             cache: Arc::new(cache),
             dynamic_filter,
             fetch,
@@ -591,6 +673,7 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
                 null_equality: exec.null_equality,
                 null_aware: exec.null_aware,
                 null_aware_value_keys: exec.null_aware_value_keys,
+                single: exec.single,
                 cache: Arc::clone(&exec.cache),
                 dynamic_filter: exec.dynamic_filter.clone(),
                 fetch: exec.fetch,
@@ -871,6 +954,11 @@ pub struct HashJoinExec {
     /// join, a scalar `NOT IN`; a null-aware join with more keys must set it
     /// with [`HashJoinExecBuilder::with_null_aware_value_keys`].
     pub null_aware_value_keys: usize,
+    /// Whether this join fails when a row of its preserved side has two or
+    /// more matches, as a scalar subquery must. Valid on `Left` and `Right`
+    /// joins that are not null-aware. A row is emitted only after all its
+    /// matches are seen.
+    pub single: bool,
     /// Cache holding plan properties like equivalences, output partitioning etc.
     cache: Arc<PlanProperties>,
     /// Dynamic filter for pushing down to the probe side
@@ -905,6 +993,7 @@ impl fmt::Debug for HashJoinExec {
             .field("mode", &self.mode)
             .field("null_aware", &self.null_aware)
             .field("null_aware_value_keys", &self.null_aware_value_keys)
+            .field("single", &self.single)
             .field("metrics", &self.metrics)
             .field("projection", &self.projection)
             .field("column_indices", &self.column_indices)
@@ -1248,6 +1337,7 @@ impl HashJoinExec {
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
+    #[expect(clippy::too_many_arguments)]
     fn compute_properties(
         left: &Arc<dyn ExecutionPlan>,
         right: &Arc<dyn ExecutionPlan>,
@@ -1256,6 +1346,7 @@ impl HashJoinExec {
         on: JoinOnRef,
         mode: PartitionMode,
         projection: Option<&[usize]>,
+        single: bool,
     ) -> Result<PlanProperties> {
         // Calculate equivalence properties:
         let mut eq_properties = join_equivalence_properties(
@@ -1283,7 +1374,10 @@ impl HashJoinExec {
         let emission_type =
             // LeftSemi does not emit rows during probing. It records matching build-side
             // rows in a bitmap and can only emit them after the probe side is exhausted.
-            if left.boundedness().is_unbounded() || join_type == JoinType::LeftSemi {
+            if left.boundedness().is_unbounded()
+                || join_type == JoinType::LeftSemi
+                || (single && join_type == JoinType::Left)
+            {
                 EmissionType::Final
             } else if right.pipeline_behavior() == EmissionType::Incremental {
                 // Unmatched build-side rows can only be emitted once the probe side
@@ -1434,6 +1528,7 @@ impl DisplayAs for HashJoinExec {
                         (true, 0 | 1) => ", null_aware".to_string(),
                         (true, n) => format!(", null_aware(value_keys={n})"),
                     };
+                let display_single = if self.single { ", single" } else { "" };
                 let display_prepared = self
                     .prepared_build
                     .as_ref()
@@ -1448,7 +1543,7 @@ impl DisplayAs for HashJoinExec {
                     .join(", ");
                 write!(
                     f,
-                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}{}{}{}",
+                    "HashJoinExec: mode={:?}, join_type={:?}, on=[{}]{}{}{}{}{}{}{}",
                     self.mode,
                     self.join_type,
                     on,
@@ -1457,6 +1552,7 @@ impl DisplayAs for HashJoinExec {
                     display_null_equality,
                     display_fetch,
                     display_null_aware,
+                    display_single,
                     display_prepared,
                 )
             }
@@ -1494,6 +1590,10 @@ impl DisplayAs for HashJoinExec {
                             self.null_aware_value_keys
                         )?;
                     }
+                }
+
+                if self.single {
+                    writeln!(f, "single")?;
                 }
 
                 if let Some(filter) = self.filter.as_ref() {
@@ -1806,6 +1906,7 @@ impl ExecutionPlan for HashJoinExec {
             build_accumulator,
             self.mode,
             self.fetch,
+            self.single,
         )))
     }
 
@@ -1932,7 +2033,10 @@ impl ExecutionPlan for HashJoinExec {
         //    different join sides, or a nested join on one side, can produce
         //    columns with the same name (e.g. nested mark joins both producing
         //    "mark" columns, or several `id` columns).
-        let (left_preserved, right_preserved) = lr_is_preserved(self.join_type);
+        let (mut left_preserved, mut right_preserved) = lr_is_preserved(self.join_type);
+        if self.single && phase == FilterPushdownPhase::Post {
+            (left_preserved, right_preserved) = (false, false);
+        }
 
         // Map each output position to its input position, accounting for the
         // join's projection.
@@ -2094,6 +2198,7 @@ impl ExecutionPlan for HashJoinExec {
             null_equality,
             null_aware,
             null_aware_value_keys,
+            single,
             dynamic_filter,
             fetch,
             // derived from the children's schemas by the builder on decode
@@ -2186,6 +2291,7 @@ impl ExecutionPlan for HashJoinExec {
                             })?,
                         dynamic_filter,
                         fetch: fetch.map(|f| f as u64),
+                        single: *single,
                     },
                 )),
             ),
@@ -2225,6 +2331,7 @@ impl HashJoinExec {
             null_aware_value_keys,
             dynamic_filter,
             fetch,
+            single,
         } = &**hashjoin;
 
         let left = ctx.decode_required_child(left.as_deref(), "HashJoinExec", "left")?;
@@ -2304,6 +2411,7 @@ impl HashJoinExec {
                 "HashJoinExec",
                 "null_aware_value_keys",
             )?)
+            .with_single(*single)
             .with_fetch(fetch)
             .build()?;
 
@@ -2400,6 +2508,7 @@ mod proto_tests {
             null_aware_value_keys: 0,
             dynamic_filter: None,
             fetch: None,
+            single: false,
         }
     }
 
@@ -2571,6 +2680,21 @@ mod proto_tests {
         // (see `try_from_proto_rejects_a_null_aware_partitioned_join`).
         node.partition_mode = protobuf::PartitionMode::CollectLeft.into();
         assert!(as_join(&decode(node)).null_aware);
+    }
+
+    #[test]
+    fn single_round_trips() {
+        let plan = join_builder()
+            .with_type(JoinType::Right)
+            .with_single(true)
+            .build()
+            .unwrap();
+        assert!(encode(&plan, &StubPlanEncoder::ok()).single);
+
+        let mut node = decodable_node();
+        node.join_type = protobuf::JoinType::Right.into();
+        node.single = true;
+        assert!(as_join(&decode(node)).single);
     }
 
     /// A null-aware join decides in the final stage from state shared across
@@ -3418,6 +3542,7 @@ fn build_in_memory(
         }),
         not_in,
         visited_indices_bitmap: Mutex::new(visited_indices_bitmap),
+        single_matches: Default::default(),
         probe_completion: ProbeCompletion::new(probe_threads_count),
     };
 
@@ -11982,6 +12107,293 @@ mod tests {
             .await
             .unwrap_err();
         assert_contains!(error.to_string(), "Resources exhausted");
+        Ok(())
+    }
+
+    fn single_join_outer() -> Arc<dyn ExecutionPlan> {
+        let batch = crate::test::build_table_i32_two_cols(
+            ("id", &vec![1, 2, 3, 4]),
+            ("key", &vec![10, 20, 30, 40]),
+        );
+        let schema = batch.schema();
+        TestMemoryExec::try_new_exec(&[vec![batch]], schema, None).unwrap()
+    }
+
+    fn single_join_subquery(batches: &[(Vec<i32>, Vec<i32>)]) -> Arc<dyn ExecutionPlan> {
+        let batches: Vec<_> = batches
+            .iter()
+            .map(|(keys, values)| {
+                crate::test::build_table_i32_two_cols(("key", keys), ("value", values))
+            })
+            .collect();
+        let schema = batches[0].schema();
+        TestMemoryExec::try_new_exec(&[batches], schema, None).unwrap()
+    }
+
+    fn single_join(
+        outer: Arc<dyn ExecutionPlan>,
+        subquery: Arc<dyn ExecutionPlan>,
+        join_type: JoinType,
+        mode: PartitionMode,
+        value_filter: Option<i32>,
+    ) -> Result<HashJoinExecBuilder> {
+        let (left, right, projection, subquery_side) = match join_type {
+            JoinType::Right => (subquery, outer, vec![2, 1], JoinSide::Left),
+            _ => (outer, subquery, vec![0, 3], JoinSide::Right),
+        };
+        let key = |plan: &Arc<dyn ExecutionPlan>| -> Result<PhysicalExprRef> {
+            Ok(Arc::new(Column::new_with_schema("key", &plan.schema())?))
+        };
+        let on = vec![(key(&left)?, key(&right)?)];
+        let (left, right): (Arc<dyn ExecutionPlan>, Arc<dyn ExecutionPlan>) = match mode {
+            PartitionMode::Partitioned => (
+                Arc::new(RepartitionExec::try_new(
+                    left,
+                    Partitioning::Hash(vec![Arc::clone(&on[0].0)], 4),
+                )?),
+                Arc::new(RepartitionExec::try_new(
+                    right,
+                    Partitioning::Hash(vec![Arc::clone(&on[0].1)], 4),
+                )?),
+            ),
+            _ => (
+                left,
+                Arc::new(RepartitionExec::try_new(
+                    right,
+                    Partitioning::RoundRobinBatch(4),
+                )?),
+            ),
+        };
+        let filter = value_filter.map(|value| {
+            JoinFilter::new(
+                Arc::new(BinaryExpr::new(
+                    Arc::new(Column::new("value", 0)),
+                    Operator::NotEq,
+                    Arc::new(Literal::new(ScalarValue::Int32(Some(value)))),
+                )),
+                vec![ColumnIndex {
+                    index: 1,
+                    side: subquery_side,
+                }],
+                Arc::new(Schema::new(vec![Field::new(
+                    "value",
+                    DataType::Int32,
+                    false,
+                )])),
+            )
+        });
+        Ok(HashJoinExecBuilder::new(left, right, on, join_type)
+            .with_filter(filter)
+            .with_projection(Some(projection))
+            .with_partition_mode(mode)
+            .with_single(true))
+    }
+
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn single_join_returns_at_most_one_match(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+        #[values(JoinType::Left, JoinType::Right)] join_type: JoinType,
+        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
+        mode: PartitionMode,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let subquery = single_join_subquery(&[
+            (vec![10, 20], vec![100, 200]),
+            (vec![40, 50], vec![400, 500]),
+        ]);
+        let join = single_join(single_join_outer(), subquery, join_type, mode, None)?
+            .build_exec()?;
+        let batches = crate::collect(join, task_ctx).await?;
+        allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&batches), @r"
+            +----+-------+
+            | id | value |
+            +----+-------+
+            | 1  | 100   |
+            | 2  | 200   |
+            | 3  |       |
+            | 4  | 400   |
+            +----+-------+
+            ");
+        }
+        Ok(())
+    }
+
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn single_join_fails_on_a_second_match(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+        #[values(JoinType::Left, JoinType::Right)] join_type: JoinType,
+        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
+        mode: PartitionMode,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let subquery = single_join_subquery(&[
+            (vec![10, 20], vec![100, 200]),
+            (vec![20, 40], vec![250, 400]),
+        ]);
+        let join = single_join(single_join_outer(), subquery, join_type, mode, None)?
+            .build_exec()?;
+        let err = crate::collect(join, task_ctx).await.unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Scalar subquery returned more than one row"
+        );
+        Ok(())
+    }
+
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn single_join_counts_matches_after_the_filter(
+        batch_size: usize,
+        use_perfect_hash_join_as_possible: bool,
+        #[values(JoinType::Left, JoinType::Right)] join_type: JoinType,
+        #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
+        mode: PartitionMode,
+        #[values(200, 250)] removed: i32,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(batch_size, use_perfect_hash_join_as_possible);
+        let subquery =
+            single_join_subquery(&[(vec![10, 20, 20, 40], vec![100, 200, 250, 400])]);
+        let join = single_join(
+            single_join_outer(),
+            subquery,
+            join_type,
+            mode,
+            Some(removed),
+        )?
+        .build_exec()?;
+        let batches = crate::collect(join, task_ctx).await?;
+        let kept = 450 - removed;
+        assert_eq!(
+            batches_to_sort_string(&batches),
+            format!(
+                "+----+-------+\n\
+                 | id | value |\n\
+                 +----+-------+\n\
+                 | 1  | 100   |\n\
+                 | 2  | {kept}   |\n\
+                 | 3  |       |\n\
+                 | 4  | 400   |\n\
+                 +----+-------+"
+            )
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn single_join_fetch_does_not_hide_a_second_match(
+        #[values(JoinType::Left, JoinType::Right)] join_type: JoinType,
+    ) -> Result<()> {
+        let task_ctx = prepare_task_ctx(1, false);
+        let subquery = single_join_subquery(&[(vec![10, 10], vec![100, 150])]);
+        let join = single_join(
+            single_join_outer(),
+            subquery,
+            join_type,
+            PartitionMode::CollectLeft,
+            None,
+        )?
+        .with_fetch(Some(1))
+        .build_exec()?;
+        let err = crate::collect(join, task_ctx).await.unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Scalar subquery returned more than one row"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn single_join_requires_an_outer_join_without_null_aware() -> Result<()> {
+        let subquery = single_join_subquery(&[(vec![10], vec![100])]);
+        for (join_type, null_aware) in [
+            (JoinType::Inner, false),
+            (JoinType::Full, false),
+            (JoinType::LeftAnti, true),
+        ] {
+            let builder = single_join(
+                single_join_outer(),
+                Arc::clone(&subquery),
+                JoinType::Left,
+                PartitionMode::CollectLeft,
+                None,
+            )?
+            .with_type(join_type)
+            .with_projection(None)
+            .with_null_aware(null_aware);
+            assert_contains!(
+                builder.build().unwrap_err().to_string(),
+                "single joins must be Left or Right joins without null_aware"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn single_join_survives_swap_and_display() -> Result<()> {
+        let subquery = single_join_subquery(&[(vec![10], vec![100])]);
+        let join = single_join(
+            single_join_outer(),
+            subquery,
+            JoinType::Right,
+            PartitionMode::CollectLeft,
+            None,
+        )?
+        .build()?;
+        let swapped = join.swap_inputs(PartitionMode::CollectLeft)?;
+        let swapped = swapped.downcast_ref::<HashJoinExec>().unwrap();
+        assert_eq!(*swapped.join_type(), JoinType::Left);
+        assert!(swapped.single);
+        assert_contains!(
+            crate::displayable(swapped).one_line().to_string(),
+            "join_type=Left, on=[(key@1, key@0)], projection=[id@0, value@3], single"
+        );
+        Ok(())
+    }
+
+    #[rstest]
+    fn single_join_keeps_parent_dynamic_filters_above(
+        #[values(JoinType::Left, JoinType::Right)] join_type: JoinType,
+    ) -> Result<()> {
+        let subquery = single_join_subquery(&[(vec![10], vec![100])]);
+        let join = single_join(
+            single_join_outer(),
+            subquery,
+            join_type,
+            PartitionMode::CollectLeft,
+            None,
+        )?
+        .build()?;
+        let parent_filter: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("id", 0)),
+            Operator::Lt,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+        ));
+        let config = ConfigOptions::default();
+        for (phase, pushed) in [
+            (FilterPushdownPhase::Pre, 1),
+            (FilterPushdownPhase::Post, 0),
+        ] {
+            let description = join.gather_filters_for_pushdown(
+                phase,
+                vec![Arc::clone(&parent_filter)],
+                &config,
+            )?;
+            let pushed_to_children = description
+                .parent_filters()
+                .iter()
+                .flatten()
+                .filter(|filter| {
+                    matches!(filter.discriminant, crate::filter_pushdown::PushedDown::Yes)
+                })
+                .count();
+            assert_eq!(pushed_to_children, pushed, "{phase:?}");
+        }
         Ok(())
     }
 }

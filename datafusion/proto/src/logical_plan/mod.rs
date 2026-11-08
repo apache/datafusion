@@ -1076,7 +1076,8 @@ impl AsLogicalPlan for LogicalPlanNode {
                         join.null_aware_value_keys,
                         "JoinNode",
                         "null_aware_value_keys",
-                    )?),
+                    )?)
+                    .with_single(join.single),
                 ))
             }
             LogicalPlanType::AsOfJoin(join) => {
@@ -1764,6 +1765,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 null_equality,
                 null_aware,
                 null_aware_value_keys,
+                single,
                 // Not encoded; recomputed by `Join::try_new` on decode.
                 schema: _,
             }) => {
@@ -1815,6 +1817,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     "JoinNode: null_aware_value_keys {null_aware_value_keys} does not fit in u32"
                                 )
                             })?,
+                            single: *single,
                         },
                     ))),
                 })

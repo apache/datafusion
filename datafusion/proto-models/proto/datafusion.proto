@@ -279,6 +279,7 @@ message JoinNode {
   // single key. Messages predating this field decode it as 0: they can only
   // hold scalar `NOT IN` joins.
   uint32 null_aware_value_keys = 10;
+  bool single = 11;
 }
 
 enum AsOfMatchOperator {
@@ -1470,6 +1471,7 @@ message HashJoinExecNode {
   // only for a single key. Messages predating this field decode it as 0:
   // they can only hold scalar `NOT IN` joins.
   uint32 null_aware_value_keys = 13;
+  bool single = 14;
 }
 
 enum StreamPartitionMode {
@@ -1663,6 +1665,7 @@ message NestedLoopJoinExecNode {
   datafusion_common.JoinType join_type = 3;
   JoinFilter filter = 4;
   repeated uint32 projection = 5;
+  bool single = 6;
 }
 
 message CoalesceBatchesExecNode {

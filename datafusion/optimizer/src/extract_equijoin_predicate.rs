@@ -61,6 +61,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 null_equality,
                 null_aware,
                 null_aware_value_keys,
+                single,
             }) => {
                 let left_schema = left.schema();
                 let right_schema = right.schema();
@@ -104,6 +105,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                             null_equality: NullEquality::NullEqualsNull,
                             null_aware,
                             null_aware_value_keys,
+                            single,
                         })));
                     }
                 }
@@ -121,6 +123,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         null_equality,
                         null_aware,
                         null_aware_value_keys,
+                        single,
                     })))
                 } else {
                     Ok(Transformed::no(LogicalPlan::Join(Join {
@@ -134,6 +137,7 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                         null_equality,
                         null_aware,
                         null_aware_value_keys,
+                        single,
                     })))
                 }
             }

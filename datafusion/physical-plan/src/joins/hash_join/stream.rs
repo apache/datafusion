@@ -19,7 +19,7 @@ use crate::joins::hash_join::shared_bounds::{
     PartitionBounds, PartitionBuildData, SharedBuildAccumulator,
 };
 use crate::joins::join_hash_map::ProbeOffset;
-use crate::joins::join_hash_map::ProbeOffset::AtRow;
+use crate::joins::join_hash_map::ProbeOffset::{AtRow, MidChain};
 use crate::joins::probe_completion::{Completion, ProbeSideSummary};
 use crate::joins::utils::{
     JoinKeyComparator, OnceFut, equal_rows_arr_with_normalized_left, matchable_join_keys,
@@ -41,7 +41,8 @@ use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::datatypes::{Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, internal_datafusion_err, internal_err,
+    JoinSide, JoinType, NullEquality, Result, exec_err, internal_datafusion_err,
+    internal_err,
 };
 use datafusion_physical_expr::PhysicalExprRef;
 
@@ -186,6 +187,8 @@ pub(super) struct ProcessProbeBatchState {
     /// Key comparator for this batch, built on first use and reused by every
     /// chunk
     key_comparator: Option<JoinKeyComparator>,
+    /// A `Right` single join match held back for the next chunk
+    held_single_match: Option<(u64, u32)>,
 }
 
 impl ProcessProbeBatchState {
@@ -213,6 +216,37 @@ impl ProcessProbeBatchState {
         count
     }
 
+    /// Fails if a probe row of a `Right` single join has two matches, and
+    /// holds back a row whose chain continues in the next chunk.
+    fn check_single_matches(
+        &mut self,
+        build_indices: &UInt64Array,
+        probe_indices: &UInt32Array,
+        next_offset: Option<ProbeOffset>,
+    ) -> Result<(UInt64Array, UInt32Array)> {
+        let (mut build_indices, mut probe_indices): (Vec<u64>, Vec<u32>) = self
+            .held_single_match
+            .take()
+            .into_iter()
+            .chain(
+                build_indices
+                    .values()
+                    .iter()
+                    .copied()
+                    .zip(probe_indices.values().iter().copied()),
+            )
+            .unzip();
+        if probe_indices.windows(2).any(|pair| pair[0] == pair[1]) {
+            return exec_err!("Scalar subquery returned more than one row");
+        }
+        if let Some(MidChain { row, .. }) = next_offset
+            && probe_indices.last() == Some(&(row as u32))
+        {
+            self.held_single_match = build_indices.pop().zip(probe_indices.pop());
+        }
+        Ok((build_indices.into(), probe_indices.into()))
+    }
+
     /// Returns whether the next lookup is the first chunk of this probe batch.
     ///
     /// A probe batch starts at `AtRow { row: 0 }`, and a lookup never returns
@@ -234,6 +268,8 @@ pub(super) struct EmitUnmatchedBuildRowsState {
     visited: BooleanBuffer,
     /// Index of the next build row to examine
     cursor: usize,
+    /// Matched probe rows of a `Left` single join and their index per build row
+    single_matches: Option<(RecordBatch, UInt32Array)>,
     /// What every probe partition together saw, needed by the null-aware
     /// post-processing of each chunk. Captured with the bitmap snapshot
     /// because [`JoinLeftData::report_probe_completed`] hands it out once.
@@ -403,6 +439,8 @@ pub(super) struct HashJoinStream {
     /// Output buffer for coalescing small batches into larger ones with optional fetch limit.
     /// Uses `LimitedBatchCoalescer` to efficiently combine batches and absorb limit with 'fetch'
     output_buffer: LimitedBatchCoalescer,
+    /// Whether this is a single join, see [`super::HashJoinExec::single`]
+    single: bool,
 }
 
 impl RecordBatchStream for HashJoinStream {
@@ -558,6 +596,7 @@ impl HashJoinStream {
         build_accumulator: Option<Arc<SharedBuildAccumulator>>,
         mode: PartitionMode,
         fetch: Option<usize>,
+        single: bool,
     ) -> Self {
         // Create output buffer with coalescing and optional fetch limit.
         let output_buffer =
@@ -585,6 +624,7 @@ impl HashJoinStream {
             build_report: BuildReportHandle::new(partition, mode, build_accumulator),
             mode,
             output_buffer,
+            single,
         }
     }
 
@@ -804,6 +844,7 @@ impl HashJoinStream {
                         joined_probe_idx: None,
                         matched_probe_idx: None,
                         key_comparator: None,
+                        held_single_match: None,
                     });
             }
             Some(Err(err)) => return Poll::Ready(Err(err)),
@@ -928,6 +969,26 @@ impl HashJoinStream {
                 None,
                 self.join_type,
             )?
+        } else {
+            (left_indices, right_indices)
+        };
+
+        if self.single && self.join_type == JoinType::Left {
+            build_side.left_data.record_single_matches(
+                &left_indices,
+                &right_indices,
+                &state.batch,
+            )?;
+            timer.done();
+            match next_offset {
+                Some(offset) => state.advance(offset, None),
+                None => self.state = HashJoinStreamState::FetchProbeBatch,
+            }
+            return Ok(StatefulStreamResult::Continue);
+        }
+
+        let (left_indices, right_indices) = if self.single {
+            state.check_single_matches(&left_indices, &right_indices, next_offset)?
         } else {
             (left_indices, right_indices)
         };
@@ -1080,6 +1141,15 @@ impl HashJoinStream {
             .lock()
             .finish_cloned();
 
+        let single_matches = self
+            .single
+            .then(|| {
+                build_side
+                    .left_data
+                    .take_single_matches(&self.right.schema())
+            })
+            .transpose()?;
+
         // The final build rows count as one logical input batch; the rows are
         // added chunk by chunk in `emit_unmatched_build_rows`.
         self.join_metrics.input_batches.add(1);
@@ -1089,6 +1159,7 @@ impl HashJoinStream {
             HashJoinStreamState::EmitUnmatchedBuildRows(EmitUnmatchedBuildRowsState {
                 visited,
                 cursor: 0,
+                single_matches,
                 probe_summary,
             });
 
@@ -1120,12 +1191,23 @@ impl HashJoinStream {
         let probe_summary = state.probe_summary;
 
         // use the global left bitmap to produce the left indices and right indices
-        let (left_side, right_side) = next_final_indices_chunk(
-            &state.visited,
-            &mut state.cursor,
-            self.join_type,
-            self.batch_size,
-        );
+        let (left_side, right_side) = match &state.single_matches {
+            Some((_, matches)) => {
+                let start = state.cursor;
+                let end = (start + self.batch_size).min(matches.len());
+                state.cursor = end;
+                (
+                    (start as u64..end as u64).collect(),
+                    matches.slice(start, end - start),
+                )
+            }
+            None => next_final_indices_chunk(
+                &state.visited,
+                &mut state.cursor,
+                self.join_type,
+                self.batch_size,
+            ),
+        };
 
         let (left_side, right_side, mark_column) = match build_side.left_data.not_in() {
             Some(not_in) => not_in.final_chunk(probe_summary, left_side, right_side),
@@ -1136,11 +1218,14 @@ impl HashJoinStream {
 
         // Push this chunk of final indices to output buffer
         if !left_side.is_empty() {
-            let empty_right_batch = RecordBatch::new_empty(self.right.schema());
+            let right_batch = match &state.single_matches {
+                Some((probe_rows, _)) => probe_rows.clone(),
+                None => RecordBatch::new_empty(self.right.schema()),
+            };
             let batch = build_batch_from_indices(
                 &self.schema,
                 build_side.left_data.batch(),
-                &empty_right_batch,
+                &right_batch,
                 &left_side,
                 &right_side,
                 &self.column_indices,

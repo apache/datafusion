@@ -21,8 +21,8 @@ use datafusion_common::{JoinSide, JoinType, Result, internal_datafusion_err};
 use datafusion_physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
 use datafusion_physical_plan::ExecutionPlan;
-use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion_physical_plan::joins::{NestedLoopJoinExec, NestedLoopJoinExecBuilder};
 use datafusion_physical_plan::projection::{
     ProjectionExec, remove_unnecessary_projections,
 };
@@ -159,13 +159,17 @@ fn try_push_down_join_filter(
         }
     };
 
-    Ok(Transformed::yes(Arc::new(NestedLoopJoinExec::try_new(
-        lhs_rewrite.data.0,
-        rhs_rewrite.data.0,
-        Some(join_filter),
-        join.join_type(),
-        Some(projections),
-    )?)))
+    Ok(Transformed::yes(Arc::new(
+        NestedLoopJoinExecBuilder::new(
+            lhs_rewrite.data.0,
+            rhs_rewrite.data.0,
+            *join.join_type(),
+        )
+        .with_filter(Some(join_filter))
+        .with_projection(Some(projections))
+        .with_single(join.single())
+        .build()?,
+    )))
 }
 
 /// Tries to push down parts of `expr` into the `join_side`.

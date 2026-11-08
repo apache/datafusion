@@ -377,6 +377,7 @@ fn find_inner_join(
                 null_equality,
                 null_aware: false,
                 null_aware_value_keys: 0,
+                single: false,
             }));
         }
     }
@@ -401,6 +402,7 @@ fn find_inner_join(
         null_equality: NullEquality::NullEqualsNothing,
         null_aware: false,
         null_aware_value_keys: 0,
+        single: false,
     }))
 }
 

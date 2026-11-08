@@ -58,8 +58,8 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
     DataFusionError, JoinSide, NullEquality, Result, ScalarValue, SharedResult,
-    Statistics, arrow_err, assert_eq_or_internal_err, internal_datafusion_err,
-    internal_err, project_schema, unwrap_or_internal_err,
+    Statistics, arrow_err, assert_eq_or_internal_err, exec_err, internal_datafusion_err,
+    internal_err, plan_err, project_schema, unwrap_or_internal_err,
 };
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryPool, MemoryReservation};
 use datafusion_execution::{SpillFile, TaskContext};
@@ -229,6 +229,8 @@ pub struct NestedLoopJoinExec {
     column_indices: Vec<ColumnIndex>,
     /// Projection to apply to the output of the join
     projection: Option<ProjectionRef>,
+    /// Whether this `Right` join fails when a right row has two or more matches
+    pub(crate) single: bool,
 
     /// Execution metrics
     metrics: ExecutionPlanMetricsSet,
@@ -243,6 +245,7 @@ pub struct NestedLoopJoinExecBuilder {
     join_type: JoinType,
     filter: Option<JoinFilter>,
     projection: Option<ProjectionRef>,
+    single: bool,
 }
 
 impl NestedLoopJoinExecBuilder {
@@ -258,6 +261,7 @@ impl NestedLoopJoinExecBuilder {
             join_type,
             filter: None,
             projection: None,
+            single: false,
         }
     }
 
@@ -278,6 +282,12 @@ impl NestedLoopJoinExecBuilder {
         self
     }
 
+    /// Set single property, see [`NestedLoopJoinExec::single`].
+    pub fn with_single(mut self, single: bool) -> Self {
+        self.single = single;
+        self
+    }
+
     /// Build resulting execution plan.
     pub fn build(self) -> Result<NestedLoopJoinExec> {
         let Self {
@@ -286,7 +296,14 @@ impl NestedLoopJoinExecBuilder {
             join_type,
             filter,
             projection,
+            single,
         } = self;
+
+        if single && join_type != JoinType::Right {
+            return plan_err!(
+                "single nested loop joins must be Right joins, got {join_type}"
+            );
+        }
 
         let left_schema = left.schema();
         let right_schema = right.schema();
@@ -314,6 +331,7 @@ impl NestedLoopJoinExecBuilder {
             left_chunk_barrier,
             column_indices,
             projection,
+            single,
             metrics: Default::default(),
             cache: Arc::new(cache),
         })
@@ -328,6 +346,7 @@ impl From<&NestedLoopJoinExec> for NestedLoopJoinExecBuilder {
             join_type: exec.join_type,
             filter: exec.filter.clone(),
             projection: exec.projection.clone(),
+            single: exec.single,
         }
     }
 }
@@ -369,6 +388,11 @@ impl NestedLoopJoinExec {
 
     pub fn projection(&self) -> &Option<ProjectionRef> {
         &self.projection
+    }
+
+    /// Whether this join fails when a right row has two or more matches
+    pub fn single(&self) -> bool {
+        self.single
     }
 
     /// This function creates the cache object that stores the plan properties such as schema, equivalence properties, ordering, partitioning, etc.
@@ -546,10 +570,11 @@ impl DisplayAs for NestedLoopJoinExec {
                 } else {
                     "".to_string()
                 };
+                let display_single = if self.single { ", single" } else { "" };
                 write!(
                     f,
-                    "NestedLoopJoinExec: join_type={:?}{}{}",
-                    self.join_type, display_filter, display_projections
+                    "NestedLoopJoinExec: join_type={:?}{}{}{}",
+                    self.join_type, display_filter, display_projections, display_single
                 )
             }
             DisplayFormatType::TreeRender => {
@@ -629,6 +654,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                     join_schema: Arc::clone(&self.join_schema),
                     column_indices: self.column_indices.clone(),
                     projection: self.projection.clone(),
+                    single: self.single,
                 }))
             }
             ChildrenPropertiesMode::Recompute => Ok(Arc::new(
@@ -639,6 +665,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                 )
                 .with_filter(self.filter.clone())
                 .with_projection_ref(self.projection.clone())
+                .with_single(self.single)
                 .build()?,
             )),
         }
@@ -725,7 +752,8 @@ impl ExecutionPlan for NestedLoopJoinExec {
             && need_produce_result_in_final(self.join_type)
             && right_partition_count > 1;
         let can_spill = context.runtime_env().disk_manager.tmp_files_enabled()
-            && !coordinated_fallback_disabled;
+            && !coordinated_fallback_disabled
+            && !self.single;
 
         let build_side_data = self.build_side_data.try_once(|| {
             let stream = self.left.execute(0, Arc::clone(&context))?;
@@ -774,6 +802,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             metrics,
             batch_size,
             spill_state,
+            self.single,
         )))
     }
 
@@ -846,6 +875,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             | JoinType::RightMark => (false, true),
             JoinType::Full => (false, false),
         };
+        let right_preserved = right_preserved && !self.single;
         let output_indices: Vec<_> = match &self.projection {
             Some(projection) => projection.to_vec(),
             None => (0..self.column_indices.len()).collect(),
@@ -921,6 +951,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                     *self.join_type(),
                 )
                 .with_filter(join_filter)
+                .with_single(self.single)
                 .build()?,
             )))
         } else {
@@ -942,6 +973,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
             filter,
             join_type,
             projection,
+            single,
             // derived from the children's schemas by `try_new` on decode
             join_schema: _,
             // runtime build-side state, not part of the plan
@@ -978,6 +1010,7 @@ impl ExecutionPlan for NestedLoopJoinExec {
                             Some(v) if v.is_empty() => vec![u32::MAX],
                             Some(v) => v.iter().map(|x| *x as u32).collect(),
                         },
+                        single: *single,
                     },
                 )),
             ),
@@ -1007,6 +1040,7 @@ impl NestedLoopJoinExec {
             join_type,
             filter,
             projection,
+            single,
         } = &**join;
 
         let left =
@@ -1030,9 +1064,13 @@ impl NestedLoopJoinExec {
             indices => Some(indices.iter().map(|i| *i as usize).collect()),
         };
 
-        Ok(Arc::new(NestedLoopJoinExec::try_new(
-            left, right, filter, &join_type, projection,
-        )?))
+        Ok(Arc::new(
+            NestedLoopJoinExecBuilder::new(left, right, join_type)
+                .with_filter(filter)
+                .with_projection(projection)
+                .with_single(*single)
+                .build()?,
+        ))
     }
 }
 
@@ -1085,6 +1123,7 @@ mod proto_tests {
                         join_type: protobuf::JoinType::Inner.into(),
                         filter: None,
                         projection,
+                        single: false,
                     },
                 )),
             ),
@@ -1129,6 +1168,29 @@ mod proto_tests {
         let err =
             NestedLoopJoinExec::try_from_proto(&encoded_child_node(), &ctx).unwrap_err();
         assert!(err.to_string().contains("not a NestedLoopJoinExec"));
+    }
+
+    #[test]
+    fn single_round_trips() {
+        let plan =
+            NestedLoopJoinExecBuilder::new(stub_child(), stub_child(), JoinType::Right)
+                .with_single(true)
+                .build()
+                .unwrap();
+        let encoder = StubPlanEncoder::ok();
+        let node = plan
+            .try_to_proto(&ExecutionPlanEncodeCtx::new(&encoder))
+            .unwrap()
+            .unwrap();
+        let decoder = StubPlanDecoder::ok();
+        let decoded = NestedLoopJoinExec::try_from_proto(
+            &node,
+            &ExecutionPlanDecodeCtx::new(&decoder),
+        )
+        .unwrap();
+        let decoded = decoded.downcast_ref::<NestedLoopJoinExec>().unwrap();
+        assert!(decoded.single());
+        assert_eq!(*decoded.join_type(), JoinType::Right);
     }
 }
 
@@ -2181,6 +2243,10 @@ pub(crate) struct NestedLoopJoinStream {
     current_right_batch_matched: Option<BooleanArray>,
     /// Candidate pruning for right semi/anti joins in the current left chunk.
     right_existence_probe: Option<RightExistenceProbe>,
+    /// Whether this is a single join, see [`NestedLoopJoinExec::single`]
+    single: bool,
+    /// Matches of a single join in `current_right_batch`, as row indices
+    single_matches: (Vec<usize>, Vec<u32>),
 
     /// Memory-limited spill fallback state. See [`SpillState`] for details.
     spill_state: SpillState,
@@ -2515,6 +2581,7 @@ impl NestedLoopJoinStream {
         metrics: NestedLoopJoinMetrics,
         batch_size: usize,
         spill_state: SpillState,
+        single: bool,
     ) -> Self {
         Self {
             output_schema: Arc::clone(&schema),
@@ -2531,6 +2598,8 @@ impl NestedLoopJoinStream {
             current_right_batch: None,
             current_right_batch_matched: None,
             right_existence_probe: None,
+            single,
+            single_matches: Default::default(),
             state: NLJState::BufferingLeft,
             left_probe_idx: 0,
             left_emit_idx: 0,
@@ -2908,6 +2977,12 @@ impl NestedLoopJoinStream {
                     let left_rows = left_data.batch().num_rows();
                     let right_rows = right_batch.num_rows();
                     self.metrics.selectivity.add_total(left_rows * right_rows);
+                }
+
+                if self.single
+                    && let Err(e) = self.emit_single_matches()
+                {
+                    return ControlFlow::Break(Poll::Ready(Some(Err(e))));
                 }
 
                 if self.should_track_unmatched_right {
@@ -3474,6 +3549,17 @@ impl NestedLoopJoinStream {
             if let Some(bitmap) = local_right_bitmap.as_mut()
                 && is_matched
             {
+                if self.single {
+                    let matched_before = self
+                        .current_right_batch_matched
+                        .as_ref()
+                        .is_some_and(|matched| matched.value(r_index));
+                    if matched_before || bitmap.get_bit(r_index) {
+                        return exec_err!("Scalar subquery returned more than one row");
+                    }
+                    self.single_matches.0.push(l_index);
+                    self.single_matches.1.push(r_index as u32);
+                }
                 bitmap.set_bit(r_index, true);
             }
         }
@@ -3499,6 +3585,10 @@ impl NestedLoopJoinStream {
 
             self.current_right_batch_matched =
                 Some(BooleanArray::new(updated_global_right_bitmap, None));
+        }
+
+        if self.single {
+            return Ok(None);
         }
 
         // For the following join types: only bitmaps are updated; do not emit rows now
@@ -3565,7 +3655,25 @@ impl NestedLoopJoinStream {
             BooleanArray::new(BooleanBuffer::new_set(right_row_count), None)
         };
 
+        if self.single {
+            let matched_before =
+                self.current_right_batch_matched.as_ref().ok_or_else(|| {
+                    internal_datafusion_err!("right bitmap should be present")
+                })?;
+            for r_index in cur_right_bitmap.values().set_indices() {
+                if matched_before.value(r_index) {
+                    return exec_err!("Scalar subquery returned more than one row");
+                }
+                self.single_matches.0.push(l_index);
+                self.single_matches.1.push(r_index as u32);
+            }
+        }
+
         self.update_matched_bitmap(l_index, &cur_right_bitmap)?;
+
+        if self.single {
+            return Ok(None);
+        }
 
         // For the following join types: here we only have to set the left/right
         // bitmap, and no need to output result
@@ -3722,6 +3830,44 @@ impl NestedLoopJoinStream {
         self.current_right_batch_matched = None;
 
         res
+    }
+
+    /// Emits the single join matches of the current right batch.
+    fn emit_single_matches(&mut self) -> Result<()> {
+        let (left_rows, right_rows) = std::mem::take(&mut self.single_matches);
+        if right_rows.is_empty() {
+            return Ok(());
+        }
+        let batch = if self.output_schema.fields().is_empty() {
+            create_record_batch_with_empty_schema(
+                Arc::clone(&self.output_schema),
+                right_rows.len(),
+            )?
+        } else {
+            let left_batch = self.get_left_data()?.batch();
+            let right_batch = self.current_right_batch.as_ref().ok_or_else(|| {
+                internal_datafusion_err!("Right batch should be available")
+            })?;
+            let left_indices = left_batch.row_indices(left_rows)?;
+            let right_indices = UInt32Array::from(right_rows);
+            let columns = self
+                .column_indices
+                .iter()
+                .map(|column_index| match column_index.side {
+                    JoinSide::Left => {
+                        left_batch.take_column(column_index.index, &left_indices)
+                    }
+                    _ => Ok(take(
+                        right_batch.column(column_index.index).as_ref(),
+                        &right_indices,
+                        None,
+                    )?),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            RecordBatch::try_new(Arc::clone(&self.output_schema), columns)?
+        };
+        self.output_buffer.push_batch(batch)?;
+        Ok(())
     }
 
     // ==== Utilities ====
@@ -4803,6 +4949,7 @@ pub(crate) mod tests {
             metrics,
             1024,
             spill_state,
+            false,
         );
 
         let start = Instant::now();
@@ -5315,6 +5462,7 @@ pub(crate) mod tests {
             NestedLoopJoinMetrics::new(&ExecutionPlanMetricsSet::new(), 0),
             65,
             SpillState::Disabled,
+            false,
         );
         stream.buffered_left_data = Some(Arc::new(left_data));
         let mut cx = std::task::Context::from_waker(futures::task::noop_waker_ref());
@@ -6927,5 +7075,116 @@ pub(crate) mod tests {
             );
         }
         Ok(())
+    }
+
+    fn single_join(subquery_keys: Vec<i32>) -> Result<Arc<dyn ExecutionPlan>> {
+        let values = subquery_keys.iter().map(|key| key * 10).collect::<Vec<_>>();
+        let subquery = crate::test::build_table_i32_two_cols(
+            ("key", &subquery_keys),
+            ("value", &values),
+        );
+        let outer = crate::test::build_table_i32_two_cols(
+            ("id", &vec![1, 2, 3, 4]),
+            ("key", &vec![10, 20, 30, 40]),
+        );
+        let subquery_schema = subquery.schema();
+        let outer_schema = outer.schema();
+        let subquery =
+            TestMemoryExec::try_new_exec(&[vec![subquery]], subquery_schema, None)?;
+        let outer = Arc::new(RepartitionExec::try_new(
+            TestMemoryExec::try_new_exec(&[vec![outer]], outer_schema, None)?,
+            Partitioning::RoundRobinBatch(4),
+        )?);
+        let filter = JoinFilter::new(
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("key", 0)),
+                Operator::Eq,
+                Arc::new(Column::new("key", 1)),
+            )),
+            vec![
+                ColumnIndex {
+                    index: 0,
+                    side: JoinSide::Left,
+                },
+                ColumnIndex {
+                    index: 1,
+                    side: JoinSide::Right,
+                },
+            ],
+            Arc::new(Schema::new(vec![
+                Field::new("key", DataType::Int32, false),
+                Field::new("key", DataType::Int32, false),
+            ])),
+        );
+        Ok(Arc::new(
+            NestedLoopJoinExecBuilder::new(subquery, outer, JoinType::Right)
+                .with_filter(Some(filter))
+                .with_projection(Some(vec![2, 1]))
+                .with_single(true)
+                .build()?,
+        ))
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn single_join_returns_at_most_one_match(
+        #[values(1, 2, 1024)] batch_size: usize,
+    ) -> Result<()> {
+        let join = single_join(vec![10, 20, 40, 50])?;
+        let batches = crate::collect(join, new_task_ctx(batch_size)).await?;
+        allow_duplicates!(assert_snapshot!(batches_to_sort_string(&batches), @r"
+        +----+-------+
+        | id | value |
+        +----+-------+
+        | 1  | 100   |
+        | 2  | 200   |
+        | 3  |       |
+        | 4  | 400   |
+        +----+-------+
+        "));
+        Ok(())
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn single_join_fails_on_a_second_match(
+        #[values(1, 2, 1024)] batch_size: usize,
+        #[values(vec![10, 20, 20, 40], vec![20, 10, 40, 20])] subquery_keys: Vec<i32>,
+    ) -> Result<()> {
+        let join = single_join(subquery_keys)?;
+        let err = crate::collect(join, new_task_ctx(batch_size))
+            .await
+            .unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "Scalar subquery returned more than one row"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn single_join_does_not_spill() -> Result<()> {
+        let join = single_join(vec![10, 20, 40, 50])?;
+        let err = crate::collect(join, task_ctx_with_memory_limit(50, 16)?)
+            .await
+            .unwrap_err();
+        assert_contains!(err.to_string(), "Resources exhausted");
+        Ok(())
+    }
+
+    #[test]
+    fn single_join_must_be_a_right_join() {
+        let err = NestedLoopJoinExecBuilder::new(
+            build_left_table(),
+            build_right_table(),
+            JoinType::Left,
+        )
+        .with_single(true)
+        .build()
+        .unwrap_err();
+        assert_contains!(
+            err.to_string(),
+            "single nested loop joins must be Right joins, got Left"
+        );
     }
 }

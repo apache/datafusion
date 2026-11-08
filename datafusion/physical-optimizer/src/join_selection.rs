@@ -330,6 +330,7 @@ fn statistical_join_selection_subrule(
         let left = nl_join.left();
         let right = nl_join.right();
         if nl_join.join_type().supports_swap()
+            && !nl_join.single()
             && should_swap_join_order(left, right, context)?
         {
             nl_join.swap_inputs().map(Some)?
@@ -384,7 +385,10 @@ fn hash_join_convert_symmetric_subrule(
             EmissionType::Incremental | EmissionType::Both
         );
         // Process only if both left and right sides are unbounded and incrementally emit.
-        if left_unbounded && right_unbounded & left_incremental & right_incremental {
+        if left_unbounded
+            && right_unbounded & left_incremental & right_incremental
+            && !hash_join.single
+        {
             // Determine the partition mode based on configuration.
             let mode = if config_options.optimizer.repartition_joins {
                 StreamJoinPartitionMode::Partitioned
