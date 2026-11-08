@@ -31,7 +31,8 @@ use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::joins::probe_completion::{Completion, ProbeCompletion};
 use crate::joins::utils::{
     OnceAsync, OnceFut, asymmetric_join_output_partitioning, emits_unmatched_left_rows,
-    is_existence_join, reorder_output_after_swap, swap_join_projection, update_hash,
+    is_existence_join, reorder_output_after_swap, swap_join_projection,
+    update_hash_from_values,
 };
 use crate::joins::{JoinOn, JoinOnRef, PartitionMode, ReservedMap, SharedBitmapBuilder};
 use crate::metrics::{Count, MetricBuilder, MetricCategory};
@@ -746,15 +747,15 @@ impl From<&HashJoinExec> for HashJoinExecBuilder {
 ///                           ┌──────────────────────────┐
 ///                           │                     idx  │   hashmap.insert(row-hash, row-idx + offset)
 ///            ┌───────┐      │          ┌───────┐       │
-///   Batch 1  │ Row 1 │      │ Slice 1  │ Row 1 │  0    │   1) update_hash for slice 3 with offset 6
+///   Batch 1  │ Row 1 │      │ Slice 1  │ Row 1 │  0    │   1) hash slice 3 at offset 6
 ///            │ Row 2 │      │          │ Row 2 │  1    │      - hashmap.insert(Row 7, idx 6)
 ///            └───────┘      │          │ Row 3 │  2    │
-///                           │          └───────┘       │   2) update_hash for slice 2 with offset 3
+///                           │          └───────┘       │   2) hash slice 2 at offset 3
 ///            ┌───────┐      │                          │      - hashmap.insert(Row 6, idx 5)
 ///   Batch 2  │ Row 3 │      │          ┌───────┐       │      - hashmap.insert(Row 5, idx 4)
 ///            │ Row 4 │      │ Slice 2  │ Row 4 │  3    │      - hashmap.insert(Row 4, idx 3)
 ///            │ Row 5 │      │          │ Row 5 │  4    │
-///            └───────┘      │          │ Row 6 │  5    │   3) update_hash for slice 1 with offset 0
+///            └───────┘      │          │ Row 6 │  5    │   3) hash slice 1 at offset 0
 ///                           │          └───────┘       │      - hashmap.insert(Row 3, idx 2)
 ///            ┌───────┐      │                          │      - hashmap.insert(Row 2, idx 1)
 ///   Batch 3  │ Row 6 │      │          ┌───────┐       │      - hashmap.insert(Row 1, idx 0)
@@ -3297,15 +3298,19 @@ fn build_in_memory(
         // `chunk_rows` is 0 when the build side is empty
         let chunk_rows = chunk_rows.max(1);
 
-        // Update the hashmap from slices of at most `chunk_rows` rows,
-        // starting from the last one, so rows with smaller indices end up on
-        // top of the chains. Each slice is indexed at its offset in `batch`.
+        // Update the hashmap from slices of the key arrays `left_values` of at
+        // most `chunk_rows` rows, starting from the last one, so rows with
+        // smaller indices end up on top of the chains. Each slice is indexed at
+        // its offset in `batch`.
         for offset in (0..num_rows).step_by(chunk_rows).rev() {
-            let chunk = batch.slice(offset, chunk_rows.min(num_rows - offset));
+            let len = chunk_rows.min(num_rows - offset);
+            let chunk: Vec<ArrayRef> = left_values
+                .iter()
+                .map(|values| values.slice(offset, len))
+                .collect();
             hashes_buffer.clear();
-            hashes_buffer.resize(chunk.num_rows(), 0);
-            update_hash(
-                on_left,
+            hashes_buffer.resize(len, 0);
+            update_hash_from_values(
                 &chunk,
                 &mut *hashmap,
                 offset,
