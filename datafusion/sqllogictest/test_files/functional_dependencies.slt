@@ -787,7 +787,23 @@ ORDER BY i_item_sk;
 1 1
 2 1
 
-# 8.4 The planner adds `i_desc`, which `i_item_sk` determines, to the inner
+# 8.4 `i_item_sk` is not a key of `item_dates`: the DISTINCT must stay, and the
+# default window frame must stay RANGE (peers of item 1 count together).
+query I
+SELECT DISTINCT i_item_sk FROM item_dates ORDER BY i_item_sk;
+----
+1
+2
+
+query II
+SELECT i_item_sk, count(*) OVER (ORDER BY i_item_sk) FROM item_dates
+ORDER BY i_item_sk;
+----
+1 2
+1 2
+2 3
+
+# 8.5 The planner adds `i_desc`, which `i_item_sk` determines, to the inner
 # GROUP BY. `i_desc` is an extraneous column of the inner aggregate's key and
 # is removed from it, so the key still exists after the projection removes
 # `i_desc`, and `c` can be selected.
@@ -800,6 +816,49 @@ GROUP BY i_item_sk, s_date ORDER BY i_item_sk, s_date;
 1 100 1
 1 101 1
 2 100 1
+
+# 8.6 `upper(i_desc)` reads only `i_desc`, which `i_item_sk` determines, so
+# `i_item_sk` is a key of the inner aggregate and `c` can be selected.
+query II
+SELECT i_item_sk, c
+FROM (SELECT i_item_sk, upper(i_desc) AS u, count(*) AS c
+      FROM item JOIN sales ON i_item_sk = s_item_sk
+      GROUP BY i_item_sk, upper(i_desc)) q
+GROUP BY i_item_sk ORDER BY i_item_sk;
+----
+1 2
+2 1
+
+# 8.7 `s_date + 1` reads `s_date`, which `i_item_sk` does not determine.
+statement error
+SELECT i_item_sk, c
+FROM (SELECT i_item_sk, s_date + 1 AS d, count(*) AS c
+      FROM item JOIN sales ON i_item_sk = s_item_sk
+      GROUP BY i_item_sk, s_date + 1) q
+GROUP BY i_item_sk;
+----
+DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "q.c" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "q.i_item_sk" appears in the SELECT clause satisfies this requirement
+
+
+# 8.8 A volatile expression is never determined: the join stays an inner join.
+query TT
+EXPLAIN SELECT sum(o_amount) FROM orders
+JOIN (SELECT i_item_sk FROM item JOIN sales ON i_item_sk = s_item_sk
+      GROUP BY i_item_sk, random() > 0.5) g
+  ON o_item_sk = g.i_item_sk;
+----
+logical_plan
+01)Aggregate: groupBy=[[]], aggr=[[sum(CAST(orders.o_amount AS Int64))]]
+02)--Projection: orders.o_amount
+03)----Inner Join: orders.o_item_sk = g.i_item_sk
+04)------TableScan: orders projection=[o_item_sk, o_amount]
+05)------SubqueryAlias: g
+06)--------Projection: item.i_item_sk
+07)----------Aggregate: groupBy=[[item.i_item_sk, random() > Float64(0.5), item.i_desc]], aggr=[[]]
+08)------------Projection: item.i_item_sk, item.i_desc
+09)--------------Inner Join: item.i_item_sk = sales.s_item_sk
+10)----------------TableScan: item projection=[i_item_sk, i_desc]
+11)----------------TableScan: sales projection=[s_item_sk]
 
 statement ok
 DROP VIEW item_dates;

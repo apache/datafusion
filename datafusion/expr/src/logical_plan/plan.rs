@@ -58,8 +58,9 @@ use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
     ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
-    aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
+    aggregate_functional_dependencies_with_computed_inputs, assert_eq_or_internal_err,
+    assert_or_internal_err, internal_err, plan_datafusion_err, plan_err,
+    validate_range_split_points,
 };
 use itertools::Itertools as _;
 
@@ -4529,19 +4530,54 @@ fn calc_func_dependencies_for_aggregate(
     // - Otherwise, it may be possible to propagate functional dependencies.
     if !contains_grouping_set(group_expr) {
         // One entry per GROUP BY output field, in the order of `aggr_schema`
-        let group_by_input_indices = grouping_set_to_exprlist(group_expr)?
-            .into_iter()
+        let group_exprs = grouping_set_to_exprlist(group_expr)?;
+        let group_by_input_indices = group_exprs
+            .iter()
             .map(|item| passthrough_field_index(item, input.schema()))
             .collect::<Vec<_>>();
-        let aggregate_func_dependencies = aggregate_functional_dependencies(
-            input.schema(),
-            &group_by_input_indices,
-            aggr_schema,
-        );
+        let computed_input_indices = group_exprs
+            .iter()
+            .zip(&group_by_input_indices)
+            .map(|(item, input_idx)| match input_idx {
+                Some(_) => None,
+                None => deterministic_input_indices(item, input.schema()),
+            })
+            .collect::<Vec<_>>();
+        let aggregate_func_dependencies =
+            aggregate_functional_dependencies_with_computed_inputs(
+                input.schema(),
+                &group_by_input_indices,
+                &computed_input_indices,
+                aggr_schema,
+            );
         Ok(aggregate_func_dependencies)
     } else {
         Ok(FunctionalDependencies::empty())
     }
+}
+
+/// Returns the input fields that `expr` reads, or `None` if `expr` is volatile,
+/// contains a subquery or reads a column that is not an input field.
+fn deterministic_input_indices(expr: &Expr, schema: &DFSchema) -> Option<Vec<usize>> {
+    let has_subquery = expr
+        .exists(|e| {
+            Ok(matches!(
+                e,
+                Expr::ScalarSubquery(_)
+                    | Expr::Exists(_)
+                    | Expr::InSubquery(_)
+                    | Expr::SetComparison(_)
+                    | Expr::OuterReferenceColumn(..)
+            ))
+        })
+        .unwrap_or(true);
+    if expr.is_volatile() || has_subquery {
+        return None;
+    }
+    expr.column_refs()
+        .into_iter()
+        .map(|column| schema.index_of_column(column).ok())
+        .collect()
 }
 
 /// This function projects functional dependencies of the `input` plan according

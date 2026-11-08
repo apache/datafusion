@@ -445,9 +445,42 @@ impl Deref for FunctionalDependencies {
 /// the expression computes a new value. Only a column reference can carry an
 /// input dependency; a computed expression such as `CAST(pk AS INT)` cannot,
 /// even though its output name may equal the column's name.
+///
+/// Every computed GROUP BY expression is treated as not determined by any
+/// determinant.
+#[deprecated(
+    since = "57.0.0",
+    note = "Use `aggregate_functional_dependencies_with_computed_inputs` instead"
+)]
 pub fn aggregate_functional_dependencies(
     aggr_input_schema: &DFSchema,
     group_by_input_indices: &[Option<usize>],
+    aggr_schema: &DFSchema,
+) -> FunctionalDependencies {
+    aggregate_functional_dependencies_with_computed_inputs(
+        aggr_input_schema,
+        group_by_input_indices,
+        &vec![None; group_by_input_indices.len()],
+        aggr_schema,
+    )
+}
+
+/// Calculates functional dependencies for aggregate output, when there is a GROUP BY expression.
+///
+/// `group_by_input_indices[i]` is the index of the input field that GROUP BY
+/// expression `i` passes through unchanged (a column reference), or `None` if
+/// the expression computes a new value. Only a column reference can carry an
+/// input dependency; a computed expression such as `CAST(pk AS INT)` cannot,
+/// even though its output name may equal the column's name.
+///
+/// `computed_input_indices[i]` lists the input fields that a deterministic
+/// computed GROUP BY expression `i` reads, or is `None` for a column
+/// reference or a volatile expression. A computed expression whose fields
+/// are all determined by a determinant is determined by it too.
+pub fn aggregate_functional_dependencies_with_computed_inputs(
+    aggr_input_schema: &DFSchema,
+    group_by_input_indices: &[Option<usize>],
+    computed_input_indices: &[Option<Vec<usize>>],
     aggr_schema: &DFSchema,
 ) -> FunctionalDependencies {
     let mut aggregate_func_dependencies = vec![];
@@ -489,14 +522,18 @@ pub fn aggregate_functional_dependencies(
                 &grouped_source_indices,
             )
             .unwrap_or_default();
-            // Dependencies are tracked for columns only, so a computed
-            // expression is never counted as determined, even when its inputs
-            // are.
+            // A deterministic computed expression is determined when every
+            // field it reads is.
             let mut determined_output_indices = vec![];
             for (output_idx, input_idx) in group_by_input_indices.iter().enumerate() {
-                if let Some(input_idx) = input_idx
-                    && determined_input_indices.contains(input_idx)
-                {
+                let determined = match (input_idx, &computed_input_indices[output_idx]) {
+                    (Some(input_idx), _) => determined_input_indices.contains(input_idx),
+                    (None, Some(read)) => read
+                        .iter()
+                        .all(|idx| determined_input_indices.contains(idx)),
+                    (None, None) => false,
+                };
+                if determined {
                     determined_output_indices.push(output_idx);
                 }
             }
