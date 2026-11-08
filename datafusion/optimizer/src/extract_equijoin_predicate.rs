@@ -85,7 +85,9 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 //
                 // Only convert when there are NO equijoin predicates, to be conservative.
                 // Note: Joins are initially constructed with `on: []` and default `NullEqualsNothing`.
-                if on.is_empty()
+                // Explicitly guard against re-scanning if the join was already converted to `NullEqualsNull`.
+                if null_equality == NullEquality::NullEqualsNothing
+                    && on.is_empty()
                     && equijoin_predicates.is_empty()
                     && non_equijoin_expr.is_some()
                 {
