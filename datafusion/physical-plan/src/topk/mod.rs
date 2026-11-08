@@ -917,8 +917,9 @@ impl TopKMetrics {
 /// paths bound that the same way — compact once the store holds this multiple
 /// of what is still referenced — and only the denominator differs: one heap's
 /// length in [`TopKHeap::maybe_compact`], every partition's retained rows
-/// (heap slots, plus ties for `RANK`) in [`RecordBatchStore::compact`]. The
-/// multiplier avoids compacting when the savings would be marginal.
+/// (heap slots, plus ties for `RANK` and groups for `DENSE_RANK`) in
+/// [`RecordBatchStore::compact`]. The multiplier avoids compacting when the
+/// savings would be marginal.
 const STORE_COMPACTION_RATIO: usize = 2;
 
 /// This structure keeps at most the *smallest* k items, using the
@@ -2711,18 +2712,47 @@ impl DenseRankPartitionState {
             + (self.keys.capacity() - heap_before) * size_of::<Vec<u8>>()
     }
 
-    /// Stop tracking the largest ob value, returning its rows, which the
-    /// caller owes the store a release each for, and the bytes this freed.
-    fn evict_max(&mut self) -> (Vec<StoreRef>, usize) {
-        let heap_key = self.keys.pop().expect("a full partition holds k >= 1 keys");
-        let (map_key, rows) = self
+    /// Replace the largest tracked ob value with the smaller, previously
+    /// unseen `key`, holding the row at `at` as its only row, reusing the old
+    /// key buffers and letting `PeekMut` sift down, so a steady-state eviction
+    /// allocates nothing. Every old row goes back through `admission`.
+    fn replace_max(&mut self, key: &[u8], at: StoreRef, admission: &mut Admission<'_>) {
+        let table_before = self.groups.allocation_size();
+        let mut heap_key = self
+            .keys
+            .peek_mut()
+            .expect("a full partition holds k >= 1 keys");
+        let (mut map_key, mut rows) = self
             .groups
-            .remove_entry(&heap_key)
+            .remove_entry(heap_key.as_slice())
             .expect("keys mirrors groups");
-        let freed = heap_key.capacity()
+        // A group's rows from one batch sit next to each other, in arrival
+        // order, so each run of them drops its uses with one store lookup
+        // rather than one per row.
+        for run in rows.chunk_by(|a, b| a.batch_id == b.batch_id) {
+            admission.release_n(run[0].batch_id, run.len());
+        }
+        admission.replacements += rows.len();
+        admission.freed += heap_key.capacity()
             + map_key.capacity()
             + rows.capacity() * size_of::<StoreRef>();
-        (rows, freed)
+
+        heap_key.clear();
+        heap_key.extend_from_slice(key);
+        map_key.clear();
+        map_key.extend_from_slice(key);
+        if rows.len() == 1 {
+            rows[0] = at;
+        } else {
+            // Do not let a group that was large pin its capacity.
+            rows = vec![at];
+        }
+        admission.grown += heap_key.capacity()
+            + map_key.capacity()
+            + rows.capacity() * size_of::<StoreRef>();
+        drop(heap_key);
+        self.groups.insert(map_key, rows);
+        admission.grown += self.groups.allocation_size() - table_before;
     }
 }
 
@@ -2821,20 +2851,11 @@ impl PartitionedTopKDenseRank {
                 }
                 if let Some(rows) = state.groups.get_mut(key) {
                     admission.grown += push_slot(rows, at);
+                } else if full {
+                    // Every row of the boundary group, from this batch or
+                    // earlier ones, now ranks below K.
+                    state.replace_max(key, at, admission);
                 } else {
-                    if full {
-                        // Every row of the boundary group, from this batch or
-                        // earlier ones, now ranks below K.
-                        let (evicted, freed) = state.evict_max();
-                        // A group's rows from one batch sit next to each other, in
-                        // arrival order, so each run of them drops its uses with
-                        // one store lookup rather than one per row.
-                        for run in evicted.chunk_by(|a, b| a.batch_id == b.batch_id) {
-                            admission.release_n(run[0].batch_id, run.len());
-                        }
-                        admission.replacements += evicted.len();
-                        admission.freed += freed;
-                    }
                     admission.grown += state.insert_group(key, at);
                 }
                 true
