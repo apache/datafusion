@@ -7,15 +7,21 @@
 use std::sync::Arc;
 
 use crate::PhysicalOptimizerRule;
-use datafusion_common::Result;
+use arrow::compute::SortOptions;
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
+use datafusion_common::tree_node::{
+    Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
+};
+use datafusion_common::Result;
 use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::aggregates::AggregateExec;
-use datafusion_physical_plan::execution_plan::CardinalityEffect;
+use datafusion_physical_plan::execution_plan::{
+    replace_children_if_necessary, CardinalityEffect,
+};
+use datafusion_physical_plan::materialized_cte::MaterializedCteExec;
 use datafusion_physical_plan::projection::ProjectionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
+use datafusion_physical_plan::ExecutionPlan;
 use itertools::Itertools;
 
 /// An optimizer rule that passes a `limit` hint to aggregations if the whole result is not needed
@@ -26,6 +32,85 @@ impl TopKAggregation {
     /// Create a new `LimitAggregation`
     pub fn new() -> Self {
         Self {}
+    }
+
+    fn transform_down_plan(
+        plan: Arc<dyn ExecutionPlan>,
+        limit: usize,
+        mut sort_col_name: String,
+        sort_options: SortOptions,
+        cardinality_preserved: &mut bool,
+    ) -> Result<Transformed<Arc<dyn ExecutionPlan>>> {
+        if !*cardinality_preserved {
+            return Ok(Transformed::no(plan));
+        }
+
+        if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
+            match aggr
+                .clone()
+                .try_optimize_topk(limit, &sort_col_name, sort_options)
+            {
+                None => *cardinality_preserved = false,
+                Some(aggr) => return Ok(Transformed::yes(Arc::new(aggr.data))),
+            }
+            return Ok(Transformed::no(plan));
+        }
+
+        if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
+            // track renames due to successive projections
+            for proj_expr in proj.expr() {
+                let Some(src_col) = proj_expr.expr.downcast_ref::<Column>() else {
+                    continue;
+                };
+                if proj_expr.alias == sort_col_name {
+                    sort_col_name = src_col.name().to_string();
+                }
+            }
+        } else if let Some(cte) = plan.downcast_ref::<MaterializedCteExec>() {
+            // The body is shared by all CTE consumers and must not be limited by
+            // an outer sort on this consumer. Only enter the continuation,
+            // whose rows reach this node's output.
+            let children = cte.children();
+            let body = Arc::clone(children[0]);
+            let continuation = Arc::clone(children[1]);
+
+            let transformed_continuation = Self::transform_down_plan(
+                continuation,
+                limit,
+                sort_col_name,
+                sort_options,
+                cardinality_preserved,
+            )?;
+
+            return if transformed_continuation.transformed {
+                let new_cte = replace_children_if_necessary(
+                    Arc::clone(&plan),
+                    vec![body, transformed_continuation.data],
+                )?;
+                Ok(Transformed::new(new_cte, true, TreeNodeRecursion::Jump))
+            } else {
+                Ok(Transformed::new(plan, false, TreeNodeRecursion::Jump))
+            };
+        } else {
+            // or we continue down through types that don't reduce cardinality
+            match plan.cardinality_effect() {
+                CardinalityEffect::Equal | CardinalityEffect::GreaterEqual => {}
+                CardinalityEffect::Unknown | CardinalityEffect::LowerEqual => {
+                    *cardinality_preserved = false;
+                    return Ok(Transformed::no(plan));
+                }
+            }
+        }
+
+        plan.map_children(|c| {
+            Self::transform_down_plan(
+                c,
+                limit,
+                sort_col_name.clone(),
+                sort_options,
+                cardinality_preserved,
+            )
+        })
     }
 
     /// Push the bound into eligible aggregates to retain fewer groups; keep the
@@ -51,44 +136,20 @@ impl TopKAggregation {
         let order = order.iter().exactly_one().ok()?;
         let sort_options = order.options;
         let order = order.expr.downcast_ref::<Column>()?;
-        let mut sort_col_name = order.name().to_string();
+        let sort_col_name = order.name().to_string();
         let limit = sort.fetch()?;
 
         let mut cardinality_preserved = true;
-        let closure = |plan: Arc<dyn ExecutionPlan>| {
-            if !cardinality_preserved {
-                return Ok(Transformed::no(plan));
-            }
-            if let Some(aggr) = plan.downcast_ref::<AggregateExec>() {
-                match aggr
-                    .clone()
-                    .try_optimize_topk(limit, &sort_col_name, sort_options)
-                {
-                    None => cardinality_preserved = false,
-                    Some(aggr) => return Ok(Transformed::yes(Arc::new(aggr.data))),
-                }
-            } else if let Some(proj) = plan.downcast_ref::<ProjectionExec>() {
-                // track renames due to successive projections
-                for proj_expr in proj.expr() {
-                    let Some(src_col) = proj_expr.expr.downcast_ref::<Column>() else {
-                        continue;
-                    };
-                    if proj_expr.alias == sort_col_name {
-                        sort_col_name = src_col.name().to_string();
-                    }
-                }
-            } else {
-                // or we continue down through types that don't reduce cardinality
-                match plan.cardinality_effect() {
-                    CardinalityEffect::Equal | CardinalityEffect::GreaterEqual => {}
-                    CardinalityEffect::Unknown | CardinalityEffect::LowerEqual => {
-                        cardinality_preserved = false;
-                    }
-                }
-            }
-            Ok(Transformed::no(plan))
-        };
-        let child = Arc::clone(child).transform_down(closure).data().ok()?;
+        let child = Self::transform_down_plan(
+            Arc::clone(child),
+            limit,
+            sort_col_name,
+            sort_options,
+            &mut cardinality_preserved,
+        )
+        .ok()?
+        .data;
+
         let sort = SortExec::new(sort.expr().clone(), child)
             .with_fetch(sort.fetch())
             .with_preserve_partitioning(sort.preserve_partitioning());

@@ -1118,6 +1118,28 @@ SELECT count(DISTINCT x) FROM (SELECT x FROM r UNION ALL SELECT x FROM r)
 ----
 2
 
+# WITH ... AS MATERIALIZED under ORDER BY ... LIMIT: TopKAggregation must not
+# push the limit into the shared CTE body (#27219).
+query I
+SELECT * FROM (
+  WITH c AS MATERIALIZED (SELECT x FROM generate_series(1, 200) AS t(x) GROUP BY x)
+  SELECT x FROM c WHERE x > 100
+) s ORDER BY x LIMIT 3;
+----
+101
+102
+103
+
+query II
+SELECT * FROM (
+  WITH c AS MATERIALIZED (SELECT x FROM generate_series(1, 200) AS t(x) GROUP BY x)
+  SELECT c.x, m.n FROM c CROSS JOIN (SELECT count(*) AS n FROM c) m
+) s ORDER BY x LIMIT 3;
+----
+1 200
+2 200
+3 200
+
 statement ok
 DROP TABLE t;
 
