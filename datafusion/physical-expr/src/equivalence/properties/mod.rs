@@ -59,7 +59,7 @@ use itertools::{Either, Itertools};
 /// | Concept                | Example                                   | Stored in                                                           |
 /// |------------------------|-------------------------------------------|---------------------------------------------------------------------|
 /// | Equivalent expressions | `a` and `b` after the filter `a = b`      | An [`EquivalenceGroup`] of [`EquivalenceClass`]es                   |
-/// | Constants              | `a` after the filter `a = 5`              | A [`ConstExpr`] of [`EquivalenceClass`]es |
+/// | Constants              | `a` after the filter `a = 5`              | The `constant` of an [`EquivalenceClass`], added as a [`ConstExpr`] |
 /// | Orderings              | `[a ASC, b DESC]` after a sort            | An [`OrderingEquivalenceClass`]                                     |
 /// | Groupings              | `[a, b]` after a hash aggregate on `a, b` | A [`GroupingEquivalenceClass`]                                      |
 /// | Constraints            | A primary key or unique constraint        | [`Constraints`]                                                     |
@@ -197,18 +197,13 @@ use itertools::{Either, Itertools};
 ///   DataFusion's window implementation keeps the input order.
 /// - Within each run of equal `k`, `w` has one value.
 ///
-/// `w` is not a constant, since `w` differs across the output. However,
-/// within each group of rows with the same `k`, `w` has one value, so if the
-/// input is sorted by `[k]`, the output is sorted by `[k, w]` in *every*
-/// direction of `w`: ascending or descending, nulls first or last.
-///
-/// Given those observations, the output sorting is described by all of:
+/// Given those observations, the output is sorted by `[k, w]` in *every*
+/// direction of `w`: ascending or descending, nulls first or last:
 ///
 /// - `[k ASC, w ASC NULLS FIRST]`
 /// - `[k ASC, w ASC NULLS LAST]`
 /// - `[k ASC, w DESC NULLS FIRST]`
 /// - `[k ASC, w DESC NULLS LAST]`
-///
 ///
 /// ## Example: Window Functions without `PARTITION BY`
 ///
@@ -258,14 +253,16 @@ use itertools::{Either, Itertools};
 ///   raise its value or leave it unchanged (see [`SetMonotonicity`]).
 ///
 /// Given those observations, `m` never decreases as `ts` increases, so the
-/// output sorting is described by `[ts ASC]` AND `[m ASC NULLS LAST]`,
+/// output sorting is described by both `[ts ASC]` and `[m ASC NULLS LAST]`.
 ///
-/// If the query had a `PARTITION BY k` the ordering would be `[k ASC, m ASC NULLS LAST]`.
+/// If the query had a `PARTITION BY k`, with the input sorted by `k` first,
+/// the added ordering would be `[k, m ASC NULLS LAST]`.
 ///
-/// A decreasing aggregate such as `MIN` results in `DESC NULLS LAST`
+/// A decreasing aggregate such as `MIN` results in `DESC NULLS LAST`.
 ///
-/// A window frame that shrinks the rows, such as `CURRENT ROW` to `UNBOUNDED
-/// FOLLOWING`, reverses the direction.
+/// A frame that shrinks as rows advance, such as `CURRENT ROW` to
+/// `UNBOUNDED FOLLOWING`, reverses the direction: `MAX` then results in
+/// `DESC NULLS FIRST`.
 ///
 /// [`SetMonotonicity`]: datafusion_expr::SetMonotonicity
 ///
@@ -275,20 +272,21 @@ use itertools::{Either, Itertools};
 /// inputs sorted on the join keys, and a streaming window needs its input
 /// sorted by its `PARTITION BY` and then its `ORDER BY` expressions.
 ///
-/// Each operator states this through [`ExecutionPlan::required_input_ordering`].
+/// Each operator describes its requirements via
+/// [`ExecutionPlan::required_input_ordering`].
 ///
-/// Orderings describe what the data *is*; requirements describe what an
-/// operator *needs*. The planner compares them with
-/// [`Self::ordering_satisfy_requirement`] and inserts / removes sorts so they
-/// match [Checking whether a requirement is satisfied]).
+/// **Orderings** describe how the data is actually distributed.
+/// **Requirements** describe what an operator *needs*. The planner compares
+/// orderings to requirements with [`Self::ordering_satisfy_requirement`] and
+/// inserts or removes Sort operations so that they match (see [Checking whether
+/// a requirement is satisfied]).
 ///
 /// # Normal form
 ///
 /// Orderings and requirements (see [Required orderings]) are compared in
-/// *normal form*: every
-/// expression is replaced by the first member of its equivalence class,
-/// uniform constants are removed, and so are the expressions that repeat an
-/// earlier one.
+/// *normal form*: every expression is replaced by the first member of its
+/// equivalence class, uniform constants and expressions that repeat an earlier
+/// one are removed.
 ///
 /// For example, if `a` and `b` are equal and `d` is a uniform constant, the
 /// requirement `[b ASC, d DESC, c ASC, a ASC]` normalizes to `[a ASC, c ASC]`.
@@ -309,7 +307,9 @@ use itertools::{Either, Itertools};
 ///
 /// ## Example: Ordering Implied by a `CAST`
 ///
-/// Consider `SELECT a, b, CAST(a AS BIGINT) AS c FROM t ORDER BY c, b`:
+/// Consider a table `t` sorted by `[c ASC, b ASC]` and the query
+/// `SELECT a, b, c FROM t WHERE c = CAST(a AS BIGINT)`, which produces the
+/// following rows:
 ///
 /// ```text
 /// ┌───┬───┬───┐
@@ -323,19 +323,24 @@ use itertools::{Either, Itertools};
 /// ```
 ///
 /// Observations:
+/// - The filter keeps the input order, so the rows are still sorted by
+///   `[c ASC, b ASC]`
 /// - Casting an `INT` to a `BIGINT` preserves order and never maps two
 ///   different values to the same one, so rows with different `a` are in the
 ///   order of `c`, which is the order of `a`.
-/// - Rows with equal `c` have equal `a`
+/// - Rows with equal `c` have equal `a`, and are also still sorted by `b`.
 ///
 /// Given those observations, the rows are also sorted by `[a ASC, b ASC]`,
-/// even though no operator sorted on `a`
+/// even though no operator sorted on `a`. `EquivalenceProperties` derives
+/// this ordering when the equality is added, so a later `ORDER BY a, b`
+/// needs no re-sorting.
 ///
-/// This property holds in general for a function `f` that preserves the
-/// lexicographical order of its arguments (that set [`ExprProperties::preserves_lex_ordering`]).
+/// This holds in general for a function `f` whose output follows the
+/// lexicographical order of its arguments, which `f` declares by setting
+/// [`ExprProperties::preserves_lex_ordering`].
 ///
-/// See [`Self::add_ordering`], [`Self::add_equal_conditions`] and
-/// [`Self::add_constants`] for more details.
+/// [`Self::add_equal_conditions`] and [`Self::add_constants`] look for such
+/// orderings whenever they learn something new.
 ///
 /// # Code Example
 /// ```
