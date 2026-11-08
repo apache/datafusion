@@ -1,0 +1,170 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# A correlated `NOT IN` runs as a partitioned null-aware hash join when its
+# inputs are too large to collect. Both inputs are hash partitioned on the
+# correlation scope key alone, so a NULL stays in the partition of its scope.
+# An uncorrelated `NOT IN` still collects its build side.
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold = 0;
+
+statement ok
+set datafusion.optimizer.hash_join_single_partition_threshold_rows = 0;
+
+statement ok
+set datafusion.execution.batch_size = 2;
+
+statement ok
+CREATE TABLE o(id INT, grp INT, z INT) AS VALUES
+(1, 1, 5),
+(2, 1, 5),
+(NULL, 1, 5),
+(4, 2, 5),
+(NULL, 3, 5),
+(3, 2, 0),
+(NULL, 4, 5),
+(6, 4, 5),
+(7, 5, 5),
+(8, 6, 5),
+(NULL, 6, 5),
+(5, NULL, 5);
+
+statement ok
+CREATE TABLE i(id INT, grp INT, z INT) AS VALUES
+(1, 1, 1),
+(NULL, 2, 9),
+(9, 3, 1),
+(8, 6, 1),
+(NULL, 7, 1),
+(5, NULL, 1);
+
+query TT
+EXPLAIN SELECT id, grp FROM o WHERE id NOT IN (SELECT id FROM i WHERE i.grp = o.grp);
+----
+logical_plan
+01)LeftAnti Join: o.id = __correlated_sq_1.id, o.grp = __correlated_sq_1.grp null_aware
+02)--TableScan: o projection=[id, grp]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: i projection=[id, grp]
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=RightAnti, on=[(id@0, id@0), (grp@1, grp@1)], null_aware
+02)--RepartitionExec: partitioning=Hash([grp@1], 4), input_partitions=1
+03)----DataSourceExec: partitions=1, partition_sizes=[3]
+04)--RepartitionExec: partitioning=Hash([grp@1], 4), input_partitions=4
+05)----DataSourceExec: partitions=4, partition_sizes=[2, 2, 1, 1]
+
+query II rowsort
+SELECT id, grp FROM o WHERE id NOT IN (SELECT id FROM i WHERE i.grp = o.grp);
+----
+2 1
+5 NULL
+6 4
+7 5
+NULL 4
+
+# Without join reordering the outer side stays the build side.
+statement ok
+set datafusion.optimizer.join_reordering = false;
+
+query TT
+EXPLAIN SELECT id, grp FROM o WHERE id NOT IN (SELECT id FROM i WHERE i.grp = o.grp);
+----
+logical_plan
+01)LeftAnti Join: o.id = __correlated_sq_1.id, o.grp = __correlated_sq_1.grp null_aware
+02)--TableScan: o projection=[id, grp]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: i projection=[id, grp]
+physical_plan
+01)HashJoinExec: mode=Partitioned, join_type=LeftAnti, on=[(id@0, id@0), (grp@1, grp@1)], null_aware
+02)--RepartitionExec: partitioning=Hash([grp@1], 4), input_partitions=4
+03)----DataSourceExec: partitions=4, partition_sizes=[2, 2, 1, 1]
+04)--RepartitionExec: partitioning=Hash([grp@1], 4), input_partitions=1
+05)----DataSourceExec: partitions=1, partition_sizes=[3]
+
+query II rowsort
+SELECT id, grp FROM o WHERE id NOT IN (SELECT id FROM i WHERE i.grp = o.grp);
+----
+2 1
+5 NULL
+6 4
+7 5
+NULL 4
+
+statement ok
+reset datafusion.optimizer.join_reordering;
+
+query TT
+EXPLAIN SELECT id, grp, id IN (SELECT id FROM i WHERE i.grp = o.grp AND i.z < o.z) AS m FROM o;
+----
+logical_plan
+01)Projection: o.id, o.grp, __correlated_sq_1.mark AS m
+02)--LeftMark Join: o.id = __correlated_sq_1.id, o.grp = __correlated_sq_1.grp Filter: __correlated_sq_1.z < o.z null_aware
+03)----TableScan: o projection=[id, grp, z]
+04)----SubqueryAlias: __correlated_sq_1
+05)------TableScan: i projection=[id, grp, z]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, grp@1 as grp, mark@2 as m]
+02)--HashJoinExec: mode=Partitioned, join_type=RightMark, on=[(id@0, id@0), (grp@1, grp@1)], filter=z@1 < z@0, projection=[id@0, grp@1, mark@3], null_aware
+03)----RepartitionExec: partitioning=Hash([grp@1], 4), input_partitions=1
+04)------DataSourceExec: partitions=1, partition_sizes=[3]
+05)----RepartitionExec: partitioning=Hash([grp@1], 4), input_partitions=4
+06)------DataSourceExec: partitions=4, partition_sizes=[2, 2, 1, 1]
+
+query IIB rowsort
+SELECT id, grp, id IN (SELECT id FROM i WHERE i.grp = o.grp AND i.z < o.z) AS m FROM o;
+----
+1 1 true
+2 1 false
+3 2 false
+4 2 false
+5 NULL false
+6 4 false
+7 5 false
+8 6 true
+NULL 1 NULL
+NULL 3 NULL
+NULL 4 false
+NULL 6 NULL
+
+query TT
+EXPLAIN SELECT id, grp FROM o WHERE id NOT IN (SELECT id FROM i WHERE id IS NOT NULL);
+----
+logical_plan
+01)LeftAnti Join: o.id = __correlated_sq_1.id null_aware
+02)--TableScan: o projection=[id, grp]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Filter: i.id IS NOT NULL
+05)------TableScan: i projection=[id]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, id@0)], null_aware
+02)--CoalescePartitionsExec
+03)----FilterExec: id@0 IS NOT NULL
+04)------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+05)--------DataSourceExec: partitions=1, partition_sizes=[3]
+06)--DataSourceExec: partitions=4, partition_sizes=[2, 2, 1, 1]
+
+query II rowsort
+SELECT id, grp FROM o WHERE id NOT IN (SELECT id FROM i WHERE id IS NOT NULL);
+----
+2 1
+3 2
+4 2
+6 4
+7 5
+
+statement ok
+DROP TABLE o;
+
+statement ok
+DROP TABLE i;
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold;
+
+statement ok
+reset datafusion.optimizer.hash_join_single_partition_threshold_rows;
+
+statement ok
+reset datafusion.execution.batch_size;

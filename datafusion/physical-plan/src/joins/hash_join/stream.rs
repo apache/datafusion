@@ -851,13 +851,20 @@ impl HashJoinStream {
         let is_empty = !build_side.left_data.has_matchable_build_rows();
 
         if is_empty {
-            let result = self.not_in.after_empty_build(build_batch_empty_build_side(
+            let mut result = build_batch_empty_build_side(
                 &self.schema,
                 build_side.left_data.batch(),
                 &state.batch,
                 &self.column_indices,
                 self.join_type,
-            )?)?;
+            )?;
+            if let Some(not_in) = build_side.left_data.not_in() {
+                result = self.not_in.after_empty_build(
+                    not_in,
+                    result,
+                    &self.column_indices,
+                )?;
+            }
             timer.done();
             self.output_buffer.push_batch(result)?;
             self.state = HashJoinStreamState::FetchProbeBatch;
@@ -979,6 +986,7 @@ impl HashJoinStream {
             self.right_side_ordered,
         )?;
 
+        let mut mark_column = None;
         if let Some(not_in) = build_side.left_data.not_in() {
             right_indices = self.not_in.after_lookup(
                 not_in,
@@ -986,6 +994,9 @@ impl HashJoinStream {
                 state.valid_keys.as_ref(),
                 right_indices,
             );
+            mark_column = self
+                .not_in
+                .probe_marks(not_in, &left_indices, &right_indices);
         }
 
         // Build output batch and push to coalescer
@@ -1005,7 +1016,7 @@ impl HashJoinStream {
             &self.column_indices,
             join_side,
             self.join_type,
-            None,
+            mark_column.as_ref(),
         )?;
 
         // Reclaim the array map scratch buffers now that no index array

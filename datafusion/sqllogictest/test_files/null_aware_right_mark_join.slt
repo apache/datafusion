@@ -1,0 +1,153 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# A null-aware mark join builds on the subquery side when it is the smaller
+# one: `JoinSelection` swaps the `LeftMark` into a null-aware `RightMark` that
+# marks each outer row as it streams.
+
+statement ok
+CREATE TABLE o(id INT, grp INT, z INT) AS VALUES
+(1, 1, 5),
+(2, 1, 5),
+(NULL, 1, 5),
+(4, 2, 5),
+(NULL, 3, 5),
+(3, 2, 0),
+(NULL, 4, 5),
+(6, 4, 5);
+
+statement ok
+CREATE TABLE i_no_null(id INT) AS VALUES (1), (3);
+
+statement ok
+CREATE TABLE i_with_null(id INT) AS VALUES (1), (NULL);
+
+statement ok
+CREATE TABLE i_empty(id INT) AS SELECT * FROM (VALUES (1)) AS t(id) WHERE id < 0;
+
+statement ok
+CREATE TABLE i_corr(id INT, grp INT, z INT) AS VALUES
+(1, 1, 1),
+(NULL, 2, 9),
+(9, 3, 1);
+
+query TT
+EXPLAIN SELECT id, id IN (SELECT id FROM i_no_null) AS m FROM o;
+----
+logical_plan
+01)Projection: o.id, __correlated_sq_1.mark AS m
+02)--LeftMark Join: o.id = __correlated_sq_1.id null_aware
+03)----TableScan: o projection=[id]
+04)----SubqueryAlias: __correlated_sq_1
+05)------TableScan: i_no_null projection=[id]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, mark@1 as m]
+02)--HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)], null_aware
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IIB rowsort
+SELECT id, grp, id IN (SELECT id FROM i_no_null) AS m FROM o;
+----
+1 1 true
+2 1 false
+3 2 true
+4 2 false
+6 4 false
+NULL 1 NULL
+NULL 3 NULL
+NULL 4 NULL
+
+query IIB rowsort
+SELECT id, grp, id IN (SELECT id FROM i_with_null) AS m FROM o;
+----
+1 1 true
+2 1 NULL
+3 2 NULL
+4 2 NULL
+6 4 NULL
+NULL 1 NULL
+NULL 3 NULL
+NULL 4 NULL
+
+query IIB rowsort
+SELECT id, grp, id IN (SELECT id FROM i_empty) AS m FROM o;
+----
+1 1 false
+2 1 false
+3 2 false
+4 2 false
+6 4 false
+NULL 1 false
+NULL 3 false
+NULL 4 false
+
+query TT
+EXPLAIN SELECT id, grp, id IN (SELECT id FROM i_corr WHERE i_corr.grp = o.grp) AS m FROM o;
+----
+logical_plan
+01)Projection: o.id, o.grp, __correlated_sq_1.mark AS m
+02)--LeftMark Join: o.id = __correlated_sq_1.id, o.grp = __correlated_sq_1.grp null_aware
+03)----TableScan: o projection=[id, grp]
+04)----SubqueryAlias: __correlated_sq_1
+05)------TableScan: i_corr projection=[id, grp]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, grp@1 as grp, mark@2 as m]
+02)--HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0), (grp@1, grp@1)], null_aware
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IIB rowsort
+SELECT id, grp, id IN (SELECT id FROM i_corr WHERE i_corr.grp = o.grp) AS m FROM o;
+----
+1 1 true
+2 1 false
+3 2 NULL
+4 2 NULL
+6 4 false
+NULL 1 NULL
+NULL 3 NULL
+NULL 4 false
+
+query TT
+EXPLAIN SELECT id, grp, id IN (SELECT id FROM i_corr WHERE i_corr.z < o.z) AS m FROM o;
+----
+logical_plan
+01)Projection: o.id, o.grp, __correlated_sq_1.mark AS m
+02)--LeftMark Join: o.id = __correlated_sq_1.id Filter: __correlated_sq_1.z < o.z null_aware
+03)----TableScan: o projection=[id, grp, z]
+04)----SubqueryAlias: __correlated_sq_1
+05)------TableScan: i_corr projection=[id, z]
+physical_plan
+01)ProjectionExec: expr=[id@0 as id, grp@1 as grp, mark@2 as m]
+02)--HashJoinExec: mode=CollectLeft, join_type=RightMark, on=[(id@0, id@0)], filter=z@1 < z@0, projection=[id@0, grp@1, mark@3], null_aware
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+query IIB rowsort
+SELECT id, grp, id IN (SELECT id FROM i_corr WHERE i_corr.z < o.z) AS m FROM o;
+----
+1 1 true
+2 1 false
+3 2 false
+4 2 false
+6 4 false
+NULL 1 NULL
+NULL 3 NULL
+NULL 4 NULL
+
+statement ok
+DROP TABLE o;
+
+statement ok
+DROP TABLE i_no_null;
+
+statement ok
+DROP TABLE i_with_null;
+
+statement ok
+DROP TABLE i_empty;
+
+statement ok
+DROP TABLE i_corr;

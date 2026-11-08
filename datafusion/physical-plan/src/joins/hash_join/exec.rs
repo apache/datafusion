@@ -837,17 +837,16 @@ pub struct HashJoinExec {
     /// A join filter holds the non-equality part of a correlated subquery, and
     /// only the probe rows that pass it take part in the three-valued logic.
     ///
-    /// `JoinSelection` may swap a null-aware `LeftAnti` into a `RightAnti`
-    /// join that builds on the subquery side and decides each outer (probe)
-    /// row as it streams.
+    /// `JoinSelection` may swap a null-aware `LeftAnti` or `LeftMark` into a
+    /// `RightAnti` or `RightMark` join that builds on the subquery side and
+    /// decides each outer (probe) row as it streams.
     ///
     /// Key-ordering convention (relied on positionally, not enforced): for a
     /// null-aware join, `on[..V]` are the `NOT IN` value keys and `on[V..]`
     /// the correlated equality scope keys, where `V` is
     /// [`Self::null_aware_value_keys`].
     /// Reordering these keys would silently produce wrong results, which is why
-    /// such joins are pinned to `PartitionMode::CollectLeft` (the only key
-    /// reorderer acts solely on `PartitionMode::Partitioned`).
+    /// the key reorderers of `EnforceDistribution` skip null-aware joins.
     pub null_aware: bool,
     /// Number of `NOT IN` value keys of a null-aware join; ignored unless
     /// [`Self::null_aware`] is set.
@@ -1047,9 +1046,10 @@ impl HashJoinExec {
         //   would be missed by that scan.
         // NOT NULL build keys rule out both, so the filter stays there.
         if self.null_aware
-            && self.on.iter().any(|(build_key, _)| {
-                build_key.nullable(&self.left.schema()).unwrap_or(true)
-            })
+            && (self.mode == PartitionMode::Partitioned
+                || self.on.iter().any(|(build_key, _)| {
+                    build_key.nullable(&self.left.schema()).unwrap_or(true)
+                }))
         {
             return false;
         }
@@ -1526,9 +1526,15 @@ impl ExecutionPlan for HashJoinExec {
     fn input_distribution_requirements(&self) -> InputDistributionRequirements {
         match self.mode {
             PartitionMode::Partitioned => {
+                let value_keys = if self.null_aware {
+                    self.null_aware_value_keys.max(1)
+                } else {
+                    0
+                };
                 let (left_expr, right_expr) = self
                     .on
                     .iter()
+                    .skip(value_keys)
                     .map(|(l, r)| (Arc::clone(l), Arc::clone(r)))
                     .unzip();
                 InputDistributionRequirements::co_partitioned(vec![
@@ -2573,7 +2579,7 @@ mod proto_tests {
         assert!(as_join(&decode(node)).null_aware);
     }
 
-    /// A null-aware join decides in the final stage from state shared across
+    /// An uncorrelated null-aware join decides in the final stage from state shared across
     /// the probe partitions, which `PartitionMode::Partitioned` does not give
     /// it. Decoding goes through the same builder as `try_new`, so a node
     /// written with that combination is rejected rather than silently
@@ -2590,12 +2596,18 @@ mod proto_tests {
             protobuf::PartitionMode::Partitioned as i32
         );
 
-        let err = HashJoinExec::try_from_proto(&join_node(node), &ctx).unwrap_err();
+        let err =
+            HashJoinExec::try_from_proto(&join_node(node.clone()), &ctx).unwrap_err();
         assert!(
             err.to_string()
                 .contains("null_aware joins require PartitionMode::CollectLeft"),
             "{err}"
         );
+
+        node.on = vec![node.on[0].clone(), node.on[0].clone()];
+        node.null_aware_value_keys = 1;
+        let join = decode(node);
+        assert_eq!(*as_join(&join).partition_mode(), PartitionMode::Partitioned);
     }
 
     /// A multi-column `NOT IN` keeps its value key count through the round
@@ -3525,6 +3537,8 @@ mod tests {
     use futures::StreamExt;
     use hashbrown::HashTable;
     use insta::{allow_duplicates, assert_snapshot};
+    use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
     use rstest::*;
     use rstest_reuse::*;
 
@@ -10229,7 +10243,7 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains(
-            "null_aware can only be true for LeftAnti joins and RightAnti joins"
+            "null_aware can only be true for LeftAnti, LeftMark, RightAnti and RightMark joins"
         ));
     }
 
@@ -10260,7 +10274,7 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains(
-            "null_aware can only be true for LeftAnti joins and RightAnti joins"
+            "null_aware joins require PartitionMode::CollectLeft without correlation scope keys"
         ));
     }
 
@@ -10343,15 +10357,11 @@ mod tests {
             ),
         ];
 
-        // A correlated (multi-key) LeftMark requires CollectLeft.
-        let result = try_new_scalar_not_in(
-            left,
-            right,
-            on,
-            None,
-            JoinType::LeftMark,
-            PartitionMode::Partitioned,
-        );
+        let result = HashJoinExecBuilder::new(left, right, on, JoinType::LeftMark)
+            .with_partition_mode(PartitionMode::Partitioned)
+            .with_null_aware(true)
+            .with_null_aware_value_keys(2)
+            .build();
 
         assert!(result.is_err());
         assert!(
@@ -10369,6 +10379,8 @@ mod tests {
     #[case::right_anti_multi_key(JoinType::RightAnti, true, false)]
     #[case::right_anti_filter(JoinType::RightAnti, false, true)]
     #[case::left_anti_filter(JoinType::LeftAnti, false, true)]
+    #[case::right_mark_multi_key(JoinType::RightMark, true, false)]
+    #[case::right_mark_filter(JoinType::RightMark, false, true)]
     fn test_null_aware_correlated_anti_join_accepted(
         #[case] join_type: JoinType,
         #[case] multi_key: bool,
@@ -10398,7 +10410,14 @@ mod tests {
         )?;
         let scope = NotInScope::Correlated { value_keys: 1 };
         let expected = match join_type {
-            JoinType::RightAnti => NotIn::ProbeRows { scope },
+            JoinType::RightAnti => NotIn::ProbeRows {
+                scope,
+                output: NotInOutput::Rows,
+            },
+            JoinType::RightMark => NotIn::ProbeRows {
+                scope,
+                output: NotInOutput::Mark,
+            },
             _ => NotIn::BuildRows {
                 scope,
                 output: NotInOutput::Rows,
@@ -11122,20 +11141,20 @@ mod tests {
         // not the missing count.
         for (on, join_type, partition_mode, expected) in [
             (
-                two_keys.clone(),
+                two_keys,
                 JoinType::Inner,
                 PartitionMode::CollectLeft,
-                "null_aware can only be true for LeftAnti joins",
+                "null_aware can only be true for LeftAnti",
             ),
             (
-                two_keys.clone(),
+                vec![key("a", "x")?],
                 JoinType::RightAnti,
                 PartitionMode::Partitioned,
-                "null_aware can only be true for LeftAnti joins",
+                "null_aware joins require PartitionMode::CollectLeft",
             ),
             (
-                two_keys,
-                JoinType::LeftAnti,
+                vec![key("a", "x")?],
+                JoinType::RightMark,
                 PartitionMode::Partitioned,
                 "null_aware joins require PartitionMode::CollectLeft",
             ),
@@ -11448,6 +11467,351 @@ mod tests {
             | 9  | 4 |
             +----+---+
             ");
+        }
+        Ok(())
+    }
+
+    fn null_aware_table(rows: &[[Option<i32>; 3]]) -> Arc<dyn ExecutionPlan> {
+        let schema = Arc::new(Schema::new(
+            ["v", "w", "g"]
+                .map(|name| Field::new(name, DataType::Int32, true))
+                .to_vec(),
+        ));
+        let batches = rows
+            .chunks(2)
+            .map(|rows| {
+                let columns = (0..3)
+                    .map(|i| {
+                        Arc::new(Int32Array::from_iter(rows.iter().map(|row| row[i])))
+                            as ArrayRef
+                    })
+                    .collect();
+                RecordBatch::try_new(Arc::clone(&schema), columns).unwrap()
+            })
+            .collect::<Vec<_>>();
+        TestMemoryExec::try_new_exec(&[batches], schema, None).unwrap()
+    }
+
+    fn null_aware_join(
+        left: Arc<dyn ExecutionPlan>,
+        right: Arc<dyn ExecutionPlan>,
+        keys: &[&str],
+        value_keys: usize,
+        filter: Option<JoinFilter>,
+        join_type: JoinType,
+        partition_mode: PartitionMode,
+    ) -> Result<HashJoinExec> {
+        let on = keys
+            .iter()
+            .map(|name| {
+                Ok((
+                    Arc::new(Column::new_with_schema(name, &left.schema())?) as _,
+                    Arc::new(Column::new_with_schema(name, &right.schema())?) as _,
+                ))
+            })
+            .collect::<Result<JoinOn>>()?;
+        HashJoinExecBuilder::new(left, right, on, join_type)
+            .with_filter(filter)
+            .with_partition_mode(partition_mode)
+            .with_null_aware(true)
+            .with_null_aware_value_keys(value_keys)
+            .build()
+    }
+
+    fn swap_null_aware(
+        join: &HashJoinExec,
+        partition_mode: PartitionMode,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let swapped = join.swap_inputs(partition_mode)?;
+        let swapped_join = swapped.downcast_ref::<HashJoinExec>().unwrap();
+        assert!(swapped_join.null_aware);
+        assert_eq!(
+            swapped_join.null_aware_value_keys,
+            join.null_aware_value_keys
+        );
+        assert_eq!(*swapped_join.join_type(), join.join_type().swap());
+        Ok(swapped)
+    }
+
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_right_mark(batch_size: usize) -> Result<()> {
+        let outer = [
+            [Some(1), Some(5), Some(1)],
+            [Some(2), Some(5), Some(1)],
+            [None, Some(5), Some(1)],
+            [Some(4), Some(5), Some(2)],
+            [None, Some(5), Some(3)],
+            [Some(3), Some(0), Some(2)],
+            [None, Some(5), Some(4)],
+        ];
+        let scenarios = [
+            (
+                "matches",
+                vec![[Some(1), None, None], [Some(3), None, None]],
+                vec!["v"],
+                1,
+                false,
+            ),
+            (
+                "null_build",
+                vec![[Some(1), None, None], [None, None, None]],
+                vec!["v"],
+                1,
+                false,
+            ),
+            ("empty_build", vec![], vec!["v"], 1, false),
+            (
+                "all_null_build",
+                vec![[None, None, None]],
+                vec!["v"],
+                1,
+                false,
+            ),
+            (
+                "scope",
+                vec![
+                    [Some(1), Some(0), Some(1)],
+                    [None, Some(0), Some(2)],
+                    [Some(9), Some(0), Some(3)],
+                ],
+                vec!["v", "g"],
+                1,
+                false,
+            ),
+            (
+                "multi_value_keys",
+                vec![
+                    [Some(1), Some(5), Some(1)],
+                    [Some(2), None, Some(1)],
+                    [Some(4), Some(6), Some(2)],
+                    [None, Some(0), Some(3)],
+                ],
+                vec!["v", "w", "g"],
+                2,
+                false,
+            ),
+            (
+                "filter",
+                vec![
+                    [Some(1), Some(1), None],
+                    [None, Some(9), None],
+                    [Some(3), Some(1), None],
+                ],
+                vec!["v"],
+                1,
+                true,
+            ),
+        ];
+
+        let mut results = vec![];
+        for (name, inner, keys, value_keys, with_filter) in scenarios {
+            let task_ctx = prepare_task_ctx(batch_size, false);
+            let left_mark = || {
+                null_aware_join(
+                    null_aware_table(&outer),
+                    null_aware_table(&inner),
+                    &keys,
+                    value_keys,
+                    with_filter.then(prepare_second_column_gt_filter),
+                    JoinType::LeftMark,
+                    PartitionMode::CollectLeft,
+                )
+            };
+            let right_mark = swap_null_aware(&left_mark()?, PartitionMode::CollectLeft)?;
+            let expected = batches_to_sort_string(
+                &crate::execution_plan::collect(
+                    Arc::new(left_mark()?),
+                    Arc::clone(&task_ctx),
+                )
+                .await?,
+            );
+            let actual = batches_to_sort_string(
+                &crate::execution_plan::collect(right_mark, task_ctx).await?,
+            );
+            assert_eq!(actual, expected, "{name}");
+            results.push(format!("{name}\n{actual}"));
+        }
+
+        allow_duplicates! {
+            assert_snapshot!(results.join("\n"), @r"
+            matches
+            +---+---+---+-------+
+            | v | w | g | mark  |
+            +---+---+---+-------+
+            |   | 5 | 1 |       |
+            |   | 5 | 3 |       |
+            |   | 5 | 4 |       |
+            | 1 | 5 | 1 | true  |
+            | 2 | 5 | 1 | false |
+            | 3 | 0 | 2 | true  |
+            | 4 | 5 | 2 | false |
+            +---+---+---+-------+
+            null_build
+            +---+---+---+------+
+            | v | w | g | mark |
+            +---+---+---+------+
+            |   | 5 | 1 |      |
+            |   | 5 | 3 |      |
+            |   | 5 | 4 |      |
+            | 1 | 5 | 1 | true |
+            | 2 | 5 | 1 |      |
+            | 3 | 0 | 2 |      |
+            | 4 | 5 | 2 |      |
+            +---+---+---+------+
+            empty_build
+            +---+---+---+-------+
+            | v | w | g | mark  |
+            +---+---+---+-------+
+            |   | 5 | 1 | false |
+            |   | 5 | 3 | false |
+            |   | 5 | 4 | false |
+            | 1 | 5 | 1 | false |
+            | 2 | 5 | 1 | false |
+            | 3 | 0 | 2 | false |
+            | 4 | 5 | 2 | false |
+            +---+---+---+-------+
+            all_null_build
+            +---+---+---+------+
+            | v | w | g | mark |
+            +---+---+---+------+
+            |   | 5 | 1 |      |
+            |   | 5 | 3 |      |
+            |   | 5 | 4 |      |
+            | 1 | 5 | 1 |      |
+            | 2 | 5 | 1 |      |
+            | 3 | 0 | 2 |      |
+            | 4 | 5 | 2 |      |
+            +---+---+---+------+
+            scope
+            +---+---+---+-------+
+            | v | w | g | mark  |
+            +---+---+---+-------+
+            |   | 5 | 1 |       |
+            |   | 5 | 3 |       |
+            |   | 5 | 4 | false |
+            | 1 | 5 | 1 | true  |
+            | 2 | 5 | 1 | false |
+            | 3 | 0 | 2 |       |
+            | 4 | 5 | 2 |       |
+            +---+---+---+-------+
+            multi_value_keys
+            +---+---+---+-------+
+            | v | w | g | mark  |
+            +---+---+---+-------+
+            |   | 5 | 1 |       |
+            |   | 5 | 3 | false |
+            |   | 5 | 4 | false |
+            | 1 | 5 | 1 | true  |
+            | 2 | 5 | 1 |       |
+            | 3 | 0 | 2 | false |
+            | 4 | 5 | 2 | false |
+            +---+---+---+-------+
+            filter
+            +---+---+---+-------+
+            | v | w | g | mark  |
+            +---+---+---+-------+
+            |   | 5 | 1 |       |
+            |   | 5 | 3 |       |
+            |   | 5 | 4 |       |
+            | 1 | 5 | 1 | true  |
+            | 2 | 5 | 1 | false |
+            | 3 | 0 | 2 | false |
+            | 4 | 5 | 2 | false |
+            +---+---+---+-------+
+            ");
+        }
+        Ok(())
+    }
+
+    #[apply(hash_join_exec_configs)]
+    #[tokio::test]
+    async fn test_null_aware_partitioned_on_scope_keys(batch_size: usize) -> Result<()> {
+        let random_rows = |rng: &mut StdRng, num_rows| {
+            let mut value =
+                |max| (!rng.random_bool(0.2)).then(|| rng.random_range(0..max));
+            (0..num_rows)
+                .map(|_| [value(4), value(3), value(8)])
+                .collect::<Vec<_>>()
+        };
+        let partitioned =
+            |input: Arc<dyn ExecutionPlan>| -> Result<Arc<dyn ExecutionPlan>> {
+                let scope_key = Arc::new(Column::new_with_schema("g", &input.schema())?);
+                Ok(Arc::new(RepartitionExec::try_new(
+                    input,
+                    Partitioning::Hash(vec![scope_key], 4),
+                )?))
+            };
+        let shapes: [(&[&str], usize, bool); 3] = [
+            (&["v", "g"], 1, false),
+            (&["v", "w", "g"], 2, false),
+            (&["v", "g"], 1, true),
+        ];
+
+        for seed in 0..8 {
+            let mut rng = StdRng::seed_from_u64(seed);
+            let outer = random_rows(&mut rng, 40);
+            let inner = random_rows(&mut rng, 30);
+            for (keys, value_keys, with_filter) in shapes {
+                for join_type in [JoinType::LeftAnti, JoinType::LeftMark] {
+                    let join = |partition_mode| {
+                        let (left, right) = match partition_mode {
+                            PartitionMode::Partitioned => (
+                                partitioned(null_aware_table(&outer))?,
+                                partitioned(null_aware_table(&inner))?,
+                            ),
+                            _ => (null_aware_table(&outer), null_aware_table(&inner)),
+                        };
+                        null_aware_join(
+                            left,
+                            right,
+                            keys,
+                            value_keys,
+                            with_filter.then(prepare_second_column_gt_filter),
+                            join_type,
+                            partition_mode,
+                        )
+                    };
+                    let Distribution::KeyPartitioned(scope_keys) =
+                        &join(PartitionMode::Partitioned)?
+                            .input_distribution_requirements()
+                            .into_per_child()[0]
+                    else {
+                        panic!("a partitioned join requires hash partitioned inputs");
+                    };
+                    assert_eq!(scope_keys.len(), 1);
+
+                    for swap in [false, true] {
+                        let plan = |partition_mode| -> Result<Arc<dyn ExecutionPlan>> {
+                            let join = join(partition_mode)?;
+                            if swap {
+                                swap_null_aware(&join, partition_mode)
+                            } else {
+                                Ok(Arc::new(join))
+                            }
+                        };
+                        let collect_left = plan(PartitionMode::CollectLeft)?;
+                        let partitioned = plan(PartitionMode::Partitioned)?;
+                        let task_ctx = prepare_task_ctx(batch_size, false);
+                        let expected = batches_to_sort_string(
+                            &crate::execution_plan::collect(
+                                collect_left,
+                                Arc::clone(&task_ctx),
+                            )
+                            .await?,
+                        );
+                        let actual = batches_to_sort_string(
+                            &crate::execution_plan::collect(partitioned, task_ctx)
+                                .await?,
+                        );
+                        assert_eq!(
+                            actual, expected,
+                            "seed={seed} keys={keys:?} value_keys={value_keys} \
+                             filter={with_filter} {join_type} swap={swap}"
+                        );
+                    }
+                }
+            }
         }
         Ok(())
     }
