@@ -396,7 +396,7 @@ fn get_exprs_except_skipped(
 /// joins). An unqualified wildcard should include each USING column only once.
 /// This function returns the duplicate columns that should be excluded.
 fn exclude_using_columns(plan: &LogicalPlan) -> Result<HashSet<Column>> {
-    let output_columns: HashSet<_> = plan.schema().columns().iter().cloned().collect();
+    let output_columns: HashSet<_> = plan.schema().columns().into_iter().collect();
     let mut excluded = HashSet::new();
     for cols in plan.using_columns()? {
         // `using_columns()` returns join columns from both sides regardless of

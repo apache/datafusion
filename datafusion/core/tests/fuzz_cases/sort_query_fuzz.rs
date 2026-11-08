@@ -630,33 +630,40 @@ mod test {
 
     /// The sort query fuzzer uses the current time as its seed for each run.
     /// This test replays seeds from previously failing cases.
-    ///
-    /// Regressions:
-    /// https://github.com/apache/datafusion/actions/runs/41196052207/job/124522323666
     #[tokio::test(flavor = "multi_thread")]
     async fn test_regression_sort_query_fuzz() {
-        // Regression seeds
-        let gen_seed = 1_793_445_468;
-
-        // Reproducing
-        let mut test_generator = SortFuzzerTestGenerator::new(
-            2000,
-            3,
-            "sort_fuzz_table".to_string(),
-            get_supported_types_columns(gen_seed),
-            false,
-            gen_seed,
-        );
-
-        test_generator
-            .fuzzer_run(
+        let seeds = [
+            // https://github.com/apache/datafusion/actions/runs/41196052207/job/124522323666
+            (
+                1_793_445_468,
                 17_320_197_313_368_524_478,
                 16_774_755_103_655_697_964,
                 1_568_822_825_954_225_201,
-                true,
-            )
-            .await
-            .unwrap();
+            ),
+            // https://github.com/apache/datafusion/actions/runs/41115808909/job/124269616294
+            (
+                1_793_388_738,
+                1_004_655_469_210_299_058,
+                17_630_739_076_404_108_311,
+                5_497_646_063_426_563_414,
+            ),
+        ];
+
+        for (gen_seed, dataset_seed, query_seed, config_seed) in seeds {
+            let mut test_generator = SortFuzzerTestGenerator::new(
+                2000,
+                3,
+                "sort_fuzz_table".to_string(),
+                get_supported_types_columns(gen_seed),
+                false,
+                gen_seed,
+            );
+
+            test_generator
+                .fuzzer_run(dataset_seed, query_seed, config_seed, true)
+                .await
+                .unwrap();
+        }
     }
 
     /// Given the same seed, the result should be the same

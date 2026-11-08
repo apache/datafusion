@@ -277,18 +277,25 @@
 //! possible, significant effort is spent planning and
 //! optimizing, in the following manner:
 //!
-//! 1. The [`LogicalPlan`] is checked and rewritten to enforce
-//!    semantic rules, such as type coercion, by [`AnalyzerRule`]s
+//! 1. The [`LogicalPlan`] is checked and rewritten by the [`Analyzer`], using
+//!    [`AnalyzerRule`]s, to enforce semantic rules such as type coercion.
 //!
-//! 2. The [`LogicalPlan`] is rewritten by [`OptimizerRule`]s, such as
-//!    projection and filter pushdown, to improve its efficiency.
+//! 2. The [`LogicalPlan`] is rewritten by the [`Optimizer`], using
+//!    [`OptimizerRule`]s such as projection and filter pushdown, to improve
+//!    its efficiency.
 //!
 //! 3. The [`LogicalPlan`] is converted to an [`ExecutionPlan`] by a
-//!    [`PhysicalPlanner`]
+//!    [`PhysicalPlanner`].
 //!
-//! 4. The [`ExecutionPlan`] is rewritten by
-//!    [`PhysicalOptimizerRule`]s, such as sort and join selection, to
-//!    improve its efficiency.
+//! 4. The [`ExecutionPlan`] is rewritten by the [`PhysicalOptimizer`], using
+//!    [`PhysicalOptimizerRule`]s such as join algorithm selection, to further
+//!    improve efficiency.
+//!
+//! There is not yet a physical counterpart to the [`Analyzer`]. The rules that
+//! make an [`ExecutionPlan`] executable, by enforcing its distribution and
+//! ordering requirements, currently run at the start of the
+//! [`PhysicalOptimizer`]. Moving them into a separate physical analyzer phase
+//! is tracked in <https://github.com/apache/datafusion/issues/26481>.
 //!
 //! ## Data Sources
 //!
@@ -739,6 +746,9 @@
 //! [`Expr`]: datafusion_expr::Expr
 //! [`LogicalPlan`]: datafusion_expr::LogicalPlan
 //! [`AnalyzerRule`]: datafusion_optimizer::analyzer::AnalyzerRule
+//! [`Analyzer`]: datafusion_optimizer::Analyzer
+//! [`Optimizer`]: datafusion_optimizer::Optimizer
+//! [`PhysicalOptimizer`]: datafusion_physical_optimizer::optimizer::PhysicalOptimizer
 //! [`OptimizerRule`]: optimizer::optimizer::OptimizerRule
 //! [`ExecutionPlan`]: physical_plan::ExecutionPlan
 //! [`PhysicalPlanner`]: physical_planner::PhysicalPlanner
@@ -748,7 +758,6 @@
 //! [`RecordBatch`]: arrow::array::RecordBatch
 //! [`RecordBatchReader`]: arrow::record_batch::RecordBatchReader
 //! [`Array`]: arrow::array::Array
-#![cfg_attr(doc, doc = include_str!("optimizer_rule_reference.md"))]
 
 extern crate core;
 #[cfg(feature = "sql")]
@@ -773,9 +782,6 @@ pub use parquet;
 
 #[cfg(feature = "avro")]
 pub use datafusion_datasource_avro::arrow_avro;
-
-#[cfg(test)]
-mod optimizer_rule_reference;
 
 // re-export DataFusion sub-crates at the top level. Use `pub use *`
 // so that the contents of the subcrates appears in rustdocs
