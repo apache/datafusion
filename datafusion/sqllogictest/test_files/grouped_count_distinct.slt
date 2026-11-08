@@ -70,6 +70,26 @@ logical_plan
 03)----Aggregate: groupBy=[[numeric_counts.g, numeric_counts.f AS alias1]], aggr=[[]]
 04)------TableScan: numeric_counts projection=[g, f]
 
+# A non-DISTINCT aggregate alongside keeps the rewrite.
+query TT
+EXPLAIN SELECT g, count(DISTINCT x), sum(x) FROM numeric_counts GROUP BY g;
+----
+logical_plan
+01)Projection: numeric_counts.g, count(alias1) AS count(DISTINCT numeric_counts.x), sum(alias2) AS sum(numeric_counts.x)
+02)--Aggregate: groupBy=[[numeric_counts.g]], aggr=[[count(alias1), sum(alias2)]]
+03)----Aggregate: groupBy=[[numeric_counts.g, numeric_counts.x AS alias1]], aggr=[[sum(CAST(numeric_counts.x AS Int64)) AS alias2]]
+04)------TableScan: numeric_counts projection=[g, x]
+
+# `sum` does not report specialized DISTINCT support, so it keeps the rewrite.
+query TT
+EXPLAIN SELECT g, sum(DISTINCT x) FROM numeric_counts GROUP BY g;
+----
+logical_plan
+01)Projection: numeric_counts.g, sum(alias1) AS sum(DISTINCT numeric_counts.x)
+02)--Aggregate: groupBy=[[numeric_counts.g]], aggr=[[sum(alias1)]]
+03)----Aggregate: groupBy=[[numeric_counts.g, CAST(numeric_counts.x AS Int64) AS alias1]], aggr=[[]]
+04)------TableScan: numeric_counts projection=[g, x]
+
 # The global aggregate does not use a GroupsAccumulator.
 query TT
 EXPLAIN SELECT count(DISTINCT x) FROM numeric_counts;
