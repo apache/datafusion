@@ -27,7 +27,7 @@ use datafusion_common::{
     DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
     arrow_datafusion_err,
     config::{
-        CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions,
+        ConfigNonZeroUsize, CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions,
         ParquetColumnOptions, ParquetOptions, TableParquetOptions,
     },
     file_options::{csv_writer::CsvWriterOptions, json_writer::JsonWriterOptions},
@@ -1175,6 +1175,15 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
     ) -> datafusion_common::Result<Self, Self::Error> {
         let to_usize =
             |value: u64, field: &str| usize_from_wire(value, "ParquetOptions", field);
+        let maximum_buffered_record_batches_per_stream =
+            if value.maximum_buffered_record_batches_per_stream == 0 {
+                ParquetOptions::default().maximum_buffered_record_batches_per_stream
+            } else {
+                ConfigNonZeroUsize::try_new(to_usize(
+                    value.maximum_buffered_record_batches_per_stream,
+                    "maximum_buffered_record_batches_per_stream",
+                )?)?
+            };
         Ok(ParquetOptions {
             enable_page_index: value.enable_page_index,
             pruning: value.pruning,
@@ -1265,10 +1274,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
                 value.maximum_parallel_row_group_writers,
                 "maximum_parallel_row_group_writers",
             )?,
-            maximum_buffered_record_batches_per_stream: to_usize(
-                value.maximum_buffered_record_batches_per_stream,
-                "maximum_buffered_record_batches_per_stream",
-            )?,
+            maximum_buffered_record_batches_per_stream,
             schema_force_view_types: value.schema_force_view_types,
             binary_as_string: value.binary_as_string,
             coerce_int96: value.coerce_int96_opt.as_ref().map(|opt| match opt {
@@ -1439,7 +1445,8 @@ where
 mod tests {
     use datafusion_common::TableReference;
     use datafusion_common::config::{
-        MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
+        ConfigNonZeroUsize, MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions,
+        TableParquetOptions,
     };
     use datafusion_common::parquet_config::{
         DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFTimeUnit,
@@ -1605,6 +1612,35 @@ mod tests {
                 "Error during planning: ParquetOptions: data_pagesize_limit wire value 18446744073709551615 is out of range for usize"
             );
         }
+    }
+
+    #[test]
+    fn parquet_options_missing_buffer_capacity_uses_default() {
+        let proto = crate::protobuf_common::ParquetOptions {
+            writer_version: "1.0".to_string(),
+            ..Default::default()
+        };
+
+        let recovered = ParquetOptions::try_from(&proto).unwrap();
+        assert_eq!(
+            recovered.maximum_buffered_record_batches_per_stream.get(),
+            2
+        );
+    }
+
+    #[test]
+    fn parquet_options_buffer_capacity_round_trip() {
+        let opts = ParquetOptions {
+            maximum_buffered_record_batches_per_stream: ConfigNonZeroUsize::try_new(4)
+                .unwrap(),
+            ..ParquetOptions::default()
+        };
+
+        let recovered = parquet_options_proto_round_trip(opts);
+        assert_eq!(
+            recovered.maximum_buffered_record_batches_per_stream.get(),
+            4
+        );
     }
 
     #[test]

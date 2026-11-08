@@ -947,6 +947,26 @@ caused by
 Invalid or Unsupported Configuration: value must be greater than 0
 
 
+statement ok
+SET datafusion.execution.parquet.maximum_buffered_record_batches_per_stream = 1
+
+statement error
+SET datafusion.execution.parquet.maximum_buffered_record_batches_per_stream = 0
+----
+DataFusion error: Error setting config datafusion.execution.parquet.maximum_buffered_record_batches_per_stream
+caused by
+Invalid or Unsupported Configuration: value must be greater than 0
+
+
+query TT
+SHOW datafusion.execution.parquet.maximum_buffered_record_batches_per_stream
+----
+datafusion.execution.parquet.maximum_buffered_record_batches_per_stream 1
+
+statement ok
+RESET datafusion.execution.parquet.maximum_buffered_record_batches_per_stream
+
+
 statement error
 SET datafusion.sql_parser.recursion_limit = 0
 ----

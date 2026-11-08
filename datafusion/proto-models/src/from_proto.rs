@@ -13,8 +13,8 @@
 use std::sync::Arc;
 
 use datafusion_common::config::{
-    CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions,
-    ParquetOptions, TableParquetOptions,
+    ConfigNonZeroUsize, CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions,
+    ParquetColumnOptions, ParquetOptions, TableParquetOptions,
 };
 use datafusion_common::display::{PlanType, StringifiedPlan};
 use datafusion_common::parquet_config::RowGroupRangeAssignment;
@@ -345,6 +345,15 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
         };
         let to_usize =
             |value: u64, field: &str| usize_from_wire(value, "ParquetOptions", field);
+        let maximum_buffered_record_batches_per_stream =
+            if proto.maximum_buffered_record_batches_per_stream == 0 {
+                ParquetOptions::default().maximum_buffered_record_batches_per_stream
+            } else {
+                ConfigNonZeroUsize::try_new(to_usize(
+                    proto.maximum_buffered_record_batches_per_stream,
+                    "maximum_buffered_record_batches_per_stream",
+                )?)?
+            };
 
         Ok(ParquetOptions {
             enable_page_index: proto.enable_page_index,
@@ -452,10 +461,7 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
                 proto.maximum_parallel_row_group_writers,
                 "maximum_parallel_row_group_writers",
             )?,
-            maximum_buffered_record_batches_per_stream: to_usize(
-                proto.maximum_buffered_record_batches_per_stream,
-                "maximum_buffered_record_batches_per_stream",
-            )?,
+            maximum_buffered_record_batches_per_stream,
             schema_force_view_types: proto.schema_force_view_types,
             binary_as_string: proto.binary_as_string,
             skip_arrow_metadata: proto.skip_arrow_metadata,
@@ -570,6 +576,29 @@ impl TryFrom<&TableParquetOptionsProto> for TableParquetOptions {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parquet_options_missing_buffer_capacity_uses_default() {
+        let recovered =
+            ParquetOptions::try_from(&ParquetOptionsProto::default()).unwrap();
+        assert_eq!(
+            recovered.maximum_buffered_record_batches_per_stream.get(),
+            2
+        );
+    }
+
+    #[test]
+    fn parquet_options_nonzero_buffer_capacity_is_preserved() {
+        let proto = ParquetOptionsProto {
+            maximum_buffered_record_batches_per_stream: 4,
+            ..Default::default()
+        };
+        let recovered = ParquetOptions::try_from(&proto).unwrap();
+        assert_eq!(
+            recovered.maximum_buffered_record_batches_per_stream.get(),
+            4
+        );
+    }
 
     #[test]
     fn rejects_invalid_parquet_encoding() {
