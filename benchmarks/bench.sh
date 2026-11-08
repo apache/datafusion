@@ -105,6 +105,8 @@ spill_views:            Sort and GROUP BY queries that spill StringView/BinaryVi
 null_aware_join:        Null-aware (NOT IN) hash join micro-benchmarks: uncorrelated, non-equality-correlated and equality-correlated
                           NOT IN across NULL fractions, to measure the per-pair join-filter work the correlated cases do
                           (data generated inline by the suite's load SQL from range(); knobs: NAJ_ROWS, NAJ_LARGE_ROWS)
+staged_sort:            Automatic staged ORDER BY evaluation across ties, NULLs, expensive keys, and controls
+                          (inline data; knobs: STAGED_SORT_ROWS, STAGED_SORT_PAYLOAD_WIDTH)
 projection_subquery:    IN / NOT IN / EXISTS subqueries in the SELECT list (see https://github.com/apache/datafusion/issues/25341); each query projects the
                           boolean subquery result and aggregates it, so the cost is the decorrelation plan and not the output size
                           (q07 correlates on '<' instead of '=', so it keeps the nested-loop plan and acts as the control)
@@ -276,6 +278,9 @@ main() {
                 null_aware_join)
                     # Data is generated inline by the suite's load SQL from range().
                     echo "null_aware_join: no external data to generate"
+                    ;;
+                staged_sort)
+                    echo "staged_sort: no external data to generate"
                     ;;
                 projection_subquery)
                     # Data is generated inline by the suite's load SQL.
@@ -536,6 +541,9 @@ main() {
                     ;;
                 null_aware_join)
                     run_null_aware_join
+                    ;;
+                staged_sort)
+                    run_staged_sort
                     ;;
                 projection_subquery)
                     run_projection_subquery
@@ -996,6 +1004,17 @@ run_null_aware_join() {
       NAJ_ROWS="${NAJ_ROWS:-10000}" \
       NAJ_LARGE_ROWS="${NAJ_LARGE_ROWS:-1000000}" \
       ${QUERY:+BENCH_QUERY="${QUERY}"}  \
+      bash -c "$SQL_CARGO_COMMAND"
+}
+
+# Inline staged ORDER BY workloads; the suite sets its own sort thresholds.
+run_staged_sort() {
+    echo "Running staged_sort benchmark (rows=${STAGED_SORT_ROWS:-200000}, payload_width=${STAGED_SORT_PAYLOAD_WIDTH:-32})..."
+    debug_run env BENCH_NAME=staged_sort \
+      BENCH_RESULTS_FILE="$(sql_results_file staged_sort)" \
+      STAGED_SORT_ROWS="${STAGED_SORT_ROWS:-200000}" \
+      STAGED_SORT_PAYLOAD_WIDTH="${STAGED_SORT_PAYLOAD_WIDTH:-32}" \
+      ${QUERY:+BENCH_QUERY="${QUERY}"} \
       bash -c "$SQL_CARGO_COMMAND"
 }
 

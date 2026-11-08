@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+template sql_benchmarks/staged_sort/staged_sort.benchmark.template
+QPAD=07
+NAME=q07_topk_control
+THRESHOLD=1073741824
+PLAN=SortExec: TopK(fetch=100), expr=[id@0 % 100 ASC NULLS LAST, md5(payload@2)

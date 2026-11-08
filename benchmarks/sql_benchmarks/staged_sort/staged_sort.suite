@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+description = "Automatic staged ORDER BY evaluation across tie densities, expensive keys, NULLs, and controls. Data is generated inline."
+
+[[options]]
+name = "rows"
+short = "r"
+env = "STAGED_SORT_ROWS"
+default = "200000"
+help = "Number of fixture rows (at least 100)."
+
+[[options]]
+name = "payload-width"
+env = "STAGED_SORT_PAYLOAD_WIDTH"
+default = "32"
+help = "Number of filler characters appended to each unique numeric payload."
+
+[[examples]]
+command = "cargo run --release --bin benchmark_runner -- staged_sort --query 1"
+description = "Run the unique-prefix case."

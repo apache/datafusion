@@ -1443,7 +1443,7 @@ fn rows_to_filter_before(
 
 /// Whether evaluating `expr` on all rows is cheap and cannot fail.
 /// Inspired by `reorder_predicates`' cheap forms, with fallible forms excluded.
-fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
+pub fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> bool {
     use crate::expressions::{
         CastExpr, Column, InListExpr, IsNotNullExpr, IsNullExpr, Literal, NotExpr,
     };

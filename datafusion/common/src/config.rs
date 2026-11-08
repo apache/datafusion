@@ -1003,6 +1003,11 @@ config_namespace! {
         /// batches and merged.
         pub sort_in_place_threshold_bytes: usize, default = 1024 * 1024
 
+        /// Enables staged sorting for eligible in-memory sorts.
+        /// Later keys may be skipped for rows already in order
+        /// TopK and spill sorting do not use staged sorting.
+        pub enable_staged_sort: bool, default = false
+
         /// Maximum buffer capacity (in bytes) per partition for BufferExec
         /// inserted during sort pushdown optimization.
         ///

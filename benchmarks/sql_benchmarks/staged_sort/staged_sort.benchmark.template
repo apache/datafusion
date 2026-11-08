@@ -1,0 +1,53 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# The load and assertions are outside the timed region.
+load sql_benchmarks/staged_sort/load.sql
+
+name ${NAME}
+group staged_sort
+
+init
+SET datafusion.execution.target_partitions = 1;
+
+init
+SET datafusion.execution.sort_in_place_threshold_bytes = ${THRESHOLD};
+
+assert I
+SELECT count(*) = ${STAGED_SORT_ROWS:-200000} AND count(DISTINCT id) = count(*) AND count(*) >= 100 FROM bench;
+----
+true
+
+assert I
+SELECT count(*) > 1 AND count(*) < (SELECT count(*) FROM bench) FROM bench WHERE nullable_key IS NULL;
+----
+true
+
+assert I
+SELECT count(DISTINCT tie_key) = 1 AND count(DISTINCT id % 100) = 100 FROM bench;
+----
+true
+
+# Nonzero sparse keys equal unique IDs; zero is the only tied group.
+assert I
+SELECT count(*) FILTER (WHERE sparse_key = 0) > 1
+   AND count(*) FILTER (WHERE sparse_key <> 0) > count(*) / 2
+   AND count(*) FILTER (WHERE sparse_key <> 0 AND sparse_key <> id) = 0
+FROM bench;
+----
+true
+
+assert I
+SELECT min(length(payload)) >= ${STAGED_SORT_PAYLOAD_WIDTH:-32} + 1 FROM bench;
+----
+true
+
+expect_plan ${PLAN}
+
+run sql_benchmarks/staged_sort/queries/q${QPAD}.sql
+
+result ${STAGED_SORT_RESULTS_DIR:-sql_benchmarks/staged_sort/results}/q${QPAD}.csv
+
+cleanup
+DROP TABLE bench;
