@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! ParquetSource implementation for reading parquet files
 use std::fmt::Debug;
@@ -37,9 +24,7 @@ use datafusion_datasource::as_file_source;
 use datafusion_datasource::file_stream::FileOpener;
 use datafusion_datasource::morsel::Morselizer;
 
-use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
-use datafusion_common::DataFusionError;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 #[cfg(feature = "proto")]
@@ -537,19 +522,6 @@ impl ParquetSource {
     }
 }
 
-/// Validates that `tz` is a parseable IANA timezone and returns it as an
-/// `Arc<str>` for use in `Timestamp(_, Some(tz))` types.
-pub(crate) fn parse_coerce_int96_tz_string(
-    tz: &str,
-) -> datafusion_common::Result<Arc<str>> {
-    tz.parse::<Tz>().map_err(|e| {
-        DataFusionError::Configuration(format!(
-            "Invalid parquet coerce_int96_tz {tz:?}: {e}"
-        ))
-    })?;
-    Ok(Arc::<str>::from(tz))
-}
-
 /// Allows easy conversion from ParquetSource to Arc&lt;dyn FileSource&gt;
 impl From<ParquetSource> for Arc<dyn FileSource> {
     fn from(source: ParquetSource) -> Self {
@@ -605,8 +577,7 @@ impl FileSource for ParquetSource {
             .global
             .coerce_int96_tz
             .as_ref()
-            .map(|tz| parse_coerce_int96_tz_string(tz))
-            .transpose()?;
+            .map(|tz| Arc::<str>::from(tz.as_str()));
         if coerce_int96_tz.is_some() && coerce_int96.is_none() {
             warn!(
                 "coerce_int96_tz is set but coerce_int96 is not; the timezone will be ignored"
@@ -636,7 +607,7 @@ impl FileSource for ParquetSource {
                 .batch_size
                 .expect("Batch size must set before creating ParquetMorselizer"),
             limit: base_config.limit,
-            preserve_order: base_config.preserve_order,
+            preserve_order: base_config.preserves_file_order(),
             predicate: self.predicate.clone(),
             table_schema: self.table_schema.clone(),
             metadata_size_hint: self.metadata_size_hint,

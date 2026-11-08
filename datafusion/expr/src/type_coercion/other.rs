@@ -1,21 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::datatypes::DataType;
+use arrow::datatypes::{DataType, Field};
+use datafusion_common::{Result, plan_datafusion_err, plan_err};
 
 use super::binary::{comparison_coercion, type_union_coercion};
 
@@ -30,6 +18,30 @@ fn fold_coerce(
         .try_fold(initial_type.clone(), |left_type, right_type| {
             coerce_fn(&left_type, right_type)
         })
+}
+
+/// Infer a common output type for one UNION column, in input order.
+///
+/// Field names are used only to report incompatible inputs. This does not
+/// insert casts or require input expressions to have been analyzed.
+pub fn coerce_union_type<'a>(
+    fields: impl IntoIterator<Item = &'a Field>,
+) -> Result<DataType> {
+    let mut fields = fields.into_iter();
+    let Some(first) = fields.next() else {
+        return plan_err!("UNION requires at least one input field");
+    };
+    fields.try_fold(first.data_type().clone(), |data_type, field| {
+        type_union_coercion(&data_type, field.data_type()).ok_or_else(|| {
+            plan_datafusion_err!(
+                "Incompatible inputs for Union: Previous inputs were \
+                 of type {}, but got incompatible type {} on column '{}'",
+                data_type,
+                field.data_type(),
+                field.name()
+            )
+        })
+    })
 }
 
 /// Attempts to coerce the types of `list_types` to be comparable with the

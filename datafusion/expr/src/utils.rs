@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Expression utilities
 
@@ -409,7 +396,7 @@ fn get_exprs_except_skipped(
 /// joins). An unqualified wildcard should include each USING column only once.
 /// This function returns the duplicate columns that should be excluded.
 fn exclude_using_columns(plan: &LogicalPlan) -> Result<HashSet<Column>> {
-    let output_columns: HashSet<_> = plan.schema().columns().iter().cloned().collect();
+    let output_columns: HashSet<_> = plan.schema().columns().into_iter().collect();
     let mut excluded = HashSet::new();
     for cols in plan.using_columns()? {
         // `using_columns()` returns join columns from both sides regardless of
@@ -862,15 +849,11 @@ fn find_exprs_in_exprs<'a, F>(
 where
     F: Fn(&Expr) -> bool,
 {
-    exprs
-        .into_iter()
-        .flat_map(|expr| find_exprs_in_expr(expr, test_fn))
-        .fold(vec![], |mut acc, expr| {
-            if !acc.contains(&expr) {
-                acc.push(expr)
-            }
-            acc
-        })
+    let mut found = IndexSet::new();
+    for expr in exprs {
+        collect_exprs_in_expr(expr, test_fn, &mut found);
+    }
+    found.into_iter().collect()
 }
 
 /// Search an `Expr`, and all of its nested `Expr`'s, for any that pass the
@@ -880,11 +863,17 @@ fn find_exprs_in_expr<F>(expr: &Expr, test_fn: &F) -> Vec<Expr>
 where
     F: Fn(&Expr) -> bool,
 {
-    let mut exprs = vec![];
+    find_exprs_in_exprs(std::iter::once(expr), test_fn)
+}
+
+fn collect_exprs_in_expr<F>(expr: &Expr, test_fn: &F, found: &mut IndexSet<Expr>)
+where
+    F: Fn(&Expr) -> bool,
+{
     expr.apply(|expr| {
         if test_fn(expr) {
-            if !(exprs.contains(expr)) {
-                exprs.push(expr.clone())
+            if !found.contains(expr) {
+                found.insert(expr.clone());
             }
             // Stop recursing down this expr once we find a match
             return Ok(TreeNodeRecursion::Jump);
@@ -894,7 +883,6 @@ where
     })
     // pre_visit always returns OK, so this will always too
     .expect("no way to return error during recursion");
-    exprs
 }
 
 /// Recursively inspect an [`Expr`] and all its children.
@@ -917,6 +905,28 @@ where
     .expect("no way to return error during recursion");
 
     err
+}
+
+/// Returns the element field at the given list unnesting depth.
+pub(crate) fn get_unnested_list_field(
+    data_type: &DataType,
+    depth: usize,
+) -> Result<&Field> {
+    match data_type {
+        DataType::List(field)
+        | DataType::FixedSizeList(field, _)
+        | DataType::LargeList(field)
+        | DataType::ListView(field)
+        | DataType::LargeListView(field) => {
+            if depth == 1 {
+                return Ok(field.as_ref());
+            }
+            return get_unnested_list_field(field.data_type(), depth - 1);
+        }
+        _ => {}
+    }
+
+    internal_err!("trying to unnest on invalid data type {data_type}")
 }
 
 /// Create schema fields from an expression list, for use in result set schema construction
@@ -1168,13 +1178,29 @@ pub fn find_valid_equijoin_key_pair(
         return Ok(None);
     }
 
-    if check_all_columns_from_schema(&left_using_columns, left_schema)?
-        && check_all_columns_from_schema(&right_using_columns, right_schema)?
-    {
+    // Returns whether all `left_columns` are from `left_schema` and all
+    // `right_columns` are from `right_schema`. Looking up a column scans the
+    // schema, so check the narrower schema first: a key that does not belong
+    // to the join inputs is then usually rejected without scanning the wider
+    // one, such as the accumulated left input of a left-deep join tree.
+    let left_is_narrower = left_schema.fields().len() <= right_schema.fields().len();
+    let check = |left_columns: &HashSet<&Column>,
+                 right_columns: &HashSet<&Column>|
+     -> Result<bool> {
+        let left = (left_columns, left_schema);
+        let right = (right_columns, right_schema);
+        let (first, second) = if left_is_narrower {
+            (left, right)
+        } else {
+            (right, left)
+        };
+        Ok(check_all_columns_from_schema(first.0, first.1)?
+            && check_all_columns_from_schema(second.0, second.1)?)
+    };
+
+    if check(&left_using_columns, &right_using_columns)? {
         return Ok(Some((left_key.clone(), right_key.clone())));
-    } else if check_all_columns_from_schema(&right_using_columns, left_schema)?
-        && check_all_columns_from_schema(&left_using_columns, right_schema)?
-    {
+    } else if check(&right_using_columns, &left_using_columns)? {
         return Ok(Some((right_key.clone(), left_key.clone())));
     }
 
@@ -1483,6 +1509,10 @@ pub fn add_filter(plan: LogicalPlan, predicates: &[&Expr]) -> Result<LogicalPlan
 /// # Return value
 ///
 /// Tuple of (expressions containing joins, remaining non-join expressions)
+#[deprecated(
+    since = "56.0.0",
+    note = "This decorrelation helper is intended for internal optimizer use and has no public replacement"
+)]
 pub fn find_join_exprs(exprs: Vec<&Expr>) -> Result<(Vec<Expr>, Vec<Expr>)> {
     let mut joins = vec![];
     let mut others = vec![];
@@ -1574,6 +1604,38 @@ pub fn collect_subquery_cols(
     })
 }
 
+/// Determine the subquery-side expressions a join filter compares,
+/// stopping at the first subquery-referencing sub-expression rather than
+/// descending to the bare columns inside of it.
+///
+/// `t1.a = t2.b` yields `t2.b`, matching [`collect_subquery_cols`]. But
+/// `t1.a = CAST(t2.b AS INT)` yields `CAST(t2.b AS INT)` whole, not `t2.b`.
+/// The two differ whenever the correlated predicate wraps the subquery's
+/// column in an expression, in which case we need to evaluate the full
+/// expression before grouping, so that two column values which compare
+/// equal after the wrapping expression end up in the same group.
+pub fn collect_subquery_join_exprs(
+    exprs: &[Expr],
+    subquery_schema: &DFSchema,
+) -> Result<Vec<Expr>> {
+    let mut result: Vec<Expr> = vec![];
+    for expr in exprs {
+        expr.apply(|e| {
+            if e.column_refs()
+                .into_iter()
+                .all(|col| subquery_schema.has_column(col))
+                && !e.column_refs().is_empty()
+                && !result.contains(e)
+            {
+                result.push(e.clone());
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    Ok(result)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1606,6 +1668,21 @@ mod tests {
         // computed, even though it is named `b.id`
         assert_eq!(index(crate::cast(col("b.id"), DataType::Int64)), None);
         Ok(())
+    }
+
+    #[test]
+    fn find_aggregate_exprs_dedups_in_order_of_appearance() {
+        use crate::test::function_stub::{count, sum};
+
+        let exprs = [
+            sum(col("a")) + count(col("b")),
+            count(col("b")) * sum(col("c")),
+            sum(col("a")) + sum(col("a")),
+        ];
+        assert_eq!(
+            find_aggregate_exprs(&exprs),
+            vec![sum(col("a")), count(col("b")), sum(col("c"))]
+        );
     }
 
     #[test]
@@ -2325,6 +2402,41 @@ mod tests {
             @"Error during planning: Window function calls are not allowed in HAVING: 'sum(sum(a)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn find_valid_equijoin_key_pair_inputs_of_different_widths() -> Result<()> {
+        let schema = |name: &str, width: usize| {
+            let fields = (0..width)
+                .map(|i| Field::new(format!("c{i}"), DataType::Int32, false))
+                .collect::<Vec<_>>();
+            DFSchema::try_from_qualified_schema(name, &Schema::new(fields))
+        };
+        let narrow = schema("n", 1)?;
+        let wide = schema("w", 3)?;
+        let other = col("o.c0");
+
+        // The narrower input is checked first, so cover both orders
+        for (left_schema, right_schema, left, right) in [
+            (&narrow, &wide, col("n.c0"), col("w.c2")),
+            (&wide, &narrow, col("w.c2"), col("n.c0")),
+        ] {
+            let find = |left_key: &Expr, right_key: &Expr| {
+                find_valid_equijoin_key_pair(
+                    left_key,
+                    right_key,
+                    left_schema,
+                    right_schema,
+                )
+            };
+            let expected = Some((left.clone(), right.clone()));
+            assert_eq!(find(&left, &right)?, expected);
+            assert_eq!(find(&right, &left)?, expected);
+            assert_eq!(find(&left, &other)?, None);
+            assert_eq!(find(&other, &right)?, None);
+            assert_eq!(find(&(left.clone() + right.clone()), &right)?, None);
+        }
         Ok(())
     }
 }

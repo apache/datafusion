@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::sync::Arc;
 
@@ -25,8 +12,8 @@ use datafusion_common::{
     tree_node::{TreeNode, TreeNodeRecursion},
 };
 use datafusion_expr::{
-    Extension, LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCteId,
-    MaterializedCteScan, TableSource,
+    LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCteId,
+    MaterializedCtePlan, MaterializedCteScan, TableSource,
 };
 use sqlparser::ast::{CteAsMaterialized, Ident, Query, SetExpr, SetOperator, With};
 
@@ -40,15 +27,14 @@ pub(crate) struct PendingMaterializedCte {
 
 impl PendingMaterializedCte {
     /// Wrap `continuation` so that its scans of this CTE read one shared result.
-    pub(crate) fn wrap(self, continuation: LogicalPlan) -> LogicalPlan {
-        LogicalPlan::Extension(Extension {
-            node: Arc::new(MaterializedCte {
-                id: self.id,
-                name: self.name,
-                cte: self.cte,
-                continuation,
-            }),
-        })
+    pub(crate) fn wrap(self, continuation: LogicalPlan) -> Result<LogicalPlan> {
+        MaterializedCte::try_new(
+            self.id,
+            self.name,
+            Arc::new(self.cte),
+            Arc::new(continuation),
+        )
+        .map(|cte| LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)))
     }
 }
 
@@ -101,13 +87,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 // of the body. The body is already planned, so a reference
                 // of a recursive CTE to itself stays a work table scan.
                 let id = MaterializedCteId::next();
-                let scan = LogicalPlan::Extension(Extension {
-                    node: Arc::new(MaterializedCteScan {
+                let scan = LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+                    MaterializedCteScan::new(
                         id,
-                        name: cte_name.clone(),
-                        schema: Arc::clone(final_plan.schema()),
-                    }),
-                });
+                        cte_name.clone(),
+                        Arc::clone(final_plan.schema()),
+                    ),
+                ));
                 materialized.push(PendingMaterializedCte {
                     id,
                     name: cte_name.clone(),

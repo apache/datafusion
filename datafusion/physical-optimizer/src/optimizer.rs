@@ -1,27 +1,17 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Physical optimizer traits
+//! [`PhysicalOptimizer`] for optimizing [`ExecutionPlan`]s
+//!
+//! [`ExecutionPlan`]: datafusion_physical_plan::ExecutionPlan
 
 use std::fmt::Debug;
 use std::sync::Arc;
 
 use crate::aggregate_statistics::AggregateStatistics;
 use crate::combine_partial_final_agg::CombinePartialFinalAggregate;
+use crate::eliminate_constant_join::EliminateConstantJoin;
 use crate::ensure_coop::EnsureCooperative;
 use crate::ensure_requirements::EnsureRequirements;
 use crate::filter_pushdown::FilterPushdown;
@@ -30,7 +20,6 @@ use crate::limit_pushdown::LimitPushdown;
 use crate::limited_distinct_aggregation::LimitedDistinctAggregation;
 use crate::output_requirements::OutputRequirements;
 use crate::projection_pushdown::ProjectionPushdown;
-use crate::sanity_checker::SanityCheckPlan;
 use crate::topk_aggregation::TopKAggregation;
 use crate::topk_repartition::TopKRepartition;
 use crate::update_aggr_exprs::OptimizeAggregateOrder;
@@ -81,7 +70,137 @@ impl PhysicalOptimizerContext for ConfigOnlyContext<'_> {
 
 /// A rule-based physical optimizer.
 ///
-/// Applies its rule list in order in a single pass.
+/// Applies a *Pipeline* (an ordered list) of [`PhysicalOptimizerRule`]s in a single pass.
+///
+/// # Physical Optimizer Contract
+///
+/// [`PhysicalOptimizer::new`] defines the default sequence of
+/// [`PhysicalOptimizerRule`]s. The optimizer applies them in order, in a single
+/// pass. This section describes the contract between the optimizer rules, both
+/// for projects that extend or reorder the default rule list and for
+/// contributors adding new built-in rules.
+///
+/// ## Invariants
+///
+/// The following properties hold for all rules (built-in and custom):
+///
+/// 1. **Correctness.** The returned plan must a) be valid (it can be executed
+///    without internal errors) and b) produce the same results as the input
+///    plan. A rule may change the operators in the plan, such as changing
+///    which operator implements a join, but it may never change the query's
+///    semantics.
+///
+/// 2. **Reorderable.** Because each rule preserves correctness, running the
+///    rules in a different order must still yield a valid plan that produces
+///    the same results.
+///
+/// ### Exceptions
+///
+/// Some built-in rules do not yet fully satisfy the invariants above because
+/// they are responsible for making an initial plan *executable* rather than for
+/// optimizing an existing plan:
+///
+/// - [`EnsureRequirements`] inserts the repartitioning and sorting needed to
+///   satisfy the distribution and ordering requirements.
+/// - [`OutputRequirements`] records output requirements.
+///
+/// Custom pipelines must keep these rules in a compatible relative order. We
+/// are working to remove these exceptions, so that all rules can be reordered
+/// freely.
+///
+/// After the last rule, including rules added by the user, the physical
+/// planner rejects the plan if its requirements are not satisfied (see
+/// [`check_plan_tree_sanity`](crate::sanity_checker::check_plan_tree_sanity)).
+///
+/// ## Optimization Coverage Is Not Guaranteed
+///
+/// The invariants above guarantee *correctness*, not that every optimization is
+/// applied. Built-in rules often match specific plan shapes that may only occur
+/// at a certain point in the default pipeline. Adding, removing, or reordering
+/// rules can change plan shapes, so a built-in rule may silently miss an
+/// optimization that would apply in the default order. To keep their
+/// implementations simple, built-in rules typically only recognize shapes that
+/// the default pipeline produces.
+///
+/// For example, [`CombinePartialFinalAggregate`] runs after
+/// [`EnsureRequirements`] and only merges a `Partial` aggregate that is the
+/// direct child of a `Final` aggregate.
+///
+/// ```text
+/// -- Canonical shape (default pipeline):
+/// -- built-in rules recognize and optimize this
+/// Limit
+///   Aggregate(Final)
+///     Aggregate(Partial)
+///
+/// -- Non-canonical shape (repartitioning inserted first):
+/// -- built-in rules skip the optimization
+/// Limit
+///   Aggregate(Final)
+///     Repartition
+///       Aggregate(Partial)
+/// ```
+///
+/// ## Guidance for Custom Pipelines
+///
+/// We recommend keeping the default rule order and using the supported
+/// configuration options to disable individual optimizations. For example, `SET
+/// datafusion.optimizer.enable_distinct_aggregation_soft_limit = false`
+/// disables the distinct aggregation soft-limit optimization. These variations
+/// are tested and preserve both correctness and optimization coverage.
+/// See <https://github.com/apache/datafusion/issues/26481> for more details.
+///
+/// If you do build a custom pipeline:
+///
+/// - **Reordering must still yield a valid plan.** Downstream projects are
+///   encouraged to add tests that run their pipeline end to end and check
+///   results, as DataFusion's own tests only cover the default order.
+/// - **Test for reduced optimization coverage,** as described above, and verify
+///   the plans you care about with `EXPLAIN`.
+/// - **Prefer adding a rule over extending a built-in one.** We discourage
+///   extending a built-in rule to match plan shapes it will not encounter in
+///   the default pipeline, because such extensions are difficult to test and
+///   maintain. Instead, add a custom rule that rewrites your plan into the
+///   canonical shape recognized by the built-in rules. If extending a built-in
+///   rule still seems necessary, please open a DataFusion issue to discuss it.
+///
+/// # Built-in Physical Optimizer Rules
+///
+/// The rules are applied in the following order. Note: the list may change
+/// between releases. Some rules run twice, in different phases. See the
+/// [contract](#physical-optimizer-contract) above before reordering or
+/// extending the list.
+///
+/// After the last rule, the physical planner checks the plan and returns an
+/// error if it is not valid.
+///
+/// Note: The rules up to and including [`EnsureRequirements`] make the plan
+/// executable rather than optimize it. This may be improved in the future.
+/// See <https://github.com/apache/datafusion/issues/26481>.
+///
+/// | rule (name in EXPLAIN plan)    | struct name                      | summary                                                                                       |
+/// | ------------------------------ | -------------------------------- | --------------------------------------------------------------------------------------------- |
+/// | `OutputRequirements`           | [`OutputRequirements`]           | Adds helper nodes so output requirements survive later rewrites (add mode).                   |
+/// | `aggregate_statistics`         | [`AggregateStatistics`]          | Answers some aggregates from exact statistics without scanning data.                          |
+/// | `EliminateConstantJoin`        | [`EliminateConstantJoin`]        | Replaces inner joins against a single row of literals with a filter.                          |
+/// | `join_selection`               | [`JoinSelection`]                | Chooses the join implementation, build side, and partition mode.                              |
+/// | `LimitedDistinctAggregation`   | [`LimitedDistinctAggregation`]   | Pushes limit hints into grouped distinct-style aggregations.                                  |
+/// | `FilterPushdown`               | [`FilterPushdown`]               | Pushes static filters toward data sources (pre-optimization phase).                           |
+/// | `WindowTopN`                   | [`WindowTopN`]                   | Replaces row-number window and filter patterns with per-partition TopK.                       |
+/// | `EnsureRequirements`           | [`EnsureRequirements`]           | Inserts the repartitioning and sorting needed to meet distribution and ordering requirements. |
+/// | `CombinePartialFinalAggregate` | [`CombinePartialFinalAggregate`] | Merges adjacent partial and final aggregates.                                                 |
+/// | `OptimizeAggregateOrder`       | [`OptimizeAggregateOrder`]       | Rewrites aggregate expressions to use the input ordering.                                     |
+/// | `ProjectionPushdown`           | [`ProjectionPushdown`]           | Pushes projections toward inputs (early pass).                                                |
+/// | `OutputRequirements`           | [`OutputRequirements`]           | Removes the helper nodes added by the first pass (remove mode).                               |
+/// | `LimitAggregation`             | [`TopKAggregation`]              | Passes a limit hint into aggregations so they keep fewer groups.                              |
+/// | `LimitPushPastWindows`         | [`LimitPushPastWindows`]         | Pushes limits through bounded window operators.                                               |
+/// | `HashJoinBuffering`            | [`HashJoinBuffering`]            | Buffers the probe side of hash joins so it is polled before the build side finishes.          |
+/// | `LimitPushdown`                | [`LimitPushdown`]                | Pushes limits into child operators or fetch-enabled variants.                                 |
+/// | `TopKRepartition`              | [`TopKRepartition`]              | Pushes TopK below hash repartition when the partition key is a prefix of the sort key.        |
+/// | `ProjectionPushdown`           | [`ProjectionPushdown`]           | Pushes projections again after limit and TopK rewrites (late pass).                           |
+/// | `PushdownSort`                 | [`PushdownSort`]                 | Pushes sort requirements into data sources that can return sorted output.                     |
+/// | `EnsureCooperative`            | [`EnsureCooperative`]            | Wraps non-cooperative operators so long-running tasks yield.                                  |
+/// | `FilterPushdown(Post)`         | [`FilterPushdown`]               | Pushes dynamic filters once plan references stop moving (post-optimization phase).            |
 #[derive(Clone, Debug)]
 pub struct PhysicalOptimizer {
     /// All rules to apply
@@ -95,7 +214,7 @@ impl Default for PhysicalOptimizer {
 }
 
 impl PhysicalOptimizer {
-    /// Create a new optimizer using the recommended list of rules
+    /// Create a new optimizer using the [built-in rules](Self#built-in-physical-optimizer-rules)
     pub fn new() -> Self {
         // NOTEs:
         // - The order of rules in this list is important, as it determines the
@@ -108,6 +227,10 @@ impl PhysicalOptimizer {
             // this information is not lost across different rules during optimization.
             Arc::new(OutputRequirements::new_add_mode()),
             Arc::new(AggregateStatistics::new()),
+            // Runs after AggregateStatistics, which can fold a scalar subquery into a
+            // row of literals, and before EnsureRequirements, so that the filter
+            // replacing a join against such a row keeps the other input's ordering.
+            Arc::new(EliminateConstantJoin::new()),
             // Statistics-based join selection will change the Auto mode to a real join implementation,
             // like collect left, or hash join, or future sort merge join, which will influence the
             // EnsureRequirements rule as it decides whether to add additional repartitioning and
@@ -196,22 +319,44 @@ impl PhysicalOptimizer {
             // Therefore, it should be run at the end of the optimization process since any changes to the plan may break the dynamic filter's references.
             // See `FilterPushdownPhase` for more details.
             Arc::new(FilterPushdown::new_post_optimization()),
-            // The SanityCheckPlan rule checks whether the order and
-            // distribution requirements of each node in the plan
-            // is satisfied. It will also reject non-runnable query
-            // plans that use pipeline-breaking operators on infinite
-            // input(s). The rule generates a diagnostic error
-            // message for invalid plans. It makes no changes to the
-            // given query plan; i.e. it only acts as a final
-            // gatekeeping rule.
-            Arc::new(SanityCheckPlan::new()),
+            // There is no `SanityCheckPlan` rule at the end of this list. The
+            // physical planner runs the same check on the final plan, after
+            // every rule including the ones appended by the user. See
+            // `crate::sanity_checker`.
         ];
 
         Self::with_rules(rules)
     }
 
     /// Create a new optimizer with the given rules
+    ///
+    /// See the [`PhysicalOptimizer`](Self) documentation for the contract
+    /// governing non-default optimizer pipelines.
     pub fn with_rules(rules: Vec<Arc<dyn PhysicalOptimizerRule + Send + Sync>>) -> Self {
         Self { rules }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PhysicalOptimizer;
+    use datafusion_common::test_util::documented_rule_names;
+
+    /// Verifies the rule table in the [`PhysicalOptimizer`] docs matches the
+    /// rules (and their order) returned by [`PhysicalOptimizer::new`]
+    #[test]
+    fn physical_rules_match_documented_order() {
+        let rules: Vec<_> = PhysicalOptimizer::new()
+            .rules
+            .iter()
+            .map(|rule| rule.name().to_string())
+            .collect();
+
+        let documented = documented_rule_names(
+            include_str!("optimizer.rs"),
+            "/// # Built-in Physical Optimizer Rules",
+        );
+
+        assert_eq!(documented, rules);
     }
 }
