@@ -16,6 +16,7 @@ use std::sync::Arc;
 use std::sync::LazyLock;
 
 use datafusion_common::config::ConfigOptions;
+use datafusion_common::float_semantics::has_float_leaf;
 use datafusion_common::nested_struct::has_one_of_more_common_fields;
 use datafusion_common::{
     DFSchema, DataFusionError, Result, ScalarValue, exec_datafusion_err, internal_err,
@@ -1650,12 +1651,12 @@ impl TreeNodeRewriter for Simplifier<'_> {
             // a between 3 and 5  -->  a >= 3 AND a <=5
             // a not between 3 and 5  -->  a < 3 OR a > 5
             Expr::Between(between) => Transformed::yes(if between.negated {
-                let l = *between.expr.clone();
+                let l = between.expr.as_ref().clone();
                 let r = *between.expr;
                 or(l.lt(*between.low), r.gt(*between.high))
             } else {
                 and(
-                    between.expr.clone().gt_eq(*between.low),
+                    between.expr.as_ref().clone().gt_eq(*between.low),
                     between.expr.lt_eq(*between.high),
                 )
             }),
@@ -2132,6 +2133,11 @@ fn get_preimage(
     if func.signature().volatility != Volatility::Immutable {
         return Ok(PreimageResult::None);
     }
+    // We can get duplicate expressions due to preimage rewrites due to volatile arguments
+    if args.iter().any(Expr::is_volatile) {
+        return Ok(PreimageResult::None);
+    }
+
     func.preimage(args, right_expr, info)
 }
 
@@ -2229,8 +2235,9 @@ fn are_inlist_and_eq_and_match_neg(
 fn inlists_have_set_comparable_literals(left: &Expr, right: &Expr) -> bool {
     match (left, right) {
         (Expr::InList(l), Expr::InList(r)) => l.list.iter().chain(&r.list).all(|item| {
-            item.as_literal()
-                .is_some_and(|value| !value.is_null() && !value.data_type().is_floating())
+            item.as_literal().is_some_and(|value| {
+                !value.is_null() && !has_float_leaf(&value.data_type())
+            })
         }),
         _ => false,
     }
@@ -2260,12 +2267,12 @@ fn as_inlist(expr: &'_ Expr) -> Option<Cow<'_, InList>> {
             match (left.as_ref(), right.as_ref()) {
                 (Expr::Column(_), Expr::Literal(_, _)) => Some(Cow::Owned(InList {
                     expr: left.clone(),
-                    list: vec![*right.clone()],
+                    list: vec![right.as_ref().clone()],
                     negated: false,
                 })),
                 (Expr::Literal(_, _), Expr::Column(_)) => Some(Cow::Owned(InList {
                     expr: right.clone(),
-                    list: vec![*left.clone()],
+                    list: vec![left.as_ref().clone()],
                     negated: false,
                 })),
                 _ => None,

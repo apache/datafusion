@@ -5,10 +5,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::utils::{
-    add_sort_above_with_distribution, is_sort, is_sort_preserving_merge, is_union,
-    is_window,
-};
+use crate::utils::{add_sort_above_with_distribution, is_sort, is_union, is_window};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -24,7 +21,6 @@ use datafusion_physical_expr_common::sort_expr::{
     PhysicalSortRequirement,
 };
 use datafusion_physical_plan::aggregates::AggregateExec;
-use datafusion_physical_plan::execution_plan::CardinalityEffect;
 use datafusion_physical_plan::filter::FilterExec;
 use datafusion_physical_plan::joins::utils::{
     ColumnIndex, calculate_join_output_ordering,
@@ -38,8 +34,10 @@ use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeE
 use datafusion_physical_plan::tree_node::PlanContext;
 use datafusion_physical_plan::{
     ChildSatisfactionOptions, ChildrenPropertiesMode, ExecutionPlan,
-    ExecutionPlanProperties, ReplaceChildrenOptions,
+    ExecutionPlanProperties, LimitBehavior, ReplaceChildrenOptions,
 };
+
+use crate::row_bound::{RowBound, limit_node};
 
 /// "Data class" used by sort pushdown (now driven from `EnsureRequirements`)
 /// to push down [`SortExec`] in the plan. In some cases the total
@@ -83,21 +81,19 @@ pub type SortPushDown = PlanContext<ParentRequirements>;
 /// fetch is the tighter bound. Using the bare `fetch` would be wrong too, as
 /// it would turn `LIMIT 10 OFFSET 5` into `TopK(10)` below the limit, i.e. 5
 /// result rows.
-///
-/// `skip` and `fetch` are independent `usize`s, so their sum can overflow. Like
-/// [`combine_limit`], we saturate: `usize::MAX` input rows is never a smaller
-/// bound than the real one, so the pushed-down fetch stays correct.
-///
-/// [`combine_limit`]: datafusion_common::utils::combine_limit
 fn input_fetch(
     plan: &Arc<dyn ExecutionPlan>,
     parent_fetch: Option<usize>,
 ) -> Option<usize> {
-    let fetch = min_fetch(plan.fetch(), parent_fetch)?;
     let skip = plan
         .downcast_ref::<GlobalLimitExec>()
         .map_or(0, |limit| limit.skip());
-    Some(fetch.saturating_add(skip))
+    let output = RowBound::fetch(plan.fetch()).min(RowBound::fetch(parent_fetch));
+    RowBound {
+        skip,
+        fetch: output.fetch,
+    }
+    .input_rows()
 }
 
 /// Assigns the ordering requirement of the root node to the its children.
@@ -129,18 +125,16 @@ pub fn pushdown_sorts(sort_push_down: SortPushDown) -> Result<SortPushDown> {
 }
 
 fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
-    match (f1, f2) {
-        (Some(f1), Some(f2)) => Some(f1.min(f2)),
-        (Some(_), _) => f1,
-        (_, Some(_)) => f2,
-        _ => None,
-    }
+    RowBound::fetch(f1).min(RowBound::fetch(f2)).fetch
 }
 
-/// Returns whether a fetch on `plan` can also be applied to each child.
-fn can_push_fetch_through(plan: &Arc<dyn ExecutionPlan>) -> bool {
-    plan.supports_limit_pushdown()
-        && matches!(plan.cardinality_effect(), CardinalityEffect::Equal)
+/// Returns whether a fetch on `plan` can move to its input.
+pub(crate) fn can_push_fetch_through(plan: &Arc<dyn ExecutionPlan>) -> bool {
+    match plan.limit_behavior() {
+        LimitBehavior::MoveToInput => true,
+        LimitBehavior::Merge => plan.fetch().is_none(),
+        _ => false,
+    }
 }
 
 /// Returns a plan when the fast path for an already-satisfied ordering can also
@@ -177,11 +171,7 @@ fn preserve_fetch_above_ordered_plan(
         node.plan.output_partitioning().partition_count() > 1;
     let input = Arc::clone(&node.plan);
 
-    let limit: Arc<dyn ExecutionPlan> = if input_has_multiple_partitions {
-        Arc::new(LocalLimitExec::new(input, fetch))
-    } else {
-        Arc::new(GlobalLimitExec::new(input, 0, Some(fetch)))
-    };
+    let limit = limit_node(input, RowBound::fetch(Some(fetch)));
     let limit_node = PlanContext::new(limit, ParentRequirements::default(), vec![node]);
 
     if input_has_multiple_partitions
@@ -318,11 +308,16 @@ fn pushdown_sorts_helper(
                 sort_ordering.clone().into(),
                 parent_requirement.first().clone(),
             );
-            sort_push_down.data.ordering_requirement = if current_is_stricter {
-                Some(OrderingRequirements::from(sort_ordering))
-            } else {
-                Some(parent_requirement)
-            };
+            // A fetched sort selects rows using its own keys. Even if those
+            // keys satisfy the parent ordering, replacing them with a weaker
+            // ordering can change which rows survive (e.g. a lossy cast can
+            // introduce ties). Keep the selection keys in that case.
+            sort_push_down.data.ordering_requirement =
+                if current_is_stricter || (sort_fetch.is_some() && satisfy_parent) {
+                    Some(OrderingRequirements::from(sort_ordering))
+                } else {
+                    Some(parent_requirement)
+                };
             // Recursive call to helper, so it doesn't transform_down and miss
             // the new node (previous child of sort):
             return pushdown_sorts_helper(sort_push_down);
@@ -449,29 +444,10 @@ fn pushdown_requirement_to_children(
     parent_required: OrderingRequirements,
     parent_fetch: Option<usize>,
 ) -> Result<Option<SortPushdownProposal>> {
-    // A parent fetch can be pushed through a plan only if the plan explicitly
-    // supports limit pushdown and does not change cardinality. For example, if
-    // LIMIT 2 is applied below a FilterExec that removes half the rows, only one
-    // row may remain. Applied after the filter, it correctly returns two rows
-    // when at least two are available.
-    //
-    // Checking `supports_limit_pushdown()` alone is not enough. For example:
-    //
-    // UnionExec advertises `supports_limit_pushdown() == true` because it can
-    // forward a LIMIT k to each of its children—i.e. apply “LIMIT k” separately
-    // on each branch before merging them together.
-    //
-    // However, UnionExec’s `cardinality_effect() == GreaterEqual` (it sums up
-    // all child row counts), so pushing a global TopK/LIMIT through it would
-    // break the semantics of “take the first k rows of the combined result.”
-    //
-    // For example, with two branches A and B and k = 3:
-    //   — Global LIMIT: take the first 3 rows from (A ∪ B) after merging.
-    //   — Pushed down: take 3 from A, 3 from B, then merge → up to 6 rows!
-    //
-    // That’s why we also require equal cardinality: even though UnionExec can
-    // push a LIMIT to its children, its GreaterEqual effect means it cannot
-    // preserve the global TopK semantics.
+    // Pushing the sort below `plan` moves the parent fetch with it. For
+    // example, if LIMIT 2 is applied below a FilterExec that removes half the
+    // rows, only one row may remain; and a LIMIT 3 pushed into both inputs of
+    // a UnionExec keeps up to 6 rows. See `LimitBehavior`.
     if parent_fetch.is_some() && !can_push_fetch_through(plan) {
         return Ok(None);
     }
@@ -545,21 +521,10 @@ fn pushdown_requirement_to_children(
         } else {
             Ok(None)
         }
-    } else if plan.is::<SortPreservingMergeExec>() && plan.fetch().is_some() {
-        // Push down through a fetched merge when:
-        // - requirement is aligned with output ordering
-        // - it preserves ordering during execution
-        // Refining a fetched merge must preserve the ordering that selected its rows.
-        let Some(ordering) = plan.output_ordering() else {
-            return Ok(None);
-        };
-        Ok(plan
-            .equivalence_properties()
-            .requirements_compatible(
-                parent_required.first().clone(),
-                ordering.clone().into(),
-            )
-            .then(|| vec![Some(parent_required)]))
+    } else if plan.is::<SortPreservingMergeExec>() {
+        // A merge orders rows across partitions only by its own keys, and this
+        // function doesn't rewrite them. Keep the finer parent sort above it.
+        Ok(None)
     } else if is_union(plan) {
         // `UnionExec` does not have real sort requirements for its input, we
         // just propagate the sort requirements down:
@@ -614,21 +579,6 @@ fn pushdown_requirement_to_children(
         // Keep sorts above RepartitionExec even when a single input partition
         // lets it preserve order; pushing the sort below it provides no benefit.
         Ok(None)
-    } else if is_sort_preserving_merge(plan) {
-        let new_ordering = LexOrdering::from(parent_required.first().clone());
-        let mut spm_eqs = plan.equivalence_properties().clone();
-        let old_ordering = spm_eqs.output_ordering().unwrap();
-        // Sort preserving merge will have new ordering, one requirement above is pushed down to its below.
-        let change = spm_eqs.reorder(new_ordering)?;
-        if !change || spm_eqs.ordering_satisfy(old_ordering)? {
-            // Can push-down through SortPreservingMergeExec, because parent requirement is finer
-            // than SortPreservingMergeExec output ordering.
-            Ok(Some(vec![Some(parent_required)]))
-        } else {
-            // Do not push-down through SortPreservingMergeExec when
-            // ordering requirement invalidates requirement of sort preserving merge exec.
-            Ok(None)
-        }
     } else if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
         handle_hash_join(hash_join, parent_required)
     } else {

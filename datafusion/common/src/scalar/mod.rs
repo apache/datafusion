@@ -62,7 +62,7 @@ use arrow::array::{
     Time32SecondArray, Time64MicrosecondArray, Time64NanosecondArray,
     TimestampMicrosecondArray, TimestampMillisecondArray, TimestampNanosecondArray,
     TimestampSecondArray, UInt8Array, UInt16Array, UInt32Array, UInt64Array, UnionArray,
-    downcast_run_array, make_comparator, new_empty_array, new_null_array,
+    downcast_array, downcast_run_array, make_comparator, new_empty_array, new_null_array,
 };
 use arrow::buffer::{BooleanBuffer, ScalarBuffer};
 use arrow::compute::kernels::cast::{CastOptions, cast_with_options};
@@ -2760,6 +2760,45 @@ impl ScalarValue {
                 | ScalarValue::UInt32(_)
                 | ScalarValue::UInt64(_)
         )
+    }
+
+    /// Applies DataFusion's floating-point equality semantics to this value,
+    /// including floats inside nested and encoded values. Negative zero becomes
+    /// positive zero; nulls, NaN payloads and other values are preserved.
+    ///
+    /// See [`crate::float_semantics`] for the shared normalization rules.
+    pub fn normalize(mut self) -> Self {
+        use crate::float_semantics::{normalize_float, normalize_floats};
+
+        fn normalize_array<A: Array + From<ArrayData> + 'static>(array: &mut Arc<A>) {
+            let original: ArrayRef = Arc::clone(array) as ArrayRef;
+            let normalized = normalize_floats(&original);
+            if !Arc::ptr_eq(&original, &normalized) {
+                *array = Arc::new(downcast_array(normalized.as_ref()));
+            }
+        }
+
+        fn normalize(scalar: &mut ScalarValue) {
+            match scalar {
+                ScalarValue::Float16(Some(value)) => *value = normalize_float(*value),
+                ScalarValue::Float32(Some(value)) => *value = normalize_float(*value),
+                ScalarValue::Float64(Some(value)) => *value = normalize_float(*value),
+                ScalarValue::FixedSizeList(array) => normalize_array(array),
+                ScalarValue::List(array) => normalize_array(array),
+                ScalarValue::LargeList(array) => normalize_array(array),
+                ScalarValue::ListView(array) => normalize_array(array),
+                ScalarValue::LargeListView(array) => normalize_array(array),
+                ScalarValue::Struct(array) => normalize_array(array),
+                ScalarValue::Map(array) => normalize_array(array),
+                ScalarValue::Union(Some((_, value)), _, _)
+                | ScalarValue::Dictionary(_, value)
+                | ScalarValue::RunEndEncoded(_, _, value) => normalize(value),
+                _ => {}
+            }
+        }
+
+        normalize(&mut self);
+        self
     }
 
     /// whether this value is null or not.
@@ -12055,5 +12094,29 @@ mod tests {
         assert_eq!(arr.len(), 1);
         assert_eq!(arr.null_count(), 0);
         assert_eq!(arr.num_columns(), 0);
+    }
+
+    #[test]
+    fn normalize_folds_negative_zero() {
+        assert_eq!(
+            ScalarValue::Float64(Some(-0.0)).normalize(),
+            ScalarValue::Float64(Some(0.0))
+        );
+        assert_eq!(
+            ScalarValue::Float32(Some(-0.0)).normalize(),
+            ScalarValue::Float32(Some(0.0))
+        );
+        assert_eq!(
+            ScalarValue::Float16(Some(f16::NEG_ZERO)).normalize(),
+            ScalarValue::Float16(Some(f16::ZERO))
+        );
+        assert_eq!(
+            ScalarValue::Float64(None).normalize(),
+            ScalarValue::Float64(None)
+        );
+        assert_eq!(
+            ScalarValue::Int32(Some(0)).normalize(),
+            ScalarValue::Int32(Some(0))
+        );
     }
 }

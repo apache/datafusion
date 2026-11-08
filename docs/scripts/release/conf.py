@@ -21,6 +21,8 @@ the release process builds docs with the following command from a main
 checkout:
 
 sphinx-build -c docs/scripts/release
+
+See docs/scripts/build_versions.sh for building past releases
 """
 
 import os
@@ -32,11 +34,14 @@ sys.path.insert(0, str(source.parent))
 exec(compile((source / "conf.py").read_bytes(), str(source / "conf.py"), "exec"))
 
 # Resolve paths relative to the tag, not this configuration overlay.
+# Releases before 54.0.0 do not set html_extra_path, and releases before
+# 53.0.0 do not set html_favicon.
 templates_path = [str(source / path) for path in templates_path]
 html_static_path = [str(source / path) for path in html_static_path]
-html_extra_path = [str(source / path) for path in html_extra_path]
+html_extra_path = [str(source / path) for path in globals().get("html_extra_path", [])]
 html_logo = str(source / html_logo)
-html_favicon = str(source / html_favicon)
+if globals().get("html_favicon"):
+    html_favicon = str(source / html_favicon)
 
 version = release = os.environ["DATAFUSION_DOCS_VERSION"]
 html_baseurl = f"https://datafusion.apache.org/versions/{version}/"
@@ -54,4 +59,25 @@ html_theme_options = {
     },
 }
 # The old tag's absolute redirect would leave the release documentation.
-redirects = {**redirects, "library-user-guide/upgrading": "upgrading/index.html"}
+# Releases before 53.0.0 have no redirects (the upgrade guide was a single page).
+if "library-user-guide/upgrading" in globals().get("redirects", {}):
+    redirects = {**redirects, "library-user-guide/upgrading": "upgrading/index.html"}
+
+
+# Releases before 51.0.0 have a sidebar template that calls
+# ``generate_nav_html``, which pydata-sphinx-theme renamed to
+# ``generate_toctree_html``.
+def _add_generate_nav_html(app, pagename, templatename, context, doctree):
+    def generate_nav_html(kind, startdepth=1, **kwargs):
+        return context["generate_toctree_html"](kind, startdepth=startdepth, **kwargs)
+
+    context.setdefault("generate_nav_html", generate_nav_html)
+
+
+_release_setup = globals().get("setup")
+
+
+def setup(app):
+    if _release_setup is not None:
+        _release_setup(app)
+    app.connect("html-page-context", _add_generate_nav_html)

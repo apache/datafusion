@@ -1333,6 +1333,168 @@ RESET datafusion.execution.parquet.pushdown_filters;
 statement ok
 drop table t;
 
+##########
+# Casting a timestamp to a time-of-day wraps at midnight
+#
+# https://github.com/apache/datafusion/issues/26451
+##########
+
+# Pruning must never change a query's answer. A cast whose output does not
+# preserve the ordering of its input can invert the bounds derived from
+# statistics, which makes pruning discard row groups that do contain matching
+# rows. Every predicate below is therefore run twice: once against an
+# in-memory table, which is never pruned and so gives the ground truth, and
+# once against the same rows stored as Parquet. The two must agree.
+
+# Three timestamps at 23:00, 00:00 and 01:00, written as a single row group so
+# that the row group's min/max bracket midnight. Casting those bounds to
+# time-of-day turns them into 23:00:00 and 01:00:00, which excludes every value
+# that actually lies between them.
+statement ok
+CREATE TABLE source_data(ts TIMESTAMP) AS VALUES
+  (TIMESTAMP '2024-03-10 23:00:00'),
+  (TIMESTAMP '2024-03-11 00:00:00'),
+  (TIMESTAMP '2024-03-11 01:00:00');
+
+statement ok
+COPY (SELECT ts FROM source_data)
+TO 'test_files/scratch/push_down_filter_parquet/timestamp_to_time/timestamps.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '3');
+
+statement ok
+CREATE EXTERNAL TABLE timestamps
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/timestamp_to_time/timestamps.parquet';
+
+# Equality against the row at midnight.
+query P
+SELECT ts FROM source_data WHERE CAST(ts AS TIME) = TIME '00:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00
+
+query P
+SELECT ts FROM timestamps WHERE CAST(ts AS TIME) = TIME '00:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00
+
+# Range predicate spanning the wrap point.
+query P
+SELECT ts FROM source_data WHERE CAST(ts AS TIME) < TIME '02:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00
+2024-03-11T01:00:00
+
+query P
+SELECT ts FROM timestamps WHERE CAST(ts AS TIME) < TIME '02:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00
+2024-03-11T01:00:00
+
+# The same predicates spelled with arrow_cast, which also reaches Time32.
+query P
+SELECT ts FROM source_data
+WHERE arrow_cast(ts, 'Time32(Second)') = arrow_cast('00:00:00', 'Time32(Second)')
+ORDER BY ts;
+----
+2024-03-11T00:00:00
+
+query P
+SELECT ts FROM timestamps
+WHERE arrow_cast(ts, 'Time32(Second)') = arrow_cast('00:00:00', 'Time32(Second)')
+ORDER BY ts;
+----
+2024-03-11T00:00:00
+
+query P
+SELECT ts FROM source_data
+WHERE arrow_cast(ts, 'Time32(Second)') < arrow_cast('02:00:00', 'Time32(Second)')
+ORDER BY ts;
+----
+2024-03-11T00:00:00
+2024-03-11T01:00:00
+
+query P
+SELECT ts FROM timestamps
+WHERE arrow_cast(ts, 'Time32(Second)') < arrow_cast('02:00:00', 'Time32(Second)')
+ORDER BY ts;
+----
+2024-03-11T00:00:00
+2024-03-11T01:00:00
+
+statement ok
+DROP TABLE timestamps;
+
+##########
+# The same wrap happens at the local midnight of a timezone-aware column
+##########
+
+# The same three local wall-clock times, tagged +05:00, so the instants
+# actually stored are 18:00, 19:00 and 20:00 UTC on 2024-03-10. Those are
+# monotonic and fall inside a single UTC day, so the min/max bounds only
+# invert if the cast honours the column's timezone.
+statement ok
+CREATE TABLE source_data_tz AS
+SELECT arrow_cast(ts, 'Timestamp(Nanosecond, Some("+05:00"))') AS ts
+FROM source_data;
+
+statement ok
+DROP TABLE source_data;
+
+statement ok
+COPY (SELECT ts FROM source_data_tz)
+TO 'test_files/scratch/push_down_filter_parquet/timestamp_to_time/timestamps_tz.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '3');
+
+statement ok
+CREATE EXTERNAL TABLE timestamps_tz
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/timestamp_to_time/timestamps_tz.parquet';
+
+# Pin the shape of the data this section depends on: the local times have to
+# straddle a local midnight while the stored instants stay monotonic within a
+# single UTC day. Without this, a change to how a timezone is attached would
+# leave the queries below passing while no longer exercising the wrap at all.
+query TIT
+SELECT
+  ts::string AS local_time,
+  to_unixtime(ts) AS stored_instant,
+  CAST(ts AS TIME)::string AS time_of_day
+FROM timestamps_tz ORDER BY ts;
+----
+2024-03-10T23:00:00+05:00 1710093600 23:00:00
+2024-03-11T00:00:00+05:00 1710097200 00:00:00
+2024-03-11T01:00:00+05:00 1710100800 01:00:00
+
+query P
+SELECT ts FROM source_data_tz WHERE CAST(ts AS TIME) = TIME '00:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00+05:00
+
+query P
+SELECT ts FROM timestamps_tz WHERE CAST(ts AS TIME) = TIME '00:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00+05:00
+
+query P
+SELECT ts FROM source_data_tz WHERE CAST(ts AS TIME) < TIME '02:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00+05:00
+2024-03-11T01:00:00+05:00
+
+query P
+SELECT ts FROM timestamps_tz WHERE CAST(ts AS TIME) < TIME '02:00:00' ORDER BY ts;
+----
+2024-03-11T00:00:00+05:00
+2024-03-11T01:00:00+05:00
+
+statement ok
+DROP TABLE timestamps_tz;
+
+statement ok
+DROP TABLE source_data_tz;
+
 # A predicate that the Parquet scan keeps only for pruning
 # (pushdown_filters = false) must not make the scan claim equivalences.
 # Each file is sorted by (a, b). If the scan claims that `a` is constant,
@@ -1440,3 +1602,117 @@ RESET datafusion.execution.parquet.pushdown_filters;
 
 statement ok
 RESET datafusion.explain.physical_plan_only;
+
+##########
+# Pruning casts the min/max statistics of each row group, so it may only use a
+# cast that keeps the order of the values. Each predicate below runs against
+# an in-memory table, which is never pruned, and the same rows in one Parquet
+# row group. The two must agree.
+##########
+
+statement ok
+CREATE TABLE cast_order_src(i INT, ts TIMESTAMP) AS VALUES
+  (-1, TIMESTAMP '2024-03-10 00:00:00'),
+  (0, TIMESTAMP '2024-03-10 01:00:00'),
+  (1, TIMESTAMP '2024-03-10 02:30:00'),
+  (255, TIMESTAMP '2024-03-10 02:45:00'),
+  (256, TIMESTAMP '2024-03-10 03:00:00');
+
+statement ok
+COPY cast_order_src
+TO 'test_files/scratch/push_down_filter_parquet/cast_order/data.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE cast_order
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_parquet/cast_order/data.parquet';
+
+# -1 and 1 are true and 0 is false, so the bounds -1 and 256 both cast to true.
+query I
+SELECT i FROM cast_order_src WHERE CAST(i AS BOOLEAN) <= false;
+----
+0
+
+query I
+SELECT i FROM cast_order WHERE CAST(i AS BOOLEAN) <= false;
+----
+0
+
+# An integer casts to its little-endian bytes: -1 is X'FFFFFFFF' and 256 is
+# X'00010000', so the bounds no longer bracket the values in between.
+query I
+SELECT i FROM cast_order_src WHERE CAST(i AS BYTEA) < X'05' ORDER BY i;
+----
+0
+1
+256
+
+query I
+SELECT i FROM cast_order WHERE CAST(i AS BYTEA) < X'05' ORDER BY i;
+----
+0
+1
+256
+
+# Comparing a timestamp without a timezone to one with a timezone casts the
+# column to that timezone, reading the values as local times. New York skipped
+# 02:00 to 03:00 on 2024-03-10, and Arrow reads 02:30 as 03:30 (07:30 UTC),
+# after 03:00 (07:00 UTC). The bound 03:00 is no longer the largest value after
+# the cast, so this cast must not prune.
+statement ok
+SET datafusion.execution.time_zone = 'America/New_York';
+
+query I
+SELECT i FROM cast_order_src WHERE ts > TIMESTAMPTZ '2024-03-10 07:15:00+00:00' ORDER BY i;
+----
+1
+255
+
+query I
+SELECT i FROM cast_order WHERE ts > TIMESTAMPTZ '2024-03-10 07:15:00+00:00' ORDER BY i;
+----
+1
+255
+
+# A fixed offset skips no local times, so that cast keeps the order and still
+# prunes.
+statement ok
+SET datafusion.execution.time_zone = '-05:00';
+
+statement ok
+SET datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT i FROM cast_order WHERE ts > TIMESTAMPTZ '2024-03-10 07:15:00+00:00';
+----
+physical_plan
+01)FilterExec: CAST(ts@1 AS Timestamp(ns, "-05:00")) > 1710054900000000000, projection=[i@0]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/push_down_filter_parquet/cast_order/data.parquet]]}, projection=[i, ts], file_type=parquet, predicate=CAST(ts@1 AS Timestamp(ns, "-05:00")) > 1710054900000000000, pruning_predicate=ts_null_count@1 != row_count@2 AND CAST(ts_max@0 AS Timestamp(ns, "-05:00");N) > 1710054900000000000, required_guarantees=[]
+
+query I
+SELECT i FROM cast_order_src WHERE ts > TIMESTAMPTZ '2024-03-10 07:15:00+00:00' ORDER BY i;
+----
+1
+255
+256
+
+query I
+SELECT i FROM cast_order WHERE ts > TIMESTAMPTZ '2024-03-10 07:15:00+00:00' ORDER BY i;
+----
+1
+255
+256
+
+statement ok
+RESET datafusion.explain.physical_plan_only;
+
+statement ok
+RESET datafusion.execution.time_zone;
+
+statement ok
+DROP TABLE cast_order;
+
+statement ok
+DROP TABLE cast_order_src;
