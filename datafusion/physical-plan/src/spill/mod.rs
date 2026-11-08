@@ -934,7 +934,11 @@ fn gc_array(array: &ArrayRef, dictionaries: bool) -> Result<(ArrayRef, bool)> {
             if !shrunk && !values_mutated {
                 return Ok((Arc::clone(array), false));
             }
-            Ok((gc.with_values(values), true))
+            // `gc` holds only the values its rows reference, so there are no more
+            // than it has rows.
+            #[expect(clippy::disallowed_methods)]
+            let compacted = gc.with_values(values);
+            Ok((compacted, true))
         }
         DataType::Dictionary(_, _)
             if array.as_any_dictionary().values().len() > array.len() =>
