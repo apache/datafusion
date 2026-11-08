@@ -22,18 +22,67 @@ use itertools::Itertools;
 /// The state of one walk along a sequence of sort keys, such as the keys of a
 /// required ordering.
 ///
-/// A sort key only matters among the rows that tie on the keys before it. So
-/// once a key is satisfied, the walk *pins* it: for the rest of the walk, the
-/// key has one value, like a constant. An expression is *fixed* if it has one
-/// value among those rows: it is a literal, a constant, pinned, a leaf that
-/// reports itself as a singleton (such as an uncorrelated scalar subquery), or
-/// not volatile and computed only from fixed expressions. The *head* of an
-/// ordering is its first expression that is not fixed; an ordering whose
-/// expressions are all fixed has no head. With orderings `[a, b]` and
-/// `[a, c]`, the requirement `[a, c]` is satisfied, because pinning `a` makes
-/// `c` the head of the second ordering.
+/// [`EquivalenceProperties`] uses a `SortKeyWalk` to decide whether the
+/// orderings it already knows satisfy a requirement, one key at a time. The
+/// walk reads the properties but never changes them: everything it learns
+/// along the way lives in the walk itself and is dropped with it.
 ///
-/// Pins live in the walk; the equivalence properties it reads do not change.
+/// # Why a walk
+///
+/// A sort key only matters among the rows that tie on the keys before it. For
+/// the requirement `[a, b]`, `a` must be sorted over all rows, but `b` only
+/// has to be sorted within each group of rows with the same `a`. So once a
+/// key is satisfied, the walk *pins* it: for the rest of the walk, the key has
+/// one value, like a constant, and every known ordering can skip it.
+///
+/// # Terms
+///
+/// - An expression is *pinned* if the walk has pinned it. Pinning a member of
+///   an equivalence class pins all of its members.
+/// - An expression is *fixed* if it has one value among the rows that tie on
+///   the pinned expressions: it is a literal, a constant, pinned, a leaf that
+///   reports itself as a singleton (such as an uncorrelated scalar subquery),
+///   or not volatile and computed only from fixed expressions. See
+///   [`Self::is_fixed`].
+/// - The *head* of an ordering is its first expression that is not fixed. An
+///   ordering whose expressions are all fixed has no head. See
+///   [`Self::heads`].
+/// - An ordering is *implied* if it follows from the heads through a known
+///   equality, as [`EquivalenceProperties::implied_ordering`] finds. The walk
+///   collects implied orderings as it pins, and treats them like the
+///   orderings of the properties from then on.
+///
+/// A key is satisfied if it is fixed, if it is the head of some ordering in
+/// the required direction, or if its order follows from the heads (for
+/// example, `CAST(a AS BIGINT)` when `a` is a head). See
+/// [`Self::sorted_prefix_len`].
+///
+/// # Example
+///
+/// With orderings `[a, b]` and `[a, c]`, the requirement `[a, c]` is
+/// satisfied:
+///
+/// 1. Nothing is pinned, so `a` heads both orderings. `a` is satisfied and
+///    pinned.
+/// 2. `a` is now fixed, so the heads move to `b` and `c`. `c` heads the second
+///    ordering, so it is satisfied.
+///
+/// With orderings `[a, b]` and `[b, c]`, the requirement `[a, b, c]` is
+/// satisfied too: pinning `a` moves the head of the first ordering to `b`,
+/// which now heads both orderings. Pinning `b` uses up the first ordering and
+/// moves the head of the second to `c`.
+///
+/// # Where it is used
+///
+/// - [`EquivalenceProperties::ordering_satisfy_requirement`] and
+///   [`EquivalenceProperties::common_sort_prefix_length`] walk the keys of a
+///   requirement with [`Self::sorted_prefix_len`].
+/// - [`EquivalenceProperties::find_longest_permutation`] pins each expression
+///   it finds with [`Self::pin`], so that the next expression is checked among
+///   the rows that tie on the ones found so far.
+/// - [`EquivalenceProperties::get_expr_properties`] reads the properties of
+///   an expression through a walk with nothing pinned, via
+///   [`Self::expr_properties`].
 pub(super) struct SortKeyWalk<'a> {
     props: &'a EquivalenceProperties,
     /// Pinned expressions. Pinning a member of an equivalence class pins all
