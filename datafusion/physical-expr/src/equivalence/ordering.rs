@@ -30,7 +30,8 @@ use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
 /// ```
 ///
 /// Here, both `[a ASC, b ASC]` and `[c DESC, d ASC]` describe the table
-/// ordering. In this case, we say that these orderings are equivalent.
+/// ordering. In this case, we say that these orderings are equivalent. See
+/// [Equivalent sort expressions](crate::equivalence::EquivalenceProperties#equivalent-sort-expressions).
 ///
 /// An `OrderingEquivalenceClass` is a set of such equivalent orderings, which
 /// is represented by a vector of `LexOrdering`s. The set does not store any
@@ -216,18 +217,9 @@ impl OrderingEquivalenceClass {
     /// `ASC NULLS LAST` and `DESC NULLS FIRST`. Rows sorted both ways all have
     /// the same value (or are all null).
     ///
-    /// This is how a value that is constant only within groups of rows is
-    /// recorded, since a `ConstExpr` is constant across all rows. For example,
-    /// `SUM(x) OVER (PARTITION BY k)` has one value per `k`, so the window adds
-    /// `[k, w]` once for each of the four directions of `w`.
-    ///
-    /// ### Future Improvements
-    ///
-    /// This function may become unnecessary if any of the following improvements
-    /// are implemented:
-    /// 1. `SortOptions` supports encoding constantness information.
-    /// 2. `EquivalenceProperties` gains `FunctionalDependency` awareness, eliminating
-    ///    the need for `Constant` and `Constraints`.
+    /// This is how a whole-partition window aggregate records that its value
+    /// is constant within each window partition. See
+    /// [Per-partition constants from window functions](crate::equivalence::EquivalenceProperties#per-partition-constants-from-window-functions).
     pub fn is_expr_partial_const(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         is_partial_const(self.iter().map(|ordering| ordering.first()), expr)
     }

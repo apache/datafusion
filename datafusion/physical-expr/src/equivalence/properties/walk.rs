@@ -25,7 +25,8 @@ use itertools::Itertools;
 /// [`EquivalenceProperties`] uses a `SortKeyWalk` to decide whether the
 /// orderings it already knows satisfy a requirement, one key at a time. The
 /// walk reads the properties but never changes them: everything it learns
-/// along the way lives in the walk itself and is dropped with it.
+/// along the way lives in the walk itself and is dropped with it. For the
+/// concepts, see [Checking whether a requirement is satisfied](EquivalenceProperties#checking-whether-a-requirement-is-satisfied).
 ///
 /// # Why a walk
 ///
@@ -301,9 +302,10 @@ impl<'a> SortKeyWalk<'a> {
         }
         // Now, check what we know about orderings. A whole-partition window
         // such as `SUM(x) OVER (PARTITION BY k)` adds `[k, w]` in all four
-        // directions of `w` (see `OrderingEquivalenceClass::is_expr_partial_const`).
-        // Once `k` is pinned, `w` heads orderings in opposite directions, so it
-        // has one value among the rows that tie on `k`:
+        // directions of `w` (see "Per-partition constants from window
+        // functions" on `EquivalenceProperties`). Once `k` is pinned, `w`
+        // heads orderings in opposite directions, so it has one value among
+        // the rows that tie on `k`:
         let normal_expr = self.props.eq_group.normalize_expr(Arc::clone(&node.expr));
         if self.is_fixed(&normal_expr) || is_partial_const(self.heads(), &normal_expr) {
             node.data.sort_properties = SortProperties::Singleton;

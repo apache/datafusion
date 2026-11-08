@@ -364,6 +364,16 @@ pub(crate) fn get_partition_by_sort_exprs(
     }
 }
 
+/// Computes the [`EquivalenceProperties`] of a window operator's output: the
+/// input's properties, plus what each window expression adds.
+///
+/// A whole-partition aggregate such as `SUM(x) OVER (PARTITION BY k)` is
+/// constant across the table when there is no `PARTITION BY`, and otherwise
+/// has one value per window partition, which is recorded by adding `[k, w]`
+/// in all four sort directions of `w`. See
+/// [Per-partition constants from window functions](EquivalenceProperties#per-partition-constants-from-window-functions).
+/// A set-monotonic aggregate over an unbounded frame adds an ordering on its
+/// output instead.
 pub(crate) fn window_equivalence_properties(
     schema: &SchemaRef,
     input: &Arc<dyn ExecutionPlan>,

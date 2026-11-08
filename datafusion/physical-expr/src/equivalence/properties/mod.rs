@@ -50,7 +50,22 @@ use itertools::{Either, Itertools};
 ///
 /// [Using Ordering for Better Plans]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis/
 ///
-/// # Example equivalent sort expressions
+/// This page explains the concepts and how the pieces fit together. Each
+/// struct documents what it represents.
+///
+/// # Overview
+///
+/// | Concept | Example | Stored in |
+/// |---|---|---|
+/// | Equivalent expressions | `a` and `b` after the filter `a = b` | An [`EquivalenceGroup`] of [`EquivalenceClass`]es |
+/// | Constants | `a` after the filter `a = 5` | The `constant` of an [`EquivalenceClass`], added as a [`ConstExpr`] |
+/// | Orderings | `[a ASC, b DESC]` after a sort | An [`OrderingEquivalenceClass`] |
+/// | Groupings | `[a, b]` after a hash aggregate on `a, b` | A [`GroupingEquivalenceClass`] |
+/// | Constraints | A primary key or unique constraint | [`Constraints`] |
+///
+/// [`EquivalenceClass`]: crate::equivalence::EquivalenceClass
+///
+/// # Equivalent sort expressions
 ///
 /// Consider table below:
 ///
@@ -71,7 +86,7 @@ use itertools::{Either, Itertools};
 /// specifies the output sorted by EITHER `a ASC` or `b DESC`, the sort can be
 /// avoided.
 ///
-/// # Example equivalent expressions
+/// # Equivalent expressions
 ///
 /// Similarly, consider the table below:
 ///
@@ -91,6 +106,97 @@ use itertools::{Either, Itertools};
 /// the partition requirement is `Hash(a)` and output partitioning is
 /// `Hash(b)`, then DataFusion avoids repartitioning the data as the existing
 /// partitioning satisfies the requirement.
+///
+/// # Constants
+///
+/// A constant is an expression with a single value in the output of a plan
+/// node. For example, after the filter `a = 5`, `a` is constant. A constant
+/// never changes the order of rows, so a sort on `[a, b]` is the same as a
+/// sort on `[b]`, and a requirement that mentions `a` can drop it (see
+/// [Normal form](#normal-form)).
+///
+/// A constant is *uniform* if it has the same value in every output
+/// partition of the node, and *heterogeneous* if it has one value within each
+/// partition but may differ between partitions (see [`AcrossPartitions`]). A
+/// literal and the `a` of the filter `a = 5` are uniform. In the output of a
+/// `UNION ALL` whose inputs each have their own constant value of `c`, `c` is
+/// heterogeneous: each partition comes from one input, so it has one value,
+/// but the inputs differ. A `ConstExpr` created from a non-literal expression
+/// is heterogeneous unless stated otherwise, which is the safe assumption.
+///
+/// The difference matters once partitions are merged. Within a partition, a
+/// heterogeneous constant never changes the order of rows, but an operator
+/// that merges partitions, such as a sort preserving merge, sees several
+/// values, so the constant still discriminates the order and must be kept in
+/// an ordering. Only uniform constants are removed from orderings and
+/// requirements.
+///
+/// # Per-partition constants from window functions
+///
+/// Here *partition* means a window partition: the rows with equal
+/// `PARTITION BY` keys, not an execution partition. A whole-partition window
+/// aggregate such as `SUM(x) OVER (PARTITION BY k) AS w` has one value per
+/// `k`. This is not a constant, since `w` differs across the output, and it
+/// is not an ordering on its own. But within each group of rows with the same
+/// `k`, `w` has one value, so if the input is sorted by `[k]`, the output is
+/// sorted by `[k, w]` in *every* direction of `w`: ascending or descending,
+/// nulls first or last.
+///
+/// The window operator records this by adding `[k, w]` once for each of the
+/// four directions of `w`. The encoding is read back in two places:
+///
+/// - [`OrderingEquivalenceClass::is_expr_partial_const`] reports that `w`
+///   has a single value when one ordering leads with `w` in some direction
+///   and another leads with it in the exact reverse, since rows sorted both
+///   ways all have the same value (or are all null).
+/// - When a requirement is checked (see [below](#checking-whether-a-requirement-is-satisfied)),
+///   pinning `k` makes `w` the leading expression of orderings in opposite
+///   directions, so `w` is a singleton among the rows that tie on `k`.
+///
+/// This encoding may become unnecessary if `SortOptions` can express that an
+/// expression is constant, or if `EquivalenceProperties` gains functional
+/// dependency awareness, which would also remove the need for constants and
+/// constraints.
+///
+/// # Normal form
+///
+/// Orderings and requirements are compared in *normal form*: every
+/// expression is replaced by the first member of its equivalence class,
+/// uniform constants are removed, and so are the expressions that repeat an
+/// earlier one. If `a` and `b` are equal and `d` is a uniform constant, the
+/// requirement `[b ASC, d DESC, c ASC, a ASC]` normalizes to
+/// `[a ASC, c ASC]`. Orderings are kept in normal form in a cache along with
+/// a map from each leading expression to the orderings it leads, so that a
+/// requirement is checked against orderings in the same form.
+///
+/// # Checking whether a requirement is satisfied
+///
+/// The requirement `[a, b]` holds if the rows are sorted by `a`, and the rows
+/// that tie on `a` are sorted by `b`. So each key only has to be ordered
+/// among the rows that tie on the keys before it. [`Self::ordering_satisfy_requirement`]
+/// checks the keys in order. Once a key is satisfied, it is *pinned*: it is
+/// treated like a constant for the rest of the keys, so every known ordering
+/// can skip it. With orderings `[a, b]` and `[a, c]`, the requirement
+/// `[a, c]` holds: pinning `a` leaves `c` as the first unpinned expression of
+/// the second ordering. Pinning is kept in a `SortKeyWalk` (see
+/// `properties/walk.rs`), which defines its terms; the properties being read
+/// never change.
+///
+/// A key need not appear in an ordering itself. Its order can follow from an
+/// expression that does, as [`PhysicalExpr::get_properties`] reports:
+/// `CAST(a AS BIGINT)` is sorted when `a` is, and
+/// [`Self::get_expr_properties`] exposes this.
+///
+/// # Discovering orderings
+///
+/// Adding an ordering, an equality or a constant can imply orderings that
+/// were not stated. If the rows are sorted by `[c, a, b]` and `c = f(a, b)`
+/// for a function `f` that preserves the lexicographical order of its
+/// arguments, such as `c = CAST(a AS BIGINT)`, the rows are also sorted by
+/// `[a, b]`: rows with different `(a, b)` are in the order of `f(a, b)`,
+/// which is the order of `c`, and rows with equal `c` are sorted by `[a, b]`
+/// anyway. [`Self::add_ordering`], [`Self::add_equal_conditions`] and
+/// [`Self::add_constants`] look for such orderings.
 ///
 /// # Code Example
 /// ```

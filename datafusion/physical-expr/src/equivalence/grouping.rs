@@ -26,6 +26,9 @@ use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 /// describe the same grouping. Entries do not imply properties for subsets;
 /// `[a, b]` alone says nothing about whether all rows with the same `a` are
 /// contiguous.
+///
+/// See [`EquivalenceProperties`](crate::equivalence::EquivalenceProperties)
+/// for how groupings relate to the other properties of a plan node.
 #[derive(Clone, Debug, Default)]
 pub struct GroupingEquivalenceClass {
     groupings: Vec<Vec<Arc<dyn PhysicalExpr>>>,

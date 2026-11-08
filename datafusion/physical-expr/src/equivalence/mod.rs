@@ -2,6 +2,13 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+//! Equivalence properties: the orderings, equal expressions, constants and
+//! groupings known to hold for the output of a plan node, which the planner
+//! uses to avoid sorts and repartitions.
+//!
+//! Start with the documentation of [`EquivalenceProperties`], which explains
+//! the concepts and how the pieces below fit together.
+
 use std::borrow::Borrow;
 use std::sync::Arc;
 
