@@ -606,6 +606,32 @@ coverage and must pass in the merge queue before a PR merges into <code class="d
 also run on pushes to release branches (<code class="docutils literal notranslate"><span class="pre">branch-*</span></code>). You can run them manually.</p>
 <p>For local SQLite test instructions, see the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest#running-tests-sqlite">instructions in the documentation</a>.</p>
 </section>
+<section id="rust-integration-tests">
+<h2>Rust Integration Tests<a class="headerlink" href="#rust-integration-tests" title="Link to this heading">#</a></h2>
+<p>There are several public interface tests for the DataFusion library in the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/core/tests">tests</a> directory.</p>
+<p>You can run these tests individually using <code class="docutils literal notranslate"><span class="pre">cargo</span></code> as normal command such as</p>
+<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>parquet_integration
+</pre></div>
+</div>
+</section>
+<section id="fuzz-testing">
+<h2>Fuzz testing<a class="headerlink" href="#fuzz-testing" title="Link to this heading">#</a></h2>
+<p>Fuzz testing generates random inputs and configurations, then checks that a property holds for every generated case. For example, an optimized operator should produce the same results as a reference implementation.</p>
+<section id="fuzzing-unit-tests">
+<h3>Fuzzing unit tests<a class="headerlink" href="#fuzzing-unit-tests" title="Link to this heading">#</a></h3>
+<p>For fuzzing unit tests, such as tests for a single operator or an internal utility:</p>
+<ul class="simple">
+<li><p>If the test is small (easy to set up and takes a few seconds), keep it as a unit test.</p></li>
+<li><p>If the test is large (requires a fuzzing driver and takes more than 10 seconds), it should implement the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/test-utils/src/fuzz.rs"><code class="docutils literal notranslate"><span class="pre">FuzzTest</span></code> trait</a> and run through the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/fuzz/tests/fuzz.rs">central fuzz-test entry point</a>. See the <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/fuzz/tests/suites/spill_pool.rs">spill-pool fuzzer</a> for a reference implementation.</p></li>
+</ul>
+</section>
+<section id="sql-fuzz-testing">
+<h3>SQL fuzz testing<a class="headerlink" href="#sql-fuzz-testing" title="Link to this heading">#</a></h3>
+<p>For SQL fuzzing of more complex queries, use <a class="reference external" href="https://github.com/datafusion-contrib/datafusion-fuzzer">datafusion-fuzzer</a>, which is currently maintained outside the core DataFusion repository. See <a class="reference external" href="https://github.com/datafusion-contrib/datafusion-fuzzer/blob/main/README.md">its documentation</a> for details.</p>
+<hr class="docutils" />
+<p>The following sections cover <strong>non-functional tests and checks</strong> for CI workflows, documentation, and repository maintenance.</p>
+</section>
+</section>
 <section id="ci-workflow-tests">
 <h2>CI Workflow Tests<a class="headerlink" href="#ci-workflow-tests" title="Link to this heading">#</a></h2>
 <p>The Rust workflow validator and fork status bridge have regression tests.
@@ -619,21 +645,6 @@ node<span class="w"> </span>--test<span class="w"> </span>ci/scripts/test_fork_c
 </div>
 <p>The validator tests remove guards and add an invalid job dependency in memory.
 The bridge tests use stubbed GitHub API responses and make no network requests.</p>
-</section>
-<section id="rust-integration-tests">
-<h2>Rust Integration Tests<a class="headerlink" href="#rust-integration-tests" title="Link to this heading">#</a></h2>
-<p>There are several public interface tests for the DataFusion library in the <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/core/tests">tests</a> directory.</p>
-<p>You can run these tests individually using <code class="docutils literal notranslate"><span class="pre">cargo</span></code> as normal command such as</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>-p<span class="w"> </span>datafusion<span class="w"> </span>--test<span class="w"> </span>parquet_integration
-</pre></div>
-</div>
-</section>
-<section id="sql-fuzz-testing">
-<h2>SQL “Fuzz” testing<a class="headerlink" href="#sql-fuzz-testing" title="Link to this heading">#</a></h2>
-<p>DataFusion uses the <a class="reference external" href="https://github.com/sqlancer/sqlancer">SQLancer</a> for “fuzz” testing: it generates random SQL
-queries and execute them against DataFusion to find bugs.</p>
-<p>The code is in the <a class="reference external" href="https://github.com/datafusion-contrib/datafusion-sqllancer">datafusion-sqllancer</a> repository, and we welcome further
-contributions. Kudos to <a class="reference external" href="https://github.com/2010YOUY01">&#64;2010YOUY01</a> for the initial implementation.</p>
 </section>
 <section id="documentation-examples">
 <h2>Documentation Examples<a class="headerlink" href="#documentation-examples" title="Link to this heading">#</a></h2>
@@ -902,9 +913,13 @@ run the affected benchmarks and include the commands and results in your PR.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sqllogictests-tests">sqllogictests Tests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#snapshot-testing-cargo-insta">Snapshot testing (<code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">insta</span></code>)</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#extended-tests">Extended Tests</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-workflow-tests">CI Workflow Tests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#rust-integration-tests">Rust Integration Tests</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#sql-fuzz-testing">SQL “Fuzz” testing</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fuzz-testing">Fuzz testing</a><ul class="nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#fuzzing-unit-tests">Fuzzing unit tests</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sql-fuzz-testing">SQL fuzz testing</a></li>
+</ul>
+</li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-workflow-tests">CI Workflow Tests</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#documentation-examples">Documentation Examples</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-documentation-examples">API Documentation Examples</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#user-guide-documentation">User Guide Documentation</a></li>
