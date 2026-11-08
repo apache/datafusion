@@ -38,10 +38,12 @@ use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 use indexmap::IndexSet;
 use itertools::{Either, Itertools};
 
-/// `EquivalenceProperties` stores information about the output of a plan node
-/// that can be used to optimize the plan. Currently, it keeps track of:
+/// `EquivalenceProperties` stores information about how values are distributed
+/// across the output of a plan node that can be used to optimize the plan.
+///
+/// Currently, it tracks:
 /// - Sort expressions (orderings),
-/// - Complete expression tuples whose values are contiguous,
+/// - When all rows of equal values are contiguous for certain tuples (groupings)
 /// - Equivalent expressions; i.e. expressions known to have the same value.
 /// - Constants expressions; i.e. expressions known to contain a single constant
 ///   value.
@@ -50,7 +52,25 @@ use itertools::{Either, Itertools};
 ///
 /// [Using Ordering for Better Plans]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis/
 ///
-/// # Example equivalent sort expressions
+/// This document explains the concepts and how the pieces fit together.
+///
+/// # Overview
+///
+/// | Concept                | Example                                   | Stored in                                                           |
+/// |------------------------|-------------------------------------------|---------------------------------------------------------------------|
+/// | Equivalent expressions | `a` and `b` after the filter `a = b`      | An [`EquivalenceGroup`] of [`EquivalenceClass`]es                   |
+/// | Constants              | `a` after the filter `a = 5`              | The `constant` of an [`EquivalenceClass`], added as a [`ConstExpr`] |
+/// | Orderings              | `[a ASC, b DESC]` after a sort            | An [`OrderingEquivalenceClass`]                                     |
+/// | Groupings              | `[a, b]` after a hash aggregate on `a, b` | A [`GroupingEquivalenceClass`]                                      |
+/// | Constraints            | A primary key or unique constraint        | [`Constraints`]                                                     |
+///
+/// [`EquivalenceClass`]: crate::equivalence::EquivalenceClass
+/// [Normal form]: #normal-form
+/// [Required orderings]: #required-orderings
+/// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion-physical-plan/latest/datafusion_physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
+/// [Checking whether a requirement is satisfied]: #checking-whether-a-requirement-is-satisfied
+///
+/// # Equivalent sort expressions
 ///
 /// Consider table below:
 ///
@@ -67,11 +87,11 @@ use itertools::{Either, Itertools};
 ///
 /// In this case, both `a ASC` and `b DESC` can describe the table ordering.
 /// `EquivalenceProperties` tracks these different valid sort expressions and
-/// treat `a ASC` and `b DESC` on an equal footing. For example, if the query
+/// treats `a ASC` and `b DESC` on an equal footing. For example, if the query
 /// specifies the output sorted by EITHER `a ASC` or `b DESC`, the sort can be
 /// avoided.
 ///
-/// # Example equivalent expressions
+/// # Equivalent expressions
 ///
 /// Similarly, consider the table below:
 ///
@@ -86,11 +106,241 @@ use itertools::{Either, Itertools};
 /// └---┴---┘
 /// ```
 ///
-/// In this case,  columns `a` and `b` always have the same value. With this
-/// information, Datafusion can optimize various operations. For example, if
-/// the partition requirement is `Hash(a)` and output partitioning is
-/// `Hash(b)`, then DataFusion avoids repartitioning the data as the existing
-/// partitioning satisfies the requirement.
+/// In this case, columns `a` and `b` always have the same value. DataFusion
+/// uses this information to optimize various operations. For example, if the
+/// partition requirement is `Hash(a)` and output partitioning is `Hash(b)`,
+/// then DataFusion avoids repartitioning the data as the existing partitioning
+/// satisfies the requirement.
+///
+/// # Constants
+///
+/// A constant is an expression with a single value in the output of a plan
+/// node. A constant is *uniform* if it has the same value in every output
+/// partition, and *heterogeneous* if it has one value within each output
+/// partition but may differ between output partitions (see
+/// [`AcrossPartitions`]).
+///
+/// ## Example: Uniform Constant from a Filter
+///
+/// Consider an input sorted by `b ASC` and the filter `a = 5`, which produces
+/// the following table:
+///
+/// ```text
+/// ┌───┬───┐
+/// │ a │ b │
+/// ├───┼───┤
+/// │ 5 │ 1 │
+/// │ 5 │ 2 │
+/// │ 5 │ 4 │
+/// └───┴───┘
+/// ```
+///
+/// The filter adds `a` as a uniform [`ConstExpr`]. If the query requests
+/// sorting on `[a ASC, b ASC]` DataFusion knows it can skip sorting.
+///
+/// ## Example: Heterogeneous Constant from `UNION ALL`
+///
+/// Consider `SELECT 1 AS c, x FROM t1 UNION ALL SELECT 2 AS c, x FROM t2`,
+/// where each input is sorted by `x ASC` and has one output partition. The
+/// union has two output partitions, one from each input:
+///
+/// ```text
+/// Partition 0   Partition 1
+/// ┌───┬───┐     ┌───┬───┐
+/// │ c │ x │     │ c │ x │
+/// ├───┼───┤     ├───┼───┤
+/// │ 1 │ 1 │     │ 2 │ 2 │
+/// │ 1 │ 3 │     │ 2 │ 5 │
+/// └───┴───┘     └───┴───┘
+/// ```
+///
+/// Observations:
+/// - Within each output partition `c` has one value, but the values differ
+///   between output partitions, so `c` is an
+///   [`AcrossPartitions::Heterogeneous`] constant.
+/// - Each output partition is sorted by `[x ASC]`, and therefore also by
+///   `[c ASC, x ASC]`.
+/// - However, when the output partitions are merged by `[x ASC]` alone, the
+///   result is NOT sorted by `c`, unlike with an [`AcrossPartitions::Uniform`]
+///   constant, which would have the same value in every output partition and
+///   thus be sorted by `[c ASC, x ASC]` as well.
+///
+/// Given those observations, `c` must stay in the ordering `[c ASC, x ASC]`
+/// rather than being removed as a uniform constant would be.
+///
+/// # Constants within a window partition
+///
+/// NOTE: it is important to distinguish between *window partition*, the rows
+/// with equal `PARTITION BY` keys, and *output partition*, how the data is
+/// divided up across execution units during execution.
+///
+/// ## Example: Window Functions with `PARTITION BY`
+///
+/// Consider an input sorted by `k ASC` and the window expression
+/// `SUM(x) OVER (PARTITION BY k) AS w`, which produces the following rows:
+///
+/// ```text
+/// ┌───┬───┬────┐
+/// │ k │ x │ w  │
+/// ├───┼───┼────┤
+/// │ 1 │ 3 │  5 │
+/// │ 1 │ 2 │  5 │
+/// │ 2 │ 4 │ 10 │
+/// │ 2 │ 6 │ 10 │
+/// │ 3 │ 1 │  1 │
+/// └───┴───┴────┘
+/// ```
+///
+/// Observations:
+/// - `w` is not a constant because it differs between window partitions.
+/// - The output is sorted by `k` (the window partition key), because
+///   DataFusion's window implementation keeps the input order.
+/// - Within each run of equal `k`, `w` has one value.
+///
+/// Given those observations, the output is sorted by `[k, w]` in *every*
+/// direction of `w`: ascending or descending, nulls first or last:
+///
+/// - `[k ASC, w ASC NULLS FIRST]`
+/// - `[k ASC, w ASC NULLS LAST]`
+/// - `[k ASC, w DESC NULLS FIRST]`
+/// - `[k ASC, w DESC NULLS LAST]`
+///
+/// ## Example: Window Functions without `PARTITION BY`
+///
+/// Consider the same input and the window expression `SUM(x) OVER () AS w`,
+/// which produces the following rows:
+///
+/// ```text
+/// ┌───┬───┬────┐
+/// │ k │ x │ w  │
+/// ├───┼───┼────┤
+/// │ 1 │ 3 │ 16 │
+/// │ 1 │ 2 │ 16 │
+/// │ 2 │ 4 │ 16 │
+/// │ 2 │ 6 │ 16 │
+/// │ 3 │ 1 │ 16 │
+/// └───┴───┴────┘
+/// ```
+///
+/// Observations:
+/// - The frame of every row is the whole table, so `w` has one value.
+/// - The output is still sorted by `k`, as the input was.
+///
+/// Given those observations, `w` is added as a constant (a [`ConstExpr`])
+/// rather than as orderings.
+///
+/// ## Example: Set-Monotonic Window Functions
+///
+/// Consider an input sorted by `[ts ASC]` and the window function
+/// `MAX(x) OVER (ORDER BY ts) AS m`, which produces the following rows:
+///
+/// ```text
+/// ┌────┬───┬───┐
+/// │ ts │ x │ m │
+/// ├────┼───┼───┤
+/// │  1 │ 3 │ 3 │
+/// │  2 │ 1 │ 3 │
+/// │  3 │ 5 │ 5 │
+/// │  4 │ 2 │ 5 │
+/// └────┴───┴───┘
+/// ```
+///
+/// Observations:
+/// - When written with explicit defaults, this query is equivalent to
+///   `SELECT ts, x, MAX(x) OVER (ORDER BY ts RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS m`,
+///   so each row's frame contains every earlier row's frame.
+/// - `MAX` is set-monotonically increasing: adding rows to its input can only
+///   raise its value or leave it unchanged (see [`SetMonotonicity`]).
+///
+/// Given those observations, `m` never decreases as `ts` increases, so the
+/// output sorting is described by both `[ts ASC]` and `[m ASC NULLS LAST]`.
+///
+/// If the query had a `PARTITION BY k`, with the input sorted by `k` first,
+/// the added ordering would be `[k, m ASC NULLS LAST]`.
+///
+/// A decreasing aggregate such as `MIN` results in `DESC NULLS LAST`.
+///
+/// A frame that shrinks as rows advance, such as `CURRENT ROW` to
+/// `UNBOUNDED FOLLOWING`, reverses the direction: `MAX` then results in
+/// `DESC NULLS FIRST`.
+///
+/// [`SetMonotonicity`]: datafusion_expr::SetMonotonicity
+///
+/// # Required orderings
+///
+/// Some operators only work on sorted input. A sort merge join needs
+/// inputs sorted on the join keys, and a streaming window needs its input
+/// sorted by its `PARTITION BY` and then its `ORDER BY` expressions.
+///
+/// Each operator describes its requirements via
+/// [`ExecutionPlan::required_input_ordering`].
+///
+/// **Orderings** describe how the data is actually distributed.
+/// **Requirements** describe what an operator *needs*. The planner compares
+/// orderings to requirements with [`Self::ordering_satisfy_requirement`] and
+/// inserts or removes Sort operations so that they match (see [Checking whether
+/// a requirement is satisfied]).
+///
+/// # Normal form
+///
+/// Orderings and requirements (see [Required orderings]) are compared in
+/// *normal form*: every expression is replaced by the first member of its
+/// equivalence class, uniform constants and expressions that repeat an earlier
+/// one are removed.
+///
+/// For example, if `a` and `b` are equal and `d` is a uniform constant, the
+/// requirement `[b ASC, d DESC, c ASC, a ASC]` normalizes to `[a ASC, c ASC]`.
+///
+/// # Checking whether a requirement is satisfied
+///
+/// The requirement `[a, b]` holds if the rows are sorted by `a`, and the rows
+/// that tie on `a` are sorted by `b`.
+///
+/// [`Self::ordering_satisfy_requirement`] checks whether a requirement is
+/// satisfied by an ordering, and is quite complex.
+///
+/// # Discovering orderings
+///
+/// `EquivalenceProperties` discovers and accounts for additional orderings that
+/// may not be obvious from various additional information such as constants and
+/// equality.
+///
+/// ## Example: Ordering Implied by a `CAST`
+///
+/// Consider a table `t` sorted by `[c ASC, b ASC]` and the query
+/// `SELECT a, b, c FROM t WHERE c = CAST(a AS BIGINT)`, which produces the
+/// following rows:
+///
+/// ```text
+/// ┌───┬───┬───┐
+/// │ a │ b │ c │
+/// ├───┼───┼───┤
+/// │ 1 │ 2 │ 1 │
+/// │ 1 │ 5 │ 1 │
+/// │ 2 │ 1 │ 2 │
+/// │ 3 │ 4 │ 3 │
+/// └───┴───┴───┘
+/// ```
+///
+/// Observations:
+/// - The filter keeps the input order, so the rows are still sorted by
+///   `[c ASC, b ASC]`
+/// - Casting an `INT` to a `BIGINT` preserves order and never maps two
+///   different values to the same one, so rows with different `a` are in the
+///   order of `c`, which is the order of `a`.
+/// - Rows with equal `c` have equal `a`, and are also still sorted by `b`.
+///
+/// Given those observations, the rows are also sorted by `[a ASC, b ASC]`,
+/// even though no operator sorted on `a`. `EquivalenceProperties` derives
+/// this ordering when the equality is added, so a later `ORDER BY a, b`
+/// needs no re-sorting.
+///
+/// This holds in general for a function `f` whose output follows the
+/// lexicographical order of its arguments, which `f` declares by setting
+/// [`ExprProperties::preserves_lex_ordering`].
+///
+/// [`Self::add_equal_conditions`] and [`Self::add_constants`] look for such
+/// orderings whenever they learn something new.
 ///
 /// # Code Example
 /// ```
@@ -107,10 +357,10 @@ use itertools::{Either, Itertools};
 /// # let col_a = col("a", &schema).unwrap();
 /// # let col_b = col("b", &schema).unwrap();
 /// # let col_c = col("c", &schema).unwrap();
-/// // This object represents data that is sorted by a ASC, c DESC
-/// // with a single constant value of b
 /// let mut eq_properties = EquivalenceProperties::new(schema);
+/// // Single constant value of b
 /// eq_properties.add_constants(vec![ConstExpr::from(col_b)]);
+/// // ORDER BY a ASC, c DESC
 /// eq_properties.add_ordering([
 ///     PhysicalSortExpr::new_default(col_a).asc(),
 ///     PhysicalSortExpr::new_default(col_c).desc(),
@@ -364,8 +614,9 @@ impl EquivalenceProperties {
         self.geq_cache.clear();
     }
 
-    /// Removes constant expressions that may change across partitions.
-    /// This method should be used when merging data from different partitions.
+    /// Removes constant expressions that may change across output partitions.
+    /// This method should be used when merging data from different output
+    /// partitions.
     pub fn clear_per_partition_constants(&mut self) {
         if self.eq_group.clear_per_partition_constants() {
             // Renormalize orderings if the equivalence group changes:
@@ -754,6 +1005,10 @@ impl EquivalenceProperties {
     ///    tie on `a`.
     /// 3. The orderings now start at `[b, c]` and `[d]`.
     /// 4. The function returns `true` as `[d]` satisfies `d`.
+    ///
+    /// See [Required orderings] for what a requirement is.
+    ///
+    /// [Required orderings]: EquivalenceProperties#required-orderings
     pub fn ordering_satisfy_requirement(
         &self,
         given: impl IntoIterator<Item = PhysicalSortRequirement>,
@@ -1425,7 +1680,7 @@ impl EquivalenceProperties {
     /// Returns a `Some` value if the expression is constant according to
     /// equivalence group, and `None` otherwise. The `Some` variant contains
     /// an `AcrossPartitions` value indicating whether the expression is
-    /// constant across partitions, and its actual value (if available).
+    /// constant across output partitions, and its actual value (if available).
     pub fn is_expr_constant(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
