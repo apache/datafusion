@@ -66,10 +66,8 @@ async fn test_parquet_bloom_filter_io_matching() {
 #[tokio::test]
 async fn test_parquet_bloom_filter_io_pruned() {
     let test = bloom_filter_test().await;
-    // Currently the Bloom filters for all candidate columns (`a` and `b`) are
-    // loaded upfront. With incremental pruning
-    // (https://github.com/apache/datafusion/issues/25811), `a` would be
-    // evaluated first and the Bloom filter for `b` would not be loaded.
+    // Column `a` does not match, so the row group is pruned immediately
+    // and the Bloom filter for column `b` is not loaded.
     assert_snapshot!(test.query("SELECT * FROM t WHERE a = 999 AND b = 100").await, @r"
     --- Query: SELECT * FROM t WHERE a = 999 AND b = 100 (0 rows) ---
     Request 1
@@ -80,8 +78,6 @@ async fn test_parquet_bloom_filter_io_pruned() {
         Read OffsetIndex for columns 'a', 'b' (rg 0) (offsets 192..213)
     Request 4
         Read Bloom filter for column 'a' (rg 0) (offsets 98..145)
-    Request 5
-        Read Bloom filter for column 'b' (rg 0) (offsets 145..192)
     ");
 }
 
