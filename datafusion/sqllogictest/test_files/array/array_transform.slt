@@ -416,6 +416,31 @@ SELECT array_transform([1], v -> v -> v+1);
 query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 30"\)
 SELECT array_transform([1], () -> 1);
 
+# Dotted field access on lambda parameter (#27088)
+query ?
+SELECT array_transform(
+  make_array(named_struct('rule_number', 1, 'rule_action', 'allow')),
+  e -> e.rule_action
+);
+----
+[allow]
+
+query ?
+SELECT array_transform(
+  make_array(named_struct('rule_number', 1, 'rule_action', 'allow')),
+  e -> e.rule_number + 10
+);
+----
+[11]
+
+query ?
+SELECT array_transform(
+  make_array(named_struct('nested', named_struct('val', 42))),
+  e -> e.nested.val
+);
+----
+[42]
+
 statement ok
 drop table t;
 
