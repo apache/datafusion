@@ -20,15 +20,27 @@ mod suites;
 #[tokio::test(flavor = "multi_thread")]
 async fn fuzz_tests() -> Result<()> {
     let spill_pool = suites::spill_pool::SpillPoolFuzzer;
-    let suites = [Suite::new(
-        &spill_pool,
-        RunConfig {
-            run_seed: Some(0),
-            max_cases: Some(1000),
-            time_limit: None,
-            cases_per_dataset: 1000,
-        },
-    )];
+    let key_range_bitmap = suites::key_range_bitmap::KeyRangeBitmapFuzzer;
+    let suites = [
+        Suite::new(
+            &spill_pool,
+            RunConfig {
+                run_seed: Some(0),
+                max_cases: Some(1000),
+                time_limit: None,
+                cases_per_dataset: 1000,
+            },
+        ),
+        Suite::new(
+            &key_range_bitmap,
+            RunConfig {
+                run_seed: Some(0),
+                max_cases: Some(256),
+                time_limit: None,
+                cases_per_dataset: 256,
+            },
+        ),
+    ];
     run_suites(suites).await
 }
 
