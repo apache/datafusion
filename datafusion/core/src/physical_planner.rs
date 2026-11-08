@@ -2818,8 +2818,10 @@ fn extract_dml_filters(
             LogicalPlan::Filter(filter) => {
                 // Split AND predicates into individual expressions
                 for predicate in split_conjunction(&filter.predicate) {
-                    if predicate_is_on_target_multi(predicate, allowed_refs)? {
-                        filters.push(predicate.clone());
+                    let predicate =
+                        inline_projected_columns(predicate.clone(), &filter.input)?;
+                    if predicate_is_on_target_multi(&predicate, allowed_refs)? {
+                        filters.push(predicate);
                     }
                 }
             }
@@ -2965,8 +2967,12 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
                 // Only include if it's not just a column reference to itself
                 // (those are columns that aren't being updated)
                 if !is_identity_assignment(&alias.expr, &column_name) {
+                    let expr = inline_projected_columns(
+                        (*alias.expr).clone(),
+                        &projection.input,
+                    )?;
                     // Strip qualifiers from the assignment expression
-                    let stripped_expr = strip_column_qualifiers((*alias.expr).clone())?;
+                    let stripped_expr = strip_column_qualifiers(expr)?;
                     assignments.push((column_name, stripped_expr));
                 }
             }
@@ -2979,8 +2985,11 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
                     if let Expr::Alias(alias) = expr {
                         let column_name = alias.name.clone();
                         if !is_identity_assignment(&alias.expr, &column_name) {
-                            let stripped_expr =
-                                strip_column_qualifiers((*alias.expr).clone())?;
+                            let expr = inline_projected_columns(
+                                (*alias.expr).clone(),
+                                &projection.input,
+                            )?;
+                            let stripped_expr = strip_column_qualifiers(expr)?;
                             assignments.push((column_name, stripped_expr));
                         }
                     }
@@ -2992,6 +3001,41 @@ fn extract_update_assignments(input: &Arc<LogicalPlan>) -> Result<Vec<(String, E
     }
 
     Ok(assignments)
+}
+
+/// Replace references to columns computed by projections in the DML input
+/// (such as the `__common_expr` columns added by common subexpression
+/// elimination) with the expressions that compute them, so that an assignment
+/// or a filter only references columns of the target table.
+fn inline_projected_columns(mut expr: Expr, mut input: &LogicalPlan) -> Result<Expr> {
+    loop {
+        input = match input {
+            LogicalPlan::Projection(projection) => {
+                let replacements: HashMap<Column, Expr> = projection
+                    .schema
+                    .columns()
+                    .into_iter()
+                    .zip(projection.expr.iter().map(|e| e.clone().unalias()))
+                    .collect();
+                expr = expr
+                    .transform(|e| match &e {
+                        Expr::Column(col) => match replacements.get(col) {
+                            Some(replacement) => {
+                                Ok(Transformed::yes(replacement.clone()))
+                            }
+                            None => Ok(Transformed::no(e)),
+                        },
+                        _ => Ok(Transformed::no(e)),
+                    })
+                    .map(|t| t.data)?;
+                projection.input.as_ref()
+            }
+            LogicalPlan::Filter(filter) => filter.input.as_ref(),
+            LogicalPlan::Sort(sort) => sort.input.as_ref(),
+            LogicalPlan::Limit(limit) => limit.input.as_ref(),
+            _ => return Ok(expr),
+        };
+    }
 }
 
 /// Check if an assignment is an identity assignment (column = column)
