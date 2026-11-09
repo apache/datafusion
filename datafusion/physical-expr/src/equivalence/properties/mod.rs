@@ -61,7 +61,7 @@ use itertools::{Either, Itertools};
 /// | Equivalent expressions | `a` and `b` after the filter `a = b`      | An [`EquivalenceGroup`] of [`EquivalenceClass`]es                   |
 /// | Constants              | `a` after the filter `a = 5`              | The `constant` of an [`EquivalenceClass`], added as a [`ConstExpr`] |
 /// | Orderings              | `[a ASC, b DESC]` after a sort            | An [`OrderingEquivalenceClass`]                                     |
-/// | Groupings              | `[a, b]` after a hash aggregate on `a, b` | A [`GroupingEquivalenceClass`]                                      |
+/// | Groupings              | `[a, b]` declared by a custom data source | A [`GroupingEquivalenceClass`]                                      |
 /// | Constraints            | A primary key or unique constraint        | [`Constraints`]                                                     |
 ///
 /// [`EquivalenceClass`]: crate::equivalence::EquivalenceClass
