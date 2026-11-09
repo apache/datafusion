@@ -1490,8 +1490,13 @@ fn struct_field_names_match(lhs_type: &DataType, rhs_type: &DataType) -> bool {
         (RunEndEncoded(_, l), RunEndEncoded(_, r)) => {
             struct_field_names_match(l.data_type(), r.data_type())
         }
-        (Union(l, _), Union(r, _)) => l.iter().zip(r.iter()).all(|((_, lf), (_, rf))| {
-            struct_field_names_match(lf.data_type(), rf.data_type())
+        // Union variants are identified by type id, not by listing order.
+        (Union(l, _), Union(r, _)) => l.iter().all(|(lid, lf)| {
+            r.iter()
+                .find(|(rid, _)| *rid == lid)
+                .is_some_and(|(_, rf)| {
+                    struct_field_names_match(lf.data_type(), rf.data_type())
+                })
         }),
         _ => true,
     }
