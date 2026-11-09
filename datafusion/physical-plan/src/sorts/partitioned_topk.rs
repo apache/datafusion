@@ -366,8 +366,7 @@ impl PartitionedTopKExec {
             // value only ascends *within* a partition, so the ordering has to
             // be prefixed by the partition keys. `reorder` above already
             // established that prefix.
-            eq_properties
-                .add_ordering(partition_exprs.into_iter().chain([ranking_sort]))?;
+            eq_properties.add_ordering(partition_exprs.into_iter().chain([ranking_sort]));
         }
 
         Ok(PlanProperties::new(

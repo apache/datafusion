@@ -662,7 +662,7 @@ mod tests {
             );
             let mut eq_properties = EquivalenceProperties::new(Arc::clone(&test_schema));
             let orderings = convert_to_orderings(&orderings);
-            eq_properties.add_orderings(orderings)?;
+            eq_properties.add_orderings(orderings);
             let classes = eq_group
                 .into_iter()
                 .map(|eq_class| EquivalenceClass::new(eq_class.into_iter().cloned()));
@@ -706,7 +706,7 @@ mod tests {
         let orderings = convert_to_orderings(&orderings);
 
         // Column [a ASC], [e ASC], [d ASC, f ASC] are all valid orderings for the schema.
-        eq_properties.add_orderings(orderings)?;
+        eq_properties.add_orderings(orderings);
 
         // First entry in the tuple is required ordering, second entry is the expected flag
         // that indicates whether this required ordering is satisfied.

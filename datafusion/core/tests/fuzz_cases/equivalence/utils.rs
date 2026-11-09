@@ -119,7 +119,7 @@ pub fn create_random_schema(
                     options: random_sort_options(&mut rng),
                 });
 
-        eq_properties.add_ordering(ordering)?;
+        eq_properties.add_ordering(ordering);
     }
 
     Ok((test_schema, eq_properties))
@@ -408,7 +408,7 @@ pub fn create_test_params() -> Result<(SchemaRef, EquivalenceProperties)> {
         ],
     ];
     let orderings = convert_to_orderings(&orderings);
-    eq_properties.add_orderings(orderings)?;
+    eq_properties.add_orderings(orderings);
     Ok((test_schema, eq_properties))
 }
 
@@ -669,7 +669,7 @@ pub fn create_random_table_with_casts_and_windows(
         ALL_SORT_OPTIONS.map(|options| vec![sort(&k, opts_k), sort(&w, options)]),
     );
     orderings.shuffle(&mut rng);
-    eq_properties.add_orderings(orderings)?;
+    eq_properties.add_orderings(orderings);
 
     let keys = vec![
         (Arc::clone(&k), Some(opts_k)),

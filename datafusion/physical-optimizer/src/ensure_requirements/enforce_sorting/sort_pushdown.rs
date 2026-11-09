@@ -1086,7 +1086,7 @@ fn is_custom_sort_pushdown_valid(
             // Clear old ordering metadata so the proposal must prove this on its own.
             let mut proposed_properties = child_properties.clone();
             proposed_properties.clear_orderings();
-            proposed_properties.add_ordering(ordering.clone())?;
+            proposed_properties.add_ordering(ordering.clone());
             if !proposed_properties.ordering_satisfy(sort.expr().clone())? {
                 return Ok(false);
             }

@@ -137,7 +137,7 @@ mod tests {
             ],
         ];
         let orderings = convert_to_orderings(&orderings);
-        eq_properties.add_orderings(orderings)?;
+        eq_properties.add_orderings(orderings);
         Ok((test_schema, eq_properties))
     }
 

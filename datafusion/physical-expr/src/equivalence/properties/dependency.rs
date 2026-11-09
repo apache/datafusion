@@ -460,7 +460,7 @@ mod tests {
             parse_sort_expr("b", &input_schema),
             parse_sort_expr("c", &input_schema),
             parse_sort_expr("d", &input_schema),
-        ])?;
+        ]);
 
         // add equivalent ordering [a, c, b, d]
         input_properties.add_ordering([
@@ -468,7 +468,7 @@ mod tests {
             parse_sort_expr("c", &input_schema),
             parse_sort_expr("b", &input_schema), // NB b and c are swapped
             parse_sort_expr("d", &input_schema),
-        ])?;
+        ]);
 
         // simply project all the columns in order
         let proj_exprs = vec![
@@ -504,13 +504,13 @@ mod tests {
         eq_properties.add_orderings([
             vec![PhysicalSortExpr::new_default(Arc::clone(&col_b_expr))],
             vec![PhysicalSortExpr::new_default(Arc::clone(&col_c_expr))],
-        ])?;
+        ]);
 
         let mut expected_eqs = EquivalenceProperties::new(Arc::new(schema));
         expected_eqs.add_orderings([
             vec![PhysicalSortExpr::new_default(col_b_expr)],
             vec![PhysicalSortExpr::new_default(col_c_expr)],
-        ])?;
+        ]);
 
         assert!(eq_properties.oeq_class().eq(expected_eqs.oeq_class()));
         Ok(())
@@ -532,7 +532,7 @@ mod tests {
         eq_properties.add_ordering([
             PhysicalSortExpr::new(Arc::new(Column::new("b", 1)), sort_options_not),
             PhysicalSortExpr::new(Arc::new(Column::new("a", 0)), sort_options),
-        ])?;
+        ]);
         let (result, idxs) = eq_properties.find_longest_permutation(&required_columns)?;
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
@@ -561,7 +561,7 @@ mod tests {
                 PhysicalSortExpr::new(Arc::new(Column::new("b", 1)), sort_options_not),
                 PhysicalSortExpr::new(Arc::new(Column::new("a", 0)), sort_options),
             ],
-        ])?;
+        ]);
         let (result, idxs) = eq_properties.find_longest_permutation(&required_columns)?;
         assert_eq!(idxs, vec![0, 1]);
         assert_eq!(
@@ -588,7 +588,7 @@ mod tests {
             PhysicalSortExpr::new(Arc::new(Column::new("b", 1)), sort_options_not),
             PhysicalSortExpr::new(Arc::new(Column::new("c", 2)), sort_options),
             PhysicalSortExpr::new(Arc::new(Column::new("a", 0)), sort_options),
-        ])?;
+        ]);
         let (_, idxs) = eq_properties.find_longest_permutation(&required_columns)?;
         assert_eq!(idxs, vec![0]);
 
@@ -621,7 +621,7 @@ mod tests {
         for known in all_options {
             let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
             eq_properties
-                .add_ordering([PhysicalSortExpr::new(Arc::clone(&sqrt_a), known)])?;
+                .add_ordering([PhysicalSortExpr::new(Arc::clone(&sqrt_a), known)]);
             for required in all_options {
                 let required_ordering =
                     [PhysicalSortExpr::new(Arc::clone(&sqrt_a), required)];
@@ -638,7 +638,7 @@ mod tests {
         let required_ordering = [PhysicalSortExpr::new_default(Arc::clone(&sqrt_a))];
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
         assert!(!eq_properties.ordering_satisfy(required_ordering.clone())?);
-        eq_properties.add_ordering([PhysicalSortExpr::new_default(a)])?;
+        eq_properties.add_ordering([PhysicalSortExpr::new_default(a)]);
         assert!(!eq_properties.ordering_satisfy(required_ordering)?);
         Ok(())
     }
@@ -667,7 +667,7 @@ mod tests {
         eq_properties.add_orderings([
             vec![PhysicalSortExpr::new(Arc::clone(&col_b), option_asc)],
             vec![PhysicalSortExpr::new(Arc::clone(&col_d), option_asc)],
-        ])?;
+        ]);
 
         let test_cases = vec![
             // d + b can wrap
@@ -736,7 +736,7 @@ mod tests {
         eq_properties.add_ordering([
             PhysicalSortExpr::new(Arc::clone(col_d), option_asc),
             PhysicalSortExpr::new(Arc::clone(col_h), option_desc),
-        ])?;
+        ]);
         let test_cases = vec![
             // TEST CASE 1
             (vec![col_a], vec![(col_a, option_asc)]),
@@ -1078,7 +1078,7 @@ mod tests {
         ]
         .into();
 
-        eq_properties.add_ordering(initial_ordering.clone())?;
+        eq_properties.add_ordering(initial_ordering.clone());
 
         // Add equality condition c = concat(a, b)
         eq_properties.add_equal_conditions(Arc::clone(&col_c), a_concat_b)?;
@@ -1120,7 +1120,7 @@ mod tests {
         ]
         .into();
 
-        eq_properties.add_ordering(initial_ordering.clone())?;
+        eq_properties.add_ordering(initial_ordering.clone());
 
         // Add equality condition c = a * b
         eq_properties.add_equal_conditions(col_c, a_times_b)?;
@@ -1210,7 +1210,7 @@ mod tests {
             PhysicalSortExpr::new(Arc::clone(&col_a), asc),
             PhysicalSortExpr::new(Arc::clone(&col_b), desc),
             PhysicalSortExpr::new(Arc::clone(&col_c), asc),
-        ])?;
+        ]);
 
         // New ordering: [a ASC]
         let new_order = vec![PhysicalSortExpr::new(Arc::clone(&col_a), asc)];
@@ -1248,7 +1248,7 @@ mod tests {
         eq_properties.add_ordering([
             PhysicalSortExpr::new_default(Arc::clone(&col_a)),
             PhysicalSortExpr::new_default(Arc::clone(&col_c)),
-        ])?;
+        ]);
 
         // New ordering: [b ASC]
         let new_order = vec![PhysicalSortExpr::new_default(Arc::clone(&col_b))];
@@ -1289,7 +1289,7 @@ mod tests {
         eq_properties.add_ordering([
             PhysicalSortExpr::new(Arc::clone(&col_a), asc),
             PhysicalSortExpr::new(Arc::clone(&col_b), desc),
-        ])?;
+        ]);
 
         // New ordering: [a DESC]
         let new_order = vec![PhysicalSortExpr::new(Arc::clone(&col_a), desc)];
@@ -1329,7 +1329,7 @@ mod tests {
                 PhysicalSortExpr::new_default(Arc::clone(&col_a)),
             ],
             vec![PhysicalSortExpr::new_default(Arc::clone(&col_e))],
-        ])?;
+        ]);
 
         // New ordering: [b ASC, c ASC]
         let new_order = vec![
@@ -1478,7 +1478,7 @@ mod tests {
                 expr: col(col_name, schema).unwrap(),
                 options: SortOptions::default(),
             });
-            eq_properties.add_ordering(base_ordering)?;
+            eq_properties.add_ordering(base_ordering);
 
             // Add constraints
             eq_properties =
@@ -1564,7 +1564,7 @@ mod tests {
                 nulls_first: false,
             },
         );
-        input_properties.add_orderings([vec![sort_a]])?;
+        input_properties.add_orderings([vec![sort_a]]);
 
         // Project through the named_struct
         let out_schema = output_schema(&projection_mapping, &input_schema)?;
@@ -1728,7 +1728,7 @@ mod tests {
         input.add_orderings([vec![PhysicalSortExpr::new(
             Arc::clone(&a),
             SortOptions::default(),
-        )]])?;
+        )]]);
 
         // Several sources over each column, so all but the first of each are
         // served from the cache: `a` through the sort key, `b` as a plain
@@ -1777,7 +1777,7 @@ mod tests {
         input.add_orderings([vec![PhysicalSortExpr::new(
             Arc::clone(&s),
             SortOptions::default(),
-        )]])?;
+        )]]);
 
         // Every probe refers to the sort key, so both substituting the
         // ordering and deriving the projected one examine each of them.
@@ -1838,7 +1838,7 @@ mod tests {
         input.add_orderings([vec![PhysicalSortExpr::new(
             Arc::clone(&untyped),
             SortOptions::default(),
-        )]])?;
+        )]]);
 
         // The probe is ordered only through a derivation from `a + b`, which
         // fails before the probe is asked for its properties. The output type

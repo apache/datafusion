@@ -94,7 +94,7 @@ pub struct SortPreservingMergeExec {
 impl SortPreservingMergeExec {
     /// Create a new sort execution plan
     pub fn new(expr: LexOrdering, input: Arc<dyn ExecutionPlan>) -> Self {
-        let cache = Self::compute_properties(&input, expr.clone()).unwrap();
+        let cache = Self::compute_properties(&input, expr.clone());
         Self {
             input,
             expr,
@@ -148,7 +148,7 @@ impl SortPreservingMergeExec {
     fn compute_properties(
         input: &Arc<dyn ExecutionPlan>,
         ordering: LexOrdering,
-    ) -> Result<PlanProperties> {
+    ) -> PlanProperties {
         let input_partitions = input.output_partitioning().partition_count();
         let (drive, scheduling) = if input_partitions > 1 {
             (EvaluationType::Eager, SchedulingType::Cooperative)
@@ -167,15 +167,15 @@ impl SortPreservingMergeExec {
             eq_properties.clear_groupings();
         }
         eq_properties.clear_per_partition_constants();
-        eq_properties.add_ordering(ordering)?;
-        Ok(PlanProperties::new(
+        eq_properties.add_ordering(ordering);
+        PlanProperties::new(
             eq_properties,                        // Equivalence Properties
             Partitioning::UnknownPartitioning(1), // Output Partitioning
             input.pipeline_behavior(),            // Pipeline Behavior
             input.boundedness(),                  // Boundedness
         )
         .with_evaluation_type(drive)
-        .with_scheduling_type(scheduling))
+        .with_scheduling_type(scheduling)
     }
 }
 
@@ -1890,13 +1890,11 @@ mod tests {
                 .map(|(i, f)| Arc::new(Column::new(f.name(), i)) as Arc<dyn PhysicalExpr>)
                 .collect::<Vec<_>>();
             let mut eq_properties = EquivalenceProperties::new(schema);
-            eq_properties
-                .add_ordering(
-                    columns
-                        .iter()
-                        .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
-                )
-                .unwrap();
+            eq_properties.add_ordering(
+                columns
+                    .iter()
+                    .map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
+            );
             PlanProperties::new(
                 eq_properties,
                 Partitioning::Hash(columns, 3),

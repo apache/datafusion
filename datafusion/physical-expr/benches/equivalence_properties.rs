@@ -64,13 +64,11 @@ fn asc(i: usize) -> PhysicalSortExpr {
 fn properties(n_classes: usize) -> EquivalenceProperties {
     let schema = schema(8 + 2 * n_classes);
     let mut props = EquivalenceProperties::new(schema);
-    props
-        .add_orderings([
-            vec![asc(0), asc(1), asc(2), asc(3)],
-            vec![asc(4), asc(5)],
-            vec![asc(6)],
-        ])
-        .unwrap();
+    props.add_orderings([
+        vec![asc(0), asc(1), asc(2), asc(3)],
+        vec![asc(4), asc(5)],
+        vec![asc(6)],
+    ]);
     for i in 0..n_classes {
         props
             .add_equal_conditions(col(8 + 2 * i), col(9 + 2 * i))
@@ -227,7 +225,7 @@ fn bench_shapes(c: &mut Criterion) {
                 ]);
             }
         }
-        props.add_orderings(orderings).unwrap();
+        props.add_orderings(orderings);
         let keys = vec![
             PhysicalSortExpr::new(col(0), asc_nulls_last),
             PhysicalSortExpr::new(col(1), asc_nulls_last),
@@ -309,12 +307,10 @@ fn bench_project_wide_struct_fields(c: &mut Criterion) {
     let mut group = c.benchmark_group("equivalence_properties");
     for (suffix, sort_col) in [("", col_a), ("/ordered_by_s", col_s)] {
         let mut props = EquivalenceProperties::new(Arc::clone(&schema));
-        props
-            .add_orderings([vec![PhysicalSortExpr::new(
-                sort_col,
-                SortOptions::default(),
-            )]])
-            .unwrap();
+        props.add_orderings([vec![PhysicalSortExpr::new(
+            sort_col,
+            SortOptions::default(),
+        )]]);
         group.bench_function(
             format!("project/wide_struct_fields/{READ}_of_{FIELDS}{suffix}"),
             |b| b.iter(|| props.project(&mapping, Arc::clone(&output))),

@@ -1014,7 +1014,7 @@ impl FileSource for ParquetSource {
                         .collect::<Vec<_>>()
                 })
                 .collect::<Vec<_>>();
-            new.add_orderings(reversed_orderings)?;
+            new.add_orderings(reversed_orderings);
             new
         };
         let reversed_satisfies =
@@ -1712,8 +1712,7 @@ mod tests {
         let source = ParquetSource::new(Arc::clone(&schema));
         // Source declares `[a DESC]`.
         let mut eq = EquivalenceProperties::new(Arc::clone(&schema));
-        eq.add_ordering(vec![sort_expr_on(&schema, "a", true)])
-            .unwrap();
+        eq.add_ordering(vec![sort_expr_on(&schema, "a", true)]);
         // Request `[a ASC]`.
         let order = vec![sort_expr_on(&schema, "a", false)];
 
@@ -1786,7 +1785,7 @@ mod tests {
         };
         let declared = request_expr.reverse();
         let mut eq = EquivalenceProperties::new(Arc::clone(&full_schema));
-        eq.add_ordering(vec![declared]).unwrap();
+        eq.add_ordering(vec![declared]);
         let order = vec![request_expr];
 
         let result = source.try_pushdown_sort(&order, &eq).unwrap();
@@ -1848,8 +1847,7 @@ mod tests {
                     nulls_first: false,
                 },
             },
-        ])
-        .unwrap();
+        ]);
 
         // Request `[a DESC, b ASC NULLS LAST, c DESC]` — three columns;
         // source's two-column declaration is a strict prefix.

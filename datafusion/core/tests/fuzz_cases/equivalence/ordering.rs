@@ -347,7 +347,7 @@ fn test_ordering_satisfy_all_null_ordered_column() -> Result<()> {
         eq_properties.add_ordering([
             PhysicalSortExpr::new(Arc::clone(col_a), options),
             PhysicalSortExpr::new(Arc::clone(col_b), options),
-        ])?;
+        ]);
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
@@ -392,8 +392,7 @@ fn test_ordering_satisfy_null_constant_operand() -> Result<()> {
         as Arc<dyn PhysicalExpr>;
     for options in ALL_SORT_OPTIONS {
         let mut eq_properties = EquivalenceProperties::new(Arc::clone(&schema));
-        eq_properties
-            .add_ordering([PhysicalSortExpr::new(col("a", &schema)?, options)])?;
+        eq_properties.add_ordering([PhysicalSortExpr::new(col("a", &schema)?, options)]);
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![sorted_f64_array(options, 2)?],

@@ -371,10 +371,10 @@ mod tests {
 
         let mut equality_first = EquivalenceProperties::new(Arc::clone(&schema));
         equality_first.add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
-        equality_first.add_ordering(ordering.clone())?;
+        equality_first.add_ordering(ordering.clone());
 
         let mut ordering_first = EquivalenceProperties::new(Arc::clone(&schema));
-        ordering_first.add_ordering(ordering)?;
+        ordering_first.add_ordering(ordering);
         ordering_first.add_equal_conditions(cast_c, Arc::clone(&a))?;
 
         for properties in [equality_first, ordering_first] {
@@ -412,19 +412,19 @@ mod tests {
         constant_equality_ordering.add_constants([constant()])?;
         constant_equality_ordering
             .add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
-        constant_equality_ordering.add_ordering(ordering.clone())?;
+        constant_equality_ordering.add_ordering(ordering.clone());
 
         let mut constant_ordering_equality =
             EquivalenceProperties::new(Arc::clone(&schema));
         constant_ordering_equality.add_constants([constant()])?;
-        constant_ordering_equality.add_ordering(ordering.clone())?;
+        constant_ordering_equality.add_ordering(ordering.clone());
         constant_ordering_equality
             .add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
 
         let mut equality_ordering_constant =
             EquivalenceProperties::new(Arc::clone(&schema));
         equality_ordering_constant.add_equal_conditions(cast_c, Arc::clone(&a))?;
-        equality_ordering_constant.add_ordering(ordering)?;
+        equality_ordering_constant.add_ordering(ordering);
         equality_ordering_constant.add_constants([constant()])?;
 
         for properties in [
@@ -464,7 +464,7 @@ mod tests {
         properties.add_equal_conditions(cast(&a, DataType::Date64), Arc::clone(&d))?;
         properties.add_ordering(
             [&d, &a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
-        )?;
+        );
 
         assert!(
             properties
@@ -497,10 +497,10 @@ mod tests {
 
         let mut equality_first = EquivalenceProperties::new(Arc::clone(&schema));
         equality_first.add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
-        equality_first.add_ordering(ordering.clone())?;
+        equality_first.add_ordering(ordering.clone());
 
         let mut ordering_first = EquivalenceProperties::new(Arc::clone(&schema));
-        ordering_first.add_ordering(ordering)?;
+        ordering_first.add_ordering(ordering);
         ordering_first.add_equal_conditions(cast_c, Arc::clone(&a))?;
 
         for properties in [equality_first, ordering_first] {
@@ -539,11 +539,11 @@ mod tests {
         equality_then_ordering.add_constants([constant()])?;
         equality_then_ordering
             .add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
-        equality_then_ordering.add_ordering(ordering.clone())?;
+        equality_then_ordering.add_ordering(ordering.clone());
 
         let mut ordering_then_equality = EquivalenceProperties::new(Arc::clone(&schema));
         ordering_then_equality.add_constants([constant()])?;
-        ordering_then_equality.add_ordering(ordering)?;
+        ordering_then_equality.add_ordering(ordering);
         ordering_then_equality.add_equal_conditions(cast_c, Arc::clone(&a))?;
 
         for properties in [equality_then_ordering, ordering_then_equality] {
@@ -555,10 +555,11 @@ mod tests {
         Ok(())
     }
 
-    /// `add_ordering` reports what it cannot derive instead of dropping it:
-    /// here `c` is not in the schema, so its type is unknown.
+    /// `add_ordering` keeps the given ordering and leaves out an implied
+    /// ordering it cannot derive: here `c` is not in the schema, so its type
+    /// is unknown.
     #[test]
-    fn add_ordering_returns_implied_ordering_errors() -> Result<()> {
+    fn add_ordering_skips_underivable_implied_ordering() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Date32, true)]));
         let a = col("a", &schema)?;
         let c = Arc::new(Column::new("c", 1)) as Arc<dyn PhysicalExpr>;
@@ -572,7 +573,8 @@ mod tests {
         properties.add_equal_conditions(cast_c, Arc::clone(&a))?;
         let ordering =
             [&a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
-        assert!(properties.add_ordering(ordering).is_err());
+        properties.add_ordering(ordering);
+        assert_eq!(properties.oeq_class().len(), 1);
         Ok(())
     }
 
@@ -599,7 +601,7 @@ mod tests {
         // Added after the constant, so that `k` stays in the normal ordering:
         properties.add_ordering(
             [&k, &b].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
-        )?;
+        );
 
         for required in [vec![&b], vec![&b, &k], vec![&k, &b]] {
             let required = required
@@ -631,7 +633,7 @@ mod tests {
         let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
         properties.add_ordering(
             [&k, &a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
-        )?;
+        );
         properties.add_equal_conditions(cast_c, Arc::clone(&a))?;
 
         let required =
@@ -668,7 +670,7 @@ mod tests {
         properties.add_equal_conditions(Arc::clone(&x), cast(&y, DataType::Int64))?;
         properties.add_ordering(
             [&k, &x, &y, &z].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),
-        )?;
+        );
 
         let required =
             [&k, &z].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
@@ -703,7 +705,7 @@ mod tests {
             vec![sort(&a, true), sort(&k, false), sort(&c, false)],
             vec![sort(&k, false), sort(&a, true), sort(&c, false)],
             vec![sort(&k, false), sort(&a, false)],
-        ])?;
+        ]);
 
         assert!(properties.ordering_satisfy([sort(&k, false), sort(&a, false)])?);
         Ok(())
@@ -739,7 +741,7 @@ mod tests {
                 PhysicalSortExpr::new_default(Arc::clone(&k)),
                 PhysicalSortExpr::new(Arc::clone(&x), options),
             ]
-        }))?;
+        }));
 
         for options in directions {
             let required = [
@@ -776,7 +778,7 @@ mod tests {
         properties.add_ordering([
             PhysicalSortExpr::new_default(plus(&b)),
             PhysicalSortExpr::new_default(Arc::clone(&d)),
-        ])?;
+        ]);
 
         for right in [&b, &c] {
             let (_, indices) =
@@ -809,7 +811,7 @@ mod tests {
         properties.add_ordering([
             PhysicalSortExpr::new_default(Arc::clone(&k)),
             PhysicalSortExpr::new_default(Arc::clone(&b_mod_5)),
-        ])?;
+        ]);
 
         let (_, indices) =
             properties.find_longest_permutation(&[lit(5i32), k, b_mod_5])?;
@@ -849,7 +851,7 @@ mod tests {
         };
 
         let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
-        properties.add_ordering([PhysicalSortExpr::new_default(Arc::clone(&a))])?;
+        properties.add_ordering([PhysicalSortExpr::new_default(Arc::clone(&a))]);
         let satisfied = |exprs: [&Arc<dyn PhysicalExpr>; 2]| {
             properties.ordering_satisfy(
                 exprs.map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr))),

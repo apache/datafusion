@@ -730,7 +730,7 @@ impl TableProvider for GenerateSeriesTable {
             .with_projection(projection.map(|p| p.to_vec()));
 
         if let Some(ordering) = self.output_ordering(exec.schema().as_ref()) {
-            exec.add_ordering([ordering])?;
+            exec.add_ordering([ordering]);
         }
 
         Ok(Arc::new(exec))

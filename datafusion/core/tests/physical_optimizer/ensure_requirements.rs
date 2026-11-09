@@ -87,8 +87,7 @@ impl MockMultiPartitionExec {
                 nulls_first: false,
             },
         )]) {
-            eq.add_orderings(vec![ordering.into_iter().collect::<Vec<_>>()])
-                .unwrap();
+            eq.add_orderings(vec![ordering.into_iter().collect::<Vec<_>>()]);
         }
         let properties = PlanProperties::new(
             eq,
