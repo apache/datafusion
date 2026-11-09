@@ -31,7 +31,7 @@ pub use crate::aggregate::stats::StatsType;
 pub use binary::{BinaryExpr, binary, similar_to};
 pub use case::{CaseExpr, case};
 pub(crate) use cast::can_propagate_cast_constraints;
-pub use cast::{CastExpr, cast};
+pub use cast::{CastExpr, cast, is_order_preserving_cast};
 pub use column::{Column, col, with_new_schema};
 pub use datafusion_expr::utils::format_state_name;
 pub use dynamic_filters::{
