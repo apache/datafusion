@@ -61,11 +61,10 @@ use itertools::{Either, Itertools};
 /// | Equivalent expressions | `a` and `b` after the filter `a = b`      | An [`EquivalenceGroup`] of [`EquivalenceClass`]es                   |
 /// | Constants              | `a` after the filter `a = 5`              | The `constant` of an [`EquivalenceClass`], added as a [`ConstExpr`] |
 /// | Orderings              | `[a ASC, b DESC]` after a sort            | An [`OrderingEquivalenceClass`]                                     |
-/// | Groupings              | `[a, b]` after a hash aggregate on `a, b` | A [`GroupingEquivalenceClass`]                                      |
+/// | Groupings              | `[a, b]` declared by a custom data source | A [`GroupingEquivalenceClass`]                                      |
 /// | Constraints            | A primary key or unique constraint        | [`Constraints`]                                                     |
 ///
 /// [`EquivalenceClass`]: crate::equivalence::EquivalenceClass
-/// [Normal form]: #normal-form
 /// [Required orderings]: #required-orderings
 /// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion-physical-plan/latest/datafusion_physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
 /// [Checking whether a requirement is satisfied]: #checking-whether-a-requirement-is-satisfied
@@ -276,7 +275,8 @@ use itertools::{Either, Itertools};
 /// [`ExecutionPlan::required_input_ordering`].
 ///
 /// **Orderings** describe how the data is actually distributed.
-/// **Requirements** describe what an operator *needs*. The planner compares
+/// **Requirements** describe what an operator *needs*. The physical optimizer
+/// (`EnforceSorting`) compares
 /// orderings to requirements with [`Self::ordering_satisfy_requirement`] and
 /// inserts or removes Sort operations so that they match (see [Checking whether
 /// a requirement is satisfied]).
