@@ -61,6 +61,7 @@ mod sql_api;
 mod tpcds_planning;
 mod union_comparison;
 mod union_nullable;
+mod union_schema;
 mod unparser;
 
 async fn register_aggregate_csv_by_sql(ctx: &SessionContext) {
