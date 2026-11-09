@@ -280,7 +280,7 @@ by file or by shard), expose that here.
 **Output ordering** declares whether your data is naturally sorted. This
 enables the optimizer to avoid inserting a `SortExec` when a query requires
 ordered data. Getting this right can be a significant performance win. See
-[EquivalenceProperties], for more detailed information.
+[EquivalenceProperties] for more details.
 
 ### Partitioning Strategies
 

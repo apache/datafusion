@@ -24,8 +24,8 @@ For a deeper background on optimizer architecture and rule types and predicates,
 [Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries].
 
 The physical optimizer's reasoning about sort orders, equivalent expressions,
-and constants is implemented by [`EquivalenceProperties`], which explains more
-details.
+and constants is implemented by [`EquivalenceProperties`], whose documentation
+explains the details.
 
 [`optimizerrule`]: https://docs.rs/datafusion/latest/datafusion/optimizer/trait.OptimizerRule.html
 [`physicaloptimizerrule`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/trait.PhysicalOptimizerRule.html

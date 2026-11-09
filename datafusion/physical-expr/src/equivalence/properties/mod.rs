@@ -43,7 +43,7 @@ use itertools::{Either, Itertools};
 ///
 /// Currently, it tracks:
 /// - Sort expressions (orderings),
-/// - When all rows of equal values are contiguous for certain tuples (groupings)
+/// - When all rows of equal values are contiguous for certain tuples (groupings),
 /// - Equivalent expressions; i.e. expressions known to have the same value.
 /// - Constants expressions; i.e. expressions known to contain a single constant
 ///   value.
@@ -276,10 +276,10 @@ use itertools::{Either, Itertools};
 ///
 /// **Orderings** describe how the data is actually distributed.
 /// **Requirements** describe what an operator *needs*. The physical optimizer
-/// (`EnforceSorting`) compares
-/// orderings to requirements with [`Self::ordering_satisfy_requirement`] and
-/// inserts or removes Sort operations so that they match (see [Checking whether
-/// a requirement is satisfied]).
+/// (`EnforceSorting`) compares orderings to requirements with
+/// [`Self::ordering_satisfy_requirement`] and inserts or removes Sort
+/// operations so that they match (see [Checking whether a requirement is
+/// satisfied]).
 ///
 /// # Normal form
 ///
