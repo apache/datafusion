@@ -886,7 +886,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
                         parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(enabled)
                     }),
                     encoding_opt: options.encoding.map(|encoding| {
-                        parquet_column_options::EncodingOpt::Encoding(encoding)
+                        parquet_column_options::EncodingOpt::Encoding(encoding.to_string())
                     }),
                     dictionary_enabled_opt: options.dictionary_enabled.map(|enabled| {
                         parquet_column_options::DictionaryEnabledOpt::DictionaryEnabled(enabled)
