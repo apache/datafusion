@@ -102,30 +102,14 @@ impl NotIn {
         num_value_keys: usize,
         has_filter: bool,
     ) -> Result<Self> {
-        if num_value_keys == 0 || num_value_keys > num_keys {
-            return plan_err!(
-                "null_aware {join_type} join needs between 1 and {num_keys} `NOT IN` value keys, got {num_value_keys}"
-            );
-        }
-        // `num_keys > 1` also covers a multi-column value key without any
-        // correlation: a NULL in one tuple element leaves the comparison FALSE
-        // whenever another element is a definite mismatch, so it too must be
-        // decided per row.
-        let scope = if num_keys > 1 || has_filter {
-            NotInScope::Correlated {
-                value_keys: num_value_keys,
-            }
-        } else {
-            NotInScope::Uncorrelated
-        };
+        // The join type and mode come first: no value key count can make up
+        // for them. `None` is `RightAnti`, which emits probe rows.
         let output = match (join_type, partition_mode) {
-            (JoinType::LeftAnti, _) => NotInOutput::Rows,
-            (JoinType::LeftMark, _) => NotInOutput::Mark,
+            (JoinType::LeftAnti, _) => Some(NotInOutput::Rows),
+            (JoinType::LeftMark, _) => Some(NotInOutput::Mark),
             // `PartitionMode::CollectLeft` is safe because `RightAnti` is
             // probe-driven: every probe row sees the whole build side.
-            (JoinType::RightAnti, PartitionMode::CollectLeft) => {
-                return Ok(Self::ProbeRows { scope });
-            }
+            (JoinType::RightAnti, PartitionMode::CollectLeft) => None,
             _ => {
                 return plan_err!(
                     "null_aware can only be true for LeftAnti joins and RightAnti joins with `CollectLeft` `PartitionMode`, or LeftMark joins, got {join_type} with {partition_mode}"
@@ -142,7 +126,39 @@ impl NotIn {
                 "null_aware joins require PartitionMode::CollectLeft, got PartitionMode::Partitioned"
             );
         }
-        Ok(Self::BuildRows { scope, output })
+        // `0` is an unset count, which is only unambiguous with a single key:
+        // a scalar `NOT IN`. With more keys, any default would silently pick
+        // which of them are `NOT IN` value keys and which are correlation
+        // scope keys.
+        let num_value_keys = match num_value_keys {
+            0 if num_keys == 1 => 1,
+            0 => {
+                return plan_err!(
+                    "null_aware {join_type} join with {num_keys} keys needs the number of its `NOT IN` value keys, set it with `with_null_aware_value_keys`"
+                );
+            }
+            n if n > num_keys => {
+                return plan_err!(
+                    "null_aware {join_type} join needs between 1 and {num_keys} `NOT IN` value keys, got {n}"
+                );
+            }
+            n => n,
+        };
+        // `num_keys > 1` also covers a multi-column value key without any
+        // correlation: a NULL in one tuple element leaves the comparison FALSE
+        // whenever another element is a definite mismatch, so it too must be
+        // decided per row.
+        let scope = if num_keys > 1 || has_filter {
+            NotInScope::Correlated {
+                value_keys: num_value_keys,
+            }
+        } else {
+            NotInScope::Uncorrelated
+        };
+        Ok(match output {
+            Some(output) => Self::BuildRows { scope, output },
+            None => Self::ProbeRows { scope },
+        })
     }
 
     fn scope(self) -> NotInScope {

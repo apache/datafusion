@@ -442,8 +442,9 @@ pub struct JoinNode {
     #[prost(bool, tag = "9")]
     pub null_aware: bool,
     /// Number of `NOT IN` value keys of a null-aware join (see
-    /// `Join::null_aware_value_keys`). Messages predating this field decode it
-    /// as 0, which is read as 1: they can only hold scalar `NOT IN` joins.
+    /// `Join::null_aware_value_keys`). 0 is an unset count, accepted only for a
+    /// single key. Messages predating this field decode it as 0: they can only
+    /// hold scalar `NOT IN` joins.
     #[prost(uint32, tag = "10")]
     pub null_aware_value_keys: u32,
 }
@@ -2239,9 +2240,9 @@ pub struct HashJoinExecNode {
     #[prost(uint64, optional, tag = "12")]
     pub fetch: ::core::option::Option<u64>,
     /// Number of `NOT IN` value keys of a null-aware join (see
-    /// `HashJoinExec::null_aware_value_keys`). Messages predating this field
-    /// decode it as 0, which is read as 1: they can only hold scalar `NOT IN`
-    /// joins.
+    /// `HashJoinExec::null_aware_value_keys`). 0 is an unset count, accepted
+    /// only for a single key. Messages predating this field decode it as 0:
+    /// they can only hold scalar `NOT IN` joins.
     #[prost(uint32, tag = "13")]
     pub null_aware_value_keys: u32,
 }
@@ -2764,6 +2765,13 @@ pub struct SortMergeJoinExecNode {
     pub null_equality: i32,
     #[prost(uint32, repeated, tag = "8")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+    /// Enables null-aware (`NOT IN`) semantics.
+    /// (See `SortMergeJoinExec::null_aware`)
+    ///
+    /// Currently supported only for uncorrelated `LeftAnti` joins with one
+    /// join key and no join filter.
+    #[prost(bool, tag = "9")]
+    pub null_aware: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PiecewiseMergeJoinExecNode {
