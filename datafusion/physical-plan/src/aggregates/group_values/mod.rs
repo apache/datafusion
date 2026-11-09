@@ -5,7 +5,10 @@
 //! [`GroupValues`] trait for storing and interning group keys
 
 use arrow::array::{ArrayRef, downcast_primitive};
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{
+    DataType, Int8Type, Int16Type, Int32Type, Int64Type, SchemaRef, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
+};
 use datafusion_common::{Result, not_impl_err};
 
 use datafusion_expr::{EmitTo, GroupSelection};
@@ -23,7 +26,7 @@ pub(crate) use single_group_by::primitive::{GroupValuesPrimitive, HashValue};
 use crate::aggregates::{
     group_values::single_group_by::{
         boolean::GroupValuesBoolean, bytes::GroupValuesBytes,
-        bytes_view::GroupValuesBytesView,
+        bytes_view::GroupValuesBytesView, dictionary::GroupValuesDictionary,
     },
     order::GroupClustering,
 };
@@ -191,6 +194,26 @@ pub fn new_group_values(
             }
             DataType::Boolean => {
                 return Ok(Box::new(GroupValuesBoolean::new()));
+            }
+            DataType::Dictionary(key_type, _)
+                if multi_group_by::supported_schema(schema.as_ref()) =>
+            {
+                macro_rules! dictionary_group_values {
+                    ($t:ty) => {
+                        return Ok(Box::new(GroupValuesDictionary::<$t>::new(schema)))
+                    };
+                }
+                match key_type.as_ref() {
+                    DataType::Int8 => dictionary_group_values!(Int8Type),
+                    DataType::Int16 => dictionary_group_values!(Int16Type),
+                    DataType::Int32 => dictionary_group_values!(Int32Type),
+                    DataType::Int64 => dictionary_group_values!(Int64Type),
+                    DataType::UInt8 => dictionary_group_values!(UInt8Type),
+                    DataType::UInt16 => dictionary_group_values!(UInt16Type),
+                    DataType::UInt32 => dictionary_group_values!(UInt32Type),
+                    DataType::UInt64 => dictionary_group_values!(UInt64Type),
+                    _ => {}
+                }
             }
             _ => {}
         }

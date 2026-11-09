@@ -809,7 +809,7 @@ async fn oom_grouped_hash_aggregate() {
         .with_query("SELECT COUNT(*), SUM(request_bytes) FROM t GROUP BY host")
         .with_expected_errors(vec![
             "Failed to allocate additional",
-            "for PartialHashAggregateStream[0]",
+            "HashAggregateStream[0]",
         ])
         .with_memory_limit(1_000)
         .run()
