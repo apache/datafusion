@@ -389,22 +389,53 @@ impl FilterExec {
         } else {
             let null_rejecting_columns = collect_null_rejecting_columns(predicate);
 
-            if check_statistics_support(predicate, schema)
-                && decimal_columns_have_bounds(
-                    predicate,
-                    schema,
-                    &input_stats.column_statistics,
-                )
+            let analysis_ctx = if check_statistics_support(predicate, schema)
                 && !has_decimal_equality(predicate, schema)
             {
                 let input_analysis_ctx = AnalysisContext::try_from_statistics(
                     schema,
                     &input_stats.column_statistics,
                 )?;
-                let analysis_ctx = analyze(predicate, input_analysis_ctx, schema)?;
-                let selectivity = analysis_ctx.selectivity.unwrap_or(1.0);
-                let filtered_num_rows =
-                    input_num_rows.with_estimated_selectivity(selectivity);
+                Some(analyze(predicate, input_analysis_ctx, schema)?)
+            } else {
+                None
+            };
+
+            // Interval analysis gives no selectivity when it cannot tell how
+            // many values of a column in the predicate pass, e.g. for an
+            // aggregate output without min/max, as in `HAVING sum(l_quantity)
+            // > 300` in TPC-H Q18. The heuristic estimate below is used then,
+            // while the analyzed bounds still narrow the column statistics.
+            let selectivity = analysis_ctx
+                .as_ref()
+                .and_then(|analysis_ctx| analysis_ctx.selectivity)
+                .unwrap_or_else(|| {
+                    // String predicates cannot use interval analysis. Estimate them
+                    // from distinct counts and pattern form when possible, then
+                    // apply the row-count constraints implied by the predicate.
+                    //
+                    // Without interval boundaries, attempt a heuristic fallback for selectivities.
+                    // For instance, an equality filter against an unresolved scalar subquery will
+                    // fail `check_support`, but we can still estimate selectivity as `1.0 / NDV`.
+                    let default_selectivity_f64 = default_selectivity as f64 / 100.0;
+                    string_selectivity(
+                        predicate,
+                        schema,
+                        &input_stats,
+                        default_selectivity_f64,
+                    )
+                    .unwrap_or_else(|| {
+                        compute_fallback_selectivity(
+                            predicate,
+                            &input_stats.column_statistics,
+                            default_selectivity,
+                        )
+                    })
+                });
+            let filtered_num_rows =
+                input_num_rows.with_estimated_selectivity(selectivity);
+
+            if let Some(analysis_ctx) = analysis_ctx {
                 let cs = collect_new_statistics(
                     schema,
                     &input_stats.column_statistics,
@@ -415,29 +446,6 @@ impl FilterExec {
                 );
                 (selectivity, filtered_num_rows, cs)
             } else {
-                // String predicates cannot use interval analysis. Estimate them
-                // from distinct counts and pattern form when possible, then
-                // apply the row-count constraints implied by the predicate.
-                //
-                // Without interval boundaries, attempt a heuristic fallback for selectivities.
-                // For instance, an equality filter against an unresolved scalar subquery will
-                // fail `check_support`, but we can still estimate selectivity as `1.0 / NDV`.
-                let default_selectivity_f64 = default_selectivity as f64 / 100.0;
-                let selectivity = string_selectivity(
-                    predicate,
-                    schema,
-                    &input_stats,
-                    default_selectivity_f64,
-                )
-                .unwrap_or_else(|| {
-                    compute_fallback_selectivity(
-                        predicate,
-                        &input_stats.column_statistics,
-                        default_selectivity,
-                    )
-                });
-                let filtered_num_rows =
-                    input_num_rows.with_estimated_selectivity(selectivity);
                 let mut cs = input_stats.to_inexact().column_statistics;
                 for (idx, col_stat) in cs.iter_mut().enumerate() {
                     col_stat.byte_size = scale_byte_size_at_rows(
@@ -1254,33 +1262,6 @@ fn compute_fallback_selectivity(
     }
 
     selectivity
-}
-
-/// Returns true if every decimal column in `predicate` has both a min and a
-/// max statistic.
-///
-/// Interval analysis cannot narrow a column without bounds, so it estimates a
-/// selectivity of 1.0 for it. Filters on aggregate outputs, such as
-/// `HAVING sum(l_quantity) > 300` in TPC-H Q18, usually have no bounds. These
-/// decimal predicates used the default selectivity before interval analysis
-/// supported decimals, and join planning depends on that estimate, so they
-/// keep using it.
-fn decimal_columns_have_bounds(
-    predicate: &Arc<dyn PhysicalExpr>,
-    schema: &SchemaRef,
-    column_statistics: &[ColumnStatistics],
-) -> bool {
-    collect_columns(predicate).iter().all(|column| {
-        let is_decimal = schema
-            .fields()
-            .get(column.index())
-            .is_some_and(|field| field.data_type().is_decimal());
-        !is_decimal
-            || column_statistics.get(column.index()).is_some_and(|stats| {
-                stats.min_value.get_value().is_some()
-                    && stats.max_value.get_value().is_some()
-            })
-    })
 }
 
 /// Returns true if `predicate` compares a decimal value with `=`.
@@ -2407,18 +2388,20 @@ mod tests {
         Ok(())
     }
 
-    /// Interval analysis cannot narrow a decimal column without min/max
-    /// statistics, such as an aggregate output. Predicates on such columns keep
-    /// the default selectivity, as they did before decimals were analyzed.
+    /// Interval analysis cannot tell how many values of a column without
+    /// min/max statistics, such as an aggregate output, pass a predicate.
+    /// Predicates on such columns use the default selectivity.
     #[tokio::test]
-    async fn test_filter_statistics_decimal_without_bounds() -> Result<()> {
+    async fn test_filter_statistics_without_bounds() -> Result<()> {
         // Table:
         //      a: Decimal128(15, 2), bounds vary per case
         //      b: Int32, min=0, max=99
+        //      c: Int64, bounds vary per case
         let decimal = |v: i128| ScalarValue::Decimal128(Some(v), 15, 2);
         let schema = Schema::new(vec![
-            Field::new("a", DataType::Decimal128(15, 2), false),
+            Field::new("a", DataType::Decimal128(15, 2), true),
             Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int64, true),
         ]);
         let b_stats = ColumnStatistics {
             min_value: Precision::Inexact(ScalarValue::Int32(Some(0))),
@@ -2428,6 +2411,8 @@ mod tests {
 
         // a > 3.00
         let a_gt = binary(col("a", &schema)?, Operator::Gt, lit(decimal(300)), &schema)?;
+        // c > 3
+        let c_gt = binary(col("c", &schema)?, Operator::Gt, lit(3i64), &schema)?;
         // b < 50 AND a > 3.00
         let b_lt_and_a_gt = binary(
             binary(col("b", &schema)?, Operator::Lt, lit(50i32), &schema)?,
@@ -2436,20 +2421,46 @@ mod tests {
             &schema,
         )?;
 
-        for a_stats in [
-            ColumnStatistics::new_unknown(),
+        for (a_stats, c_stats) in [
+            (
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics::new_unknown(),
+            ),
             // Only a lower bound
-            ColumnStatistics {
-                min_value: Precision::Inexact(decimal(100)),
-                ..Default::default()
-            },
+            (
+                ColumnStatistics {
+                    min_value: Precision::Inexact(decimal(100)),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Precision::Inexact(ScalarValue::Int64(Some(1))),
+                    ..Default::default()
+                },
+            ),
+            // Null bounds
+            (
+                ColumnStatistics {
+                    min_value: Precision::Exact(ScalarValue::Decimal128(None, 15, 2)),
+                    max_value: Precision::Exact(ScalarValue::Decimal128(None, 15, 2)),
+                    ..Default::default()
+                },
+                ColumnStatistics {
+                    min_value: Precision::Exact(ScalarValue::Int64(None)),
+                    max_value: Precision::Exact(ScalarValue::Int64(None)),
+                    ..Default::default()
+                },
+            ),
         ] {
-            for predicate in [&a_gt, &b_lt_and_a_gt] {
+            for predicate in [&a_gt, &c_gt, &b_lt_and_a_gt] {
                 let input = Arc::new(StatisticsExec::new(
                     Statistics {
                         num_rows: Precision::Inexact(1000),
                         total_byte_size: Precision::Absent,
-                        column_statistics: vec![a_stats.clone(), b_stats.clone()],
+                        column_statistics: vec![
+                            a_stats.clone(),
+                            b_stats.clone(),
+                            c_stats.clone(),
+                        ],
                     },
                     schema.clone(),
                 ));

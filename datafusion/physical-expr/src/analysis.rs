@@ -29,7 +29,8 @@ pub struct AnalysisContext {
     pub boundaries: Vec<ExprBoundaries>,
     /// The estimated percentage of rows that this expression would select, if
     /// it were to be used as a boolean predicate on a filter. The value will be
-    /// between 0.0 (selects nothing) and 1.0 (selects everything).
+    /// between 0.0 (selects nothing) and 1.0 (selects everything), or `None`
+    /// if it cannot be estimated.
     pub selectivity: Option<f64>,
 }
 
@@ -148,6 +149,9 @@ impl ExprBoundaries {
 /// # Returns
 ///
 /// * `AnalysisContext` constructed by pruned boundaries and a selectivity value.
+///   The selectivity is `None` when the number of values of a column in `expr`
+///   is unknown, e.g. the column has no min/max statistics or its range holds
+///   more than [`u64::MAX`] values.
 pub fn analyze(
     expr: &Arc<dyn PhysicalExpr>,
     context: AnalysisContext,
@@ -228,6 +232,7 @@ fn shrink_boundaries(
     target_expr_and_indices: &[(Arc<dyn PhysicalExpr>, usize)],
 ) -> Result<AnalysisContext> {
     let initial_boundaries = target_boundaries.clone();
+    let mut expr_columns = Vec::with_capacity(target_expr_and_indices.len());
     for (expr, i) in target_expr_and_indices {
         if let Some(column) = expr.downcast_ref::<Column>()
             && let Some(bound) = target_boundaries
@@ -235,10 +240,15 @@ fn shrink_boundaries(
                 .find(|bound| bound.column.eq(column))
         {
             bound.interval = Some(graph.get_interval(*i));
+            expr_columns.push(column.clone());
         }
     }
 
-    let selectivity = calculate_selectivity(&target_boundaries, &initial_boundaries)?;
+    let Some(selectivity) =
+        calculate_selectivity(&target_boundaries, &initial_boundaries, &expr_columns)?
+    else {
+        return Ok(AnalysisContext::new(target_boundaries));
+    };
 
     assert_or_internal_err!(
         (0.0..=1.0).contains(&selectivity),
@@ -289,10 +299,15 @@ fn singleton_selectivity(
 /// This function calculates the filter predicate's selectivity by comparing
 /// the initial and pruned column boundaries. Selectivity is defined as the
 /// ratio of rows in a table that satisfy the filter's predicate.
+///
+/// Returns `None` if the number of values of one of `expr_columns`, the
+/// columns in the predicate, is unknown before or after pruning. Without it,
+/// the ratio is unknown, and assuming 1.0 would overestimate the rows.
 fn calculate_selectivity(
     target_boundaries: &[ExprBoundaries],
     initial_boundaries: &[ExprBoundaries],
-) -> Result<f64> {
+    expr_columns: &[Column],
+) -> Result<Option<f64>> {
     // Since the intervals are assumed uniform and the values
     // are not correlated, we need to multiply the selectivities
     // of multiple columns to get the overall selectivity.
@@ -316,6 +331,12 @@ fn calculate_selectivity(
                     acc *= s;
                     continue;
                 }
+                if expr_columns.contains(&target.column)
+                    && (initial_interval.cardinality().is_none()
+                        || target_interval.cardinality().is_none())
+                {
+                    return Ok(None);
+                }
                 acc *= cardinality_ratio(initial_interval, target_interval);
             }
             (None, Some(_)) => {
@@ -323,11 +344,11 @@ fn calculate_selectivity(
                     "Initial boundary cannot be None while having a Some() target boundary"
                 );
             }
-            _ => return Ok(0.0),
+            _ => return Ok(Some(0.0)),
         }
     }
 
-    Ok(acc)
+    Ok(Some(acc))
 }
 
 #[cfg(test)]
@@ -550,18 +571,22 @@ mod tests {
     /// cardinality ratio is 1.0 and the overall selectivity should remain 1.0.
     #[test]
     fn test_calculate_selectivity_already_singleton_initial_interval() {
+        let columns = [Column::new("a", 0)];
         let already_singleton = make_boundary(7, 7, 1);
 
         let selectivity = calculate_selectivity(
             std::slice::from_ref(&already_singleton),
             std::slice::from_ref(&already_singleton),
+            &columns,
         )
         .unwrap();
 
         let wide_initial = make_boundary(1, 100, 50);
         let same_singleton_target = make_boundary(7, 7, 50);
         let selectivity_new =
-            calculate_selectivity(&[same_singleton_target], &[wide_initial]).unwrap();
+            calculate_selectivity(&[same_singleton_target], &[wide_initial], &columns)
+                .unwrap()
+                .unwrap();
         assert!(
             (selectivity_new - 0.02).abs() < 1e-10,
             "expected selectivity 1/NDV = 0.02, got {selectivity_new}"
@@ -570,13 +595,98 @@ mod tests {
         let singleton_initial = make_boundary(7, 7, 50);
         let singleton_target = make_boundary(7, 7, 50);
         let selectivity_no_new_filter =
-            calculate_selectivity(&[singleton_target], &[singleton_initial]).unwrap();
+            calculate_selectivity(&[singleton_target], &[singleton_initial], &columns)
+                .unwrap()
+                .unwrap();
         assert!(
             (selectivity_no_new_filter - 1.0).abs() < 1e-10,
             "expected selectivity 1.0 when initial was already the same singleton, got {selectivity_no_new_filter}"
         );
 
         let _ = selectivity; // silence unused warning
+    }
+
+    /// The selectivity is unknown when the number of values of a column in
+    /// the predicate is unknown, rather than 1.0.
+    #[test]
+    fn test_calculate_selectivity_unknown_cardinality() {
+        let boundary = |lower: Option<i32>, upper: Option<i32>| ExprBoundaries {
+            column: Column::new("a", 0),
+            interval: Some(
+                Interval::try_new(ScalarValue::Int32(lower), ScalarValue::Int32(upper))
+                    .unwrap(),
+            ),
+            distinct_count: Precision::Absent,
+        };
+        let columns = [Column::new("a", 0)];
+
+        // a > 5, with no min/max for `a`:
+        let unbounded = boundary(None, None);
+        let target = boundary(Some(6), None);
+        assert_eq!(
+            calculate_selectivity(
+                std::slice::from_ref(&target),
+                std::slice::from_ref(&unbounded),
+                &columns
+            )
+            .unwrap(),
+            None
+        );
+
+        // A column that is not in the predicate keeps its selectivity of 1.0:
+        assert_eq!(
+            calculate_selectivity(
+                std::slice::from_ref(&unbounded),
+                std::slice::from_ref(&unbounded),
+                &[]
+            )
+            .unwrap(),
+            Some(1.0)
+        );
+
+        // a < 50, with `a` in [0, 99]:
+        let target = boundary(Some(0), Some(49));
+        let initial = boundary(Some(0), Some(99));
+        assert_eq!(
+            calculate_selectivity(&[target], &[initial], &columns).unwrap(),
+            Some(0.5)
+        );
+    }
+
+    /// The selectivity is unknown when a decimal range holds more than
+    /// `u64::MAX` values.
+    #[test]
+    fn test_analyze_decimal_unknown_cardinality() -> datafusion_common::Result<()> {
+        // w: Decimal128(38, 18) in [0, 99], i.e. 99 * 10^18 + 1 values
+        let schema = Arc::new(Schema::new(vec![make_field(
+            "w",
+            DataType::Decimal128(38, 18),
+        )]));
+        let scale = 10_i128.pow(18);
+        let boundaries = vec![ExprBoundaries {
+            column: Column::new("w", 0),
+            interval: Some(Interval::try_new(
+                ScalarValue::Decimal128(Some(0), 38, 18),
+                ScalarValue::Decimal128(Some(99 * scale), 38, 18),
+            )?),
+            distinct_count: Precision::Absent,
+        }];
+        // w < 10
+        let expr = col("w").lt(lit(ScalarValue::Decimal128(Some(10 * scale), 38, 18)));
+        let df_schema = DFSchema::try_from(Arc::clone(&schema))?;
+        let physical_expr = create_physical_expr(
+            &expr,
+            &df_schema,
+            &ExecutionProps::new(),
+            &PhysicalPlanningContext::default(),
+        )?;
+        let analysis = analyze(
+            &physical_expr,
+            AnalysisContext::new(boundaries),
+            df_schema.as_ref(),
+        )?;
+        assert_eq!(analysis.selectivity, None);
+        Ok(())
     }
 
     // Regression tests for #19264.

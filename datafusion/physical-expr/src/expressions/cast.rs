@@ -19,6 +19,7 @@ use datafusion_common::nested_struct::{
     requires_nested_struct_cast, validate_data_type_compatibility,
 };
 use datafusion_common::{Result, not_impl_err};
+use datafusion_expr_common::casts::is_lossless_decimal_cast;
 use datafusion_expr_common::columnar_value::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::Interval;
 use datafusion_expr_common::sort_properties::ExprProperties;
@@ -694,33 +695,18 @@ impl PhysicalExpr for CastExpr {
 /// Many-to-one casts, such as Float64 to Int32, cannot generally be inverted this way:
 /// an output of 0 does not imply an input of 0.0.
 /// Returns false for unrecognized conversions so the input range remains unchanged.
-fn can_propagate_cast_constraints(source: &DataType, target: &DataType) -> bool {
+pub(crate) fn can_propagate_cast_constraints(
+    source: &DataType,
+    target: &DataType,
+) -> bool {
     CastExpr::check_bigger_cast(target, source)
         || (source.is_integer() && target.is_integer())
         // NaN bounds are unbounded; finite Float32 values widen exactly.
         || (*source == Float32 && *target == Float64)
-        || is_decimal_widening(source, target)
-}
-
-/// Whether a decimal-to-decimal cast keeps every value exactly, i.e. the target
-/// has at least as many fractional and integer digits as the source. Casting
-/// bounds back to the source then rounds to a neighboring representable value,
-/// which never excludes a valid input.
-fn is_decimal_widening(source: &DataType, target: &DataType) -> bool {
-    fn precision_scale(data_type: &DataType) -> Option<(i16, i16)> {
-        match data_type {
-            Decimal32(p, s) | Decimal64(p, s) | Decimal128(p, s) | Decimal256(p, s) => {
-                Some((*p as i16, *s as i16))
-            }
-            _ => None,
-        }
-    }
-    match (precision_scale(source), precision_scale(target)) {
-        (Some((source_p, source_s)), Some((target_p, target_s))) => {
-            target_s >= source_s && target_p - target_s >= source_p - source_s
-        }
-        _ => false,
-    }
+        // An integer or decimal cast to a decimal that keeps every value.
+        // Casting bounds back to the source then rounds to a neighboring
+        // representable value, which never excludes a valid input.
+        || is_lossless_decimal_cast(source, target)
 }
 
 #[cfg(feature = "proto")]
@@ -947,6 +933,11 @@ mod tests {
             (Decimal32(9, 2), Decimal128(20, 4), true),
             (Decimal128(6, 2), Decimal128(6, 3), false),
             (Decimal128(6, 2), Decimal128(8, 1), false),
+            (Int32, Decimal128(11, 1), true),
+            (Int32, Decimal128(10, 1), false),
+            (Int64, Decimal128(19, 0), true),
+            (Int64, Decimal128(18, 0), false),
+            (UInt64, Decimal128(20, 0), true),
         ] {
             let schema = Schema::new(vec![Field::new("x", source.clone(), true)]);
             let expr = CastExpr::new(col("x", &schema)?, target.clone(), None);
@@ -969,8 +960,11 @@ mod tests {
 
     #[test]
     fn test_decimal_widening_constraint_boundaries() -> Result<()> {
-        fn decimal(data_type: &DataType, value: i128) -> ScalarValue {
+        fn scalar(data_type: &DataType, value: i128) -> ScalarValue {
             match data_type {
+                Int8 => ScalarValue::Int8(Some(value as i8)),
+                Int32 => ScalarValue::Int32(Some(value as i32)),
+                Int64 => ScalarValue::Int64(Some(value as i64)),
                 Decimal32(p, s) => ScalarValue::Decimal32(Some(value as i32), *p, *s),
                 Decimal64(p, s) => ScalarValue::Decimal64(Some(value as i64), *p, *s),
                 Decimal128(p, s) => ScalarValue::Decimal128(Some(value), *p, *s),
@@ -989,6 +983,10 @@ mod tests {
             (Decimal64(5, 1), Decimal256(10, 3), 100, 99999),
             // Negative scale:
             (Decimal128(3, -1), Decimal128(5, 0), 10, 999),
+            // Integer sources:
+            (Int8, Decimal128(5, 2), 100, i8::MAX as i128),
+            (Int32, Decimal128(11, 1), 10, i32::MAX as i128),
+            (Int64, Decimal128(21, 2), 100, i64::MAX as i128),
         ] {
             // Source values near zero and near the extremes of the precision:
             let values: Vec<i128> = (-5..=5)
@@ -1015,16 +1013,16 @@ mod tests {
             for (i, lower) in bounds.iter().enumerate() {
                 for upper in &bounds[i..] {
                     let output = Interval::try_new(
-                        decimal(&target, *lower),
-                        decimal(&target, *upper),
+                        scalar(&target, *lower),
+                        scalar(&target, *upper),
                     )?;
                     let propagated =
                         expr.propagate_constraints(&output, &[&input])?.unwrap();
                     assert_eq!(propagated.len(), 1);
                     for value in &values {
-                        if output.contains_value(decimal(&target, value * factor))? {
+                        if output.contains_value(scalar(&target, value * factor))? {
                             assert!(
-                                propagated[0].contains_value(decimal(&source, *value))?,
+                                propagated[0].contains_value(scalar(&source, *value))?,
                                 "{source} -> {target}: input={value}, output={output}, \
                                  propagated={:?}",
                                 propagated[0]

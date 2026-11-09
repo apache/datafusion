@@ -112,6 +112,83 @@ SELECT count(*) FROM customer_address WHERE ca_gmt_offset = -5;
 statement ok
 DROP TABLE customer_address;
 
+# Predicates that interval analysis cannot estimate use the default
+# selectivity (20%), instead of keeping every row. t has 1100 rows, with
+# i in 0..99, w in 0..99 and d in 0.00..0.10.
+
+query I
+COPY (
+  SELECT
+    CAST(value % 100 AS INT) AS i,
+    CAST(value % 100 AS DECIMAL(38, 18)) AS w,
+    CAST((value % 11) * 0.01 AS DECIMAL(15, 2)) AS d,
+    value % 10 AS k
+  FROM range(1100)
+)
+TO 'test_files/scratch/filter_statistics_decimal/t.parquet'
+STORED AS PARQUET;
+----
+1100
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/filter_statistics_decimal/t.parquet';
+
+# INT to DECIMAL(11, 1) keeps every value, so bounds propagate back through the
+# cast and i is narrowed to [0, 2].
+query TT
+EXPLAIN SELECT i FROM t WHERE i < CAST(2.5 AS DECIMAL(5, 1));
+----
+physical_plan
+01)FilterExec: CAST(i@0 AS Decimal128(11, 1)) < 2.5, statistics=[Rows=Inexact(33), Bytes=Inexact(132), [(Col[0]: Min=Inexact(Int32(0)) Max=Inexact(Int32(2)) Null=Inexact(0) ScanBytes=Inexact(132))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/t.parquet]]}, projection=[i], file_type=parquet, predicate=CAST(i@0 AS Decimal128(11, 1)) < 2.5, pruning_predicate=i_null_count@1 != row_count@2 AND CAST(i_min@0 AS Decimal128(11, 1);N) < 2.5, required_guarantees=[], statistics=[Rows=Inexact(1100), Bytes=Inexact(4400), [(Col[0]: Min=Inexact(Int32(0)) Max=Inexact(Int32(99)) Null=Inexact(0) ScanBytes=Inexact(4400))]]
+
+query I
+SELECT count(*) FROM t WHERE i < CAST(2.5 AS DECIMAL(5, 1));
+----
+33
+
+# w's range holds 99 * 10^18 values, more than fit in a u64, so the share of
+# them that passes is unknown.
+query TT
+EXPLAIN SELECT w FROM t WHERE w < 10;
+----
+physical_plan
+01)FilterExec: w@0 < 10.000000000000000000, statistics=[Rows=Inexact(220), Bytes=Inexact(3520), [(Col[0]: Min=Inexact(Decimal128(0.000000000000000000,38,18)) Max=Inexact(Decimal128(9.999999999999999999,38,18)) Null=Exact(0) ScanBytes=Inexact(3520))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/t.parquet]]}, projection=[w], file_type=parquet, predicate=w@1 < 10.000000000000000000, pruning_predicate=w_null_count@1 != row_count@2 AND w_min@0 < 10.000000000000000000, required_guarantees=[], statistics=[Rows=Inexact(1100), Bytes=Inexact(17600), [(Col[0]: Min=Inexact(Decimal128(0.000000000000000000,38,18)) Max=Inexact(Decimal128(99.000000000000000000,38,18)) Null=Inexact(0) ScanBytes=Inexact(17600))]]
+
+query I
+SELECT count(*) FROM t WHERE w < 10;
+----
+110
+
+# Casting a decimal to DOUBLE loses precision, so bounds do not propagate back
+# through the cast to d.
+query TT
+EXPLAIN SELECT d FROM t WHERE CAST(d AS DOUBLE) > 0.05;
+----
+physical_plan
+01)FilterExec: CAST(d@0 AS Float64) > 0.05, statistics=[Rows=Inexact(220), Bytes=Inexact(3520), [(Col[0]: Min=Inexact(Decimal128(0.00,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(3520))]]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/t.parquet]]}, projection=[d], file_type=parquet, predicate=CAST(d@2 AS Float64) > 0.05, pruning_predicate=d_null_count@1 != row_count@2 AND CAST(d_max@0 AS Float64;N) > 0.05, required_guarantees=[], statistics=[Rows=Inexact(1100), Bytes=Inexact(17600), [(Col[0]: Min=Inexact(Decimal128(0.00,15,2)) Max=Inexact(Decimal128(0.10,15,2)) Null=Inexact(0) ScanBytes=Inexact(17600))]]
+
+query I
+SELECT count(*) FROM t WHERE CAST(d AS DOUBLE) > 0.05;
+----
+500
+
+# sum(i) is an aggregate output without min/max, as in TPC-H Q18.
+query TT
+EXPLAIN SELECT k FROM t GROUP BY k HAVING sum(i) > CAST(300.5 AS DECIMAL(10, 1));
+----
+physical_plan
+01)FilterExec: CAST(sum(t.i)@1 AS Decimal128(21, 1)) > 300.5, projection=[k@0], statistics=[Rows=Inexact(220), Bytes=Inexact(2640), [(Col[0]: Min=Inexact(Int64(0)) Max=Inexact(Int64(9)))]]
+02)--AggregateExec: mode=Single, gby=[k@1 as k], aggr=[sum(t.i)], statistics=[Rows=Inexact(1100), Bytes=Inexact(13200), [(Col[0]: Min=Exact(Int64(0)) Max=Exact(Int64(9))),(Col[1]:)]]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/filter_statistics_decimal/t.parquet]]}, projection=[i, k], file_type=parquet, statistics=[Rows=Exact(1100), Bytes=Exact(13200), [(Col[0]: Min=Exact(Int32(0)) Max=Exact(Int32(99)) Null=Exact(0) ScanBytes=Exact(4400)),(Col[1]: Min=Exact(Int64(0)) Max=Exact(Int64(9)) Null=Exact(0) ScanBytes=Exact(8800))]]
+
+statement ok
+DROP TABLE t;
+
 # TPC-H Q18 plan check (https://github.com/apache/datafusion/issues/27108).
 #
 # The tables follow the TPC-H shape: 10 orders per customer and 4 lineitems
