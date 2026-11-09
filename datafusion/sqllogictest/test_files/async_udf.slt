@@ -90,8 +90,11 @@ statement ok
 set datafusion.sql_parser.dialect = databricks;
 
 # Async udf can't be used in lambdas
-query error DataFusion error: Error during planning: Async functions in lambdas aren't supported, see https://github\.com/apache/datafusion/issues/22091
+query error
 select array_transform([1], v -> async_abs(v));
+----
+DataFusion error: Error during planning: Async functions in lambdas aren't supported, see https://github.com/apache/datafusion/issues/22091
+
 
 statement ok
 set datafusion.sql_parser.dialect = generic;

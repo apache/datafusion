@@ -22,8 +22,11 @@ select range(5),
 [0, 1, 2, 3, 4] [2, 3, 4] [2, 5, 8] [10, 7, 4] [] [] [1, 0, -1, -2, -3, -4] [1992-09-01, 1992-10-01, 1992-11-01, 1992-12-01, 1993-01-01, 1993-02-01] [1993-02-01, 1993-01-31, 1993-01-30, 1993-01-29, 1993-01-28, 1993-01-27, 1993-01-26, 1993-01-25, 1993-01-24, 1993-01-23, 1993-01-22, 1993-01-21, 1993-01-20, 1993-01-19, 1993-01-18, 1993-01-17, 1993-01-16, 1993-01-15, 1993-01-14, 1993-01-13, 1993-01-12, 1993-01-11, 1993-01-10, 1993-01-09, 1993-01-08, 1993-01-07, 1993-01-06, 1993-01-05, 1993-01-04, 1993-01-03, 1993-01-02] [1989-04-01, 1990-04-01, 1991-04-01] []
 
 # Test range with zero step
-query error DataFusion error: Execution error: step can't be 0 for function range\(start \[, stop, step\]\)
+query error
 select range(1, 1, 0);
+----
+DataFusion error: Execution error: step can't be 0 for function range(start [, stop, step])
+
 
 # Range too large to materialize should error instead of panicking
 query error DataFusion error: Execution error: Range too large to materialize
@@ -176,8 +179,11 @@ select range(TIMESTAMP '1993-03-01', TIMESTAMP '1989-04-01', INTERVAL '1' YEAR)
 ----
 []
 
-query error DataFusion error: Execution error: Cannot generate date range less than 1 day\.
+query error
 select range(DATE '1993-03-01', DATE '1993-03-01', INTERVAL '1' HOUR)
+----
+DataFusion error: Execution error: Cannot generate date range less than 1 day.
+
 
 query ?
 select range(TIMESTAMP '1993-03-01', TIMESTAMP '1993-03-01', INTERVAL '1' HOUR)
@@ -339,8 +345,11 @@ select generate_series('2000-01-01T00:00:00.000000001Z'::timestamp, '2000-01-01T
 [2000-01-01T00:00:00.000000001, 2000-01-01T00:00:00.000000002, 2000-01-01T00:00:00.000000003, 2000-01-01T00:00:00.000000004, 2000-01-01T00:00:00.000000005, 2000-01-01T00:00:00.000000006, 2000-01-01T00:00:00.000000007, 2000-01-01T00:00:00.000000008, 2000-01-01T00:00:00.000000009, 2000-01-01T00:00:00.000000010]
 
 # Test generate_series with zero step
-query error DataFusion error: Execution error: step can't be 0 for function generate_series\(start \[, stop, step\]\)
+query error
 select generate_series(1, 1, 0);
+----
+DataFusion error: Execution error: step can't be 0 for function generate_series(start [, stop, step])
+
 
 # Test generate_series with zero step
 query error DataFusion error: Execution error: Interval argument to generate_series must not be 0
