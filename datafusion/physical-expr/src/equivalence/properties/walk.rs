@@ -19,31 +19,28 @@ use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
 use itertools::Itertools;
 
-/// The state of one walk along a sequence of sort keys, such as the keys of a
-/// required ordering.
+/// The state of a walk along a required ordering (a sequence of sort keys).
 ///
 /// [`EquivalenceProperties`] uses a `SortKeyWalk` to decide if a set of
-/// orderings satisfy a requirement. See [Checking whether a requirement is
+/// orderings satisfies a requirement. See [Checking whether a requirement is
 /// satisfied] for more details.
 ///
-/// # Intuition and Introduction, and Definitions
+/// # Intuition and Definitions
 ///
-/// An ordering `[x, y, z]` is a chain of claims about the rows: they are sorted
-/// by x; among rows with equal x, sorted by y; among rows with equal x and y,
-/// sorted by z.
+/// An ordering `[x, y, z]` can be thought of as a chain of claims about the
+/// rows: they are sorted by `x`; among rows with equal `x`, sorted by `y`;
+/// among rows with equal `x` and `y`, sorted by `z`.
 ///
 /// ## Pinning and Fixed Expressions
 ///
 /// During a walk, the code scans the ordering requirement left to right. When
-/// it finds key `k` satisfied, it *pins* `k`, meaning that for the next steps
-/// in the walk, `k` is effectively a constant across the remaining ordering
-/// requirement.
+/// it finds key `k` satisfied, it *pins* `k`, meaning that `k` is effectively a
+/// constant across the remaining ordering requirement.
 ///
 /// An expression is *fixed* if it has one value for all rows that tie on the
-/// currently pinned expressions. Fixed expressions include the pinned expressions
-/// themselves, as well as literals, constants, and singleton leaf expressions
-/// (such as an uncorrelated scalar subquery). See [`Self::is_fixed`] for more
-/// details.
+/// currently pinned expressions. Fixed expressions include the pinned
+/// expressions themselves, as well as literals, constants, and singleton leaf
+/// expressions (e.g. an uncorrelated scalar subquery).
 ///
 /// ## Heads
 ///
@@ -88,8 +85,8 @@ use itertools::Itertools;
 /// | 1    | a               | {}     | a                | d          | pin a     |
 /// | 2    | b               | {a}    | b                | d          | satisfied |
 ///
-/// This ordering is satisfied, (intuitively since the requirement is a prefix
-/// of the first ordering). The second ordering plays no part.
+/// This requirement is satisfied (intuitively, because it is a prefix of the
+/// first ordering). The second ordering plays no part.
 ///
 /// * Orderings: `[a ASC, b ASC]` and `[b ASC, c ASC]`
 /// * Requirement: `[a ASC, b ASC, c ASC]`
@@ -100,9 +97,9 @@ use itertools::Itertools;
 /// | 2    | b               | {a}    | b             | b             | pin b     |
 /// | 3    | c               | {a, b} | -             | c             | satisfied |
 ///
-/// Note that After step 2, `[a, b]` is used up as both of its expressions are
+/// Note that after step 2, `[a, b]` is used up, as both of its expressions are
 /// pinned. Among the rows that tie on `a` and `b`, the second ordering says the
-/// rows are sorted by `c`, which can satisfy the third key.
+/// rows are sorted by `c`, which satisfies the third key.
 ///
 /// * Orderings: `[a ASC, c ASC]` and `[c ASC, b ASC]`
 /// * Requirement: `[a ASC, b ASC, c ASC]`
@@ -113,7 +110,7 @@ use itertools::Itertools;
 /// | 2    | b               | {a}    | c             | c             | unsatisfied |
 ///
 /// After pinning `a`, both orderings are headed by `c`. Since nothing says the
-/// rows that tie on `a` are sorted by `b`, the walk stops, and reports that the
+/// rows that tie on `a` are sorted by `b`, the walk stops and reports that the
 /// requirement is not satisfied.
 ///
 /// * Orderings: `[a ASC, b ASC]` and `[a ASC, c ASC]`
@@ -138,8 +135,9 @@ pub(super) struct SortKeyWalk<'a> {
     /// as returned by [`Self::ordering`].
     ///
     /// The ordering at index `i` is:
-    ///  * if `i < self.props.normal_cls.len()` then `self.props.normal_cls[i]`
-    ///  * else, `self.implied[i - self.props.normal_cls.len()]` otherwise. See
+    ///  * `self.props.oeq_cache.normal_cls[i]` if `i` is less than
+    ///    `self.props.oeq_cache.normal_cls.len()`,
+    ///  * `self.implied[i - self.props.oeq_cache.normal_cls.len()]` otherwise.
     ///
     /// The value is either an index into that ordering's sort expressions, or
     /// its length when the ordering has been exhausted.
@@ -234,9 +232,9 @@ impl<'a> SortKeyWalk<'a> {
     ///
     /// See [`SortKeyWalk`] for an explanation of pinning.
     ///
-    ///
-    /// This method pins `expr` and thus by extension all members of its
-    /// equivalence class), but not its children. See [`Self::pin_key`] for more details.
+    /// This method pins `expr` (and thus, by extension, all members of its
+    /// equivalence class), but not its children. See [`Self::pin_key`] for
+    /// more details.
     pub(super) fn pin(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
         match self.props.eq_group.get_equivalence_class(&expr) {
             Some(class) => self.pinned.extend(class.iter().cloned()),
@@ -366,11 +364,11 @@ impl<'a> SortKeyWalk<'a> {
         Ok(Transformed::yes(node))
     }
 
-    /// Whether `expr` is fixed
+    /// Whether `expr` is fixed.
     ///
-    /// Note `expr` must be in [normal form].
+    /// Note that `expr` must be in [normal form].
     ///
-    /// See [`SortKeyWalk`] for more details
+    /// See [`SortKeyWalk`] for more details.
     ///
     /// [normal form]: EquivalenceProperties#normal-form
     fn is_fixed(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
