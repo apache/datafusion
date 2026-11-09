@@ -1312,6 +1312,22 @@ impl Unparser<'_> {
     fn scalar_to_sql(&self, v: &ScalarValue) -> Result<ast::Expr> {
         match v {
             ScalarValue::Null => Ok(ast::Expr::value(ast::Value::Null)),
+            // The list arms below render the child values without checking whether
+            // the list itself is null, and the struct/map/union arms reject every
+            // value. Catch nulls of these types first so they unparse as `NULL`,
+            // like other typed nulls.
+            ScalarValue::List(_)
+            | ScalarValue::LargeList(_)
+            | ScalarValue::FixedSizeList(_)
+            | ScalarValue::ListView(_)
+            | ScalarValue::LargeListView(_)
+            | ScalarValue::Struct(_)
+            | ScalarValue::Map(_)
+            | ScalarValue::Union(..)
+                if v.is_null() =>
+            {
+                Ok(ast::Expr::value(ast::Value::Null))
+            }
             ScalarValue::Boolean(Some(b)) => {
                 Ok(ast::Expr::value(ast::Value::Boolean(b.to_owned())))
             }
@@ -1947,10 +1963,13 @@ mod tests {
 
     use crate::unparser::dialect::{MySqlDialect, SnowflakeDialect, SqliteDialect};
     use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
-    use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
+    use arrow::datatypes::{
+        DataType::Int8, Field, Int32Type, Schema, TimeUnit, UnionFields, UnionMode,
+    };
     use ast::ObjectName;
     use datafusion_common::datatype::DataTypeExt;
-    use datafusion_common::{Spans, TableReference};
+    use datafusion_common::scalar::ScalarStructBuilder;
+    use datafusion_common::{DataFusionError, Spans, TableReference};
     use datafusion_expr::expr::WildcardOptions;
     use datafusion_expr::{
         ColumnarValue, HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress,
@@ -3398,6 +3417,90 @@ mod tests {
 
         let ast = unparser.expr_to_sql(&expr)?;
         assert_eq!(ast.to_string(), "ARRAY[ARRAY[1, 2], ARRAY[3, 4]]");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_null_nested_scalar_value_to_sql() -> Result<()> {
+        let item = Arc::new(Field::new_list_field(DataType::Int32, true));
+        let map_entries = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(
+                vec![
+                    Field::new("key", DataType::Utf8, false),
+                    Field::new("value", DataType::Int32, true),
+                ]
+                .into(),
+            ),
+            false,
+        ));
+        let data_types = [
+            DataType::List(Arc::clone(&item)),
+            DataType::LargeList(Arc::clone(&item)),
+            DataType::FixedSizeList(Arc::clone(&item), 2),
+            DataType::ListView(Arc::clone(&item)),
+            DataType::LargeListView(Arc::clone(&item)),
+            DataType::Struct(vec![Field::new("a", DataType::Int32, true)].into()),
+            DataType::Map(map_entries, false),
+            DataType::Union(
+                UnionFields::try_new(
+                    vec![0],
+                    vec![Field::new("a", DataType::Int32, true)],
+                )?,
+                UnionMode::Sparse,
+            ),
+        ];
+
+        for data_type in data_types {
+            let expr = Expr::Literal(ScalarValue::try_new_null(&data_type)?, None);
+            assert_eq!(
+                expr_to_sql(&expr)?.to_string(),
+                "NULL",
+                "data type: {data_type}"
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_non_null_nested_scalar_value_to_sql() -> Result<()> {
+        let list_type =
+            DataType::List(Arc::new(Field::new_list_field(DataType::Int32, true)));
+        let list_with_null_element = ScalarValue::List(ScalarValue::new_list_nullable(
+            &[
+                ScalarValue::try_new_null(&list_type)?,
+                ScalarValue::List(ScalarValue::new_list_nullable(
+                    &[ScalarValue::Int32(Some(1))],
+                    &DataType::Int32,
+                )),
+            ],
+            &list_type,
+        ));
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(list_with_null_element, None))?.to_string(),
+            "[NULL, [1]]"
+        );
+
+        let empty_list =
+            ScalarValue::List(ScalarValue::new_list_nullable(&[], &DataType::Int32));
+        assert_eq!(
+            expr_to_sql(&Expr::Literal(empty_list, None))?.to_string(),
+            "[]"
+        );
+
+        let non_null_struct = ScalarStructBuilder::new()
+            .with_scalar(
+                Field::new("a", DataType::Int32, true),
+                ScalarValue::Int32(Some(1)),
+            )
+            .build()?;
+        let err = expr_to_sql(&Expr::Literal(non_null_struct, None)).unwrap_err();
+        assert!(
+            matches!(err, DataFusionError::NotImplemented(_)),
+            "unexpected error: {err}"
+        );
 
         Ok(())
     }
