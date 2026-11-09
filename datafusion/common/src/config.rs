@@ -20,6 +20,7 @@ use crate::{DataFusionError, Result};
 #[cfg(feature = "parquet_encryption")]
 use hex;
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
@@ -886,6 +887,10 @@ impl From<SpillCompression> for Option<CompressionType> {
     }
 }
 
+/// The directory name Hive compliant writers use in place of a null partition value, and the
+/// default for [`ExecutionOptions::listing_table_hive_default_partition_name`].
+pub const HIVE_DEFAULT_PARTITION_NAME: &str = "__HIVE_DEFAULT_PARTITION__";
+
 config_namespace! {
     /// Options related to query execution
     ///
@@ -1094,6 +1099,14 @@ config_namespace! {
         /// partitions from Hive compliant directories. Defaults to true (partition columns are
         /// inferred and will be represented in the table schema).
         pub listing_table_factory_infer_partitions: bool, default = true
+
+        /// The directory name Hive compliant writers use in place of a null partition
+        /// value, e.g. `/table/date=__HIVE_DEFAULT_PARTITION__/data.parquet`. Partition
+        /// values equal to this name are read as NULL, as Hive, Spark and Impala do, and
+        /// partitioned writes reject them. Corresponds to Hive's
+        /// `hive.exec.default.partition.name`. Set this to the empty string to read and
+        /// write such values as the literal directory name instead.
+        pub listing_table_hive_default_partition_name: String, default = HIVE_DEFAULT_PARTITION_NAME.to_string()
 
         /// Should DataFusion support recursive CTEs
         pub enable_recursive_ctes: bool, default = true
@@ -1644,6 +1657,16 @@ config_namespace! {
         /// cause regressions in both memory usage and runtime.
         pub enable_window_topn: bool, default = false
 
+        /// When set to true, the optimizer will rewrite a "top-1 per group"
+        /// pattern of the form `Filter(row_number() = 1)` over a `PARTITION BY` window into an
+        /// `Aggregate(first_value(... ORDER BY ...) GROUP BY partition)`.
+        /// This avoids buffering / fully sorting the input, which is especially beneficial on wide payloads.
+        /// Disabled by default because on nested/wide value types the aggregate only becomes memory
+        /// efficient once the columnar nested-type `GroupsAccumulator` fast
+        /// path is available; enabling it without that support can route wide
+        /// payloads onto the slow per-group accumulator path.
+        pub enable_row_number_to_aggregate: bool, default = false
+
         /// When set to true, the optimizer will push TopK (Sort with fetch)
         /// below hash repartition when the partition key is a prefix of the
         /// sort key, reducing data volume before the shuffle.
@@ -1916,6 +1939,18 @@ config_namespace! {
         /// branches share the same source and compatible wrapper nodes such as identical
         /// projections or aliases.
         pub enable_unions_to_filter: bool, default = false
+
+        /// Prefer native grouped DISTINCT aggregation when target_partitions is 1
+        /// and every aggregate explicitly supports a specialized GroupsAccumulator
+        /// for its DISTINCT argument types. Defaults to false, preserving the
+        /// two-phase GROUP BY rewrite.
+        ///
+        /// The native plan can avoid materializing distinct (group, value) pairs,
+        /// but can be slower for many groups with duplicate values. It must fit
+        /// each group's distinct values in memory, so queries that succeed by
+        /// spilling with the rewrite may fail with this option enabled. One target
+        /// partition can still have multiple input partitions and merge native states.
+        pub single_distinct_prefer_native: bool, default = false
     }
 }
 
@@ -2516,11 +2551,23 @@ impl ConfigOptions {
                 &mut docs,
                 "| {} | {} | {} |",
                 entry.key,
-                entry.value.as_deref().unwrap_or("NULL"),
+                display_default(entry.value.as_deref()),
                 entry.description
             );
         }
         docs
+    }
+}
+
+/// Renders a default value for the generated documentation table.
+///
+/// Values containing `_` or `*` are shown as code, since markdown would otherwise read them
+/// as formatting: a default of `__HIVE_DEFAULT_PARTITION__` renders as bold text.
+fn display_default(value: Option<&str>) -> Cow<'_, str> {
+    match value {
+        None => Cow::Borrowed("NULL"),
+        Some(value) if value.contains(['_', '*']) => Cow::Owned(format!("`{value}`")),
+        Some(value) => Cow::Borrowed(value),
     }
 }
 

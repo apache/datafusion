@@ -29,7 +29,7 @@ use datafusion_physical_plan::execution_plan::{
 };
 use datafusion_physical_plan::joins::SymmetricHashJoinExec;
 use datafusion_physical_plan::{
-    ChildSatisfactionOptions, ExecutionPlanProperties, get_plan_string,
+    ChildSatisfactionOptions, ExecutionPlanProperties, displayable, get_plan_string,
 };
 
 use crate::PhysicalOptimizerRule;
@@ -135,8 +135,8 @@ pub fn check_finiteness_requirements(
         && input.pipeline_behavior() == EmissionType::Final)
     {
         plan_err!(
-            "Cannot execute pipeline breaking queries, operator: {:?}",
-            input
+            "Cannot execute pipeline breaking queries, operator: {}",
+            displayable(input).one_line().to_string().trim_end()
         )
     } else {
         Ok(())

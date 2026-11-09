@@ -158,7 +158,7 @@ struct MyTypePlanner;
 impl TypePlanner for MyTypePlanner {
     fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
         match sql_type {
-            // Map DATETIME(precision) to Arrow Timestamp
+            // Map DATETIME(precision) to Arrow Timestamp (this is also the default behavior)
             ast::DataType::Datetime(precision) => {
                 let time_unit = match precision {
                     Some(0) => TimeUnit::Second,
