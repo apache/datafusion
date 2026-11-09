@@ -2653,6 +2653,51 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
     Ok(())
 }
 
+// Substrait lambda parameter types carry no struct field names, so a parameter over a
+// list of structs must take its field names from the list, not from its declared type.
+#[tokio::test]
+async fn roundtrip_lambda_parameter_struct_field_names() -> Result<()> {
+    let ctx = higher_order_function_ctx().await?;
+    ctx.sql(
+        "CREATE TABLE structs AS SELECT \
+         [named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y')] AS s, \
+         [[named_struct('a', 3, 'b', 'z')]] AS nested",
+    )
+    .await?
+    .collect()
+    .await?;
+
+    // field of a parameter over a column
+    roundtrip_with_ctx(
+        "SELECT array_transform(s, p0 -> get_field(p0, 'b')) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    // field of a parameter over a computed list
+    roundtrip_with_ctx(
+        "SELECT array_transform(array_concat(s, s), p0 -> get_field(p0, 'a')) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    // field of the inner parameter, where the inner list is the outer parameter
+    roundtrip_with_ctx(
+        "SELECT array_transform(nested, p0 -> array_transform(p0, p1 -> get_field(p1, 'b'))) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    // field of the outer parameter, read inside an inner lambda
+    roundtrip_with_ctx(
+        "SELECT array_transform(s, p0 -> array_transform([1, 2], p1 -> get_field(p0, 'a') + p1)) FROM structs",
+        ctx.clone(),
+    )
+    .await?;
+
+    Ok(())
+}
+
 pub(crate) async fn higher_order_function_ctx() -> Result<SessionContext> {
     let ctx = create_context_with_dialect(Some(Dialect::Databricks)).await?;
 

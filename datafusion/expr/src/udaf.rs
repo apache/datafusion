@@ -13,7 +13,10 @@ use std::vec;
 
 use arrow::datatypes::{DataType, Field, FieldRef};
 
-use datafusion_common::{Result, ScalarValue, Statistics, exec_err, not_impl_err};
+use datafusion_common::{
+    Result, ScalarValue, Statistics, exec_err, internal_err, metadata::FieldMetadata,
+    not_impl_err,
+};
 use datafusion_expr_common::dyn_eq::{DynEq, DynHash};
 use datafusion_expr_common::operator::Operator;
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
@@ -195,7 +198,9 @@ impl AggregateUDF {
         self.inner.window_function_display_name(params)
     }
 
+    #[deprecated(since = "56.0.0", note = "Use `AggregateUDF::return_field` instead.")]
     pub fn is_nullable(&self) -> bool {
+        #[expect(deprecated)]
         self.inner.is_nullable()
     }
 
@@ -557,6 +562,7 @@ pub trait AggregateUDFImpl: Debug + DynEq + DynHash + Send + Sync + Any {
     /// For example, aggregate functions like `COUNT` always return a non null value
     /// but others like `MIN` will return `NULL` if there is nullable input.
     /// Note that if the function is declared as *not* nullable, make sure the [`AggregateUDFImpl::default_value`] is `non-null`
+    #[deprecated(since = "56.0.0", note = "Use `return_field` instead.")]
     fn is_nullable(&self) -> bool {
         true
     }
@@ -1501,8 +1507,26 @@ pub fn udaf_default_return_field<F: AggregateUDFImpl + ?Sized>(
     Ok(Arc::new(Field::new(
         func.name(),
         data_type,
+        #[expect(deprecated)]
         func.is_nullable(),
     )))
+}
+
+/// Returns the default field for `func` with metadata from its first argument.
+///
+/// This is useful for aggregate functions that return a value from their first
+/// argument, such as `min`, `max`, and `first_value`.
+pub fn udaf_return_field_preserving_arg_metadata<F: AggregateUDFImpl + ?Sized>(
+    func: &F,
+    arg_fields: &[FieldRef],
+) -> Result<FieldRef> {
+    let Some(arg_field) = arg_fields.first() else {
+        return internal_err!(
+            "udaf_return_field_preserving_arg_metadata requires at least one argument"
+        );
+    };
+    let field = udaf_default_return_field(func, arg_fields)?;
+    Ok(FieldMetadata::from(arg_field.as_ref()).add_to_field_ref(field))
 }
 
 pub enum ReversedUDAF {
@@ -1665,6 +1689,7 @@ impl AggregateUDFImpl for AliasedAggregateUDFImpl {
     }
 
     fn is_nullable(&self) -> bool {
+        #[expect(deprecated)]
         self.inner.is_nullable()
     }
 
