@@ -2137,15 +2137,6 @@ mod tests {
         assert_eq!(
             rows(ColumnStatistics {
                 distinct_count: Precision::Absent,
-                ..unique.clone()
-            })?,
-            Precision::Inexact(20)
-        );
-
-        // Nor without a null count.
-        assert_eq!(
-            rows(ColumnStatistics {
-                null_count: Precision::Absent,
                 ..unique
             })?,
             Precision::Inexact(20)
@@ -2162,18 +2153,20 @@ mod tests {
         let null = || lit(ScalarValue::Utf8(None));
 
         let schema = Schema::new(vec![Field::new("id", DataType::Utf8, true)]);
-        let rows = |list: Vec<Arc<dyn PhysicalExpr>>,
+        let unique = ColumnStatistics {
+            null_count: Precision::Exact(0),
+            distinct_count: Precision::Exact(100_000),
+            ..Default::default()
+        };
+        let rows = |column: ColumnStatistics,
+                    list: Vec<Arc<dyn PhysicalExpr>>,
                     negated: bool|
          -> Result<Precision<usize>> {
             let input = Arc::new(StatisticsExec::new(
                 Statistics {
                     num_rows: Precision::Exact(100_000),
                     total_byte_size: Precision::Absent,
-                    column_statistics: vec![ColumnStatistics {
-                        null_count: Precision::Exact(0),
-                        distinct_count: Precision::Exact(100_000),
-                        ..Default::default()
-                    }],
+                    column_statistics: vec![column],
                 },
                 schema.clone(),
             ));
@@ -2186,26 +2179,46 @@ mod tests {
         };
 
         assert_eq!(
-            rows(vec![lit("a"), lit("b"), lit("c")], false)?,
+            rows(unique.clone(), vec![lit("a"), lit("b"), lit("c")], false)?,
             Precision::Inexact(3)
         );
         // Repeats ask for the same row twice.
         assert_eq!(
-            rows(vec![lit("a"), lit("b"), lit("a")], false)?,
+            rows(unique.clone(), vec![lit("a"), lit("b"), lit("a")], false)?,
             Precision::Inexact(2)
         );
         // NULL matches nothing.
-        assert_eq!(rows(vec![null(); 32], false)?, Precision::Inexact(0));
+        assert_eq!(
+            rows(unique.clone(), vec![null(); 32], false)?,
+            Precision::Inexact(0)
+        );
         // `NOT IN` selects nearly everything, so the default applies.
         assert_eq!(
-            rows(vec![lit("a"), lit("b"), lit("c")], true)?,
+            rows(unique.clone(), vec![lit("a"), lit("b"), lit("c")], true)?,
             Precision::Inexact(20_000)
         );
         // A list member that is not a literal leaves the set open.
         assert_eq!(
-            rows(vec![lit("a"), col("id", &schema)?], false)?,
+            rows(unique.clone(), vec![lit("a"), col("id", &schema)?], false)?,
             Precision::Inexact(20_000)
         );
+        // Without a distinct count or a null count the column is not known to
+        // hold each value once, so the default selectivity applies.
+        for column in [
+            ColumnStatistics {
+                distinct_count: Precision::Absent,
+                ..unique.clone()
+            },
+            ColumnStatistics {
+                null_count: Precision::Absent,
+                ..unique.clone()
+            },
+        ] {
+            assert_eq!(
+                rows(column, vec![lit("a"), lit("b"), lit("c")], false)?,
+                Precision::Inexact(20_000)
+            );
+        }
 
         // A large list, with non-adjacent repeats and NULLs that must not raise the
         // cap.
@@ -2219,9 +2232,12 @@ mod tests {
             .cloned()
             .chain(std::iter::repeat_n(null(), 32))
             .collect();
-        assert_eq!(rows(values, false)?, Precision::Inexact(distinct_values));
         assert_eq!(
-            rows(repeated_values, false)?,
+            rows(unique.clone(), values, false)?,
+            Precision::Inexact(distinct_values)
+        );
+        assert_eq!(
+            rows(unique, repeated_values, false)?,
             Precision::Inexact(distinct_values)
         );
 
