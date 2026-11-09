@@ -1532,6 +1532,13 @@ select case when 1=2 then { 'foo': 'baz' } else { 'xxx': 'blarg' } end;
 statement error Error during planning: Cannot infer common argument type for comparison operation Struct\("foo": Utf8\) = Struct\("xxx": Utf8\)
 select { 'foo': 'baz' } = { 'xxx': 'blarg' };
 
+# Array containment over structs with different field names also fails.
+# The error differs from the ones above because the analyzer rewrites `@>`
+# to the `array_has_all` function before binary operator coercion runs, so
+# the function signature coercion reports the failure.
+statement error Error during planning: Failed to coerce arguments to satisfy a call to 'array_has_all' function
+select [{ 'foo': 1 }] @> [{ 'xxx': 1 }];
+
 # Same field names in a different order, with a field type that needs
 # coercion (Utf8 vs Utf8View), still unify by name.
 

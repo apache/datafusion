@@ -1893,7 +1893,8 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Si
 }
 
 fn array_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type.equals_datatype(rhs_type) {
+    if lhs_type.equals_datatype(rhs_type) && struct_field_names_match(lhs_type, rhs_type)
+    {
         Some(lhs_type.to_owned())
     } else {
         None
