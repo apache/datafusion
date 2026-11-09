@@ -335,9 +335,10 @@ unused_qualifications = "deny"
 # Profiles available:
 # - dev: default debug build; fastest to compile, slowest to run. Carries line
 #     tables only, so panics and backtraces still name a file and line but a
-#     debugger cannot inspect variables; build with `CARGO_PROFILE_DEV_DEBUG=2`
-#     when you need that. For everyday development; default for
-#     "cargo [ build | test | run ]".
+#     debugger cannot inspect variables; use the `dbg` profile when you need
+#     that. For everyday development; default for "cargo [ build | test | run ]".
+# - dbg: like dev, but with full debug info for stepping through code and
+#     inspecting variables in a debugger.
 # - release: fully optimized build; slowest to compile, fastest to run, smallest
 #     binaries. For public releases; default for "cargo [ bench | install ]".
 # - release-nonlto: skips LTO, so it builds much faster while staying close to
@@ -356,10 +357,14 @@ unused_qualifications = "deny"
 # is generated over and over. `line-tables-only` keeps file and line numbers --
 # so panics and `RUST_BACKTRACE` output stay useful -- while dropping the
 # variable-level DWARF that only an interactive debugger consumes. Build with
-# `CARGO_PROFILE_DEV_DEBUG=2 cargo build` when you need to step through code in a
-# debugger.
+# `--profile dbg` when you need to step through code in a debugger.
 [profile.dev]
 debug = "line-tables-only"
+
+# Full debug info for interactive debugging ("debug" is a reserved profile name).
+[profile.dbg]
+inherits = "dev"
+debug = true
 
 [profile.release]
 codegen-units = 1
