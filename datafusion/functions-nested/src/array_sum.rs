@@ -9,8 +9,7 @@ use arrow::array::{
     Array, ArrayRef, ArrowNumericType, GenericListArray, OffsetSizeTrait, PrimitiveArray,
 };
 use arrow::datatypes::{
-    DECIMAL32_MAX_PRECISION, DECIMAL64_MAX_PRECISION, DECIMAL128_MAX_PRECISION,
-    DECIMAL256_MAX_PRECISION, DataType,
+    DataType,
     DataType::{
         Decimal32, Decimal64, Decimal128, Decimal256, FixedSizeList, Float64, Int8,
         Int16, Int32, Int64, LargeList, List, Null, UInt8, UInt16, UInt32, UInt64,
@@ -24,9 +23,10 @@ use datafusion_common::utils::{
 };
 use datafusion_common::{Result, internal_err, plan_err, utils::take_function_args};
 use datafusion_expr::{
-    ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl, Signature,
-    Volatility,
+    AggregateUDFImpl, ColumnarValue, Documentation, ScalarFunctionArgs, ScalarUDFImpl,
+    Signature, Volatility,
 };
+use datafusion_functions_aggregate::sum::Sum;
 use datafusion_macros::user_doc;
 use std::sync::Arc;
 
@@ -87,14 +87,8 @@ impl ScalarUDFImpl for ArraySum {
 
     fn return_type(&self, arg_types: &[DataType]) -> Result<DataType> {
         let [arg_type] = take_function_args(self.name(), arg_types)?;
-        // Same decimal widening as the `sum` aggregate
-        Ok(match sum_element_type(&base_type(arg_type)) {
-            Decimal32(p, s) => Decimal32(DECIMAL32_MAX_PRECISION.min(p + 10), s),
-            Decimal64(p, s) => Decimal64(DECIMAL64_MAX_PRECISION.min(p + 10), s),
-            Decimal128(p, s) => Decimal128(DECIMAL128_MAX_PRECISION.min(p + 10), s),
-            Decimal256(p, s) => Decimal256(DECIMAL256_MAX_PRECISION.min(p + 10), s),
-            other => other,
-        })
+        let element_type = sum_element_type(&base_type(arg_type));
+        Sum::new().return_type(&[element_type])
     }
 
     fn coerce_types(&self, arg_types: &[DataType]) -> Result<Vec<DataType>> {
