@@ -252,16 +252,16 @@ use itertools::{Either, Itertools};
 ///   raise its value or leave it unchanged (see [`SetMonotonicity`]).
 ///
 /// Given those observations, `m` never decreases as `ts` increases, so the
-/// output sorting is described by both `[ts ASC]` and `[m ASC NULLS LAST]`.
+/// output sorting is described by both `[ts ASC]` and `[m ASC]`.
 ///
 /// If the query had a `PARTITION BY k`, with the input sorted by `k` first,
-/// the added ordering would be `[k, m ASC NULLS LAST]`.
+/// the added ordering would be `[k, m ASC]`.
 ///
-/// A decreasing aggregate such as `MIN` results in `DESC NULLS LAST`.
+/// A decreasing aggregate such as `MIN` results in `DESC`.
 ///
 /// A frame that shrinks as rows advance, such as `CURRENT ROW` to
 /// `UNBOUNDED FOLLOWING`, reverses the direction: `MAX` then results in
-/// `DESC NULLS FIRST`.
+/// `DESC`.
 ///
 /// [`SetMonotonicity`]: datafusion_expr::SetMonotonicity
 ///
