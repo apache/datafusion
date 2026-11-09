@@ -69,10 +69,14 @@ jobs:
       - name: Show available disk space
         run: |
           df -h
-      - name: Run tests (excluding doctests)
+      - name: Run extended tests
         run: cargo xtask ci step test extended
-      - name: Run fuzzers with more iterations
+      - name: Run fuzz tests
         run: cargo xtask ci step test fuzz
+      # Migrate it to the above unified fuzz runner over time
+      # Tracker: https://github.com/apache/datafusion/issues/27082
+      - name: Run unmigrated fuzzers with more iterations
+        run: cargo xtask ci step test fuzz-legacy
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code

@@ -3093,7 +3093,9 @@ SELECT g, percentile_cont(x, m) FROM (SELECT value % 4 AS g, value AS x, 0.25 AS
 2 26
 3 27
 
-query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values 0.5 and 0.9
+# The partial states are merged in whichever order the partitions finish,
+# so the two differing values can be reported in either order
+query error DataFusion error: Execution error: Percentile value for 'PERCENTILE_CONT' must be constant across the aggregation, found differing values (0\.5 and 0\.9|0\.9 and 0\.5)
 SELECT g, percentile_cont(x, m) FROM (SELECT value % 4 AS g, value AS x, CASE WHEN value <= 50 THEN 0.5 ELSE 0.9 END AS m FROM generate_series(1, 100)) GROUP BY g
 
 query IR

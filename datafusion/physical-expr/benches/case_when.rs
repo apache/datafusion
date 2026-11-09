@@ -2,15 +2,13 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::array::{
-    Array, ArrayRef, BooleanArray, Int32Array, Int32Builder, StringArray,
-};
-use arrow::datatypes::{ArrowNativeTypeOp, Field, Schema};
+use arrow::array::{Array, ArrayRef, Int32Array, Int32Builder, StringArray};
+use arrow::datatypes::{ArrowNativeTypeOp, DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_common::ScalarValue;
 use datafusion_expr::Operator;
-use datafusion_physical_expr::expressions::{BinaryExpr, case, col, lit};
+use datafusion_physical_expr::expressions::{BinaryExpr, case, cast, col, lit};
 use datafusion_physical_expr_common::physical_expr::PhysicalExpr;
 use itertools::Itertools;
 use rand::distr::Alphanumeric;
@@ -132,28 +130,38 @@ fn benchmark_literal_when_selection(c: &mut Criterion, row_count: usize) {
         ])
         .unwrap();
         let schema = batch.schema();
-        let then: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+        let comparison: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
             col("left_key", &schema).unwrap(),
             Operator::Eq,
             col("right_key", &schema).unwrap(),
         ));
+        let comparison = cast(comparison, &schema, DataType::Int32).unwrap();
+        let branch_value = |branch: usize| -> Arc<dyn PhysicalExpr> {
+            Arc::new(BinaryExpr::new(
+                Arc::clone(&comparison),
+                Operator::Plus,
+                lit((2 * branch) as i32),
+            ))
+        };
         let expr = case(
             Some(col("partition", &schema).unwrap()),
             (0..branches)
-                .map(|i| (lit(i as i32), Arc::clone(&then)))
+                .map(|i| (lit(i as i32), branch_value(i)))
                 .collect(),
-            with_else.then(|| Arc::clone(&then)),
+            with_else.then(|| branch_value(branches)),
         )
         .unwrap();
-        let expected =
-            BooleanArray::from((0..row_count).map(|i| i % 3 == 0).collect::<Vec<_>>());
+        let expected = Int32Array::from_iter_values((0..row_count).map(|i| {
+            let branch = if first_only { 0 } else { i % partitions };
+            (2 * branch) as i32 + i32::from(i % 3 == 0)
+        }));
         let result = expr
             .evaluate(&batch)
             .unwrap()
             .into_array(row_count)
             .unwrap();
         assert_eq!(
-            result.as_any().downcast_ref::<BooleanArray>().unwrap(),
+            result.as_any().downcast_ref::<Int32Array>().unwrap(),
             &expected
         );
         group.bench_function(BenchmarkId::new(distribution, branches), |b| {
