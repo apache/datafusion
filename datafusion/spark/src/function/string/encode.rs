@@ -600,8 +600,12 @@ mod tests {
                 "{value}: {err}"
             );
             assert!(err.contains("`encode`"), "{value}: {err}");
-            // the charset appears as the user wrote it
-            assert!(err.ends_with(&format!("with {name}")), "{value}: {err}");
+            // the charset appears as the user wrote it. Use `contains`, not
+            // `ends_with`: with the `backtrace` feature a backtrace follows the message
+            assert!(
+                err.contains(&format!("encode` with {name}")),
+                "{value}: {err}"
+            );
         }
     }
 
