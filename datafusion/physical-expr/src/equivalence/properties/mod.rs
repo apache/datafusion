@@ -307,7 +307,7 @@ use itertools::{Either, Itertools};
 ///
 /// ## Example: Ordering Implied by a `CAST`
 ///
-/// Consider a table `t` sorted by `[c ASC, b ASC]` and the query
+/// Consider a table `t` sorted by `[c ASC, a ASC, b ASC]` and the query
 /// `SELECT a, b, c FROM t WHERE c = CAST(a AS BIGINT)`, which produces the
 /// following rows:
 ///
@@ -324,16 +324,18 @@ use itertools::{Either, Itertools};
 ///
 /// Observations:
 /// - The filter keeps the input order, so the rows are still sorted by
-///   `[c ASC, b ASC]`
+///   `[c ASC, a ASC, b ASC]`.
 /// - Casting an `INT` to a `BIGINT` preserves order and never maps two
 ///   different values to the same one, so rows with different `a` are in the
 ///   order of `c`, which is the order of `a`.
-/// - Rows with equal `c` have equal `a`, and are also still sorted by `b`.
+/// - Rows with equal `c` are sorted by `[a, b]`.
 ///
 /// Given those observations, the rows are also sorted by `[a ASC, b ASC]`,
-/// even though no operator sorted on `a`. `EquivalenceProperties` derives
-/// this ordering when the equality is added, so a later `ORDER BY a, b`
-/// needs no re-sorting.
+/// even though `a` is not the leading sort key. `EquivalenceProperties`
+/// derives this ordering when the equality is added, so a later
+/// `ORDER BY a, b` needs no re-sorting. The arguments of the cast must
+/// directly follow `c` in the ordering: from `[c ASC, b ASC]` alone, the
+/// ordering `[a ASC, b ASC]` is not derived.
 ///
 /// This holds in general for a function `f` whose output follows the
 /// lexicographical order of its arguments, which `f` declares by setting
