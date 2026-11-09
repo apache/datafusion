@@ -1512,11 +1512,11 @@ statement error Error during planning: Failed to coerce then \(Struct\("foo": Ut
 select case when 1=2 then column1 else column2 end from mismatched_struct_names;
 
 # Comparison of structs with different field names fails at plan time
-statement error Cannot infer common argument type for comparison operation
+statement error Error during planning: Cannot infer common argument type for comparison operation Struct\("foo": Utf8\) = Struct\("xxx": Utf8View\)
 select column1 = column2 from mismatched_struct_names;
 
 # Comparison with an anonymous struct literal (fields c0, c1) also fails
-statement error Cannot infer common argument type for comparison operation
+statement error Error during planning: Cannot infer common argument type for comparison operation Struct\("foo": Utf8\) = Struct\("c0": Utf8\)
 select column1 = struct('baz') from mismatched_struct_names;
 
 statement ok
@@ -1529,7 +1529,7 @@ drop table mismatched_struct_names;
 statement error Error during planning: Failed to coerce then \(Struct\("foo": Utf8\)\) and else \(Struct\("xxx": Utf8\)\) to common types in CASE WHEN expression
 select case when 1=2 then { 'foo': 'baz' } else { 'xxx': 'blarg' } end;
 
-statement error Cannot infer common argument type for comparison operation
+statement error Error during planning: Cannot infer common argument type for comparison operation Struct\("foo": Utf8\) = Struct\("xxx": Utf8\)
 select { 'foo': 'baz' } = { 'xxx': 'blarg' };
 
 # Same field names in a different order, with a field type that needs
