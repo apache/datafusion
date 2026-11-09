@@ -136,6 +136,7 @@ pub use udaf::{
     StatisticsArgs, UdafDisplayNameBuilder, UdafHumanDisplayBuilder,
     UdafSchemaNameBuilder, UdafWindowFunctionDisplayNameBuilder,
     UdafWindowFunctionSchemaNameBuilder, udaf_default_return_field,
+    udaf_return_field_preserving_arg_metadata,
 };
 #[expect(deprecated)]
 pub use udaf::{
