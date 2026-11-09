@@ -37,8 +37,9 @@
 //!
 //! ### Group clustering optimization
 //!
-//! When the input is ordered by group keys, rows are clustered by those keys.
-//! The clustered paths use this guarantee to emit completed groups early.
+//! When the input is ordered by group keys, or its equivalence properties declare
+//! them grouped, rows are clustered by those keys. The clustered paths use this
+//! guarantee to emit completed groups early.
 //!
 //! ```text
 //! AggregateExec (final, clustered)
@@ -1030,7 +1031,7 @@ impl AggregateExec {
         // Grouping sets can change group keys. PartialReduce combines intermediate
         // states without using group boundaries to recognize completed groups.
         let group_clustering_mode = if group_by.has_grouping_set()
-            || group_by.groups.len() != 1
+            || group_by.groups != [vec![false; group_by.expr.len()]]
             || mode == AggregateMode::PartialReduce
         {
             GroupClusteringMode::None
@@ -5685,6 +5686,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn nulling_group_mask_does_not_use_group_clustering() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let a = col("a", &schema)?;
+        let b = col("b", &schema)?;
+        let batches = [(1, 1, 10), (2, 2, 20), (3, 1, 30)]
+            .into_iter()
+            .map(|(a, b, value)| {
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from(vec![a])),
+                        Arc::new(Int32Array::from(vec![b])),
+                        Arc::new(Int64Array::from(vec![value])),
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let input = TestMemoryExec::try_new(&[batches], Arc::clone(&schema), None)?;
+        let grouped_input = input
+            .clone()
+            .try_with_grouping_information(vec![vec![Arc::clone(&a), Arc::clone(&b)]])?;
+        // Nulling a turns distinct input tuples into (NULL, 1), (NULL, 2),
+        // (NULL, 1), which are no longer contiguous.
+        let group_by = PhysicalGroupBy::new(
+            vec![(a, "a".to_string()), (b, "b".to_string())],
+            vec![
+                (lit(ScalarValue::Int32(None)), "a".to_string()),
+                (lit(ScalarValue::Int32(None)), "b".to_string()),
+            ],
+            vec![vec![true, false]],
+            false,
+        );
+        let aggr_expr = Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(value)")
+                .build()?,
+        );
+
+        for input in [input, grouped_input] {
+            let aggregate = AggregateExec::try_new(
+                AggregateMode::Single,
+                group_by.clone(),
+                vec![Arc::clone(&aggr_expr)],
+                vec![None],
+                Arc::new(input),
+                Arc::clone(&schema),
+            )?;
+            let output =
+                collect(aggregate.execute(0, new_migrated_hash_ctx(1024))?).await?;
+            allow_duplicates! {
+            assert_snapshot!(batches_to_sort_string(&output), @r"
+            +---+---+------------+
+            | a | b | SUM(value) |
+            +---+---+------------+
+            |   | 1 | 40         |
+            |   | 2 | 20         |
+            +---+---+------------+
+            ");
+            }
+            assert_eq!(
+                aggregate.group_clustering_mode(),
+                &GroupClusteringMode::None
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn constant_only_grouping_uses_final_emission() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("key", DataType::Int32, false),
@@ -6208,6 +6282,96 @@ mod tests {
 +-----+----------+------------+
 ");
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn grouped_input_uses_clustered_partial_and_single_partitioned() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("key", DataType::Int32, false),
+            Field::new("value", DataType::Int64, false),
+        ]));
+        let batch = |keys: Vec<i32>, values: Vec<i64>| {
+            RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Int32Array::from(keys)),
+                    Arc::new(Int64Array::from(values)),
+                ],
+            )
+        };
+        // Groups are contiguous within each partition but not sorted. Key 1 spans
+        // a batch boundary, and keys 2 and 3 occur in both partitions.
+        let partitions = vec![
+            vec![
+                batch(vec![2, 1], vec![1, 2])?,
+                batch(vec![1, 3], vec![3, 4])?,
+            ],
+            vec![batch(vec![3, 3, 2], vec![5, 6, 7])?],
+        ];
+        let key = col("key", &schema)?;
+        let input: Arc<dyn ExecutionPlan> = Arc::new(
+            TestMemoryExec::try_new(&partitions, Arc::clone(&schema), None)?
+                .try_with_grouping_information(vec![vec![Arc::clone(&key)]])?,
+        );
+        let group_by = PhysicalGroupBy::new_single(vec![(key, "key".to_string())]);
+        let aggr_expr = Arc::new(
+            AggregateExprBuilder::new(sum_udaf(), vec![col("value", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("SUM(value)")
+                .build()?,
+        );
+        let task_ctx = new_migrated_hash_ctx(1024);
+
+        let single_partitioned = AggregateExec::try_new(
+            AggregateMode::SinglePartitioned,
+            group_by.clone(),
+            vec![Arc::clone(&aggr_expr)],
+            vec![None],
+            Arc::clone(&input),
+            Arc::clone(&schema),
+        )?;
+        assert_eq!(
+            single_partitioned.group_clustering_mode(),
+            &GroupClusteringMode::Full
+        );
+        assert!(matches!(
+            single_partitioned.execute_typed(0, &task_ctx)?,
+            StreamType::ClusteredSingleAggregate(_)
+        ));
+
+        let partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            group_by.clone(),
+            vec![Arc::clone(&aggr_expr)],
+            vec![None],
+            input,
+            Arc::clone(&schema),
+        )?);
+        assert_eq!(partial.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert!(matches!(
+            partial.execute_typed(0, &task_ctx)?,
+            StreamType::ClusteredPartialAggregate(_)
+        ));
+
+        let final_aggregate = AggregateExec::try_new(
+            AggregateMode::Final,
+            group_by.as_final(),
+            vec![aggr_expr],
+            vec![None],
+            Arc::new(CoalescePartitionsExec::new(partial)),
+            schema,
+        )?;
+        let output = collect(final_aggregate.execute(0, task_ctx)?).await?;
+        assert_snapshot!(batches_to_sort_string(&output), @r"
+        +-----+------------+
+        | key | SUM(value) |
+        +-----+------------+
+        | 1   | 5          |
+        | 2   | 8          |
+        | 3   | 15         |
+        +-----+------------+
+        ");
         Ok(())
     }
 
