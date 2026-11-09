@@ -380,9 +380,21 @@ impl<K: ArrowDictionaryKeyType> DirectDictionaryGroups<K> {
             + self.hashes.allocated_size()
     }
 
-    fn array_from_keys(&self, keys: Vec<Option<K::Native>>) -> ArrayRef {
-        let keys: PrimitiveArray<K> = keys.into_iter().collect();
-        Arc::new(DictionaryArray::<K>::new(keys, Arc::clone(&self.values)))
+    fn array_from_keys(&self, source_keys: Vec<Option<K::Native>>) -> Result<ArrayRef> {
+        let mut value_indices = Vec::with_capacity(source_keys.len());
+        let keys: PrimitiveArray<K> = source_keys
+            .into_iter()
+            .map(|source_key| {
+                source_key.map(|source_key| {
+                    let compact_key = K::Native::usize_as(value_indices.len());
+                    value_indices.push(source_key.as_usize() as u64);
+                    compact_key
+                })
+            })
+            .collect();
+        let value_indices = UInt64Array::from(value_indices);
+        let values = take(self.values.as_ref(), &value_indices, None)?;
+        Ok(Arc::new(DictionaryArray::<K>::new(keys, values)))
     }
 
     fn into_array(mut self, emit_to: EmitTo) -> Result<ArrayRef> {
@@ -394,7 +406,7 @@ impl<K: ArrowDictionaryKeyType> DirectDictionaryGroups<K> {
             EmitTo::All => self.len(),
             EmitTo::First(n) => n,
         };
-        let emitted = self.array_from_keys(self.group_to_key[..n].to_vec());
+        let emitted = self.array_from_keys(self.group_to_key[..n].to_vec())?;
 
         if n == self.len() {
             self.group_to_key.clear();
@@ -424,12 +436,12 @@ impl<K: ArrowDictionaryKeyType> DirectDictionaryGroups<K> {
 
     fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
         selection.validate_num_groups(self.len())?;
-        Ok(self.array_from_keys(
+        self.array_from_keys(
             selection
                 .iter()
                 .map(|group| self.group_to_key[group])
                 .collect(),
-        ))
+        )
     }
 
     fn shrink_to_fit(&mut self) {
@@ -506,8 +518,10 @@ mod tests {
         let direct = group_values.direct.as_ref().unwrap();
         assert_eq!(direct.value_map.len(), 2);
         assert_eq!(direct.key_to_group[4], UNRESOLVED);
+        let output = group_values.emit(EmitTo::All)?;
+        assert_eq!(output[0].as_dictionary::<Int32Type>().values().len(), 2);
         assert_eq!(
-            strings(&group_values.emit(EmitTo::All)?[0]),
+            strings(&output[0]),
             vec![Some("a".into()), Some("b".into()), None,]
         );
         Ok(())
@@ -549,6 +563,7 @@ mod tests {
         )?;
 
         let emitted = group_values.emit(EmitTo::First(1))?;
+        assert_eq!(emitted[0].as_dictionary::<Int32Type>().values().len(), 1);
         assert_eq!(strings(&emitted[0]), vec![Some("a".into())]);
         group_values.intern(
             &[dict(vec![Some(1), Some(2), Some(0)], &values)],
