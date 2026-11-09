@@ -54,7 +54,7 @@
     <link rel="icon" href="../_static/favicon.svg"/>
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
-    <link rel="next" title="API health policy" href="api-health.html" />
+    <link rel="next" title="Testing Infrastructure" href="testing_infrastructure.html" />
     <link rel="prev" title="Workspace Dependency Graph" href="architecture/dependency-graph.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="color-scheme" content="light dark"/>
@@ -394,7 +394,10 @@
 <li class="toctree-l1"><a class="reference internal" href="development_environment.html">Development Environment</a></li>
 <li class="toctree-l1"><a class="reference internal" href="architecture.html">Architecture</a></li>
 <li class="toctree-l1"><a class="reference internal" href="architecture/dependency-graph.html">Workspace Dependency Graph</a></li>
-<li class="toctree-l1 current active"><a aria-current="page" class="current reference internal" href="#">Testing</a></li>
+<li class="toctree-l1 current active has-children"><a aria-current="page" class="current reference internal" href="#">Testing</a><details open="open"><summary><span class="toctree-toggle" role="presentation"><i class="fa-solid fa-chevron-down"></i></span></summary><ul>
+<li class="toctree-l2"><a class="reference internal" href="testing_infrastructure.html">Testing Infrastructure</a></li>
+</ul>
+</details></li>
 <li class="toctree-l1"><a class="reference internal" href="api-health.html">API health policy</a></li>
 <li class="toctree-l1"><a class="reference internal" href="howtos.html">HOWTOs</a></li>
 <li class="toctree-l1"><a class="reference internal" href="release_management.html">Release Management</a></li>
@@ -487,6 +490,7 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 <p>Tests are critical to ensure that DataFusion is working properly and
 is not accidentally broken during refactorings. All new features
 should have test coverage and the entire test suite is run as part of CI.</p>
+<p>For CI workflows, documentation checks, and benchmarks, see <a class="reference internal" href="testing_infrastructure.html"><span class="std std-doc">Testing Infrastructure</span></a>.</p>
 <section id="testing-quick-start">
 <h2>Testing Quick Start<a class="headerlink" href="#testing-quick-start" title="Link to this heading">#</a></h2>
 <p>While developing a feature or bug fix, best practice is to run the smallest set
@@ -628,230 +632,8 @@ also run on pushes to release branches (<code class="docutils literal notranslat
 <section id="sql-fuzz-testing">
 <h3>SQL fuzz testing<a class="headerlink" href="#sql-fuzz-testing" title="Link to this heading">#</a></h3>
 <p>For SQL fuzzing of more complex queries, use <a class="reference external" href="https://github.com/datafusion-contrib/datafusion-fuzzer">datafusion-fuzzer</a>, which is currently maintained outside the core DataFusion repository. See <a class="reference external" href="https://github.com/datafusion-contrib/datafusion-fuzzer/blob/main/README.md">its documentation</a> for details.</p>
-<hr class="docutils" />
-<p>The following sections cover <strong>non-functional tests and checks</strong> for CI workflows, documentation, and repository maintenance.</p>
-</section>
-</section>
-<section id="ci-workflow-tests">
-<h2>CI Workflow Tests<a class="headerlink" href="#ci-workflow-tests" title="Link to this heading">#</a></h2>
-<p>The Rust workflow validator and fork status bridge have regression tests.
-These tests cover skip conditions, fork run recovery, polling frequency, and
-concurrency groups for fork pushes and merge queue runs.
-They run in the <code class="docutils literal notranslate"><span class="pre">asf-yaml-check</span></code> CI job and in <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code>.
-Run them locally with Python, PyYAML, and Node.js 24:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>python3<span class="w"> </span>ci/scripts/test_rust_workflow_skips.py
-node<span class="w"> </span>--test<span class="w"> </span>ci/scripts/test_fork_ci_status.cjs
-</pre></div>
+<div class="toctree-wrapper compound">
 </div>
-<p>The validator tests remove guards and add an invalid job dependency in memory.
-The bridge tests use stubbed GitHub API responses and make no network requests.</p>
-</section>
-<section id="documentation-examples">
-<h2>Documentation Examples<a class="headerlink" href="#documentation-examples" title="Link to this heading">#</a></h2>
-<p>We use Rust <a class="reference external" href="https://doc.rust-lang.org/rust-by-example/testing/doc_testing.html">doctest</a> to verify examples from the documentation are correct and
-up-to-date. These tests are run as part of our CI and you can run them
-locally with the following command:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span><span class="nb">test</span><span class="w"> </span>--doc
-</pre></div>
-</div>
-<section id="api-documentation-examples">
-<h3>API Documentation Examples<a class="headerlink" href="#api-documentation-examples" title="Link to this heading">#</a></h3>
-<p>As with other Rust projects, examples in doc comments in <code class="docutils literal notranslate"><span class="pre">.rs</span></code> files are
-automatically checked to ensure they work and evolve along with the code.</p>
-<p>Prefix a line with <code class="docutils literal notranslate"><span class="pre">#</span> </code> (a <code class="docutils literal notranslate"><span class="pre">#</span></code> followed by a space) to keep it compiled and
-run, but hidden from the rendered documentation. This is most useful for
-<code class="docutils literal notranslate"><span class="pre">use</span></code> statements, since readers care about the API being demonstrated, not
-its import boilerplate:</p>
-<div class="highlight-rust notranslate"><div class="highlight"><pre><span></span><span class="sd">///</span>
-<span class="err">```</span>
-<span class="sd">/// # use std::sync::Arc;</span>
-<span class="sd">/// let value = Arc::new(42);</span>
-<span class="sd">/// ```</span>
-</pre></div>
-</div>
-<p>Only the <code class="docutils literal notranslate"><span class="pre">let</span> <span class="pre">value</span> <span class="pre">=</span> <span class="pre">...</span></code> line renders.</p>
-</section>
-<section id="user-guide-documentation">
-<h3>User Guide Documentation<a class="headerlink" href="#user-guide-documentation" title="Link to this heading">#</a></h3>
-<p>Rust example code from the user guide (anything marked with ```rust) is also
-tested in the same way using the <a class="reference external" href="https://docs.rs/doc-comment/latest/doc_comment">doc_comment</a> crate. See the end of
-<a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/core/src/lib.rs#L583">core/src/lib.rs</a> for more details.</p>
-</section>
-</section>
-<section id="documentation-link-checks">
-<h2>Documentation Link Checks<a class="headerlink" href="#documentation-link-checks" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code> runs the internal markdown link check. If <code class="docutils literal notranslate"><span class="pre">lychee</span></code> is
-missing, the script installs the version pinned in
-<code class="docutils literal notranslate"><span class="pre">ci/scripts/utils/tool_versions.sh</span></code>. It uses an existing installation as is,
-even if the version differs from the pin.</p>
-<p>To run the check on its own:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span><span class="nb">source</span><span class="w"> </span>ci/scripts/utils/tool_versions.sh
-cargo<span class="w"> </span>install<span class="w"> </span>lychee<span class="w"> </span>--locked<span class="w"> </span>--version<span class="w"> </span><span class="s2">&quot;</span><span class="si">${</span><span class="nv">LYCHEE_VERSION</span><span class="si">}</span><span class="s2">&quot;</span>
-bash<span class="w"> </span>ci/scripts/markdown_link_check.sh
-</pre></div>
-</div>
-<p>Notes:</p>
-<ul class="simple">
-<li><p>The script is run with <code class="docutils literal notranslate"><span class="pre">bash</span></code> and is compatible with the default Bash on macOS (no <code class="docutils literal notranslate"><span class="pre">mapfile</span></code> dependency).</p></li>
-<li><p>The CI configuration currently checks internal markdown links only. External <code class="docutils literal notranslate"><span class="pre">http(s)</span></code> and <code class="docutils literal notranslate"><span class="pre">mailto</span></code> links are excluded to avoid flaky failures.</p></li>
-<li><p>The check only reports broken links. <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span> <span class="pre">--write</span></code> does not change them.</p></li>
-</ul>
-<p>When a link is broken, lychee prints the file and URL/path that failed. For example:</p>
-<div class="highlight-text notranslate"><div class="highlight"><pre><span></span>[docs/source/user-guide/cli/overview.md]:
-  [ERROR] file:///.../docs/source/user-guide/cli/missing-page.md | Cannot find file: File not found. Check if file exists and path is correct
-</pre></div>
-</div>
-<p>Rust doc comments are validated by rustdoc in CI and can be checked locally with:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>bash<span class="w"> </span>ci/scripts/rust_docs.sh
-</pre></div>
-</div>
-</section>
-<section id="asf-status-check-validation">
-<h2>ASF Status Check Validation<a class="headerlink" href="#asf-status-check-validation" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">ci/scripts/check_asf_yaml_status_checks.py</span></code> checks that every required status
-check in <code class="docutils literal notranslate"><span class="pre">.asf.yaml</span></code> matches a job in <code class="docutils literal notranslate"><span class="pre">.github/workflows</span></code>.
-<code class="docutils literal notranslate"><span class="pre">ci/scripts/check_rust_workflow_skips.py</span></code> checks that <code class="docutils literal notranslate"><span class="pre">rust.yml</span></code> skips only its
-listed jobs on pushes to <code class="docutils literal notranslate"><span class="pre">main</span></code> and on pull requests from forks.
-<code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code> runs both and needs <code class="docutils literal notranslate"><span class="pre">python3</span></code> with <a class="reference external" href="https://pypi.org/project/PyYAML/">PyYAML</a>. The <a class="reference external" href="https://docs.astral.sh/uv/">uv</a>
-workspace provides both:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>uv<span class="w"> </span>run<span class="w"> </span>./dev/rust_lint.sh
-</pre></div>
-</div>
-<p>To run the checks on their own:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>uv<span class="w"> </span>run<span class="w"> </span>python3<span class="w"> </span>ci/scripts/check_asf_yaml_status_checks.py
-uv<span class="w"> </span>run<span class="w"> </span>python3<span class="w"> </span>ci/scripts/check_rust_workflow_skips.py
-</pre></div>
-</div>
-</section>
-<section id="security-audit">
-<h2>Security Audit<a class="headerlink" href="#security-audit" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">ci/scripts/security_audit.sh</span></code> runs <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">audit</span></code> on the root <code class="docutils literal notranslate"><span class="pre">Cargo.lock</span></code> with
-the advisory exceptions that CI uses. <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code> runs it and installs
-<a class="reference external" href="https://github.com/rustsec/rustsec/blob/main/cargo-audit/README.md">cargo-audit</a> if it is missing. To run the audit on its own:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>./ci/scripts/security_audit.sh
-</pre></div>
-</div>
-<p>The audit fetches the RustSec advisory database. A new advisory or a different
-<code class="docutils literal notranslate"><span class="pre">cargo-audit</span></code> version can change the result without any change to the repository.</p>
-</section>
-<section id="large-file-check">
-<h2>Large File Check<a class="headerlink" href="#large-file-check" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">ci/scripts/check_large_files.sh</span></code> fails if any file committed between a base
-ref and a head ref is larger than 1.5 MB, the same check the “Large files PR
-check” workflow runs on pull requests. <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code> runs it against
-the merge base of <code class="docutils literal notranslate"><span class="pre">HEAD</span></code> and <code class="docutils literal notranslate"><span class="pre">main</span></code> on the remote that points at
-<code class="docutils literal notranslate"><span class="pre">apache/datafusion</span></code>, or on <code class="docutils literal notranslate"><span class="pre">origin</span></code> when there is no such remote. To run the
-check on its own, or against a different range:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>./ci/scripts/check_large_files.sh
-./ci/scripts/check_large_files.sh<span class="w"> </span>--base<span class="w"> </span>upstream/main<span class="w"> </span>--head<span class="w"> </span>my-branch
-</pre></div>
-</div>
-<p>Only committed files are checked. Commit a change before running it.</p>
-</section>
-<section id="dependency-checks">
-<h2>Dependency Checks<a class="headerlink" href="#dependency-checks" title="Link to this heading">#</a></h2>
-<p>CI runs two dependency checks, and <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code> runs both:</p>
-<ul class="simple">
-<li><p><code class="docutils literal notranslate"><span class="pre">ci/scripts/check_circular_dependencies.sh</span></code> fails on dependency cycles
-between DataFusion crates, including one through a dev-dependency, which
-Cargo allows when building but which prevents publishing the crates. It runs
-<code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">publish</span> <span class="pre">--workspace</span> <span class="pre">--dry-run</span> <span class="pre">--no-verify</span></code>, which packages every crate
-that does not set <code class="docutils literal notranslate"><span class="pre">publish</span> <span class="pre">=</span> <span class="pre">false</span></code> without building or uploading anything,
-so it also fails on any other problem that would stop the crates from being
-published to crates.io. It reads the crates.io index and accepts uncommitted
-changes.</p></li>
-<li><p><code class="docutils literal notranslate"><span class="pre">ci/scripts/check_unused_dependencies.sh</span></code> runs <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">machete</span> <span class="pre">--with-metadata</span></code>
-from the repository root. The lint suite installs <a class="reference external" href="https://github.com/bnjbvr/cargo-machete">cargo-machete</a> with the
-version in <code class="docutils literal notranslate"><span class="pre">ci/scripts/utils/tool_versions.sh</span></code> if it is missing.</p></li>
-</ul>
-<p>To run either check on its own:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>./ci/scripts/check_circular_dependencies.sh
-./ci/scripts/check_unused_dependencies.sh
-</pre></div>
-</div>
-</section>
-<section id="examples-readme-check">
-<h2>Examples README Check<a class="headerlink" href="#examples-readme-check" title="Link to this heading">#</a></h2>
-<p><code class="docutils literal notranslate"><span class="pre">datafusion-examples/README.md</span></code> is generated from the documentation comments in
-<code class="docutils literal notranslate"><span class="pre">datafusion-examples/examples/&lt;group&gt;/main.rs</span></code>. <code class="docutils literal notranslate"><span class="pre">ci/scripts/check_examples_docs.sh</span></code>
-regenerates it and fails if the committed file differs. <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code>
-runs it and needs <code class="docutils literal notranslate"><span class="pre">cargo</span></code> and <code class="docutils literal notranslate"><span class="pre">npx</span></code>. To run the check on its own, or to update
-the README:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>./ci/scripts/check_examples_docs.sh
-./ci/scripts/check_examples_docs.sh<span class="w"> </span>--write
-</pre></div>
-</div>
-</section>
-<section id="config-and-function-docs-check">
-<h2>Config and Function Docs Check<a class="headerlink" href="#config-and-function-docs-check" title="Link to this heading">#</a></h2>
-<p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/docs/source/user-guide/configs.md"><code class="docutils literal notranslate"><span class="pre">configs.md</span></code></a>, <a class="reference external" href="https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/aggregate_functions.md"><code class="docutils literal notranslate"><span class="pre">aggregate_functions.md</span></code></a>, <a class="reference external" href="https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/scalar_functions.md"><code class="docutils literal notranslate"><span class="pre">scalar_functions.md</span></code></a>, and
-<a class="reference external" href="https://github.com/apache/datafusion/blob/main/docs/source/user-guide/sql/window_functions.md"><code class="docutils literal notranslate"><span class="pre">window_functions.md</span></code></a> are generated by <a class="reference external" href="https://github.com/apache/datafusion/blob/main/dev/update_config_docs.sh"><code class="docutils literal notranslate"><span class="pre">dev/update_config_docs.sh</span></code></a> and
-<a class="reference external" href="https://github.com/apache/datafusion/blob/main/dev/update_function_docs.sh"><code class="docutils literal notranslate"><span class="pre">dev/update_function_docs.sh</span></code></a>. To check that they are up to date, run the
-<a class="reference external" href="https://github.com/apache/datafusion/blob/main/ci/scripts/check_generated_docs.sh"><code class="docutils literal notranslate"><span class="pre">ci/scripts/check_generated_docs.sh</span></code></a> script, which also runs as part of
-<code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code>. Run it with <code class="docutils literal notranslate"><span class="pre">--write</span></code> to update the pages.</p>
-</section>
-<section id="documentation-html-build">
-<h2>Documentation HTML Build<a class="headerlink" href="#documentation-html-build" title="Link to this heading">#</a></h2>
-<p><a class="reference external" href="https://github.com/apache/datafusion/blob/main/ci/scripts/check_docs_html.sh"><code class="docutils literal notranslate"><span class="pre">ci/scripts/check_docs_html.sh</span></code></a> builds the documentation website, the same
-build the “Test doc build” job runs. Sphinx builds with <code class="docutils literal notranslate"><span class="pre">-W</span></code>, so one warning
-fails the check. <code class="docutils literal notranslate"><span class="pre">./dev/rust_lint.sh</span></code> runs it. Run the script with <code class="docutils literal notranslate"><span class="pre">--help</span></code>
-for the tools it needs and the files it writes.</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>./ci/scripts/check_docs_html.sh
-</pre></div>
-</div>
-</section>
-<section id="benchmarks">
-<h2>Benchmarks<a class="headerlink" href="#benchmarks" title="Link to this heading">#</a></h2>
-<section id="criterion-benchmarks">
-<h3>Criterion Benchmarks<a class="headerlink" href="#criterion-benchmarks" title="Link to this heading">#</a></h3>
-<p><a class="reference external" href="https://docs.rs/criterion/latest/criterion/index.html">Criterion</a> is a statistics-driven micro-benchmarking framework used by DataFusion for evaluating the performance of specific code-paths. In particular, the criterion benchmarks help to both guide optimisation efforts, and prevent performance regressions within DataFusion.</p>
-<p>Criterion integrates with Cargo’s built-in <a class="reference external" href="https://doc.rust-lang.org/cargo/commands/cargo-bench.html">benchmark support</a> and a given benchmark can be run with</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">BENCHMARK_NAME</span>
-</pre></div>
-</div>
-<p>A full list of benchmarks can be found <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/core/benches">here</a>.</p>
-<p><em><a class="reference external" href="https://github.com/bheisler/cargo-criterion">cargo-criterion</a> may also be used for more advanced reporting.</em></p>
-</section>
-<section id="microbenchmark-health-checks-local-only">
-<h3>Microbenchmark health checks (local-only)<a class="headerlink" href="#microbenchmark-health-checks-local-only" title="Link to this heading">#</a></h3>
-<p>Runs each microbenchmark case once to catch runtime panics, without measuring performance:</p>
-<div class="highlight-shell notranslate"><div class="highlight"><pre><span></span>cargo<span class="w"> </span>xtask<span class="w"> </span>ci<span class="w"> </span>step<span class="w"> </span><span class="nb">test</span><span class="w"> </span>microbenchmarks
-</pre></div>
-</div>
-<p>The suite took about 10 minutes in CI, so execution is local-only, including on
-release branches; no hosted workflow or required check is provided. Runtime failures
-may go unnoticed until a local run. When changing benchmark fixtures, setup, or APIs,
-run the affected benchmarks and include the commands and results in your PR.</p>
-</section>
-<section id="parquet-sql-benchmarks">
-<h3>Parquet SQL Benchmarks<a class="headerlink" href="#parquet-sql-benchmarks" title="Link to this heading">#</a></h3>
-<p>The parquet SQL benchmarks can be run with</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span> <span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">parquet_query_sql</span>
-</pre></div>
-</div>
-<p>These randomly generate a parquet file, and then benchmark queries sourced from <a class="reference download internal" download="" href="../_downloads/ef2c125b8dcc9e4b052e1280935df561/parquet_query_sql.sql"><span class="xref download myst">parquet_query_sql.sql</span></a> against it. This can therefore be a quick way to add coverage of particular query and/or data paths.</p>
-<p>If the environment variable <code class="docutils literal notranslate"><span class="pre">PARQUET_FILE</span></code> is set, the benchmark will run queries against this file instead of a randomly generated one. This can be useful for performing multiple runs, potentially with different code, against the same source data, or for testing against a custom dataset.</p>
-<p>The benchmark will automatically remove any generated parquet file on exit, however, if interrupted (e.g. by CTRL+C) it will not. This can be useful for analysing the particular file after the fact, or preserving it to use with <code class="docutils literal notranslate"><span class="pre">PARQUET_FILE</span></code> in subsequent runs.</p>
-</section>
-<section id="comparing-baselines">
-<h3>Comparing Baselines<a class="headerlink" href="#comparing-baselines" title="Link to this heading">#</a></h3>
-<p>By default, Criterion.rs will compare the measurements against the previous run (if any). Sometimes it’s useful to keep a set of measurements around for several runs. For example, you might want to make multiple changes to the code while comparing against the master branch. For this situation, Criterion.rs supports custom baselines.</p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span> <span class="n">git</span> <span class="n">checkout</span> <span class="n">main</span>
- <span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">sql_planner</span> <span class="o">--</span> <span class="o">--</span><span class="n">save</span><span class="o">-</span><span class="n">baseline</span> <span class="n">main</span>
- <span class="n">git</span> <span class="n">checkout</span> <span class="n">YOUR_BRANCH</span>
- <span class="n">cargo</span> <span class="n">bench</span> <span class="o">--</span><span class="n">bench</span> <span class="n">sql_planner</span> <span class="o">--</span>  <span class="o">--</span><span class="n">baseline</span> <span class="n">main</span>
-</pre></div>
-</div>
-<p>Note: For MacOS it may be required to run <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">bench</span></code> with <code class="docutils literal notranslate"><span class="pre">sudo</span></code></p>
-<div class="highlight-default notranslate"><div class="highlight"><pre><span></span><span class="n">sudo</span> <span class="n">cargo</span> <span class="n">bench</span> <span class="o">...</span>
-</pre></div>
-</div>
-<p>More information on <a class="reference external" href="https://bheisler.github.io/criterion.rs/book/user_guide/command_line_options.html#baselines">Baselines</a></p>
-</section>
-<section id="upstream-benchmark-suites">
-<h3>Upstream Benchmark Suites<a class="headerlink" href="#upstream-benchmark-suites" title="Link to this heading">#</a></h3>
-<p>Instructions and tooling for running upstream benchmark suites against DataFusion can be found in <a class="reference external" href="https://github.com/apache/datafusion/tree/main/benchmarks">benchmarks</a>.</p>
-<p>These are valuable for comparative evaluation against alternative Arrow implementations and query engines.</p>
 </section>
 </section>
 </section>
@@ -876,11 +658,11 @@ run the affected benchmarks and include the commands and results in your PR.</p>
       </div>
     </a>
     <a class="right-next"
-       href="api-health.html"
+       href="testing_infrastructure.html"
        title="next page">
       <div class="prev-next-info">
         <p class="prev-next-subtitle">next</p>
-        <p class="prev-next-title">API health policy</p>
+        <p class="prev-next-title">Testing Infrastructure</p>
       </div>
       <i class="fa-solid fa-angle-right"></i>
     </a>
@@ -917,28 +699,6 @@ run the affected benchmarks and include the commands and results in your PR.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#fuzz-testing">Fuzz testing</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#fuzzing-unit-tests">Fuzzing unit tests</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#sql-fuzz-testing">SQL fuzz testing</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#ci-workflow-tests">CI Workflow Tests</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#documentation-examples">Documentation Examples</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#api-documentation-examples">API Documentation Examples</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#user-guide-documentation">User Guide Documentation</a></li>
-</ul>
-</li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#documentation-link-checks">Documentation Link Checks</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#asf-status-check-validation">ASF Status Check Validation</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#security-audit">Security Audit</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#large-file-check">Large File Check</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#dependency-checks">Dependency Checks</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#examples-readme-check">Examples README Check</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#config-and-function-docs-check">Config and Function Docs Check</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#documentation-html-build">Documentation HTML Build</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#benchmarks">Benchmarks</a><ul class="nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#criterion-benchmarks">Criterion Benchmarks</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#microbenchmark-health-checks-local-only">Microbenchmark health checks (local-only)</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#parquet-sql-benchmarks">Parquet SQL Benchmarks</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#comparing-baselines">Comparing Baselines</a></li>
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#upstream-benchmark-suites">Upstream Benchmark Suites</a></li>
 </ul>
 </li>
 </ul>
