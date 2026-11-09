@@ -2723,7 +2723,8 @@ impl JoinKeyComparator {
             .map(|((l, r), opts)| {
                 // `make_comparator` uses IEEE 754 totalOrder for floats and
                 // treats `-0.0` / `+0.0` as distinct. Normalize float arrays
-                // to honor SQL equality;
+                // to honor SQL equality. Normalizing keeps null positions, so
+                // the null masks of `l` and `r` below stay valid.
                 let l_norm = if normalize_left {
                     float_semantics::normalize(Arc::clone(l))
                 } else {
