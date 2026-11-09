@@ -84,8 +84,8 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 // Nested Loop Join, resulting in better performance.
                 //
                 // Only convert when there are NO equijoin predicates, to be conservative.
-                // Note: Joins are initially constructed with `on: []` and default `NullEqualsNothing`.
-                // Explicitly guard against re-scanning if the join was already converted to `NullEqualsNull`.
+                // A `NullEqualsNull` join already moved its `IS NOT DISTINCT FROM`
+                // predicates into `on` in the split above, so nothing is left to convert.
                 if null_equality == NullEquality::NullEqualsNothing
                     && on.is_empty()
                     && equijoin_predicates.is_empty()
