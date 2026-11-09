@@ -577,16 +577,11 @@ pub fn aggregate_functional_dependencies_with_computed_inputs(
         // Remove extraneous columns (the GROUP BY expressions that the others
         // determine) from the key, so that the key still exists after a
         // projection removes them.
-        let source_indices = match get_required_group_by_exprs_indices(
+        let source_indices = group_by_key_indices(
             aggr_input_schema,
             group_by_input_indices,
-        ) {
-            Some(mut indices) => {
-                indices.sort_unstable();
-                indices
-            }
-            None => (0..count).collect(),
-        };
+            computed_input_indices,
+        );
         let nullable = source_indices
             .iter()
             .any(|idx| aggr_fields[*idx].is_nullable());
@@ -615,6 +610,58 @@ pub fn aggregate_functional_dependencies_with_computed_inputs(
         }
     }
     FunctionalDependencies::new(aggregate_func_dependencies)
+}
+
+/// Returns the GROUP BY expressions that the whole GROUP BY key needs. A column
+/// that the other columns determine is left out, and so is a deterministic
+/// computed expression whose fields the remaining columns determine.
+fn group_by_key_indices(
+    schema: &DFSchema,
+    group_by_input_indices: &[Option<usize>],
+    computed_input_indices: &[Option<Vec<usize>>],
+) -> Vec<usize> {
+    let all = || (0..group_by_input_indices.len()).collect();
+    let (column_positions, column_inputs): (Vec<usize>, Vec<Option<usize>>) =
+        group_by_input_indices
+            .iter()
+            .enumerate()
+            .filter(|(_, input_idx)| input_idx.is_some())
+            .map(|(idx, input_idx)| (idx, *input_idx))
+            .unzip();
+    let Some(required) = get_required_group_by_exprs_indices(schema, &column_inputs)
+    else {
+        return all();
+    };
+    let key_inputs = required
+        .iter()
+        .map(|idx| column_inputs[*idx])
+        .collect::<Vec<_>>();
+    let determined =
+        get_target_functional_dependencies(schema, &key_inputs).unwrap_or_default();
+    let mut key = required
+        .iter()
+        .map(|idx| column_positions[*idx])
+        .collect::<Vec<_>>();
+    for (idx, (input_idx, read)) in group_by_input_indices
+        .iter()
+        .zip(computed_input_indices)
+        .enumerate()
+    {
+        let is_determined = read.as_ref().is_some_and(|read| {
+            read.iter().all(|field| {
+                determined.contains(field) || key_inputs.contains(&Some(*field))
+            })
+        });
+        if input_idx.is_none() && !is_determined {
+            key.push(idx);
+        }
+    }
+    // A key with no columns is left as the whole GROUP BY list.
+    if key.is_empty() {
+        return all();
+    }
+    key.sort_unstable();
+    key
 }
 
 /// Returns target indices, for the determinant keys that are inside

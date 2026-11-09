@@ -817,7 +817,27 @@ GROUP BY i_item_sk, s_date ORDER BY i_item_sk, s_date;
 1 101 1
 2 100 1
 
-# 8.6 `upper(i_desc)` reads only `i_desc`, which `i_item_sk` determines, so
+# 8.6 `upper(i_desc)` reads `i_desc`, which `i_item_sk` determines, and
+# `s_date + 1` reads `s_date`: both are removed from the key of the inner
+# aggregate.
+query III
+SELECT i_item_sk, s_date, c
+FROM (SELECT i_item_sk, s_date, count(*) AS c FROM item JOIN sales ON i_item_sk = s_item_sk
+      GROUP BY i_item_sk, s_date, upper(i_desc), s_date + 1) q
+GROUP BY i_item_sk, s_date ORDER BY i_item_sk, s_date;
+----
+1 100 1
+1 101 1
+2 100 1
+
+# 8.7 A GROUP BY that reads no column keeps the whole GROUP BY list as its key.
+query I
+SELECT count(*) FROM orders
+JOIN (SELECT 1 AS k FROM sales WHERE false GROUP BY 'x') g ON o_item_sk = g.k;
+----
+0
+
+# 8.8 `upper(i_desc)` reads only `i_desc`, which `i_item_sk` determines, so
 # `i_item_sk` is a key of the inner aggregate and `c` can be selected.
 query II
 SELECT i_item_sk, c
@@ -829,7 +849,7 @@ GROUP BY i_item_sk ORDER BY i_item_sk;
 1 2
 2 1
 
-# 8.7 `s_date + 1` reads `s_date`, which `i_item_sk` does not determine.
+# 8.9 `s_date + 1` reads `s_date`, which `i_item_sk` does not determine.
 statement error
 SELECT i_item_sk, c
 FROM (SELECT i_item_sk, s_date + 1 AS d, count(*) AS c
@@ -840,7 +860,7 @@ GROUP BY i_item_sk;
 DataFusion error: Error during planning: Column in SELECT must be in GROUP BY or an aggregate function: While expanding wildcard, column "q.c" must appear in the GROUP BY clause or must be part of an aggregate function, currently only "q.i_item_sk" appears in the SELECT clause satisfies this requirement
 
 
-# 8.8 A volatile expression is never determined: the join stays an inner join.
+# 8.10 A volatile expression is never determined: the join stays an inner join.
 query TT
 EXPLAIN SELECT sum(o_amount) FROM orders
 JOIN (SELECT i_item_sk FROM item JOIN sales ON i_item_sk = s_item_sk
