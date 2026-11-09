@@ -16,7 +16,7 @@ use datafusion_common::Statistics;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{JoinSide, JoinType, internal_err};
+use datafusion_common::{JoinSide, JoinType, internal_err, plan_err};
 use datafusion_expr_common::sort_properties::SortProperties;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::expressions::Column;
@@ -367,6 +367,11 @@ pub type PipelineFixerSubrule =
 /// An `Option` that contains the `Result` of the transformation. If the transformation is not applicable,
 /// it returns `None`. If applicable, it returns `Some(Ok(...))` with the modified pipeline state,
 /// or `Some(Err(...))` if an error occurs during the transformation.
+///
+/// # Errors
+/// Returns a planning error if both inputs are unbounded and the join is
+/// null-aware. Unbounded inputs require a symmetric hash join, which does not
+/// support null-aware semantics.
 fn hash_join_convert_symmetric_subrule(
     input: Arc<dyn ExecutionPlan>,
     config_options: &ConfigOptions,
@@ -383,6 +388,12 @@ fn hash_join_convert_symmetric_subrule(
             hash_join.right.pipeline_behavior(),
             EmissionType::Incremental | EmissionType::Both
         );
+        if left_unbounded && right_unbounded && hash_join.null_aware {
+            return plan_err!(
+                "Cannot execute a null-aware join with two unbounded inputs: \
+                 SymmetricHashJoinExec does not support null-aware semantics."
+            );
+        }
         // Process only if both left and right sides are unbounded and incrementally emit.
         if left_unbounded && right_unbounded & left_incremental & right_incremental {
             // Determine the partition mode based on configuration.

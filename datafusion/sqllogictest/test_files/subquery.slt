@@ -4741,5 +4741,58 @@ NULL NULL NULL
 statement ok
 DROP TABLE p26572;
 
+# Regression for https://github.com/apache/datafusion/issues/27216: converting a
+# null-aware NOT IN join to a symmetric hash join loses its NULL semantics.
+query I
+COPY (VALUES (1, 'x'), (2, 'x'), (CAST(NULL AS INT), 'x'))
+TO 'test_files/scratch/subquery/not_in_left.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+3
+
+query I
+COPY (VALUES (2, 'y'), (CAST(NULL AS INT), 'y'))
+TO 'test_files/scratch/subquery/not_in_right.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+2
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE unbounded_not_in_left(a INT, b VARCHAR)
+STORED AS CSV LOCATION 'test_files/scratch/subquery/not_in_left.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE unbounded_not_in_right(a INT, b VARCHAR)
+STORED AS CSV LOCATION 'test_files/scratch/subquery/not_in_right.csv'
+OPTIONS ('format.has_header' 'true');
+
+# These null-aware joins cannot be executed as streaming symmetric hash joins.
+# Reject them during planning instead of returning rows with incorrect NULL handling.
+query error Cannot execute a null-aware join with two unbounded inputs: SymmetricHashJoinExec does not support null-aware semantics
+SELECT a FROM unbounded_not_in_left
+WHERE a NOT IN (SELECT a FROM unbounded_not_in_right);
+
+# NOT IN inside OR requires a null-aware LeftMark join.
+query error Cannot execute a null-aware join with two unbounded inputs: SymmetricHashJoinExec does not support null-aware semantics
+SELECT a FROM unbounded_not_in_left
+WHERE a = 1 OR a NOT IN (SELECT a FROM unbounded_not_in_right);
+
+# Nullable outer values still require null-aware semantics when the subquery excludes NULLs.
+query error Cannot execute a null-aware join with two unbounded inputs: SymmetricHashJoinExec does not support null-aware semantics
+SELECT a FROM unbounded_not_in_left
+WHERE a NOT IN (SELECT a FROM unbounded_not_in_right WHERE a IS NOT NULL);
+
+# IN in a projection also requires a null-aware LeftMark join to preserve UNKNOWN.
+query error Cannot execute a null-aware join with two unbounded inputs: SymmetricHashJoinExec does not support null-aware semantics
+SELECT a, a IN (SELECT a FROM unbounded_not_in_right) AS is_present
+FROM unbounded_not_in_left;
+
+statement ok
+DROP TABLE unbounded_not_in_left;
+
+statement ok
+DROP TABLE unbounded_not_in_right;
+
 statement ok
 RESET datafusion.execution.batch_size;
