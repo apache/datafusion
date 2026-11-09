@@ -9,6 +9,9 @@
 # queries exercise the whole chain — the requirement being proven through
 # declared orderings, through projection-alias equivalences, and through
 # filter-induced constants — and pin the results.
+#
+# A single primitive ORDER BY column takes a typed accumulator. The twins that
+# add a column constant within the group (`ORDER BY c, a`) take the generic one.
 
 statement ok
 CREATE EXTERNAL TABLE multiple_ordered_table (
@@ -26,59 +29,63 @@ OPTIONS ('format.has_header' 'true');
 
 # Direct match: requirement (a) ++ (c ASC) is satisfied by the declared
 # orderings, so the fast path runs.
-query III
-SELECT a, FIRST_VALUE(c ORDER BY c), LAST_VALUE(c ORDER BY c)
+query IIIII
+SELECT a, FIRST_VALUE(c ORDER BY c), LAST_VALUE(c ORDER BY c),
+  FIRST_VALUE(c ORDER BY c, a), LAST_VALUE(c ORDER BY c, a)
 FROM multiple_ordered_table GROUP BY a ORDER BY a;
 ----
-0 0 49
-1 50 99
+0 0 49 0 49
+1 50 99 50 99
 
 # The winner's non-key column rides along (argmax semantics).
-query III
-SELECT a, FIRST_VALUE(d ORDER BY c), LAST_VALUE(d ORDER BY c)
+query IIIII
+SELECT a, FIRST_VALUE(d ORDER BY c), LAST_VALUE(d ORDER BY c),
+  FIRST_VALUE(d ORDER BY c, a), LAST_VALUE(d ORDER BY c, a)
 FROM multiple_ordered_table GROUP BY a ORDER BY a;
 ----
-0 0 3
-1 0 3
+0 0 3 0 3
+1 0 3 0 3
 
 # Requirement proven through a projection-alias equivalence class: the input
 # is ordered by (a, b) / (c), the query groups by an alias of `a`, and the
 # aggregate orders by an alias of `c`.
-query II
-SELECT a2, LAST_VALUE(d2 ORDER BY c2)
+query III
+SELECT a2, LAST_VALUE(d2 ORDER BY c2), LAST_VALUE(d2 ORDER BY c2, a2)
 FROM (SELECT a AS a2, c AS c2, d AS d2 FROM multiple_ordered_table)
 GROUP BY a2 ORDER BY a2;
 ----
-0 3
-1 3
+0 3 3
+1 3 3
 
 # Requirement proven with the help of a filter-induced constant: `a` is
 # constant under `a = 1`, so the (b) prefix comes from the (a, b) ordering and
 # `c` stays ordered inside every b-segment.
-query III
-SELECT b, FIRST_VALUE(c ORDER BY c), LAST_VALUE(c ORDER BY c)
+query IIIII
+SELECT b, FIRST_VALUE(c ORDER BY c), LAST_VALUE(c ORDER BY c),
+  FIRST_VALUE(c ORDER BY c, b), LAST_VALUE(c ORDER BY c, b)
 FROM multiple_ordered_table WHERE a = 1 GROUP BY b ORDER BY b;
 ----
-2 50 74
-3 75 99
+2 50 74 50 74
+3 75 99 75 99
 
 # FILTER clause interacts with the fast path.
-query II
-SELECT a, LAST_VALUE(c ORDER BY c) FILTER (WHERE c % 2 = 0)
+query III
+SELECT a, LAST_VALUE(c ORDER BY c) FILTER (WHERE c % 2 = 0),
+  LAST_VALUE(c ORDER BY c, a) FILTER (WHERE c % 2 = 0)
 FROM multiple_ordered_table GROUP BY a ORDER BY a;
 ----
-0 48
-1 98
+0 48 48
+1 98 98
 
 # A DESC requirement over an ASC input takes the reverse branch: the rule
 # swaps FIRST_VALUE for LAST_VALUE before setting the flag, and the result is
 # unchanged.
-query II
-SELECT a, FIRST_VALUE(c ORDER BY c DESC)
+query III
+SELECT a, FIRST_VALUE(c ORDER BY c DESC), FIRST_VALUE(c ORDER BY c DESC, a)
 FROM multiple_ordered_table GROUP BY a ORDER BY a;
 ----
-0 49
-1 99
+0 49 49
+1 99 99
 
 statement ok
 DROP TABLE multiple_ordered_table;
@@ -104,26 +111,27 @@ LOCATION 'test_files/scratch/first_last_ordered/rollup.csv'
 WITH ORDER (a ASC, b ASC, c ASC)
 OPTIONS ('format.has_header' 'false');
 
-query IIII
-SELECT a, b, FIRST_VALUE(d ORDER BY c), LAST_VALUE(d ORDER BY c)
+query IIIIII
+SELECT a, b, FIRST_VALUE(d ORDER BY c), LAST_VALUE(d ORDER BY c),
+  FIRST_VALUE(d ORDER BY c, a), LAST_VALUE(d ORDER BY c, a)
 FROM rollup_source GROUP BY ROLLUP(a, b) ORDER BY a NULLS FIRST, b NULLS FIRST;
 ----
-NULL NULL 200 101
-1 NULL 200 101
-1 1 100 101
-1 2 200 201
+NULL NULL 200 101 200 101
+1 NULL 200 101 200 101
+1 1 100 101 100 101
+1 2 200 201 200 201
 
 # An aggregate ORDER BY that is satisfied without any group-by prefix stays on
 # the fast path even under ROLLUP: `a` leads the input ordering, so it is
 # ordered inside every group of every grouping set.
-query III
-SELECT a, b, LAST_VALUE(d ORDER BY a)
+query IIII
+SELECT a, b, LAST_VALUE(d ORDER BY a), LAST_VALUE(d ORDER BY a, b)
 FROM rollup_source GROUP BY ROLLUP(a, b) ORDER BY a NULLS FIRST, b NULLS FIRST;
 ----
-NULL NULL 201
-1 NULL 201
-1 1 101
-1 2 201
+NULL NULL 201 201
+1 NULL 201 201
+1 1 101 101
+1 2 201 201
 
 # Boolean is outside groups_accumulator_supported, so these run through
 # GroupsAccumulatorAdapter and the single-group accumulators, which consumed
@@ -159,12 +167,13 @@ LOCATION 'test_files/scratch/first_last_ordered/ties.csv'
 WITH ORDER (g ASC, ts ASC)
 OPTIONS ('format.has_header' 'false');
 
-query III
-SELECT g, FIRST_VALUE(px ORDER BY ts), LAST_VALUE(px ORDER BY ts)
+query IIIII
+SELECT g, FIRST_VALUE(px ORDER BY ts), LAST_VALUE(px ORDER BY ts),
+  FIRST_VALUE(px ORDER BY ts, g), LAST_VALUE(px ORDER BY ts, g)
 FROM tie_source GROUP BY g ORDER BY g;
 ----
-1 10 11
-2 20 21
+1 10 11 10 11
+2 20 21 20 21
 
 statement ok
 DROP TABLE tie_source;
