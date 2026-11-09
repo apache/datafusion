@@ -268,13 +268,10 @@ mod tests {
 
     #[test]
     fn normalize_floats_rewrites_negative_zero() {
-        let array: ArrayRef =
-            Arc::new(Float64Array::from(vec![Some(-0.0), None, Some(1.0)]));
+        let floats = &[Some(5.0), Some(0.0), None, Some(2.0)];
+        let (array, _) = float64_array_fixture(floats);
         let result = normalize(Arc::clone(&array));
-        let result = result.as_primitive::<Float64Type>();
-        assert_eq!(result.value(0).to_bits(), 0.0_f64.to_bits());
-        assert!(result.is_null(1));
-        assert_eq!(result.value(2), 1.0);
+        assert_float64_values(&result, floats);
 
         let array: ArrayRef = Arc::new(Float32Array::from(vec![-0.0_f32]));
         let result = normalize(Arc::clone(&array));
@@ -302,26 +299,29 @@ mod tests {
 
     #[test]
     fn normalize_floats_rewrites_in_place_when_unique() {
-        let array: ArrayRef = Arc::new(Float64Array::from(vec![-0.0, 1.0]));
-        let values_ptr = array.as_primitive::<Float64Type>().values().as_ptr();
-        let result = normalize(array);
-        let result = result.as_primitive::<Float64Type>();
-        assert_eq!(result.values().as_ptr(), values_ptr);
-        assert_eq!(result.value(0).to_bits(), 0.0_f64.to_bits());
+        let floats = &[Some(5.0), Some(-0.0), None, Some(2.0)];
+        let (array, values_ptr) = float64_array_fixture(floats);
+        let (result, result_values_ptr) = normalize_fixture(array);
+        assert_eq!(result_values_ptr, values_ptr);
+        assert_float64_values(&result, floats);
 
         // A shared buffer is copied and the original is left as it is
-        let array: ArrayRef = Arc::new(Float64Array::from(vec![-0.0, 1.0]));
-        let result = normalize(Arc::clone(&array));
-        let result = result.as_primitive::<Float64Type>();
-        assert_ne!(
-            result.values().as_ptr(),
-            array.as_primitive::<Float64Type>().values().as_ptr()
-        );
-        assert_eq!(result.value(0).to_bits(), 0.0_f64.to_bits());
-        assert_eq!(
-            array.as_primitive::<Float64Type>().value(0).to_bits(),
-            (-0.0_f64).to_bits()
-        );
+        let (array, values_ptr) = float64_array_fixture(floats);
+        let (result, result_values_ptr) = normalize_fixture(Arc::clone(&array));
+        assert_ne!(result_values_ptr, values_ptr);
+        assert_float64_values(&result, floats);
+        assert_float64_values(&array, floats);
+    }
+
+    #[test]
+    fn normalize_floats_copies_shared_slice() {
+        let floats = &[Some(5.0), Some(-0.0), None, Some(2.0)];
+        let (parent, values_ptr) = float64_array_fixture(floats);
+        let slice = parent.slice(1, 3);
+        let (result, result_values_ptr) = normalize_fixture(slice);
+        assert_ne!(result_values_ptr, values_ptr.wrapping_add(1));
+        assert_float64_values(&result, &floats[1..4]);
+        assert_float64_values(&parent, floats);
     }
 
     #[test]
@@ -443,5 +443,38 @@ mod tests {
         assert_eq!(child.value(0).to_bits(), 0.0_f64.to_bits());
         assert_eq!(child.value(1).to_bits(), nan.to_bits());
         assert!(child.is_null(2));
+    }
+
+    /// Creates a float64 array and returns it with a pointer to its values
+    fn float64_array_fixture(input: &[Option<f64>]) -> (ArrayRef, *const f64) {
+        let array: ArrayRef = Arc::new(Float64Array::from(input.to_vec()));
+        let values_ptr = array.as_primitive::<Float64Type>().values().as_ptr();
+        (array, values_ptr)
+    }
+
+    /// Calls `normalize` and returns the normalized array and a pointer to its values
+    fn normalize_fixture(array: ArrayRef) -> (ArrayRef, *const f64) {
+        let result = normalize(array);
+        let values_ptr = result.as_primitive::<Float64Type>().values().as_ptr();
+        (result, values_ptr)
+    }
+
+    /// Asserts that the values in a float64 array match the expected values
+    fn assert_float64_values(array: &ArrayRef, expected: &[Option<f64>]) {
+        let array = array.as_primitive::<Float64Type>();
+        // Note don't use the eq on FloatArray to ensure we are comparing using
+        // bitwise equality (not normalized equality).
+        assert_eq!(array.len(), expected.len());
+        assert_eq!(
+            array.null_count(),
+            expected.iter().filter(|value| value.is_none()).count()
+        );
+        for (index, (actual, expected)) in array.iter().zip(expected).enumerate() {
+            assert_eq!(
+                actual.map(f64::to_bits),
+                expected.map(f64::to_bits),
+                "value at index {index}"
+            );
+        }
     }
 }
