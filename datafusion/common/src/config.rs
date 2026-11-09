@@ -2253,6 +2253,26 @@ config_namespace! {
         ///
         /// Values are case-insensitive.
         pub map_key_dedup_policy: MapKeyDedupPolicy, default = MapKeyDedupPolicy::Exception
+
+        /// If true, the Spark-compatible `encode` function accepts any charset name
+        /// it knows, including aliases such as `UTF8`, `LATIN1` and `UTF-32BE`, as
+        /// Spark 3.x did. If false (default), `encode` accepts only `us-ascii`,
+        /// `iso-8859-1`, `utf-8`, `utf-16be`, `utf-16le`, `utf-16` and `utf-32`
+        /// (case-insensitive) and raises `[INVALID_PARAMETER_VALUE.CHARSET]` for any
+        /// other name, as Spark 4.0 and later do.
+        ///
+        /// Mirrors Spark's
+        /// [`spark.sql.legacy.javaCharsets`](https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala).
+        pub legacy_java_charsets: bool, default = false
+
+        /// If true, the Spark-compatible `encode` function replaces a character that
+        /// the target charset cannot represent with `?`, as Spark 3.x did. If false
+        /// (default), `encode` raises `[MALFORMED_CHARACTER_CODING]`, as Spark 4.0 and
+        /// later do.
+        ///
+        /// Mirrors Spark's
+        /// [`spark.sql.legacy.codingErrorAction`](https://github.com/apache/spark/blob/v4.2.0/sql/catalyst/src/main/scala/org/apache/spark/sql/internal/SQLConf.scala).
+        pub legacy_coding_error_action: bool, default = false
     }
 }
 
