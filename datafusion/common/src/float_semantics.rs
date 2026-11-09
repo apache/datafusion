@@ -120,12 +120,12 @@ pub fn hash_input<T: FloatSemantics>(v: T) -> T {
 /// bit patterns, so that `+0.0 = -0.0` holds.
 ///
 /// Optimized for the common case of nothing to normalize, by searching for such
-/// values in a vectorized way.
+/// values in a vectorized way. If noting needs normalization, the original
+/// array is returned unchanged.
 ///
-/// If the values do require normalization, they are rewritten in place when
-/// `array` holds the only reference to its values and validity buffers and
-/// does not start at an offset into them; otherwise they are copied. Passing
-/// `Arc::clone(&array)` therefore always copies.
+/// If the values do require normalization, attempts to rewrite in place when
+/// possible (when the underlying buffers are not shared). Thus, passing
+/// `Arc::clone(&array)` therefore always copies if normalization is required.
 pub fn normalize(array: ArrayRef) -> ArrayRef {
     match array.data_type() {
         DataType::Float16 => normalize_primitive::<Float16Type>(array),
