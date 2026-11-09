@@ -38,17 +38,13 @@ SELECT encode('Spark SQL'::string, 'utf-16'::string);
 ----
 feff0053007000610072006b002000530051004c
 
-# UTF-32BE encoding
-query ?
+# UTF-32BE encoding (alias rejected in Spark 4 strict mode)
+statement error INVALID_PARAMETER_VALUE\.CHARSET
 SELECT encode('A'::string, 'utf-32be'::string);
-----
-00000041
 
-# UTF-32LE encoding
-query ?
+# UTF-32LE encoding (alias rejected in Spark 4 strict mode)
+statement error INVALID_PARAMETER_VALUE\.CHARSET
 SELECT encode('AB'::string, 'utf-32le'::string);
-----
-4100000042000000
 
 # UTF-32 (Spark 3.5 / 4.1: no BOM, identical to UTF-32BE)
 query ?
@@ -62,17 +58,13 @@ SELECT encode('hello'::string, 'Utf-8'::string);
 ----
 68656c6c6f
 
-# US-ASCII: unmappable characters are silently replaced with '?' (Spark 3.5 behavior)
-query ?
+# US-ASCII: unmappable characters fail in Spark 4 strict mode
+statement error MALFORMED_CHARACTER_CODING
 SELECT encode('é'::string, 'us-ascii'::string);
-----
-3f
 
-# ISO-8859-1: code points above U+00FF are replaced with '?' (Ā is U+0100)
-query ?
+# ISO-8859-1: code points above U+00FF fail in Spark 4 strict mode (Ā is U+0100)
+statement error MALFORMED_CHARACTER_CODING
 SELECT encode('Ā'::string, 'iso-8859-1'::string);
-----
-3f
 
 # Multi-byte input (emoji 😀 = U+1F600) across charsets
 query ?
@@ -95,15 +87,11 @@ SELECT encode('😀'::string, 'utf-16'::string);
 ----
 feffd83dde00
 
-query ?
+statement error INVALID_PARAMETER_VALUE\.CHARSET
 SELECT encode('😀'::string, 'utf-32be'::string);
-----
-0001f600
 
-query ?
+statement error INVALID_PARAMETER_VALUE\.CHARSET
 SELECT encode('😀'::string, 'utf-32le'::string);
-----
-00f60100
 
 query ?
 SELECT encode('😀'::string, 'utf-32'::string);
@@ -174,10 +162,76 @@ SELECT encode(a, b) FROM VALUES (X'0a', 'US-ASCII'), (X'deadbeef', 'UTF-16be') A
 0a
 07adfffdfffd
 
-# Error: unsupported charset
-statement error Unsupported charset for encode
+# Error: unsupported charset (strict Spark 4 rejects unknown charsets with INVALID_PARAMETER_VALUE.CHARSET)
+statement error INVALID_PARAMETER_VALUE\.CHARSET
 SELECT encode('hello'::string, 'EBCDIC'::string);
 
 # Error: no arguments
 statement error encode function requires 2 arguments
 SELECT encode();
+
+# -----------------------------------------------------------------------------
+# Legacy compatibility: legacy_java_charsets and legacy_coding_error_action
+# -----------------------------------------------------------------------------
+
+statement ok
+SET datafusion.spark.legacy_java_charsets = true;
+
+statement ok
+SET datafusion.spark.legacy_coding_error_action = true;
+
+# Legacy mode: UTF-32BE alias accepted
+query ?
+SELECT encode('A'::string, 'utf-32be'::string);
+----
+00000041
+
+# Legacy mode: UTF-32LE alias accepted
+query ?
+SELECT encode('AB'::string, 'utf-32le'::string);
+----
+4100000042000000
+
+# Legacy mode: ASCII and UTF8 aliases accepted
+query ?
+SELECT encode('Hello'::string, 'ascii'::string);
+----
+48656c6c6f
+
+query ?
+SELECT encode('Spark'::string, 'utf8'::string);
+----
+537061726b
+
+# Legacy mode: unmappable characters replaced with '?' (0x3F)
+query ?
+SELECT encode('é'::string, 'us-ascii'::string);
+----
+3f
+
+query ?
+SELECT encode('Ā'::string, 'iso-8859-1'::string);
+----
+3f
+
+# Legacy mode: emoji with utf-32be and utf-32le
+query ?
+SELECT encode('😀'::string, 'utf-32be'::string);
+----
+0001f600
+
+query ?
+SELECT encode('😀'::string, 'utf-32le'::string);
+----
+00f60100
+
+# Legacy mode: truly unsupported charset error message
+statement error Unsupported charset for encode: 'EBCDIC'
+SELECT encode('hello'::string, 'EBCDIC'::string);
+
+# Reset configuration to default Spark 4 strict settings
+statement ok
+SET datafusion.spark.legacy_java_charsets = false;
+
+statement ok
+SET datafusion.spark.legacy_coding_error_action = false;

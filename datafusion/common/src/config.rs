@@ -2243,6 +2243,19 @@ config_namespace! {
     /// under `datafusion/spark`). Keys here mirror their `spark.sql.*`
     /// equivalents in Apache Spark.
     pub struct SparkOptions {
+        /// When true, restores legacy (pre-Spark 4.0) unmappable character handling in `encode`,
+        /// replacing unmappable characters with `?` rather than raising `[MALFORMED_CHARACTER_CODING]`.
+        ///
+        /// Mirrors Spark's `spark.sql.legacy.codingErrorAction`.
+        pub legacy_coding_error_action: bool, default = false
+
+        /// When true, restores legacy (pre-Spark 4.0) charset handling in `encode`,
+        /// accepting non-canonical Java/alias charset names rather than only the seven
+        /// canonical Spark charsets (US-ASCII, ISO-8859-1, UTF-8, UTF-16, UTF-16BE, UTF-16LE, UTF-32).
+        ///
+        /// Mirrors Spark's `spark.sql.legacy.javaCharsets`.
+        pub legacy_java_charsets: bool, default = false
+
         /// Policy for handling duplicate keys in Spark-compatible map-construction
         /// functions (`map_from_arrays`, `map_from_entries`, `str_to_map`).
         ///
