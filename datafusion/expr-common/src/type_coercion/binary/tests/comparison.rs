@@ -1232,3 +1232,38 @@ fn test_comparison_coercion_with_session_timezone() {
         Some(DataType::Utf8)
     );
 }
+
+/// How many integer digits an integer needs is known exactly, so the common
+/// type of an integer and a decimal has to keep room for them. Capping the
+/// precision at the variant's maximum kept the scale instead, leaving a type
+/// the integer could not be cast into.
+#[test]
+fn test_integer_wide_decimal_comparison_coercion() -> Result<()> {
+    // `Int32` becomes `Decimal128(10, 0)`, so the required precision is
+    // max(38, 0) + max(38 - 38, 10 - 0) = 48, past `Decimal128`'s 38.
+    assert_eq!(
+        comparison_coercion(&DataType::Int32, &DataType::Decimal128(38, 38)),
+        Some(DataType::Decimal256(48, 38))
+    );
+
+    // max(30, 0) + max(38 - 30, 10 - 0) = 40
+    assert_eq!(
+        comparison_coercion(&DataType::Int32, &DataType::Decimal128(38, 30)),
+        Some(DataType::Decimal256(40, 30))
+    );
+
+    // max(3, 0) + max(20 - 3, 10 - 0) = 20 fits, so the variant does not change
+    assert_eq!(
+        comparison_coercion(&DataType::Int32, &DataType::Decimal128(20, 3)),
+        Some(DataType::Decimal128(20, 3))
+    );
+
+    // A float's scale is an approximation of its own, so it keeps the capped
+    // type rather than widening every comparison against a decimal column.
+    assert_eq!(
+        comparison_coercion(&DataType::Float64, &DataType::Decimal128(38, 38)),
+        Some(DataType::Decimal128(38, 38))
+    );
+
+    Ok(())
+}

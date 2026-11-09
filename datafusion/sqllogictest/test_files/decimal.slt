@@ -1390,3 +1390,38 @@ SELECT a < b FROM decimal256_wide;
 
 statement ok
 DROP TABLE decimal256_wide;
+
+# Regression for https://github.com/apache/datafusion/issues/27095: the common
+# type of an integer and a wide decimal kept the decimal's scale while capping
+# the precision, leaving the integer's digits no room, so its cast failed.
+
+statement ok
+CREATE TABLE int_vs_wide_decimal(a INT) AS VALUES (-1), (0), (5);
+
+query I
+SELECT a FROM int_vs_wide_decimal WHERE a != CAST(0.9 AS DECIMAL(38,38)) ORDER BY a;
+----
+-1
+0
+5
+
+statement ok
+CREATE TABLE wide_decimal_col(a INT, b DECIMAL(38,30)) AS VALUES (1, 0.5), (123456789, 0.5);
+
+query I
+SELECT a FROM wide_decimal_col WHERE a > CAST(0.5 AS DECIMAL(38,30)) ORDER BY a;
+----
+1
+123456789
+
+query I
+SELECT a FROM wide_decimal_col WHERE a > b ORDER BY a;
+----
+1
+123456789
+
+statement ok
+DROP TABLE int_vs_wide_decimal;
+
+statement ok
+DROP TABLE wide_decimal_col;

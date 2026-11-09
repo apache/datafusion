@@ -1267,22 +1267,61 @@ fn get_common_decimal_type(
     other_type: &DataType,
 ) -> Option<DataType> {
     use arrow::datatypes::DataType::*;
-    match decimal_type {
-        Decimal32(_, _) => {
-            let other_decimal_type = coerce_numeric_type_to_decimal32(other_type)?;
-            get_wider_decimal_type(decimal_type, &other_decimal_type)
+    let other_decimal_type = match decimal_type {
+        Decimal32(_, _) => coerce_numeric_type_to_decimal32(other_type)?,
+        Decimal64(_, _) => coerce_numeric_type_to_decimal64(other_type)?,
+        Decimal128(_, _) => coerce_numeric_type_to_decimal128(other_type)?,
+        Decimal256(_, _) => coerce_numeric_type_to_decimal256(other_type)?,
+        _ => return None,
+    };
+
+    // How many integer digits an integer needs is known exactly, so a common
+    // type that caps the precision and keeps the scale can be one that no
+    // value of it casts into. A wider variant holds them. The scale a float
+    // coerces to is an approximation already, so those keep the capped type.
+    if other_type.is_integer()
+        && let Some(exact) = exact_decimal_type(decimal_type, &other_decimal_type)
+    {
+        return Some(exact);
+    }
+
+    get_wider_decimal_type(decimal_type, &other_decimal_type)
+}
+
+/// Like [`get_wider_decimal_type`], but in the narrowest variant that holds the
+/// required precision rather than capping it, and `None` if none of them does.
+fn exact_decimal_type(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
+    use arrow::datatypes::DataType::*;
+
+    let (p1, s1, p2, s2) = match (lhs_type, rhs_type) {
+        (Decimal32(p1, s1), Decimal32(p2, s2))
+        | (Decimal64(p1, s1), Decimal64(p2, s2))
+        | (Decimal128(p1, s1), Decimal128(p2, s2))
+        | (Decimal256(p1, s1), Decimal256(p2, s2)) => (*p1, *s1, *p2, *s2),
+        _ => return None,
+    };
+    let precision = required_decimal_precision(p1, s1, p2, s2);
+    let scale = s1.max(s2);
+    let holds = |max_precision: u8, max_scale: i8| {
+        precision <= max_precision && scale <= max_scale
+    };
+
+    match lhs_type {
+        Decimal32(_, _) if holds(DECIMAL32_MAX_PRECISION, DECIMAL32_MAX_SCALE) => {
+            Some(Decimal32(precision, scale))
         }
-        Decimal64(_, _) => {
-            let other_decimal_type = coerce_numeric_type_to_decimal64(other_type)?;
-            get_wider_decimal_type(decimal_type, &other_decimal_type)
+        Decimal32(_, _) | Decimal64(_, _)
+            if holds(DECIMAL64_MAX_PRECISION, DECIMAL64_MAX_SCALE) =>
+        {
+            Some(Decimal64(precision, scale))
         }
-        Decimal128(_, _) => {
-            let other_decimal_type = coerce_numeric_type_to_decimal128(other_type)?;
-            get_wider_decimal_type(decimal_type, &other_decimal_type)
+        Decimal32(_, _) | Decimal64(_, _) | Decimal128(_, _)
+            if holds(DECIMAL128_MAX_PRECISION, DECIMAL128_MAX_SCALE) =>
+        {
+            Some(Decimal128(precision, scale))
         }
-        Decimal256(_, _) => {
-            let other_decimal_type = coerce_numeric_type_to_decimal256(other_type)?;
-            get_wider_decimal_type(decimal_type, &other_decimal_type)
+        _ if holds(DECIMAL256_MAX_PRECISION, DECIMAL256_MAX_SCALE) => {
+            Some(Decimal256(precision, scale))
         }
         _ => None,
     }
