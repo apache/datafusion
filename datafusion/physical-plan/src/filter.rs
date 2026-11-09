@@ -1150,6 +1150,7 @@ fn unique_match_limit(
 ///
 /// The column is checked before the values are counted, so IN lists on columns that
 /// may hold a value more than once are never scanned.
+#[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
 fn restricted_column(
     expr: &Arc<dyn PhysicalExpr>,
     holds_once_fn: impl Fn(usize) -> bool,
