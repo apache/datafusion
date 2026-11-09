@@ -857,8 +857,8 @@ impl SharedBuildAccumulator {
             .update(self.preserve_probe_nulls(filter_expr, keys_have_null)?)
     }
 
-    /// `members` holds each non-empty partition's id, strategy (an IN list or a
-    /// hash table) and bounds, out of `num_partitions` partitions.
+    /// `members` holds each non-empty partition's id, strategy (an IN list, a
+    /// hash table or an array map) and bounds, out of `num_partitions` partitions.
     fn merged_membership_filter(
         &self,
         members: &[(usize, PushdownStrategy, PartitionBounds)],
@@ -965,8 +965,7 @@ impl SharedBuildAccumulator {
 
     /// Container pruning reads one bitmap, so merge the partitions' key ranges:
     /// a hash table's bitmap, an IN list's keys, or else a partition's whole
-    /// bounds. `None` when no partition narrows its bounds, as the bounds
-    /// predicate already prunes that much.
+    /// bounds. `None` when nothing can be excluded.
     fn merged_pruning_bitmap(
         &self,
         members: &[(usize, PushdownStrategy, PartitionBounds)],
@@ -991,12 +990,6 @@ impl SharedBuildAccumulator {
                     }),
             })
             .collect::<Option<Vec<_>>>()?;
-        if parts
-            .iter()
-            .all(|part| matches!(part, KeyRangePart::Range { .. }))
-        {
-            return None;
-        }
         KeyRangeBitmap::union(&merged.min, &merged.max, &parts).map(Arc::new)
     }
 
@@ -1486,6 +1479,104 @@ mod tests {
             .into_array(keys.len())
             .unwrap();
         assert_eq!(matched.as_boolean(), &BooleanArray::from(expected.to_vec()));
+    }
+
+    /// An array map holding `keys`, as a dense build side gets.
+    fn array_map_of(keys: &[i32]) -> PushdownStrategy {
+        use crate::joins::array_map::ArrayMap;
+
+        let bound = |key: Option<&i32>| {
+            ArrayMap::key_to_u64(&ScalarValue::Int32(key.copied())).unwrap()
+        };
+        let min = bound(keys.iter().min());
+        let max = bound(keys.iter().max());
+        let keys: ArrayRef = Arc::new(Int32Array::from(keys.to_vec()));
+        let map = ArrayMap::try_new(&keys, min, max).unwrap();
+        let map = Arc::new(Map::ArrayMap(map));
+        PushdownStrategy::Map(Arc::new(ReservedMap::unreserved(map)), None)
+    }
+
+    /// Array map partitions merge into one lookup with hash table partitions.
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn partitioned_array_map_and_hash_map_partitions_merge() {
+        let acc = make_partitioned_expr_accumulator_for_test(4);
+        let build: Vec<i32> = (0..40).step_by(2).collect();
+
+        acc.build_filter(FinalizeInput::Partitioned(routed_partitions(
+            &acc,
+            4,
+            &build,
+            |partition, keys| {
+                if partition % 2 == 0 {
+                    array_map_of(keys)
+                } else {
+                    hash_map_of(keys)
+                }
+            },
+        )))
+        .unwrap();
+
+        assert!(
+            current_expr(&acc).downcast_ref::<CaseExpr>().is_none(),
+            "expected a merged lookup, got: {}",
+            current_expr(&acc)
+        );
+        let probe: Vec<i32> = (0..40).collect();
+        let expected: Vec<bool> = probe.iter().map(|key| key % 2 == 0).collect();
+        assert_matches(&acc, &probe, &expected);
+    }
+
+    /// Array map partitions merge under Range routing too.
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn partitioned_range_array_map_partitions_merge() -> Result<()> {
+        let mut acc = make_partitioned_expr_accumulator_for_test(4);
+        acc.probe_range_partitioning = Some(RangePartitioning::try_new(
+            [PhysicalSortExpr::new(
+                Arc::clone(&acc.on_right[0]),
+                Default::default(),
+            )]
+            .into(),
+            vec![
+                SplitPoint::new(vec![ScalarValue::Int32(Some(10))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(20))]),
+                SplitPoint::new(vec![ScalarValue::Int32(Some(30))]),
+            ],
+        )?);
+
+        acc.build_filter(FinalizeInput::Partitioned(vec![
+            reported(array_map_of(&[7, 8, 9]), bounds(7, 9)),
+            reported(PushdownStrategy::Empty, no_bounds()),
+            reported(array_map_of(&[27, 28, 29]), bounds(27, 29)),
+            reported(array_map_of(&[37, 38, 39]), bounds(37, 39)),
+        ]))?;
+
+        assert!(current_expr(&acc).downcast_ref::<CaseExpr>().is_none());
+        let probe: Vec<i32> = (0..50).collect();
+        let expected: Vec<bool> = probe
+            .iter()
+            .map(|key| matches!(key, 7..=9 | 27..=29 | 37..=39))
+            .collect();
+        assert_matches(&acc, &probe, &expected);
+        Ok(())
+    }
+
+    /// Partitions without a bitmap still leave the gaps between them prunable.
+    #[test]
+    fn disjoint_array_map_partitions_keep_gap_pruning() {
+        let acc = make_partitioned_expr_accumulator_for_test(2);
+        let members = [
+            (0, array_map_of(&[7, 8, 9]), bounds(7, 9)),
+            (1, array_map_of(&[37, 38, 39]), bounds(37, 39)),
+        ];
+
+        let bitmap = acc
+            .merged_pruning_bitmap(&members, Some(&bounds(7, 39)))
+            .expect("the gap between the partitions can be pruned");
+
+        assert!(bitmap.may_contain_range(7, 9));
+        assert!(!bitmap.may_contain_range(10, 36));
     }
 
     #[test]

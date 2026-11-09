@@ -8,7 +8,7 @@ use std::{fmt::Display, hash::Hash, sync::Arc};
 
 use arrow::{
     array::{ArrayRef, BooleanArray, BooleanBufferBuilder, UInt32Array, UInt64Array},
-    compute::take,
+    compute::take_arrays,
     datatypes::{DataType, Schema},
     record_batch::RecordBatch,
 };
@@ -281,10 +281,11 @@ pub struct HashTableLookupExpr {
 enum Lookup {
     /// One map holding every build key, probed directly with no routing.
     Single(Arc<ReservedMap>),
-    /// One hash table per build partition of a `Partitioned` join, `None` where
-    /// the partition is empty. A key is only ever built into the partition its
-    /// key routes to, so each probe row is looked up in that partition's table
-    /// alone: no `CASE` over per-partition filters, and no merged table.
+    /// One map (a hash table or an array map) per build partition of a
+    /// `Partitioned` join, `None` where the partition is empty. A key is only
+    /// ever built into the partition its key routes to, so each probe row is
+    /// looked up in that partition's map alone: no `CASE` over per-partition
+    /// filters, and no merged map.
     Routed {
         router: PartitionRouter,
         maps: Arc<[Option<Arc<ReservedMap>>]>,
@@ -418,7 +419,7 @@ impl HashTableLookupExpr {
         self.pruning_bitmap.as_ref()
     }
 
-    /// Membership of each row of `keys` in the hash table of its routed partition.
+    /// Membership of each row of `keys` in the map of its routed partition.
     fn evaluate_routed(
         &self,
         keys: &[ArrayRef],
@@ -465,11 +466,7 @@ impl HashTableLookupExpr {
                     // the run's own key values.
                     Map::ArrayMap(map) => {
                         let indices = UInt32Array::from(rows[run.clone()].to_vec());
-                        let run_keys = keys
-                            .iter()
-                            .map(|key| take(key.as_ref(), &indices, None))
-                            .collect::<std::result::Result<Vec<_>, _>>()?;
-                        map.contain_keys(&run_keys)?
+                        map.contain_keys(&take_arrays(keys, &indices, None)?)?
                     }
                 };
                 for hit in hits.values().set_indices() {
@@ -1155,14 +1152,13 @@ mod tests {
 
     /// An array map of `keys`, as a dense build side gets.
     fn array_map(keys: &ArrayRef) -> Result<Arc<Map>> {
-        let keys = keys.as_primitive::<arrow::datatypes::Int32Type>();
+        let values = keys.as_primitive::<arrow::datatypes::Int32Type>();
         let key = |value: Option<i32>| {
             ArrayMap::key_to_u64(&ScalarValue::Int32(value)).expect("Int32 key")
         };
-        let min = key(arrow::compute::min(keys));
-        let max = key(arrow::compute::max(keys));
-        let keys: ArrayRef = Arc::new(keys.clone());
-        Ok(Arc::new(Map::ArrayMap(ArrayMap::try_new(&keys, min, max)?)))
+        let min = key(arrow::compute::min(values));
+        let max = key(arrow::compute::max(values));
+        Ok(Arc::new(Map::ArrayMap(ArrayMap::try_new(keys, min, max)?)))
     }
 
     /// One randomly generated scenario, see [`routed_lookup_fuzz`].
@@ -1206,8 +1202,12 @@ mod tests {
         .partition(
             RecordBatch::try_new(schema, vec![Arc::clone(&build)])?,
             |partition, batch| {
-                // A dense partition builds an array map, others a hash table.
-                maps[partition] = Some(if rng.random_bool(0.5) {
+                // Half the partitions build an array map, as dense keys would. Under
+                // forced collisions a hash table matches every key, so an array
+                // map would disagree with the single-table reference below.
+                let dense =
+                    cfg!(not(feature = "force_hash_collisions")) && rng.random_bool(0.5);
+                maps[partition] = Some(if dense {
                     array_map(batch.column(0))?
                 } else {
                     hash_table(batch.column(0), &random_state)?
