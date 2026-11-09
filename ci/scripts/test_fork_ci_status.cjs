@@ -190,6 +190,21 @@ test("notification mirrors the pull request to main when a newer one targets a r
   assertRun(writes[0], "create", latest);
 });
 
+test("notification updates the check a commit already has instead of adding one", async () => {
+  // A pull request of the same branch to a release branch signals the commit
+  // of the pull request to main.
+  const release = { ...pr, number: 2, base: { ref: "branch-55" } };
+  const latest = run(2, "workflow_dispatch");
+  const writes = await execute({
+    event: "workflow_run",
+    check: checkFor(run(1)),
+    openPrs: [release, pr],
+    runs: [latest],
+  });
+  assert.equal(writes.length, 1);
+  assertRun(writes[0], "update", latest);
+});
+
 test("notification skips a commit that is no longer a pull request head", async () => {
   const writes = await execute({
     event: "workflow_run",

@@ -199,3 +199,17 @@ test("labels the other pull requests when one label fails, then fails the run", 
     [2]
   );
 });
+
+test("logs every failed request with its commit or pull request", async () => {
+  const { result, error } = await run({
+    commits: ["a", "b"],
+    lookups: { a: new Error("rate limited"), b: [[pull(2)]] },
+    failLabels: [2],
+  });
+  assert.equal(error.message, "rate limited");
+  assert.deepEqual(result.logs, [
+    "Looking up a failed: Error: rate limited",
+    "Labeling #2 failed: Error: cannot label 2",
+    "2 request(s) failed, see above.",
+  ]);
+});

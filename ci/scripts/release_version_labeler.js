@@ -51,7 +51,7 @@ module.exports = async ({ github, context }) => {
     // A push can include several merged pull requests. Look the commits up a
     // batch at a time, so the retries of commits without one overlap. A failed
     // lookup or label must not cost the other pull requests their label, so
-    // collect the errors and throw the first one after labeling.
+    // log every error and throw the first one after labeling.
     const pushed = (context.payload.commits || []).map((commit) => commit.id);
     const shas = pushed.length ? pushed : [context.sha];
     const numbers = new Set();
@@ -61,13 +61,14 @@ module.exports = async ({ github, context }) => {
         const settled = await Promise.allSettled(
             batch.map((sha) => mergedPulls({ github, context, sha }))
         );
-        for (const result of settled) {
+        settled.forEach((result, index) => {
             if (result.status === 'fulfilled') {
                 result.value.forEach((pull) => numbers.add(pull.number));
             } else {
+                console.log(`Looking up ${batch[index]} failed: ${result.reason}`);
                 errors.push(result.reason);
             }
-        }
+        });
     }
     if (numbers.size === 0 && errors.length === 0) {
         console.log(`No merged pull request found for ${shas.join(', ')}`);
@@ -81,11 +82,12 @@ module.exports = async ({ github, context }) => {
                 labels: [target_version]
             });
         } catch (error) {
+            console.log(`Labeling #${number} failed: ${error}`);
             errors.push(error);
         }
     }
     if (errors.length > 0) {
-        console.log(`${errors.length} request(s) failed. The pull requests that were found are labeled.`);
+        console.log(`${errors.length} request(s) failed, see above.`);
         throw errors[0];
     }
 };

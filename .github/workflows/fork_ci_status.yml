@@ -235,6 +235,19 @@ jobs:
                 core.info('Not a fork pull request to main; nothing to mirror.');
                 return;
               }
+              // A pull request of the same branch to a release branch, or a
+              // reopened pull request, signals a commit that can already have
+              // the check. Update that check instead of adding a second one.
+              const { data } = await github.rest.checks.listForRef({
+                ...upstream,
+                ref: pr.head.sha,
+                check_name: CHECK,
+                per_page: 1,
+              });
+              if (data.check_runs.length > 0) {
+                await syncCheck(pr);
+                return;
+              }
               await createCheck(pr, 12);
             }
 
