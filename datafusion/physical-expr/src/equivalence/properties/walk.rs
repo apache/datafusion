@@ -26,139 +26,110 @@ use itertools::Itertools;
 /// orderings satisfy a requirement. See [Checking whether a requirement is
 /// satisfied] for more details.
 ///
-/// # Intuition and Introduction
+/// # Intuition and Introduction, and Definitions
 ///
 /// An ordering `[x, y, z]` is a chain of claims about the rows: they are sorted
 /// by x; among rows with equal x, sorted by y; among rows with equal x and y,
 /// sorted by z.
+///
+/// ## Pinning and Fixed Expressions
 ///
 /// During a walk, the code scans the ordering requirement left to right. When
 /// it finds key `k` satisfied, it *pins* `k`, meaning that for the next steps
 /// in the walk, `k` is effectively a constant across the remaining ordering
 /// requirement.
 ///
-/// An expression is *fixed* if it has one value for all the rows that tie on the
-/// currently pinned expressions. Fixed expressions include literals, constants,
-/// pinned expressions, and singleton leaf expressions (such as an
-/// uncorrelated scalar subquery). See [`Self::is_fixed`].
+/// An expression is *fixed* if it has one value for all rows that tie on the
+/// currently pinned expressions. Fixed expressions the pinned expressions
+/// themselves, as well as literals, constants, and singleton leaf expressions
+/// (such as an uncorrelated scalar subquery). See [`Self::is_fixed`] for more
+/// details.
+/// 
+/// ## Implied Orderings
 ///
+/// - An ordering is *implied* if it follows from the heads through a known
+///   equality, as [`EquivalenceProperties::implied_ordering`] finds. The walk
+///   collects implied orderings as it pins, and treats them like the
+///   orderings of the properties from then on.
 ///
-/// Fixed is relative to the walk: the expression has one value among the rows
-/// that tie on what the walk has pinned. That is a smaller set of rows than the
-/// whole output, so more things qualify. Every constant is fixed, but a pinned
-/// key is fixed without being a constant. k takes many values across the
-/// output, yet among rows tied on k it has one.
+/// ## Heads
 ///
+/// For each equivalent ordering, the walk tracks its current *head* expression,
+/// which is the current claim that is valid given the currently pinned
+/// expressions. When an expression is pinned, it advances the head of any
+/// existing claim about that key. An ordering with nothing left to promise is
+/// used up.
 ///
-/// For each known ordering, the head is the first expression of that ordering
-/// that still carries information given what is pinned.
+/// For example, if we have data ordered by `[a, b]` as well as `[c]`, and we
+/// walk the requirement `[a, c]`, pinning `a` after the first step results in:
 ///
-/// # Example: Walking a Requirement
+/// | Step | Requirement Key | Pinned | Head `[a, b]` | Head `[c]` | Outcome   |
+/// |------|-----------------|--------|---------------|------------|-----------|
+/// | 1    | a               | {}     | a             | c          | pin a     |
+/// | 2    | c               | {a}    | b             | c          | satisfied |
 ///
-/// The walk checks the keys of a requirement one at a time. Each known
-/// ordering has a *head*, its first expression that the walk has not
-/// yet pinned. A key is satisfied when it heads some ordering, and is then
-/// *pinned*, which moves the heads past it. The walk stops at the first key
-/// that is not satisfied.
-///
-/// **Orderings `[a ASC, b ASC, c ASC]` and `[d ASC]`, requirement
-/// `[a ASC, b ASC]`**: satisfied, since the requirement is a prefix of the
-/// first ordering. The second ordering plays no part: its head stays `d`.
-///
-/// ```text
-/// Step  Key  Pinned  Head [a, b, c]  Head [d]  Outcome
-/// 1     a    {}      a               d         a heads the first: pin a
-/// 2     b    {a}     b               d         b heads the first: done
-/// ```
-///
-/// The remaining cases use the requirement `[a ASC, b ASC, c ASC]` against
-/// two different sets of known orderings, and then a shorter requirement.
-///
-/// **Orderings `[a ASC, b ASC]` and `[b ASC, c ASC]`**: the requirement is
-/// satisfied, even though neither ordering contains all three keys.
-///
-/// ```text
-/// Step  Key  Pinned  Head [a, b]  Head [b, c]  Outcome
-/// 1     a    {}      a            b            a heads the first: pin a
-/// 2     b    {a}     b            b            b heads both: pin b
-/// 3     c    {a, b}  -            c            c heads the second: done
-/// ```
-///
-/// After step 2, `[a, b]` is used up: both of its expressions are pinned, so
-/// it has no head. Among the rows that tie on `a` and `b`, the second
-/// ordering says the rows are sorted by `c`, which is what the third key
-/// asks. All three keys are satisfied, so no sort is needed.
-///
-/// To see why this is right, take a table sorted by both orderings:
+/// It may be confusing that the head of `[c]` does not advance. The intuition
+/// is that `[c]` still promises the data is sorted by `c` for all equal values
+/// of `a`. This is true because the data was entirely sorted by `[c]` to begin
+/// with, and pinning `a` does not change the order of the rows that tie on `a`,
+/// as illustrated in this example:
 ///
 /// ```text
 /// ┌───┬───┬───┐
 /// │ a │ b │ c │
 /// ├───┼───┼───┤
-/// │ 1 │ 1 │ 5 │
-/// │ 1 │ 2 │ 3 │
-/// │ 1 │ 2 │ 4 │
-/// │ 2 │ 2 │ 6 │
-/// │ 2 │ 3 │ 1 │
+/// │ 1 │ 1 │ 2 │
+/// │ 1 │ 3 │ 5 │
+/// │ 2 │ 1 │ 7 │
+/// │ 2 │ 2 │ 9 │
 /// └───┴───┴───┘
 /// ```
 ///
-/// The `(a, b)` pairs run `(1,1), (1,2), (1,2), (2,2), (2,3)`, so the table
-/// is sorted by `[a, b]`. The `b` values run `1, 2, 2, 2, 3` and within
-/// `b = 2` the `c` values run `3, 4, 6`, so it is sorted by `[b, c]` too.
-/// Now check `[a, b, c]`:
+/// # Example: Walking a Requirement
 ///
-/// 1. `a` is sorted over all rows, from `[a, b]`.
-/// 2. Among rows that tie on `a`, `b` is sorted, also from `[a, b]`.
-/// 3. Among rows that tie on both `a` and `b`, `c` is sorted: those rows are
-///    a subset of the rows that tie on `b`, and `[b, c]` says every run of
-///    equal `b` is sorted by `c`. A subset of a sorted run, in the same
-///    relative order, is still sorted. Rows 2 and 3 tie on `(1, 2)` and
-///    their `c` values are `3, 4`.
+/// * Orderings: `[a ASC, b ASC, c ASC]` and `[d ASC]`
+/// * Requirement: `[a ASC, b ASC]`
 ///
-/// A head is a promise that the rows tied on everything pinned are sorted by
-/// that expression, which is what step 3 relies on.
+/// | Step | Requirement Key | Pinned | Head `[a, b, c]` | Head `[d]` | Outcome   |
+/// |------|-----------------|--------|------------------|------------|-----------|
+/// | 1    | a               | {}     | a                | d          | pin a     |
+/// | 2    | b               | {a}    | b                | d          | satisfied |
 ///
-/// **Orderings `[a ASC, c ASC]` and `[c ASC, b ASC]`**: the requirement is
-/// not satisfied.
+/// This ordering is satisfied, (intuitively since the requirement is a prefix
+/// of the first ordering). The second ordering plays no part.
 ///
-/// ```text
-/// Step  Key  Pinned  Head [a, c]  Head [c, b]  Outcome
-/// 1     a    {}      a            c            a heads the first: pin a
-/// 2     b    {a}     c            c            b heads nothing: stop
-/// ```
+/// * Orderings: `[a ASC, b ASC]` and `[b ASC, c ASC]`
+/// * Requirement: `[a ASC, b ASC, c ASC]`
 ///
-/// After pinning `a`, both orderings are headed by `c`. Nothing says the rows
-/// that tie on `a` are sorted by `b`, so the walk stops. It reports that only
-/// the first key holds, and the planner has to sort.
+/// | Step | Requirement Key | Pinned | Head `[a, b]` | Head `[b, c]` | Outcome   |
+/// |------|-----------------|--------|---------------|---------------|-----------|
+/// | 1    | a               | {}     | a             | b             | pin a     |
+/// | 2    | b               | {a}    | b             | b             | pin b     |
+/// | 3    | c               | {a, b} | -             | c             | satisfied |
 ///
-/// **Orderings `[a ASC, b ASC]` and `[a ASC, c ASC]`, requirement
-/// `[a ASC, c ASC]`**: satisfied. Pinning `a` moves the head of *both*
-/// orderings, and the second one then supplies `c`.
+/// Note that After step 2, `[a, b]` is used up as both of its expressions are
+/// pinned. Among the rows that tie on `a` and `b`, the second ordering says the
+/// rows are sorted by `c`, which can satisfy the third key.
 ///
-/// ```text
-/// Step  Key  Pinned  Head [a, b]  Head [a, c]  Outcome
-/// 1     a    {}      a            a            a heads both: pin a
-/// 2     c    {a}     b            c            c heads the second: done
-/// ```
+/// * Orderings: `[a ASC, c ASC]` and `[c ASC, b ASC]`
+/// * Requirement: `[a ASC, b ASC, c ASC]`
 ///
-/// # Why a walk
+/// | Step | Requirement Key | Pinned | Head `[a, c]` | Head `[c, b]` | Outcome     |
+/// |------|-----------------|--------|---------------|---------------|-------------|
+/// | 1    | a               | {}     | a             | c             | pin a       |
+/// | 2    | b               | {a}    | c             | c             | unsatisfied |
 ///
-/// A sort key only matters among the rows that tie on the keys before it. For
-/// the requirement `[a, b]`, `a` must be sorted over all rows, but `b` only
-/// has to be sorted within each group of rows with the same `a`. So once a
-/// key is satisfied, the walk *pins* it: for the rest of the walk, the key has
-/// one value, like a constant, and every known ordering can skip it.
+/// After pinning `a`, both orderings are headed by `c`. Since nothing says the
+/// rows that tie on `a` are sorted by `b`, the walk stops, and reports that the
+/// requiremet is not satisfied.
 ///
-/// # Terms
+/// * Orderings: `[a ASC, b ASC]` and `[a ASC, c ASC]`
+/// * Requirement: `[a ASC, c ASC]`
 ///
-/// - The *head* of an ordering is its first expression that is not fixed. An
-///   ordering whose expressions are all fixed has no head. See
-///   [`Self::heads`].
-/// - An ordering is *implied* if it follows from the heads through a known
-///   equality, as [`EquivalenceProperties::implied_ordering`] finds. The walk
-///   collects implied orderings as it pins, and treats them like the
-///   orderings of the properties from then on.
+/// | Step | Requirement Key | Pinned | Head `[a, b]` | Head `[a, c]` | Outcome   |
+/// |------|-----------------|--------|---------------|---------------|-----------|
+/// | 1    | a               | {}     | a             | a             | pin a     |
+/// | 2    | c               | {a}    | b             | c             | satisfied |
 ///
 /// [Checking whether a requirement is satisfied]: EquivalenceProperties#checking-whether-a-requirement-is-satisfied
 pub(super) struct SortKeyWalk<'a> {
@@ -276,8 +247,8 @@ impl<'a> SortKeyWalk<'a> {
     /// See [`SortKeyWalk`] for an explanation of pinning.
     ///
     ///
-    /// This method pins `expr` (and thus by extension all members of its equivalence class),
-    /// but not its children (see [`Self::pin_key`'].
+    /// This method pins `expr` (and thus by extension all members of its
+    /// equivalence class), but not its children (see [`Self::pin_key`]).
     pub(super) fn pin(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
         match self.props.eq_group.get_equivalence_class(&expr) {
             Some(class) => self.pinned.extend(class.iter().cloned()),
