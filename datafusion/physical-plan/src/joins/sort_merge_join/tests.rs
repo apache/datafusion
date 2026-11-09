@@ -8395,3 +8395,358 @@ async fn left_join_with_partial_filter_preserves_streamed_order() -> Result<()> 
     );
     Ok(())
 }
+
+// ============================================================================
+// Early filtering of Inner joins
+// ============================================================================
+
+/// Rows for the early-filtering tests, sorted by the key column `names[0]`: key
+/// `k` of `0..keys` has `rows_per_key(k)` rows. `names[1]` is the row number and
+/// `names[2]` a pseudo-random value in `0..1000` that is NULL in every 37th row.
+/// The rows are split into batches of `rows_per_batch`.
+fn early_filtering_batches(
+    names: [&str; 3],
+    keys: i32,
+    rows_per_key: impl Fn(i32) -> usize,
+    seed: u64,
+    rows_per_batch: usize,
+) -> (Vec<RecordBatch>, SchemaRef) {
+    let mut key_values = vec![];
+    let mut row_numbers = vec![];
+    let mut values = vec![];
+    let mut state = seed;
+    for key in 0..keys {
+        for _ in 0..rows_per_key(key) {
+            state = state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            let row = key_values.len() as i32;
+            key_values.push(key);
+            row_numbers.push(row);
+            values.push((row % 37 != 0).then_some(((state >> 33) % 1000) as i32));
+        }
+    }
+    let schema = Arc::new(Schema::new(vec![
+        Field::new(names[0], DataType::Int32, false),
+        Field::new(names[1], DataType::Int32, false),
+        Field::new(names[2], DataType::Int32, true),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int32Array::from(key_values)),
+            Arc::new(Int32Array::from(row_numbers)),
+            Arc::new(Int32Array::from(values)),
+        ],
+    )
+    .unwrap();
+    let batches = (0..batch.num_rows())
+        .step_by(rows_per_batch)
+        .map(|offset| batch.slice(offset, rows_per_batch.min(batch.num_rows() - offset)))
+        .collect();
+    (batches, schema)
+}
+
+/// Inputs for the early-filtering tests. Every third key has a group of 600
+/// buffered rows, long enough to be filtered as it is paired, and the 250-row
+/// buffered batches split each such group. The other keys have groups of one or
+/// two buffered rows, whose pairs are filtered at freeze. Keys repeat up to four
+/// times on the streamed side.
+fn early_filtering_inputs()
+-> ((Vec<RecordBatch>, SchemaRef), (Vec<RecordBatch>, SchemaRef)) {
+    let left =
+        early_filtering_batches(["a1", "b1", "c1"], 40, |k| 1 + (k % 4) as usize, 1, 7);
+    let right = early_filtering_batches(
+        ["a2", "b2", "c2"],
+        40,
+        |k| if k % 3 == 0 { 600 } else { (k % 3) as usize },
+        2,
+        250,
+    );
+    (left, right)
+}
+
+/// The filter `c2 > c1 AND b1 % 2 = b2 % 2`, whose intermediate columns are in
+/// the order `c2, c1, b1, b2`, so that they alternate between the join sides.
+fn interleaved_early_filter(left_schema: &Schema, right_schema: &Schema) -> JoinFilter {
+    let parity = |name: &str, index: usize| -> PhysicalExprRef {
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new(name, index)),
+            Operator::Modulo,
+            Arc::new(Literal::new(ScalarValue::Int32(Some(2)))),
+        ))
+    };
+    let expression = Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c2", 0)),
+            Operator::Gt,
+            Arc::new(Column::new("c1", 1)),
+        )),
+        Operator::And,
+        Arc::new(BinaryExpr::new(
+            parity("b1", 2),
+            Operator::Eq,
+            parity("b2", 3),
+        )),
+    ));
+    let column_indices = vec![
+        ColumnIndex {
+            index: 2,
+            side: JoinSide::Right,
+        },
+        ColumnIndex {
+            index: 2,
+            side: JoinSide::Left,
+        },
+        ColumnIndex {
+            index: 1,
+            side: JoinSide::Left,
+        },
+        ColumnIndex {
+            index: 1,
+            side: JoinSide::Right,
+        },
+    ];
+    let schema = Schema::new(vec![
+        right_schema.field_with_name("c2").unwrap().clone(),
+        left_schema.field_with_name("c1").unwrap().clone(),
+        left_schema.field_with_name("b1").unwrap().clone(),
+        right_schema.field_with_name("b2").unwrap().clone(),
+    ]);
+    JoinFilter::new(expression, column_indices, Arc::new(schema))
+}
+
+/// The filter `b2 <> b1 OR c2 < c1`, which nearly every pair passes, with its
+/// intermediate columns in the order `b2, b1, c2, c1`. It reads four of the six
+/// output columns, so after the first freeze the join materializes whole batches
+/// and filters them (see `filter_first_pays`).
+fn high_pass_early_filter(left_schema: &Schema, right_schema: &Schema) -> JoinFilter {
+    let expression = Arc::new(BinaryExpr::new(
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("b2", 0)),
+            Operator::NotEq,
+            Arc::new(Column::new("b1", 1)),
+        )),
+        Operator::Or,
+        Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("c2", 2)),
+            Operator::Lt,
+            Arc::new(Column::new("c1", 3)),
+        )),
+    ));
+    let column_indices = vec![
+        ColumnIndex {
+            index: 1,
+            side: JoinSide::Right,
+        },
+        ColumnIndex {
+            index: 1,
+            side: JoinSide::Left,
+        },
+        ColumnIndex {
+            index: 2,
+            side: JoinSide::Right,
+        },
+        ColumnIndex {
+            index: 2,
+            side: JoinSide::Left,
+        },
+    ];
+    let schema = Schema::new(vec![
+        right_schema.field_with_name("b2").unwrap().clone(),
+        left_schema.field_with_name("b1").unwrap().clone(),
+        right_schema.field_with_name("c2").unwrap().clone(),
+        left_schema.field_with_name("c1").unwrap().clone(),
+    ]);
+    JoinFilter::new(expression, column_indices, Arc::new(schema))
+}
+
+/// A filter that reads no columns and always evaluates to `value`.
+fn column_free_early_filter(value: bool) -> JoinFilter {
+    JoinFilter::new(
+        Arc::new(Literal::new(ScalarValue::Boolean(Some(value)))),
+        vec![],
+        Arc::new(Schema::empty()),
+    )
+}
+
+fn early_filtering_on(left_schema: &Schema, right_schema: &Schema) -> Result<JoinOn> {
+    Ok(vec![(
+        Arc::new(Column::new_with_schema("a1", left_schema)?) as _,
+        Arc::new(Column::new_with_schema("a2", right_schema)?) as _,
+    )])
+}
+
+/// Asserts that the key column of `batches` is ascending, the order of the
+/// streamed side that the join maintains.
+fn assert_streamed_order(batches: &[RecordBatch]) {
+    let keys: Vec<i32> = batches
+        .iter()
+        .flat_map(|b| {
+            b.column(0)
+                .as_any()
+                .downcast_ref::<Int32Array>()
+                .unwrap()
+                .values()
+                .to_vec()
+        })
+        .collect();
+    assert!(
+        keys.is_sorted(),
+        "Inner join output must stay ordered on the streamed side"
+    );
+}
+
+/// An Inner join with a filter filters long runs of buffered rows as it pairs them
+/// and the pairs of shorter runs at freeze. It must keep the same pairs as a hash
+/// join whatever the batch size, which decides where a batch of pairs cuts a run,
+/// and whatever the order of the filter's columns. The pseudo-random values pass
+/// `c1 < c2` for about half of the pairs, and their NULLs pass for none. The
+/// high-pass filter also covers freezes that materialize whole batches.
+#[tokio::test]
+async fn join_inner_early_filtering_matches_hash_join() -> Result<()> {
+    let ((left_batches, left_schema), (right_batches, right_schema)) =
+        early_filtering_inputs();
+    let on = early_filtering_on(&left_schema, &right_schema)?;
+    let filters = [
+        build_c1_lt_c2_filter(&left_schema, &right_schema),
+        interleaved_early_filter(&left_schema, &right_schema),
+        high_pass_early_filter(&left_schema, &right_schema),
+    ];
+    let memory_exec = |batches: &Vec<RecordBatch>, schema: &SchemaRef| {
+        TestMemoryExec::try_new_exec(
+            std::slice::from_ref(batches),
+            Arc::clone(schema),
+            None,
+        )
+    };
+
+    for filter in filters {
+        for batch_size in [1, 7, 300, 8192] {
+            let (stream, expected) = join_get_stream_and_get_expected(
+                memory_exec(&left_batches, &left_schema)?,
+                memory_exec(&right_batches, &right_schema)?,
+                memory_exec(&left_batches, &left_schema)?,
+                memory_exec(&right_batches, &right_schema)?,
+                on.clone(),
+                Inner,
+                Some(filter.clone()),
+                batch_size,
+            )
+            .await?;
+            let output = common::collect(stream).await?;
+            assert!(expected.num_rows() > 0, "the filter must keep some pairs");
+            assert_streamed_order(&output);
+            assert_eq!(
+                prepare_record_batches_for_cmp(output),
+                expected,
+                "filter {filter} with batch_size {batch_size}"
+            );
+        }
+    }
+    Ok(())
+}
+
+/// A filter that reads no columns still runs for every pair, both on a long run
+/// as it is paired and at freeze.
+#[tokio::test]
+async fn join_inner_early_filtering_column_free_filter() -> Result<()> {
+    let ((left_batches, left_schema), (right_batches, right_schema)) =
+        early_filtering_inputs();
+    let on = early_filtering_on(&left_schema, &right_schema)?;
+    let left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+        std::slice::from_ref(&left_batches),
+        Arc::clone(&left_schema),
+        None,
+    )?;
+    let right: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
+        std::slice::from_ref(&right_batches),
+        Arc::clone(&right_schema),
+        None,
+    )?;
+
+    let (_, unfiltered) =
+        join_collect(Arc::clone(&left), Arc::clone(&right), on.clone(), Inner).await?;
+    let (_, kept) = join_collect_with_filter(
+        Arc::clone(&left),
+        Arc::clone(&right),
+        on.clone(),
+        column_free_early_filter(true),
+        Inner,
+    )
+    .await?;
+    assert_eq!(
+        batches_to_sort_string(&kept),
+        batches_to_sort_string(&unfiltered)
+    );
+
+    let (_, dropped) =
+        join_collect_with_filter(left, right, on, column_free_early_filter(false), Inner)
+            .await?;
+    assert_eq!(dropped.iter().map(|b| b.num_rows()).sum::<usize>(), 0);
+    Ok(())
+}
+
+/// A long run in a spilled buffered batch is paired unfiltered, and its pairs are
+/// filtered at freeze once the batch is read back.
+#[tokio::test]
+async fn join_inner_early_filtering_with_spilled_buffered_batches() -> Result<()> {
+    let ((left_batches, left_schema), (right_batches, right_schema)) =
+        early_filtering_inputs();
+    let on = early_filtering_on(&left_schema, &right_schema)?;
+    let filter = build_c1_lt_c2_filter(&left_schema, &right_schema);
+    let memory_exec = |batches: &Vec<RecordBatch>, schema: &SchemaRef| {
+        TestMemoryExec::try_new_exec(
+            std::slice::from_ref(batches),
+            Arc::clone(schema),
+            None,
+        )
+    };
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(100, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
+        )
+        .build_arc()?;
+    let session_config = SessionConfig::default().with_batch_size(8192);
+    let sort_options = vec![SortOptions::default(); on.len()];
+
+    let join = join_with_filter(
+        memory_exec(&left_batches, &left_schema)?,
+        memory_exec(&right_batches, &right_schema)?,
+        on.clone(),
+        filter.clone(),
+        Inner,
+        sort_options.clone(),
+        NullEquality::NullEqualsNothing,
+    )?;
+    let task_ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(session_config.clone())
+            .with_runtime(runtime),
+    );
+    let spilled = common::collect(join.execute(0, task_ctx)?).await?;
+    assert!(
+        join.metrics().unwrap().spill_count().unwrap() > 0,
+        "expected the buffered batches to spill"
+    );
+
+    let join_no_spill = join_with_filter(
+        memory_exec(&left_batches, &left_schema)?,
+        memory_exec(&right_batches, &right_schema)?,
+        on,
+        filter,
+        Inner,
+        sort_options,
+        NullEquality::NullEqualsNothing,
+    )?;
+    let task_ctx = Arc::new(TaskContext::default().with_session_config(session_config));
+    let no_spill = common::collect(join_no_spill.execute(0, task_ctx)?).await?;
+
+    assert_streamed_order(&spilled);
+    assert_eq!(
+        batches_to_sort_string(&spilled),
+        batches_to_sort_string(&no_spill)
+    );
+    Ok(())
+}
