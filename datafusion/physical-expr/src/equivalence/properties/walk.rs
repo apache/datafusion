@@ -22,11 +22,125 @@ use itertools::Itertools;
 /// The state of one walk along a sequence of sort keys, such as the keys of a
 /// required ordering.
 ///
-/// [`EquivalenceProperties`] uses a `SortKeyWalk` to decide whether the
-/// orderings it already knows satisfy a requirement, one key at a time. The
-/// walk reads the properties but never changes them: everything it learns
-/// along the way lives in the walk itself and is dropped with it. For the
-/// concepts, see [Checking whether a requirement is satisfied].
+/// [`EquivalenceProperties`] uses a `SortKeyWalk` to decide if a set of
+/// orderings satisfy a requirement. See [Checking whether a requirement is
+/// satisfied] for more details.
+///
+/// # Intuition and Introduction
+///
+/// An ordering `[x, y, z]` is a chain of claims about the rows: they are sorted
+/// by x; among rows with equal x, sorted by y; among rows with equal x and y,
+/// sorted by z.
+///
+/// During a walk, the code scans the ordering requirement left to right. When
+/// it finds key `k` satisfied, it *pins* `k`, meaning that for the next steps
+/// in the walk, `k` is effectively a constant across the remaining ordering
+/// requirement.
+///
+/// An expression is *fixed* if it has one value for all the rows that tie on the
+/// currently pinned expressions. Fixed expressions include literals, constants,
+/// pinned expressions, and singleton leaf expressions (such as an
+/// uncorrelated scalar subquery). See [`Self::is_fixed`].
+///
+///
+/// Fixed is relative to the walk: the expression has one value among the rows
+/// that tie on what the walk has pinned. That is a smaller set of rows than the
+/// whole output, so more things qualify. Every constant is fixed, but a pinned
+/// key is fixed without being a constant. k takes many values across the
+/// output, yet among rows tied on k it has one.
+///
+///
+/// For each known ordering, the head is the first expression of that ordering
+/// that still carries information given what is pinned.
+///
+/// # Example: Walking a Requirement
+///
+/// The walk checks the keys of a requirement one at a time. Each known
+/// ordering has a *head*, its first expression that the walk has not
+/// yet pinned. A key is satisfied when it heads some ordering, and is then
+/// *pinned*, which moves the heads past it. The walk stops at the first key
+/// that is not satisfied.
+///
+/// **Orderings `[a ASC, b ASC, c ASC]` and `[d ASC]`, requirement
+/// `[a ASC, b ASC]`**: satisfied, since the requirement is a prefix of the
+/// first ordering. The second ordering plays no part: its head stays `d`.
+///
+/// ```text
+/// Step  Key  Pinned  Head [a, b, c]  Head [d]  Outcome
+/// 1     a    {}      a               d         a heads the first: pin a
+/// 2     b    {a}     b               d         b heads the first: done
+/// ```
+///
+/// The remaining cases use the requirement `[a ASC, b ASC, c ASC]` against
+/// two different sets of known orderings, and then a shorter requirement.
+///
+/// **Orderings `[a ASC, b ASC]` and `[b ASC, c ASC]`**: the requirement is
+/// satisfied, even though neither ordering contains all three keys.
+///
+/// ```text
+/// Step  Key  Pinned  Head [a, b]  Head [b, c]  Outcome
+/// 1     a    {}      a            b            a heads the first: pin a
+/// 2     b    {a}     b            b            b heads both: pin b
+/// 3     c    {a, b}  -            c            c heads the second: done
+/// ```
+///
+/// After step 2, `[a, b]` is used up: both of its expressions are pinned, so
+/// it has no head. Among the rows that tie on `a` and `b`, the second
+/// ordering says the rows are sorted by `c`, which is what the third key
+/// asks. All three keys are satisfied, so no sort is needed.
+///
+/// To see why this is right, take a table sorted by both orderings:
+///
+/// ```text
+/// ┌───┬───┬───┐
+/// │ a │ b │ c │
+/// ├───┼───┼───┤
+/// │ 1 │ 1 │ 5 │
+/// │ 1 │ 2 │ 3 │
+/// │ 1 │ 2 │ 4 │
+/// │ 2 │ 2 │ 6 │
+/// │ 2 │ 3 │ 1 │
+/// └───┴───┴───┘
+/// ```
+///
+/// The `(a, b)` pairs run `(1,1), (1,2), (1,2), (2,2), (2,3)`, so the table
+/// is sorted by `[a, b]`. The `b` values run `1, 2, 2, 2, 3` and within
+/// `b = 2` the `c` values run `3, 4, 6`, so it is sorted by `[b, c]` too.
+/// Now check `[a, b, c]`:
+///
+/// 1. `a` is sorted over all rows, from `[a, b]`.
+/// 2. Among rows that tie on `a`, `b` is sorted, also from `[a, b]`.
+/// 3. Among rows that tie on both `a` and `b`, `c` is sorted: those rows are
+///    a subset of the rows that tie on `b`, and `[b, c]` says every run of
+///    equal `b` is sorted by `c`. A subset of a sorted run, in the same
+///    relative order, is still sorted. Rows 2 and 3 tie on `(1, 2)` and
+///    their `c` values are `3, 4`.
+///
+/// A head is a promise that the rows tied on everything pinned are sorted by
+/// that expression, which is what step 3 relies on.
+///
+/// **Orderings `[a ASC, c ASC]` and `[c ASC, b ASC]`**: the requirement is
+/// not satisfied.
+///
+/// ```text
+/// Step  Key  Pinned  Head [a, c]  Head [c, b]  Outcome
+/// 1     a    {}      a            c            a heads the first: pin a
+/// 2     b    {a}     c            c            b heads nothing: stop
+/// ```
+///
+/// After pinning `a`, both orderings are headed by `c`. Nothing says the rows
+/// that tie on `a` are sorted by `b`, so the walk stops. It reports that only
+/// the first key holds, and the planner has to sort.
+///
+/// **Orderings `[a ASC, b ASC]` and `[a ASC, c ASC]`, requirement
+/// `[a ASC, c ASC]`**: satisfied. Pinning `a` moves the head of *both*
+/// orderings, and the second one then supplies `c`.
+///
+/// ```text
+/// Step  Key  Pinned  Head [a, b]  Head [a, c]  Outcome
+/// 1     a    {}      a            a            a heads both: pin a
+/// 2     c    {a}     b            c            c heads the second: done
+/// ```
 ///
 /// # Why a walk
 ///
@@ -38,13 +152,6 @@ use itertools::Itertools;
 ///
 /// # Terms
 ///
-/// - An expression is *pinned* if the walk has pinned it. Pinning a member of
-///   an equivalence class pins all of its members.
-/// - An expression is *fixed* if it has one value among the rows that tie on
-///   the pinned expressions: it is a literal, a constant, pinned, a leaf that
-///   reports itself as a singleton (such as an uncorrelated scalar subquery),
-///   or not volatile and computed only from fixed expressions. See
-///   [`Self::is_fixed`].
 /// - The *head* of an ordering is its first expression that is not fixed. An
 ///   ordering whose expressions are all fixed has no head. See
 ///   [`Self::heads`].
@@ -52,38 +159,6 @@ use itertools::Itertools;
 ///   equality, as [`EquivalenceProperties::implied_ordering`] finds. The walk
 ///   collects implied orderings as it pins, and treats them like the
 ///   orderings of the properties from then on.
-///
-/// A key is satisfied if it is fixed, if it is the head of some ordering in
-/// the required direction, or if its order follows from the heads (for
-/// example, `CAST(a AS BIGINT)` when `a` is a head). See
-/// [`Self::sorted_prefix_len`].
-///
-/// # Example
-///
-/// With orderings `[a, b]` and `[a, c]`, the requirement `[a, c]` is
-/// satisfied:
-///
-/// 1. Nothing is pinned, so `a` heads both orderings. `a` is satisfied and
-///    pinned.
-/// 2. `a` is now fixed, so the heads move to `b` and `c`. `c` heads the second
-///    ordering, so it is satisfied.
-///
-/// With orderings `[a, b]` and `[b, c]`, the requirement `[a, b, c]` is
-/// satisfied too: pinning `a` moves the head of the first ordering to `b`,
-/// which now heads both orderings. Pinning `b` uses up the first ordering and
-/// moves the head of the second to `c`.
-///
-/// # Where it is used
-///
-/// - [`EquivalenceProperties::ordering_satisfy_requirement`] and
-///   [`EquivalenceProperties::common_sort_prefix_length`] walk the keys of a
-///   requirement with [`Self::sorted_prefix_len`].
-/// - [`EquivalenceProperties::find_longest_permutation`] pins each expression
-///   it finds with [`Self::pin`], so that the next expression is checked among
-///   the rows that tie on the ones found so far.
-/// - [`EquivalenceProperties::get_expr_properties`] reads the properties of
-///   an expression through a walk with nothing pinned, via
-///   [`Self::expr_properties`].
 ///
 /// [Checking whether a requirement is satisfied]: EquivalenceProperties#checking-whether-a-requirement-is-satisfied
 pub(super) struct SortKeyWalk<'a> {
@@ -94,9 +169,21 @@ pub(super) struct SortKeyWalk<'a> {
     /// Orderings that hold among the rows that tie on the pinned expressions,
     /// found by [`EquivalenceProperties::implied_ordering`] as the walk goes.
     implied: Vec<LexOrdering>,
-    /// For each ordering (the normal orderings of `props`, then `implied`),
-    /// the index of its head. Empty until the first pin, so that a walk with
-    /// nothing pinned allocates nothing; until then every head is at index 0.
+    /// The position of the head of each ordering.
+    ///
+    /// Empty until the first pin.
+    ///
+    /// `head_idxs[i]` tracks the position in the `LexOrdering` at index `i`,
+    /// as returned by [`Self::ordering`]. The ordering at index `i` is:
+    ///  * if `i < self.props.normal_cls.len()` then `self.props.normal_cls[i]`
+    ///  * else, `self.implied[i - self.props.normal_cls.len()]` otherwise. See
+    ///
+    /// The value is either an index into that ordering's sort expressions, or
+    /// its length when it has no head.
+    ///
+    /// For example, with orderings `[a, b]` and `[b, c]`, head_idxs is `[0, 0]`
+    /// at the start, `[1, 0]` after pinning `a`, and `[2, 1]` after pinning
+    /// `b`, when `[a, b]` is used up.
     head_idxs: Vec<usize>,
 }
 
@@ -184,10 +271,13 @@ impl<'a> SortKeyWalk<'a> {
         Ok(())
     }
 
-    /// Pins `expr` and the rest of its equivalence class (but, unlike
-    /// [`Self::pin_key`], not its children), then moves the head of each
-    /// ordering past the expressions that are now fixed, and adds the
-    /// orderings that the heads imply, until no new ordering is found.
+    /// Pins `expr` .
+    ///
+    /// See [`SortKeyWalk`] for an explanation of pinning.
+    ///
+    ///
+    /// This method pins `expr` (and thus by extension all members of its equivalence class),
+    /// but not its children (see [`Self::pin_key`'].
     pub(super) fn pin(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
         match self.props.eq_group.get_equivalence_class(&expr) {
             Some(class) => self.pinned.extend(class.iter().cloned()),
@@ -317,10 +407,9 @@ impl<'a> SortKeyWalk<'a> {
         Ok(Transformed::yes(node))
     }
 
-    /// Whether `expr` is fixed (see [`SortKeyWalk`]). Callers pass `expr` in
-    /// normal form. Pins are stored as given, so a pinned expression that is
-    /// not in normal form is found only through its equivalence class, whose
-    /// members are all pinned.
+    /// Whether `expr` is fixed (see [`SortKeyWalk`]).
+    ///
+    /// `expr` must be in normal form.
     fn is_fixed(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         if expr.is::<Literal>() || self.pinned.contains(expr) {
             return true;
