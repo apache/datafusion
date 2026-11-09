@@ -78,6 +78,22 @@ fn build_sorted_batches_with_size(
     batches
 }
 
+/// Like [`build_sorted_batches`], but with only the `key` and `data` columns of
+/// [`narrow_schema`].
+fn build_narrow_sorted_batches(num_rows: usize, key_mod: usize) -> Vec<RecordBatch> {
+    let s = schema();
+    let narrow = narrow_schema();
+    build_sorted_batches(num_rows, key_mod, &s)
+        .into_iter()
+        .map(|b| {
+            b.project(&[0, 1])
+                .unwrap()
+                .with_schema(Arc::clone(&narrow))
+                .unwrap()
+        })
+        .collect()
+}
+
 fn make_exec(
     batches: &[RecordBatch],
     schema: &SchemaRef,
@@ -93,8 +109,21 @@ fn schema() -> SchemaRef {
     ]))
 }
 
+/// The `key` and `data` columns of [`schema`].
+fn narrow_schema() -> SchemaRef {
+    Arc::new(Schema::new(vec![
+        Field::new("key", DataType::Int64, false),
+        Field::new("data", DataType::Int64, false),
+    ]))
+}
+
 /// The join filter `left.data < right.data`.
 fn data_lt_filter() -> JoinFilter {
+    data_filter(Operator::Lt)
+}
+
+/// The join filter `left.data <op> right.data`.
+fn data_filter(op: Operator) -> JoinFilter {
     let column_indices = vec![
         ColumnIndex {
             index: 1,
@@ -111,7 +140,7 @@ fn data_lt_filter() -> JoinFilter {
     ]);
     let expression = Arc::new(BinaryExpr::new(
         Arc::new(Column::new("left_data", 0)),
-        Operator::Lt,
+        op,
         Arc::new(Column::new("right_data", 1)),
     ));
     JoinFilter::new(expression, column_indices, Arc::new(intermediate_schema))
@@ -230,6 +259,103 @@ fn bench_smj(c: &mut Criterion) {
                 )
             })
         });
+    }
+
+    // 1:10 and 1:100 Inner Joins with a filter. `left.data < right.data` keeps
+    // about half of the pairs. A streamed row meets a run of 10 or 100 buffered
+    // rows, so its pairs are filtered at freeze.
+    for (n, key_mod, name) in [
+        (100_000, 10_000, "inner_1to10_filtered"),
+        (20_000, 200, "inner_1to100_filtered"),
+    ] {
+        let left_batches = build_sorted_batches(n, key_mod, &s);
+        let right_batches = build_sorted_batches(n, key_mod, &s);
+        group.bench_function(BenchmarkId::new(name, n), |b| {
+            b.iter(|| {
+                let left = make_exec(&left_batches, &s);
+                let right = make_exec(&right_batches, &s);
+                do_join_with_filter(
+                    left,
+                    right,
+                    datafusion_common::JoinType::Inner,
+                    Some(data_lt_filter()),
+                    &rt,
+                )
+            })
+        });
+    }
+
+    // 1:10 Inner Joins with a filter that keeps most pairs — 100K left, 100K right,
+    // 10K distinct keys. `left.data <> right.data` drops only the pair of a row with
+    // itself, keeping 90% of the pairs. The narrow case joins just `key` and `data`,
+    // so the filter reads half of the output columns.
+    {
+        let n = 100_000;
+        let key_mod = 10_000;
+        let left_batches = build_sorted_batches(n, key_mod, &s);
+        let right_batches = build_sorted_batches(n, key_mod, &s);
+        group.bench_function(
+            BenchmarkId::new("inner_1to10_high_pass_filtered", n),
+            |b| {
+                b.iter(|| {
+                    let left = make_exec(&left_batches, &s);
+                    let right = make_exec(&right_batches, &s);
+                    do_join_with_filter(
+                        left,
+                        right,
+                        datafusion_common::JoinType::Inner,
+                        Some(data_filter(Operator::NotEq)),
+                        &rt,
+                    )
+                })
+            },
+        );
+        let narrow = narrow_schema();
+        let left_batches = build_narrow_sorted_batches(n, key_mod);
+        let right_batches = build_narrow_sorted_batches(n, key_mod);
+        group.bench_function(
+            BenchmarkId::new("inner_1to10_high_pass_filtered_narrow", n),
+            |b| {
+                b.iter(|| {
+                    let left = make_exec(&left_batches, &narrow);
+                    let right = make_exec(&right_batches, &narrow);
+                    do_join_with_filter(
+                        left,
+                        right,
+                        datafusion_common::JoinType::Inner,
+                        Some(data_filter(Operator::NotEq)),
+                        &rt,
+                    )
+                })
+            },
+        );
+    }
+
+    // 1:1000 Inner Join with a selective filter — 2K left, 20K right, 20 keys
+    // Every streamed row meets a run of 1000 buffered rows, the shape of TPC-DS
+    // q72's `catalog_sales` to `inventory` join. Each key's 100 streamed rows take
+    // the smallest of its `data` values, so `left.data > right.data` keeps about
+    // 5% of the 2M pairs. Such runs are filtered as they are paired.
+    {
+        let keys = 20;
+        let left_batches = build_sorted_batches(keys * 100, keys, &s);
+        let right_batches = build_sorted_batches(keys * 1000, keys, &s);
+        group.bench_function(
+            BenchmarkId::new("inner_1to1000_selective_filtered", keys * 1000),
+            |b| {
+                b.iter(|| {
+                    let left = make_exec(&left_batches, &s);
+                    let right = make_exec(&right_batches, &s);
+                    do_join_with_filter(
+                        left,
+                        right,
+                        datafusion_common::JoinType::Inner,
+                        Some(data_filter(Operator::Gt)),
+                        &rt,
+                    )
+                })
+            },
+        );
     }
 
     // Left Join — 100K each, ~5% unmatched on left
