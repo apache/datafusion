@@ -160,8 +160,8 @@ impl From<Arc<dyn PhysicalExpr>> for ConstExpr {
 /// typically equi-join conditions and conditions in filters. See
 /// [Equivalent expressions] for more detail.
 ///
-/// Two `EquivalenceClass`es are equal if they contain the same expressions in
-/// without any ordering.
+/// Two `EquivalenceClass`es are equal if they contain the same expressions, regardless
+/// of their order.
 ///
 /// [Equivalent expressions]: crate::equivalence::EquivalenceProperties#equivalent-expressions
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
