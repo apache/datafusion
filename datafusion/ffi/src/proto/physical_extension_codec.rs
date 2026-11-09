@@ -538,14 +538,10 @@ pub mod fixtures {
     use datafusion_proto::protobuf::PhysicalExprNode;
     use prost::Message;
 
-    /// An extension plan that carries a single physical expression, so its
-    /// codec has to decode that expression itself. Executing it evaluates
-    /// that expression and emits the result as the single row of a
-    /// single-column batch, which is how the cross-library integration test
-    /// observes a decoded `ScalarSubqueryExpr`'s value without a generic
-    /// `FFI_PhysicalExpr` wrapper: the value crosses back through the
-    /// `FFI_ExecutionPlan`/`FFI_RecordBatchStream` machinery every
-    /// `ExecutionPlan` already has, via the Arrow C Data Interface.
+    /// An extension plan carrying a single physical expression, so its codec
+    /// has to decode that expression itself. Executing it emits the
+    /// expression's value as a one-row batch, which is how the test reads it
+    /// back.
     #[derive(Debug)]
     pub struct ScalarSubqueryExprExec {
         pub expr: Arc<dyn PhysicalExpr>,
