@@ -1940,19 +1940,17 @@ config_namespace! {
         /// projections or aliases.
         pub enable_unions_to_filter: bool, default = false
 
-        /// When `true`, the `SingleDistinctToGroupBy` optimizer rule applies its cost guard
-        /// universally — including to lone-distinct queries that have no companion non-distinct
-        /// aggregates.  The rewrite is skipped whenever the distinct function already has a
-        /// native `GroupsAccumulator`, reducing peak memory by avoiding the larger intermediate
-        /// `(group, distinct value)` result set that the two-phase plan produces.
+        /// When `true`, the `SingleDistinctToGroupBy` optimizer rule keeps a grouped
+        /// DISTINCT aggregate native, instead of rewriting it into a two-phase `GROUP BY`,
+        /// when every DISTINCT argument is a fixed-width, non-float type. This lowers peak
+        /// memory when no memory limit is set, because the intermediate
+        /// `(group, distinct value)` result is never built.
         ///
-        /// The trade-off is reduced parallelism: skipping the rewrite causes the engine to fall
-        /// back to serial per-group accumulation, which is typically 2–3× slower for queries
-        /// with high-cardinality distinct values.
+        /// Under a memory limit, the rewrite can spill those pairs, but the native
+        /// accumulator keeps each group's distinct values in memory. With this option
+        /// enabled, a query can need more memory, or fail where the rewrite finishes.
         ///
-        /// When `false` (the default), lone-distinct queries are always rewritten into the
-        /// two-phase `GROUP BY` so they can fan out across partitions and achieve maximum
-        /// throughput.
+        /// Queries without `GROUP BY`, and other argument types, keep the rewrite.
         ///
         /// See <https://github.com/apache/datafusion/issues/25932>
         pub single_distinct_aggregation_prefer_memory: bool, default = false

@@ -498,6 +498,13 @@ physical_plan
 07)------------AggregateExec: mode=Partial, gby=[g@0 as g, x@1 as alias1], aggr=[]
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
 
+# stddev cannot run DISTINCT itself, so it is rewritten even next to count(*).
+query IIR rowsort
+SELECT g, count(*), stddev(DISTINCT x) FROM t_prefer_mem GROUP BY g;
+----
+1 2 7.071067811865
+2 1 NULL
+
 # When single_distinct_aggregation_prefer_memory = true, the rewrite is skipped to reduce peak memory
 statement ok
 set datafusion.optimizer.single_distinct_aggregation_prefer_memory = true;
@@ -520,6 +527,18 @@ SELECT g, count(DISTINCT x) FROM t_prefer_mem GROUP BY g ORDER BY g;
 ----
 1 2
 2 1
+
+# Float DISTINCT keeps the rewrite: the native accumulator counts -0.0 and 0.0 separately.
+statement ok
+CREATE TABLE t_prefer_mem_float AS SELECT * FROM (VALUES (1, CAST('0.0' AS DOUBLE)), (1, CAST('-0.0' AS DOUBLE)), (1, CAST('1.5' AS DOUBLE))) AS v(g, f);
+
+query IIR
+SELECT g, count(DISTINCT f), avg(DISTINCT f) FROM t_prefer_mem_float GROUP BY g;
+----
+1 2 0.75
+
+statement ok
+DROP TABLE t_prefer_mem_float;
 
 statement ok
 set datafusion.optimizer.single_distinct_aggregation_prefer_memory = false;

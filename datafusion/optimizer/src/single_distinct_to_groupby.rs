@@ -112,7 +112,16 @@ impl CountRollup {
 }
 
 /// Returns `true` for fixed-width primitive types where single-phase distinct
-/// accumulation avoids heap allocation churn.
+/// accumulation avoids heap allocation churn **and** where bit-identity equals
+/// value-equality, so that skipping the GROUP BY rewrite cannot silently change
+/// query results.
+///
+/// Float types are deliberately excluded: IEEE 754 defines `-0.0 == 0.0`, so a
+/// `GROUP BY` on floats merges those two bit-patterns into one group.  The
+/// native distinct accumulators hash raw bits and therefore count them
+/// separately.  Keeping floats in this list would let `prefer_memory` skip the
+/// rewrite for a float column, producing a different answer than the
+/// non-rewritten path — a silent correctness regression.
 fn is_fixed_width_type(dt: &DataType) -> bool {
     matches!(
         dt,
@@ -125,9 +134,6 @@ fn is_fixed_width_type(dt: &DataType) -> bool {
             | DataType::UInt16
             | DataType::UInt32
             | DataType::UInt64
-            | DataType::Float16
-            | DataType::Float32
-            | DataType::Float64
             | DataType::Date32
             | DataType::Date64
             | DataType::Time32(_)
@@ -143,9 +149,14 @@ fn is_fixed_width_type(dt: &DataType) -> bool {
 /// Check whether all aggregate exprs are eligible for the single-distinct-to-group-by rewrite.
 ///
 /// When `prefer_memory` is true, the rewrite is skipped only for `GROUP BY` queries
-/// on fixed-width primitive types, where it reliably reduces peak memory without
-/// regressing throughput. Variable-length types (strings, binary) and un-grouped
-/// aggregates always continue with the 2-phase rewrite.
+/// on fixed-width primitive integer/decimal/date types, where it reliably reduces
+/// peak memory without regressing throughput or changing results.
+/// Float types (`Float16`, `Float32`, `Float64`) are **not** candidates for skipping:
+/// their native accumulators hash raw bits, counting `-0.0` and `0.0` separately,
+/// while `GROUP BY` treats them as equal under IEEE 754.  Skipping the rewrite for
+/// floats would silently produce wrong counts and averages.
+/// Variable-length types (strings, binary) and un-grouped aggregates always
+/// continue with the 2-phase rewrite.
 /// Aggregates with [`DistinctHandling::Unsupported`] (e.g. `approx_median`) cannot
 /// run natively with `DISTINCT` and are always rewritten.
 fn is_single_distinct_agg(
@@ -233,15 +244,12 @@ fn is_single_distinct_agg(
     //     types (Utf8, Binary, …) single-phase accumulators suffer heavy per-value
     //     heap allocation churn that increases both memory and latency.
     if prefer_memory && has_group_by {
-        // Resolve the data type of each distinct argument.
-        let all_fixed_width = distinct_aggs.iter().all(|(_, args)| {
-            args.iter().all(|arg| {
-                arg.get_type(input_schema)
-                    .map(|dt| is_fixed_width_type(&dt))
-                    .unwrap_or(false)
-            })
-        });
-        if all_fixed_width {
+        let arg_types = distinct_aggs
+            .iter()
+            .flat_map(|(_, args)| args.iter())
+            .map(|arg| arg.get_type(input_schema))
+            .collect::<Result<Vec<_>>>()?;
+        if arg_types.iter().all(is_fixed_width_type) {
             return Ok(false);
         }
     }
@@ -661,6 +669,22 @@ mod tests {
         let schema = Schema::new(vec![
             Field::new("a", DataType::UInt32, false),
             Field::new("b", DataType::Utf8, false),
+            Field::new("c", DataType::UInt32, false),
+        ]);
+        table_scan(Some("test"), &schema, None)?.build()
+    }
+
+    /// `test` with a `Float64` `b`.
+    ///
+    /// Used to verify that `prefer_memory` does **not** skip the rewrite for
+    /// float columns: `-0.0` and `0.0` are equal under IEEE 754 (GROUP BY
+    /// treats them as one group) but are bit-distinct (native accumulators
+    /// count them separately).  Skipping the rewrite for floats would silently
+    /// change query results.
+    fn test_table_scan_float64_b() -> Result<LogicalPlan> {
+        let schema = Schema::new(vec![
+            Field::new("a", DataType::UInt32, false),
+            Field::new("b", DataType::Float64, false),
             Field::new("c", DataType::UInt32, false),
         ]);
         table_scan(Some("test"), &schema, None)?.build()
@@ -1628,6 +1652,37 @@ mod tests {
           Aggregate: groupBy=[[test.a]], aggr=[[unsupported(alias1)]] [a:UInt32, unsupported(alias1):UInt32;N]
             Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:UInt32]
               TableScan: test [a:UInt32, b:UInt32, c:UInt32]
+        "
+        )
+    }
+
+    #[test]
+    // prefer_memory=true must NOT skip the rewrite for Float64 columns.
+    //
+    // The native distinct accumulators hash raw bits, so they count `-0.0` and
+    // `0.0` as two separate values.  A GROUP BY on those same floats collapses
+    // them into one group under IEEE 754 equality.  Skipping the rewrite for
+    // floats would silently change `count(DISTINCT f)` from 2 to 3 (and
+    // `avg(DISTINCT f)` from 0.75 to 0.5) on a table containing (0.0, -0.0, 1.5).
+    // The rewrite must still fire so the two-phase path's GROUP BY-based
+    // deduplication is what actually runs.
+    fn single_distinct_aggregation_prefer_memory_true_rewrites_for_float64() -> Result<()>
+    {
+        let table_scan = test_table_scan_float64_b()?;
+
+        let plan = LogicalPlanBuilder::from(table_scan)
+            .aggregate(vec![col("a")], vec![count_distinct(col("b"))])?
+            .build()?;
+
+        let ctx = RegistryOptimizerContext::with_prefer_memory(true);
+        assert_optimized_plan_equal_with_context!(
+            ctx,
+            plan,
+            @r"
+        Projection: test.a, count(alias1) AS count(DISTINCT test.b) [a:UInt32, count(DISTINCT test.b):Int64]
+          Aggregate: groupBy=[[test.a]], aggr=[[count(alias1)]] [a:UInt32, count(alias1):Int64]
+            Aggregate: groupBy=[[test.a, test.b AS alias1]], aggr=[[]] [a:UInt32, alias1:Float64]
+              TableScan: test [a:UInt32, b:Float64, c:UInt32]
         "
         )
     }
