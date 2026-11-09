@@ -1064,15 +1064,21 @@ SELECT c2,
 
 
 #fn window_frame_creation
-statement error DataFusion error: Error during planning: Invalid window frame: start bound \(1 PRECEDING\) cannot be larger than end bound \(2 PRECEDING\)
+statement error
 SELECT
  COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN 1 PRECEDING AND 2 PRECEDING)
  FROM aggregate_test_100
+----
+DataFusion error: Error during planning: Invalid window frame: start bound (1 PRECEDING) cannot be larger than end bound (2 PRECEDING)
 
-statement error DataFusion error: Error during planning: Invalid window frame: start bound \(2 FOLLOWING\) cannot be larger than end bound \(1 FOLLOWING\)
+
+statement error
 SELECT
  COUNT(c1) OVER (ORDER BY c2 RANGE BETWEEN 2 FOLLOWING AND 1 FOLLOWING)
  FROM aggregate_test_100
+----
+DataFusion error: Error during planning: Invalid window frame: start bound (2 FOLLOWING) cannot be larger than end bound (1 FOLLOWING)
+
 
 statement error DataFusion error: Error during planning: GROUPS requires an ORDER BY clause
 SELECT
@@ -3894,8 +3900,11 @@ SELECT NTILE(9223372036854775809) OVER(ORDER BY a) FROM t1;
 query error DataFusion error: Execution error: NTILE requires a positive integer
 SELECT NTILE(-922337203685477580) OVER(ORDER BY a) FROM t1;
 
-query error DataFusion error: Execution error: Table 't' doesn't exist\.
+query error
 DROP TABLE t;
+----
+DataFusion error: Execution error: Table 't' doesn't exist.
+
 
 # NTILE with PARTITION BY, those tests from duckdb: https://github.com/duckdb/duckdb/blob/main/test/sql/window/test_ntile.test
 statement ok
@@ -6344,20 +6353,29 @@ statement ok
 CREATE TABLE table_distinct_sum_types(ts INT, f DOUBLE, d DECIMAL(10, 2)) AS VALUES
   (1, 1.5, 1.50), (2, 2.5, 2.50), (3, 1.5, 1.50);
 
-query error DataFusion error: This feature is not implemented: SUM\(DISTINCT\) over sliding window frames is only supported for Int64, got Float64
+query error
 SELECT SUM(DISTINCT f) OVER (
   ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
 ) FROM table_distinct_sum_types;
+----
+DataFusion error: This feature is not implemented: SUM(DISTINCT) over sliding window frames is only supported for Int64, got Float64
 
-query error DataFusion error: This feature is not implemented: SUM\(DISTINCT\) over sliding window frames is only supported for Int64, got Decimal128\(10, 2\)
+
+query error
 SELECT SUM(DISTINCT d) OVER (
   ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
 ) FROM table_distinct_sum_types;
+----
+DataFusion error: This feature is not implemented: SUM(DISTINCT) over sliding window frames is only supported for Int64, got Decimal128(10, 2)
 
-query error DataFusion error: This feature is not implemented: SUM\(DISTINCT\) over sliding window frames is only supported for Int64, got UInt64
+
+query error
 SELECT SUM(DISTINCT arrow_cast(ts, 'UInt64')) OVER (
   ORDER BY ts ROWS BETWEEN 1 PRECEDING AND CURRENT ROW
 ) FROM table_distinct_sum_types;
+----
+DataFusion error: This feature is not implemented: SUM(DISTINCT) over sliding window frames is only supported for Int64, got UInt64
+
 
 # Unbounded frames take the regular distinct-sum path and keep
 # supporting all SUM input types.
@@ -6375,28 +6393,34 @@ DROP TABLE table_distinct_sum_types;
 # FILTER clause with window functions
 
 # Verify FILTER clause with non-aggregate window functions fails with a clear message
-query error DataFusion error: Error during planning: FILTER clause can only be used with aggregate window functions\. Found in 'row_number\(\) FILTER \(WHERE test\.c1 > Int64\(0\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+query error
 SELECT
 c1,
 ROW_NUMBER() FILTER(WHERE c1 > 0) OVER () as rn1
 FROM test
 LIMIT 5
+----
+DataFusion error: Error during planning: FILTER clause can only be used with aggregate window functions. Found in 'row_number() FILTER (WHERE test.c1 > Int64(0)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
 
 
-query error DataFusion error: Error during planning: FILTER clause can only be used with aggregate window functions\. Found in 'first_value\(test\.c1\) FILTER \(WHERE test\.c1 > Int64\(0\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+query error
 SELECT
 c1,
 FIRST_VALUE(c1) FILTER(WHERE c1 > 0) OVER () as rn1
 FROM test
 LIMIT 5
+----
+DataFusion error: Error during planning: FILTER clause can only be used with aggregate window functions. Found in 'first_value(test.c1) FILTER (WHERE test.c1 > Int64(0)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
 
 
-query error DataFusion error: Error during planning: FILTER clause can only be used with aggregate window functions\. Found in 'lag\(test\.c1\) FILTER \(WHERE test\.c1 > Int64\(0\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+query error
 SELECT
 c1,
 LAG(c1) FILTER(WHERE c1 > 0) OVER () as rn1
 FROM test
 LIMIT 5
+----
+DataFusion error: Error during planning: FILTER clause can only be used with aggregate window functions. Found in 'lag(test.c1) FILTER (WHERE test.c1 > Int64(0)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
 
 
 # Check error propagation from filter to window function
@@ -7414,13 +7438,23 @@ ORDER BY x
 02:00:00 3
 
 # Finite offsets over time are rejected for both the start and end bound.
-query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Time64\(µs\)
+query error
 SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN INTERVAL '1' HOUR PRECEDING AND CURRENT ROW)
 FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)'))) t(x)
+----
+DataFusion error: type_coercion
+caused by
+Error during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Time64(µs)
 
-query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Time64\(µs\)
+
+query error
 SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND INTERVAL '1' HOUR FOLLOWING)
 FROM (VALUES (arrow_cast('01:00:00', 'Time64(Microsecond)'))) t(x)
+----
+DataFusion error: type_coercion
+caused by
+Error during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Time64(µs)
+
 
 # Unsupported RANGE ORDER BY types are rejected during planning.
 query error Error during planning: RANGE window frames are not supported for ORDER BY type Struct
@@ -7451,9 +7485,14 @@ query error DataFusion error: type_coercion\ncaused by\nError during planning: R
 SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING)
 FROM (VALUES (true)) t(x)
 
-query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type List\(Int64\)
+query error
 SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
 FROM (VALUES ([1,2])) t(x)
+----
+DataFusion error: type_coercion
+caused by
+Error during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type List(Int64)
+
 
 query error DataFusion error: type_coercion\ncaused by\nError during planning: RANGE with offset PRECEDING/FOLLOWING is not supported for ORDER BY type Null
 SELECT COUNT(*) OVER (ORDER BY x RANGE BETWEEN 1 PRECEDING AND CURRENT ROW)
@@ -7628,24 +7667,36 @@ select count(*) over (order by d, l) from (values (arrow_cast(1, 'Duration(Secon
 statement ok
 CREATE TABLE window_in_filter_t(a INT, b INT) AS VALUES (1, 1), (2, 2);
 
-statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'sum\(count\(Int64\(1\)\) AS count\(\*\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+statement error
 SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
 FROM window_in_filter_t
 GROUP BY a
 HAVING sum(count(*)) OVER () >= 10;
+----
+DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'sum(count(Int64(1)) AS count(*)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+
 
 # ... also through an alias of the window function
-statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'sum\(count\(Int64\(1\)\) AS count\(\*\)\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+statement error
 SELECT a, count(*) AS cnt, sum(count(*)) OVER () AS total
 FROM window_in_filter_t
 GROUP BY a
 HAVING total >= 10;
+----
+DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'sum(count(Int64(1)) AS count(*)) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
 
-statement error DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+
+statement error
 SELECT a FROM window_in_filter_t GROUP BY a HAVING row_number() OVER () = 1;
+----
+DataFusion error: Error during planning: Window function calls are not allowed in HAVING: 'row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
 
-statement error DataFusion error: Error during planning: Window function calls are not allowed in WHERE: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+
+statement error
 SELECT a FROM window_in_filter_t WHERE row_number() OVER () = 1;
+----
+DataFusion error: Error during planning: Window function calls are not allowed in WHERE: 'row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+
 
 # The same window function is legal in the SELECT list ...
 query III
@@ -7690,24 +7741,42 @@ WHERE a IN (SELECT a FROM window_in_filter_t QUALIFY row_number() OVER (ORDER BY
 
 # Window functions are rejected during planning in JOIN ON, GROUP BY and VALUES
 # as well
-statement error DataFusion error: Error during planning: Window function calls are not allowed in JOIN ON: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+statement error
 SELECT * FROM window_in_filter_t x JOIN window_in_filter_t y ON x.a = y.a AND row_number() OVER () = 1;
+----
+DataFusion error: Error during planning: Window function calls are not allowed in JOIN ON: 'row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
 
-statement error DataFusion error: Error during planning: Window function calls are not allowed in GROUP BY: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+
+statement error
 SELECT count(*) FROM window_in_filter_t GROUP BY row_number() OVER ();
+----
+DataFusion error: Error during planning: Window function calls are not allowed in GROUP BY: 'row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+
 
 # ... also through an alias or the position of a select expression
-statement error DataFusion error: Error during planning: Window function calls are not allowed in GROUP BY: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+statement error
 SELECT row_number() OVER () AS rn, count(*) FROM window_in_filter_t GROUP BY rn;
+----
+DataFusion error: Error during planning: Window function calls are not allowed in GROUP BY: 'row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
 
-statement error DataFusion error: Error during planning: Window function calls are not allowed in GROUP BY: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+
+statement error
 SELECT row_number() OVER (), count(*) FROM window_in_filter_t GROUP BY 1;
+----
+DataFusion error: Error during planning: Window function calls are not allowed in GROUP BY: 'row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
 
-statement error DataFusion error: Error during planning: Window function calls are not allowed in VALUES: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+
+statement error
 VALUES (row_number() OVER ());
+----
+DataFusion error: Error during planning: Window function calls are not allowed in VALUES: 'row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
 
-statement error DataFusion error: Error during planning: Window function calls are not allowed in VALUES: 'row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+
+statement error
 INSERT INTO window_in_filter_t VALUES (row_number() OVER (), 1);
+----
+DataFusion error: Error during planning: Window function calls are not allowed in VALUES: 'row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING'
+
 
 # A window function in a joined subquery is legal
 query II
@@ -7720,15 +7789,24 @@ ORDER BY x.a;
 
 # Positions with no dedicated check are reported by the physical planner, which
 # names the function instead of dumping its internal representation
-statement error DataFusion error: This feature is not implemented: Unsupported LIMIT expression: CAST\(row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS Int64\)
+statement error
 SELECT a FROM window_in_filter_t LIMIT row_number() OVER ();
+----
+DataFusion error: This feature is not implemented: Unsupported LIMIT expression: CAST(row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS Int64)
 
-statement error DataFusion error: This feature is not implemented: Unsupported OFFSET expression: CAST\(row_number\(\) ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS Int64\)
+
+statement error
 SELECT a FROM window_in_filter_t OFFSET row_number() OVER ();
+----
+DataFusion error: This feature is not implemented: Unsupported OFFSET expression: CAST(row_number() ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING AS Int64)
+
 
 # ... and the same for an aggregate function
-statement error DataFusion error: This feature is not implemented: Unsupported LIMIT expression: count\(Int64\(1\)\) AS count\(\*\)
+statement error
 SELECT a FROM window_in_filter_t LIMIT count(*);
+----
+DataFusion error: This feature is not implemented: Unsupported LIMIT expression: count(Int64(1)) AS count(*)
+
 
 statement ok
 DROP TABLE window_in_filter_t;

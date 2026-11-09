@@ -135,8 +135,11 @@ DROP TABLE aggregate_simple;
 statement ok
 create table t(a int, b int, c int) as values (1, 2, 3);
 
-query error DataFusion error: Error during planning: Projections require unique expression names but the expression "t\.a" at position 0 and "t\.a" at position 3 have the same name\. Consider aliasing \("AS"\) one of them\.
+query error
 select *, a from t;
+----
+DataFusion error: Error during planning: Projections require unique expression names but the expression "t.a" at position 0 and "t.a" at position 3 have the same name. Consider aliasing ("AS") one of them.
+
 
 # a is aliased to other name so the query is valid
 query IIII

@@ -111,8 +111,12 @@ NULL 5
 
 # Ambiguous name
 
-statement error DataFusion error: Schema error: No field named x\.\nValid fields are a, b.
+statement error
 SELECT x AS a FROM t1 UNION BY NAME SELECT x AS b FROM t1 ORDER BY x;
+----
+DataFusion error: Schema error: No field named x.
+Valid fields are a, b.
+
 
 query II
 (SELECT y FROM t1 UNION ALL SELECT x FROM t1) UNION BY NAME (SELECT z FROM t2 UNION ALL SELECT y FROM t2) ORDER BY y, z;
