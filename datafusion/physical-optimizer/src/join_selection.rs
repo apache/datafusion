@@ -369,9 +369,9 @@ pub type PipelineFixerSubrule =
 /// or `Some(Err(...))` if an error occurs during the transformation.
 ///
 /// # Errors
-/// Returns a planning error if both inputs are unbounded and the join is
-/// null-aware. Unbounded inputs require a symmetric hash join, which does not
-/// support null-aware semantics.
+/// Returns a planning error if both inputs are unbounded and emit incrementally,
+/// and the join is null-aware. The symmetric hash join used for these inputs
+/// does not support null-aware semantics.
 fn hash_join_convert_symmetric_subrule(
     input: Arc<dyn ExecutionPlan>,
     config_options: &ConfigOptions,
@@ -388,14 +388,14 @@ fn hash_join_convert_symmetric_subrule(
             hash_join.right.pipeline_behavior(),
             EmissionType::Incremental | EmissionType::Both
         );
-        if left_unbounded && right_unbounded && hash_join.null_aware {
-            return plan_err!(
-                "Cannot execute a null-aware join with two unbounded inputs: \
-                 SymmetricHashJoinExec does not support null-aware semantics."
-            );
-        }
         // Process only if both left and right sides are unbounded and incrementally emit.
         if left_unbounded && right_unbounded & left_incremental & right_incremental {
+            if hash_join.null_aware {
+                return plan_err!(
+                    "Cannot execute a null-aware join with two unbounded inputs: \
+                     SymmetricHashJoinExec does not support null-aware semantics."
+                );
+            }
             // Determine the partition mode based on configuration.
             let mode = if config_options.optimizer.repartition_joins {
                 StreamJoinPartitionMode::Partitioned

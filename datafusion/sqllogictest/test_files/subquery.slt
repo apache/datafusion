@@ -4788,11 +4788,57 @@ query error Cannot execute a null-aware join with two unbounded inputs: Symmetri
 SELECT a, a IN (SELECT a FROM unbounded_not_in_right) AS is_present
 FROM unbounded_not_in_left;
 
+# Blocking subqueries retain the pipeline-breaking error from SanityCheckPlan.
+query error Cannot execute pipeline breaking queries
+SELECT a FROM unbounded_not_in_left
+WHERE a NOT IN (SELECT max(a) FROM unbounded_not_in_right GROUP BY b);
+
+query error Cannot execute pipeline breaking queries
+SELECT a FROM unbounded_not_in_left
+WHERE a NOT IN (SELECT a FROM unbounded_not_in_right ORDER BY a LIMIT 5);
+
 statement ok
 DROP TABLE unbounded_not_in_left;
 
 statement ok
 DROP TABLE unbounded_not_in_right;
+
+# With non-nullable keys, NOT IN still runs as a symmetric hash join.
+query I
+COPY (VALUES (1, 'x'), (2, 'x'))
+TO 'test_files/scratch/subquery/not_in_left_nn.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+2
+
+query I
+COPY (VALUES (2, 'y'))
+TO 'test_files/scratch/subquery/not_in_right_nn.csv'
+STORED AS CSV OPTIONS ('format.has_header' 'true');
+----
+1
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE unbounded_not_in_left_nn(a INT NOT NULL, b VARCHAR)
+STORED AS CSV LOCATION 'test_files/scratch/subquery/not_in_left_nn.csv'
+OPTIONS ('format.has_header' 'true');
+
+statement ok
+CREATE UNBOUNDED EXTERNAL TABLE unbounded_not_in_right_nn(a INT NOT NULL, b VARCHAR)
+STORED AS CSV LOCATION 'test_files/scratch/subquery/not_in_right_nn.csv'
+OPTIONS ('format.has_header' 'true');
+
+query I
+SELECT a FROM unbounded_not_in_left_nn
+WHERE a NOT IN (SELECT a FROM unbounded_not_in_right_nn);
+----
+1
+
+statement ok
+DROP TABLE unbounded_not_in_left_nn;
+
+statement ok
+DROP TABLE unbounded_not_in_right_nn;
 
 statement ok
 RESET datafusion.execution.batch_size;
