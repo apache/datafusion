@@ -430,9 +430,15 @@ impl HashTableLookupExpr {
         let mut partition_ids = Vec::with_capacity(num_rows);
         router.route(keys, maps.len(), &mut partition_ids)?;
 
-        with_hashes(keys, self.random_state.random_state(), |hashes| {
+        // Only a hash map probes by hash. When every map is an array map, no
+        // probe reads the hashes, so the lookup skips hashing the keys.
+        let needs_hashes = maps.iter().flatten().any(|map| {
+            let map: &Map = map;
+            matches!(map, Map::HashMap(_))
+        });
+        let probe = |hashes: Option<&[u64]>| -> Result<BooleanArray> {
             // Counting sort of the rows by partition, so each table is probed
-            // once per batch over a contiguous run of its rows' hashes.
+            // once per batch over a contiguous run of its rows.
             let mut starts = vec![0usize; maps.len() + 1];
             for &id in &partition_ids {
                 starts[id as usize + 1] += 1;
@@ -442,13 +448,15 @@ impl HashTableLookupExpr {
             }
             let mut next = starts.clone();
             let mut rows = vec![0u32; num_rows];
-            let mut sorted_hashes = vec![0u64; num_rows];
-            for (row, (&id, &hash)) in partition_ids.iter().zip(hashes).enumerate() {
+            for (row, &id) in partition_ids.iter().enumerate() {
                 let slot = &mut next[id as usize];
                 rows[*slot] = row as u32;
-                sorted_hashes[*slot] = hash;
                 *slot += 1;
             }
+            let sorted_hashes: Vec<u64> = match hashes {
+                Some(hashes) => rows.iter().map(|&row| hashes[row as usize]).collect(),
+                None => Vec::new(),
+            };
 
             let mut matched = BooleanBufferBuilder::new(num_rows);
             matched.append_n(num_rows, false);
@@ -461,6 +469,8 @@ impl HashTableLookupExpr {
                 }
                 let map: &Map = map;
                 let hits = match map {
+                    // `needs_hashes` is true whenever a hash map exists, so
+                    // `sorted_hashes` holds every row here.
                     Map::HashMap(map) => map.contain_hashes(&sorted_hashes[run.clone()]),
                     // An array map is keyed by value, not hash, so it probes
                     // the run's own key values.
@@ -474,7 +484,14 @@ impl HashTableLookupExpr {
                 }
             }
             Ok(BooleanArray::new(matched.finish(), None))
-        })
+        };
+        if needs_hashes {
+            with_hashes(keys, self.random_state.random_state(), |hashes| {
+                probe(Some(hashes))
+            })
+        } else {
+            probe(None)
+        }
     }
 }
 impl std::fmt::Debug for HashTableLookupExpr {
@@ -1159,6 +1176,60 @@ mod tests {
         let min = key(arrow::compute::min(values));
         let max = key(arrow::compute::max(values));
         Ok(Arc::new(Map::ArrayMap(ArrayMap::try_new(keys, min, max)?)))
+    }
+
+    /// With every partition built as an array map, the routed lookup skips
+    /// hashing and still matches each probe row against its own partition.
+    #[test]
+    fn routed_lookup_all_array_maps() -> Result<()> {
+        use crate::repartition::{BatchPartitioner, REPARTITION_RANDOM_STATE};
+
+        let column: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let schema = Arc::new(Schema::new(vec![arrow::datatypes::Field::new(
+            "a",
+            DataType::Int32,
+            false,
+        )]));
+        let build: ArrayRef =
+            Arc::new(arrow::array::Int32Array::from(vec![1, 2, 3, 5, 8, 13, 21]));
+        let num_partitions = 4;
+        let mut maps = vec![None; num_partitions];
+        BatchPartitioner::new_hash_partitioner(
+            vec![Arc::clone(&column)],
+            num_partitions,
+            crate::metrics::Time::new(),
+        )?
+        .partition(
+            RecordBatch::try_new(schema, vec![build])?,
+            |partition, batch| {
+                maps[partition] = Some(array_map(batch.column(0))?);
+                Ok(())
+            },
+        )?;
+        let routed = HashTableLookupExpr::new(
+            vec![column],
+            SeededRandomState::with_seed(1),
+            Some(PartitionRouter::Hash(REPARTITION_RANDOM_STATE)),
+            maps,
+            "routed".to_string(),
+            None,
+        )?;
+
+        let probe: ArrayRef = Arc::new(arrow::array::Int32Array::from(vec![
+            Some(0),
+            Some(1),
+            None,
+            Some(4),
+            Some(5),
+            Some(13),
+            Some(20),
+            Some(21),
+        ]));
+        assert_eq!(
+            lookup(&routed, &probe)?,
+            BooleanArray::from(vec![false, true, false, false, true, true, false, true])
+        );
+        Ok(())
     }
 
     /// One randomly generated scenario, see [`routed_lookup_fuzz`].
