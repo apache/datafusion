@@ -366,10 +366,9 @@ pub(crate) fn get_partition_by_sort_exprs(
 
 /// Computes the [`EquivalenceProperties`] of a window operator's output.
 ///
-/// See [Constants within a window partition] for what this computes along with
-/// examples.
+/// See [Window functions] for what this computes along with examples.
 ///
-/// [Constants within a window partition]: EquivalenceProperties#constants-within-a-window-partition
+/// [Window functions]: EquivalenceProperties#window-functions
 pub(crate) fn window_equivalence_properties(
     schema: &SchemaRef,
     input: &Arc<dyn ExecutionPlan>,

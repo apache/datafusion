@@ -167,7 +167,7 @@ use itertools::{Either, Itertools};
 /// Given those observations, `c` must stay in the ordering `[c ASC, x ASC]`
 /// rather than being removed as a uniform constant would be.
 ///
-/// # Constants within a window partition
+/// # Window functions
 ///
 /// NOTE: it is important to distinguish between *window partition*, the rows
 /// with equal `PARTITION BY` keys, and *output partition*, how the data is
