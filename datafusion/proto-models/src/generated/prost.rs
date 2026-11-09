@@ -447,6 +447,8 @@ pub struct JoinNode {
     /// hold scalar `NOT IN` joins.
     #[prost(uint32, tag = "10")]
     pub null_aware_value_keys: u32,
+    #[prost(bool, tag = "11")]
+    pub single: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct AsOfJoinNode {
@@ -2241,6 +2243,8 @@ pub struct HashJoinExecNode {
     /// they can only hold scalar `NOT IN` joins.
     #[prost(uint32, tag = "13")]
     pub null_aware_value_keys: u32,
+    #[prost(bool, tag = "14")]
+    pub single: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SymmetricHashJoinExecNode {
@@ -2510,6 +2514,8 @@ pub struct NestedLoopJoinExecNode {
     pub filter: ::core::option::Option<JoinFilter>,
     #[prost(uint32, repeated, tag = "5")]
     pub projection: ::prost::alloc::vec::Vec<u32>,
+    #[prost(bool, tag = "6")]
+    pub single: bool,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct CoalesceBatchesExecNode {

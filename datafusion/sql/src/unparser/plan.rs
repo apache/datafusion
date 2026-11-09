@@ -1459,6 +1459,9 @@ impl Unparser<'_> {
                 self.select_to_sql_recursively(input, query, select, relation)
             }
             LogicalPlan::Join(join) => {
+                if join.single {
+                    return not_impl_err!("Unparsing a single join is not supported");
+                }
                 let mut table_scan_filters = vec![];
                 let (left_plan, right_plan) = match join.join_type {
                     JoinType::RightSemi | JoinType::RightAnti => {

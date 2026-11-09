@@ -122,8 +122,8 @@ pub(super) fn push_topk_through_join(sort: SortPlan) -> Result<Transformed<Logic
     // module doc comment for why CROSS JOIN specifically isn't safe to
     // push through here despite superficially preserving every row.
     let preserved_side = match join.join_type {
-        JoinType::Left | JoinType::LeftMark => Side::Left,
-        JoinType::Right | JoinType::RightMark => Side::Right,
+        JoinType::Left | JoinType::LeftMark if !join.single => Side::Left,
+        JoinType::Right | JoinType::RightMark if !join.single => Side::Right,
         _ => return Ok(Transformed::no(LogicalPlan::Sort(sort))),
     };
 
@@ -1667,5 +1667,30 @@ mod test {
             TableScan: t2 projection=[a, b, c]
         "#);
         Ok(())
+    }
+
+    #[test]
+    fn topk_not_pushed_for_single_join() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+        let LogicalPlan::Join(join) = LogicalPlanBuilder::from(t1)
+            .join(t2, JoinType::Left, (vec!["a"], vec!["a"]), None)?
+            .build()?
+        else {
+            unreachable!()
+        };
+        let plan = LogicalPlanBuilder::from(LogicalPlan::Join(join.with_single(true)))
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(3))?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Left Join: t1.a = t2.a single
+            TableScan: t1
+            TableScan: t2
+        "
+        )
     }
 }

@@ -755,6 +755,7 @@ impl LogicalPlan {
                 null_equality,
                 null_aware,
                 null_aware_value_keys,
+                single,
             }) => {
                 let schema =
                     build_join_schema(left.schema(), right.schema(), &join_type)?;
@@ -778,6 +779,7 @@ impl LogicalPlan {
                     null_equality,
                     null_aware,
                     null_aware_value_keys,
+                    single,
                 }))
             }
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -1064,6 +1066,7 @@ impl LogicalPlan {
                 null_equality,
                 null_aware,
                 null_aware_value_keys,
+                single,
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
@@ -1107,6 +1110,7 @@ impl LogicalPlan {
                     null_equality: *null_equality,
                     null_aware: *null_aware,
                     null_aware_value_keys: *null_aware_value_keys,
+                    single: *single,
                 }))
             }
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -2367,6 +2371,7 @@ impl LogicalPlan {
                         join_type,
                         null_aware,
                         null_aware_value_keys,
+                        single,
                         ..
                     }) => {
                         let join_expr: Vec<String> =
@@ -2381,6 +2386,7 @@ impl LogicalPlan {
                             (true, 0 | 1) => " null_aware".to_string(),
                             (true, n) => format!(" null_aware(value_keys={n})"),
                         };
+                        let single_expr = if *single { " single" } else { "" };
                         let join_type = if filter.is_none()
                             && keys.is_empty()
                             && *join_type == JoinType::Inner
@@ -2400,17 +2406,18 @@ impl LogicalPlan {
                                         filter_expr
                                     )?;
                                 }
-                                write!(f, "{null_aware_expr}")?;
+                                write!(f, "{null_aware_expr}{single_expr}")?;
                                 Ok(())
                             }
                             JoinConstraint::Using => {
                                 write!(
                                     f,
-                                    "{} Join: Using {}{}{}",
+                                    "{} Join: Using {}{}{}{}",
                                     join_type,
                                     join_expr.join(", "),
                                     filter_expr,
                                     null_aware_expr,
+                                    single_expr,
                                 )
                             }
                         }
@@ -4666,6 +4673,10 @@ pub struct Join {
     /// unset count only for a single-key join, a scalar `NOT IN`, and rejects
     /// it for more keys: no default can tell which of them are value keys.
     pub null_aware_value_keys: usize,
+    /// Whether this join fails when a row of its preserved side has two or
+    /// more matches, as a scalar subquery must. Valid on `Left` and `Right`
+    /// joins that are not null-aware.
+    pub single: bool,
 }
 
 /// The ordered comparison used by an [`AsOfJoin`].
@@ -4894,6 +4905,7 @@ impl Join {
             null_equality,
             null_aware,
             null_aware_value_keys: 0,
+            single: false,
         })
     }
 
@@ -4901,6 +4913,12 @@ impl Join {
     /// [`Self::null_aware_value_keys`].
     pub fn with_null_aware_value_keys(mut self, null_aware_value_keys: usize) -> Self {
         self.null_aware_value_keys = null_aware_value_keys;
+        self
+    }
+
+    /// Sets [`Self::single`].
+    pub fn with_single(mut self, single: bool) -> Self {
+        self.single = single;
         self
     }
 
@@ -4957,6 +4975,7 @@ impl Join {
                 null_equality: original_join.null_equality,
                 null_aware: original_join.null_aware,
                 null_aware_value_keys: original_join.null_aware_value_keys,
+                single: original_join.single,
             },
             requalified,
         ))
@@ -7245,6 +7264,7 @@ mod tests {
                 null_equality: NullEquality::NullEqualsNothing,
                 null_aware: false,
                 null_aware_value_keys: 0,
+                single: false,
             }))
         }
 

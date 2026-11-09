@@ -19,9 +19,11 @@ use datafusion_common::alias::AliasGenerator;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion, TreeNodeRewriter,
 };
-use datafusion_common::{Column, Result, ScalarValue, assert_or_internal_err, plan_err};
+use datafusion_common::{
+    Column, Result, ScalarValue, assert_or_internal_err, internal_err, plan_err,
+};
 use datafusion_expr::expr_rewriter::create_col_from_scalar_expr;
-use datafusion_expr::logical_plan::{JoinType, Subquery};
+use datafusion_expr::logical_plan::{JoinType, Projection, Subquery, SubqueryAlias};
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, lit, not, when};
 
 /// Optimizer rule that rewrites scalar subquery filters to joins and places an
@@ -335,9 +337,15 @@ fn build_join(
     // join with `Boolean(true)`) when the
     // `enable_physical_uncorrelated_scalar_subquery` option is disabled.
     let subquery_plan = subquery.subquery.as_ref();
+    let single = needs_single_join(subquery_plan);
     let mut pull_up = PullUpCorrelatedExpr::new().with_need_handle_count_bug(true);
     let decorrelated_subquery = subquery_plan.clone().rewrite(&mut pull_up).data()?;
     if !pull_up.can_pull_up {
+        if single {
+            return plan_err!(
+                "Correlated scalar subquery must be aggregated to return at most one row"
+            );
+        }
         return Ok(None);
     }
 
@@ -391,9 +399,19 @@ fn build_join(
     // columns.
     let join_filter = join_filter_opt.or_else(|| Some(lit(true)));
 
-    let new_plan = LogicalPlanBuilder::from(outer_input.clone())
-        .join_on(aliased_subquery, JoinType::Left, join_filter)?
-        .build()?;
+    let new_plan = if single {
+        let LogicalPlan::Join(join) = LogicalPlanBuilder::from(aliased_subquery)
+            .join_on(outer_input.clone(), JoinType::Right, join_filter)?
+            .build()?
+        else {
+            return internal_err!("Expected a join for the scalar subquery");
+        };
+        LogicalPlan::Join(join.with_single(true))
+    } else {
+        LogicalPlanBuilder::from(outer_input.clone())
+            .join_on(aliased_subquery, JoinType::Left, join_filter)?
+            .build()?
+    };
 
     // Add count-bug compensation for each of the subquery's projected
     // expressions that yield non-NULL values on empty input. We wrap each
@@ -439,6 +457,24 @@ fn build_join(
     }
 
     Ok(Some((new_plan, compensation_exprs)))
+}
+
+/// Whether a scalar subquery may return several rows for one outer row.
+fn needs_single_join(subquery: &LogicalPlan) -> bool {
+    let mut plan = subquery;
+    while let LogicalPlan::Projection(Projection { input, .. })
+    | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) = plan
+    {
+        plan = input;
+    }
+    let aggregated = match plan {
+        LogicalPlan::Aggregate(_) => true,
+        LogicalPlan::Filter(filter) => {
+            matches!(filter.input.as_ref(), LogicalPlan::Aggregate(_))
+        }
+        _ => false,
+    };
+    !aggregated && subquery.max_rows().is_none_or(|rows| rows > 1)
 }
 
 #[cfg(test)]
@@ -1333,5 +1369,60 @@ mod tests {
                       TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
         "
         )
+    }
+
+    #[test]
+    fn non_aggregated_scalar_subquery_to_single_join() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
+                )?
+                .project(vec![col("orders.o_totalprice")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .project(vec![col("customer.c_custkey"), scalar_subquery(sq)])?
+            .build()?;
+
+        assert_optimized_plan_equal!(
+            plan,
+            @r"
+        Projection: customer.c_custkey, __scalar_sq_1.o_totalprice AS o_totalprice [c_custkey:Int64, o_totalprice:Float64;N]
+          Right Join:  Filter: customer.c_custkey = __scalar_sq_1.o_custkey single [o_totalprice:Float64;N, o_custkey:Int64;N, c_custkey:Int64, c_name:Utf8]
+            SubqueryAlias: __scalar_sq_1 [o_totalprice:Float64;N, o_custkey:Int64]
+              Projection: orders.o_totalprice, orders.o_custkey [o_totalprice:Float64;N, o_custkey:Int64]
+                TableScan: orders [o_orderkey:Int64, o_custkey:Int64, o_orderstatus:Utf8, o_totalprice:Float64;N]
+            TableScan: customer [c_custkey:Int64, c_name:Utf8]
+        "
+        )
+    }
+
+    #[test]
+    fn non_aggregated_scalar_subquery_that_cannot_be_decorrelated() -> Result<()> {
+        let sq = Arc::new(
+            LogicalPlanBuilder::from(scan_tpch_table("orders"))
+                .filter(
+                    out_ref_col(DataType::Int64, "customer.c_custkey")
+                        .eq(col("orders.o_custkey")),
+                )?
+                .limit(0, Some(2))?
+                .project(vec![col("orders.o_totalprice")])?
+                .build()?,
+        );
+
+        let plan = LogicalPlanBuilder::from(scan_tpch_table("customer"))
+            .project(vec![col("customer.c_custkey"), scalar_subquery(sq)])?
+            .build()?;
+
+        let err = ScalarSubqueryToJoin::new()
+            .rewrite(plan, &crate::OptimizerContext::new())
+            .unwrap_err();
+        assert!(err.to_string().contains(
+            "Correlated scalar subquery must be aggregated to return at most one row"
+        ));
+        Ok(())
     }
 }

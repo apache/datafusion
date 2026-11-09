@@ -38,7 +38,8 @@ use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
 use datafusion_physical_plan::joins::{
-    HashJoinExec, HashJoinExecBuilder, NestedLoopJoinExec, PartitionMode,
+    HashJoinExec, HashJoinExecBuilder, NestedLoopJoinExec, NestedLoopJoinExecBuilder,
+    PartitionMode,
 };
 use datafusion_physical_plan::operator_statistics::{
     ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
@@ -521,6 +522,58 @@ async fn test_null_aware_left_anti_swaps_to_right_anti(
         with_filter.then(|| vec![JoinSide::Right, JoinSide::Left])
     );
 
+    Ok(())
+}
+
+#[rstest]
+#[case::collect_left(PartitionMode::CollectLeft)]
+#[case::partitioned(PartitionMode::Partitioned)]
+#[tokio::test]
+async fn test_single_join_swaps_and_keeps_single(
+    #[case] partition_mode: PartitionMode,
+) -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let on = vec![(
+        Arc::new(Column::new_with_schema("big_col", &big.schema())?) as _,
+        Arc::new(Column::new_with_schema("small_col", &small.schema())?) as _,
+    )];
+    let join = HashJoinExecBuilder::new(big, small, on, JoinType::Right)
+        .with_partition_mode(partition_mode)
+        .with_single(true)
+        .build()?;
+
+    let optimized_join =
+        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+    let swapped_join = optimized_join
+        .downcast_ref::<ProjectionExec>()
+        .expect("a projection restores the column order")
+        .input()
+        .downcast_ref::<HashJoinExec>()
+        .expect("the join stays a hash join");
+
+    assert_eq!(*swapped_join.join_type(), JoinType::Left);
+    assert!(swapped_join.single);
+    assert_eq!(swapped_join.left().schema().field(0).name(), "small_col");
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_nested_loop_single_join_is_not_swapped() -> Result<()> {
+    let (big, small) = create_big_and_small();
+    let join = NestedLoopJoinExecBuilder::new(big, small, JoinType::Right)
+        .with_filter(nl_join_filter())
+        .with_single(true)
+        .build()?;
+
+    let optimized_join =
+        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
+    let join = optimized_join
+        .downcast_ref::<NestedLoopJoinExec>()
+        .expect("the join is not swapped");
+
+    assert_eq!(*join.join_type(), JoinType::Right);
+    assert!(join.single());
+    assert_eq!(join.left().schema().field(0).name(), "big_col");
     Ok(())
 }
 

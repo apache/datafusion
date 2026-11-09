@@ -3930,6 +3930,31 @@ async fn roundtrip_join_null_aware() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn roundtrip_single_join() -> Result<()> {
+    use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
+
+    let ctx = SessionContext::new();
+    let df = ctx
+        .sql(
+            "SELECT t1.id, (SELECT t2.v FROM (VALUES (1, 10), (1, 20)) AS t2(id, v) WHERE t2.id = t1.id) \
+             FROM (VALUES (1), (2)) AS t1(id)",
+        )
+        .await?;
+    let plan = ctx.state().optimize(df.logical_plan())?;
+    let mut single = false;
+    plan.apply(|n| {
+        single |= matches!(n, LogicalPlan::Join(j) if j.single);
+        Ok(TreeNodeRecursion::Continue)
+    })?;
+    assert!(single);
+
+    let bytes = logical_plan_to_bytes(&plan)?;
+    let logical_round_trip = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
+    assert_eq!(format!("{plan:?}"), format!("{logical_round_trip:?}"));
+    Ok(())
+}
+
 // Regression test for `null_equality` round-trip (related to #22065):
 // the decoder must preserve a non-default `null_equality`
 // (`NullEqualsNull`) across a to_proto -> from_proto round trip.

@@ -157,7 +157,8 @@ pub fn check_subquery_expr(
                 subquery.subquery.schema().field_names().join(", ")
             );
         }
-        // Correlated scalar subquery must be aggregated to return at most one row
+        // An aggregated correlated scalar subquery must return at most one row
+        // per outer row
         if !subquery.outer_ref_columns.is_empty() {
             match strip_inner_query(inner_plan) {
                 LogicalPlan::Aggregate(agg) => {
@@ -172,15 +173,7 @@ pub fn check_subquery_expr(
                         Ok(())
                     }
                 }
-                _ => {
-                    if inner_plan.max_rows().is_some_and(|max_row| max_row <= 1) {
-                        Ok(())
-                    } else {
-                        plan_err!(
-                            "Correlated scalar subquery must be aggregated to return at most one row"
-                        )
-                    }
-                }
+                _ => Ok(()),
             }?;
             match outer_plan {
                 LogicalPlan::Projection(_)

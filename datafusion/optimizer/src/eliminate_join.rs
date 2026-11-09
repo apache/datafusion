@@ -508,7 +508,8 @@ fn rewrite_join(
                 join.null_equality,
                 join.null_aware,
             )?
-            .with_null_aware_value_keys(join.null_aware_value_keys),
+            .with_null_aware_value_keys(join.null_aware_value_keys)
+            .with_single(join.single),
         )))
     } else {
         // Nothing changed; reassemble the join reusing its existing schema rather
@@ -524,6 +525,7 @@ fn rewrite_join(
             null_equality: join.null_equality,
             null_aware: join.null_aware,
             null_aware_value_keys: join.null_aware_value_keys,
+            single: join.single,
         })))
     }
 }

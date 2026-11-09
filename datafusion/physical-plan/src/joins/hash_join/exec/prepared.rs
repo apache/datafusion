@@ -60,6 +60,7 @@ impl PreparedHashJoinBuild {
             // Prepared builds exclude null-aware joins.
             not_in: None,
             visited_indices_bitmap: Mutex::new(BooleanBufferBuilder::new(0)),
+            single_matches: Default::default(),
             probe_completion: ProbeCompletion::new(probe_threads),
         }
     }
