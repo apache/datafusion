@@ -114,7 +114,7 @@ use itertools::Itertools;
 ///
 /// After pinning `a`, both orderings are headed by `c`. Since nothing says the
 /// rows that tie on `a` are sorted by `b`, the walk stops, and reports that the
-/// requiremet is not satisfied.
+/// requirement is not satisfied.
 ///
 /// * Orderings: `[a ASC, b ASC]` and `[a ASC, c ASC]`
 /// * Requirement: `[a ASC, c ASC]`
@@ -127,23 +127,22 @@ use itertools::Itertools;
 /// [Checking whether a requirement is satisfied]: EquivalenceProperties#checking-whether-a-requirement-is-satisfied
 pub(super) struct SortKeyWalk<'a> {
     props: &'a EquivalenceProperties,
-    /// Pinned expressions. Pinning a member of an equivalence class pins all
-    /// of its members.
+    /// Pinned expressions.
     pinned: HashSet<Arc<dyn PhysicalExpr>>,
     /// Orderings that hold among the rows that tie on the pinned expressions,
     /// found by [`EquivalenceProperties::implied_ordering`] as the walk goes.
     implied: Vec<LexOrdering>,
-    /// The position of the head of each ordering.
-    ///
-    /// Empty until the first pin.
+    /// The position of the head of each ordering. Empty until the first pin.
     ///
     /// `head_idxs[i]` tracks the position in the `LexOrdering` at index `i`,
-    /// as returned by [`Self::ordering`]. The ordering at index `i` is:
+    /// as returned by [`Self::ordering`].
+    ///
+    /// The ordering at index `i` is:
     ///  * if `i < self.props.normal_cls.len()` then `self.props.normal_cls[i]`
     ///  * else, `self.implied[i - self.props.normal_cls.len()]` otherwise. See
     ///
     /// The value is either an index into that ordering's sort expressions, or
-    /// its length when it has no head.
+    /// its length when the ordering has been exhausted.
     head_idxs: Vec<usize>,
 }
 
@@ -231,13 +230,13 @@ impl<'a> SortKeyWalk<'a> {
         Ok(())
     }
 
-    /// Pins `expr` .
+    /// Pins `expr`.
     ///
     /// See [`SortKeyWalk`] for an explanation of pinning.
     ///
     ///
-    /// This method pins `expr` (and thus by extension all members of its
-    /// equivalence class), but not its children (see [`Self::pin_key`]).
+    /// This method pins `expr` and thus by extension all members of its
+    /// equivalence class), but not its children. See [`Self::pin_key`] for more details.
     pub(super) fn pin(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
         match self.props.eq_group.get_equivalence_class(&expr) {
             Some(class) => self.pinned.extend(class.iter().cloned()),
@@ -354,10 +353,10 @@ impl<'a> SortKeyWalk<'a> {
         }
         // Now, check what we know about orderings. A window aggregate over a
         // whole window partition, such as `SUM(x) OVER (PARTITION BY k)`, adds
-        // `[k, w]` in all four directions of `w` (see "Constants within a
-        // window partition" on `EquivalenceProperties`). Once `k` is pinned,
-        // `w` heads orderings in opposite directions, so it has one value
-        // among the rows that tie on `k`:
+        // `[k, w]` in all four directions of `w` (see `EquivalenceProperties`
+        // documentation for more details). Once `k` is pinned, `w` heads
+        // orderings in opposite directions, so it has one value among the rows
+        // that tie on `k`:
         let normal_expr = self.props.eq_group.normalize_expr(Arc::clone(&node.expr));
         if self.is_fixed(&normal_expr) || is_partial_const(self.heads(), &normal_expr) {
             node.data.sort_properties = SortProperties::Singleton;
@@ -367,9 +366,13 @@ impl<'a> SortKeyWalk<'a> {
         Ok(Transformed::yes(node))
     }
 
-    /// Whether `expr` is fixed (see [`SortKeyWalk`]).
+    /// Whether `expr` is fixed
     ///
-    /// `expr` must be in normal form.
+    /// Note `expr` must be in [normal form].
+    ///
+    /// See [`SortKeyWalk`] for more details
+    ///
+    /// [normal form]: EquivalenceProperties#normal-form
     fn is_fixed(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         if expr.is::<Literal>() || self.pinned.contains(expr) {
             return true;
@@ -530,7 +533,9 @@ mod tests {
     }
 
     /// A window over a whole window partition, such as `SUM(..) OVER
-    /// (PARTITION BY k)`, adds `[k, x]` in all four directions of `x`. Pinning `k` leaves `x`
+    /// (PARTITION BY k)`, adds `[k, x]` in all four directions of `x`.
+    ///
+    /// Pinning `k` leaves `x`
     /// heading orderings in opposite directions, so `x` has one value, and so
     /// does `CAST(x AS BIGINT)`: `[k, CAST(x AS BIGINT)]` holds in every
     /// direction. Without the partial constant check, `x` would only be
