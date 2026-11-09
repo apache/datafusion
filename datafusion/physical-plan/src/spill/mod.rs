@@ -833,15 +833,17 @@ const VIEW_SIZE_BYTES: usize = 16;
 ///
 /// # When GC is triggered
 ///
-/// View GC is only performed when data buffers exceed a threshold (currently 10KB).
-/// This balances memory savings against the CPU overhead of garbage collection.
-/// Small view buffers are passed through unchanged since the GC overhead would exceed
-/// any memory savings.
+/// View GC runs when data buffers above a threshold (currently 10KB) hold more
+/// bytes than the views use. This balances memory savings against the CPU
+/// overhead of garbage collection. It also runs at any size when several data
+/// buffers remain and the views share no bytes, since each buffer read back
+/// from the spill is charged for the whole IPC message.
 ///
 /// # Performance considerations
 ///
 /// - If no arrays need compaction, the original batch is cloned cheaply
-/// - View GC is skipped for small buffers to avoid unnecessary CPU overhead
+/// - View GC is skipped for a single small data buffer to avoid unnecessary CPU
+///   overhead
 /// - Nested container types are traversed recursively so view arrays inside
 ///   `List`, `Map`, `Union`, `Dictionary`, and other child-bearing arrays are compacted too
 /// - Traversal uses physical children, not logical reachability. For example,
@@ -2703,6 +2705,24 @@ mod tests {
         let views: ArrayRef = Arc::new(dictionary_array(8192)?);
         let batch = RecordBatch::try_from_iter([("c", views)])?;
         assert!(!views_share_bytes(&batch));
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_keeps_shared_views_in_two_buffers() -> Result<()> {
+        use arrow::array::AsArray;
+        use arrow::compute::concat;
+
+        let (_, first) = shared_dictionary_views(1000, 8, 1024)?;
+        let (_, second) = shared_dictionary_views(1000, 8, 1024)?;
+        let merged = concat(&[&first as &dyn Array, &second])?;
+        let merged = merged.as_string_view();
+
+        // `gc()` would copy 16384 values, 8x what the two dictionaries hold
+        let compacted = compact_view_array(merged).expect("buffer entries repeat");
+        assert_eq!(compacted.data_buffers().len(), 2);
+        assert_eq!(&compacted, merged);
+
         Ok(())
     }
 

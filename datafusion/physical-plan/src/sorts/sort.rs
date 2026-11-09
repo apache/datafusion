@@ -66,7 +66,7 @@ use datafusion_execution::memory_pool::{
 use datafusion_execution::runtime_env::RuntimeEnv;
 use datafusion_physical_expr::LexOrdering;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{DynamicFilterPhysicalExpr, lit};
+use datafusion_physical_expr::expressions::{Column, DynamicFilterPhysicalExpr, lit};
 
 use futures::{Stream, StreamExt, TryStreamExt};
 use log::{debug, trace};
@@ -784,13 +784,13 @@ impl ExternalSorter {
         let (sizes, shared_input_size) = self.sort_run_sizes(&runs)?;
         let shared_input =
             shared_input_size.map(|size| Arc::new(self.reservation.split(size)));
-        let batch_size = self.merge_run_batch_size();
         let jobs =
             runs.into_iter()
                 .zip(sizes)
                 .enumerate()
                 .map(move |(index, (batch, size))| {
                     let reservation = self.reservation.split(size);
+                    let batch_size = self.merge_run_batch_size(&batch)?;
                     let sort = self.sort_run(
                         batch,
                         reservation,
@@ -978,11 +978,11 @@ impl ExternalSorter {
         let (sizes, shared_input_size) = self.sort_run_sizes(&runs)?;
         let shared_input =
             shared_input_size.map(|size| Arc::new(self.reservation.split(size)));
-        let batch_size = self.merge_run_batch_size();
         runs.into_iter()
             .zip(sizes)
             .map(|(run, size)| {
                 let reservation = self.reservation.split(size);
+                let batch_size = self.merge_run_batch_size(&run)?;
                 self.sort_batch_stream(run, reservation, shared_input.clone(), batch_size)
             })
             .collect()
@@ -1038,12 +1038,6 @@ impl ExternalSorter {
         let expressions = self.expr.clone();
         let merge_pool = Arc::clone(&self.merge_pool);
         let elapsed_compute = self.metrics.baseline.elapsed_compute().clone();
-        // Split batches of views sharing bytes would each be charged for them
-        let batch_size = if batch_size < self.batch_size && views_share_bytes(&batch) {
-            self.batch_size
-        } else {
-            batch_size
-        };
         // Set when `merge_run_batch_size` split this run
         let split = batch_size < self.batch_size;
 
@@ -1096,15 +1090,17 @@ impl ExternalSorter {
         })
     }
 
-    /// Batch size of the sorted runs that feed a merge. A merge in the row format
-    /// holds the keys of every run's current batch at once, and these keys can be
-    /// larger than the batches. With a memory limit, runs therefore use an eighth
-    /// of `batch_size`, but at least 1024 rows to keep the per-batch merge cost
-    /// small. The merge output still uses `batch_size`. Runs keep `batch_size`
-    /// when their batches would share buffers other than the data of top-level
-    /// view columns, such as dictionary values, since every batch is charged for
-    /// them. `sort_run` also keeps it for a run whose views share bytes.
-    fn merge_run_batch_size(&self) -> usize {
+    /// Batch size of the sorted run `run` when it feeds a merge. A merge in the
+    /// row format holds the keys of every run's current batch at once. The sort
+    /// reserves about twice the run, so the keys fit next to the sorted copy if
+    /// they are at most as large as the run. Otherwise, with a memory limit, the
+    /// run uses an eighth of `batch_size`, but at least 1024 rows to keep the
+    /// per-batch merge cost small. The merge output still uses `batch_size`.
+    ///
+    /// Runs keep `batch_size` when their batches would share buffers other than
+    /// the data of top-level view columns, such as dictionary values, or when the
+    /// views of `run` share bytes, since every batch is charged for them.
+    fn merge_run_batch_size(&self, run: &RecordBatch) -> Result<usize> {
         let limited = !matches!(
             self.runtime.memory_pool.memory_limit(),
             MemoryLimit::Infinite
@@ -1114,11 +1110,34 @@ impl ExternalSorter {
             sorted_copy_keeps_buffers(data_type)
                 && !matches!(data_type, DataType::Utf8View | DataType::BinaryView)
         });
-        if limited && !shares_buffers && merges_in_row_format(&self.expr, &self.schema) {
-            (self.batch_size / 8).max(1024).min(self.batch_size)
+        if limited
+            && !shares_buffers
+            && merges_in_row_format(&self.expr, &self.schema)
+            && self.encoded_keys_may_exceed(run)?
+            && !views_share_bytes(run)
+        {
+            Ok((self.batch_size / 8).max(1024).min(self.batch_size))
         } else {
-            self.batch_size
+            Ok(self.batch_size)
         }
+    }
+
+    /// Returns whether the row-format keys of `run` may be larger than `run`. A
+    /// computed key counts as larger, since sizing it would evaluate it again.
+    fn encoded_keys_may_exceed(&self, run: &RecordBatch) -> Result<bool> {
+        // An 8-byte offset per row, then a null byte and the bytes of each key
+        let mut encoded = run.num_rows() * size_of::<usize>();
+        for sort_expr in self.expr.iter() {
+            let Some(column) = sort_expr.expr.downcast_ref::<Column>() else {
+                return Ok(true);
+            };
+            encoded += run.num_rows()
+                + run
+                    .column(column.index())
+                    .to_data()
+                    .get_slice_memory_size()?;
+        }
+        Ok(encoded > run.get_sliced_size()?)
     }
 
     /// If this sort may spill, pre-allocates

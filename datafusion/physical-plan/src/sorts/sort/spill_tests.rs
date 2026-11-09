@@ -685,10 +685,11 @@ async fn test_sort_preparation_keeps_output_reserved() -> Result<()> {
 
 /// Merging sorted runs in the row format holds the keys of every run's current
 /// batch. Two `Int32` keys encode to 18 bytes per row against 8 bytes in the
-/// batches, and a single `FixedSizeBinary(16)` key also merges in the row
-/// format, so merging full-size runs needs more memory than the sort reserves
-/// while buffering them. The `Utf8View` and dictionary payloads keep buffers
-/// shared after sorting, which must not be charged once per split batch.
+/// batches, and a single `FixedSizeBinary(16)` key and two long `Utf8View` keys
+/// also encode to more than their runs, so merging full-size runs needs more
+/// memory than the sort reserves while buffering them. The payloads make runs
+/// larger than their keys or keep buffers shared after sorting, so these runs
+/// keep `batch_size` and must not be charged once per batch either.
 async fn check_merge_keys_larger_than_batches() -> Result<()> {
     let rows = 8192;
     let int_keys = |batch: i32| -> Vec<ArrayRef> {
@@ -711,7 +712,9 @@ async fn check_merge_keys_larger_than_batches() -> Result<()> {
         DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8));
     for payload in [DataType::Utf8View, dictionary] {
         let fields = [&int_fields[..], &[("c", payload.clone())]].concat();
-        check_merge_keys(&fields, 2, 16, true, |batch| {
+        // Runs of this `Utf8View` payload are not split, as on `main`
+        let within_pool = payload != DataType::Utf8View;
+        check_merge_keys(&fields, 2, 16, within_pool, |batch| {
             let payload = cast(&strings(batch), &payload)?;
             Ok([int_keys(batch), vec![payload]].concat())
         })
@@ -828,6 +831,52 @@ async fn test_merge_keys_larger_than_batches() -> Result<()> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn test_merge_keys_larger_than_batches_multithreaded() -> Result<()> {
     check_merge_keys_larger_than_batches().await
+}
+
+/// Only runs whose encoded keys are larger than the run are split.
+#[test]
+fn test_merge_run_batch_size_follows_key_size() -> Result<()> {
+    let batch_size = 8192;
+    let rows = batch_size as i32;
+    let check = |payload: Option<ArrayRef>, expected: usize| -> Result<()> {
+        let mut columns: Vec<(&str, ArrayRef)> = vec![
+            ("a", Arc::new(Int64Array::from_iter_values(0..rows as i64))),
+            ("b", Arc::new(Int64Array::from_iter_values(0..rows as i64))),
+        ];
+        columns.extend(payload.map(|payload| ("c", payload)));
+        let batch = RecordBatch::try_from_iter(columns)?;
+        let ordering = LexOrdering::new((0..2).map(|i| {
+            PhysicalSortExpr::new_default(Arc::new(Column::new(
+                batch.schema().field(i).name(),
+                i,
+            )))
+        }))
+        .expect("two sort keys");
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(1024 * 1024 * 1024, 1.0)
+            .build_arc()?;
+        let sorter = ExternalSorter::new(
+            0,
+            batch.schema(),
+            ordering,
+            batch_size,
+            0,
+            0,
+            SpillCompression::Uncompressed,
+            &ExecutionPlanMetricsSet::new(),
+            runtime,
+        )?;
+        assert_eq!(sorter.merge_run_batch_size(&batch)?, expected);
+        Ok(())
+    };
+    // Encoded keys: 26 bytes a row, against 16 bytes a row
+    check(None, batch_size / 8)?;
+    // Against 16 + 16 bytes a row: inlined views add more than the keys need
+    let short: StringViewArray = (0..rows).map(|i| Some(format!("{i}"))).collect();
+    check(Some(Arc::new(short)), batch_size)?;
+    // Against 16 + 16 + 64 bytes a row
+    let long: StringViewArray = (0..rows).map(|i| Some(format!("{i:0>64}"))).collect();
+    check(Some(Arc::new(long)), batch_size)
 }
 
 #[tokio::test]
