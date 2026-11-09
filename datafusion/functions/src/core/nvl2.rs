@@ -1,21 +1,9 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::datatypes::{DataType, Field, FieldRef};
+use datafusion_common::metadata::coerced_fields_metadata;
 use datafusion_common::{Result, internal_err, plan_err, utils::take_function_args};
 use datafusion_expr::{
     ColumnarValue, Documentation, Expr, ReturnFieldArgs, ScalarFunctionArgs,
@@ -94,7 +82,14 @@ impl ScalarUDFImpl for NVL2Func {
         let nullable =
             args.arg_fields[1].is_nullable() || args.arg_fields[2].is_nullable();
         let return_type = args.arg_fields[1].data_type().clone();
-        Ok(Field::new(self.name(), return_type, nullable).into())
+        // The result value comes from the second or third argument; propagate
+        // field metadata (e.g. Arrow extension types) from them. The first
+        // argument is only tested for NULL and does not contribute a value.
+        let metadata =
+            coerced_fields_metadata(args.arg_fields[1..3].iter().map(|f| f.as_ref()))?;
+        Ok(metadata
+            .add_to_field(Field::new(self.name(), return_type, nullable))
+            .into())
     }
 
     fn invoke_with_args(&self, _args: ScalarFunctionArgs) -> Result<ColumnarValue> {

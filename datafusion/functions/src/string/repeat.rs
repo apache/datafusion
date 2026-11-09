@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::strings::{
     BulkNullStringArrayBuilder, GenericStringArrayBuilder, StringViewArrayBuilder,
@@ -34,6 +21,12 @@ use datafusion_expr::{ScalarFunctionArgs, ScalarUDFImpl, Signature};
 use datafusion_expr_common::signature::{Coercion, TypeSignatureClass};
 use datafusion_expr_common::sort_properties::ExprProperties;
 use datafusion_macros::user_doc;
+
+/// Largest result, in bytes, that `repeat` produces for `LargeUtf8`, both for a
+/// single value and for the total of an array. The result is allocated up front,
+/// and an allocation the allocator refuses aborts or panics instead of returning
+/// an error.
+const LARGE_UTF8_MAX_SIZE: usize = u32::MAX as usize;
 
 #[user_doc(
     doc_section(label = "String Functions"),
@@ -138,7 +131,7 @@ impl ScalarUDFImpl for RepeatFunc {
                         compute_repeat(s, count, i32::MAX as usize)?,
                     )),
                     ScalarValue::LargeUtf8(Some(s)) => ScalarValue::LargeUtf8(Some(
-                        compute_repeat(s, count, i64::MAX as usize)?,
+                        compute_repeat(s, count, LARGE_UTF8_MAX_SIZE)?,
                     )),
                     _ => {
                         return internal_err!(
@@ -238,7 +231,16 @@ fn repeat(string_array: &ArrayRef, count_array: &ArrayRef) -> Result<ArrayRef> {
         LargeUtf8 => {
             let string_arr = string_array.as_string::<i64>();
             let (total_capacity, max_item_capacity) =
-                calculate_capacities(&string_arr, number_array, i64::MAX as usize)?;
+                calculate_capacities(&string_arr, number_array, LARGE_UTF8_MAX_SIZE)?;
+            // The builder allocates the whole output up front, so the cap must
+            // also bound the total, not only each row.
+            if total_capacity > LARGE_UTF8_MAX_SIZE {
+                return exec_err!(
+                    "string size overflow on repeat, max size is {}, but got {}",
+                    LARGE_UTF8_MAX_SIZE,
+                    total_capacity
+                );
+            }
             let builder = GenericStringArrayBuilder::<i64>::with_capacity(
                 string_array.len(),
                 total_capacity,
@@ -467,6 +469,21 @@ mod tests {
             Utf8,
             StringArray
         );
+        test_function!(
+            RepeatFunc::new(),
+            vec![
+                ColumnarValue::Scalar(ScalarValue::LargeUtf8(Some(String::from("a")))),
+                ColumnarValue::Scalar(ScalarValue::Int64(Some(1 << 60))),
+            ],
+            exec_err!(
+                "string size overflow on repeat, max size is {}, but got {}",
+                u32::MAX,
+                1usize << 60
+            ),
+            &str,
+            LargeUtf8,
+            LargeStringArray
+        );
 
         Ok(())
     }
@@ -529,6 +546,27 @@ mod tests {
         assert!(
             err.contains("string size overflow on repeat"),
             "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_repeat_large_string_array_total_exceeds_max_size() {
+        // Each row is at the cap, but the total is larger than any allocation
+        // can satisfy, so a missing total check fails at once.
+        let n = 1 << 17;
+        let strings: ArrayRef = Arc::new(LargeStringArray::from(vec![Some("a"); n]));
+        let counts: ArrayRef = Arc::new(Int64Array::from(vec![Some(u32::MAX as i64); n]));
+
+        let err = super::repeat(&strings, &counts)
+            .unwrap_err()
+            .strip_backtrace();
+        assert_eq!(
+            err,
+            format!(
+                "Execution error: string size overflow on repeat, max size is {}, but got {}",
+                u32::MAX,
+                n * u32::MAX as usize
+            )
         );
     }
 

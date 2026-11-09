@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Query Optimizer
@@ -29,7 +16,7 @@ contains an extensive set of [`OptimizerRule`]s and [`PhysicalOptimizerRule`]s t
 they execute more quickly while still computing the same result.
 
 For a reference list of the built-in analyzer, logical optimizer, and physical optimizer rules,
-see [Optimizer Rule Reference].
+see the documentation of [`Analyzer`], [`Optimizer`], and [`PhysicalOptimizer`].
 
 For a deeper background on optimizer architecture and rule types and predicates, see
 [Optimizing SQL (and DataFrames) in DataFusion, Part 1], [Part 2],
@@ -42,7 +29,9 @@ For a deeper background on optimizer architecture and rule types and predicates,
 [part 2]: https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-two
 [using ordering for better plans in apache datafusion]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis
 [dynamic filters: passing information between operators during execution for 25x faster queries]: https://datafusion.apache.org/blog/2025/09/10/dynamic-filters
-[optimizer rule reference]: https://docs.rs/datafusion/latest/datafusion/index.html#built-in-optimizer-rules
+[`analyzer`]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Analyzer.html#built-in-analyzer-rules
+[`optimizer`]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Optimizer.html#built-in-optimizer-rules
+[`physicaloptimizer`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/optimizer/struct.PhysicalOptimizer.html#built-in-physical-optimizer-rules
 [`logicalplan`]: https://docs.rs/datafusion/latest/datafusion/logical_expr/enum.LogicalPlan.html
 
 ## Running the Optimizer
@@ -371,6 +360,8 @@ There should also be a test in `integration-tests.rs` that tests the rule as par
 The `EXPLAIN VERBOSE` command can be used to show the effect of each optimization rule on a query.
 
 In the following example, the `type_coercion` and `simplify_expressions` passes have simplified the plan so that it returns the constant `"3.2"` rather than doing a computation at execution time.
+The rule names shown in the output are listed, in the order the rules run, in the
+documentation of [`Analyzer`], [`Optimizer`], and [`PhysicalOptimizer`].
 
 ```text
 > explain verbose select cast(1 + 2.2 as string) as foo;

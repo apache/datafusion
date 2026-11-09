@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ParquetMorselizer`] state machines for opening Parquet files
 
@@ -42,8 +29,10 @@ use arrow::array::RecordBatch;
 use arrow::datatypes::DataType;
 use datafusion_datasource::morsel::{Morsel, MorselPlan, MorselPlanner, Morselizer};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr_adapter::replace_columns_with_literals;
 use datafusion_physical_expr_adapter::rewrite::rewrite_input_file_name_in_projection;
+use datafusion_physical_expr_adapter::{
+    replace_columns_with_literals, replace_columns_with_literals_keeping_metadata,
+};
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::future::Future;
@@ -935,11 +924,23 @@ impl ParquetMorselizer {
         let mut projection = self.projection.clone();
         let mut predicate = self.predicate.clone();
         if !literal_columns.is_empty() {
+            // Keep the field metadata of the replaced columns, such as extension types
+            let table_schema = self.table_schema.table_schema();
             projection = projection.try_map_exprs(|expr| {
-                replace_columns_with_literals(Arc::clone(&expr), &literal_columns)
+                replace_columns_with_literals_keeping_metadata(
+                    Arc::clone(&expr),
+                    &literal_columns,
+                    table_schema,
+                )
             })?;
             predicate = predicate
-                .map(|p| replace_columns_with_literals(p, &literal_columns))
+                .map(|p| {
+                    replace_columns_with_literals_keeping_metadata(
+                        p,
+                        &literal_columns,
+                        table_schema,
+                    )
+                })
                 .transpose()?;
         }
 
