@@ -44,13 +44,6 @@ use itertools::Itertools;
 /// themselves, as well as literals, constants, and singleton leaf expressions
 /// (such as an uncorrelated scalar subquery). See [`Self::is_fixed`] for more
 /// details.
-/// 
-/// ## Implied Orderings
-///
-/// - An ordering is *implied* if it follows from the heads through a known
-///   equality, as [`EquivalenceProperties::implied_ordering`] finds. The walk
-///   collects implied orderings as it pins, and treats them like the
-///   orderings of the properties from then on.
 ///
 /// ## Heads
 ///
@@ -151,10 +144,6 @@ pub(super) struct SortKeyWalk<'a> {
     ///
     /// The value is either an index into that ordering's sort expressions, or
     /// its length when it has no head.
-    ///
-    /// For example, with orderings `[a, b]` and `[b, c]`, head_idxs is `[0, 0]`
-    /// at the start, `[1, 0]` after pinning `a`, and `[2, 1]` after pinning
-    /// `b`, when `[a, b]` is used up.
     head_idxs: Vec<usize>,
 }
 
