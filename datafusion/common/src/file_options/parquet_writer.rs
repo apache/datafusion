@@ -9,7 +9,7 @@ use std::sync::Arc;
 use crate::{
     _internal_datafusion_err, DataFusionError, Result,
     config::{ParquetCdcOptions, ParquetOptions, TableParquetOptions},
-    parquet_config::{DFParquetCompression, DFParquetEncoding},
+    parquet_config::DFParquetCompression,
 };
 
 use arrow::datatypes::Schema;
@@ -117,8 +117,7 @@ impl TryFrom<&TableParquetOptions> for WriterPropertiesBuilder {
             }
 
             if let Some(encoding) = &options.encoding {
-                let parsed_encoding = parse_encoding_string(encoding)?;
-                builder = builder.set_column_encoding(path.clone(), parsed_encoding);
+                builder = builder.set_column_encoding(path.clone(), (*encoding).into());
             }
 
             if let Some(dictionary_enabled) = options.dictionary_enabled {
@@ -286,13 +285,6 @@ impl ParquetOptions {
     }
 }
 
-/// Parses a column-specific parquet encoding string.
-pub(crate) fn parse_encoding_string(
-    str_setting: &str,
-) -> Result<parquet::basic::Encoding> {
-    str_setting.parse::<DFParquetEncoding>().map(Into::into)
-}
-
 /// Parses datafusion.execution.parquet.compression String to a parquet::basic::Compression
 pub fn parse_compression_string(
     str_setting: &str,
@@ -344,7 +336,7 @@ mod tests {
             compression: Some("zstd(22)".into()),
             dictionary_enabled: src_col_defaults.dictionary_enabled.map(|v| !v),
             statistics_enabled: Some("none".into()),
-            encoding: Some("RLE".into()),
+            encoding: Some(DFParquetEncoding::Rle),
             bloom_filter_enabled: Some(true),
             bloom_filter_fpp: Some(0.72),
             bloom_filter_ndv: Some(72),
@@ -416,7 +408,12 @@ mod tests {
 
         ParquetColumnOptions {
             bloom_filter_enabled: Some(bloom_filter_default_props.is_some()),
-            encoding: props.encoding(&col).map(|s| s.to_string()),
+            encoding: props.encoding(&col).map(|encoding| {
+                encoding
+                    .to_string()
+                    .parse()
+                    .expect("valid parquet encoding")
+            }),
             dictionary_enabled: Some(props.dictionary_enabled(&col)),
             compression: match props.compression(&col) {
                 Compression::ZSTD(lvl) => {
@@ -493,10 +490,7 @@ mod tests {
                 data_page_row_count_limit: props.data_page_row_count_limit(),
 
                 // global options which set the default column props
-                encoding: default_col_props
-                    .encoding
-                    .as_deref()
-                    .map(|encoding| encoding.parse().expect("valid parquet encoding")),
+                encoding: default_col_props.encoding,
                 compression: match props.compression(&default_col) {
                     Compression::ZSTD(level) => {
                         Some(DFParquetCompression::Zstd(level.compression_level() as u32))

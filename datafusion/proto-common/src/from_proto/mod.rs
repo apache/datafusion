@@ -1329,11 +1329,12 @@ impl TryFrom<&protobuf::ParquetColumnOptions> for ParquetColumnOptions {
                 })
                 .unwrap_or(None),
             encoding: value
-                .encoding_opt.clone()
+                .encoding_opt
+                .as_ref()
                 .map(|opt| match opt {
-                    protobuf::parquet_column_options::EncodingOpt::Encoding(v) => Some(v),
+                    protobuf::parquet_column_options::EncodingOpt::Encoding(v) => v.parse(),
                 })
-                .unwrap_or(None),
+                .transpose()?,
             bloom_filter_enabled: value.bloom_filter_enabled_opt.map(|opt| match opt {
                 protobuf::parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled(v) => Some(v),
             })
@@ -1439,7 +1440,8 @@ where
 mod tests {
     use datafusion_common::TableReference;
     use datafusion_common::config::{
-        MaxRowGroupBytes, ParquetCdcOptions, ParquetOptions, TableParquetOptions,
+        MaxRowGroupBytes, ParquetCdcOptions, ParquetColumnOptions, ParquetOptions,
+        TableParquetOptions,
     };
     use datafusion_common::parquet_config::{
         DFParquetCompression, DFParquetEncoding, DFParquetStatistics, DFTimeUnit,
@@ -1749,6 +1751,37 @@ mod tests {
         );
 
         let err = ParquetOptions::try_from(&proto).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unknown or unsupported parquet encoding: invalid"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_column_parquet_encoding_round_trip() {
+        let opts = ParquetColumnOptions {
+            encoding: Some(DFParquetEncoding::ByteStreamSplit),
+            ..Default::default()
+        };
+        let proto: crate::protobuf_common::ParquetColumnOptions =
+            (&opts).try_into().expect("to_proto");
+        let recovered = ParquetColumnOptions::try_from(&proto).unwrap();
+        assert_eq!(recovered.encoding, opts.encoding);
+    }
+
+    #[test]
+    fn test_invalid_column_parquet_encoding_rejected_from_proto() {
+        let proto = crate::protobuf_common::ParquetColumnOptions {
+            encoding_opt: Some(
+                crate::protobuf_common::parquet_column_options::EncodingOpt::Encoding(
+                    "invalid".to_string(),
+                ),
+            ),
+            ..Default::default()
+        };
+
+        let err = ParquetColumnOptions::try_from(&proto).unwrap_err();
         assert!(
             err.to_string()
                 .contains("Unknown or unsupported parquet encoding: invalid"),

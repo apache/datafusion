@@ -995,8 +995,7 @@ impl TryFrom<&ParquetColumnOptions> for protobuf::ParquetColumnOptions {
                 .map(protobuf::parquet_column_options::StatisticsEnabledOpt::StatisticsEnabled),
             encoding_opt: value
                 .encoding
-                .clone()
-                .map(protobuf::parquet_column_options::EncodingOpt::Encoding),
+                .map(|encoding| protobuf::parquet_column_options::EncodingOpt::Encoding(encoding.to_string())),
             bloom_filter_enabled_opt: value
                 .bloom_filter_enabled
                 .map(protobuf::parquet_column_options::BloomFilterEnabledOpt::BloomFilterEnabled),

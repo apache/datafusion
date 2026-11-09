@@ -3559,7 +3559,7 @@ config_namespace_with_hashmap! {
         /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
-        pub encoding: Option<String>, default = None
+        pub encoding: Option<DFParquetEncoding>, default = None
 
         /// Sets if dictionary encoding is enabled for the column path. If NULL, uses
         /// default parquet options
@@ -4346,6 +4346,8 @@ mod tests {
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
         Extensions, TableOptions,
     };
+    #[cfg(feature = "parquet")]
+    use crate::parquet_config::DFParquetEncoding;
 
     #[test]
     fn invalid_temporal_format_is_rejected_before_rendering() {
@@ -4622,6 +4624,27 @@ mod tests {
         assert_eq!(
             table_config.parquet.column_specific_options["col1"].bloom_filter_enabled,
             Some(true)
+        );
+
+        table_config.set("format.encoding::col1", "RLE").unwrap();
+        assert_eq!(
+            table_config.parquet.column_specific_options["col1"].encoding,
+            Some(DFParquetEncoding::Rle)
+        );
+    }
+
+    #[cfg(feature = "parquet")]
+    #[test]
+    fn parquet_table_options_reject_invalid_encoding() {
+        let mut table_config = TableOptions::new();
+        table_config.set_config_format(ConfigFileType::PARQUET);
+        let err = table_config
+            .set("format.encoding::col1", "invalid")
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("Unknown or unsupported parquet encoding: invalid"),
+            "unexpected error: {err}"
         );
     }
 
