@@ -511,9 +511,9 @@ impl PhysicalExtensionCodec for ForeignPhysicalExtensionCodec {
 
 /// An extension plan and codec for the cross-library integration test.
 ///
-/// These live in this crate because the test `dlopen`s this crate's cdylib and
-/// asks it for the codec, so the cdylib has to be able to build one. The
-/// feature keeps them out of ordinary builds.
+/// That test loads them from `datafusion-ffi-integration-tests`'s cdylib,
+/// which links this crate, so they have to be reachable from here. The feature
+/// keeps them out of ordinary builds.
 #[cfg(feature = "integration-tests")]
 pub mod fixtures {
     use std::sync::Arc;
@@ -544,8 +544,8 @@ pub mod fixtures {
     /// back.
     #[derive(Debug)]
     pub struct ScalarSubqueryExprExec {
-        pub expr: Arc<dyn PhysicalExpr>,
-        pub child: Arc<dyn ExecutionPlan>,
+        expr: Arc<dyn PhysicalExpr>,
+        child: Arc<dyn ExecutionPlan>,
         properties: Arc<PlanProperties>,
     }
 
@@ -643,7 +643,7 @@ pub mod fixtures {
     }
 
     #[derive(Clone, PartialEq, Message)]
-    pub struct ScalarSubqueryExprExecProto {
+    struct ScalarSubqueryExprExecProto {
         #[prost(message, optional, tag = "1")]
         expr: Option<PhysicalExprNode>,
     }
