@@ -1044,6 +1044,52 @@ mod tests {
         Ok(())
     }
 
+    /// A terminator inside a quoted header field does not end the header
+    #[rstest]
+    #[case::local(HeaderLayoutRead::Local)]
+    #[case::chunked(HeaderLayoutRead::Chunked)]
+    #[tokio::test]
+    async fn csv_match_columns_by_header_with_quoted_terminator(
+        #[case] read: HeaderLayoutRead,
+    ) -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        fs::write(
+            tmp_dir.path().join("a.csv"),
+            "\"x;y\",c,a;\"p;q\",30,3;s,40,4;",
+        )?;
+
+        let ctx = SessionContext::new();
+        if matches!(read, HeaderLayoutRead::Chunked) {
+            ctx.register_object_store(
+                &Url::parse("file://").unwrap(),
+                Arc::new(ChunkedStore::new(Arc::new(LocalFileSystem::new()), 3)),
+            );
+        }
+        header_layout_table(
+            &ctx,
+            &format!("{}/", tmp_dir.path().display()),
+            ", 'format.match_columns_by_header' 'true', 'format.terminator' ';'",
+        )
+        .await?;
+
+        let batches = ctx
+            .sql("SELECT * FROM t ORDER BY a")
+            .await?
+            .collect()
+            .await?;
+        insta::allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +---+---+----+---+
+            | a | b | c  | d |
+            +---+---+----+---+
+            | 3 |   | 30 |   |
+            | 4 |   | 40 |   |
+            +---+---+----+---+
+            ");
+        }
+        Ok(())
+    }
+
     #[tokio::test]
     async fn csv_match_columns_by_header_with_truncated_rows() -> Result<()> {
         let tmp_dir = TempDir::new()?;

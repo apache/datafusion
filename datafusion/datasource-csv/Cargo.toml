@@ -29,6 +29,7 @@ proto = [
 arrow = { workspace = true }
 async-trait = { workspace = true }
 bytes = { workspace = true }
+csv-core = "0.1"
 datafusion-common = { workspace = true, features = ["object_store"] }
 datafusion-common-runtime = { workspace = true }
 datafusion-datasource = { workspace = true }

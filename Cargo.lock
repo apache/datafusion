@@ -2037,6 +2037,7 @@ dependencies = [
  "arrow",
  "async-trait",
  "bytes",
+ "csv-core",
  "datafusion-common",
  "datafusion-common-runtime",
  "datafusion-datasource",
