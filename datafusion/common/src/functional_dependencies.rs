@@ -522,21 +522,11 @@ pub fn aggregate_functional_dependencies_with_computed_inputs(
                 &grouped_source_indices,
             )
             .unwrap_or_default();
-            // A deterministic computed expression is determined when every
-            // field it reads is.
-            let mut determined_output_indices = vec![];
-            for (output_idx, input_idx) in group_by_input_indices.iter().enumerate() {
-                let determined = match (input_idx, &computed_input_indices[output_idx]) {
-                    (Some(input_idx), _) => determined_input_indices.contains(input_idx),
-                    (None, Some(read)) => read
-                        .iter()
-                        .all(|idx| determined_input_indices.contains(idx)),
-                    (None, None) => false,
-                };
-                if determined {
-                    determined_output_indices.push(output_idx);
-                }
-            }
+            let determined_output_indices = group_by_positions_determined_by(
+                &determined_input_indices,
+                group_by_input_indices,
+                computed_input_indices,
+            );
             // A determinant is a key of the output, and so determines the
             // aggregate values too, if it is a key of the input or determines
             // every GROUP BY expression.
@@ -612,22 +602,63 @@ pub fn aggregate_functional_dependencies_with_computed_inputs(
     FunctionalDependencies::new(aggregate_func_dependencies)
 }
 
-/// Returns the GROUP BY expressions that the whole GROUP BY key needs. A column
-/// that the other columns determine is left out, and so is a deterministic
-/// computed expression whose fields the remaining columns determine.
+/// Returns the positions of the GROUP BY expressions that the input fields
+/// `fields` determine: when two input rows have the same value in every field
+/// of `fields`, they also have the same value for each of these expressions.
+/// NULL counts as the same value as NULL, as in GROUP BY.
+///
+/// A column reference is determined when its field is in `fields`. A computed
+/// expression is determined when it is deterministic (its
+/// `computed_input_indices` entry is `Some`) and every field it reads is in
+/// `fields`.
+///
+/// For example, for `GROUP BY i_item_sk, s_date, upper(i_desc)` over input
+/// fields `[i_item_sk, i_desc, s_item_sk, s_date]`, the fields `[0, 1]`
+/// (`i_item_sk` and `i_desc`) determine positions `[0, 2]`, but not `s_date`
+/// at position 1.
+fn group_by_positions_determined_by(
+    fields: &[usize],
+    group_by_input_indices: &[Option<usize>],
+    computed_input_indices: &[Option<Vec<usize>>],
+) -> Vec<usize> {
+    group_by_input_indices
+        .iter()
+        .zip(computed_input_indices)
+        .enumerate()
+        .filter(|(_, item)| match item {
+            (Some(field), _) => fields.contains(field),
+            (None, Some(read)) => read.iter().all(|field| fields.contains(field)),
+            (None, None) => false,
+        })
+        .map(|(position, _)| position)
+        .collect()
+}
+
+/// Returns the positions of the GROUP BY expressions that the GROUP BY key
+/// needs: the GROUP BY list without its extraneous expressions. An expression
+/// is extraneous when the other expressions of the key determine it.
+///
+/// Only column references can be key columns, because a computed expression
+/// does not expose the fields it reads. The key columns are the column
+/// references without the extraneous ones. They determine every column
+/// reference of the GROUP BY list, and through the input dependencies some
+/// more fields; every expression that these fields determine is left out of
+/// the key.
+///
+/// For example, `GROUP BY i_item_sk, s_date, upper(i_desc), i_desc` over a
+/// join where `i_item_sk` determines `i_desc` needs only `i_item_sk` and
+/// `s_date`.
 fn group_by_key_indices(
     schema: &DFSchema,
     group_by_input_indices: &[Option<usize>],
     computed_input_indices: &[Option<Vec<usize>>],
 ) -> Vec<usize> {
     let all = || (0..group_by_input_indices.len()).collect();
-    let (column_positions, column_inputs): (Vec<usize>, Vec<Option<usize>>) =
-        group_by_input_indices
-            .iter()
-            .enumerate()
-            .filter(|(_, input_idx)| input_idx.is_some())
-            .map(|(idx, input_idx)| (idx, *input_idx))
-            .unzip();
+    let column_inputs = group_by_input_indices
+        .iter()
+        .filter(|input_idx| input_idx.is_some())
+        .copied()
+        .collect::<Vec<_>>();
     let Some(required) = get_required_group_by_exprs_indices(schema, &column_inputs)
     else {
         return all();
@@ -636,31 +667,34 @@ fn group_by_key_indices(
         .iter()
         .map(|idx| column_inputs[*idx])
         .collect::<Vec<_>>();
-    let determined =
-        get_target_functional_dependencies(schema, &key_inputs).unwrap_or_default();
-    let mut key = required
+    let mut fields = column_inputs.iter().flatten().copied().collect::<Vec<_>>();
+    fields.extend(
+        get_target_functional_dependencies(schema, &key_inputs).unwrap_or_default(),
+    );
+    let determined = group_by_positions_determined_by(
+        &fields,
+        group_by_input_indices,
+        computed_input_indices,
+    );
+    // A column can be in the GROUP BY list more than one time (`x, x AS k`):
+    // the key keeps its first position.
+    let key_positions = key_inputs
         .iter()
-        .map(|idx| column_positions[*idx])
+        .filter_map(|key_input| {
+            group_by_input_indices
+                .iter()
+                .position(|input| input == key_input)
+        })
         .collect::<Vec<_>>();
-    for (idx, (input_idx, read)) in group_by_input_indices
-        .iter()
-        .zip(computed_input_indices)
-        .enumerate()
-    {
-        let is_determined = read.as_ref().is_some_and(|read| {
-            read.iter().all(|field| {
-                determined.contains(field) || key_inputs.contains(&Some(*field))
-            })
-        });
-        if input_idx.is_none() && !is_determined {
-            key.push(idx);
-        }
-    }
+    let key = (0..group_by_input_indices.len())
+        .filter(|position| {
+            key_positions.contains(position) || !determined.contains(position)
+        })
+        .collect::<Vec<_>>();
     // A key with no columns is left as the whole GROUP BY list.
     if key.is_empty() {
         return all();
     }
-    key.sort_unstable();
     key
 }
 
