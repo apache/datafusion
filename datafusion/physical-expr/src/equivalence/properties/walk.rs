@@ -154,9 +154,11 @@ impl<'a> SortKeyWalk<'a> {
         }
     }
 
-    /// Returns how many leading keys (in normal form) the existing orderings
+    /// Returns how many leading keys (in [normal form]) the existing orderings
     /// satisfy, pinning each satisfied key for the keys after it. A key
     /// without sort options only needs to be ordered in some direction.
+    ///
+    /// [normal form]: EquivalenceProperties#normal-form
     pub(super) fn sorted_prefix_len<'k>(
         mut self,
         keys: impl ExactSizeIterator<Item = (&'k Arc<dyn PhysicalExpr>, Option<SortOptions>)>,
@@ -228,13 +230,15 @@ impl<'a> SortKeyWalk<'a> {
         Ok(())
     }
 
-    /// Pins `expr`.
+    /// Pins `expr`, an expression in [normal form].
     ///
     /// See [`SortKeyWalk`] for an explanation of pinning.
     ///
     /// This method pins `expr` (and thus, by extension, all members of its
     /// equivalence class), but not its children. See [`Self::pin_key`] for
     /// more details.
+    ///
+    /// [normal form]: EquivalenceProperties#normal-form
     pub(super) fn pin(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
         match self.props.eq_group.get_equivalence_class(&expr) {
             Some(class) => self.pinned.extend(class.iter().cloned()),
@@ -395,8 +399,10 @@ impl<'a> SortKeyWalk<'a> {
         children.into_iter().all(|child| self.is_fixed(child))
     }
 
-    /// The ordering at `idx`: the normal orderings of `props`, then
+    /// The ordering at `idx`: the orderings of `props` in [normal form], then
     /// `implied`.
+    ///
+    /// [normal form]: EquivalenceProperties#normal-form
     fn ordering(&self, idx: usize) -> &LexOrdering {
         let normal = &self.props.oeq_cache.normal_cls;
         normal
@@ -574,10 +580,17 @@ mod tests {
         Ok(())
     }
 
-    /// `find_longest_permutation` pins what it finds in normal form. With
-    /// `b = c` and ordering `[a + b, d]`, finding either `a + b` or `a + c`
-    /// pins the head of the ordering, whichever of `b` and `c` the class
-    /// normalizes to, so `d` is found next.
+    /// `find_longest_permutation` pins what it finds in [normal form].
+    ///
+    /// For example, with `b = c` and ordering `[a + b, d]`, finding either
+    ///
+    /// * `a + b`
+    /// * `a + c`
+    ///
+    /// pins the head of the ordering (whichever of `b` or `c` the ordering
+    /// normalizes to), so `d` is found next.
+    ///
+    /// [normal form]: EquivalenceProperties#normal-form
     #[test]
     fn find_longest_permutation_pins_normal_form() -> Result<()> {
         let schema = Arc::new(Schema::new(
