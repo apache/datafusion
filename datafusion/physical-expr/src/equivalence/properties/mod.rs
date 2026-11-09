@@ -307,8 +307,8 @@ use itertools::{Either, Itertools};
 ///
 /// ## Example: Ordering Implied by a `CAST`
 ///
-/// Consider a table `t` sorted by `[c ASC, a ASC, b ASC]` and the query
-/// `SELECT a, b, c FROM t WHERE c = CAST(a AS BIGINT)`, which produces the
+/// Consider a table `t` sorted by `[c ASC, a ASC, b ASC]` and a query `SELECT
+/// a, b, c FROM t WHERE c = CAST(a AS BIGINT) ORDER BY a, b` that produces the
 /// following rows:
 ///
 /// ```text
@@ -332,10 +332,8 @@ use itertools::{Either, Itertools};
 ///
 /// Given those observations, the rows are also sorted by `[a ASC, b ASC]`,
 /// even though `a` is not the leading sort key. `EquivalenceProperties`
-/// derives this ordering when the equality is added, so a later
-/// `ORDER BY a, b` needs no re-sorting. The arguments of the cast must
-/// directly follow `c` in the ordering: from `[c ASC, b ASC]` alone, the
-/// ordering `[a ASC, b ASC]` is not derived.
+/// derives this ordering when the equality is added, so the `ORDER BY a, b`
+/// needs no sort.
 ///
 /// This holds in general for a function `f` whose output follows the
 /// lexicographical order of its arguments, which `f` declares by setting
