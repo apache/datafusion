@@ -189,6 +189,9 @@ pub fn new_group_values(
             DataType::BinaryView => {
                 return Ok(Box::new(GroupValuesBytesView::new(OutputType::BinaryView)));
             }
+            DataType::Dictionary(_, _) => {
+                return single_group_by::dictionary::new_group_values(&schema.fields[0]);
+            }
             DataType::Boolean => {
                 return Ok(Box::new(GroupValuesBoolean::new()));
             }
