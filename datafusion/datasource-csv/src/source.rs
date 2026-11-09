@@ -282,14 +282,14 @@ impl CsvSource {
             if !eof && input.is_empty() {
                 return Ok(None);
             }
-            let (result, nin, nout, nend) = parser.read_record(
+            let (result, read, written, ends_written) = parser.read_record(
                 input,
                 &mut output[output_len..],
                 &mut ends[ends_len..],
             );
-            input = &input[nin..];
-            output_len += nout;
-            ends_len += nend;
+            input = &input[read..];
+            output_len += written;
+            ends_len += ends_written;
             match result {
                 ReadRecordResult::InputEmpty if !eof => return Ok(None),
                 ReadRecordResult::InputEmpty => {}
