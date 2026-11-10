@@ -17,8 +17,8 @@ use datafusion_functions::core::planner::CoreFunctionPlanner;
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
 use datafusion_sql::{
+    parser::DFParser,
     planner::{ContextProvider, SqlToRel},
-    sqlparser::{dialect::GenericDialect, parser::Parser},
 };
 
 fn main() {
@@ -35,18 +35,18 @@ fn main() {
         GROUP BY 1, 2, 3 \
         ORDER BY state_tax DESC";
 
-    // parse the SQL
-    let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
-    let ast = Parser::parse_sql(&dialect, sql).unwrap();
-    let statement = &ast[0];
+    // parse the SQL with DataFusion's dialect (use
+    // `DFParser::parse_sql_with_dialect` to choose another one)
+    let mut ast = DFParser::parse_sql(sql).unwrap();
+    let statement = ast.pop_front().unwrap();
 
     // create a logical query plan
     let context_provider = MyContextProvider::new()
         .with_udaf(sum_udaf())
         .with_udaf(count_udaf())
         .with_expr_planner(Arc::new(CoreFunctionPlanner::default()));
-    let sql_to_rel = SqlToRel::new(&context_provider);
-    let plan = sql_to_rel.sql_statement_to_plan(statement.clone()).unwrap();
+    let sql_to_rel = SqlToRel::new(&context_provider).with_source(sql);
+    let plan = sql_to_rel.statement_to_plan(statement).unwrap();
 
     // show the plan
     println!("{plan}");

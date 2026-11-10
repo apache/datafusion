@@ -12,10 +12,7 @@ use datafusion_common::{Diagnostic, Location, Result, Span};
 use datafusion_sql::{
     parser::{DFParser, DFParserBuilder, Statement as DFStatement},
     planner::{ParserOptions, SqlToRel},
-    sqlparser::{
-        ast::{Expr as SQLExpr, visit_expressions_mut},
-        tokenizer::Span as SQLParserSpan,
-    },
+    sqlparser::ast::{ExprKind, Span as SQLParserSpan, visit_expressions_mut},
 };
 use regex::Regex;
 
@@ -35,7 +32,7 @@ fn do_query(sql: &'static str) -> Diagnostic {
         .with_scalar_function(Arc::new(string::concat().as_ref().clone()))
         .with_aggregate_function(sum_udaf());
     let context = MockContextProvider { state };
-    let sql_to_rel = SqlToRel::new_with_options(&context, options);
+    let sql_to_rel = SqlToRel::new_with_options(&context, options).with_source(sql);
     match sql_to_rel.statement_to_plan(statement) {
         Ok(_) => panic!("expected error"),
         Err(err) => match err.diagnostic() {
@@ -51,17 +48,17 @@ fn do_query_warnings(sql: &'static str) -> Vec<Diagnostic> {
         .expect("unable to create parser")
         .parse_statement()
         .expect("unable to parse query");
-    do_statement_warnings(statement)
+    do_statement_warnings(sql, statement)
 }
 
-fn do_statement_warnings(statement: DFStatement) -> Vec<Diagnostic> {
+fn do_statement_warnings(sql: &str, statement: DFStatement) -> Vec<Diagnostic> {
     let options = ParserOptions {
         collect_spans: true,
         ..ParserOptions::default()
     };
     let state = MockSessionState::default();
     let context = MockContextProvider { state };
-    let sql_to_rel = SqlToRel::new_with_options(&context, options);
+    let sql_to_rel = SqlToRel::new_with_options(&context, options).with_source(sql);
     sql_to_rel
         .statement_to_plan(statement)
         .expect("expected planning to succeed");
@@ -73,8 +70,8 @@ fn clear_value_spans(statement: &mut DFStatement) {
         panic!("expected sqlparser statement");
     };
     let _ = visit_expressions_mut(statement.as_mut(), |expr| {
-        if let SQLExpr::Value(value) = expr {
-            value.span = SQLParserSpan::empty();
+        if let ExprKind::Literal(_) = expr.kind {
+            expr.span = SQLParserSpan::default();
         }
         ControlFlow::<()>::Continue(())
     });
@@ -456,7 +453,7 @@ fn test_syntax_error() -> Result<()> {
         Err(err) => match err.diagnostic() {
             Some(diag) => {
                 let diag = diag.clone();
-                assert_snapshot!(diag.message, @"Expected: ',' or ')' after partition definition, found: int at Line: 1, Column: 77");
+                assert_snapshot!(diag.message, @"expected ',' or ')' after partition definition, found int");
                 println!("{spans:?}");
                 assert_eq!(diag.span, Some(spans["int"]));
                 Ok(())
@@ -591,7 +588,7 @@ fn test_eq_null_warning_without_null_span() -> Result<()> {
         .expect("unable to parse query");
     clear_value_spans(&mut statement);
 
-    let warnings = do_statement_warnings(statement);
+    let warnings = do_statement_warnings(query, statement);
     assert_eq!(warnings.len(), 1);
     assert_eq!(warnings[0].kind, DiagnosticKind::Warning);
     assert_snapshot!(
@@ -700,10 +697,9 @@ fn test_nested_window_function() -> Result<()> {
 fn test_window_function_in_where() -> Result<()> {
     // https://github.com/apache/datafusion/issues/4610
     //
-    // The span is taken from the SQL text and covers the window function call.
-    // sqlparser's span for a function call ends at its last argument, so the
-    // `) OVER ()` part is not included.
-    let query = "SELECT id FROM person WHERE /*a*/sum(age/*a*/) OVER () > 0";
+    // The span is taken from the SQL text and covers the window function call,
+    // including its `OVER` clause.
+    let query = "SELECT id FROM person WHERE /*a*/sum(age) OVER ()/*a*/ > 0";
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_snapshot!(diag.message, @"Window function calls are not allowed in WHERE");
@@ -719,7 +715,7 @@ fn test_window_function_in_where() -> Result<()> {
 fn test_window_function_in_where_after_subquery() -> Result<()> {
     // A window function inside a subquery is legal and must not be the one the
     // span points at
-    let query = "SELECT id FROM person WHERE id IN (SELECT id FROM person QUALIFY sum(age) OVER () > 0) AND /*a*/sum(age/*a*/) OVER () > 0";
+    let query = "SELECT id FROM person WHERE id IN (SELECT id FROM person QUALIFY sum(age) OVER () > 0) AND /*a*/sum(age) OVER ()/*a*/ > 0";
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_snapshot!(diag.message, @"Window function calls are not allowed in WHERE");
@@ -730,7 +726,7 @@ fn test_window_function_in_where_after_subquery() -> Result<()> {
 #[test]
 fn test_window_function_in_having() -> Result<()> {
     // https://github.com/apache/datafusion/issues/4610
-    let query = "SELECT first_name FROM person GROUP BY first_name HAVING /*a*/sum(sum(age/*a*/)) OVER () > 0";
+    let query = "SELECT first_name FROM person GROUP BY first_name HAVING /*a*/sum(sum(age)) OVER ()/*a*/ > 0";
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_snapshot!(diag.message, @"Window function calls are not allowed in HAVING");
@@ -740,7 +736,7 @@ fn test_window_function_in_having() -> Result<()> {
 
 #[test]
 fn test_window_function_in_join_on() -> Result<()> {
-    let query = "SELECT p.id FROM person p JOIN person q ON p.id = q.id AND /*a*/sum(p.age/*a*/) OVER () > 0";
+    let query = "SELECT p.id FROM person p JOIN person q ON p.id = q.id AND /*a*/sum(p.age) OVER ()/*a*/ > 0";
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_snapshot!(diag.message, @"Window function calls are not allowed in JOIN ON");
@@ -755,7 +751,7 @@ fn test_window_function_in_join_on() -> Result<()> {
 #[test]
 fn test_window_function_in_group_by() -> Result<()> {
     let query =
-        "SELECT first_name FROM person GROUP BY first_name, /*a*/sum(age/*a*/) OVER ()";
+        "SELECT first_name FROM person GROUP BY first_name, /*a*/sum(age) OVER ()/*a*/";
     let spans = get_spans(query);
     let diag = do_query(query);
     assert_snapshot!(diag.message, @"Window function calls are not allowed in GROUP BY");

@@ -115,7 +115,7 @@ fn test_prepare_statement_to_plan_panic_prepare_wrong_syntax() {
         logical_plan(sql)
             .unwrap_err()
             .strip_backtrace()
-            .contains("Expected: AS, found: SELECT")
+            .contains("expected identifier, found AS")
     )
 }
 
@@ -158,7 +158,7 @@ fn test_non_prepare_statement_should_infer_types() {
 
 #[test]
 #[should_panic(
-    expected = "Expected: [NOT] NULL | TRUE | FALSE | DISTINCT | [NOT] JSON [VALUE | SCALAR | ARRAY | OBJECT] [WITH | WITHOUT UNIQUE [KEYS]] | [form] NORMALIZED FROM after IS, found: $1"
+    expected = "expected NULL, TRUE, FALSE, UNKNOWN or DISTINCT FROM, found $1"
 )]
 fn test_prepare_statement_to_plan_panic_is_param() {
     let sql = "PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1";

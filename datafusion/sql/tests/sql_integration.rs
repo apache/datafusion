@@ -4,7 +4,7 @@
 
 // This lint violation is acceptable for tests, so suppress for now
 // Issue: <https://github.com/apache/datafusion/issues/18503>
-#![expect(clippy::needless_pass_by_value)]
+#![allow(clippy::needless_pass_by_value)]
 
 use std::hash::Hash;
 #[cfg(test)]
@@ -28,7 +28,7 @@ use datafusion_expr::{
 use datafusion_functions::{core as core_functions, string, unicode};
 use datafusion_sql::{
     parser::DFParser,
-    planner::{NullOrdering, ParserOptions, PlannerContext, SqlToRel},
+    planner::{NullOrdering, ParserOptions, SqlToRel},
 };
 
 use crate::common::{CustomExprPlanner, CustomTypePlanner, MockSessionState};
@@ -43,12 +43,9 @@ use datafusion_functions_aggregate::{
 };
 use datafusion_functions_nested::make_array::make_array_udf;
 use datafusion_functions_window::{rank::rank_udwf, row_number::row_number_udwf};
+use datafusion_sql::parser::{DialectKind, SqlDialect};
 use insta::{allow_duplicates, assert_snapshot};
 use rstest::rstest;
-use sqlparser::dialect::{
-    DatabricksDialect, Dialect, GenericDialect, HiveDialect, MySqlDialect,
-};
-use sqlparser::parser::Parser;
 
 mod cases;
 mod common;
@@ -253,21 +250,15 @@ fn within_group_rejected_for_non_ordered_set_udaf() {
 
 #[test]
 fn typed_literal_without_string_payload_returns_error() {
-    let sql_expr = Parser::new(&GenericDialect {})
-        .try_with_sql("time 17542368000000000")
-        .unwrap()
-        .parse_expr()
-        .unwrap();
-    let context = MockContextProvider {
-        state: MockSessionState::default(),
-    };
-    let sql_to_rel = SqlToRel::new(&context);
+    // A typed literal's payload is always a string in the AST, so one
+    // without a string payload is rejected when parsing.
+    let err = DFParser::parse_sql_into_expr("time 17542368000000000")
+        .expect_err("parsing invalid typed literals should return an error");
 
-    let err = sql_to_rel
-        .sql_to_expr(sql_expr, &DFSchema::empty(), &mut PlannerContext::new())
-        .expect_err("planning invalid typed literals should return an error");
-
-    assert_contains!(err.to_string(), "Typed literal requires a string payload");
+    assert_contains!(
+        err.to_string(),
+        "expected end of expression, found 17542368000000000"
+    );
 }
 
 #[test]
@@ -756,7 +747,7 @@ fn plan_insert_preserves_target_extension_metadata_on_type_cast() {
 
 #[test]
 fn plan_insert_does_not_promise_ordinary_target_field_metadata() {
-    let sql = "INSERT INTO array_with_field_metadata SELECT left FROM array";
+    let sql = r#"INSERT INTO array_with_field_metadata SELECT "left" FROM array"#;
     let plan = logical_plan(sql).unwrap();
     let LogicalPlan::Dml(dml) = &plan else {
         panic!("expected DML plan");
@@ -842,7 +833,9 @@ fn plan_delete() {
 #[case("delete from person limit 1")]
 #[case("delete from person where id = 1 limit 1")]
 fn plan_delete_rejects_limit(#[case] sql: &str) {
-    let err = logical_plan(sql).expect_err("DELETE LIMIT should be rejected");
+    // DELETE ... LIMIT is MySQL syntax
+    let err = logical_plan_with_dialect(sql, SqlDialect::Builtin(DialectKind::MySql))
+        .expect_err("DELETE LIMIT should be rejected");
     assert_eq!(
         err.strip_backtrace(),
         "Error during planning: Delete-limit clause is not supported"
@@ -921,7 +914,7 @@ fn select_scalar_func_with_expr_planner() -> Result<()> {
         .with_expr_planner(Arc::new(SingleArgumentCoalescePlanner));
     let plan = logical_plan_from_state(
         "SELECT coalesce(t.a) FROM (SELECT 42 AS a) AS t",
-        &GenericDialect {},
+        SqlDialect::DataFusion,
         ParserOptions::default(),
         state,
     )?;
@@ -4064,11 +4057,7 @@ fn plan_update_json_has_dml_node_without_merge_fields() {
 )]
 #[case(
     "MERGE INTO j1() USING j2 ON true WHEN MATCHED THEN DELETE",
-    "MERGE target table modifiers are not supported"
-)]
-#[case(
-    "MERGE INTO j1 PARTITION (p0) USING j2 ON true WHEN MATCHED THEN DELETE",
-    "MERGE target table modifiers are not supported"
+    "Cannot MERGE INTO non-table relation"
 )]
 #[case(
     "MERGE INTO j1 AS t(a) USING j2 ON true WHEN MATCHED THEN DELETE",
@@ -4085,6 +4074,18 @@ fn plan_merge_into_rejects_invalid_actions_and_structure(
     );
 }
 
+#[test]
+fn plan_merge_into_rejects_target_partition() {
+    // `PARTITION (...)` after a table name is MySQL syntax
+    let sql = "MERGE INTO j1 PARTITION (p0) USING j2 ON true WHEN MATCHED THEN DELETE";
+    let err = logical_plan_with_dialect(sql, SqlDialect::Builtin(DialectKind::MySql))
+        .unwrap_err();
+    assert_contains!(
+        err.strip_backtrace(),
+        "MERGE target table modifiers are not supported"
+    );
+}
+
 /// With the `DatetimeFunctionPlanner`, `AT TIME ZONE` plans as the `timezone`
 /// function for every input type. The function picks the result type after
 /// type coercion, so the SQL planner does not need the input type.
@@ -4095,7 +4096,7 @@ fn plan_at_time_zone_with_datetime_planner() {
         .with_scalar_function(datetime::timezone());
     let plan = logical_plan_from_state(
         "SELECT birth_date AT TIME ZONE 'America/Denver' FROM person",
-        &GenericDialect {},
+        SqlDialect::DataFusion,
         ParserOptions::default(),
         state,
     )
@@ -4135,11 +4136,11 @@ fn logical_plan_with_config(
 }
 
 fn logical_plan_with_options(sql: &str, options: ParserOptions) -> Result<LogicalPlan> {
-    let dialect = &GenericDialect {};
+    let dialect = SqlDialect::DataFusion;
     logical_plan_with_dialect_and_options(sql, dialect, options)
 }
 
-fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<LogicalPlan> {
+fn logical_plan_with_dialect(sql: &str, dialect: SqlDialect) -> Result<LogicalPlan> {
     let state = MockSessionState::default()
         .with_aggregate_function(sum_udaf())
         .with_higher_order_function(Arc::new(HigherOrderUDF::new_from_impl(
@@ -4148,7 +4149,7 @@ fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<Logical
         .with_scalar_function(make_array_udf())
         .with_expr_planner(Arc::new(CustomExprPlanner {})); // plan array literal
     let context = MockContextProvider { state };
-    let planner = SqlToRel::new(&context);
+    let planner = SqlToRel::new(&context).with_source(sql);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
     planner.statement_to_plan(ast.pop_front().unwrap())
@@ -4156,7 +4157,7 @@ fn logical_plan_with_dialect(sql: &str, dialect: &dyn Dialect) -> Result<Logical
 
 fn logical_plan_with_dialect_and_options(
     sql: &str,
-    dialect: &dyn Dialect,
+    dialect: SqlDialect,
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
     let state = mock_session_state();
@@ -4169,7 +4170,7 @@ fn logical_plan_with_config_and_options(
     config_options: datafusion_common::config::ConfigOptions,
     options: ParserOptions,
 ) -> Result<LogicalPlan> {
-    let dialect = &GenericDialect {};
+    let dialect = SqlDialect::DataFusion;
     let mut state = mock_session_state();
     state.config_options = config_options;
 
@@ -4219,12 +4220,12 @@ fn mock_session_state() -> MockSessionState {
 
 fn logical_plan_from_state(
     sql: &str,
-    dialect: &dyn Dialect,
+    dialect: SqlDialect,
     options: ParserOptions,
     state: MockSessionState,
 ) -> Result<LogicalPlan> {
     let context = MockContextProvider { state };
-    let planner = SqlToRel::new_with_options(&context, options);
+    let planner = SqlToRel::new_with_options(&context, options).with_source(sql);
     let result = DFParser::parse_sql_with_dialect(sql, dialect);
     let mut ast = result?;
     planner.statement_to_plan(ast.pop_front().unwrap())
@@ -4731,7 +4732,7 @@ fn join_on_complex_condition() {
 
 #[test]
 fn hive_aggregate_with_filter() -> Result<()> {
-    let dialect = &HiveDialect {};
+    let dialect = SqlDialect::Builtin(DialectKind::Hive);
     let sql = "SELECT sum(age) FILTER (WHERE age > 4) FROM person";
     let plan = logical_plan_with_dialect(sql, dialect)?;
 
@@ -4886,7 +4887,7 @@ fn test_distribute_by() {
 fn test_double_quoted_literal_string() {
     // Assert double quoted literal string is parsed correctly like single quoted one in specific
     // dialect.
-    let dialect = &MySqlDialect {};
+    let dialect = SqlDialect::Builtin(DialectKind::MySql);
     let single_quoted_res = format!(
         "{:?}",
         logical_plan_with_dialect("SELECT '1'", dialect).unwrap()
@@ -5251,24 +5252,34 @@ fn test_select_qualify_complex_condition() {
 
 #[rstest]
 #[case::select_cluster_by_unsupported(
+    SqlDialect::DataFusion,
     "SELECT customer_name, sum(order_total) as total_order_amount FROM orders CLUSTER BY customer_name",
     "This feature is not implemented: CLUSTER BY"
 )]
 #[case::select_lateral_view_unsupported(
+    SqlDialect::Builtin(DialectKind::Hive),
     "SELECT id, number FROM person LATERAL VIEW explode(numbers) exploded_table AS number",
     "This feature is not implemented: LATERAL VIEWS"
 )]
 #[case::select_top_unsupported(
+    SqlDialect::Builtin(DialectKind::MsSql),
     "SELECT TOP (5) * FROM person",
     "This feature is not implemented: TOP"
 )]
 #[case::select_sort_by_unsupported(
+    SqlDialect::DataFusion,
     "SELECT * FROM person SORT BY id",
     "This feature is not implemented: SORT BY"
 )]
 #[test]
-fn test_select_unsupported_syntax_errors(#[case] sql: &str, #[case] error: &str) {
-    let err = logical_plan(sql).unwrap_err();
+fn test_select_unsupported_syntax_errors(
+    #[case] dialect: SqlDialect,
+    #[case] sql: &str,
+    #[case] error: &str,
+) {
+    let err =
+        logical_plan_with_dialect_and_options(sql, dialect, ParserOptions::default())
+            .unwrap_err();
     assert_eq!(err.strip_backtrace(), error)
 }
 
@@ -5568,7 +5579,7 @@ fn plan_create_index() {
 #[test]
 fn test_table_function_with_unsupported_arg_propagates_error() {
     let sql = "SELECT * FROM my_func(('a', 'b', 'c'))";
-    let dialect = &GenericDialect {};
+    let dialect = SqlDialect::DataFusion;
     let state = MockSessionState::default();
     let context = MockContextProvider { state };
     let planner = SqlToRel::new(&context);
@@ -5622,7 +5633,7 @@ fn test_no_functions_registered() {
     let sql = "SELECT foo()";
 
     let options = ParserOptions::default();
-    let dialect = &GenericDialect {};
+    let dialect = SqlDialect::DataFusion;
     let state = MockSessionState::default();
     let context = MockContextProvider { state };
     let planner = SqlToRel::new_with_options(&context, options);
@@ -5667,7 +5678,7 @@ fn test_custom_type_plan() -> Result<()> {
 
     // test the default behavior
     let options = ParserOptions::default();
-    let dialect = &GenericDialect {};
+    let dialect = SqlDialect::DataFusion;
     let state = MockSessionState::default();
     let context = MockContextProvider { state };
     let planner = SqlToRel::new_with_options(&context, options);
@@ -5684,7 +5695,7 @@ fn test_custom_type_plan() -> Result<()> {
 
     fn plan_sql(sql: &str) -> LogicalPlan {
         let options = ParserOptions::default();
-        let dialect = &GenericDialect {};
+        let dialect = SqlDialect::DataFusion;
         let state = MockSessionState::default()
             .with_scalar_function(make_array_udf())
             .with_expr_planner(Arc::new(CustomExprPlanner {}))
@@ -5984,7 +5995,7 @@ Sort: customer.c_custkey ASC NULLS LAST
 fn test_progressive_lambda_parameters() {
     let sql = "select array_reduce([1.0, 2.0], 0, (acc, v) -> acc + v, v -> -v)";
 
-    let expr = logical_plan_with_dialect(sql, &DatabricksDialect)
+    let expr = logical_plan_with_dialect(sql, SqlDialect::DataFusion)
         .unwrap()
         .head_output_expr()
         .unwrap()
