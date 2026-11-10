@@ -588,14 +588,52 @@ impl EquivalenceProperties {
         Ok(())
     }
 
-    /// Returns the orderings that the normal ordering `ordering` implies. If a
-    /// key is a function of the keys after it, as `a` is in `[k, a, c]` with
-    /// `a = CAST(c AS DATE)`, rows tied on the keys before it are sorted by the
-    /// keys after it, so the ordering without that key holds: `[k, c]`. The
-    /// constants that a normal ordering can keep (those that differ between
-    /// partitions) are left out, because within a partition they have one
-    /// value.
-    fn implied_by(&self, ordering: &LexOrdering) -> Result<Vec<Vec<PhysicalSortExpr>>> {
+    /// Returns the orderings that the normal ordering `ordering` implies
+    /// through known equalities: for each key that is a function of the keys
+    /// after it (see [`Self::implied_ordering`]), `ordering` without that key.
+    ///
+    /// # Example: a key that is a function of the keys after it
+    ///
+    /// * Ordering: `[k ASC, a ASC, c ASC]`
+    /// * Equality: `a = CAST(c AS DATE)`
+    /// * Returns: `[k ASC, c ASC]`
+    ///
+    /// Among the rows that tie on `k`, the rows are sorted by `a`, and the
+    /// rows that also tie on `a` are sorted by `c`. `a` is the date of `c`, so
+    /// a row with an earlier `a` also has an earlier `c`, and the rows that
+    /// tie on `k` are sorted by `c` alone:
+    ///
+    /// ```text
+    /// ┌───┬────────────┬──────────────────┐
+    /// │ k │ a          │ c                │
+    /// ├───┼────────────┼──────────────────┤
+    /// │ x │ 2026-01-01 │ 2026-01-01 09:00 │
+    /// │ x │ 2026-01-02 │ 2026-01-02 01:00 │
+    /// │ x │ 2026-01-02 │ 2026-01-02 05:00 │
+    /// │ y │ 2026-01-01 │ 2026-01-01 03:00 │
+    /// └───┴────────────┴──────────────────┘
+    /// ```
+    ///
+    /// # Example: a constant that differs between partitions
+    ///
+    /// * Ordering: `[k ASC, a ASC, c ASC]`, where `k` is a constant whose value
+    ///   differs between partitions
+    /// * Equality: `a = CAST(c AS DATE)`
+    /// * Returns: `[c ASC]`
+    ///
+    /// A normal ordering can keep such a constant (see
+    /// `EquivalenceGroup::normalize_sort_exprs`). Within a partition `k` has
+    /// one value, so it is left out of the keys and of the result.
+    ///
+    /// # Example: directions that differ
+    ///
+    /// * Ordering: `[a ASC, c DESC]`
+    /// * Equality: `a = CAST(c AS DATE)`
+    /// * Returns: nothing
+    ///
+    /// `c` descends within a date but ascends across dates, so the rows are
+    /// not sorted by `c` in either direction.
+    fn implied_by(&self, ordering: &LexOrdering) -> Result<Vec<LexOrdering>> {
         let keys: Vec<_> = ordering
             .iter()
             .filter(|sort_expr| self.eq_group.is_expr_constant(&sort_expr.expr).is_none())
@@ -605,7 +643,8 @@ impl EquivalenceProperties {
             if let Some(rest) =
                 self.implied_ordering(key, keys[idx + 1..].iter().copied())?
             {
-                implied.push(keys[..idx].iter().copied().cloned().chain(rest).collect());
+                let prefix = keys[..idx].iter().copied().cloned();
+                implied.extend(LexOrdering::new(prefix.chain(rest)));
             }
         }
         Ok(implied)
