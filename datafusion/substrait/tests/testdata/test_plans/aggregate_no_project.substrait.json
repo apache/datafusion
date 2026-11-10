@@ -46,15 +46,8 @@
             },
             "groupings": [
               {
-                "groupingExpressions": [
-                  {
-                    "selection": {
-                      "directReference": {
-                        "structField": {}
-                      },
-                      "rootReference": {}
-                    }
-                  }
+                "expressionReferences": [
+                  0
                 ]
               }
             ],
@@ -78,6 +71,16 @@
                       }
                     }
                   ]
+                }
+              }
+            ],
+            "groupingExpressions": [
+              {
+                "selection": {
+                  "directReference": {
+                    "structField": {}
+                  },
+                  "rootReference": {}
                 }
               }
             ]

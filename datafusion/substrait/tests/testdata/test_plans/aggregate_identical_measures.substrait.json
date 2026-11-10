@@ -39,8 +39,9 @@
             }
           },
           "groupings": [{
-            "groupingExpressions": []
+            "expressionReferences": []
           }],
+          "groupingExpressions": [],
           "measures": [
             {
               "measure": {

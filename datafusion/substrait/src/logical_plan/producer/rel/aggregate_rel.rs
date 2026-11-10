@@ -54,6 +54,7 @@ fn grouping_set_output_mapping(grouping_count: usize, measure_count: usize) -> R
         emit_kind: Some(EmitKind::Emit(rel_common::Emit { output_mapping })),
         hint: None,
         advanced_extension: None,
+        rel_anchor: None,
     }
 }
 
@@ -70,15 +71,16 @@ pub fn from_distinct(
                 .map(substrait_field_ref)
                 .collect::<datafusion::common::Result<Vec<_>>>()?;
 
-            #[expect(deprecated)]
+            // The keys are declared once on the relation and the single grouping
+            // set references them by index.
+            let expression_references = (0..grouping.len() as u32).collect();
             Ok(Box::new(Rel {
                 rel_type: Some(RelType::Aggregate(Box::new(AggregateRel {
                     common: None,
                     input: Some(input),
-                    grouping_expressions: vec![],
+                    grouping_expressions: grouping,
                     groupings: vec![Grouping {
-                        grouping_expressions: grouping,
-                        expression_references: vec![],
+                        expression_references,
                     }],
                     measures: vec![],
                     advanced_extension: None,
@@ -166,11 +168,9 @@ pub fn parse_flat_grouping_exprs(
     ref_group_exprs: &mut Vec<Expression>,
 ) -> datafusion::common::Result<Grouping> {
     let mut expression_references = Vec::with_capacity(exprs.len());
-    let mut grouping_expressions = Vec::with_capacity(exprs.len());
 
     for e in exprs {
         let rex = producer.handle_expr(e, schema)?;
-        grouping_expressions.push(rex.clone());
         let reference = ref_group_exprs.iter().position(|existing| existing == &rex);
         let reference = reference.unwrap_or_else(|| {
             ref_group_exprs.push(rex);
@@ -178,9 +178,7 @@ pub fn parse_flat_grouping_exprs(
         });
         expression_references.push(reference as u32);
     }
-    #[expect(deprecated)]
     Ok(Grouping {
-        grouping_expressions,
         expression_references,
     })
 }
