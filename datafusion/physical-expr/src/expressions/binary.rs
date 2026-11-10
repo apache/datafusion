@@ -7496,7 +7496,7 @@ mod tests {
         // -------------------------------------------------------------------
 
         // Stateful/non-deterministic expression must only be evaluated on rows that pass the previues conditions
-        // to make sure the expression return the expected results (for example `rand` with predefined seed, calling on unnedded rows will update the internal state and return different results)
+        // to make sure the expression return the expected results (for example `rand` with predefined seed, calling on unneeded rows will update the internal state and return different results)
         #[test]
         fn and_stateful_rhs_only_evaluated_on_needed_rows() {
             let batch = batch();
