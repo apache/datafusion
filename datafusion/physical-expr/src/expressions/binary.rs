@@ -8,11 +8,11 @@ use crate::PhysicalExpr;
 use crate::expressions::SqlSimilarToPattern;
 use crate::expressions::translate_scalar;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
-use datafusion_physical_expr_common::physical_expr::is_volatile;
+use datafusion_common::tree_node::{TreeNode, TreeNodeRecursion};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::Hash;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use arrow::array::*;
 use arrow::buffer::NullBuffer;
@@ -52,10 +52,10 @@ pub struct BinaryExpr {
     right: Arc<dyn PhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
-    /// Lazily computed on first use, so walking the children is not repeated
-    /// for every batch. Children never change after construction, and every
-    /// constructor starts with an empty cache, so it never goes stale.
-    children_volatility: OnceLock<ChildrenVolatility>,
+    /// Computed once in [`BinaryExpr::new`] for `AND` / `OR` (the operators
+    /// that short-circuit), so the children are not walked for every batch.
+    /// `None` for other operators. Children never change after construction.
+    children_volatility: Option<ChildrenVolatility>,
 }
 
 /// Whether each child of a [`BinaryExpr`] (or anything under it) is volatile.
@@ -65,7 +65,7 @@ struct ChildrenVolatility {
     right: bool,
 }
 
-// `children_volatility` is a cache derived from the children, so it is left out
+// `children_volatility` is derived from the children, so it is left out
 impl std::fmt::Debug for BinaryExpr {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BinaryExpr")
@@ -102,12 +102,17 @@ impl BinaryExpr {
         op: Operator,
         right: Arc<dyn PhysicalExpr>,
     ) -> Self {
+        let children_volatility =
+            matches!(op, Operator::And | Operator::Or).then(|| ChildrenVolatility {
+                left: subtree_is_volatile(&left),
+                right: subtree_is_volatile(&right),
+            });
         Self {
             left,
             op,
             right,
             fail_on_overflow: false,
-            children_volatility: OnceLock::new(),
+            children_volatility,
         }
     }
 
@@ -118,15 +123,25 @@ impl BinaryExpr {
             op: self.op,
             right: self.right,
             fail_on_overflow,
-            children_volatility: OnceLock::new(),
+            // Same children, so the volatility is unchanged
+            children_volatility: self.children_volatility,
         }
     }
 
-    fn children_volatility(&self) -> ChildrenVolatility {
-        *self.children_volatility.get_or_init(|| ChildrenVolatility {
-            left: is_volatile(&self.left),
-            right: is_volatile(&self.right),
-        })
+    /// Whether the left child (or anything under it) is volatile
+    fn left_is_volatile(&self) -> bool {
+        match self.children_volatility {
+            Some(v) => v.left,
+            None => subtree_is_volatile(&self.left),
+        }
+    }
+
+    /// Whether the right child (or anything under it) is volatile
+    fn right_is_volatile(&self) -> bool {
+        match self.children_volatility {
+            Some(v) => v.right,
+            None => subtree_is_volatile(&self.right),
+        }
     }
 
     /// Get the left side of the binary expression
@@ -589,7 +604,7 @@ impl PhysicalExpr for BinaryExpr {
         let lhs = self.left.evaluate(batch)?;
 
         // Check if we can apply short-circuit evaluation.
-        match check_short_circuit(&lhs, &self.op, || self.children_volatility().right) {
+        match check_short_circuit(&lhs, &self.op, self.right_is_volatile()) {
             ShortCircuitStrategy::None => {}
             ShortCircuitStrategy::ReturnLeft => return Ok(lhs),
             ShortCircuitStrategy::ReturnRight => {
@@ -1267,7 +1282,7 @@ impl BinaryExpr {
 
         // Returns whether to go on to the next conjunct.
         let mut evaluate = |conjunct: &Arc<dyn PhysicalExpr>,
-                            is_volatile: &dyn Fn() -> bool|
+                            is_volatile: bool|
          -> Result<bool> {
             if let Some(undecided) = rows_to_filter_before(
                 conjunct,
@@ -1297,9 +1312,8 @@ impl BinaryExpr {
             result = and_kleene_columnar(so_far, value, input.num_rows())?;
             Ok(!is_all_false(&result))
         };
-        let volatility = || self.children_volatility();
-        if for_each_conjunct(&self.left, &|| volatility().left, &mut evaluate)? {
-            for_each_conjunct(&self.right, &|| volatility().right, &mut evaluate)?;
+        if for_each_conjunct(&self.left, self.left_is_volatile(), &mut evaluate)? {
+            for_each_conjunct(&self.right, self.right_is_volatile(), &mut evaluate)?;
         }
 
         selections
@@ -1323,6 +1337,38 @@ enum ShortCircuitStrategy {
 /// Maximum share of rows still needing evaluation before filtering.
 const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 
+/// Whether `expr` or anything under it is volatile, like
+/// [`is_volatile`](datafusion_physical_expr_common::physical_expr::is_volatile),
+/// but reuses the volatility already computed for `AND` / `OR` nodes (at any
+/// depth) instead of walking their children again, so building a long
+/// `AND` / `OR` chain stays linear.
+fn subtree_is_volatile(expr: &Arc<dyn PhysicalExpr>) -> bool {
+    let mut volatile = false;
+    expr.apply(|e| {
+        if let Some(BinaryExpr {
+            children_volatility: Some(v),
+            ..
+        }) = e.downcast_ref::<BinaryExpr>()
+        {
+            // `BinaryExpr` itself is never volatile, only its children can be
+            return Ok(if v.left || v.right {
+                volatile = true;
+                TreeNodeRecursion::Stop
+            } else {
+                TreeNodeRecursion::Jump
+            });
+        }
+        Ok(if e.is_volatile_node() {
+            volatile = true;
+            TreeNodeRecursion::Stop
+        } else {
+            TreeNodeRecursion::Continue
+        })
+    })
+    .expect("infallible closure should not fail");
+    volatile
+}
+
 /// Returns the short-circuit strategy for `OR` with a Boolean LHS.
 /// All true returns the LHS; all false returns the RHS. Otherwise the RHS is
 /// evaluated only on the rows that are not `true` when at most
@@ -1332,7 +1378,7 @@ const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 fn check_short_circuit(
     lhs: &ColumnarValue,
     op: &Operator,
-    rhs_is_volatile: impl FnOnce() -> bool,
+    rhs_is_volatile: bool,
 ) -> ShortCircuitStrategy {
     if *op != Operator::Or {
         return ShortCircuitStrategy::None;
@@ -1367,8 +1413,8 @@ fn check_short_circuit(
                     };
                 }
 
-                if undecided as f32 / len as f32 <= PRE_SELECTION_THRESHOLD
-                    || rhs_is_volatile()
+                if rhs_is_volatile
+                    || undecided as f32 / len as f32 <= PRE_SELECTION_THRESHOLD
                 {
                     return ShortCircuitStrategy::PreSelection {
                         mask: not_true(bool_array),
@@ -1514,7 +1560,7 @@ fn pre_selection_scatter(
 /// `conjunct` on all rows is not cheap and infallible.
 fn rows_to_filter_before(
     conjunct: &Arc<dyn PhysicalExpr>,
-    is_volatile: &dyn Fn() -> bool,
+    is_volatile: bool,
     result: &ColumnarValue,
     schema: &Schema,
     num_rows: usize,
@@ -1522,9 +1568,9 @@ fn rows_to_filter_before(
     let undecided = undecided_rows(result)?;
     let undecided_count = undecided.true_count();
     // Classify last: it walks the whole conjunct.
-    ((undecided_count as f32 / num_rows as f32 <= PRE_SELECTION_THRESHOLD
-        && !is_cheap_and_infallible(conjunct, schema))
-        || is_volatile())
+    (is_volatile
+        || (undecided_count as f32 / num_rows as f32 <= PRE_SELECTION_THRESHOLD
+            && !is_cheap_and_infallible(conjunct, schema)))
     .then_some(undecided)
 }
 
@@ -1604,20 +1650,17 @@ fn is_cheap_and_infallible(expr: &Arc<dyn PhysicalExpr>, schema: &Schema) -> boo
 /// until it returns `false`. Walks the tree in place, so it doesn't allocate.
 fn for_each_conjunct(
     expr: &Arc<dyn PhysicalExpr>,
-    is_volatile: &dyn Fn() -> bool,
-    f: &mut impl FnMut(&Arc<dyn PhysicalExpr>, &dyn Fn() -> bool) -> Result<bool>,
+    is_volatile: bool,
+    f: &mut impl FnMut(&Arc<dyn PhysicalExpr>, bool) -> Result<bool>,
 ) -> Result<bool> {
     match expr.downcast_ref::<BinaryExpr>() {
-        // Each conjunct's volatility is cached on its parent `AND`.
-        Some(binary) if binary.op == Operator::And => Ok(for_each_conjunct(
-            &binary.left,
-            &|| binary.children_volatility().left,
-            f,
-        )? && for_each_conjunct(
-            &binary.right,
-            &|| binary.children_volatility().right,
-            f,
-        )?),
+        // Each conjunct's volatility is stored on its parent `AND`.
+        Some(binary) if binary.op == Operator::And => {
+            Ok(
+                for_each_conjunct(&binary.left, binary.left_is_volatile(), f)?
+                    && for_each_conjunct(&binary.right, binary.right_is_volatile(), f)?,
+            )
+        }
         _ => f(expr, is_volatile),
     }
 }
@@ -6295,7 +6338,7 @@ mod tests {
 
     #[test]
     fn test_check_short_circuit() {
-        // A non-volatile RHS (`|| false`), so only the LHS decides the strategy
+        // A non-volatile RHS (`false`), so only the LHS decides the strategy
         // Test with non-nullable arrays
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -6313,7 +6356,7 @@ mod tests {
         let left_expr = logical2physical(&logical_col("a").eq(expr_lit(2)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
-            check_short_circuit(&left_value, &Operator::And, || false),
+            check_short_circuit(&left_value, &Operator::And, false),
             ShortCircuitStrategy::None
         ));
 
@@ -6321,7 +6364,7 @@ mod tests {
         let left_expr = logical2physical(&logical_col("a").gt(expr_lit(0)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
-            check_short_circuit(&left_value, &Operator::Or, || false),
+            check_short_circuit(&left_value, &Operator::Or, false),
             ShortCircuitStrategy::ReturnLeft
         ));
 
@@ -6333,7 +6376,7 @@ mod tests {
             panic!("Expected ColumnarValue::Array");
         };
         let ShortCircuitStrategy::PreSelection { mask, fill_value } =
-            check_short_circuit(&left_value, &Operator::Or, || false)
+            check_short_circuit(&left_value, &Operator::Or, false)
         else {
             panic!("Expected ShortCircuitStrategy::PreSelection");
         };
@@ -6353,7 +6396,7 @@ mod tests {
             logical2physical(&logical_col("a").gt(expr_lit(4)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
-            check_short_circuit(&left_value, &Operator::Or, || false),
+            check_short_circuit(&left_value, &Operator::Or, false),
             ShortCircuitStrategy::None
         ));
 
@@ -6389,7 +6432,7 @@ mod tests {
         let mixed_nulls = logical2physical(&logical_col("c"), &schema_nullable);
         let mixed_nulls_value = mixed_nulls.evaluate(&batch_nullable).unwrap();
         assert!(matches!(
-            check_short_circuit(&mixed_nulls_value, &Operator::Or, || false),
+            check_short_circuit(&mixed_nulls_value, &Operator::Or, false),
             ShortCircuitStrategy::None
         ));
 
@@ -6406,7 +6449,7 @@ mod tests {
 
         // All nulls shouldn't short-circuit for OR
         assert!(matches!(
-            check_short_circuit(&null_value, &Operator::Or, || false),
+            check_short_circuit(&null_value, &Operator::Or, false),
             ShortCircuitStrategy::None
         ));
 
@@ -6414,21 +6457,21 @@ mod tests {
         // Scalar true
         let scalar_true = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
         assert!(matches!(
-            check_short_circuit(&scalar_true, &Operator::Or, || false),
+            check_short_circuit(&scalar_true, &Operator::Or, false),
             ShortCircuitStrategy::ReturnLeft
         )); // Should short-circuit OR
 
         // Scalar false
         let scalar_false = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
         assert!(matches!(
-            check_short_circuit(&scalar_false, &Operator::Or, || false),
+            check_short_circuit(&scalar_false, &Operator::Or, false),
             ShortCircuitStrategy::ReturnRight
         )); // Should return the RHS for OR
 
         // Scalar null
         let scalar_null = ColumnarValue::Scalar(ScalarValue::Boolean(None));
         assert!(matches!(
-            check_short_circuit(&scalar_null, &Operator::Or, || false),
+            check_short_circuit(&scalar_null, &Operator::Or, false),
             ShortCircuitStrategy::None
         ));
     }
@@ -7049,24 +7092,24 @@ mod tests {
         // Filter before fallible work when few rows remain; keep NULLs.
         let expected = BooleanArray::from((0..10).map(|i| i < 2).collect::<Vec<_>>());
         assert_eq!(
-            rows_to_filter_before(&fallible, &|| false, &few_left, &schema, 10),
+            rows_to_filter_before(&fallible, false, &few_left, &schema, 10),
             Some(expected)
         );
         assert_eq!(
-            rows_to_filter_before(&cheap, &|| false, &few_left, &schema, 10),
+            rows_to_filter_before(&cheap, false, &few_left, &schema, 10),
             None
         );
         assert_eq!(
-            rows_to_filter_before(&fallible, &|| false, &many_left, &schema, 10),
+            rows_to_filter_before(&fallible, false, &many_left, &schema, 10),
             None
         );
         assert_eq!(
-            rows_to_filter_before(&fallible, &|| false, &all_true, &schema, 10),
+            rows_to_filter_before(&fallible, false, &all_true, &schema, 10),
             None
         );
         let scalar = ColumnarValue::Scalar(ScalarValue::Boolean(None));
         assert_eq!(
-            rows_to_filter_before(&fallible, &|| false, &scalar, &schema, 10),
+            rows_to_filter_before(&fallible, false, &scalar, &schema, 10),
             None
         );
     }
