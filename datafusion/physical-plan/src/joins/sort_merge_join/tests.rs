@@ -4881,8 +4881,11 @@ fn build_batched_finish_barrier_table(
 }
 
 /// Concat and sort batches by all the columns to make sure we can compare them with different join
-fn prepare_record_batches_for_cmp(output: Vec<RecordBatch>) -> RecordBatch {
-    let output_batch = arrow::compute::concat_batches(output[0].schema_ref(), &output)
+fn prepare_record_batches_for_cmp(
+    schema: &SchemaRef,
+    output: Vec<RecordBatch>,
+) -> RecordBatch {
+    let output_batch = arrow::compute::concat_batches(schema, &output)
         .expect("failed to concat batches");
 
     // Sort on all columns to make sure we have a deterministic order for the assertion
@@ -4937,7 +4940,7 @@ async fn join_get_stream_and_get_expected(
 
         let batches = common::collect(stream).await?;
 
-        prepare_record_batches_for_cmp(batches)
+        prepare_record_batches_for_cmp(&oracle.schema(), batches)
     };
 
     let join = SortMergeJoinExec::try_new(
@@ -5150,7 +5153,8 @@ async fn test_should_emit_early_when_have_enough_data_to_emit() -> Result<()> {
                 // Just sanity test to make sure we are still producing valid output
                 {
                     let output = [output_batched, output_batches_after_finish].concat();
-                    let actual_prepared = prepare_record_batches_for_cmp(output);
+                    let actual_prepared =
+                        prepare_record_batches_for_cmp(&expected.schema(), output);
 
                     assert_eq!(actual_prepared.columns(), expected.columns());
                 }
@@ -8642,7 +8646,7 @@ async fn join_inner_early_filtering_matches_hash_join() -> Result<()> {
             assert_eq!(expected.num_rows() > 0, keeps_pairs, "filter {filter}");
             assert_streamed_order(&output);
             assert_eq!(
-                prepare_record_batches_for_cmp(output),
+                prepare_record_batches_for_cmp(&expected.schema(), output),
                 expected,
                 "filter {filter} with batch_size {batch_size}"
             );
