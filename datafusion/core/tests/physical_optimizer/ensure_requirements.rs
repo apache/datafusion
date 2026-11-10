@@ -522,6 +522,32 @@ fn test_fetched_merge_keeps_stricter_topk_above() {
     ");
 }
 
+/// A merge guarantees only its own keys across partitions, so a finer
+/// requirement must stay above it.
+#[test]
+fn test_finer_sort_stays_above_merge_without_fetch() {
+    let source: Arc<dyn ExecutionPlan> = Arc::new(MockMultiPartitionExec::new(4));
+    let a = sort_expr_on("a", 0, false, false);
+    let a_b = LexOrdering::new(
+        a.iter()
+            .cloned()
+            .chain(sort_expr_on("b", 1, false, false).iter().cloned()),
+    )
+    .unwrap();
+    let merge = Arc::new(SortPreservingMergeExec::new(a, source));
+    let plan: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(a_b, merge));
+
+    let mut sort_push_down = SortPushDown::new_default(plan);
+    assign_initial_requirements(&mut sort_push_down);
+    let pushed_down = plan_string(&pushdown_sorts(sort_push_down).unwrap().plan);
+
+    assert_snapshot!(pushed_down, @r"
+    SortExec: expr=[a@0 ASC NULLS LAST, b@1 ASC NULLS LAST], preserve_partitioning=[false]
+      SortPreservingMergeExec: [a@0 ASC NULLS LAST]
+        MockMultiPartitionExec
+    ");
+}
+
 // ========================================================================
 // Multiple sort columns test
 // ========================================================================

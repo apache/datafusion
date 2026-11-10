@@ -61,12 +61,8 @@ async fn union_all_mismatched_nullable(
     .await
 }
 
-/// The schema DataFusion actually commits to for a query: the logical plan
-/// after the `Analyzer` (which includes the `UNION` nullability/type
-/// coercion this test targets) and `Optimizer` have run. `DataFrame::schema`
-/// alone is not enough here -- it reflects the raw, pre-`Analyzer` plan (see
-/// `SessionState::create_logical_plan`), which for a `UNION` still has the
-/// first leg's un-coerced type.
+/// This test checks the schema after the Analyzer and Optimizer run,
+/// because they can change nullability.
 fn analyzed_schema(df: &DataFrame) -> Result<Schema> {
     Ok(df
         .clone()
