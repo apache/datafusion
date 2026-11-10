@@ -20,10 +20,18 @@ distributed rewrite, which remains selected with either flag value. The same
 environment variable works with `./bench.sh run grouped_count_distinct`.
 
 Q01-Q09 vary argument and grouping-key types, group count, distinct cardinality,
-and skew. Q10 covers the unfavorable native shape: at the default four million
-rows it has one million groups, each with four copies of the same value. Each
-native input row probes both the group table and the per-group distinct set;
-the rewrite's outer aggregate only sees the deduplicated pairs.
+and skew. Q10 has one million groups, each with four copies of the same value,
+at the default four million rows. It exercises the native accumulator's inline
+first value, which lets repeated singleton values skip the distinct hash set.
+The rewrite's outer aggregate only sees the deduplicated pairs.
+
+When the average number of additional distinct values per group exceeds eight,
+the native accumulator moves its inline values into the hash set and releases
+the inline buffer. Later batches use the hash-only loop.
+
+Q11 uses the same group count with at most two distinct values per group. Q12
+has 95% of groups containing only NULL arguments, exposing the memory cost of
+allocating inline value slots for groups without a non-NULL value.
 
 Every query checks its result against an explicit distinct-pairs-then-count
 query before timing. Keep the memory pool and limit the same on both sides.
