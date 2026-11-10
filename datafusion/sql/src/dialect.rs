@@ -53,7 +53,7 @@ use sqlparser::dialect::bigquery::{BigQueryExpr, BigQueryStruct};
 use sqlparser::dialect::builtin::{BuiltinExpr, BuiltinSelect, BuiltinStatement};
 use sqlparser::dialect::snowflake::{PathElement, SnowflakeExpr};
 use sqlparser::dialect::{
-    Builtin, Dialect, bigquery, duckdb, mysql, postgres, snowflake, spark,
+    Builtin, Dialect, bigquery, duckdb, mysql, postgres, snowflake, spark, sqlite,
 };
 use sqlparser::grammar::{self, prec};
 use sqlparser::lexer;
@@ -112,6 +112,22 @@ impl Dialect for DataFusion {
         grammar::parse_insert_source_with_default(p)
     }
 
+    /// `INSERT OVERWRITE [TABLE] t ...`, as in Spark, and `INSERT OR REPLACE`,
+    /// as in SQLite. Other inserts keep the core rule and so this dialect's
+    /// hooks, such as `DEFAULT VALUES`.
+    fn parse_insert_statement<'a>(
+        p: &mut Parser<'a, Self>,
+    ) -> PResult<Statement<'a, Builtin>> {
+        let after_insert = p.peek_nth(1);
+        if after_insert.is_word("OVERWRITE") {
+            return spark::parse_insert(p);
+        }
+        if after_insert.is_word("OR") {
+            return sqlite::parse_insert(p);
+        }
+        Self::parse_insert(p).map(|insert| StatementKind::Insert(Box::new(insert)).into())
+    }
+
     fn parse_drop_object_type<'a>(p: &mut Parser<'a, Self>) -> Option<ObjectType<'a>> {
         grammar::eat_drop_object_type(p, &["TYPE"])
     }
@@ -135,16 +151,36 @@ impl Dialect for DataFusion {
         lex_token(rest)
     }
 
+    /// DuckDB's reserved words, except that `LEFT` and `RIGHT` can name a
+    /// table or column, as in `FROM left AS t1`. They are still joins after a
+    /// table, through [`Self::is_reserved_for_alias`].
     #[inline]
     fn is_reserved(word: &str) -> bool {
-        duckdb::is_reserved(word)
+        duckdb::is_reserved(word) && !is_join_side(word)
+    }
+
+    /// The standard functions written without parentheses, such as
+    /// `CURRENT_DATE`, plus `USER` and `CURRENT_CATALOG`.
+    #[inline]
+    fn is_niladic_function(word: &str) -> bool {
+        grammar::is_niladic_function(word)
+            || ["USER", "CURRENT_CATALOG"]
+                .iter()
+                .any(|name| word.eq_ignore_ascii_case(name))
+    }
+
+    #[inline]
+    fn is_typed_string_type(name: &str) -> bool {
+        <sqlparser::dialect::DuckDb as Dialect>::is_typed_string_type(name)
     }
 
     #[inline]
     fn is_reserved_for_alias(word: &str) -> bool {
-        // Spark's `DISTRIBUTE BY`, `CLUSTER BY` and `SORT BY` follow a table.
+        // Spark's `DISTRIBUTE BY`, `CLUSTER BY` and `SORT BY` follow a table,
+        // as does `MATCH_CONDITION` in `ASOF JOIN (a JOIN b ON ...) MATCH_CONDITION`.
         duckdb::is_reserved_for_alias(word)
-            || ["DISTRIBUTE", "CLUSTER", "SORT"]
+            || is_join_side(word)
+            || ["DISTRIBUTE", "CLUSTER", "SORT", "MATCH_CONDITION"]
                 .iter()
                 .any(|clause| word.eq_ignore_ascii_case(clause))
     }
@@ -196,7 +232,11 @@ impl Dialect for DataFusion {
         mysql::at_row_values(p, n) || grammar::at_query_values(p, n)
     }
 
+    /// DuckDB's statements, plus `REPLACE INTO t ...`, as in MySQL and SQLite.
     fn parse_statement<'a>(p: &mut Parser<'a, Self>) -> PResult<Statement<'a, Builtin>> {
+        if p.at_keyword("REPLACE") && p.peek_nth(1).is_word("INTO") {
+            return sqlite::parse_insert(p);
+        }
         duckdb::parse_statement(p)
     }
 
@@ -443,9 +483,17 @@ impl Dialect for DataFusion {
     }
 }
 
-/// A token: DuckDB's, plus `<=>` and backtick-quoted names, as in MySQL, and
-/// the `|>` of a pipe.
+/// `LEFT` or `RIGHT`, which start a join after a table.
+fn is_join_side(word: &str) -> bool {
+    word.eq_ignore_ascii_case("LEFT") || word.eq_ignore_ascii_case("RIGHT")
+}
+
+/// A token: DuckDB's, plus `<=>` and backtick-quoted names, as in MySQL, the
+/// `|>` of a pipe, and `@name` and `@@name` variables.
 pub fn lex_token(rest: &str) -> Option<LexResult> {
+    if let Some(variable) = lex_variable(rest) {
+        return Some(Ok(variable));
+    }
     if rest.starts_with("<=>") || rest.starts_with("|>") {
         let len = if rest.starts_with("|>") { 2 } else { 3 };
         return Some(Ok(Lexeme {
@@ -457,6 +505,25 @@ pub fn lex_token(rest: &str) -> Option<LexResult> {
         return Some(lexer::quoted(rest, TokenKind::QuotedIdent));
     }
     duckdb::lex_token(rest)
+}
+
+/// Lexes `@name` or `@@name` as a word, which the planner reads as a variable.
+/// `@` and `@@` followed by anything else remain operators.
+fn lex_variable(rest: &str) -> Option<Lexeme> {
+    let bytes = rest.as_bytes();
+    let sigils = bytes.iter().take(2).take_while(|&&b| b == b'@').count();
+    let starts_name = |b: &u8| b.is_ascii_alphabetic() || *b == b'_' || !b.is_ascii();
+    if sigils == 0 || !bytes.get(sigils).is_some_and(starts_name) {
+        return None;
+    }
+    let name = bytes[sigils..]
+        .iter()
+        .take_while(|&&b| b.is_ascii_alphanumeric() || b == b'_' || !b.is_ascii())
+        .count();
+    Some(Lexeme {
+        kind: TokenKind::Word,
+        len: sigils + name,
+    })
 }
 
 /// `STRUCT(value [AS name], ...)`, in which a name can also be a string.
@@ -734,6 +801,8 @@ pub fn parse_data_type<'a, D: Dialect<Ext = Builtin>>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlparser::dialect::spark::SparkStatement;
+    use sqlparser::dialect::sqlite::SqliteStatement;
 
     #[test]
     fn parses_what_duckdb_parses() {
@@ -747,5 +816,92 @@ mod tests {
             let duckdb = sqlparser::parse_sql::<sqlparser::dialect::DuckDb>(sql).unwrap();
             assert_eq!(ours, duckdb, "{sql}");
         }
+    }
+
+    /// The tables and joins in the `FROM` of a single `SELECT`.
+    fn from_clause(sql: &str) -> TableWithJoins<'_, Builtin> {
+        let mut statements = sqlparser::parse_sql::<DataFusion>(sql).unwrap();
+        assert_eq!(statements.len(), 1, "{sql}");
+        let StatementKind::Query(query) = statements.remove(0).kind else {
+            panic!("not a query: {sql}");
+        };
+        let SetExpr::Select(select) = query.body else {
+            panic!("not a SELECT: {sql}");
+        };
+        let mut from = select.from;
+        assert_eq!(from.len(), 1, "{sql}");
+        from.remove(0)
+    }
+
+    fn table_name<'t>(table: &'t TableRef<'_, Builtin>) -> &'t str {
+        let TableFactor::Named(name) = &table.factor else {
+            panic!("not a named table: {:?}", table.factor);
+        };
+        assert_eq!(name.parts.len(), 1);
+        name.parts[0].text.as_ref()
+    }
+
+    #[test]
+    fn left_and_right_name_tables_but_still_join() {
+        let from = from_clause(
+            "SELECT * FROM left AS t1 LEFT JOIN right AS t2 ON t1.a = t2.a \
+             RIGHT JOIN u ON t1.a = u.a",
+        );
+        assert_eq!(table_name(&from.relation), "left");
+        assert_eq!(from.relation.alias.as_ref().unwrap().name.text, "t1");
+        let kinds: Vec<_> = from.joins.iter().map(|join| join.kind.clone()).collect();
+        assert_eq!(kinds, [JoinKind::Left, JoinKind::Right]);
+        assert_eq!(table_name(&from.joins[0].table), "right");
+        assert_eq!(table_name(&from.joins[1].table), "u");
+        assert!(from.joins[1].table.alias.is_none());
+    }
+
+    #[test]
+    fn insert_overwrite_and_replace_use_their_dialects_rules() {
+        let mut statements =
+            sqlparser::parse_sql::<DataFusion>("INSERT OVERWRITE t1 VALUES (1, null)")
+                .unwrap();
+        let StatementKind::Ext(BuiltinStatement::Spark(SparkStatement::Insert(insert))) =
+            statements.remove(0).kind
+        else {
+            panic!("not a Spark insert");
+        };
+        assert!(insert.overwrite);
+        assert!(!insert.into);
+        assert!(!insert.table_keyword);
+        assert_eq!(insert.table.parts[0].text, "t1");
+
+        for sql in [
+            "REPLACE INTO t1 VALUES (1, null)",
+            "INSERT OR REPLACE INTO t1 VALUES (1, null)",
+        ] {
+            let mut statements = sqlparser::parse_sql::<DataFusion>(sql).unwrap();
+            let StatementKind::Ext(BuiltinStatement::Sqlite(SqliteStatement::Insert(
+                insert,
+            ))) = statements.remove(0).kind
+            else {
+                panic!("not a SQLite insert: {sql}");
+            };
+            assert_eq!(insert.or_action.as_deref(), Some("REPLACE"), "{sql}");
+            assert_eq!(insert.table.parts[0].text, "t1");
+        }
+
+        // Without `OVERWRITE`, `DEFAULT VALUES` still goes through this dialect.
+        let statements =
+            sqlparser::parse_sql::<DataFusion>("INSERT INTO t1 DEFAULT VALUES").unwrap();
+        assert!(matches!(statements[0].kind, StatementKind::Insert(_)));
+    }
+
+    #[test]
+    fn match_condition_is_not_an_alias_of_a_nested_join() {
+        let from = from_clause(
+            "SELECT * FROM t ASOF JOIN (p JOIN q ON p.a = q.a) \
+             MATCH_CONDITION (t.ts >= q.ts) ON t.a = p.a",
+        );
+        assert_eq!(from.joins.len(), 1);
+        let asof = &from.joins[0];
+        assert_eq!(asof.kind, JoinKind::AsOf);
+        assert!(matches!(asof.table.factor, TableFactor::NestedJoin(_)));
+        assert!(asof.table.alias.is_none());
     }
 }

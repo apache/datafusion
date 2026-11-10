@@ -11,6 +11,7 @@ use datafusion_expr::planner::{
 };
 use sqlparser::ast::{Visit, Visitor};
 use sqlparser::dialect::bigquery::BigQueryExpr;
+use sqlparser::dialect::clickhouse::ClickHouseExpr;
 use sqlparser::dialect::duckdb::DuckDbExpr;
 use sqlparser::dialect::mysql::MySqlExpr;
 use sqlparser::dialect::postgres::PostgresExpr;
@@ -212,27 +213,6 @@ pub(crate) fn reject_window_functions(
         None => Ok(()),
         Some(window) => Err(window_function_not_allowed_err(&window, clause, span, help)),
     }
-}
-
-/// Names that an earlier version of `sqlparser` parsed as calls to functions
-/// without arguments when written as bare keywords, such as `current_date`.
-fn is_keyword_function(ident: &Ident<'_>) -> bool {
-    const NAMES: [&str; 10] = [
-        "current_catalog",
-        "current_date",
-        "current_role",
-        "current_time",
-        "current_timestamp",
-        "current_user",
-        "localtime",
-        "localtimestamp",
-        "session_user",
-        "user",
-    ];
-    ident.quote.is_none()
-        && NAMES
-            .iter()
-            .any(|name| ident.text.eq_ignore_ascii_case(name))
 }
 
 /// One step after the root of `a.b[1]['c'][2:3]`.
@@ -486,14 +466,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 planner_context.prepare_param_data_types(),
             ),
             ExprKind::Interval(interval) => self.sql_interval_to_expr(false, *interval),
-            ExprKind::Ident(id) if is_keyword_function(&id) => self
-                .function_args_to_logical_expr(
-                    function::FunctionArgs::without_parentheses(ObjectName {
-                        parts: vec![id],
-                    }),
-                    schema,
-                    planner_context,
-                ),
             ExprKind::Ident(id) => {
                 self.sql_identifier_to_expr(id, schema, planner_context)
             }
@@ -632,6 +604,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         match special {
+            SpecialExpr::Niladic(name) => self.function_args_to_logical_expr(
+                function::FunctionArgs::without_parentheses(ObjectName {
+                    parts: vec![name],
+                }),
+                schema,
+                planner_context,
+            ),
+
             SpecialExpr::Extract { field, expr } => {
                 self.sql_extract_to_expr(&field, expr, schema, planner_context)
             }
@@ -740,7 +720,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             | BuiltinExpr::BigQuery(BigQueryExpr::Array(elements)) => {
                 self.sql_array_literal(elements, schema)
             }
-            BuiltinExpr::DuckDb(DuckDbExpr::Struct(fields)) => {
+            // `{'key': value}`, which Snowflake reads with ClickHouse's rule
+            BuiltinExpr::DuckDb(DuckDbExpr::Struct(fields))
+            | BuiltinExpr::ClickHouse(ClickHouseExpr::Dictionary(fields)) => {
                 self.try_plan_dictionary_literal(fields, schema, planner_context)
             }
             BuiltinExpr::DuckDb(DuckDbExpr::Map(entries)) => {
@@ -1147,7 +1129,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         not_impl_err!("Position not supported by ExprPlanner: {position_args:?}")
     }
 
-    /// Plans DuckDB's `{'key': value, ...}`.
+    /// Plans `{'key': value, ...}`, in DuckDB, ClickHouse and Snowflake.
     fn try_plan_dictionary_literal<'s>(
         &self,
         fields: Vec<(Ident<'s>, SQLExpr<'s>)>,
@@ -1886,7 +1868,12 @@ mod tests {
                     .collect::<Vec<String>>()
                     .join(" OR ");
 
-                let sql_expr = sqlparser::parse_expr::<DuckDb>(&expr_str).unwrap();
+                // The chain is taller than the parser allows by default.
+                let sql_expr = sqlparser::parser::Parser::<DuckDb>::new(&expr_str)
+                    .unwrap()
+                    .with_max_tree_height($num_expr * 2)
+                    .parse_expr()
+                    .unwrap();
 
                 let context_provider = TestContextProvider::new();
                 let sql_to_rel = SqlToRel::new(&context_provider);

@@ -334,7 +334,7 @@ mod tests {
         // exceeds the default recursion limit
         let result = readline_direct(Cursor::new(nested(60)), &validator)?;
         assert!(
-            matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("RecursionLimitExceeded"))
+            matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("nested too deeply"))
         );
 
         validator.set_parser_options(&with_limit(100));
@@ -344,7 +344,7 @@ mod tests {
         validator.set_parser_options(&with_limit(5));
         let result = readline_direct(Cursor::new(nested(10)), &validator)?;
         assert!(
-            matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("RecursionLimitExceeded"))
+            matches!(result, ValidationResult::Invalid(Some(e)) if e.contains("nested too deeply"))
         );
 
         Ok(())

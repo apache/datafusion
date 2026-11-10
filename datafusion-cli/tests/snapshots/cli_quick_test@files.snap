@@ -22,4 +22,4 @@ exit_code: 0
 +------+
 
 ----- stderr -----
-SQL error: RecursionLimitExceeded (current limit: 5)
+SQL error: SQL is nested too deeply (the limit is 5) at Line: 1, Column: 28

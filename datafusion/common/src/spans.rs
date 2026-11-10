@@ -88,14 +88,15 @@ impl Span {
     /// # Examples
     /// ```
     /// # use datafusion_common::{Location, Span};
+    /// # let at = |line, column| Location { line, column };
     /// // line 1, column1 -> line 2, column 5
-    /// let span1 = Span::new(Location::new(1, 1), Location::new(2, 5));
+    /// let span1 = Span::new(at(1, 1), at(2, 5));
     /// // line 2, column 3 -> line 3, column 7
-    /// let span2 = Span::new(Location::new(2, 3), Location::new(3, 7));
+    /// let span2 = Span::new(at(2, 3), at(3, 7));
     /// // Union of the two is the min/max of the two spans
     /// // line 1, column 1 -> line 3, column 7
     /// let union = span1.union(&span2);
-    /// assert_eq!(union, Span::new(Location::new(1, 1), Location::new(3, 7)));
+    /// assert_eq!(union, Span::new(at(1, 1), at(3, 7)));
     /// ```
     pub fn union(&self, other: &Span) -> Span {
         Span {
@@ -121,16 +122,18 @@ impl Span {
     /// # Example
     /// ```
     /// # use datafusion_common::{Location, Span};
+    /// # let at = |line, column| Location { line, column };
     /// let spans = vec![
-    ///     Span::new(Location::new(1, 1), Location::new(2, 5)),
-    ///     Span::new(Location::new(2, 3), Location::new(3, 7)),
-    ///     Span::new(Location::new(3, 1), Location::new(4, 2)),
+    ///     Span::new(at(1, 1), at(2, 5)),
+    ///     Span::new(at(2, 3), at(3, 7)),
+    ///     Span::new(at(3, 1), at(4, 2)),
     /// ];
     /// // line 1, column 1 -> line 4, column 2
     /// assert_eq!(
     ///   Span::union_iter(spans),
-    ///   Span::new(Location::new(1, 1), Location::new(4, 2))
+    ///   Some(Span::new(at(1, 1), at(4, 2)))
     /// );
+    /// ```
     pub fn union_iter<I: IntoIterator<Item = Span>>(iter: I) -> Option<Span> {
         iter.into_iter().reduce(|acc, item| acc.union(&item))
     }

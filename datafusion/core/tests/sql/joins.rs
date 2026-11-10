@@ -10,7 +10,6 @@ use datafusion::physical_plan::joins::AsOfJoinExec;
 use datafusion::physical_plan::{Distribution, ExecutionPlanProperties};
 use datafusion::test_util::register_unbounded_file_with_ordering;
 use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
-#[cfg(feature = "unparser")]
 use datafusion_sql::unparser::plan_to_sql;
 
 use super::*;
@@ -316,7 +315,6 @@ async fn join_using_uppercase_column() -> Result<()> {
 }
 
 // Issue #17359: https://github.com/apache/datafusion/issues/17359
-#[cfg(feature = "unparser")]
 #[tokio::test]
 async fn unparse_cross_join() -> Result<()> {
     let ctx = SessionContext::new();
@@ -522,7 +520,6 @@ async fn asof_join_broadcasts_multi_partition_right_input() -> Result<()> {
              MATCH_CONDITION (t.ts >= p.ts)",
         )
         .await?;
-    #[cfg(feature = "unparser")]
     {
         let sql = plan_to_sql(df.logical_plan())?.to_string();
         assert_contains!(sql.as_str(), "ASOF JOIN");
@@ -640,7 +637,6 @@ async fn asof_join_rejects_unbounded_inputs_during_physical_planning() -> Result
     Ok(())
 }
 
-#[cfg(feature = "unparser")]
 #[tokio::test]
 async fn asof_join_using_unparser_round_trips() -> Result<()> {
     let ctx = SessionContext::new();
@@ -659,7 +655,6 @@ async fn asof_join_using_unparser_round_trips() -> Result<()> {
     Ok(())
 }
 
-#[cfg(feature = "unparser")]
 #[tokio::test]
 async fn asof_join_unparser_preserves_right_preselection() -> Result<()> {
     let ctx = SessionContext::new();

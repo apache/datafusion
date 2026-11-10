@@ -4280,6 +4280,7 @@ fn parse_decimals_parser_options() -> ParserOptions {
         enable_options_value_normalization: false,
         collect_spans: false,
         default_null_ordering: NullOrdering::NullsMax,
+        ..ParserOptions::default()
     }
 }
 
@@ -4292,6 +4293,7 @@ fn ident_normalization_parser_options_no_ident_normalization() -> ParserOptions 
         enable_options_value_normalization: false,
         collect_spans: false,
         default_null_ordering: NullOrdering::NullsMax,
+        ..ParserOptions::default()
     }
 }
 
@@ -4304,6 +4306,7 @@ fn ident_normalization_parser_options_ident_normalization() -> ParserOptions {
         enable_options_value_normalization: false,
         collect_spans: false,
         default_null_ordering: NullOrdering::NullsMax,
+        ..ParserOptions::default()
     }
 }
 
@@ -5506,7 +5509,7 @@ fn test_parse_escaped_string_literal_value() {
 
     assert_snapshot!(
         logical_plan(sql).unwrap_err(),
-        @r#"SQL error: TokenizerError("Unterminated encoded string literal at Line: 1, Column: 25")"#
+        @"SQL error: a string cannot contain a NUL character at Line: 1, Column: 25"
     );
 }
 

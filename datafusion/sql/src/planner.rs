@@ -16,7 +16,7 @@ use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
 use arrow_schema::extension::{Json, Uuid};
 use datafusion_common::TableReference;
-use datafusion_common::config::SqlParserOptions;
+use datafusion_common::config::{Dialect, SqlParserOptions};
 use datafusion_common::datatype::{DataTypeExt, FieldExt};
 use datafusion_common::error::add_possible_columns_to_diag;
 use datafusion_common::{DFSchema, DataFusionError, Result, not_impl_err, plan_err};
@@ -46,6 +46,9 @@ pub struct ParserOptions {
     pub map_string_types_to_utf8view: bool,
     /// Default null ordering for sorting expressions.
     pub default_null_ordering: NullOrdering,
+    /// The dialect the SQL was written in, for type names that only some
+    /// dialects have, such as Spark's `LONG`.
+    pub dialect: Dialect,
 }
 
 impl ParserOptions {
@@ -70,6 +73,7 @@ impl ParserOptions {
             // By default, `nulls_max` is used to follow Postgres's behavior.
             // postgres rule: https://www.postgresql.org/docs/current/queries-order.html
             default_null_ordering: NullOrdering::NullsMax,
+            dialect: Dialect::default(),
         }
     }
 
@@ -130,6 +134,12 @@ impl ParserOptions {
         self.default_null_ordering = value;
         self
     }
+
+    /// Sets the `dialect` option.
+    pub fn with_dialect(mut self, value: Dialect) -> Self {
+        self.dialect = value;
+        self
+    }
 }
 
 impl Default for ParserOptions {
@@ -149,6 +159,7 @@ impl From<&SqlParserOptions> for ParserOptions {
                 .enable_options_value_normalization,
             collect_spans: options.collect_spans,
             default_null_ordering: options.default_null_ordering.as_str().into(),
+            dialect: options.dialect,
         }
     }
 }
@@ -804,6 +815,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             ("INT" | "INTEGER" | "INT4", DataTypeSuffix::None) => Ok(DataType::Int32),
             ("BIGINT" | "INT8", DataTypeSuffix::None) if unsigned => Ok(DataType::UInt64),
             ("BIGINT" | "INT8", DataTypeSuffix::None) => Ok(DataType::Int64),
+            ("LONG", DataTypeSuffix::None) if self.options.dialect == Dialect::Spark => {
+                Ok(DataType::Int64)
+            }
             ("UBIGINT", DataTypeSuffix::None) => Ok(DataType::UInt64),
             ("VARCHAR" | "NVARCHAR", DataTypeSuffix::None)
             | ("CHARACTER" | "CHAR", DataTypeSuffix::Varying) => {

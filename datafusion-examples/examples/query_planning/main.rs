@@ -45,7 +45,6 @@ mod analyzer_rule;
 mod expr_api;
 mod optimizer_rule;
 mod parse_sql_expr;
-#[cfg(feature = "unparser")]
 mod plan_to_sql;
 mod plan_walk;
 mod planner_api;
@@ -64,7 +63,6 @@ enum ExampleKind {
     ExprApi,
     OptimizerRule,
     ParseSqlExpr,
-    #[cfg(feature = "unparser")]
     PlanToSql,
     PlanWalk,
     PlannerApi,
@@ -91,7 +89,6 @@ impl ExampleKind {
             ExampleKind::ExprApi => expr_api::expr_api()?,
             ExampleKind::OptimizerRule => optimizer_rule::optimizer_rule().await?,
             ExampleKind::ParseSqlExpr => parse_sql_expr::parse_sql_expr().await?,
-            #[cfg(feature = "unparser")]
             ExampleKind::PlanToSql => plan_to_sql::plan_to_sql_examples().await?,
             ExampleKind::PlanWalk => plan_walk::plan_walk()?,
             ExampleKind::PlannerApi => planner_api::planner_api().await?,

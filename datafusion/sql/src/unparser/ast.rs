@@ -572,6 +572,7 @@ impl SelectBuilder {
             qualify: self.qualify.clone(),
             windows: self.named_window.clone(),
             from_first: false,
+            span: Default::default(),
         })
     }
     fn create_empty() -> Self {

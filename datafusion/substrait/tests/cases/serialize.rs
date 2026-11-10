@@ -233,7 +233,7 @@ mod tests {
         let df = ctx
             .sql(
                 "SELECT array_transform2(
-                [[data3.p1]],
+                make_array(make_array(data3.p1)),
                 (v, i) -> array_concat(
                     -- when entering this expression, inner v is pushed into the producer and shadows outer v, but after exiting this,
                     -- it should be removed and unshadow the outer v, so that it can be used in the next expression

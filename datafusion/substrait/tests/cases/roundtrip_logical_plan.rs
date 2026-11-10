@@ -2547,45 +2547,45 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
 
     // simple
     roundtrip_with_ctx(
-        "SELECT array_transform2([data3.p1], p0 -> p0 * 2) from data3",
+        "SELECT array_transform2(make_array(data3.p1), p0 -> p0 * 2) from data3",
         ctx.clone(),
     )
     .await?;
 
     // dont use the parameter
     roundtrip_with_ctx(
-        "SELECT array_transform2([data3.p1], p0 -> 3) from data3",
+        "SELECT array_transform2(make_array(data3.p1), p0 -> 3) from data3",
         ctx.clone(),
     )
     .await?;
 
     // multiple parameters using both
     roundtrip_with_ctx(
-        "SELECT array_transform2([data3.p1], (p0, p2) -> p0 * p2) from data3",
+        "SELECT array_transform2(make_array(data3.p1), (p0, p2) -> p0 * p2) from data3",
         ctx.clone(),
     )
     .await?;
 
     // multiple parameters only last
     roundtrip_with_ctx(
-        "SELECT array_transform2([data3.p1], (p0, p2) -> 2 * p2) from data3",
+        "SELECT array_transform2(make_array(data3.p1), (p0, p2) -> 2 * p2) from data3",
         ctx.clone(),
     )
     .await?;
 
     // multiple parameters use none
     roundtrip_with_ctx(
-        "SELECT array_transform2([data3.p1], (p0, p2) -> 3) from data3",
+        "SELECT array_transform2(make_array(data3.p1), (p0, p2) -> 3) from data3",
         ctx.clone(),
     )
     .await?;
 
     // nested without variable shadowing
-    roundtrip_with_ctx("SELECT array_transform2([[data3.p1]], p0 -> array_transform2(p0, p2 -> p2 * 2)) from data3", ctx.clone())
+    roundtrip_with_ctx("SELECT array_transform2(make_array(make_array(data3.p1)), p0 -> array_transform2(p0, p2 -> p2 * 2)) from data3", ctx.clone())
         .await?;
 
     // nested with multiple parameters without variable shadowing
-    roundtrip_with_ctx("SELECT array_transform2([[data3.p1]], (p0, p2) -> array_transform2(p0, (p3, p4) -> p2 * p3 * p4)) from data3", ctx.clone())
+    roundtrip_with_ctx("SELECT array_transform2(make_array(make_array(data3.p1)), (p0, p2) -> array_transform2(p0, (p3, p4) -> p2 * p3 * p4)) from data3", ctx.clone())
         .await?;
 
     // since substrait doesn't encode lambda parameters names, they got generated, non-conflicting names during consumption
@@ -2593,7 +2593,7 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
 
     // nested with variable shadowing.
     let plan = generate_plan_from_sql_with_ctx(
-        "SELECT array_transform2([[data3.p1]], v -> array_transform2(v, v -> v * 2)) from data3",
+        "SELECT array_transform2(make_array(make_array(data3.p1)), v -> array_transform2(v, v -> v * 2)) from data3",
         true,
         true,
         &ctx,
@@ -2610,7 +2610,7 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
 
     // nested with variable shadowing with multiple parameters
     let plan = generate_plan_from_sql_with_ctx(
-        "SELECT array_transform2([[data3.p1]], (v, i) -> array_transform2(v, (v, i) -> v * i)) from data3",
+        "SELECT array_transform2(make_array(make_array(data3.p1)), (v, i) -> array_transform2(v, (v, i) -> v * i)) from data3",
         true,
         true,
         &ctx,
@@ -2628,7 +2628,7 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
     // nested with variable shadowing and later reuse of the shadowed var after exiting the shadowing expression
     let plan = generate_plan_from_sql_with_ctx(
         "SELECT array_transform2(
-                [[data3.p1]],
+                make_array(make_array(data3.p1)),
                 v -> array_concat(
                     -- when entering this expression, inner v is pushed into the producer and shadows outer v, but after exiting this,
                     -- it should be removed and unshadow the outer v, so that it can be used in the next expression
@@ -2660,8 +2660,8 @@ async fn roundtrip_lambda_parameter_struct_field_names() -> Result<()> {
     let ctx = higher_order_function_ctx().await?;
     ctx.sql(
         "CREATE TABLE structs AS SELECT \
-         [named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y')] AS s, \
-         [[named_struct('a', 3, 'b', 'z')]] AS nested",
+         make_array(named_struct('a', 1, 'b', 'x'), named_struct('a', 2, 'b', 'y')) AS s, \
+         make_array(make_array(named_struct('a', 3, 'b', 'z'))) AS nested",
     )
     .await?
     .collect()
@@ -2690,7 +2690,7 @@ async fn roundtrip_lambda_parameter_struct_field_names() -> Result<()> {
 
     // field of the outer parameter, read inside an inner lambda
     roundtrip_with_ctx(
-        "SELECT array_transform(s, p0 -> array_transform([1, 2], p1 -> get_field(p0, 'a') + p1)) FROM structs",
+        "SELECT array_transform(s, p0 -> array_transform(make_array(1, 2), p1 -> get_field(p0, 'a') + p1)) FROM structs",
         ctx.clone(),
     )
     .await?;

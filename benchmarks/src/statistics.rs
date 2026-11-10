@@ -898,7 +898,7 @@ mod tests {
             reports[1]
                 .error
                 .as_deref()
-                .is_some_and(|error| error.contains("RecursionLimitExceeded")),
+                .is_some_and(|error| error.contains("nested too deeply")),
             "unexpected report: {:?}",
             reports[1]
         );

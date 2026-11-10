@@ -89,7 +89,7 @@ This example maps the `->` operator to string concatenation:
 # use datafusion::error::Result;
 # use datafusion::logical_expr::Operator;
 # use datafusion::prelude::*;
-# use datafusion::sql::sqlparser::ast::BinaryOperator;
+# use datafusion::sql::sqlparser::ast::BinaryOp;
 use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
 # use datafusion_expr::BinaryExpr;
 
@@ -104,7 +104,7 @@ impl ExprPlanner for MyCustomPlanner {
     ) -> Result<PlannerResult<RawBinaryExpr>> {
         match &expr.op {
             // Map `->` to string concatenation
-            BinaryOperator::Arrow => {
+            BinaryOp::Named(op) if op == "->" => {
                 Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr {
                     left: Box::new(expr.left.clone()),
                     right: Box::new(expr.right.clone()),

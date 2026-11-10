@@ -693,6 +693,7 @@ impl SessionState {
                 .default_null_ordering
                 .as_str()
                 .into(),
+            dialect: sql_parser_options.dialect,
         }
     }
 

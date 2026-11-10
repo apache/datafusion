@@ -2532,10 +2532,17 @@ mod tests {
     async fn create_variable_err() -> Result<()> {
         let ctx = SessionContext::new();
 
+        let err = plan_and_collect(&ctx, "SElECT @x3").await.unwrap_err();
+        assert_eq!(
+            err.strip_backtrace(),
+            "Error during planning: variable [\"@x3\"] has no type information"
+        );
+
+        // `@` must be followed by a name to start a variable.
         let err = plan_and_collect(&ctx, "SElECT @=   X3").await.unwrap_err();
         assert_eq!(
             err.strip_backtrace(),
-            "Error during planning: variable [\"@=\"] has no type information"
+            "SQL error: unexpected character at Line: 1, Column: 8"
         );
         Ok(())
     }

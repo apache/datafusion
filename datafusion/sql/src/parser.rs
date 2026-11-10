@@ -646,7 +646,7 @@ impl<'a> DFParser<'a> {
     pub fn parse_statements(
         &mut self,
     ) -> Result<VecDeque<Statement<'a>>, DataFusionError> {
-        dispatch!(self.dialect, parse_statements_as(self.sql))
+        dispatch!(self.dialect, parse_statements_as(self.sql, self.depth()))
             .map_err(|e| locate(e, self.sql))
     }
 
@@ -662,7 +662,7 @@ impl<'a> DFParser<'a> {
 
     /// Parse the SQL as an expression, optionally followed by `AS alias`.
     pub fn parse_expr(&mut self) -> Result<ExprWithAlias<'a>, DataFusionError> {
-        dispatch!(self.dialect, parse_expr_as(self.sql, false))
+        dispatch!(self.dialect, parse_expr_as(self.sql, self.depth(), false))
             .map_err(|e| locate(e, self.sql))
     }
 
@@ -671,8 +671,13 @@ impl<'a> DFParser<'a> {
     /// In contrast to [`DFParser::parse_expr`], this function will report an error if the input
     /// contains any trailing, unparsed tokens.
     pub fn parse_into_expr(&mut self) -> Result<ExprWithAlias<'a>, DataFusionError> {
-        dispatch!(self.dialect, parse_expr_as(self.sql, true))
+        dispatch!(self.dialect, parse_expr_as(self.sql, self.depth(), true))
             .map_err(|e| locate(e, self.sql))
+    }
+
+    /// How deeply the SQL may nest.
+    fn depth(&self) -> usize {
+        self.options.recursion_limit.get()
     }
 
     /// The options this parser was built with.
@@ -712,8 +717,9 @@ fn expected<T, D: Dialect>(p: &Parser<'_, D>, what: &str) -> Result<T, DataFusio
 
 fn parse_statements_as<D: Dialect<Ext = Builtin>>(
     sql: &str,
+    max_depth: usize,
 ) -> Result<VecDeque<Statement<'_>>, DataFusionError> {
-    let mut p = Parser::<D>::new(sql)?;
+    let mut p = Parser::<D>::new(sql)?.with_max_nesting_depth(max_depth);
     let mut statements = VecDeque::new();
     let mut expecting_statement_delimiter = false;
     loop {
@@ -735,9 +741,10 @@ fn parse_statements_as<D: Dialect<Ext = Builtin>>(
 
 fn parse_expr_as<D: Dialect<Ext = Builtin>>(
     sql: &str,
+    max_depth: usize,
     whole: bool,
 ) -> Result<ExprWithAlias<'_>, DataFusionError> {
-    let mut p = Parser::<D>::new(sql)?;
+    let mut p = Parser::<D>::new(sql)?.with_max_nesting_depth(max_depth);
     if p.at_keyword("CREATE") || p.at_keyword("COPY") || p.at_keyword("EXPLAIN") {
         return parser_err!("Unsupported command in expression")?;
     }
@@ -845,7 +852,7 @@ fn parse_copy<'a, D: Dialect<Ext = Builtin>>(
             builder.stored_as = Some(parse_file_format(p)?);
         } else if p.eat_keyword("TO") {
             ensure_not_set(builder.target.as_ref(), "TO")?;
-            builder.target = Some(parse_literal_string(p)?);
+            builder.target = Some(parse_word_or_string(p, "a file path")?);
         } else if p.eat_keyword("WITH") {
             p.expect_keyword("HEADER")?;
             p.expect_keyword("ROW")?;
@@ -1266,7 +1273,7 @@ fn parse_create_external_catalog<'a, D: Dialect<Ext = Builtin>>(
             catalog_type = Some(parse_file_format(p)?);
         } else if p.eat_keyword("LOCATION") {
             ensure_not_set(location.as_ref(), "LOCATION")?;
-            location = Some(parse_literal_string(p)?);
+            location = Some(parse_word_or_string(p, "a location")?);
         } else if p.eat_keyword("OPTIONS") {
             ensure_not_set(options.as_ref(), "OPTIONS")?;
             options = Some(parse_value_options(p)?);
@@ -1335,12 +1342,12 @@ fn parse_locations<D: Dialect>(
     p: &mut Parser<'_, D>,
 ) -> Result<Vec<String>, DataFusionError> {
     if !p.eat_op("(") {
-        return Ok(vec![parse_literal_string(p)?]);
+        return Ok(vec![parse_word_or_string(p, "a location")?]);
     }
 
     let mut locations = vec![];
     loop {
-        locations.push(parse_literal_string(p)?);
+        locations.push(parse_word_or_string(p, "a location")?);
         let comma = p.eat_op(",");
         if p.eat_op(")") {
             // Allow a trailing comma, even though it's not in standard
@@ -2191,7 +2198,7 @@ mod tests {
 
         assert_contains!(
             err.to_string(),
-            "SQL error: RecursionLimitExceeded (current limit: 1)"
+            "SQL error: SQL is nested too deeply (the limit is 1)"
         );
     }
 

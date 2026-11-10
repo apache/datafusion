@@ -188,7 +188,7 @@ rstest = "0.28.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "^0.11.0"
-sqlparser = { git = "https://github.com/andygrove/datafusion-sqlparser-rs", rev = "c26934e5a6bfadd4446680b5ed5ddcc46bde1012", features = ["visitor"] }
+sqlparser = { git = "https://github.com/andygrove/datafusion-sqlparser-rs", rev = "6f8e464b133487405dcd3b8779429b70377ef1b0", features = ["visitor"] }
 stacker = "0.1.24"
 strum = "0.28.0"
 strum_macros = "0.28.0"

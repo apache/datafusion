@@ -20,7 +20,6 @@ async fn roundtrip_qualified_schema() -> Result<()> {
 }
 
 /// Tests that parse SQL expressions and unparse them back to SQL.
-#[cfg(feature = "unparser")]
 mod round_trip {
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion::prelude::{CsvReadOptions, SessionContext};

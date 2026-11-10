@@ -1550,7 +1550,7 @@ See example below:
 # use datafusion::execution::FunctionRegistry;
 # use datafusion::logical_expr::Operator;
 # use datafusion::prelude::*;
-# use datafusion::sql::sqlparser::ast::BinaryOperator;
+# use datafusion::sql::sqlparser::ast::BinaryOp;
 # use datafusion_common::ScalarValue;
 # use datafusion_expr::expr::Alias;
 # use datafusion_expr::planner::{ExprPlanner, PlannerResult, RawBinaryExpr};
@@ -1569,7 +1569,7 @@ impl ExprPlanner for MyCustomPlanner {
     ) -> Result<PlannerResult<RawBinaryExpr>> {
         match &expr.op {
             // Map `->` to string concatenation
-            BinaryOperator::Arrow => {
+            BinaryOp::Named(op) if op == "->" => {
                 // Rewrite `->` as a string concatenation operation
                 // - `left` and `right` are the operands (e.g., 'hello' and 'world')
                 // - `Operator::StringConcat` tells DataFusion to concatenate them

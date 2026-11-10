@@ -285,10 +285,14 @@ fn needs_quotes(s: &str) -> bool {
 
 #[cfg(feature = "sql")]
 pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident<'_>>> {
+    // Any word can name a part, even a keyword such as `left`.
     let mut parser = Parser::<DuckDb>::new(s)?;
-    let name = sqlparser::grammar::parse_object_name(&mut parser)?;
+    let mut parts = vec![sqlparser::grammar::parse_name_part(&mut parser)?];
+    while parser.eat_op(".") {
+        parts.push(sqlparser::grammar::parse_name_part(&mut parser)?);
+    }
     parser.expect_eof()?;
-    Ok(name.parts)
+    Ok(parts)
 }
 
 /// Parse a string into a vector of identifiers.

@@ -10,6 +10,7 @@ use datafusion_common::{
     DataFusionError, Diagnostic, Result, Span, not_impl_err, plan_err,
 };
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
+use sqlparser::ast::Spanned;
 
 /// The SQL keyword of a set operator.
 pub(crate) fn set_operator_name(op: SetOperator) -> &'static str {
@@ -40,8 +41,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         crate::stack::maybe_grow(|| {
-            // Set expressions have no span in the new SQL parser.
-            let set_expr_span: Option<Span> = None;
+            let set_expr_span = self.sql_span(set_expr.span());
             match set_expr {
                 SetExpr::Select(s) => {
                     self.select_to_plan(*s, vec![], None, planner_context)
@@ -56,8 +56,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     quantifier,
                     by_name,
                 } => {
-                    let left_span: Option<Span> = None;
-                    let right_span: Option<Span> = None;
+                    let left_span = self.sql_span(left.span());
+                    let right_span = self.sql_span(right.span());
                     let left_plan = self.set_expr_to_plan(*left, planner_context);
                     // Store the left plan's schema so that the right side can
                     // alias duplicate expressions to match. Skip for BY NAME

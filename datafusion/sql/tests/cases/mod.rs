@@ -5,5 +5,4 @@
 mod collection;
 mod diagnostic;
 mod params;
-#[cfg(feature = "unparser")]
 mod plan_to_sql;
