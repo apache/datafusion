@@ -3,23 +3,21 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion_common::{DataFusionError, assert_contains};
+use datafusion_sql::parser::DFParser;
 use datafusion_sql::planner::SqlToRel;
-use sqlparser::{dialect::GenericDialect, parser::Parser};
 
 use crate::{MockContextProvider, MockSessionState};
 
 fn do_query(sql: &'static str) -> DataFusionError {
-    let dialect = GenericDialect {};
-    let statement = Parser::new(&dialect)
-        .try_with_sql(sql)
-        .expect("unable to create parser")
-        .parse_statement()
-        .expect("unable to parse query");
+    let statement = DFParser::parse_sql(sql)
+        .expect("unable to parse query")
+        .pop_front()
+        .expect("expected a statement");
     let state = MockSessionState::default();
     let context = MockContextProvider { state };
-    let sql_to_rel = SqlToRel::new(&context);
+    let sql_to_rel = SqlToRel::new(&context).with_source(sql);
     sql_to_rel
-        .sql_statement_to_plan(statement)
+        .statement_to_plan(statement)
         .expect_err("expected error")
 }
 

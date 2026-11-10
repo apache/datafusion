@@ -384,15 +384,19 @@ pub struct CustomTypePlanner {}
 impl TypePlanner for CustomTypePlanner {
     fn plan_type_field(
         &self,
-        sql_type: &sqlparser::ast::DataType,
+        sql_type: &sqlparser::ast::DataType<'_>,
     ) -> Result<Option<FieldRef>> {
-        match sql_type {
-            sqlparser::ast::DataType::Datetime(precision) => {
-                let precision = match precision {
-                    Some(0) => TimeUnit::Second,
-                    Some(3) => TimeUnit::Millisecond,
-                    Some(6) => TimeUnit::Microsecond,
-                    None | Some(9) => TimeUnit::Nanosecond,
+        let is_datetime = sql_type.qualifier.is_empty()
+            && sql_type.name.value().eq_ignore_ascii_case("datetime")
+            && sql_type.suffix == sqlparser::ast::DataTypeSuffix::None
+            && sql_type.array == sqlparser::ast::ArrayType::None;
+        match sql_type.args.as_slice() {
+            precision @ ([] | [_]) if is_datetime => {
+                let precision = match precision.first().map(|p| p.as_ref()) {
+                    Some("0") => TimeUnit::Second,
+                    Some("3") => TimeUnit::Millisecond,
+                    Some("6") => TimeUnit::Microsecond,
+                    None | Some("9") => TimeUnit::Nanosecond,
                     _ => unreachable!(),
                 };
                 // Differs from the default mapping (no time zone)
