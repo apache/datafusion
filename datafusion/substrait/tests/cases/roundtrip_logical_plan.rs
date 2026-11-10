@@ -1465,39 +1465,18 @@ async fn roundtrip_union2() -> Result<()> {
 
 #[tokio::test]
 async fn roundtrip_union_join_duplicate_column_names() -> Result<()> {
-    use datafusion::arrow::array::{Int64Array, ListBuilder, MapBuilder, StringBuilder};
-    use datafusion::arrow::record_batch::RecordBatch;
-
-    // Non-nullable list items expose type coercion after consumption widens the
-    // typed NULL's list items to nullable. Both joined columns need that cast.
-    let mut tags = MapBuilder::new(
-        None,
-        StringBuilder::new(),
-        ListBuilder::new(StringBuilder::new()).with_field(Field::new(
-            "item",
-            DataType::Utf8,
-            false,
-        )),
-    );
-    tags.keys().append_value("env");
-    tags.values().values().append_value("test");
-    tags.values().append(true);
-    tags.append(true)?;
-    let batch = RecordBatch::try_from_iter(vec![
-        ("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef),
-        ("_tags", Arc::new(tags.finish()) as ArrayRef),
-    ])?;
-    let ctx = SessionContext::new();
-    for table in ["t1", "t2", "t3"] {
-        ctx.register_batch(table, batch.clone())?;
-    }
+    let ctx = create_context().await?;
+    ctx.sql(
+        "CREATE TABLE tags AS \
+         SELECT arrow_cast(['test'], 'List(non-null Utf8)') AS tags",
+    )
+    .await?;
 
     // List-item nullability changes during the round trip, so the schemas differ.
     let plan = generate_plan_from_sql_with_ctx(
-        "SELECT NULL AS a, NULL AS b FROM t1 \
+        "SELECT NULL AS a, NULL AS b FROM tags \
          UNION ALL \
-         SELECT x._tags AS a, y._tags AS b \
-         FROM t2 AS x INNER JOIN t3 AS y ON x.id = y.id",
+         SELECT x.tags AS a, y.tags AS b FROM tags AS x CROSS JOIN tags AS y",
         false,
         true,
         &ctx,
@@ -1506,16 +1485,18 @@ async fn roundtrip_union_join_duplicate_column_names() -> Result<()> {
 
     assert_snapshot!(
         plan,
-        @r#"
-    Projection: Map([NULL]) AS a, Map([NULL])__temp__0 AS b
+        @r"
+    Projection: List() AS a, List()__temp__0 AS b
       Union
-        Projection: Map([NULL]), Map([NULL]) AS Map([NULL])__temp__0
-          TableScan: t1 projection=[]
-        Projection: CAST(t2._tags AS Map("entries": non-null Struct("key": non-null Utf8, "value": List(Utf8)), unsorted)) AS Map([NULL]), CAST(t3._tags AS Map("entries": non-null Struct("key": non-null Utf8, "value": List(Utf8)), unsorted)) AS Map([NULL])__temp__0
-          Inner Join: t2.id = t3.id
-            TableScan: t2 projection=[id, _tags]
-            TableScan: t3 projection=[id, _tags]
-    "#
+        Projection: List(), List() AS List()__temp__0
+          TableScan: tags projection=[]
+        Projection: CAST(left.tags AS List(Utf8)) AS List(), CAST(right.tags AS List(Utf8)) AS List()__temp__0
+          Cross Join:
+            SubqueryAlias: left
+              TableScan: tags projection=[tags]
+            SubqueryAlias: right
+              TableScan: tags projection=[tags]
+    "
     );
     Ok(())
 }
