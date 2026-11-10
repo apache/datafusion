@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
 [project]
 name = "datafusion-docs"
 version = "0.1.0"
@@ -7,8 +11,8 @@ dependencies = [
   "sphinx-reredirects>=1.1,<2",
   "pydata-sphinx-theme>=0.23.0,<1",
   "myst-parser>=5.1.0,<6",
-  "maturin>=1.14.1,<2",
+  "maturin>=1.16.0,<2",
   "jinja2>=3.1.6,<4",
-  "setuptools>=84.2.0,<85",
+  "setuptools>=84.2.1,<85",
   "sphinx-sitemap>=2.9.0,<3",
 ]

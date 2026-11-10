@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # make sure to a batch size smaller than row number of the table.
 statement ok
@@ -791,6 +778,75 @@ query I rowsort
 SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT * FROM t2 WHERE t2_id = t1_id) a JOIN (SELECT * FROM t3 ORDER BY t3_id LIMIT 1 OFFSET 1) b ON a.t2_int = b.t3_int)
 ----
 22
+
+#exists_subquery_with_limit_below_having
+#not de-correlated, the limit decides the count the HAVING reads: count(*) over
+#the one row LIMIT 1 keeps can never exceed 1, so the subquery is always empty.
+#Dropping the limit counted the whole scan and this returned 33.
+#https://github.com/apache/datafusion/issues/26629
+query TT
+explain SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT t2_id FROM t2 WHERE t2_int = t1_int LIMIT 1) s HAVING count(*) > 1)
+----
+logical_plan
+01)Projection: t1.t1_id
+02)--Filter: EXISTS (<subquery>)
+03)----Subquery:
+04)------Projection: Int64(1)
+05)--------Filter: count(Int64(1)) > Int64(1)
+06)----------Aggregate: groupBy=[[]], aggr=[[count(Int64(1))]]
+07)------------SubqueryAlias: s
+08)--------------Projection: t2.t2_id
+09)----------------Limit: skip=0, fetch=1
+10)------------------Filter: t2.t2_int = outer_ref(t1.t1_int)
+11)--------------------TableScan: t2
+12)----TableScan: t1 projection=[t1_id, t1_int]
+
+# errors rather than returning wrong rows
+query error Physical plan does not support logical expression Exists
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT t2_id FROM t2 WHERE t2_int = t1_int LIMIT 1) s HAVING count(*) > 1)
+
+# same for NOT EXISTS, which returned 11, 22, 44 instead of every row
+query error Physical plan does not support logical expression Exists
+SELECT t1_id FROM t1 WHERE NOT EXISTS (SELECT 1 FROM (SELECT t2_id FROM t2 WHERE t2_int = t1_int LIMIT 1) s HAVING count(*) > 1)
+
+#exists_subquery_with_limit_below_filter
+#not de-correlated, the rows the limit keeps decide the filter above it
+query error Physical plan does not support logical expression Exists
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT 1 FROM (SELECT t2_id, t2_int FROM t2 WHERE t2_id = t1_id LIMIT 1) s WHERE s.t2_int > 2)
+
+#exists_subquery_with_limit_below_aggregate
+#de-correlated, an aggregate without a grouping always returns its one row, so
+#the rows the limit held back cannot change whether the subquery is empty
+query TT
+explain SELECT t1_id FROM t1 WHERE EXISTS (SELECT count(*) FROM (SELECT t2_id FROM t2 WHERE t2_id = t1_id LIMIT 1) s)
+----
+logical_plan TableScan: t1 projection=[t1_id]
+
+query I rowsort
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT count(*) FROM (SELECT t2_id FROM t2 WHERE t2_id = t1_id LIMIT 1) s)
+----
+11
+22
+33
+44
+
+#exists_subquery_with_limit_below_distinct
+#de-correlated, a DISTINCT has rows exactly when its input has rows
+query I rowsort
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT DISTINCT s.t2_id FROM (SELECT t2_id FROM t2 WHERE t2_id = t1_id LIMIT 1) s)
+----
+11
+22
+44
+
+#exists_subquery_with_limit_below_group_by
+#de-correlated, a grouping has rows exactly when its input has rows
+query I rowsort
+SELECT t1_id FROM t1 WHERE EXISTS (SELECT s.t2_id FROM (SELECT t2_id FROM t2 WHERE t2_id = t1_id LIMIT 1) s GROUP BY s.t2_id)
+----
+11
+22
+44
 
 #in_correlated_subquery_with_limit
 #not de-correlated
@@ -2163,6 +2219,71 @@ WHERE t1_int + 2 NOT IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id)
 query error Physical plan does not support logical expression InSubquery
 SELECT t1_id, t1_int + 2 IN (SELECT max(t2_int) FROM t2 WHERE t2.t2_id = t1.t1_id) FROM t1
 
+# https://github.com/apache/datafusion/issues/26503
+# A correlated scalar subquery whose HAVING reads an outer column is rejected:
+# left in the join ON it returns the empty-input 0 where NULL is correct.
+statement error .*Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns
+SELECT x.a, x.d,
+       (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVING count(*) >= x.a) AS v
+FROM (VALUES (1, 1), (2, 1), (1, 9)) AS x(a, d)
+ORDER BY x.d, x.a
+
+# Same shape with the predicate in a filter above the aggregate rather than in
+# HAVING: the filter references only an outer column, so it is rejected too.
+statement error .*Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns
+SELECT (SELECT n FROM (SELECT count(*) AS n FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) WHERE x.a > 1) AS v
+FROM (VALUES (1, 1)) AS x(a, d)
+
+# A local HAVING that holds on the empty-input default still yields the
+# default (0), not NULL, when no inner row matches the correlation. Only
+# conditions that read outer columns are rejected.
+query I
+SELECT (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVING count(*) >= 0) AS v
+FROM (VALUES (1, 9)) AS x(a, d)
+----
+0
+
+# A local HAVING that fails on the empty-input default yields NULL.
+query I
+SELECT (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVING count(*) > 0) AS v
+FROM (VALUES (1, 9)) AS x(a, d)
+----
+NULL
+
+# A stacked filter above the aggregate that reads an outer column is rejected
+# for the same reason, whether or not a HAVING keyword is written.
+statement error .*Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns
+SELECT x.n, x.d,
+       (SELECT s.n FROM (SELECT count(*) AS n FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS s
+        WHERE s.n < x.n) AS v
+FROM (VALUES (5, 9), (0, 9), (5, 1)) AS x(n, d)
+ORDER BY x.d, x.n
+
+# A group the HAVING rejects would fall back to the empty-input default when
+# the condition stays in the ON, so this shape is rejected as well.
+statement error .*Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns
+SELECT x.a, x.d,
+       (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVING count(*) < x.a) AS v
+FROM (VALUES (1, 1), (2, 1), (1, 9)) AS x(a, d)
+ORDER BY x.d, x.a
+
+# max appears only in the HAVING, but the subquery outputs count(*), so the
+# output still needs compensation and the query is rejected.
+statement error .*Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns
+SELECT x.a, x.d,
+       (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVING max(y.c) < x.a) AS v
+FROM (VALUES (1, 1), (2, 1), (1, 9)) AS x(a, d)
+ORDER BY x.d, x.a
+
+# The same shape, but here the HAVING does hold on the empty input
+# (max(y.c) IS NULL). The join cannot tell which side decides the unmatched
+# row, so this one is rejected too.
+statement error .*Unsupported correlated scalar subquery: a HAVING or filter above a count-like aggregate reads outer columns
+SELECT x.a, x.d,
+       (SELECT count(*) FROM (VALUES (1)) AS y(c) WHERE y.c = x.d HAVING max(y.c) IS NULL OR count(*) < x.a) AS v
+FROM (VALUES (1, 1), (2, 1), (1, 9)) AS x(a, d)
+ORDER BY x.d, x.a
+
 statement ok
 DROP TABLE limit_zero_outer;
 
@@ -3131,14 +3252,20 @@ DROP TABLE sq_count_orders;
 # NULL the predicate is never TRUE, so the query must return zero rows. This must
 # hold regardless of the chosen physical join operator. Previously, with
 # prefer_hash_join = false and multiple partitions, the planner routed the
-# null-aware anti join to SortMergeJoin (which is not null-aware) and returned
-# wrong results; null-aware anti joins must use the CollectLeft HashJoin.
+# null-aware anti join to an ordinary SortMergeJoin and returned wrong results.
+# The null-aware SortMergeJoin path must preserve the same NOT IN semantics.
 
 statement ok
 set datafusion.optimizer.prefer_hash_join = false;
 
 statement ok
 CREATE TABLE nia_left(x INT) AS VALUES (1), (2), (3), (4);
+
+statement ok
+CREATE TABLE nia_left_with_null(x INT) AS VALUES (NULL), (1), (2), (3), (3), (4);
+
+statement ok
+CREATE TABLE nia_right_with_empty(y INT);
 
 statement ok
 CREATE TABLE nia_right_with_null(y INT) AS VALUES (2), (NULL);
@@ -3151,9 +3278,48 @@ query I
 SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null) ORDER BY x;
 ----
 
-# The null-aware anti join must be planned as a CollectLeft HashJoinExec even with
-# prefer_hash_join = false: SortMergeJoinExec is not null-aware and must not be used.
-# This test has no usable size statistics, so JoinSelection keeps LeftAnti.
+# Subquery is empty -> NOT IN keeps every left row.
+query I
+SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_empty) ORDER BY x;
+----
+1
+2
+3
+4
+
+# Subquery has no NULL -> NOT IN behaves like a normal anti join.
+query I
+SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_no_null) ORDER BY x;
+----
+1
+3
+
+# A NULL in the RHS also suppresses a NULL left key.
+query I
+SELECT x FROM nia_left_with_null WHERE x NOT IN (SELECT y FROM nia_right_with_null) ORDER BY x;
+----
+
+# An empty RHS preserves NULL left keys and duplicate rows.
+query I
+SELECT x FROM nia_left_with_null WHERE x NOT IN (SELECT y FROM nia_right_with_empty) ORDER BY x NULLS FIRST;
+----
+NULL
+1
+2
+3
+3
+4
+
+# A nonempty RHS without NULL excludes NULL left keys but preserves duplicates.
+query I
+SELECT x FROM nia_left_with_null WHERE x NOT IN (SELECT y FROM nia_right_no_null) ORDER BY x;
+----
+1
+3
+3
+
+# With prefer_hash_join = false, this single-key, unfiltered null-aware LeftAnti
+# join uses SortMergeJoinExec with sorted, single-partition inputs.
 query TT
 EXPLAIN SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null);
 ----
@@ -3163,19 +3329,47 @@ logical_plan
 03)--SubqueryAlias: __correlated_sq_1
 04)----TableScan: nia_right_with_null projection=[y]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(x@0, y@0)], null_aware
-02)--DataSourceExec: partitions=1, partition_sizes=[1]
-03)--DataSourceExec: partitions=1, partition_sizes=[1]
+01)SortMergeJoinExec: join_type=LeftAnti, on=[(x@0, y@0)], null_aware
+02)--SortExec: expr=[x@0 ASC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--SortExec: expr=[y@0 ASC], preserve_partitioning=[false]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
 
-# Subquery has no NULL -> NOT IN behaves like a normal anti join.
-query I
-SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_no_null) ORDER BY x;
+# Tree-formatted plans must also distinguish null-aware joins from ordinary anti joins.
+query TT
+EXPLAIN FORMAT TREE SELECT x FROM nia_left WHERE x NOT IN (SELECT y FROM nia_right_with_null);
 ----
-1
-3
+physical_plan
+01)┌───────────────────────────┐
+02)│     SortMergeJoinExec     │
+03)│    --------------------   │
+04)│    join_type: LeftAnti    │
+05)│                           ├──────────────┐
+06)│         null_aware        │              │
+07)│                           │              │
+08)│        on: (x = y)        │              │
+09)└─────────────┬─────────────┘              │
+10)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+11)│          SortExec         ││          SortExec         │
+12)│    --------------------   ││    --------------------   │
+13)│          x@0 ASC          ││          y@0 ASC          │
+14)└─────────────┬─────────────┘└─────────────┬─────────────┘
+15)┌─────────────┴─────────────┐┌─────────────┴─────────────┐
+16)│       DataSourceExec      ││       DataSourceExec      │
+17)│    --------------------   ││    --------------------   │
+18)│         bytes: 112        ││         bytes: 176        │
+19)│       format: memory      ││       format: memory      │
+20)│          rows: 4          ││          rows: 2          │
+21)└───────────────────────────┘└───────────────────────────┘
 
 statement ok
 DROP TABLE nia_left;
+
+statement ok
+DROP TABLE nia_left_with_null;
+
+statement ok
+DROP TABLE nia_right_with_empty;
 
 statement ok
 DROP TABLE nia_right_with_null;
@@ -3185,6 +3379,141 @@ DROP TABLE nia_right_no_null;
 
 statement ok
 reset datafusion.optimizer.prefer_hash_join;
+
+# A NULL in one RHS partition must affect every outer row.
+
+statement ok
+SET datafusion.optimizer.prefer_hash_join = false;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+SET datafusion.optimizer.repartition_joins = true;
+
+statement ok
+CREATE TABLE nia_mp_left(x INT) AS
+VALUES (NULL), (1), (2), (3), (3);
+
+# Each UNION ALL branch produces one partition.
+# CTAS preserves the partitioned result in the memory table.
+statement ok
+CREATE TABLE nia_mp_right AS
+SELECT CAST(10 AS INT) AS y
+UNION ALL
+SELECT CAST(20 AS INT) AS y
+UNION ALL
+SELECT CAST(30 AS INT) AS y
+UNION ALL
+SELECT CAST(NULL AS INT) AS y;
+
+# Verify that the RHS really has four nonempty partitions.
+# partition_sizes counts batches, not rows.
+query TT
+EXPLAIN SELECT y FROM nia_mp_right;
+----
+logical_plan TableScan: nia_mp_right projection=[y]
+physical_plan DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]
+
+# No left key matches 10, 20, or 30.
+# The NULL in the remaining RHS partition must still suppress every row.
+query I
+SELECT x
+FROM nia_mp_left
+WHERE x NOT IN (SELECT y FROM nia_mp_right)
+ORDER BY x;
+----
+
+# The optimizer must bring all RHS partitions into the null-aware join.
+query TT
+EXPLAIN SELECT x FROM nia_mp_left WHERE x NOT IN (SELECT y FROM nia_mp_right);
+----
+logical_plan
+01)LeftAnti Join: nia_mp_left.x = __correlated_sq_1.y null_aware
+02)--TableScan: nia_mp_left projection=[x]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: nia_mp_right projection=[y]
+physical_plan
+01)SortMergeJoinExec: join_type=LeftAnti, on=[(x@0, y@0)], null_aware
+02)--SortExec: expr=[x@0 ASC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--SortPreservingMergeExec: [y@0 ASC]
+05)----SortExec: expr=[y@0 ASC], preserve_partitioning=[true]
+06)------DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]
+
+# Disabling join repartitioning must preserve the same semantics.
+statement ok
+SET datafusion.optimizer.repartition_joins = false;
+
+query I
+SELECT x
+FROM nia_mp_left
+WHERE x NOT IN (SELECT y FROM nia_mp_right)
+ORDER BY x;
+----
+
+# Disabling hash repartitioning must not bypass the single-partition requirement.
+query TT
+EXPLAIN SELECT x FROM nia_mp_left WHERE x NOT IN (SELECT y FROM nia_mp_right);
+----
+logical_plan
+01)LeftAnti Join: nia_mp_left.x = __correlated_sq_1.y null_aware
+02)--TableScan: nia_mp_left projection=[x]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: nia_mp_right projection=[y]
+physical_plan
+01)SortMergeJoinExec: join_type=LeftAnti, on=[(x@0, y@0)], null_aware
+02)--SortExec: expr=[x@0 ASC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--SortPreservingMergeExec: [y@0 ASC]
+05)----SortExec: expr=[y@0 ASC], preserve_partitioning=[true]
+06)------DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]
+
+# Requesting one target partition must also preserve the result.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+query I
+SELECT x
+FROM nia_mp_left
+WHERE x NOT IN (SELECT y FROM nia_mp_right)
+ORDER BY x;
+----
+
+query TT
+EXPLAIN
+SELECT x
+FROM nia_mp_left
+WHERE x NOT IN (SELECT y FROM nia_mp_right);
+----
+logical_plan
+01)LeftAnti Join: nia_mp_left.x = __correlated_sq_1.y null_aware
+02)--TableScan: nia_mp_left projection=[x]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: nia_mp_right projection=[y]
+physical_plan
+01)SortMergeJoinExec: join_type=LeftAnti, on=[(x@0, y@0)], null_aware
+02)--SortExec: expr=[x@0 ASC], preserve_partitioning=[false]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--SortPreservingMergeExec: [y@0 ASC]
+05)----SortExec: expr=[y@0 ASC], preserve_partitioning=[true]
+06)------DataSourceExec: partitions=4, partition_sizes=[1, 1, 1, 1]
+
+statement ok
+DROP TABLE nia_mp_left;
+
+statement ok
+DROP TABLE nia_mp_right;
+
+statement ok
+RESET datafusion.optimizer.prefer_hash_join;
+
+statement ok
+RESET datafusion.optimizer.repartition_joins;
+
+# Restore the SLT runner's target partition count.
+statement ok
+SET datafusion.execution.target_partitions = 4;
 
 # Regression test for #24139: CTE inside a correlated scalar subquery causing a schema error
 statement ok
@@ -4107,6 +4436,45 @@ DROP TABLE nested_agg_outer;
 statement ok
 DROP TABLE nested_agg_inner;
 
+# A set comparison in a projection without an alias must not change the projection's
+# output field name. `RewriteSetComparison` replaces `x > ALL (…)` with a `CASE` whose
+# display name differs from the field name, and rebuilding the projection from the
+# expression names failed the optimizer's "schema is invariant" check with an internal
+# error instead of returning the answer.
+query B
+select 2 > all (select v from (values (1), (0)) t(v));
+----
+true
+
+query BI
+select 2 > all (select v from (values (1), (0)) t(v)), 9 as k;
+----
+true 9
+
+# A control rather than a regression test: an aliased set comparison already keeps its
+# name on `main`, so this one does not change with the fix. It pins the alias arm of the
+# name comparison against a rule that starts renaming aliased projections.
+query B
+select 2 > all (select v from (values (1), (0)) t(v)) as aliased;
+----
+true
+
+# A qualified column next to the set comparison is the other side of the same check:
+# `Expr::schema_name` keeps the qualifier (`t_qual.k`) while the field is named after the
+# bare column, so losing the qualifier breaks the schema just as adding a stale name does.
+# Fails on `main` with the same internal error.
+statement ok
+create table t_qual(k int) as values (1), (2);
+
+query IB
+select t_qual.k, t_qual.k > all (select v from (values (1), (0)) s(v)) from t_qual order by t_qual.k;
+----
+1 false
+2 true
+
+statement ok
+drop table t_qual;
+
 # Regression tests for #25258 - Unaliased set comparison subqueries return wrong results
 
 statement ok
@@ -4245,3 +4613,133 @@ SELECT * FROM (VALUES (1)) AS x(d)
 WHERE x.d IN (SELECT t.c FROM (SELECT * FROM (VALUES (1)) AS y(c) WHERE y.c = x.d) AS t WHERE x.d > 0);
 ----
 1
+
+# Regression test for #26572: an uncorrelated scalar subquery is constant, so a
+# requirement on it is satisfied by any ordering, even when it is not projected
+# from a literal.
+statement ok
+SET datafusion.execution.batch_size = 1;
+
+statement ok
+CREATE TABLE t26572 (a INT) AS VALUES (1), (2);
+
+query II
+SELECT t.a, (SELECT max(a) FROM t26572) AS m
+FROM t26572 AS u RIGHT JOIN t26572 AS t ON u.a = t.a
+ORDER BY t.a, m LIMIT 5;
+----
+1 2
+2 2
+
+query II
+SELECT t.a, (SELECT max(a) FROM t26572) AS m
+FROM t26572 AS u RIGHT JOIN t26572 AS t ON u.a = t.a
+ORDER BY m, t.a DESC LIMIT 5;
+----
+2 2
+1 2
+
+# Control, passes without the fix: a volatile leaf such as random() is not
+# constant, so it stays in the sort.
+query TT
+EXPLAIN SELECT a FROM t26572 ORDER BY a, random();
+----
+logical_plan
+01)Sort: t26572.a ASC NULLS LAST, random() ASC NULLS LAST
+02)--TableScan: t26572 projection=[a]
+physical_plan
+01)SortExec: expr=[a@0 ASC NULLS LAST, random() ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: partitions=1, partition_sizes=[2]
+
+# Two different subqueries are both constant, but not known to be equal, so a
+# UNION of them is not constant and the sort stays.
+query TT
+EXPLAIN SELECT m FROM (
+  SELECT (SELECT max(a) FROM t26572) AS m FROM t26572
+  UNION ALL
+  SELECT (SELECT min(a) FROM t26572) AS m FROM t26572
+) ORDER BY m;
+----
+logical_plan
+01)Sort: m ASC NULLS LAST
+02)--Union
+03)----Projection: (<subquery>) AS m
+04)------Subquery:
+05)--------Aggregate: groupBy=[[]], aggr=[[max(t26572.a)]]
+06)----------TableScan: t26572 projection=[a]
+07)------TableScan: t26572 projection=[]
+08)----Projection: (<subquery>) AS m
+09)------Subquery:
+10)--------Aggregate: groupBy=[[]], aggr=[[min(t26572.a)]]
+11)----------TableScan: t26572 projection=[a]
+12)------TableScan: t26572 projection=[]
+physical_plan
+01)ScalarSubqueryExec: subqueries=2
+02)--SortPreservingMergeExec: [m@0 ASC NULLS LAST]
+03)----UnionExec
+04)------ProjectionExec: expr=[scalar_subquery(<pending>) as m]
+05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+06)----------DataSourceExec: partitions=1, partition_sizes=[2]
+07)------ProjectionExec: expr=[scalar_subquery(<pending>) as m]
+08)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+09)----------DataSourceExec: partitions=1, partition_sizes=[2]
+10)--AggregateExec: mode=Final, gby=[], aggr=[max(t26572.a)]
+11)----CoalescePartitionsExec
+12)------AggregateExec: mode=Partial, gby=[], aggr=[max(t26572.a)]
+13)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+14)----------DataSourceExec: partitions=1, partition_sizes=[2]
+15)--AggregateExec: mode=Final, gby=[], aggr=[min(t26572.a)]
+16)----CoalescePartitionsExec
+17)------AggregateExec: mode=Partial, gby=[], aggr=[min(t26572.a)]
+18)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+19)----------DataSourceExec: partitions=1, partition_sizes=[2]
+
+query I
+SELECT m FROM (
+  SELECT (SELECT max(a) FROM t26572) AS m FROM t26572
+  UNION ALL
+  SELECT (SELECT min(a) FROM t26572) AS m FROM t26572
+) ORDER BY m;
+----
+1
+1
+2
+2
+
+# Nor are two different subqueries in one projection the same expression.
+query III
+SELECT (SELECT max(a) FROM t26572) AS x, (SELECT min(a) FROM t26572) AS y, a
+FROM t26572 ORDER BY y, x, a DESC;
+----
+2 1 2
+2 1 1
+
+statement ok
+DROP TABLE t26572;
+
+# A LEFT JOIN can be swapped into a physical RIGHT join with the subquery side
+# on the left. Its rows without a match are padded with NULLs, so `m` is not
+# constant there and the sort on it must stay.
+statement ok
+CREATE TABLE p26572 (a INT, b INT) AS VALUES (1, 10), (2, 20), (3, 30), (2, 5), (NULL, 7);
+
+query III
+SELECT x.a, s.a, s.m
+FROM p26572 x LEFT JOIN (
+  SELECT a, (SELECT max(a) FROM p26572) AS m FROM p26572 WHERE a > 1
+) s ON x.a = s.a
+ORDER BY s.m, x.a, s.a;
+----
+2 2 3
+2 2 3
+2 2 3
+2 2 3
+3 3 3
+1 NULL NULL
+NULL NULL NULL
+
+statement ok
+DROP TABLE p26572;
+
+statement ok
+RESET datafusion.execution.batch_size;

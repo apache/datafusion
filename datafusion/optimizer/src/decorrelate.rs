@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`PullUpCorrelatedExpr`] converts correlated subqueries to `Joins`
 
@@ -81,6 +68,14 @@ pub struct PullUpCorrelatedExpr {
     pub collected_count_expr_map: HashMap<LogicalPlan, ExprResultMap>,
     /// pull up having expr, which must be evaluated after the Join
     pub pull_up_having_expr: Option<Expr>,
+    /// Outer-reference conditions from a `Filter` that sits directly above a
+    /// count-bug `Aggregate`: a `HAVING` clause (or an outer-only filter)
+    /// that filters the aggregate *output*. Unlike `join_filters`, these do
+    /// not merely correlate the two sides: an unmatched LEFT JOIN row may
+    /// mean one of them rejected the group rather than that no group
+    /// matched, and a scalar subquery must yield NULL for a rejected group.
+    /// `build_join` uses them to reject such queries up front.
+    pub having_like_join_filters: Vec<Expr>,
     /// whether we have converted a scalar aggregation into a group aggregation. When unnesting
     /// lateral joins, we need to produce a left outer join in such cases.
     ///
@@ -110,6 +105,12 @@ pub struct PullUpCorrelatedExpr {
     /// grouping set that omits a correlated column can tell whether
     /// something above it reads the column the pull up would fill in.
     column_refs_above: Vec<BTreeSet<Column>>,
+    /// For each node on that same path, whether it returns rows based only on
+    /// whether its input has rows (see [`depends_only_on_input_having_rows`]). One
+    /// entry per node, pushed and popped with [`Self::column_refs_above`].
+    /// `f_down`'s `Limit` arm reads it: a `Limit` is only dropped from an
+    /// `EXISTS` subquery when this holds for every node above it.
+    depends_only_on_input_having_rows_above: Vec<bool>,
 }
 
 impl Default for PullUpCorrelatedExpr {
@@ -131,9 +132,11 @@ impl PullUpCorrelatedExpr {
             need_handle_count_bug: false,
             collected_count_expr_map: HashMap::new(),
             pull_up_having_expr: None,
+            having_like_join_filters: Vec::new(),
             pulled_up_scalar_agg: false,
             correlated_filters: Vec::new(),
             column_refs_above: Vec::new(),
+            depends_only_on_input_having_rows_above: Vec::new(),
         }
     }
 
@@ -196,6 +199,8 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             column_refs.extend(expr.column_refs().into_iter().cloned());
         }
         self.column_refs_above.push(column_refs);
+        self.depends_only_on_input_having_rows_above
+            .push(depends_only_on_input_having_rows(&plan));
 
         // This match is exhaustive on purpose. A correlated filter moves above
         // a node only when the node is known to keep the result the same. Add
@@ -281,9 +286,8 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 if !self.exists_sub_query {
                     return Ok(self.stop_pull_up(plan));
                 }
-                // Only emptiness matters for EXISTS, so remove a limit that
-                // cannot make its input empty and replace one that always does
-                // with an empty relation.
+                // A `LIMIT 0` always gives an empty input, whatever is
+                // above it, so it becomes an empty relation.
                 let fetch = limit.get_fetch_type()?;
                 if matches!(fetch, FetchType::Literal(Some(0))) {
                     return Ok(Transformed::yes(LogicalPlan::EmptyRelation(
@@ -293,6 +297,20 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         },
                     )));
                 }
+                // `EXISTS` asks whether the whole subquery returns a row, not
+                // whether this `Limit` does. If a node above the `Limit` looks
+                // at which rows it gets, such as a `Filter` or the `HAVING` in
+                // https://github.com/apache/datafusion/issues/26629, removing
+                // the `Limit` hands it different rows and can change the
+                // answer, so the `Limit` has to stay.
+                let (_, above) = self
+                    .depends_only_on_input_having_rows_above
+                    .split_last()
+                    .expect("f_down pushed this Limit's own entry");
+                if !above.iter().all(|follows| *follows) {
+                    return Ok(self.stop_pull_up(plan));
+                }
+
                 match (limit.get_skip_type()?, fetch) {
                     (SkipType::Literal(0), FetchType::Literal(_)) => {
                         // The rewriter does not call `f_down` on the returned
@@ -302,6 +320,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                         // `f_up` call reaches this tree position once `Limit`
                         // is gone, so only one entry must remain pushed.
                         self.column_refs_above.pop();
+                        self.depends_only_on_input_having_rows_above.pop();
                         let mut t = self.f_down((*limit.input).clone())?;
                         t.transformed = true;
                         Ok(t)
@@ -363,7 +382,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
             | LogicalPlan::Dml(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_) => {
+            | LogicalPlan::Show(_) => {
                 if holds_outer_reference(&plan) {
                     Ok(self.stop_pull_up(plan))
                 } else {
@@ -377,6 +396,7 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
         // Pop this node's own entry, pushed by the matching `f_down` call, so
         // `column_refs_above` holds only the nodes strictly above `plan`.
         self.column_refs_above.pop();
+        self.depends_only_on_input_having_rows_above.pop();
 
         // A node that null-extends or regroups rows can put a NULL back into
         // a column that a correlated filter below it rejected, so the filters
@@ -403,6 +423,22 @@ impl TreeNodeRewriter for PullUpCorrelatedExpr {
                 if let Some(in_predicate) = &self.in_predicate_opt {
                     // in_predicate may be already included in the join filters, remove it from the join filters first.
                     join_filters = remove_duplicated_filter(join_filters, in_predicate)?;
+                }
+                // A `Filter` directly above a count-bug `Aggregate` is a
+                // HAVING clause (or an outer-only filter above the aggregate):
+                // its outer-reference conditions filter the aggregate *output*,
+                // so a LEFT JOIN row can be unmatched either because the
+                // correlation matched no group or because one of them rejected
+                // the group. Record them so the scalar rewrite can tell the
+                // two apart; where the output needs count-bug compensation it
+                // rejects the query instead of guessing. A `Filter` below the
+                // aggregate only prunes input rows and is left out.
+                if self
+                    .collected_count_expr_map
+                    .contains_key(&*plan_filter.input)
+                {
+                    self.having_like_join_filters
+                        .extend(join_filters.iter().cloned());
                 }
                 let correlated_subquery_cols =
                     collect_subquery_cols(&join_filters, subquery_schema)?;
@@ -908,6 +944,43 @@ impl PullUpCorrelatedExpr {
         }
         Ok(missing_exprs)
     }
+}
+
+/// Whether `plan` returns rows based only on whether its input has rows, and
+/// not on which rows those are.
+///
+/// This is what lets `EXISTS` drop a `Limit` with no skip and a non-zero
+/// fetch. Such a `Limit` returns rows exactly when its input has rows. If
+/// every node above it also only depends on whether it gets rows, the whole
+/// subquery returns rows exactly when the `Limit`'s input has rows, with or
+/// without the `Limit`, so removing it cannot change the `EXISTS` result.
+///
+/// It holds for:
+/// - `Projection`, `SubqueryAlias`, `Sort`, `Window` and `Repartition`, which
+///   return rows whenever their input has rows (a `Sort` with a fetch of 0
+///   returns none either way)
+/// - `DISTINCT` and a grouped `Aggregate`, which return at least one row for a
+///   non-empty input and none for an empty one
+/// - an `Aggregate` without grouping, which always returns one row
+/// - a materialized CTE, which returns its continuation's rows
+///
+/// It does not hold for a `Filter`, which keeps or removes rows by their
+/// values, so the rows the `Limit` kept decide whether any survive. A `Join`
+/// and an `Unnest` can also turn rows into none. Every other plan, including a
+/// user-defined `Extension`, is treated as not holding: the `Limit` stays and
+/// the subquery is not decorrelated.
+fn depends_only_on_input_having_rows(plan: &LogicalPlan) -> bool {
+    matches!(
+        plan,
+        LogicalPlan::Projection(_)
+            | LogicalPlan::SubqueryAlias(_)
+            | LogicalPlan::Sort(_)
+            | LogicalPlan::Window(_)
+            | LogicalPlan::Repartition(_)
+            | LogicalPlan::Distinct(Distinct::All(_))
+            | LogicalPlan::Aggregate(_)
+            | LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(_))
+    )
 }
 
 /// Whether `plan` can output a NULL in a column that a filter below it keeps

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Extension `PhysicalExpr`s decoded by name through a
 //! [`ProtoDecoderRegistry`] instead of a [`PhysicalExtensionCodec`].
@@ -34,7 +21,7 @@ use datafusion::physical_plan::proto::PhysicalExprEncodeCtx;
 use datafusion::physical_plan::proto::{
     ExecutionPlanDecodeCtx, ExecutionPlanEncodeCtx, ExtensionExprFromProto,
     ExtensionPlanFromProto, ProtoDecoderRegistry, extension_expr_node,
-    physical_expr_names, register_execution_plan, register_physical_expr,
+    physical_expr_names,
 };
 use datafusion::physical_plan::{
     DisplayAs, DisplayFormatType, PlanProperties, SendableRecordBatchStream,
@@ -504,7 +491,7 @@ fn registry_decodes_named_extension_expr() -> Result<()> {
 
     let session = session_with(
         SessionConfig::new().with_batch_size(1234),
-        register_physical_expr::<TagExpr>,
+        TagExpr::register_proto,
     )?;
     let decoded = from_wire(&node, &session, &TestCodec::Refusing)?;
     let decoded = decoded.downcast_ref::<TagExpr>().unwrap();
@@ -523,8 +510,7 @@ fn unnamed_or_unregistered_falls_back_to_codec() -> Result<()> {
     set_expr_name(&mut unnamed, None);
 
     let empty = SessionContext::new();
-    let registered =
-        session_with(SessionConfig::new(), register_physical_expr::<TagExpr>)?;
+    let registered = session_with(SessionConfig::new(), TagExpr::register_proto)?;
     for (node, session) in [(&named, &empty), (&unnamed, &registered)] {
         let decoded = from_wire(node, session, &TestCodec::Tag)?;
         let decoded = decoded.downcast_ref::<TagExpr>().unwrap();
@@ -540,10 +526,8 @@ fn unnamed_or_unregistered_falls_back_to_codec() -> Result<()> {
 #[test]
 fn codec_failure_keeps_its_error_and_names_the_missing_registration() -> Result<()> {
     let named = to_wire(&tag_expr()?, &TestCodec::Refusing)?;
-    let session = session_with(
-        SessionConfig::new(),
-        register_physical_expr::<TaggedExpr<Other>>,
-    )?;
+    let session =
+        session_with(SessionConfig::new(), <TaggedExpr<Other>>::register_proto)?;
 
     let err = from_wire(&named, &session, &TestCodec::Exhausted).unwrap_err();
     assert!(
@@ -576,17 +560,19 @@ fn codec_failure_keeps_its_error_and_names_the_missing_registration() -> Result<
 #[test]
 fn registration_rejects_collisions_and_empty_names() -> Result<()> {
     let mut registry = ProtoDecoderRegistry::new();
-    register_physical_expr::<TagExpr>(&mut registry)?;
-    register_physical_expr::<TagExpr>(&mut registry)?;
+    TagExpr::register_proto(&mut registry)?;
+    TagExpr::register_proto(&mut registry)?;
 
-    let err = register_physical_expr::<TaggedExpr<TagClone>>(&mut registry)
-        .unwrap_err()
-        .to_string();
+    let err =
+        <TaggedExpr<TagClone> as ExtensionExprFromProto>::register_proto(&mut registry)
+            .unwrap_err()
+            .to_string();
     assert!(err.contains("already registered"), "{err}");
 
-    let err = register_physical_expr::<TaggedExpr<Unnamed>>(&mut registry)
-        .unwrap_err()
-        .to_string();
+    let err =
+        <TaggedExpr<Unnamed> as ExtensionExprFromProto>::register_proto(&mut registry)
+            .unwrap_err()
+            .to_string();
     assert!(err.contains("empty name"), "{err}");
 
     assert_eq!(
@@ -604,7 +590,7 @@ fn nested_extension_exprs_both_decode_through_the_registry() -> Result<()> {
         Arc::new(TagExpr::new("inner", col("a", &test_schema())?));
     let outer: Arc<dyn PhysicalExpr> = Arc::new(TagExpr::new("outer", inner));
     let node = to_wire(&outer, &TestCodec::Refusing)?;
-    let session = session_with(SessionConfig::new(), register_physical_expr::<TagExpr>)?;
+    let session = session_with(SessionConfig::new(), TagExpr::register_proto)?;
 
     let decoded = from_wire(&node, &session, &TestCodec::Refusing)?;
     let outer = decoded.downcast_ref::<TagExpr>().unwrap();
@@ -619,10 +605,8 @@ fn nested_extension_exprs_both_decode_through_the_registry() -> Result<()> {
 #[test]
 fn a_failing_registry_decoder_does_not_fall_through_to_the_codec() -> Result<()> {
     let node = to_wire(&tag_expr()?, &TestCodec::Tag)?;
-    let session = session_with(
-        SessionConfig::new(),
-        register_physical_expr::<TaggedExpr<Failing>>,
-    )?;
+    let session =
+        session_with(SessionConfig::new(), <TaggedExpr<Failing>>::register_proto)?;
     let err = from_wire(&node, &session, &TestCodec::Tag).unwrap_err();
     assert!(
         err.to_string()
@@ -637,10 +621,7 @@ fn a_failing_registry_decoder_does_not_fall_through_to_the_codec() -> Result<()>
 /// session.
 #[test]
 fn extension_expr_resolves_scalar_and_aggregate_udfs_from_the_session() -> Result<()> {
-    let session = session_with(
-        SessionConfig::new(),
-        register_physical_expr::<FunctionRefExpr>,
-    )?;
+    let session = session_with(SessionConfig::new(), FunctionRefExpr::register_proto)?;
     session.register_udf(create_udf(
         "my_add_one",
         vec![DataType::Int64],
@@ -674,10 +655,7 @@ fn extension_expr_resolves_scalar_and_aggregate_udfs_from_the_session() -> Resul
         child: col("a", &test_schema())?,
     });
     let node = to_wire(&expr, &TestCodec::Refusing)?;
-    let reader = session_with(
-        SessionConfig::new(),
-        register_physical_expr::<FunctionRefExpr>,
-    )?;
+    let reader = session_with(SessionConfig::new(), FunctionRefExpr::register_proto)?;
     let err = from_wire(&node, &reader, &TestCodec::Refusing).unwrap_err();
     assert!(err.to_string().contains("my_add_one"), "{err}");
     Ok(())
@@ -699,7 +677,7 @@ fn registry_expr_survives_a_whole_plan_roundtrip() -> Result<()> {
 
     let session = session_with(
         SessionConfig::new().with_batch_size(4096),
-        register_physical_expr::<TagExpr>,
+        TagExpr::register_proto,
     )?;
     let decoded = physical_plan_from_bytes_with_extension_codec(
         &bytes,
@@ -851,8 +829,7 @@ fn registry_expr_keeps_its_expression_id_for_deduplication() -> Result<()> {
         "the serializer must stamp the expression id"
     );
 
-    let session =
-        session_with(SessionConfig::new(), register_physical_expr::<IdentityExpr>)?;
+    let session = session_with(SessionConfig::new(), IdentityExpr::register_proto)?;
     let task_ctx = session.task_ctx();
     let decode_ctx = PhysicalPlanDecodeContext::new(task_ctx.as_ref(), &codec);
     let decoded = converter.proto_to_physical_expr(&node, &schema, &decode_ctx)?;
@@ -963,8 +940,8 @@ fn registry_plan_and_expr_with_the_same_name_roundtrip_together() -> Result<()> 
     let bytes = physical_plan_to_bytes_with_extension_codec(plan, &TestCodec::Refusing)?;
 
     let session = session_with(SessionConfig::new().with_batch_size(2048), |registry| {
-        register_execution_plan::<SameNameExec>(registry)?;
-        register_physical_expr::<TagExpr>(registry)
+        SameNameExec::register_proto(registry)?;
+        TagExpr::register_proto(registry)
     })?;
     let decoded = physical_plan_from_bytes_with_extension_codec(
         &bytes,

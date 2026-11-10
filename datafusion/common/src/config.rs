@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Runtime configuration, via [`ConfigOptions`]
 
@@ -33,6 +20,7 @@ use crate::{DataFusionError, Result};
 #[cfg(feature = "parquet_encryption")]
 use hex;
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
@@ -241,6 +229,11 @@ config_namespace! {
         /// Should DataFusion provide access to `information_schema`
         /// virtual tables for displaying schema information
         pub information_schema: bool, default = false
+
+        /// When set together with `information_schema`, the `information_schema`
+        /// of each catalog only describes the objects in that catalog. When not
+        /// set, the `information_schema` of each catalog describes all catalogs.
+        pub partition_information_schema: bool, default = false
 
         /// Location scanned to load tables for `default` schema
         pub location: Option<String>, default = None
@@ -894,6 +887,10 @@ impl From<SpillCompression> for Option<CompressionType> {
     }
 }
 
+/// The directory name Hive compliant writers use in place of a null partition value, and the
+/// default for [`ExecutionOptions::listing_table_hive_default_partition_name`].
+pub const HIVE_DEFAULT_PARTITION_NAME: &str = "__HIVE_DEFAULT_PARTITION__";
+
 config_namespace! {
     /// Options related to query execution
     ///
@@ -1102,6 +1099,14 @@ config_namespace! {
         /// partitions from Hive compliant directories. Defaults to true (partition columns are
         /// inferred and will be represented in the table schema).
         pub listing_table_factory_infer_partitions: bool, default = true
+
+        /// The directory name Hive compliant writers use in place of a null partition
+        /// value, e.g. `/table/date=__HIVE_DEFAULT_PARTITION__/data.parquet`. Partition
+        /// values equal to this name are read as NULL, as Hive, Spark and Impala do, and
+        /// partitioned writes reject them. Corresponds to Hive's
+        /// `hive.exec.default.partition.name`. Set this to the empty string to read and
+        /// write such values as the literal directory name instead.
+        pub listing_table_hive_default_partition_name: String, default = HIVE_DEFAULT_PARTITION_NAME.to_string()
 
         /// Should DataFusion support recursive CTEs
         pub enable_recursive_ctes: bool, default = true
@@ -1333,7 +1338,9 @@ config_namespace! {
 
         /// (reading) If true, the parquet reader skip the optional embedded metadata that may be in
         /// the file Schema. This setting can help avoid schema conflicts when querying
-        /// multiple parquet files with schemas containing compatible types but different metadata
+        /// multiple parquet files with schemas containing compatible types but different metadata.
+        /// Arrow extension types (the `ARROW:extension:name` and `ARROW:extension:metadata`
+        /// field metadata) are kept, because they are part of the type of a column
         pub skip_metadata: bool, default = true
 
         /// (reading) If specified, the parquet reader will try and fetch the last `size_hint`
@@ -1518,7 +1525,7 @@ config_namespace! {
         /// (writing)  Sets default encoding for any column.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
-        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         pub encoding: Option<DFParquetEncoding>, default = None
@@ -1649,6 +1656,16 @@ config_namespace! {
         /// can improve performance. However, for high cardinality keys, it may
         /// cause regressions in both memory usage and runtime.
         pub enable_window_topn: bool, default = false
+
+        /// When set to true, the optimizer will rewrite a "top-1 per group"
+        /// pattern of the form `Filter(row_number() = 1)` over a `PARTITION BY` window into an
+        /// `Aggregate(first_value(... ORDER BY ...) GROUP BY partition)`.
+        /// This avoids buffering / fully sorting the input, which is especially beneficial on wide payloads.
+        /// Disabled by default because on nested/wide value types the aggregate only becomes memory
+        /// efficient once the columnar nested-type `GroupsAccumulator` fast
+        /// path is available; enabling it without that support can route wide
+        /// payloads onto the slow per-group accumulator path.
+        pub enable_row_number_to_aggregate: bool, default = false
 
         /// When set to true, the optimizer will push TopK (Sort with fetch)
         /// below hash repartition when the partition key is a prefix of the
@@ -1922,6 +1939,18 @@ config_namespace! {
         /// branches share the same source and compatible wrapper nodes such as identical
         /// projections or aliases.
         pub enable_unions_to_filter: bool, default = false
+
+        /// Prefer native grouped DISTINCT aggregation when target_partitions is 1
+        /// and every aggregate explicitly supports a specialized GroupsAccumulator
+        /// for its DISTINCT argument types. Defaults to false, preserving the
+        /// two-phase GROUP BY rewrite.
+        ///
+        /// The native plan can avoid materializing distinct (group, value) pairs,
+        /// but can be slower for many groups with duplicate values. It must fit
+        /// each group's distinct values in memory, so queries that succeed by
+        /// spilling with the rewrite may fail with this option enabled. One target
+        /// partition can still have multiple input partitions and merge native states.
+        pub single_distinct_prefer_native: bool, default = false
     }
 }
 
@@ -2140,6 +2169,62 @@ config_namespace! {
 impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> {
     type Error = DataFusionError;
     fn try_from(options: &'a FormatOptions) -> Result<Self> {
+        for (name, format) in [
+            ("date_format", options.date_format.as_deref()),
+            ("datetime_format", options.datetime_format.as_deref()),
+            ("timestamp_format", options.timestamp_format.as_deref()),
+            (
+                "timestamp_tz_format",
+                options.timestamp_tz_format.as_deref(),
+            ),
+            ("time_format", options.time_format.as_deref()),
+        ] {
+            if let Some(format) = format {
+                let items = chrono::format::StrftimeItems::new(format).parse().map_err(
+                    |error| {
+                        DataFusionError::Configuration(format!(
+                            "Invalid datafusion.format.{name}: {error}"
+                        ))
+                    },
+                )?;
+
+                // Parsing validates directives, but some directives require fields
+                // that are absent from a particular temporal type (for example,
+                // `%H` for a date). Chrono reports those errors while formatting.
+                let mut rendered = String::new();
+                let result = match name {
+                    "date_format" => chrono::NaiveDate::from_ymd_opt(2001, 2, 3)
+                        .expect("valid sample date")
+                        .format_with_items(items.iter())
+                        .write_to(&mut rendered),
+                    "datetime_format" | "timestamp_format" => {
+                        chrono::NaiveDate::from_ymd_opt(2001, 2, 3)
+                            .expect("valid sample date")
+                            .and_hms_opt(4, 5, 6)
+                            .expect("valid sample time")
+                            .format_with_items(items.iter())
+                            .write_to(&mut rendered)
+                    }
+                    "timestamp_tz_format" => {
+                        chrono::DateTime::from_timestamp(981_173_106, 0)
+                            .expect("valid sample timestamp")
+                            .format_with_items(items.iter())
+                            .write_to(&mut rendered)
+                    }
+                    "time_format" => chrono::NaiveTime::from_hms_opt(4, 5, 6)
+                        .expect("valid sample time")
+                        .format_with_items(items.iter())
+                        .write_to(&mut rendered),
+                    _ => unreachable!("all temporal format names are handled above"),
+                };
+                if result.is_err() {
+                    return Err(DataFusionError::Configuration(format!(
+                        "Invalid datafusion.format.{name}: format is incompatible with its temporal type"
+                    )));
+                }
+            }
+        }
+
         Ok(Self::new()
             .with_display_error(options.safe)
             .with_null(&options.null)
@@ -2466,11 +2551,23 @@ impl ConfigOptions {
                 &mut docs,
                 "| {} | {} | {} |",
                 entry.key,
-                entry.value.as_deref().unwrap_or("NULL"),
+                display_default(entry.value.as_deref()),
                 entry.description
             );
         }
         docs
+    }
+}
+
+/// Renders a default value for the generated documentation table.
+///
+/// Values containing `_` or `*` are shown as code, since markdown would otherwise read them
+/// as formatting: a default of `__HIVE_DEFAULT_PARTITION__` renders as bold text.
+fn display_default(value: Option<&str>) -> Cow<'_, str> {
+    match value {
+        None => Cow::Borrowed("NULL"),
+        Some(value) if value.contains(['_', '*']) => Cow::Owned(format!("`{value}`")),
+        Some(value) => Cow::Borrowed(value),
     }
 }
 
@@ -3459,7 +3556,7 @@ config_namespace_with_hashmap! {
         /// Sets encoding for the column path.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
-        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
         pub encoding: Option<String>, default = None
@@ -4249,6 +4346,132 @@ mod tests {
         ConfigEntry, ConfigExtension, ConfigField, ConfigFileType, ExtensionOptions,
         Extensions, TableOptions,
     };
+
+    #[test]
+    fn invalid_temporal_format_is_rejected_before_rendering() {
+        use crate::config::FormatOptions;
+
+        let invalid_options = [
+            (
+                "date_format",
+                FormatOptions {
+                    date_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "datetime_format",
+                FormatOptions {
+                    datetime_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_format",
+                FormatOptions {
+                    timestamp_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_tz_format",
+                FormatOptions {
+                    timestamp_tz_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "time_format",
+                FormatOptions {
+                    time_format: Some("%".to_owned()),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (name, options) in invalid_options {
+            let error = arrow::util::display::FormatOptions::try_from(&options)
+                .expect_err("invalid format strings must be rejected before rendering");
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("datafusion.format.{name}")),
+                "unexpected validation error: {error}"
+            );
+        }
+
+        let incompatible_options = [
+            (
+                "time_format",
+                FormatOptions {
+                    time_format: Some("%Y".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "date_format",
+                FormatOptions {
+                    date_format: Some("%H".to_owned()),
+                    ..Default::default()
+                },
+            ),
+            (
+                "timestamp_format",
+                FormatOptions {
+                    timestamp_format: Some("%+".to_owned()),
+                    ..Default::default()
+                },
+            ),
+        ];
+
+        for (name, options) in incompatible_options {
+            let error = arrow::util::display::FormatOptions::try_from(&options)
+                .expect_err(
+                    "type-incompatible formats must be rejected before rendering",
+                );
+            assert!(
+                error
+                    .to_string()
+                    .contains(&format!("datafusion.format.{name}")),
+                "unexpected validation error: {error}"
+            );
+        }
+
+        arrow::util::display::FormatOptions::try_from(&FormatOptions::default())
+            .expect("the default temporal formats must remain valid");
+
+        let options = FormatOptions {
+            timestamp_tz_format: Some("%+".to_owned()),
+            ..Default::default()
+        };
+        let options: arrow::util::display::FormatOptions = (&options)
+            .try_into()
+            .expect("the timezone-aware ISO 8601 format must be valid");
+        let schema = arrow::datatypes::Schema::new(vec![arrow::datatypes::Field::new(
+            "timestamp",
+            arrow::datatypes::DataType::Timestamp(
+                arrow::datatypes::TimeUnit::Nanosecond,
+                Some("UTC".into()),
+            ),
+            false,
+        )]);
+        let batch = arrow::record_batch::RecordBatch::try_new(
+            std::sync::Arc::new(schema),
+            vec![std::sync::Arc::new(
+                arrow::array::TimestampNanosecondArray::from(vec![0])
+                    .with_timezone("UTC"),
+            )],
+        )
+        .expect("valid timestamp batch");
+        let formatted =
+            arrow::util::pretty::pretty_format_batches_with_options(&[batch], &options)
+                .expect("valid timezone-aware format must render")
+                .to_string();
+        assert!(
+            formatted.contains("1970-01-01T00:00:00+00:00"),
+            "unexpected formatted output: {formatted}"
+        );
+    }
     use std::any::Any;
     use std::collections::HashMap;
 

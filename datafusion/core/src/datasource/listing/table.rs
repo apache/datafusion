@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use crate::execution::SessionState;
 use async_trait::async_trait;
@@ -1428,6 +1415,82 @@ mod tests {
 
         assert_eq!(group_sizes, vec![1, 1, 0, 0]);
 
+        Ok(())
+    }
+
+    #[cfg(feature = "parquet")]
+    #[tokio::test]
+    async fn test_list_files_data_filter_does_not_limit_before_pruning() -> Result<()> {
+        let mut config = SessionConfig::new()
+            .with_collect_statistics(true)
+            .with_target_partitions(1);
+        config.options_mut().execution.meta_fetch_concurrency =
+            datafusion_common::config::ConfigNonZeroUsize::try_new(1)?;
+        let ctx = SessionContext::new_with_config(config);
+        let directory = TempDir::new()?;
+        let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+        for (name, values) in [("0.parquet", vec![0, 0]), ("1.parquet", vec![20])] {
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![Arc::new(arrow::array::Int32Array::from(values))],
+            )?;
+            let file = std::fs::File::create(directory.path().join(name))?;
+            let mut writer =
+                parquet::arrow::ArrowWriter::try_new(file, Arc::clone(&schema), None)?;
+            writer.write(&batch)?;
+            writer.close()?;
+        }
+        let options = ListingOptions::new(Arc::new(ParquetFormat::default()))
+            .with_file_extension(".parquet");
+        let table = ListingTable::try_new(
+            ListingTableConfig::new_with_multi_paths(
+                ["0.parquet", "1.parquet"]
+                    .into_iter()
+                    .map(|name| {
+                        ListingTableUrl::parse(
+                            directory.path().join(name).to_str().unwrap(),
+                        )
+                    })
+                    .collect::<Result<Vec<_>>>()?,
+            )
+            .with_listing_options(options)
+            .with_schema(schema),
+        )?;
+
+        // Establish that the unfiltered soft limit would stop at the first file.
+        let limited = table
+            .list_files_for_scan(&ctx.state(), &[], Some(1))
+            .await?;
+        assert_eq!(
+            limited
+                .file_groups
+                .iter()
+                .map(|group| group.len())
+                .sum::<usize>(),
+            1
+        );
+        assert_eq!(
+            limited.file_groups[0]
+                .iter()
+                .next()
+                .unwrap()
+                .object_meta
+                .location
+                .filename(),
+            Some("0.parquet")
+        );
+
+        let files = table
+            .list_files_for_scan(&ctx.state(), &[col("a").gt_eq(lit(20_i32))], Some(1))
+            .await?;
+        let paths = files
+            .file_groups
+            .iter()
+            .flat_map(|group| group.iter())
+            .map(|file| file.object_meta.location.filename().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, ["1.parquet"]);
+        assert_eq!(files.statistics.num_rows, Precision::Exact(1));
         Ok(())
     }
 
