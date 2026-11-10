@@ -6,10 +6,11 @@ use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::expr::{
     contains_struct, is_literal, name_struct_literal_like,
 };
-use datafusion::arrow::datatypes::Field;
+use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::{JoinType, NullEquality, not_impl_err, substrait_err};
 use datafusion::logical_expr::{
-    Cast, Expr, LogicalPlan, LogicalPlanBuilder, Projection, requalify_sides_if_needed,
+    Aggregate, Cast, Distinct, Expr, Limit, LogicalPlan, LogicalPlanBuilder, Projection,
+    Sort, SubqueryAlias, Union, requalify_sides_if_needed,
 };
 use std::sync::Arc;
 use substrait::proto::SetRel;
@@ -81,28 +82,108 @@ fn name_struct_literal_columns(
 
     inputs
         .into_iter()
-        .map(|input| {
-            let LogicalPlan::Projection(projection) = input else {
-                return Ok(input);
-            };
-            let mut exprs = projection.expr;
-            for (expr, named_type) in exprs.iter_mut().zip(&named_types) {
-                if let Some(named_type) = named_type {
-                    name_struct_literal_like(expr, named_type);
-                }
-            }
+        .map(|input| name_projected_struct_literals(input, &named_types))
+        .collect()
+}
+
+/// Gives the struct literals in the projection producing `input`'s columns the names in
+/// `named_types`, or in each input's projection for a nested set operation. The plans
+/// above them (`LIMIT`, `ORDER BY`, ...) are rebuilt with the new types.
+fn name_projected_struct_literals(
+    input: LogicalPlan,
+    named_types: &[Option<DataType>],
+) -> datafusion::common::Result<LogicalPlan> {
+    match input {
+        LogicalPlan::Projection(projection) => {
+            let exprs = projection
+                .expr
+                .into_iter()
+                .zip(named_types)
+                .map(|(mut expr, named_type)| {
+                    let Some(named_type) = named_type else {
+                        return Ok(expr);
+                    };
+                    // keep the column's name, which the plans above may refer to: an
+                    // unaliased literal is named after its value, field names included
+                    let name = expr.schema_name().to_string();
+                    name_struct_literal_like(&mut expr, named_type);
+                    expr.alias_if_changed(name)
+                })
+                .collect::<datafusion::common::Result<_>>()?;
             Ok(LogicalPlan::Projection(Projection::try_new(
                 exprs,
                 projection.input,
             )?))
-        })
-        .collect()
+        }
+        LogicalPlan::Union(union) => {
+            let inputs = union
+                .inputs
+                .into_iter()
+                .map(|input| {
+                    name_projected_struct_literals(
+                        Arc::unwrap_or_clone(input),
+                        named_types,
+                    )
+                    .map(Arc::new)
+                })
+                .collect::<datafusion::common::Result<_>>()?;
+            // derive the schema again, as rebuilding a union keeps its old one
+            Ok(LogicalPlan::Union(Union::try_new_with_loose_types(inputs)?))
+        }
+        LogicalPlan::Limit(_)
+        | LogicalPlan::Sort(_)
+        | LogicalPlan::Distinct(Distinct::All(_))
+        | LogicalPlan::SubqueryAlias(_) => {
+            let child =
+                name_projected_struct_literals(input.inputs()[0].clone(), named_types)?;
+            input.with_new_exprs(input.expressions(), vec![child])
+        }
+        LogicalPlan::Aggregate(ref aggregate) if removes_duplicates(aggregate) => {
+            let child =
+                name_projected_struct_literals(input.inputs()[0].clone(), named_types)?;
+            input.with_new_exprs(input.expressions(), vec![child])
+        }
+        _ => Ok(input),
+    }
 }
 
-/// Returns true if `input` is a projection whose `column` is a literal.
+/// Returns true if `aggregate` only removes duplicate rows, keeping its input's columns:
+/// it groups by each input column in order and computes nothing else. This is how a
+/// `UNION` (without `ALL`) arrives from Substrait.
+fn removes_duplicates(aggregate: &Aggregate) -> bool {
+    let input_columns = aggregate.input.schema().columns();
+    aggregate.aggr_expr.is_empty()
+        && aggregate.group_expr.len() == input_columns.len()
+        && aggregate
+            .group_expr
+            .iter()
+            .zip(&input_columns)
+            .all(|(expr, column)| matches!(expr, Expr::Column(c) if c == column))
+}
+
+/// Returns true if `input`'s `column` is produced by literals only: a literal in its
+/// projection, or in every input of a nested set operation.
 fn projects_literal(input: &LogicalPlan, column: usize) -> bool {
-    matches!(input, LogicalPlan::Projection(projection)
-        if projection.expr.get(column).is_some_and(is_literal))
+    match input {
+        LogicalPlan::Projection(projection) => {
+            projection.expr.get(column).is_some_and(is_literal)
+        }
+        LogicalPlan::Union(union) => union
+            .inputs
+            .iter()
+            .all(|input| projects_literal(input, column)),
+        // these pass their input's columns through unchanged
+        LogicalPlan::Limit(Limit { input, .. })
+        | LogicalPlan::Sort(Sort { input, .. })
+        | LogicalPlan::Distinct(Distinct::All(input))
+        | LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => {
+            projects_literal(input, column)
+        }
+        LogicalPlan::Aggregate(aggregate) if removes_duplicates(aggregate) => {
+            projects_literal(&aggregate.input, column)
+        }
+        _ => false,
+    }
 }
 
 fn union_plans(

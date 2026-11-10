@@ -637,6 +637,15 @@ pub(crate) fn is_literal(expr: &Expr) -> bool {
     }
 }
 
+/// Returns true if `expr` is a literal whose type contains a struct, possibly aliased.
+pub(crate) fn is_struct_literal(expr: &Expr) -> bool {
+    match expr {
+        Expr::Alias(alias) => is_struct_literal(&alias.expr),
+        Expr::Literal(value, _) => contains_struct(&value.data_type()),
+        _ => false,
+    }
+}
+
 pub(crate) fn contains_struct(data_type: &DataType) -> bool {
     match data_type {
         DataType::Struct(_) => true,
@@ -644,6 +653,8 @@ pub(crate) fn contains_struct(data_type: &DataType) -> bool {
         | DataType::LargeList(f)
         | DataType::FixedSizeList(f, _)
         | DataType::Map(f, _) => contains_struct(f.data_type()),
+        DataType::Dictionary(_, value) => contains_struct(value),
+        DataType::RunEndEncoded(_, values) => contains_struct(values.data_type()),
         _ => false,
     }
 }
@@ -686,6 +697,27 @@ fn with_field_names_of(data_type: &DataType, named: &DataType) -> Option<DataTyp
         (DataType::Map(field, sorted), DataType::Map(named, _)) => {
             Some(DataType::Map(renamed_field(field, named)?, *sorted))
         }
+        // a dictionary literal keeps its keys, which are plain integers; its values take
+        // the names, from the values of a dictionary column or from a plain column
+        (DataType::Dictionary(key, value), named) => {
+            let named = match named {
+                DataType::Dictionary(_, named_value) => named_value.as_ref(),
+                named => named,
+            };
+            Some(DataType::Dictionary(
+                key.clone(),
+                Box::new(with_field_names_of(value, named)?),
+            ))
+        }
+        // a table column can store its values dictionary or run-end encoded, as in
+        // `RunEndEncoded<Int32, Struct{a, b}>`, while the literal next to it is a plain
+        // `Struct{c0, c1}`: the literal takes the names of the encoded values
+        (data_type, DataType::Dictionary(_, named_value)) => {
+            with_field_names_of(data_type, named_value)
+        }
+        (data_type, DataType::RunEndEncoded(_, named_values)) => {
+            with_field_names_of(data_type, named_values.data_type())
+        }
         // types without fields keep their own type; coercion reconciles any difference
         (data_type, named) if !data_type.is_nested() && !named.is_nested() => {
             Some(data_type.clone())
@@ -724,6 +756,10 @@ fn with_array_data_type(
             data.child_data()[0].clone(),
             field.data_type(),
         )?],
+        // a dictionary array keeps its values as its only child
+        DataType::Dictionary(_, value) => {
+            vec![with_array_data_type(data.child_data()[0].clone(), value)?]
+        }
         _ => data.child_data().to_vec(),
     };
     Ok(data

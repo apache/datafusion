@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use super::literal::name_struct_literals_like_siblings;
+use super::literal::{is_struct_literal, name_struct_literals_like_siblings};
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
 use datafusion::common::Result;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -10,7 +10,9 @@ use datafusion::common::{
     DFSchema, DataFusionError, ScalarValue, not_impl_err, plan_err, substrait_err,
 };
 use datafusion::execution::FunctionRegistry;
-use datafusion::logical_expr::{Between, BinaryExpr, Expr, Like, Operator, expr};
+use datafusion::logical_expr::{
+    Between, BinaryExpr, Expr, ExprSchemable, Like, Operator, expr,
+};
 use std::vec::Drain;
 use substrait::proto::expression::ScalarFunction;
 
@@ -32,12 +34,6 @@ pub async fn from_scalar_function(
 
     let fn_name = substrait_fun_name(fn_signature);
     let mut args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
-    // struct literals come without field names, so `coalesce(s, [])` would combine
-    // `s: List<Struct{a, b}>` with a `List<Struct{c0, c1}>`
-    name_struct_literals_like_siblings(
-        &mut args.iter_mut().collect::<Vec<_>>(),
-        input_schema,
-    );
 
     let higher_order_func = consumer
         .get_function_registry()
@@ -83,10 +79,12 @@ pub async fn from_scalar_function(
             Ok(expr.resolve_lambda_variables(input_schema)?.data)
         }
     } else if let Ok(func) = udf_func {
-        Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
-            func.to_owned(),
-            args,
-        )))
+        build_naming_struct_literals_if_needed(args, input_schema, |args| {
+            Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
+                func.to_owned(),
+                args,
+            )))
+        })
     } else if let Some(op) = name_to_op(fn_name) {
         if args.len() < 2 {
             return not_impl_err!(
@@ -94,13 +92,60 @@ pub async fn from_scalar_function(
                 f.arguments.len()
             );
         }
+        // an operator always combines its operands, so they need the same field names
+        name_struct_literals_like_siblings(
+            &mut args.iter_mut().collect::<Vec<_>>(),
+            input_schema,
+        );
         // In those cases we build a balanced tree of BinaryExprs
         arg_list_to_binary_op_tree(op, args)
     } else if let Some(builder) = BuiltinExprBuilder::try_from_name(fn_name) {
+        // these combine their arguments too, as in `s BETWEEN low AND high`
+        name_struct_literals_like_siblings(
+            &mut args.iter_mut().collect::<Vec<_>>(),
+            input_schema,
+        );
         builder.build(consumer, f, args)
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
     }
+}
+
+/// Builds a function call with `build`, renaming its struct literals after a same-shaped
+/// argument only if the call doesn't type-check without it.
+///
+/// `coalesce(s, [])` needs one type for `s: List<Struct{a, b}>` and the literal's
+/// `List<Struct{c0, c1}>`, so the literal takes `s`'s names. `named_struct('left', s,
+/// 'right', {c0: 42})` type-checks as is, and renaming would break a later
+/// `get_field(..., 'c0')`, so the literal is left alone. Function signatures can't tell
+/// these apart, hence the check; operators always combine their operands and always
+/// rename.
+fn build_naming_struct_literals_if_needed(
+    args: Vec<Expr>,
+    input_schema: &DFSchema,
+    build: impl Fn(Vec<Expr>) -> Result<Expr>,
+) -> Result<Expr> {
+    if !args.iter().any(is_struct_literal) {
+        return build(args);
+    }
+    // works as is (`get_type` runs the function's own type coercion): keep the names
+    let expr = build(args.clone())?;
+    if expr.get_type(input_schema).is_ok() {
+        return Ok(expr);
+    }
+    // doesn't type-check: retry with the literals renamed
+    let mut renamed_args = args;
+    name_struct_literals_like_siblings(
+        &mut renamed_args.iter_mut().collect::<Vec<_>>(),
+        input_schema,
+    );
+    let renamed = build(renamed_args)?;
+    // if renaming doesn't help either, keep the original so the error stays the same
+    Ok(if renamed.get_type(input_schema).is_ok() {
+        renamed
+    } else {
+        expr
+    })
 }
 
 /// Checks whether `expr` uses a lambda parameter that comes from outside of it.
