@@ -352,12 +352,6 @@ unused_qualifications = "deny"
 #     tasks.
 #
 # If you want to optimize compilation, the `compile_profile` benchmark can be useful.
-# See `benchmarks/README.md` for more details.
-# `dev` is the profile every `cargo build`/`cargo test` uses, so its debug info
-# is generated over and over. `line-tables-only` keeps file and line numbers --
-# so panics and `RUST_BACKTRACE` output stay useful -- while dropping the
-# variable-level DWARF that only an interactive debugger consumes. Build with
-# `--profile dbg` when you need to step through code in a debugger.
 [profile.dev]
 debug = "line-tables-only"
 
