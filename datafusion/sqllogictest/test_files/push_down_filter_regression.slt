@@ -1019,3 +1019,37 @@ drop table window_ab;
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
+
+# Regression test for https://github.com/apache/datafusion/issues/27287
+# A scan's exact filter `complex_expr = literal` must not put the literal in an
+# equivalence class. Otherwise normalization rewrites the literal inside
+# `complex_expr`, and an aggregate that relies on the constant group key fails
+# `SanityCheckPlan`.
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+COPY (
+  SELECT * FROM (VALUES ('x', 'y'), ('x', 'z'), ('w', 'y')) AS v(a, b)
+) TO 'test_files/scratch/push_down_filter_regression/case_key_pushdown.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE case_key_pushdown (a VARCHAR, b VARCHAR)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/push_down_filter_regression/case_key_pushdown.parquet';
+
+query TI
+SELECT CASE WHEN a = 'x' AND b = 'y' THEN b WHEN a = 'x' THEN 'z' END AS e, count(*)
+FROM case_key_pushdown
+GROUP BY e
+HAVING e = 'y';
+----
+y 1
+
+statement ok
+drop table case_key_pushdown;
+
+statement ok
+reset datafusion.execution.parquet.pushdown_filters;

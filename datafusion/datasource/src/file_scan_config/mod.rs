@@ -40,7 +40,7 @@ use datafusion_physical_expr::expressions::{BinaryExpr, Column};
 use datafusion_physical_expr::projection::{ProjectionExprs, ProjectionMapping};
 use datafusion_physical_expr::utils::reassign_expr_columns;
 use datafusion_physical_expr::{
-    EquivalenceProperties, Partitioning, RangePartitioning, split_conjunction,
+    ConstExpr, EquivalenceProperties, Partitioning, RangePartitioning, split_conjunction,
 };
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
@@ -1384,23 +1384,39 @@ impl FileScanConfig {
         eq_properties: &mut EquivalenceProperties,
         schema: &Schema,
     ) -> Result<()> {
-        // Gather valid equality pairs from the filter expression
-        let equal_pairs = split_conjunction(filter).into_iter().filter_map(|expr| {
+        let input_eq_properties = eq_properties.clone();
+        let mut constants = vec![];
+        for expr in split_conjunction(filter) {
             // Ignore any binary expressions that reference non-existent columns in the current schema
             // (e.g. due to unnecessary projections being removed)
-            reassign_expr_columns(Arc::clone(expr), schema)
-                .ok()
-                .and_then(|expr| match expr.downcast_ref::<BinaryExpr>() {
-                    Some(expr) if expr.op() == &Operator::Eq => {
-                        Some((Arc::clone(expr.left()), Arc::clone(expr.right())))
-                    }
-                    _ => None,
-                })
-        });
-
-        for (lhs, rhs) in equal_pairs {
-            eq_properties.add_equal_conditions(lhs, rhs)?
+            let Ok(expr) = reassign_expr_columns(Arc::clone(expr), schema) else {
+                continue;
+            };
+            let Some(binary) = expr.downcast_ref::<BinaryExpr>() else {
+                continue;
+            };
+            if binary.op() != &Operator::Eq {
+                continue;
+            }
+            // Follow `FilterExec`: only an equality with a column on one side
+            // becomes an equivalence class. A pair like `complex_expr = literal`
+            // would put the literal in a class, and normalization would then
+            // replace that literal wherever it appears (for example inside
+            // `complex_expr` itself) with the canonical expression of the
+            // class. Such a pair still makes `complex_expr` a constant.
+            if binary.left().is::<Column>() || binary.right().is::<Column>() {
+                eq_properties.add_equal_conditions(
+                    Arc::clone(binary.left()),
+                    Arc::clone(binary.right()),
+                )?;
+            } else {
+                constants.extend(ConstExpr::collect_predicate_constants(
+                    &input_eq_properties,
+                    &expr,
+                ));
+            }
         }
+        eq_properties.add_constants(constants)?;
 
         Ok(())
     }
