@@ -806,11 +806,20 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 ))
             }
             SQLDataType::Date => Ok(DataType::Date32),
-            SQLDataType::Time(None, tz_info) => {
+            SQLDataType::Time(precision, tz_info)
+                if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
+            {
                 if *tz_info == TimezoneInfo::None
                     || *tz_info == TimezoneInfo::WithoutTimeZone
                 {
-                    Ok(DataType::Time64(TimeUnit::Nanosecond))
+                    let data_type = match precision {
+                        Some(0) => DataType::Time32(TimeUnit::Second),
+                        Some(3) => DataType::Time32(TimeUnit::Millisecond),
+                        Some(6) => DataType::Time64(TimeUnit::Microsecond),
+                        None | Some(9) => DataType::Time64(TimeUnit::Nanosecond),
+                        _ => unreachable!(),
+                    };
+                    Ok(data_type)
                 } else {
                     // We don't support TIMETZ and TIME WITH TIME ZONE for now
                     not_impl_err!("Unsupported SQL type {sql_type}")
@@ -880,7 +889,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             | SQLDataType::CharacterLargeObject(_)
             | SQLDataType::CharLargeObject(_)
             | SQLDataType::Timestamp(_, _)
-            | SQLDataType::Time(Some(_), _)
+            | SQLDataType::Time(_, _)
             | SQLDataType::Dec(_)
             | SQLDataType::BigNumeric(_)
             | SQLDataType::BigDecimal(_)

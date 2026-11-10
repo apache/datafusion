@@ -749,6 +749,85 @@ select date '1994-01-01' - interval '1' day as date;
 ----
 1993-12-31
 
+# TIME precision selects the Arrow unit; the default remains nanoseconds.
+query TTTTT
+SELECT arrow_typeof(CAST(NULL AS TIME)) AS t,
+       arrow_typeof(CAST(NULL AS TIME(0))) AS s,
+       arrow_typeof(CAST(NULL AS TIME(3))) AS ms,
+       arrow_typeof(CAST(NULL AS TIME(6))) AS us,
+       arrow_typeof(CAST(NULL AS TIME(9))) AS ns;
+----
+Time64(ns) Time32(s) Time32(ms) Time64(µs) Time64(ns)
+
+# String casts truncate fractional seconds to the requested precision.
+query DDDD
+SELECT CAST('12:34:56.123456789' AS TIME(0)) AS s,
+       CAST('12:34:56.123456789' AS TIME(3)) AS ms,
+       CAST('12:34:56.123456789' AS TIME(6)) AS us,
+       CAST('12:34:56.123456789' AS TIME(9)) AS ns;
+----
+12:34:56 12:34:56.123 12:34:56.123456 12:34:56.123456789
+
+# Column declarations use the same mapping, including WITHOUT TIME ZONE.
+statement ok
+CREATE TABLE times (
+    t TIME WITHOUT TIME ZONE,
+    s TIME(0) WITHOUT TIME ZONE,
+    ms TIME(3) WITHOUT TIME ZONE,
+    us TIME(6) WITHOUT TIME ZONE,
+    ns TIME(9) WITHOUT TIME ZONE
+);
+
+statement ok
+INSERT INTO times VALUES (
+    '12:34:56.123456789', '12:34:56.123456789', '12:34:56.123456789',
+    '12:34:56.123456789', '12:34:56.123456789'
+), (NULL, NULL, NULL, NULL, NULL);
+
+query DDDDD rowsort
+SELECT * FROM times;
+----
+12:34:56.123456789 12:34:56 12:34:56.123 12:34:56.123456 12:34:56.123456789
+NULL NULL NULL NULL NULL
+
+query TTTTT
+SELECT arrow_typeof(t), arrow_typeof(s), arrow_typeof(ms), arrow_typeof(us), arrow_typeof(ns)
+FROM times LIMIT 1;
+----
+Time64(ns) Time32(s) Time32(ms) Time64(µs) Time64(ns)
+
+# Unsupported precisions, including values beyond nanoseconds, remain errors.
+statement error
+SELECT CAST('12:34:56' AS TIME(1));
+----
+DataFusion error: This feature is not implemented: Unsupported SQL type TIME(1)
+
+
+statement error
+CREATE TABLE invalid_time (t TIME(12));
+----
+DataFusion error: This feature is not implemented: Unsupported SQL type TIME(12)
+
+
+# Arrow time types have no time zone.
+statement error
+SELECT CAST('12:34:56' AS TIME WITH TIME ZONE);
+----
+DataFusion error: This feature is not implemented: Unsupported SQL type TIME WITH TIME ZONE
+
+
+statement error
+SELECT CAST('12:34:56' AS TIME(6) WITH TIME ZONE);
+----
+DataFusion error: This feature is not implemented: Unsupported SQL type TIME(6) WITH TIME ZONE
+
+
+statement error
+SELECT CAST('12:34:56' AS TIMETZ(6));
+----
+DataFusion error: This feature is not implemented: Unsupported SQL type TIMETZ(6)
+
+
 # cast_string_to_time()
 query DDDD
 select
