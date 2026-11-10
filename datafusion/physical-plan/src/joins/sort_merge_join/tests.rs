@@ -8602,16 +8602,20 @@ fn assert_streamed_order(batches: &[RecordBatch]) {
 /// join whatever the batch size, which decides where a batch of pairs cuts a run,
 /// and whatever the order of the filter's columns. The pseudo-random values pass
 /// `c1 < c2` for about half of the pairs, and their NULLs pass for none. The
-/// high-pass filter also covers freezes that materialize whole batches.
+/// high-pass filter also covers freezes that materialize whole batches, and a
+/// filter that reads no columns must still run for every pair.
 #[tokio::test]
 async fn join_inner_early_filtering_matches_hash_join() -> Result<()> {
     let ((left_batches, left_schema), (right_batches, right_schema)) =
         early_filtering_inputs();
     let on = early_filtering_on(&left_schema, &right_schema)?;
+    // Each filter with whether it keeps any pair of these inputs.
     let filters = [
-        build_c1_lt_c2_filter(&left_schema, &right_schema),
-        interleaved_early_filter(&left_schema, &right_schema),
-        high_pass_early_filter(&left_schema, &right_schema),
+        (build_c1_lt_c2_filter(&left_schema, &right_schema), true),
+        (interleaved_early_filter(&left_schema, &right_schema), true),
+        (high_pass_early_filter(&left_schema, &right_schema), true),
+        (column_free_early_filter(true), true),
+        (column_free_early_filter(false), false),
     ];
     let memory_exec = |batches: &Vec<RecordBatch>, schema: &SchemaRef| {
         TestMemoryExec::try_new_exec(
@@ -8621,7 +8625,7 @@ async fn join_inner_early_filtering_matches_hash_join() -> Result<()> {
         )
     };
 
-    for filter in filters {
+    for (filter, keeps_pairs) in filters {
         for batch_size in [1, 7, 300, 8192] {
             let (stream, expected) = join_get_stream_and_get_expected(
                 memory_exec(&left_batches, &left_schema)?,
@@ -8635,7 +8639,7 @@ async fn join_inner_early_filtering_matches_hash_join() -> Result<()> {
             )
             .await?;
             let output = common::collect(stream).await?;
-            assert!(expected.num_rows() > 0, "the filter must keep some pairs");
+            assert_eq!(expected.num_rows() > 0, keeps_pairs, "filter {filter}");
             assert_streamed_order(&output);
             assert_eq!(
                 prepare_record_batches_for_cmp(output),
@@ -8644,46 +8648,6 @@ async fn join_inner_early_filtering_matches_hash_join() -> Result<()> {
             );
         }
     }
-    Ok(())
-}
-
-/// A filter that reads no columns still runs for every pair, both on a long run
-/// as it is paired and at freeze.
-#[tokio::test]
-async fn join_inner_early_filtering_column_free_filter() -> Result<()> {
-    let ((left_batches, left_schema), (right_batches, right_schema)) =
-        early_filtering_inputs();
-    let on = early_filtering_on(&left_schema, &right_schema)?;
-    let left: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
-        std::slice::from_ref(&left_batches),
-        Arc::clone(&left_schema),
-        None,
-    )?;
-    let right: Arc<dyn ExecutionPlan> = TestMemoryExec::try_new_exec(
-        std::slice::from_ref(&right_batches),
-        Arc::clone(&right_schema),
-        None,
-    )?;
-
-    let (_, unfiltered) =
-        join_collect(Arc::clone(&left), Arc::clone(&right), on.clone(), Inner).await?;
-    let (_, kept) = join_collect_with_filter(
-        Arc::clone(&left),
-        Arc::clone(&right),
-        on.clone(),
-        column_free_early_filter(true),
-        Inner,
-    )
-    .await?;
-    assert_eq!(
-        batches_to_sort_string(&kept),
-        batches_to_sort_string(&unfiltered)
-    );
-
-    let (_, dropped) =
-        join_collect_with_filter(left, right, on, column_free_early_filter(false), Inner)
-            .await?;
-    assert_eq!(dropped.iter().map(|b| b.num_rows()).sum::<usize>(), 0);
     Ok(())
 }
 
