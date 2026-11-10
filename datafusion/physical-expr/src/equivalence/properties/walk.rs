@@ -296,7 +296,9 @@ impl<'a> SortKeyWalk<'a> {
         if class.is_some_and(|class| class.constant.is_some()) {
             return true;
         }
-        // A column is only fixed if it is pinned or constant:
+        // A column that is neither pinned nor constant can have a different
+        // value in each row, so it is not fixed. The leaf check below gives
+        // the same answer; returning here skips it:
         if expr.is::<Column>() {
             return false;
         }

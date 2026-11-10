@@ -1543,10 +1543,22 @@ mod tests {
         assert!(matches!(remapped, OrderingRequirements::Soft(_)));
     }
 
-    /// The guard compares the alternative that is pushed down, not the first
-    /// one, which may be an alternative that cannot be remapped. Here the
-    /// input is sorted by `c`, and the projection proves `score` (`c` renamed),
-    /// but not `score % 2`, so the requirement can be pushed down.
+    /// The guard keeps a sort above a projection when the input already has
+    /// the ordering that would be pushed down, but the projection cannot show
+    /// that ordering to its parent. When the parent accepts several
+    /// orderings, the guard must check the one that is pushed down, not the
+    /// first one.
+    ///
+    /// * Input: sorted by `[c DESC]`; the projection outputs `c` as `score`
+    /// * Parent requires: `[score % 2 ASC]` or `[score DESC]`
+    /// * Expected: `[c DESC]` is pushed down
+    ///
+    /// `score % 2` is not a column, so `[score % 2 ASC]` cannot be rewritten
+    /// in terms of the input and is dropped; `[score DESC]` becomes
+    /// `[c DESC]`. The projection does provide `[score DESC]`, so the guard
+    /// does not apply. Checking the first alternative, `[score % 2 ASC]`,
+    /// which the projection does not provide, would keep an unneeded sort
+    /// above the projection.
     #[test]
     fn projection_guard_compares_the_pushed_alternative() -> Result<()> {
         let child = child_schema();
