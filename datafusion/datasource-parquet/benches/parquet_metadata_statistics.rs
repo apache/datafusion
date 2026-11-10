@@ -15,7 +15,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use criterion::{BatchSize, BenchmarkId, Criterion, criterion_group, criterion_main};
 use datafusion_datasource_parquet::metadata::DFParquetMetadata;
 use parquet::arrow::ArrowSchemaConverter;
-use parquet::basic::ColumnOrder;
+use parquet::basic::{ColumnOrder, SortOrder};
 use parquet::data_type::ByteArray;
 use parquet::file::metadata::{
     ColumnChunkMetaData, FileMetaData, ParquetMetaData, RowGroupMetaData,
@@ -159,11 +159,14 @@ fn make_synthetic_metadata(
         })
         .collect::<Vec<_>>();
 
-    // Model a modern writer so byte-array bounds have a trustworthy order.
+    // Model a modern writer so byte-array and floating bounds have a known order.
     let column_orders = schema_descr
         .columns()
         .iter()
-        .map(|column| ColumnOrder::TYPE_DEFINED_ORDER(column.sort_order()))
+        .map(|column| match column.sort_order() {
+            SortOrder::TOTAL_ORDER => ColumnOrder::IEEE_754_TOTAL_ORDER,
+            order => ColumnOrder::TYPE_DEFINED_ORDER(order),
+        })
         .collect();
     let file_metadata = FileMetaData::new(
         1,
@@ -236,6 +239,7 @@ fn statistics(
             let max = max_row.map(|row| value(column_idx, row_group, row) as f64 * 1.5);
             ParquetStatistics::Double(
                 ValueStatistics::new(min, max, None, null_count, false)
+                    .with_nan_count(Some(0))
                     .with_min_is_exact(min_exact)
                     .with_max_is_exact(max_exact),
             )

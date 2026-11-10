@@ -2,13 +2,15 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Regression tests for interpreting Parquet byte-array statistics orders.
+//! Regression tests for interpreting Parquet statistics orders and NaN counts.
 
 use std::io::Write;
 use std::sync::Arc;
 
-use arrow::array::{BooleanArray, record_batch};
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::array::{ArrayRef, BooleanArray, Float64Array, Int32Array, record_batch};
+use arrow::compute::cast;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
+use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use datafusion_common::pruning::{PrunableStatistics, PruningStatistics};
 use datafusion_common::stats::Precision;
@@ -54,6 +56,42 @@ struct TestFile {
 }
 
 impl TestFile {
+    fn floats(values: &[Option<f64>]) -> Self {
+        let row_count = values.len();
+        let values = Float64Array::from(values.to_vec());
+        let batch = RecordBatch::try_from_iter([
+            ("f16", cast(&values, &DataType::Float16).unwrap()),
+            ("f32", cast(&values, &DataType::Float32).unwrap()),
+            ("f64", Arc::new(values) as ArrayRef),
+            (
+                "n",
+                Arc::new(Int32Array::from_iter_values(0..row_count as i32)) as ArrayRef,
+            ),
+        ])
+        .unwrap();
+        let schema = batch.schema();
+        let properties = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(6))
+            .set_data_page_row_count_limit(3)
+            .set_write_batch_size(3)
+            .set_dictionary_enabled(false)
+            .set_statistics_enabled(EnabledStatistics::Page)
+            .build();
+        let mut bytes = Vec::new();
+        let mut writer =
+            ArrowWriter::try_new(&mut bytes, Arc::clone(&schema), Some(properties))
+                .unwrap();
+        writer.write(&batch).unwrap();
+        writer.close().unwrap();
+        let bytes = Bytes::from(bytes);
+        let metadata = Arc::new(read_metadata(&bytes));
+        Self {
+            bytes,
+            schema,
+            metadata,
+        }
+    }
+
     fn new(order: StatisticsOrder) -> Self {
         let batch = record_batch!(
             (
@@ -310,6 +348,296 @@ fn metrics() -> ParquetFileMetrics {
         "statistics-order.parquet",
         &ExecutionPlanMetricsSet::new(),
     )
+}
+
+#[test]
+fn float_nan_counts_preserve_matching_rows_at_every_pruning_level() {
+    // Arrange
+    let file = TestFile::floats(&[
+        Some(-f64::NAN),
+        Some(5.0),
+        Some(f64::NAN),
+        Some(5.0),
+        Some(5.0),
+        Some(5.0),
+        Some(8.0),
+        Some(9.0),
+        None,
+        Some(10.0),
+        Some(11.0),
+        None,
+    ]);
+    let metadata = file.metadata.file_metadata();
+    let row_group_stats = RowGroupPruningStatistics {
+        parquet_schema: metadata.schema_descr(),
+        column_orders: metadata.column_orders().map(Vec::as_slice),
+        row_group_metadatas: file.metadata.row_groups().iter().collect(),
+        arrow_schema: &file.schema,
+    };
+
+    // Act
+    let statistics = file.statistics();
+
+    // Assert
+    for column_index in 0..3 {
+        let field = file.schema.field(column_index);
+        let raw = file
+            .metadata
+            .row_group(0)
+            .column(column_index)
+            .statistics()
+            .unwrap();
+        assert_eq!(raw.nan_count_opt(), Some(2));
+        assert_eq!(raw.null_count_opt(), Some(0));
+        assert_eq!(raw.min_bytes_opt(), raw.max_bytes_opt());
+        assert_eq!(
+            metadata.column_order(column_index),
+            ColumnOrder::IEEE_754_TOTAL_ORDER
+        );
+        for output_type in [
+            field.data_type().clone(),
+            DataType::Dictionary(
+                Box::new(DataType::Int8),
+                Box::new(field.data_type().clone()),
+            ),
+            DataType::Int64,
+        ] {
+            for order in [
+                None,
+                Some(ColumnOrder::UNKNOWN),
+                Some(ColumnOrder::TYPE_DEFINED_ORDER(SortOrder::SIGNED)),
+                Some(ColumnOrder::IEEE_754_TOTAL_ORDER),
+            ] {
+                let orders = order.map(|order| vec![order; 3]);
+                assert_eq!(
+                    has_untrusted_min_max_order(
+                        metadata.schema_descr(),
+                        orders.as_deref(),
+                        column_index,
+                        &output_type,
+                    ),
+                    order != Some(ColumnOrder::IEEE_754_TOTAL_ORDER)
+                        || output_type == DataType::Int64,
+                    "{output_type:?}, {order:?}",
+                );
+            }
+        }
+        let index = file
+            .metadata
+            .page_index()
+            .unwrap()
+            .column_index(0, column_index)
+            .unwrap();
+        assert_eq!(index.nan_counts(), Some(&vec![2, 0]));
+        let stats = &statistics.column_statistics[column_index];
+        assert_eq!(stats.min_value, Precision::Absent);
+        assert_eq!(stats.max_value, Precision::Absent);
+        assert_eq!(stats.null_count, Precision::Exact(2));
+        let column = Column::from_name(field.name());
+        for bounds in [
+            row_group_stats.min_values(&column),
+            row_group_stats.max_values(&column),
+        ] {
+            let bounds = bounds.unwrap();
+            assert!(bounds.is_null(0));
+            assert!(!bounds.is_null(1));
+        }
+
+        let value = |v| {
+            lit(ScalarValue::Float64(Some(v))
+                .cast_to(field.data_type())
+                .unwrap())
+        };
+        for (expr, expected, selected) in [
+            (col(field.name()).lt(value(0.0)), 1, 3),
+            (col(field.name()).gt(value(100.0)), 1, 3),
+            (col(field.name()).not_eq(value(5.0)), 6, 9),
+            (col(field.name()).eq(value(5.0)), 4, 6),
+            (col(field.name()).is_null(), 2, 6),
+        ] {
+            let (physical, predicate) = file.predicate(&expr);
+            let all = ParquetAccessPlan::new_all(2);
+            assert_eq!(
+                file.matching_rows(&physical, all.clone()),
+                expected,
+                "{expr}"
+            );
+            assert!(file.file_matches(&predicate), "{expr}");
+            let row_groups = file.row_group_plan(&predicate);
+            assert!(!row_groups.is_fully_matched(0), "{expr}");
+            assert_eq!(
+                file.matching_rows(&physical, row_groups),
+                expected,
+                "{expr}"
+            );
+            // Start from all groups so row-group pruning cannot hide a page error.
+            let pages = file.page_plan(&physical, all);
+            assert_eq!(
+                file.matching_rows(&physical, pages.clone()),
+                expected,
+                "{expr}"
+            );
+            assert_eq!(
+                pages
+                    .into_inner()
+                    .iter()
+                    .zip(file.metadata.row_groups())
+                    .map(|(access, group)| match access {
+                        crate::RowGroupAccess::Skip => 0,
+                        crate::RowGroupAccess::Scan => group.num_rows() as usize,
+                        crate::RowGroupAccess::Selection(selection) => {
+                            selection.row_count()
+                        }
+                    })
+                    .sum::<usize>(),
+                selected,
+                "{expr}",
+            );
+        }
+    }
+    assert_eq!(
+        statistics.column_statistics[3].min_value,
+        Precision::Exact(ScalarValue::Int32(Some(0))),
+    );
+    assert_eq!(
+        statistics.column_statistics[3].max_value,
+        Precision::Exact(ScalarValue::Int32(Some(11))),
+    );
+    let (physical, predicate) = file.predicate(&col("n").gt(lit(20)));
+    assert!(!file.file_matches(&predicate));
+    assert!(
+        file.row_group_plan(&predicate)
+            .row_group_indexes()
+            .is_empty()
+    );
+    assert!(
+        file.page_plan(&physical, ParquetAccessPlan::new_all(2))
+            .row_group_indexes()
+            .is_empty()
+    );
+}
+
+#[test]
+fn float_nan_counts_require_file_group_and_page_proof() {
+    for omit_counts in [false, true] {
+        // Arrange
+        let mut values = [Some(5.0); 18];
+        if omit_counts {
+            values[0] = Some(f64::NAN);
+        }
+        let mut file = TestFile::floats(&values);
+        if omit_counts {
+            let mut groups = file.metadata.row_groups().to_vec();
+            for row_group in [0, 2] {
+                let mut columns = groups[row_group].columns().to_vec();
+                for column in &mut columns[..3] {
+                    let statistics = match column.statistics().unwrap().clone() {
+                        ParquetStatistics::Float(s) => s.with_nan_count(None).into(),
+                        ParquetStatistics::Double(s) => s.with_nan_count(None).into(),
+                        ParquetStatistics::FixedLenByteArray(s) => {
+                            s.with_nan_count(None).into()
+                        }
+                        _ => unreachable!(),
+                    };
+                    *column = column
+                        .clone()
+                        .into_builder()
+                        .set_statistics(statistics)
+                        .build()
+                        .unwrap();
+                }
+                groups[row_group] = groups[row_group]
+                    .clone()
+                    .into_builder()
+                    .set_column_metadata(columns)
+                    .build()
+                    .unwrap();
+            }
+            let indexes = file.metadata.page_index().unwrap();
+            let mut pages = indexes
+                .as_any()
+                .downcast_ref::<PageIndex>()
+                .unwrap()
+                .clone()
+                .into_builder();
+            for row_group in [0, 1] {
+                for column in 0..3 {
+                    let original = indexes.column_index(row_group, column).unwrap();
+                    let chunk = file.metadata.row_group(row_group).column(column);
+                    let stats = chunk.statistics().unwrap();
+                    let mut index = ColumnIndexBuilder::new(chunk.column_type());
+                    index.set_boundary_order(original.get_boundary_order().unwrap());
+                    // NaNs are excluded, so every page has finite bounds [5, 5].
+                    for page in 0..original.num_pages() as usize {
+                        index.append(
+                            original.is_null_page(page),
+                            stats.min_bytes_opt().unwrap().to_vec(),
+                            stats.max_bytes_opt().unwrap().to_vec(),
+                            original.null_count(page).unwrap(),
+                            None,
+                        );
+                    }
+                    pages.put_column_index(index.build().unwrap(), row_group, column);
+                }
+            }
+            let metadata = file
+                .metadata
+                .as_ref()
+                .clone()
+                .into_builder()
+                .set_row_groups(groups)
+                .set_page_index(Some(Arc::new(pages.build())))
+                .build();
+            // Serialize the missing counts while keeping the real data pages.
+            let mut bytes = Vec::new();
+            let mut tracked = TrackedWrite::new(&mut bytes);
+            tracked
+                .write_all(&file.bytes[..footer_start(&file.bytes)])
+                .unwrap();
+            ParquetMetaDataWriter::new_with_tracked(tracked, &metadata)
+                .finish()
+                .unwrap();
+            file.bytes = Bytes::from(bytes);
+            file.metadata = Arc::new(read_metadata(&file.bytes));
+        }
+
+        // Act
+        let statistics = file.statistics();
+
+        // Assert
+        for column_index in 0..3 {
+            let field = file.schema.field(column_index);
+            let five = ScalarValue::Float64(Some(5.0))
+                .cast_to(field.data_type())
+                .unwrap();
+            let stats = &statistics.column_statistics[column_index];
+            let expected = if omit_counts {
+                Precision::Absent
+            } else {
+                Precision::Exact(five.clone())
+            };
+            assert_eq!(stats.min_value, expected);
+            assert_eq!(stats.max_value, expected);
+            assert_eq!(stats.null_count, Precision::Exact(0));
+            let (physical, predicate) =
+                file.predicate(&col(field.name()).not_eq(lit(five)));
+            assert_eq!(file.file_matches(&predicate), omit_counts);
+            assert_eq!(
+                file.row_group_plan(&predicate).row_group_indexes(),
+                if omit_counts { vec![0, 2] } else { vec![] },
+            );
+            // RG1 proves its pages safe; RG2's pages prove themselves safe.
+            let pages = file.page_plan(&physical, ParquetAccessPlan::new_all(3));
+            assert_eq!(
+                pages.row_group_indexes(),
+                if omit_counts { vec![0] } else { vec![] }
+            );
+            assert_eq!(
+                file.matching_rows(&physical, pages),
+                usize::from(omit_counts),
+            );
+        }
+    }
 }
 
 #[test]
@@ -757,7 +1085,8 @@ fn undefined_int96_order_is_never_trusted() {
             has_untrusted_min_max_order(
                 &schema,
                 order.as_ref().map(std::slice::from_ref),
-                0
+                0,
+                &DataType::Timestamp(TimeUnit::Nanosecond, None),
             ),
             "order={order:?}",
         );
