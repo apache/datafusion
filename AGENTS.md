@@ -80,7 +80,8 @@ and [Review the Performance](docs/source/contributor-guide/pr_review.md#review-t
   a choice that looks wrong is right. Do not restate the code or describe how it changed. To explain a change
   to reviewers, leave an inline PR review comment on the changed line instead. New public items get
   a rustdoc comment with a doctest example where appropriate, and refer to other items with intra-doc
-  links such as `` [`SessionContext`] `` instead of plain names. See
+  links such as `` [`LogicalPlan`] `` instead of plain names. For an item in a crate that depends on the
+  current one, link to its docs.rs URL instead. See
   [Review the Code Comments](docs/source/contributor-guide/pr_review.md#review-the-code-comments).
 
 ### Public API

@@ -95,9 +95,10 @@ Some practical guidelines for reviewing comments:
    code, e.g. "// changed to use a HashMap" or "// this handles the case
    mentioned above"). Such comments become irrelevant as soon as the PR merges.
 3. When comments refer to other structs, functions, or modules, they should use
-   [rustdoc intra-doc links] (e.g. `` [`SessionContext`] ``) rather than plain
+   [rustdoc intra-doc links] (e.g. `` [`LogicalPlan`] ``) rather than plain
    text names, so that `cargo doc` link checking ensures the references stay
-   valid as the code evolves.
+   valid as the code evolves. For an item in a crate that depends on the
+   current one, link to its docs.rs URL instead.
 4. New public APIs have doc comments, including examples where appropriate
    (doc examples are also tested by CI, so they double as test coverage).
 5. When documenting modules, functions, or fields, start with simple examples
