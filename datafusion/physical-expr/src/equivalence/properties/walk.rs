@@ -354,8 +354,10 @@ mod tests {
     };
     use datafusion_expr::{ColumnarValue, Operator, Volatility, create_udf};
 
-    /// With `CAST(c AS DATE) = a`, the ordering `[a, c]` implies `[c]`, whether
-    /// the ordering or the equality comes first.
+    /// With `CAST(c AS DATE) = a`, the ordering `[a, c]` implies `[c]` when
+    /// `a` and `c` have the same sort options, whether the ordering or the
+    /// equality comes first. Otherwise it implies nothing: with
+    /// `[a DESC, c ASC]`, `c` descends across dates and ascends within one.
     #[test]
     fn implied_ordering_does_not_depend_on_call_order() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
@@ -368,22 +370,35 @@ mod tests {
             Arc::new(Field::new("c", DataType::Date32, true)),
             None,
         )) as Arc<dyn PhysicalExpr>;
-        let ordering =
-            [&a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
+        let all_options = [(false, false), (false, true), (true, false), (true, true)]
+            .map(|(descending, nulls_first)| SortOptions::new(descending, nulls_first));
 
-        let mut equality_first = EquivalenceProperties::new(Arc::clone(&schema));
-        equality_first.add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
-        equality_first.add_ordering(ordering.clone());
+        for a_options in all_options {
+            for c_options in all_options {
+                let ordering = [
+                    PhysicalSortExpr::new(Arc::clone(&a), a_options),
+                    PhysicalSortExpr::new(Arc::clone(&c), c_options),
+                ];
 
-        let mut ordering_first = EquivalenceProperties::new(Arc::clone(&schema));
-        ordering_first.add_ordering(ordering);
-        ordering_first.add_equal_conditions(cast_c, Arc::clone(&a))?;
+                let mut equality_first = EquivalenceProperties::new(Arc::clone(&schema));
+                equality_first
+                    .add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
+                equality_first.add_ordering(ordering.clone());
 
-        for properties in [equality_first, ordering_first] {
-            assert!(
-                properties
-                    .ordering_satisfy([PhysicalSortExpr::new_default(Arc::clone(&c))])?
-            );
+                let mut ordering_first = EquivalenceProperties::new(Arc::clone(&schema));
+                ordering_first.add_ordering(ordering);
+                ordering_first
+                    .add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
+
+                let required = [PhysicalSortExpr::new(Arc::clone(&c), c_options)];
+                for properties in [equality_first, ordering_first] {
+                    assert_eq!(
+                        properties.ordering_satisfy(required.clone())?,
+                        a_options == c_options,
+                        "ordering [a {a_options:?}, c {c_options:?}]"
+                    );
+                }
+            }
         }
         Ok(())
     }
