@@ -2093,7 +2093,7 @@ impl<T: BatchTransformer> SymmetricHashJoinStream<T> {
     }
 }
 
-/// Represents the various states of an symmetric hash join stream operation.
+/// Represents the various states of a symmetric hash join stream operation.
 ///
 /// This enum is used to track the current state of streaming during a join
 /// operation. It provides indicators as to which side of the join needs to be

@@ -78,7 +78,7 @@ impl SpillManager {
         Ok(InProgressSpillFile::new(Arc::new(self.clone()), temp_file))
     }
 
-    /// Spill input `batches` into a single file in a atomic operation. If it is
+    /// Spill input `batches` into a single file in an atomic operation. If it is
     /// intended to incrementally write in-memory batches into the same spill file,
     /// use [`Self::create_in_progress_file`] instead.
     /// None is returned if no batches are spilled.
