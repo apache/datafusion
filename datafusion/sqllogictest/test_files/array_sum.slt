@@ -76,14 +76,14 @@ select array_sum(arrow_cast([1.0, 2.0, 3.0], 'List(Float32)'));
 ----
 6
 
-# Int64 inner type (coerced to Float64)
-query R
+# Int64 inner type
+query I
 select array_sum(arrow_cast([1, 2, 3], 'List(Int64)'));
 ----
 6
 
-# Integer literals (coerced to Float64)
-query R
+# Integer literals
+query I
 select array_sum([1, 2, 3]);
 ----
 6
@@ -121,6 +121,85 @@ query RT
 select array_sum([1.0, 2.0, 3.0]), arrow_typeof(array_sum([1.0, 2.0, 3.0]));
 ----
 6 Float64
+
+# The return type follows the `sum` aggregate function
+query TTTTTTTTTTTTT
+select
+  arrow_typeof(array_sum(arrow_cast([1], 'List(Int8)'))),
+  arrow_typeof(array_sum(arrow_cast([1], 'List(Int32)'))),
+  arrow_typeof(array_sum(arrow_cast([1], 'List(Int64)'))),
+  arrow_typeof(array_sum(arrow_cast([1], 'List(UInt8)'))),
+  arrow_typeof(array_sum(arrow_cast([1], 'List(UInt64)'))),
+  arrow_typeof(array_sum(arrow_cast([1], 'List(Float16)'))),
+  arrow_typeof(array_sum(arrow_cast([1], 'List(Float32)'))),
+  arrow_typeof(array_sum(arrow_cast([1], 'List(Decimal32(5, 2))'))),
+  arrow_typeof(array_sum(arrow_cast([1], 'List(Decimal64(10, 2))'))),
+  arrow_typeof(array_sum(arrow_cast([1], 'List(Decimal128(10, 2))'))),
+  arrow_typeof(array_sum(arrow_cast([1], 'List(Decimal128(38, 2))'))),
+  arrow_typeof(array_sum(arrow_cast([1], 'List(Decimal256(40, 2))'))),
+  arrow_typeof(array_sum(arrow_cast([1], 'LargeList(Int32)')));
+----
+Int64 Int64 Int64 UInt64 UInt64 Float64 Float64 Decimal32(9, 2) Decimal64(18, 2) Decimal128(20, 2) Decimal128(38, 2) Decimal256(50, 2) Int64
+
+# Untyped NULLs still sum as Float64
+query TT
+select arrow_typeof(array_sum(NULL)), arrow_typeof(array_sum([NULL, NULL]));
+----
+Float64 Float64
+
+# Integer sums are exact beyond 2^53
+query IIII
+select
+  array_sum([9007199254740993, 1]),
+  array_sum(arrow_cast([9007199254740993, 1], 'LargeList(Int64)')),
+  array_sum(arrow_cast([2147483647, 1], 'List(Int32)')),
+  array_sum(arrow_cast([2147483647, 1], 'FixedSizeList(2, Int32)'));
+----
+9007199254740994 9007199254740994 2147483648 2147483648
+
+# Unsigned integer sums
+query II
+select
+  array_sum(arrow_cast([255, 1], 'List(UInt8)')),
+  array_sum(arrow_cast([18446744073709551614, 1], 'List(UInt64)'));
+----
+256 18446744073709551615
+
+# Integer overflow wraps, as `sum` does
+query II
+select
+  array_sum([9223372036854775807, 1]),
+  array_sum(arrow_cast([18446744073709551615, 1], 'List(UInt64)'));
+----
+-9223372036854775808 0
+
+query I
+select sum(v) from unnest([9223372036854775807, 1]) as t(v);
+----
+-9223372036854775808
+
+# Decimal sums are exact
+query RRR
+select
+  array_sum(arrow_cast([1.5, 2.25, NULL], 'List(Decimal128(10, 2))')),
+  array_sum(arrow_cast(['99999999999999999999999999999999999998', '1'], 'List(Decimal128(38, 0))')),
+  array_sum(arrow_cast(['123456789012345678901234567890.12', '0.01'], 'List(Decimal256(40, 2))'));
+----
+3.75 99999999999999999999999999999999999999 123456789012345678901234567890.13
+
+# Empty, all-NULL, and NULL rows return NULL for integer and decimal arrays
+query IR
+select array_sum(column1), array_sum(arrow_cast(column1, 'List(Decimal128(10, 2))')) from (values
+    (arrow_cast(make_array(1, NULL, 2), 'List(Int64)')),
+    (arrow_cast(make_array(), 'List(Int64)')),
+    (arrow_cast(make_array(NULL, NULL), 'List(Int64)')),
+    (NULL)
+) as t(column1);
+----
+3 3.00
+NULL NULL
+NULL NULL
+NULL NULL
 
 # list_sum alias produces the same result
 query R
