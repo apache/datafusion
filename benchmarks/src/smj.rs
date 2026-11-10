@@ -6,6 +6,7 @@ use crate::util::{BenchmarkRun, CommonOpt, QueryResult};
 use clap::Args;
 use datafusion::physical_plan::execute_stream;
 use datafusion::{error::Result, prelude::SessionContext};
+use datafusion_common::cast::as_int64_array;
 use datafusion_common::instant::Instant;
 use datafusion_common::{DataFusionError, exec_datafusion_err, exec_err};
 
@@ -607,6 +608,24 @@ impl RunOpt {
             );
 
             query_results.push(QueryResult { elapsed, row_count });
+        }
+
+        if query_id == 27 {
+            let mut rows = Vec::with_capacity(1024);
+            let mut stream = execute_stream(physical_plan, ctx.task_ctx())?;
+            while let Some(batch) = stream.next().await {
+                let batch = batch?;
+                let ids = as_int64_array(batch.column(0).as_ref())?;
+                let versions = as_int64_array(batch.column(1).as_ref())?;
+                rows.extend(ids.iter().zip(versions.iter()));
+            }
+            rows.sort_unstable();
+            let expected = (0..1024).map(|id| (Some(id), Some(127)));
+            if rows.into_iter().ne(expected) {
+                return exec_err!(
+                    "Query 27 expected version 127 exactly once for each document ID from 0 through 1023"
+                );
+            }
         }
 
         Ok(query_results)

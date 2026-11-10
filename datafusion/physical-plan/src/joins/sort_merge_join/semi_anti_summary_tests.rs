@@ -23,7 +23,7 @@ use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, NotExpr};
 use futures::StreamExt;
 
-use super::semi_anti_summary::SemiAntiComparison;
+use super::semi_anti_summary::{GroupSummary, SemiAntiComparison};
 use crate::joins::SortMergeJoinExec;
 use crate::joins::utils::{ColumnIndex, JoinFilter};
 use crate::test::TestMemoryExec;
@@ -209,9 +209,8 @@ fn only_single_cross_side_comparisons_are_eligible() -> Result<()> {
                 BooleanArray::from(expected_probe),
                 "inner value 1: NOT {op:?}, outer_is_left={outer_is_left}"
             );
-            let summary = comparison
-                .scan(&[inner.slice(0, 1), inner.slice(1, 2)], &outer, |_| false)?
-                .unwrap();
+            let inner_batches = [inner.slice(0, 1), inner.slice(1, 2)];
+            let summary = comparison.scan(&inner_batches, &outer, |_| false)?.unwrap();
             let expected = match (op, outer_is_left) {
                 (Operator::LtEq, true) | (Operator::GtEq, false) => {
                     vec![false, false, true, true]
@@ -300,10 +299,36 @@ async fn large_strings_produce_the_same_results_when_the_buffer_spills() -> Resu
 async fn not_equal_reserves_both_compact_string_extrema() -> Result<()> {
     let min = "a".repeat(16 * 1024);
     let max = "z".repeat(32 * 1024);
-    let mut values = vec![min.as_str(); 7];
+    let middle = "m".repeat(1024);
+    let mut values = vec![middle.as_str(); 7];
+    values[2] = min.as_str();
     values[6] = max.as_str();
-    let inner = batch(Arc::new(StringArray::from(values)))?;
-    let outer = batch(Arc::new(StringArray::from(vec![min.as_str()])))?;
+    let values = Arc::new(StringArray::from(values));
+    let inner = batch(Arc::clone(&values) as ArrayRef)?;
+    let outer = batch(Arc::new(StringArray::from(vec![middle.as_str()])))?;
+
+    // Until the cache is admitted, even extrema from different batches
+    // borrow their original Arrow payloads.
+    let comparison = SemiAntiComparison::try_new(
+        &filter(
+            binary(column(0), Operator::NotEq, column(1)),
+            DataType::Utf8,
+        ),
+        true,
+        &outer.schema(),
+        &inner.schema(),
+    )?
+    .unwrap();
+    let batches = [inner.slice(0, 4), inner.slice(4, 3)];
+    let Some(GroupSummary::Strings {
+        extreme: Some(lo),
+        other: Some(hi),
+    }) = comparison.scan(&batches, &outer, |_| false)?
+    else {
+        panic!("expected two string extrema");
+    };
+    assert!(std::ptr::eq(lo, values.value(2)));
+    assert!(std::ptr::eq(hi, values.value(6)));
     let plan = join(
         input(&outer, 1)?,
         input(&inner, 7)?,
@@ -315,16 +340,10 @@ async fn not_equal_reserves_both_compact_string_extrema() -> Result<()> {
     let mut stream = plan.execute(0, ctx)?;
     assert_eq!(row_ids(&stream.next().await.transpose()?.unwrap()), [0]);
 
-    let min_bytes = ScalarValue::Utf8(Some(min))
-        .to_array()?
-        .get_array_memory_size();
-    let max_bytes = ScalarValue::Utf8(Some(max))
-        .to_array()?
-        .get_array_memory_size();
     let retained = pool.reserved();
     assert!(
-        retained >= min_bytes + max_bytes,
-        "both Arrow scalars are live"
+        retained >= min.len() + max.len(),
+        "both owned string payloads must be charged"
     );
     assert!(
         retained < inner.get_array_memory_size(),
@@ -352,22 +371,43 @@ async fn oversized_extrema_fall_back_to_the_prorated_buffer() -> Result<()> {
         .div_ceil(inner.num_rows())
         * 7;
     assert!(buffered_size < long.len());
-    let runtime = RuntimeEnvBuilder::new()
-        .with_memory_limit(buffered_size, 1.0)
-        .with_disk_manager_builder(
-            DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
-        )
-        .build_arc()?;
-    let ctx = Arc::new(TaskContext::default().with_runtime(Arc::clone(&runtime)));
-    let plan = join(
-        input(&outer, 1)?,
-        input(&inner, inner.num_rows())?,
-        JoinType::LeftAnti,
-        Operator::NotEq,
-    )?;
-    assert_eq!(ids(&plan, ctx).await?, vec![0]);
-    assert_eq!(plan.metrics().unwrap().spill_count().unwrap(), 0);
-    assert_eq!(runtime.memory_pool.reserved(), 0);
+    for (limit, expect_cache) in [(buffered_size, false), (long.len() * 8, true)] {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(limit, 1.0)
+            .with_disk_manager_builder(
+                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+            )
+            .build_arc()?;
+        let ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(1))
+                .with_runtime(Arc::clone(&runtime)),
+        );
+        let plan = join(
+            input(&outer, 1)?,
+            input(&inner, inner.num_rows())?,
+            JoinType::LeftAnti,
+            Operator::NotEq,
+        )?;
+        let mut stream = plan.execute(0, ctx)?;
+        assert_eq!(row_ids(&stream.next().await.transpose()?.unwrap()), [0]);
+        // At the yield the same key may continue in the next outer batch.
+        let retained = runtime.memory_pool.reserved();
+        if expect_cache {
+            assert!(
+                retained >= long.len(),
+                "owned string extrema must be charged"
+            );
+        } else {
+            assert_eq!(
+                retained, buffered_size,
+                "keep the original group on refusal"
+            );
+        }
+        assert!(stream.next().await.is_none());
+        assert_eq!(plan.metrics().unwrap().spill_count().unwrap(), 0);
+        assert_eq!(runtime.memory_pool.reserved(), 0);
+    }
     Ok(())
 }
 

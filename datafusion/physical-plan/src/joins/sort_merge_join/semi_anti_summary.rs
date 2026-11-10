@@ -11,7 +11,8 @@
 
 use std::cmp::Ordering;
 
-use arrow::array::{Array, ArrayRef, BooleanArray, Datum, RecordBatch, Scalar};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Datum, RecordBatch, Scalar};
+use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::cmp;
 use arrow::compute::or;
 use arrow::datatypes::{DataType, Schema};
@@ -38,26 +39,57 @@ pub(super) struct SemiAntiComparison {
 
 /// Cached once per buffered key group and reused across outer batches.
 #[derive(Debug)]
-pub(super) struct GroupSummary {
-    extreme: Scalar<ArrayRef>,
-    // A not-equal comparison needs both min and max.
-    other: Option<Scalar<ArrayRef>>,
+pub(super) enum GroupSummary<S = Box<str>, N = Scalar<ArrayRef>> {
+    Scalars {
+        extreme: N,
+        other: Option<N>,
+    },
+    Strings {
+        extreme: Option<S>,
+        other: Option<S>,
+    },
 }
 
-impl GroupSummary {
-    fn from_extrema(extreme: &ScalarValue, other: Option<&ScalarValue>) -> Result<Self> {
-        Ok(Self {
-            extreme: extreme.to_scalar()?,
-            other: other.map(ScalarValue::to_scalar).transpose()?,
+/// While scanning, fixed-width values use DataFusion's min/max kernels and
+/// string values borrow directly from the buffered input.
+type RunningExtrema<'a> = GroupSummary<&'a str, ScalarValue>;
+
+impl<'a> RunningExtrema<'a> {
+    fn snapshot(&self) -> Result<GroupSummary<&'a str>> {
+        Ok(match self {
+            Self::Scalars { extreme, other } => GroupSummary::Scalars {
+                extreme: extreme.to_scalar()?,
+                other: other.as_ref().map(ScalarValue::to_scalar).transpose()?,
+            },
+            &Self::Strings { extreme, other } => GroupSummary::Strings { extreme, other },
         })
     }
+}
 
-    /// Inline state and the compact Arrow arrays retained for cached comparisons.
+impl GroupSummary<&str> {
     pub(super) fn memory_size(&self) -> usize {
         let array_size = |value: &Scalar<ArrayRef>| value.get().0.get_array_memory_size();
-        size_of::<Self>()
-            + array_size(&self.extreme)
-            + self.other.as_ref().map_or(0, array_size)
+        size_of::<GroupSummary>()
+            + match self {
+                Self::Scalars { extreme, other } => {
+                    array_size(extreme) + other.as_ref().map_or(0, array_size)
+                }
+                Self::Strings { extreme, other } => {
+                    extreme.map_or(0, str::len) + other.map_or(0, str::len)
+                }
+            }
+    }
+
+    /// String winners borrow the buffered input until the reservation admits
+    /// their exact byte lengths. Fixed-width Arrow scalars are already owned.
+    pub(super) fn into_owned(self) -> GroupSummary {
+        match self {
+            Self::Scalars { extreme, other } => GroupSummary::Scalars { extreme, other },
+            Self::Strings { extreme, other } => GroupSummary::Strings {
+                extreme: extreme.map(Box::from),
+                other: other.map(Box::from),
+            },
+        }
     }
 }
 
@@ -144,12 +176,12 @@ impl SemiAntiComparison {
     /// The callback records the mask for this outer slice and returns true once
     /// every matchable row has a witness. A complete scan returns the exact
     /// summary for later outer slices. An early stop leaves the input buffered.
-    pub(super) fn scan(
+    pub(super) fn scan<'a>(
         &self,
-        batches: &[RecordBatch],
+        batches: &'a [RecordBatch],
         outer: &RecordBatch,
         mut matches_all: impl FnMut(&BooleanArray) -> bool,
-    ) -> Result<Option<GroupSummary>> {
+    ) -> Result<Option<GroupSummary<&'a str>>> {
         let mut probes_left = DIRECT_PROBES;
         for batch in batches {
             let len = probes_left.min(batch.num_rows());
@@ -167,12 +199,21 @@ impl SemiAntiComparison {
         // The probes neither copy string payloads nor build reduction state.
         // Include their values in the first reduction for later outer slices.
         let data_type = batches[0].column(self.inner_column).data_type();
-        let mut extreme = ScalarValue::try_from(data_type)?;
-        let mut other = (self.op == Operator::NotEq).then(|| extreme.clone());
-        type Reduce = fn(&ArrayRef) -> Result<ScalarValue>;
-        let (reduce, order): (Reduce, Ordering) = match self.op {
-            Operator::Lt | Operator::LtEq => (max_batch, Ordering::Greater),
-            _ => (min_batch, Ordering::Less),
+        let wants_max = matches!(self.op, Operator::Lt | Operator::LtEq);
+        let order = if wants_max {
+            Ordering::Greater
+        } else {
+            Ordering::Less
+        };
+        let mut state = if data_type.is_string() {
+            RunningExtrema::Strings {
+                extreme: None,
+                other: None,
+            }
+        } else {
+            let extreme = ScalarValue::try_from(data_type)?;
+            let other = (self.op == Operator::NotEq).then(|| extreme.clone());
+            RunningExtrema::Scalars { extreme, other }
         };
 
         let mut scanned = 0;
@@ -184,46 +225,85 @@ impl SemiAntiComparison {
             while start < column.len() {
                 let len = (checkpoint - scanned).min(column.len() - start);
                 let finished = index + 1 == batches.len() && start + len == column.len();
-                let values = column.slice(start, len);
-                changed |= update_extreme(&mut extreme, reduce(&values)?, order);
-                if let Some(max) = &mut other {
-                    changed |=
-                        update_extreme(max, max_batch(&values)?, Ordering::Greater);
+                match &mut state {
+                    RunningExtrema::Scalars { extreme, other } => {
+                        let values = column.slice(start, len);
+                        let next = if wants_max {
+                            max_batch(&values)?
+                        } else {
+                            min_batch(&values)?
+                        };
+                        changed |= update_extreme(extreme, next, order);
+                        if let Some(max) = other {
+                            changed |= update_extreme(
+                                max,
+                                max_batch(&values)?,
+                                Ordering::Greater,
+                            );
+                        }
+                    }
+                    RunningExtrema::Strings { extreme, other } => {
+                        for value in strings(column).skip(start).take(len).flatten() {
+                            if extreme.is_none_or(|old| value.cmp(old) == order) {
+                                *extreme = Some(value);
+                                changed = true;
+                            }
+                            if self.op == Operator::NotEq
+                                && other.is_none_or(|old| value > old)
+                            {
+                                *other = Some(value);
+                                changed = true;
+                            }
+                        }
+                    }
                 }
                 start += len;
                 scanned += len;
                 if scanned == checkpoint && !finished {
-                    // The prior mask already included any unchanged extrema.
-                    if changed {
-                        let partial =
-                            GroupSummary::from_extrema(&extreme, other.as_ref())?;
-                        if matches_all(&self.evaluate(&partial, outer)?) {
-                            return Ok(None);
-                        }
+                    if changed && matches_all(&self.evaluate(&state.snapshot()?, outer)?)
+                    {
+                        return Ok(None);
                     }
                     changed = false;
                     checkpoint = checkpoint.saturating_mul(2);
                 }
             }
         }
-        // Reuse compact Arrow scalars across outer batches. A cached comparison
-        // with a long string must not copy that string into a new Arrow buffer.
-        let summary = GroupSummary::from_extrema(&extreme, other.as_ref())?;
+        let summary = state.snapshot()?;
         if changed {
             matches_all(&self.evaluate(&summary, outer)?);
         }
         Ok(Some(summary))
     }
 
-    pub(super) fn evaluate(
+    pub(super) fn evaluate<S: AsRef<str>>(
         &self,
-        summary: &GroupSummary,
+        summary: &GroupSummary<S>,
         outer: &RecordBatch,
     ) -> Result<BooleanArray> {
-        let matched = self.compare(&summary.extreme, outer)?;
-        match &summary.other {
-            Some(other) => Ok(or(&matched, &self.compare(other, outer)?)?),
-            None => Ok(matched),
+        match summary {
+            GroupSummary::Scalars { extreme, other } => {
+                let matched = self.compare(extreme, outer)?;
+                match other {
+                    Some(other) => Ok(or(&matched, &self.compare(other, outer)?)?),
+                    None => Ok(matched),
+                }
+            }
+            GroupSummary::Strings { extreme, other } => {
+                let extreme = extreme.as_ref().map(AsRef::as_ref);
+                let other = other.as_ref().map(AsRef::as_ref);
+                let hits = strings(outer.column(self.outer_column)).map(|value| {
+                    value.zip(extreme).is_some_and(|(x, y)| match self.op {
+                        Operator::Lt => x < y,
+                        Operator::LtEq => x <= y,
+                        Operator::Gt => x > y,
+                        Operator::GtEq => x >= y,
+                        Operator::NotEq => x != y || other.is_some_and(|z| x != z),
+                        _ => unreachable!("invalid semi/anti summary comparison"),
+                    })
+                });
+                Ok(BooleanArray::new(BooleanBuffer::from_iter(hits), None))
+            }
         }
     }
 
@@ -254,8 +334,16 @@ impl SemiAntiComparison {
     }
 }
 
-/// Move a winning batch extremum into place. A losing batch never clones the
-/// running winner, which may be a long string accumulated many batches ago.
+fn strings(column: &ArrayRef) -> Box<dyn Iterator<Item = Option<&str>> + '_> {
+    match column.data_type() {
+        DataType::Utf8 => Box::new(column.as_string::<i32>().iter()),
+        DataType::LargeUtf8 => Box::new(column.as_string::<i64>().iter()),
+        DataType::Utf8View => Box::new(column.as_string_view().iter()),
+        _ => unreachable!("expected a string column"),
+    }
+}
+
+/// Update a fixed-width extremum, ignoring NULLs.
 fn update_extreme(current: &mut ScalarValue, next: ScalarValue, order: Ordering) -> bool {
     if !next.is_null() && (current.is_null() || next.partial_cmp(current) == Some(order))
     {

@@ -840,15 +840,21 @@ impl BitwiseSortMergeJoinStream {
                 == matchable
         })?;
         if let Some(values) = values {
-            // A sliced string group can own extrema larger than its prorated
-            // buffer charge. Keep the buffer for later slices if resizing fails.
-            // The scan already produced the exact mask for this outer slice.
-            if self.reservation.try_resize(values.memory_size()).is_err() {
+            let retained = values.memory_size();
+            // A string prefix borrows the input. Admit its compact copy alongside
+            // the buffer before allocating it. On refusal the mask is already
+            // exact for this slice and later slices can still use the buffer.
+            let admitted = match values {
+                GroupSummary::Strings { .. } => self.reservation.try_grow(retained),
+                GroupSummary::Scalars { .. } => self.reservation.try_resize(retained),
+            };
+            if admitted.is_err() {
                 return Ok(false);
             }
             self.peak_mem_used.set_max(self.reservation.size());
+            *summary = Some(Box::new(values.into_owned()));
             self.clear_inner_key_group();
-            *summary = Some(Box::new(values));
+            self.reservation.resize(retained);
         }
         Ok(true)
     }
