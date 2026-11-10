@@ -64,8 +64,6 @@ mod tests {
         let ffi_task_ctx_provider =
             FFI_TaskContextProvider::from(&host_task_ctx_provider);
 
-        // The codec itself is produced inside a genuinely separate copy of
-        // this crate's cdylib, loaded through `libloading`.
         let foreign_ffi_codec =
             get_scalar_subquery_expr_exec_codec(ffi_task_ctx_provider)?;
         let foreign_codec: Arc<dyn PhysicalExtensionCodec> = (&foreign_ffi_codec).into();
@@ -76,10 +74,6 @@ mod tests {
             "codec built inside the dlopen'd cdylib must be seen as foreign"
         );
 
-        // The production entry point: calling `try_decode_with_ctx` directly
-        // on the foreign `Arc<dyn PhysicalExtensionCodec>` is exactly what
-        // `PhysicalPlanDecodeContext`-aware decoding does for any extension
-        // plan, foreign or not - there is no separate test-only path here.
         let task_ctx = ctx.task_ctx();
         let decode_ctx =
             PhysicalPlanDecodeContext::new(task_ctx.as_ref(), foreign_codec.as_ref())
@@ -104,10 +98,6 @@ mod tests {
             "expected the decoded plan to be a ForeignExecutionPlan"
         );
 
-        // Executing the foreign plan crosses back into the cdylib, where the
-        // decoded ScalarSubqueryExpr reads through
-        // ForeignScalarSubqueryResultsBackend into this test's `results`,
-        // and the value crosses back out as a RecordBatch.
         let stream = decoded.execute(0, task_ctx)?;
         let batches: Vec<RecordBatch> =
             datafusion_physical_plan::common::collect(stream).await?;
