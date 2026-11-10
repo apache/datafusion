@@ -190,3 +190,106 @@ RESET datafusion.execution.batch_size;
 
 statement ok
 DROP TABLE agg_filter_wide;
+
+# Boolean input columns keep these FILTERs observable at execution time.
+# In particular, keep_nullable has no false values, but its NULLs must reject
+# rows before division. Repeated batches exercise cached argument types.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.execution.batch_size = 4;
+
+statement ok
+CREATE TABLE agg_filter_masks AS
+SELECT
+  value AS g,
+  CASE WHEN value % 2 = 0 THEN 0 ELSE 5 END AS v,
+  value > 0 AS keep_all,
+  value < 0 AS keep_none,
+  CASE WHEN value > 0 THEN NULL ELSE false END AS keep_null,
+  CASE WHEN value % 2 = 0 THEN NULL ELSE true END AS keep_nullable
+FROM generate_series(1, 32);
+
+query IIRIIIIIII
+SELECT
+  count(*) FILTER (WHERE keep_all),
+  sum(v) FILTER (WHERE keep_all),
+  avg(CAST(v AS DECIMAL(10, 2))) FILTER (WHERE keep_all),
+  count(*) FILTER (WHERE keep_none),
+  sum(10 / v) FILTER (WHERE keep_none),
+  sum(10 / v) FILTER (WHERE keep_null),
+  count(*) FILTER (WHERE keep_nullable),
+  sum(10 / v) FILTER (WHERE keep_nullable),
+  sum(7) FILTER (WHERE keep_nullable),
+  count(v) FILTER (WHERE keep_nullable)
+FROM agg_filter_masks;
+----
+32 80 2.500000 0 NULL NULL 16 32 112 16
+
+# Ordinary grouped aggregation handles empty and complete selections.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 100000;
+
+query IIIRIIIIIII
+SELECT count(*), sum(c1), sum(s1), avg(a1), sum(c0), sum(s0), sum(sn), sum(cn), sum(ss), sum(sl), sum(cv)
+FROM (
+  SELECT g,
+    count(*) FILTER (WHERE keep_all) AS c1,
+    sum(v) FILTER (WHERE keep_all) AS s1,
+    avg(CAST(v AS DECIMAL(10, 2))) FILTER (WHERE keep_all) AS a1,
+    count(*) FILTER (WHERE keep_none) AS c0,
+    sum(10 / v) FILTER (WHERE keep_none) AS s0,
+    sum(10 / v) FILTER (WHERE keep_null) AS sn,
+    count(*) FILTER (WHERE keep_nullable) AS cn,
+    sum(10 / v) FILTER (WHERE keep_nullable) AS ss,
+    sum(7) FILTER (WHERE keep_nullable) AS sl,
+    count(v) FILTER (WHERE keep_nullable) AS cv
+  FROM agg_filter_masks
+  GROUP BY g
+);
+----
+32 32 80 2.5000000000 0 NULL NULL 16 32 112 16
+
+# Skip-partial must preserve row positions for the same selections. Decimal
+# AVG also exercises an argument type different from the aggregate output.
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+
+query IIIRIIIIIII
+SELECT count(*), sum(c1), sum(s1), avg(a1), sum(c0), sum(s0), sum(sn), sum(cn), sum(ss), sum(sl), sum(cv)
+FROM (
+  SELECT g,
+    count(*) FILTER (WHERE keep_all) AS c1,
+    sum(v) FILTER (WHERE keep_all) AS s1,
+    avg(CAST(v AS DECIMAL(10, 2))) FILTER (WHERE keep_all) AS a1,
+    count(*) FILTER (WHERE keep_none) AS c0,
+    sum(10 / v) FILTER (WHERE keep_none) AS s0,
+    sum(10 / v) FILTER (WHERE keep_null) AS sn,
+    count(*) FILTER (WHERE keep_nullable) AS cn,
+    sum(10 / v) FILTER (WHERE keep_nullable) AS ss,
+    sum(7) FILTER (WHERE keep_nullable) AS sl,
+    count(v) FILTER (WHERE keep_nullable) AS cv
+  FROM agg_filter_masks
+  GROUP BY g
+);
+----
+32 32 80 2.5000000000 0 NULL NULL 16 32 112 16
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold;
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_rows_threshold;
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+DROP TABLE agg_filter_masks;

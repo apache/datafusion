@@ -288,12 +288,18 @@ impl AggregateStream {
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(context))?;
+        let input_schema = input.schema();
 
         let aggregate_arguments: Vec<Vec<_>> =
             aggregate_expressions(agg.aggr_expr(), &agg.mode, 0)?
                 .into_iter()
-                .map(|exprs| exprs.into_iter().map(AggregateArgument::new).collect())
-                .collect();
+                .map(|exprs| {
+                    exprs
+                        .into_iter()
+                        .map(|expr| AggregateArgument::try_new(expr, &input_schema))
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<_>>()?;
         let filters = match agg.mode.input_mode() {
             AggregateInputMode::Raw => agg_filter_expr
                 .iter()
