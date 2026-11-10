@@ -5,9 +5,15 @@
 use std::fmt::Write as _;
 use std::{collections::HashMap, sync::Arc};
 
+use super::ast::{data_type, data_type_with_args, data_type_with_suffix, function};
+use super::keywords::KEYWORDS;
 use super::{
     Unparser, utils::character_length_to_sql, utils::date_part_to_sql,
     utils::sqlite_date_trunc_to_sql, utils::sqlite_from_unixtime_to_sql,
+};
+use crate::ast::{
+    self, BinaryOp, CastStyle, DataType, DataTypeSuffix, ExprKind, FrameBound,
+    FunctionArg, Quantifier, SpecialExpr,
 };
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
@@ -15,16 +21,9 @@ use chrono::DateTime;
 use datafusion_common::{Result, internal_err};
 use datafusion_expr::Expr;
 use regex::Regex;
-use sqlparser::tokenizer::Span;
-use sqlparser::{
-    ast::{
-        self, BinaryOperator, Function, Ident, ObjectName, TimezoneInfo, WindowFrameBound,
-    },
-    keywords::ALL_KEYWORDS,
-};
 
 pub type ScalarFnToSqlHandler =
-    Box<dyn Fn(&Unparser, &[Expr]) -> Result<Option<ast::Expr>> + Send + Sync>;
+    Box<dyn Fn(&Unparser, &[Expr]) -> Result<Option<ast::Expr<'static>>> + Send + Sync>;
 
 /// `Dialect` to use for Unparsing
 ///
@@ -61,20 +60,20 @@ pub trait Dialect: Send + Sync {
 
     /// Does the dialect use DOUBLE PRECISION to represent Float64 rather than DOUBLE?
     /// E.g. Postgres uses DOUBLE PRECISION instead of DOUBLE
-    fn float64_ast_dtype(&self) -> ast::DataType {
-        ast::DataType::Double(ast::ExactNumberInfo::None)
+    fn float64_ast_dtype(&self) -> DataType<'static> {
+        data_type("DOUBLE")
     }
 
     /// The SQL type to use for Arrow Utf8 unparsing
     /// Most dialects use VARCHAR, but some, like MySQL, require CHAR
-    fn utf8_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Varchar(None)
+    fn utf8_cast_dtype(&self) -> DataType<'static> {
+        data_type("VARCHAR")
     }
 
     /// The SQL type to use for Arrow LargeUtf8 unparsing
     /// Most dialects use TEXT, but some, like MySQL, require CHAR
-    fn large_utf8_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Text
+    fn large_utf8_cast_dtype(&self) -> DataType<'static> {
+        data_type("TEXT")
     }
 
     /// The date field extract style to use: `DateFieldExtractStyle`
@@ -94,50 +93,50 @@ pub trait Dialect: Send + Sync {
 
     /// The SQL type to use for Arrow Int64 unparsing
     /// Most dialects use BigInt, but some, like MySQL, require SIGNED
-    fn int64_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::BigInt(None)
+    fn int64_cast_dtype(&self) -> DataType<'static> {
+        data_type("BIGINT")
     }
 
     /// The SQL type to use for Arrow Int8 unparsing
     /// Most dialects use TinyInt, but PostgreSQL prefers SmallInt
-    fn int8_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::TinyInt(None)
+    fn int8_cast_dtype(&self) -> DataType<'static> {
+        data_type("TINYINT")
     }
 
     /// The SQL type to use for Arrow Int32 unparsing
     /// Most dialects use Integer, but some, like MySQL, require SIGNED
-    fn int32_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Integer(None)
+    fn int32_cast_dtype(&self) -> DataType<'static> {
+        data_type("INTEGER")
     }
 
     /// The SQL type to use for Arrow Int16 unparsing
     /// Most dialects use SmallInt, but some, like MySQL, require SIGNED
-    fn int16_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::SmallInt(None)
+    fn int16_cast_dtype(&self) -> DataType<'static> {
+        data_type("SMALLINT")
     }
 
     /// The SQL type to use for Arrow UInt8 unparsing
     /// Most dialects use TinyIntUnsigned, but some, like MySQL, require UNSIGNED
-    fn uint8_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::TinyIntUnsigned(None)
+    fn uint8_cast_dtype(&self) -> DataType<'static> {
+        data_type_with_suffix("TINYINT", DataTypeSuffix::Unsigned)
     }
 
     /// The SQL type to use for Arrow UInt16 unparsing
     /// Most dialects use SmallIntUnsigned, but some, like MySQL, require UNSIGNED
-    fn uint16_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::SmallIntUnsigned(None)
+    fn uint16_cast_dtype(&self) -> DataType<'static> {
+        data_type_with_suffix("SMALLINT", DataTypeSuffix::Unsigned)
     }
 
     /// The SQL type to use for Arrow UInt32 unparsing
     /// Most dialects use IntegerUnsigned, but some, like MySQL, require UNSIGNED
-    fn uint32_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::IntegerUnsigned(None)
+    fn uint32_cast_dtype(&self) -> DataType<'static> {
+        data_type_with_suffix("INTEGER", DataTypeSuffix::Unsigned)
     }
 
     /// The SQL type to use for Arrow UInt64 unparsing
     /// Most dialects use BigIntUnsigned, but some, like MySQL, require UNSIGNED
-    fn uint64_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::BigIntUnsigned(None)
+    fn uint64_cast_dtype(&self) -> DataType<'static> {
+        data_type_with_suffix("BIGINT", DataTypeSuffix::Unsigned)
     }
 
     /// The SQL type to use for Timestamp unparsing
@@ -147,19 +146,17 @@ pub trait Dialect: Send + Sync {
         &self,
         _time_unit: &TimeUnit,
         tz: &Option<Arc<str>>,
-    ) -> ast::DataType {
-        let tz_info = match tz {
-            Some(_) => TimezoneInfo::WithTimeZone,
-            None => TimezoneInfo::None,
-        };
-
-        ast::DataType::Timestamp(None, tz_info)
+    ) -> DataType<'static> {
+        match tz {
+            Some(_) => data_type_with_suffix("TIMESTAMP", DataTypeSuffix::WithTimeZone),
+            None => data_type("TIMESTAMP"),
+        }
     }
 
     /// The SQL type to use for Arrow Date32 unparsing
     /// Most dialects use Date, but some, like SQLite require TEXT
-    fn date32_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Date
+    fn date32_cast_dtype(&self) -> DataType<'static> {
+        data_type("DATE")
     }
 
     /// Does the dialect support specifying column aliases as part of alias table definition?
@@ -175,10 +172,10 @@ pub trait Dialect: Send + Sync {
     }
 
     /// The division operator for the dialect
-    /// Most dialect uses ` BinaryOperator::Divide` (/)
-    /// But DuckDB dialect uses `BinaryOperator::DuckIntegerDivide` (//)
-    fn division_operator(&self) -> BinaryOperator {
-        BinaryOperator::Divide
+    /// Most dialect uses `BinaryOp::Div` (/)
+    /// But DuckDB dialect uses `BinaryOp::Named("//".into())` (//)
+    fn division_operator(&self) -> BinaryOp<'static> {
+        BinaryOp::Div
     }
 
     /// Allows the dialect to override scalar function unparsing if the dialect has specific rules.
@@ -189,7 +186,7 @@ pub trait Dialect: Send + Sync {
         _unparser: &Unparser,
         _func_name: &str,
         _args: &[Expr],
-    ) -> Result<Option<ast::Expr>> {
+    ) -> Result<Option<ast::Expr<'static>>> {
         Ok(None)
     }
 
@@ -201,7 +198,7 @@ pub trait Dialect: Send + Sync {
         _unparser: &Unparser,
         _func_name: &str,
         _args: &[Expr],
-    ) -> Result<Option<ast::Expr>> {
+    ) -> Result<Option<ast::Expr<'static>>> {
         Ok(None)
     }
 
@@ -211,8 +208,8 @@ pub trait Dialect: Send + Sync {
     fn window_func_support_window_frame(
         &self,
         _func_name: &str,
-        _start_bound: &WindowFrameBound,
-        _end_bound: &WindowFrameBound,
+        _start_bound: &FrameBound<'_>,
+        _end_bound: &FrameBound<'_>,
     ) -> bool {
         true
     }
@@ -237,11 +234,11 @@ pub trait Dialect: Send + Sync {
         false
     }
 
-    /// Allow to unparse the unnest plan as [ast::TableFactor::UNNEST].
+    /// Allow to unparse the unnest plan as `UNNEST` in `FROM`.
     ///
     /// Some dialects like BigQuery require UNNEST to be used in the FROM clause but
     /// the LogicalPlan planner always puts UNNEST in the SELECT clause. This flag allows
-    /// to unparse the UNNEST plan as [ast::TableFactor::UNNEST] instead of a subquery.
+    /// to unparse the UNNEST plan as `UNNEST` in `FROM` instead of a subquery.
     fn unnest_as_table_factor(&self) -> bool {
         false
     }
@@ -311,7 +308,7 @@ pub trait Dialect: Send + Sync {
     ///
     /// For example, MSSQL requires non-ASCII strings to use national string
     /// literal syntax (`N'datafusion資料融合'`).
-    fn string_literal_to_sql(&self, _s: &str) -> Option<ast::Expr> {
+    fn string_literal_to_sql(&self, _s: &str) -> Option<ast::Expr<'static>> {
         None
     }
 }
@@ -375,7 +372,8 @@ impl Dialect for DefaultDialect {
         // ID is a keyword in ClickHouse, but we don't want to quote it when unparsing SQL here
         // Also quote identifiers with uppercase letters since unquoted identifiers are
         // normalized to lowercase by the SQL parser, which would break case-sensitive schemas
-        let needs_quote = (id_upper != "ID" && ALL_KEYWORDS.contains(&id_upper.as_str()))
+        let needs_quote = (id_upper != "ID"
+            && KEYWORDS.binary_search(&id_upper.as_str()).is_ok())
             || !identifier_regex.is_match(identifier)
             || identifier.chars().any(|c| c.is_ascii_uppercase());
         if needs_quote { Some('"') } else { None }
@@ -409,12 +407,12 @@ impl Dialect for PostgreSqlDialect {
         IntervalStyle::PostgresVerbose
     }
 
-    fn float64_ast_dtype(&self) -> ast::DataType {
-        ast::DataType::DoublePrecision
+    fn float64_ast_dtype(&self) -> DataType<'static> {
+        data_type_with_suffix("DOUBLE", DataTypeSuffix::Precision)
     }
 
-    fn int8_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::SmallInt(None)
+    fn int8_cast_dtype(&self) -> DataType<'static> {
+        data_type("SMALLINT")
     }
 
     fn distinct_from_style(&self) -> DistinctFromStyle {
@@ -426,7 +424,7 @@ impl Dialect for PostgreSqlDialect {
         unparser: &Unparser,
         func_name: &str,
         args: &[Expr],
-    ) -> Result<Option<ast::Expr>> {
+    ) -> Result<Option<ast::Expr<'static>>> {
         if func_name == "array_has" {
             return self.array_has_to_sql_any(unparser, args);
         }
@@ -446,19 +444,22 @@ impl PostgreSqlDialect {
         &self,
         unparser: &Unparser,
         args: &[Expr],
-    ) -> Result<Option<ast::Expr>> {
+    ) -> Result<Option<ast::Expr<'static>>> {
         let [haystack, needle] = args else {
             return internal_err!("array_has expected 2 arguments, got {}", args.len());
         };
 
-        Ok(Some(ast::Expr::AnyOp {
-            // Recurse through the annotated entry point so the stack-growth
-            // protection engages on nested arguments; see issue #23056.
-            left: Box::new(unparser.expr_to_sql_with_nesting(needle)?),
-            compare_op: BinaryOperator::Eq,
-            right: Box::new(unparser.expr_to_sql_with_nesting(haystack)?),
-            is_some: false,
-        }))
+        Ok(Some(
+            ExprKind::Special(Box::new(SpecialExpr::Quantified {
+                // Recurse through the annotated entry point so the stack-growth
+                // protection engages on nested arguments; see issue #23056.
+                left: unparser.expr_to_sql_with_nesting(needle)?,
+                op: BinaryOp::Eq,
+                quantifier: Quantifier::Any,
+                right: unparser.expr_to_sql_with_nesting(haystack)?,
+            }))
+            .into(),
+        ))
     }
 
     fn round_to_sql_enforce_numeric(
@@ -466,45 +467,26 @@ impl PostgreSqlDialect {
         unparser: &Unparser,
         func_name: &str,
         args: &[Expr],
-    ) -> Result<ast::Expr> {
+    ) -> Result<ast::Expr<'static>> {
         let mut args = unparser.function_args_to_sql(args)?;
 
         // Enforce the first argument to be Numeric
-        if let Some(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(expr))) =
-            args.first_mut()
-        {
-            if let ast::Expr::Cast { data_type, .. } = expr {
+        if let Some(FunctionArg::Expr(expr)) = args.first_mut() {
+            if let ExprKind::Cast { ty, .. } = &mut expr.kind {
                 // Don't create an additional cast wrapper if we can update the existing one
-                *data_type = ast::DataType::Numeric(ast::ExactNumberInfo::None);
+                **ty = data_type("NUMERIC");
             } else {
                 // Wrap the expression in a new cast
-                *expr = ast::Expr::Cast {
-                    kind: ast::CastKind::Cast,
+                *expr = ExprKind::Cast {
                     expr: Box::new(expr.clone()),
-                    data_type: ast::DataType::Numeric(ast::ExactNumberInfo::None),
-                    format: None,
-                };
+                    ty: Box::new(data_type("NUMERIC")),
+                    style: CastStyle::Function,
+                }
+                .into();
             }
         }
 
-        Ok(ast::Expr::Function(Function {
-            name: ObjectName::from(vec![Ident {
-                value: func_name.to_string(),
-                quote_style: None,
-                span: Span::empty(),
-            }]),
-            args: ast::FunctionArguments::List(ast::FunctionArgumentList {
-                duplicate_treatment: None,
-                args,
-                clauses: vec![],
-            }),
-            filter: None,
-            null_treatment: None,
-            over: None,
-            within_group: vec![],
-            parameters: ast::FunctionArguments::None,
-            uses_odbc_syntax: false,
-        }))
+        Ok(function(func_name, args))
     }
 }
 
@@ -531,8 +513,8 @@ impl Dialect for DuckDBDialect {
         CharacterLengthStyle::Length
     }
 
-    fn division_operator(&self) -> BinaryOperator {
-        BinaryOperator::DuckIntegerDivide
+    fn division_operator(&self) -> BinaryOp<'static> {
+        BinaryOp::Named("//".into())
     }
 
     fn with_custom_scalar_overrides(
@@ -551,7 +533,7 @@ impl Dialect for DuckDBDialect {
         unparser: &Unparser,
         func_name: &str,
         args: &[Expr],
-    ) -> Result<Option<ast::Expr>> {
+    ) -> Result<Option<ast::Expr<'static>>> {
         if let Some(handler) = self.custom_scalar_fn_overrides.get(func_name) {
             return handler(unparser, args);
         }
@@ -591,12 +573,12 @@ impl Dialect for MySqlDialect {
         IntervalStyle::MySQL
     }
 
-    fn utf8_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Char(None)
+    fn utf8_cast_dtype(&self) -> DataType<'static> {
+        data_type("CHAR")
     }
 
-    fn large_utf8_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Char(None)
+    fn large_utf8_cast_dtype(&self) -> DataType<'static> {
+        data_type("CHAR")
     }
 
     fn date_field_extract_style(&self) -> DateFieldExtractStyle {
@@ -607,49 +589,52 @@ impl Dialect for MySqlDialect {
         DistinctFromStyle::Spaceship
     }
 
-    fn int64_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
+    fn int64_cast_dtype(&self) -> DataType<'static> {
+        data_type("SIGNED")
     }
 
-    fn int32_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
+    fn int32_cast_dtype(&self) -> DataType<'static> {
+        data_type("SIGNED")
     }
 
-    fn int8_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
+    fn int8_cast_dtype(&self) -> DataType<'static> {
+        data_type("SIGNED")
     }
 
-    fn int16_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Custom(ObjectName::from(vec![Ident::new("SIGNED")]), vec![])
+    fn int16_cast_dtype(&self) -> DataType<'static> {
+        data_type("SIGNED")
     }
 
-    fn uint8_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Custom(ObjectName::from(vec![Ident::new("UNSIGNED")]), vec![])
+    fn uint8_cast_dtype(&self) -> DataType<'static> {
+        data_type("UNSIGNED")
     }
 
-    fn uint16_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Custom(ObjectName::from(vec![Ident::new("UNSIGNED")]), vec![])
+    fn uint16_cast_dtype(&self) -> DataType<'static> {
+        data_type("UNSIGNED")
     }
 
-    fn uint32_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Custom(ObjectName::from(vec![Ident::new("UNSIGNED")]), vec![])
+    fn uint32_cast_dtype(&self) -> DataType<'static> {
+        data_type("UNSIGNED")
     }
 
-    fn uint64_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Custom(ObjectName::from(vec![Ident::new("UNSIGNED")]), vec![])
+    fn uint64_cast_dtype(&self) -> DataType<'static> {
+        data_type("UNSIGNED")
     }
 
     fn timestamp_cast_dtype(
         &self,
         time_unit: &TimeUnit,
         _tz: &Option<Arc<str>>,
-    ) -> ast::DataType {
+    ) -> DataType<'static> {
         let precision = match time_unit {
             TimeUnit::Second => None,
             TimeUnit::Millisecond => Some(3),
             TimeUnit::Microsecond | TimeUnit::Nanosecond => Some(6),
         };
-        ast::DataType::Datetime(precision)
+        match precision {
+            Some(precision) => data_type_with_args("DATETIME", &[precision]),
+            None => data_type("DATETIME"),
+        }
     }
 
     fn requires_derived_table_alias(&self) -> bool {
@@ -661,7 +646,7 @@ impl Dialect for MySqlDialect {
         unparser: &Unparser,
         func_name: &str,
         args: &[Expr],
-    ) -> Result<Option<ast::Expr>> {
+    ) -> Result<Option<ast::Expr<'static>>> {
         if func_name == "date_part" {
             return date_part_to_sql(unparser, self.date_field_extract_style(), args);
         }
@@ -690,8 +675,8 @@ impl Dialect for SqliteDialect {
         DateFieldExtractStyle::Strftime
     }
 
-    fn date32_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::Text
+    fn date32_cast_dtype(&self) -> DataType<'static> {
+        data_type("TEXT")
     }
 
     fn character_length_style(&self) -> CharacterLengthStyle {
@@ -710,8 +695,8 @@ impl Dialect for SqliteDialect {
         &self,
         _time_unit: &TimeUnit,
         _tz: &Option<Arc<str>>,
-    ) -> ast::DataType {
-        ast::DataType::Text
+    ) -> DataType<'static> {
+        data_type("TEXT")
     }
 
     fn scalar_function_to_sql_overrides(
@@ -719,7 +704,7 @@ impl Dialect for SqliteDialect {
         unparser: &Unparser,
         func_name: &str,
         args: &[Expr],
-    ) -> Result<Option<ast::Expr>> {
+    ) -> Result<Option<ast::Expr<'static>>> {
         match func_name {
             "date_part" => {
                 date_part_to_sql(unparser, self.date_field_extract_style(), args)
@@ -773,24 +758,24 @@ impl Dialect for BigQueryDialect {
         false
     }
 
-    fn float64_ast_dtype(&self) -> ast::DataType {
-        ast::DataType::Float64
+    fn float64_ast_dtype(&self) -> DataType<'static> {
+        data_type("FLOAT64")
     }
 
-    fn utf8_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::String(None)
+    fn utf8_cast_dtype(&self) -> DataType<'static> {
+        data_type("STRING")
     }
 
-    fn large_utf8_cast_dtype(&self) -> ast::DataType {
-        ast::DataType::String(None)
+    fn large_utf8_cast_dtype(&self) -> DataType<'static> {
+        data_type("STRING")
     }
 
     fn timestamp_cast_dtype(
         &self,
         _time_unit: &TimeUnit,
         _tz: &Option<Arc<str>>,
-    ) -> ast::DataType {
-        ast::DataType::Timestamp(None, TimezoneInfo::None)
+    ) -> DataType<'static> {
+        data_type("TIMESTAMP")
     }
 
     fn date_field_extract_style(&self) -> DateFieldExtractStyle {
@@ -806,7 +791,7 @@ impl Dialect for BigQueryDialect {
         unparser: &Unparser,
         func_name: &str,
         args: &[Expr],
-    ) -> Result<Option<ast::Expr>> {
+    ) -> Result<Option<ast::Expr<'static>>> {
         if func_name == "date_part" {
             return date_part_to_sql(unparser, self.date_field_extract_style(), args);
         }
@@ -867,11 +852,11 @@ impl Dialect for SnowflakeDialect {
         &self,
         _time_unit: &TimeUnit,
         tz: &Option<Arc<str>>,
-    ) -> ast::DataType {
+    ) -> DataType<'static> {
         if tz.is_some() {
-            ast::DataType::Timestamp(None, TimezoneInfo::WithTimeZone)
+            data_type_with_suffix("TIMESTAMP", DataTypeSuffix::WithTimeZone)
         } else {
-            ast::DataType::Timestamp(None, TimezoneInfo::None)
+            data_type("TIMESTAMP")
         }
     }
 
@@ -885,25 +870,25 @@ pub struct CustomDialect {
     supports_nulls_first_in_sort: bool,
     use_timestamp_for_date64: bool,
     interval_style: IntervalStyle,
-    float64_ast_dtype: ast::DataType,
-    utf8_cast_dtype: ast::DataType,
-    large_utf8_cast_dtype: ast::DataType,
+    float64_ast_dtype: DataType<'static>,
+    utf8_cast_dtype: DataType<'static>,
+    large_utf8_cast_dtype: DataType<'static>,
     date_field_extract_style: DateFieldExtractStyle,
     character_length_style: CharacterLengthStyle,
-    int8_cast_dtype: ast::DataType,
-    int64_cast_dtype: ast::DataType,
-    int32_cast_dtype: ast::DataType,
-    int16_cast_dtype: ast::DataType,
-    uint8_cast_dtype: ast::DataType,
-    uint16_cast_dtype: ast::DataType,
-    uint32_cast_dtype: ast::DataType,
-    uint64_cast_dtype: ast::DataType,
-    timestamp_cast_dtype: ast::DataType,
-    timestamp_tz_cast_dtype: ast::DataType,
-    date32_cast_dtype: ast::DataType,
+    int8_cast_dtype: DataType<'static>,
+    int64_cast_dtype: DataType<'static>,
+    int32_cast_dtype: DataType<'static>,
+    int16_cast_dtype: DataType<'static>,
+    uint8_cast_dtype: DataType<'static>,
+    uint16_cast_dtype: DataType<'static>,
+    uint32_cast_dtype: DataType<'static>,
+    uint64_cast_dtype: DataType<'static>,
+    timestamp_cast_dtype: DataType<'static>,
+    timestamp_tz_cast_dtype: DataType<'static>,
+    date32_cast_dtype: DataType<'static>,
     supports_column_alias_in_table_alias: bool,
     requires_derived_table_alias: bool,
-    division_operator: BinaryOperator,
+    division_operator: BinaryOp<'static>,
     window_func_support_window_frame: bool,
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
@@ -917,28 +902,31 @@ impl Default for CustomDialect {
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::SQLStandard,
-            float64_ast_dtype: ast::DataType::Double(ast::ExactNumberInfo::None),
-            utf8_cast_dtype: ast::DataType::Varchar(None),
-            large_utf8_cast_dtype: ast::DataType::Text,
+            float64_ast_dtype: data_type("DOUBLE"),
+            utf8_cast_dtype: data_type("VARCHAR"),
+            large_utf8_cast_dtype: data_type("TEXT"),
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             character_length_style: CharacterLengthStyle::CharacterLength,
-            int8_cast_dtype: ast::DataType::TinyInt(None),
-            int64_cast_dtype: ast::DataType::BigInt(None),
-            int32_cast_dtype: ast::DataType::Integer(None),
-            int16_cast_dtype: ast::DataType::SmallInt(None),
-            uint8_cast_dtype: ast::DataType::TinyIntUnsigned(None),
-            uint16_cast_dtype: ast::DataType::SmallIntUnsigned(None),
-            uint32_cast_dtype: ast::DataType::IntegerUnsigned(None),
-            uint64_cast_dtype: ast::DataType::BigIntUnsigned(None),
-            timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
-            timestamp_tz_cast_dtype: ast::DataType::Timestamp(
-                None,
-                TimezoneInfo::WithTimeZone,
+            int8_cast_dtype: data_type("TINYINT"),
+            int64_cast_dtype: data_type("BIGINT"),
+            int32_cast_dtype: data_type("INTEGER"),
+            int16_cast_dtype: data_type("SMALLINT"),
+            uint8_cast_dtype: data_type_with_suffix("TINYINT", DataTypeSuffix::Unsigned),
+            uint16_cast_dtype: data_type_with_suffix(
+                "SMALLINT",
+                DataTypeSuffix::Unsigned,
             ),
-            date32_cast_dtype: ast::DataType::Date,
+            uint32_cast_dtype: data_type_with_suffix("INTEGER", DataTypeSuffix::Unsigned),
+            uint64_cast_dtype: data_type_with_suffix("BIGINT", DataTypeSuffix::Unsigned),
+            timestamp_cast_dtype: data_type("TIMESTAMP"),
+            timestamp_tz_cast_dtype: data_type_with_suffix(
+                "TIMESTAMP",
+                DataTypeSuffix::WithTimeZone,
+            ),
+            date32_cast_dtype: data_type("DATE"),
             supports_column_alias_in_table_alias: true,
             requires_derived_table_alias: false,
-            division_operator: BinaryOperator::Divide,
+            division_operator: BinaryOp::Div,
             window_func_support_window_frame: true,
             full_qualified_col: false,
             unnest_as_table_factor: false,
@@ -964,15 +952,15 @@ impl Dialect for CustomDialect {
         self.interval_style
     }
 
-    fn float64_ast_dtype(&self) -> ast::DataType {
+    fn float64_ast_dtype(&self) -> DataType<'static> {
         self.float64_ast_dtype.clone()
     }
 
-    fn utf8_cast_dtype(&self) -> ast::DataType {
+    fn utf8_cast_dtype(&self) -> DataType<'static> {
         self.utf8_cast_dtype.clone()
     }
 
-    fn large_utf8_cast_dtype(&self) -> ast::DataType {
+    fn large_utf8_cast_dtype(&self) -> DataType<'static> {
         self.large_utf8_cast_dtype.clone()
     }
 
@@ -984,35 +972,35 @@ impl Dialect for CustomDialect {
         self.character_length_style
     }
 
-    fn int64_cast_dtype(&self) -> ast::DataType {
+    fn int64_cast_dtype(&self) -> DataType<'static> {
         self.int64_cast_dtype.clone()
     }
 
-    fn int8_cast_dtype(&self) -> ast::DataType {
+    fn int8_cast_dtype(&self) -> DataType<'static> {
         self.int8_cast_dtype.clone()
     }
 
-    fn int32_cast_dtype(&self) -> ast::DataType {
+    fn int32_cast_dtype(&self) -> DataType<'static> {
         self.int32_cast_dtype.clone()
     }
 
-    fn int16_cast_dtype(&self) -> ast::DataType {
+    fn int16_cast_dtype(&self) -> DataType<'static> {
         self.int16_cast_dtype.clone()
     }
 
-    fn uint8_cast_dtype(&self) -> ast::DataType {
+    fn uint8_cast_dtype(&self) -> DataType<'static> {
         self.uint8_cast_dtype.clone()
     }
 
-    fn uint16_cast_dtype(&self) -> ast::DataType {
+    fn uint16_cast_dtype(&self) -> DataType<'static> {
         self.uint16_cast_dtype.clone()
     }
 
-    fn uint32_cast_dtype(&self) -> ast::DataType {
+    fn uint32_cast_dtype(&self) -> DataType<'static> {
         self.uint32_cast_dtype.clone()
     }
 
-    fn uint64_cast_dtype(&self) -> ast::DataType {
+    fn uint64_cast_dtype(&self) -> DataType<'static> {
         self.uint64_cast_dtype.clone()
     }
 
@@ -1020,7 +1008,7 @@ impl Dialect for CustomDialect {
         &self,
         _time_unit: &TimeUnit,
         tz: &Option<Arc<str>>,
-    ) -> ast::DataType {
+    ) -> DataType<'static> {
         if tz.is_some() {
             self.timestamp_tz_cast_dtype.clone()
         } else {
@@ -1028,7 +1016,7 @@ impl Dialect for CustomDialect {
         }
     }
 
-    fn date32_cast_dtype(&self) -> ast::DataType {
+    fn date32_cast_dtype(&self) -> DataType<'static> {
         self.date32_cast_dtype.clone()
     }
 
@@ -1041,7 +1029,7 @@ impl Dialect for CustomDialect {
         unparser: &Unparser,
         func_name: &str,
         args: &[Expr],
-    ) -> Result<Option<ast::Expr>> {
+    ) -> Result<Option<ast::Expr<'static>>> {
         match func_name {
             "date_part" => {
                 date_part_to_sql(unparser, self.date_field_extract_style(), args)
@@ -1057,15 +1045,15 @@ impl Dialect for CustomDialect {
         self.requires_derived_table_alias
     }
 
-    fn division_operator(&self) -> BinaryOperator {
+    fn division_operator(&self) -> BinaryOp<'static> {
         self.division_operator.clone()
     }
 
     fn window_func_support_window_frame(
         &self,
         _func_name: &str,
-        _start_bound: &WindowFrameBound,
-        _end_bound: &WindowFrameBound,
+        _start_bound: &FrameBound<'_>,
+        _end_bound: &FrameBound<'_>,
     ) -> bool {
         self.window_func_support_window_frame
     }
@@ -1102,25 +1090,25 @@ pub struct CustomDialectBuilder {
     supports_nulls_first_in_sort: bool,
     use_timestamp_for_date64: bool,
     interval_style: IntervalStyle,
-    float64_ast_dtype: ast::DataType,
-    utf8_cast_dtype: ast::DataType,
-    large_utf8_cast_dtype: ast::DataType,
+    float64_ast_dtype: DataType<'static>,
+    utf8_cast_dtype: DataType<'static>,
+    large_utf8_cast_dtype: DataType<'static>,
     date_field_extract_style: DateFieldExtractStyle,
     character_length_style: CharacterLengthStyle,
-    int8_cast_dtype: ast::DataType,
-    int64_cast_dtype: ast::DataType,
-    int32_cast_dtype: ast::DataType,
-    int16_cast_dtype: ast::DataType,
-    uint8_cast_dtype: ast::DataType,
-    uint16_cast_dtype: ast::DataType,
-    uint32_cast_dtype: ast::DataType,
-    uint64_cast_dtype: ast::DataType,
-    timestamp_cast_dtype: ast::DataType,
-    timestamp_tz_cast_dtype: ast::DataType,
-    date32_cast_dtype: ast::DataType,
+    int8_cast_dtype: DataType<'static>,
+    int64_cast_dtype: DataType<'static>,
+    int32_cast_dtype: DataType<'static>,
+    int16_cast_dtype: DataType<'static>,
+    uint8_cast_dtype: DataType<'static>,
+    uint16_cast_dtype: DataType<'static>,
+    uint32_cast_dtype: DataType<'static>,
+    uint64_cast_dtype: DataType<'static>,
+    timestamp_cast_dtype: DataType<'static>,
+    timestamp_tz_cast_dtype: DataType<'static>,
+    date32_cast_dtype: DataType<'static>,
     supports_column_alias_in_table_alias: bool,
     requires_derived_table_alias: bool,
-    division_operator: BinaryOperator,
+    division_operator: BinaryOp<'static>,
     window_func_support_window_frame: bool,
     full_qualified_col: bool,
     unnest_as_table_factor: bool,
@@ -1140,28 +1128,31 @@ impl CustomDialectBuilder {
             supports_nulls_first_in_sort: true,
             use_timestamp_for_date64: false,
             interval_style: IntervalStyle::PostgresVerbose,
-            float64_ast_dtype: ast::DataType::Double(ast::ExactNumberInfo::None),
-            utf8_cast_dtype: ast::DataType::Varchar(None),
-            large_utf8_cast_dtype: ast::DataType::Text,
+            float64_ast_dtype: data_type("DOUBLE"),
+            utf8_cast_dtype: data_type("VARCHAR"),
+            large_utf8_cast_dtype: data_type("TEXT"),
             date_field_extract_style: DateFieldExtractStyle::DatePart,
             character_length_style: CharacterLengthStyle::CharacterLength,
-            int8_cast_dtype: ast::DataType::TinyInt(None),
-            int64_cast_dtype: ast::DataType::BigInt(None),
-            int32_cast_dtype: ast::DataType::Integer(None),
-            int16_cast_dtype: ast::DataType::SmallInt(None),
-            uint8_cast_dtype: ast::DataType::TinyIntUnsigned(None),
-            uint16_cast_dtype: ast::DataType::SmallIntUnsigned(None),
-            uint32_cast_dtype: ast::DataType::IntegerUnsigned(None),
-            uint64_cast_dtype: ast::DataType::BigIntUnsigned(None),
-            timestamp_cast_dtype: ast::DataType::Timestamp(None, TimezoneInfo::None),
-            timestamp_tz_cast_dtype: ast::DataType::Timestamp(
-                None,
-                TimezoneInfo::WithTimeZone,
+            int8_cast_dtype: data_type("TINYINT"),
+            int64_cast_dtype: data_type("BIGINT"),
+            int32_cast_dtype: data_type("INTEGER"),
+            int16_cast_dtype: data_type("SMALLINT"),
+            uint8_cast_dtype: data_type_with_suffix("TINYINT", DataTypeSuffix::Unsigned),
+            uint16_cast_dtype: data_type_with_suffix(
+                "SMALLINT",
+                DataTypeSuffix::Unsigned,
             ),
-            date32_cast_dtype: ast::DataType::Date,
+            uint32_cast_dtype: data_type_with_suffix("INTEGER", DataTypeSuffix::Unsigned),
+            uint64_cast_dtype: data_type_with_suffix("BIGINT", DataTypeSuffix::Unsigned),
+            timestamp_cast_dtype: data_type("TIMESTAMP"),
+            timestamp_tz_cast_dtype: data_type_with_suffix(
+                "TIMESTAMP",
+                DataTypeSuffix::WithTimeZone,
+            ),
+            date32_cast_dtype: data_type("DATE"),
             supports_column_alias_in_table_alias: true,
             requires_derived_table_alias: false,
-            division_operator: BinaryOperator::Divide,
+            division_operator: BinaryOp::Div,
             window_func_support_window_frame: true,
             full_qualified_col: false,
             unnest_as_table_factor: false,
@@ -1242,19 +1233,22 @@ impl CustomDialectBuilder {
     }
 
     /// Customize the dialect with a specific SQL type for Int8 casting: TinyInt, SmallInt, etc.
-    pub fn with_int8_cast_dtype(mut self, int8_cast_dtype: ast::DataType) -> Self {
+    pub fn with_int8_cast_dtype(mut self, int8_cast_dtype: DataType<'static>) -> Self {
         self.int8_cast_dtype = int8_cast_dtype;
         self
     }
 
     /// Customize the dialect with a specific SQL type for Float64 casting: DOUBLE, DOUBLE PRECISION, etc.
-    pub fn with_float64_ast_dtype(mut self, float64_ast_dtype: ast::DataType) -> Self {
+    pub fn with_float64_ast_dtype(
+        mut self,
+        float64_ast_dtype: DataType<'static>,
+    ) -> Self {
         self.float64_ast_dtype = float64_ast_dtype;
         self
     }
 
     /// Customize the dialect with a specific SQL type for Utf8 casting: VARCHAR, CHAR, etc.
-    pub fn with_utf8_cast_dtype(mut self, utf8_cast_dtype: ast::DataType) -> Self {
+    pub fn with_utf8_cast_dtype(mut self, utf8_cast_dtype: DataType<'static>) -> Self {
         self.utf8_cast_dtype = utf8_cast_dtype;
         self
     }
@@ -1262,7 +1256,7 @@ impl CustomDialectBuilder {
     /// Customize the dialect with a specific SQL type for LargeUtf8 casting: TEXT, CHAR, etc.
     pub fn with_large_utf8_cast_dtype(
         mut self,
-        large_utf8_cast_dtype: ast::DataType,
+        large_utf8_cast_dtype: DataType<'static>,
     ) -> Self {
         self.large_utf8_cast_dtype = large_utf8_cast_dtype;
         self
@@ -1278,43 +1272,52 @@ impl CustomDialectBuilder {
     }
 
     /// Customize the dialect with a specific SQL type for Int64 casting: BigInt, SIGNED, etc.
-    pub fn with_int64_cast_dtype(mut self, int64_cast_dtype: ast::DataType) -> Self {
+    pub fn with_int64_cast_dtype(mut self, int64_cast_dtype: DataType<'static>) -> Self {
         self.int64_cast_dtype = int64_cast_dtype;
         self
     }
 
     /// Customize the dialect with a specific SQL type for Int32 casting: Integer, SIGNED, etc.
-    pub fn with_int32_cast_dtype(mut self, int32_cast_dtype: ast::DataType) -> Self {
+    pub fn with_int32_cast_dtype(mut self, int32_cast_dtype: DataType<'static>) -> Self {
         self.int32_cast_dtype = int32_cast_dtype;
         self
     }
 
     /// Customize the dialect with a specific SQL type for Int16 casting: SmallInt, SIGNED, etc.
-    pub fn with_int16_cast_dtype(mut self, int16_cast_dtype: ast::DataType) -> Self {
+    pub fn with_int16_cast_dtype(mut self, int16_cast_dtype: DataType<'static>) -> Self {
         self.int16_cast_dtype = int16_cast_dtype;
         self
     }
 
     /// Customize the dialect with a specific SQL type for UInt8 casting: TinyIntUnsigned, UNSIGNED, etc.
-    pub fn with_uint8_cast_dtype(mut self, uint8_cast_dtype: ast::DataType) -> Self {
+    pub fn with_uint8_cast_dtype(mut self, uint8_cast_dtype: DataType<'static>) -> Self {
         self.uint8_cast_dtype = uint8_cast_dtype;
         self
     }
 
     /// Customize the dialect with a specific SQL type for UInt16 casting: SmallIntUnsigned, UNSIGNED, etc.
-    pub fn with_uint16_cast_dtype(mut self, uint16_cast_dtype: ast::DataType) -> Self {
+    pub fn with_uint16_cast_dtype(
+        mut self,
+        uint16_cast_dtype: DataType<'static>,
+    ) -> Self {
         self.uint16_cast_dtype = uint16_cast_dtype;
         self
     }
 
     /// Customize the dialect with a specific SQL type for UInt32 casting: IntegerUnsigned, UNSIGNED, etc.
-    pub fn with_uint32_cast_dtype(mut self, uint32_cast_dtype: ast::DataType) -> Self {
+    pub fn with_uint32_cast_dtype(
+        mut self,
+        uint32_cast_dtype: DataType<'static>,
+    ) -> Self {
         self.uint32_cast_dtype = uint32_cast_dtype;
         self
     }
 
     /// Customize the dialect with a specific SQL type for UInt64 casting: BigIntUnsigned, UNSIGNED, etc.
-    pub fn with_uint64_cast_dtype(mut self, uint64_cast_dtype: ast::DataType) -> Self {
+    pub fn with_uint64_cast_dtype(
+        mut self,
+        uint64_cast_dtype: DataType<'static>,
+    ) -> Self {
         self.uint64_cast_dtype = uint64_cast_dtype;
         self
     }
@@ -1322,15 +1325,18 @@ impl CustomDialectBuilder {
     /// Customize the dialect with a specific SQL type for Timestamp casting: Timestamp, Datetime, etc.
     pub fn with_timestamp_cast_dtype(
         mut self,
-        timestamp_cast_dtype: ast::DataType,
-        timestamp_tz_cast_dtype: ast::DataType,
+        timestamp_cast_dtype: DataType<'static>,
+        timestamp_tz_cast_dtype: DataType<'static>,
     ) -> Self {
         self.timestamp_cast_dtype = timestamp_cast_dtype;
         self.timestamp_tz_cast_dtype = timestamp_tz_cast_dtype;
         self
     }
 
-    pub fn with_date32_cast_dtype(mut self, date32_cast_dtype: ast::DataType) -> Self {
+    pub fn with_date32_cast_dtype(
+        mut self,
+        date32_cast_dtype: DataType<'static>,
+    ) -> Self {
         self.date32_cast_dtype = date32_cast_dtype;
         self
     }
@@ -1352,7 +1358,10 @@ impl CustomDialectBuilder {
         self
     }
 
-    pub fn with_division_operator(mut self, division_operator: BinaryOperator) -> Self {
+    pub fn with_division_operator(
+        mut self,
+        division_operator: BinaryOp<'static>,
+    ) -> Self {
         self.division_operator = division_operator;
         self
     }

@@ -18,10 +18,11 @@ use datafusion_expr::{
     Unnest, Window, expr, utils::grouping_set_to_exprlist,
 };
 
+use super::ast::{function, string};
+use crate::ast::{self, ExprKind, FunctionArg, SpecialExpr};
 use arrow::compute::DatePart;
 use indexmap::IndexSet;
-use sqlparser::ast;
-use sqlparser::tokenizer::Span;
+use std::borrow::Cow;
 
 /// Recursively searches children of [LogicalPlan] to find an Aggregate node if exists
 /// prior to encountering a Join, TableScan, or a nested subquery (derived table factor).
@@ -438,26 +439,28 @@ pub(crate) fn date_part_to_sql(
     unparser: &Unparser,
     style: DateFieldExtractStyle,
     date_part_args: &[Expr],
-) -> Result<Option<ast::Expr>> {
+) -> Result<Option<ast::Expr<'static>>> {
     match (style, date_part_args.len()) {
         (DateFieldExtractStyle::Extract, 2) => {
             let date_expr = unparser.expr_to_sql_with_nesting(&date_part_args[1])?;
             if let Expr::Literal(ScalarValue::Utf8(Some(field)), _) = &date_part_args[0] {
                 let field = match DatePart::from_str(field) {
-                    Ok(DatePart::Year) => ast::DateTimeField::Year,
-                    Ok(DatePart::Month) => ast::DateTimeField::Month,
-                    Ok(DatePart::Day) => ast::DateTimeField::Day,
-                    Ok(DatePart::Hour) => ast::DateTimeField::Hour,
-                    Ok(DatePart::Minute) => ast::DateTimeField::Minute,
-                    Ok(DatePart::Second) => ast::DateTimeField::Second,
+                    Ok(DatePart::Year) => "YEAR",
+                    Ok(DatePart::Month) => "MONTH",
+                    Ok(DatePart::Day) => "DAY",
+                    Ok(DatePart::Hour) => "HOUR",
+                    Ok(DatePart::Minute) => "MINUTE",
+                    Ok(DatePart::Second) => "SECOND",
                     _ => return Ok(None),
                 };
 
-                return Ok(Some(ast::Expr::Extract {
-                    field,
-                    expr: Box::new(date_expr),
-                    syntax: ast::ExtractSyntax::From,
-                }));
+                return Ok(Some(
+                    ExprKind::Special(Box::new(SpecialExpr::Extract {
+                        field: Cow::Borrowed(field),
+                        expr: date_expr,
+                    }))
+                    .into(),
+                ));
             }
         }
         (DateFieldExtractStyle::Strftime, 2) => {
@@ -474,31 +477,10 @@ pub(crate) fn date_part_to_sql(
                     _ => return Ok(None),
                 };
 
-                return Ok(Some(ast::Expr::Function(ast::Function {
-                    name: ast::ObjectName::from(vec![ast::Ident {
-                        value: "strftime".to_string(),
-                        quote_style: None,
-                        span: Span::empty(),
-                    }]),
-                    args: ast::FunctionArguments::List(ast::FunctionArgumentList {
-                        duplicate_treatment: None,
-                        args: vec![
-                            ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(
-                                ast::Expr::value(ast::Value::SingleQuotedString(
-                                    field.to_string(),
-                                )),
-                            )),
-                            ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(column)),
-                        ],
-                        clauses: vec![],
-                    }),
-                    filter: None,
-                    null_treatment: None,
-                    over: None,
-                    within_group: vec![],
-                    parameters: ast::FunctionArguments::None,
-                    uses_odbc_syntax: false,
-                })));
+                return Ok(Some(function(
+                    "strftime",
+                    vec![FunctionArg::Expr(string(field)), FunctionArg::Expr(column)],
+                )));
             }
         }
         (DateFieldExtractStyle::DatePart, _) => {
@@ -516,7 +498,7 @@ pub(crate) fn character_length_to_sql(
     unparser: &Unparser,
     style: CharacterLengthStyle,
     character_length_args: &[Expr],
-) -> Result<Option<ast::Expr>> {
+) -> Result<Option<ast::Expr<'static>>> {
     let func_name = match style {
         CharacterLengthStyle::CharacterLength => "character_length",
         CharacterLengthStyle::Length => "length",
@@ -539,7 +521,7 @@ pub(crate) fn character_length_to_sql(
 pub(crate) fn sqlite_from_unixtime_to_sql(
     unparser: &Unparser,
     from_unixtime_args: &[Expr],
-) -> Result<Option<ast::Expr>> {
+) -> Result<Option<ast::Expr<'static>>> {
     assert_eq_or_internal_err!(
         from_unixtime_args.len(),
         1,
@@ -566,7 +548,7 @@ pub(crate) fn sqlite_from_unixtime_to_sql(
 pub(crate) fn sqlite_date_trunc_to_sql(
     unparser: &Unparser,
     date_trunc_args: &[Expr],
-) -> Result<Option<ast::Expr>> {
+) -> Result<Option<ast::Expr<'static>>> {
     assert_eq_or_internal_err!(
         date_trunc_args.len(),
         2,

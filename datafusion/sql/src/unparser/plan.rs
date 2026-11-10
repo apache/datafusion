@@ -20,6 +20,14 @@ use super::{
         unproject_unnest_expr_as_flatten_value, unproject_window_exprs,
     },
 };
+use crate::ast::{
+    self, BinaryOp, ExprKind, Ident, Join, JoinKind, OrderByItem, SelectItem, SetExpr,
+    UnaryOp,
+};
+use crate::unparser::ast::{
+    Distinct as SelectDistinct, name_expr, number, object_name, quoted_ident,
+    select_expr, select_expr_with_alias, select_wildcard, table_alias,
+};
 use crate::unparser::utils::{find_unnest_node_until_relation, unproject_agg_exprs};
 use crate::unparser::{
     ast::FlattenRelationBuilder, ast::UnnestRelationBuilder, rewrite::rewrite_qualify,
@@ -41,7 +49,6 @@ use datafusion_expr::{
     LogicalPlan, LogicalPlanBuilder, Operator, Projection, SkipType, Sort, SortExpr,
     TableScan, Unnest, UserDefinedLogicalNode, Window, expr::Alias,
 };
-use sqlparser::ast::{self, Ident, OrderByKind, SetExpr, TableAliasColumnDef};
 use std::{collections::HashSet, sync::Arc, vec};
 
 /// Convert a DataFusion [`LogicalPlan`] to [`ast::Statement`]
@@ -84,7 +91,7 @@ use std::{collections::HashSet, sync::Arc, vec};
 ///
 /// [`SqlToRel::sql_statement_to_plan`]: crate::planner::SqlToRel::sql_statement_to_plan
 /// [`expr_to_sql`]: crate::unparser::expr_to_sql
-pub fn plan_to_sql(plan: &LogicalPlan) -> Result<ast::Statement> {
+pub fn plan_to_sql(plan: &LogicalPlan) -> Result<ast::Statement<'static>> {
     let unparser = Unparser::default();
     unparser.plan_to_sql(plan)
 }
@@ -159,7 +166,7 @@ struct DerivedInputScope<'a> {
 }
 
 impl Unparser<'_> {
-    pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
+    pub fn plan_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement<'static>> {
         let mut plan = normalize_union_schema(plan)?;
         if !self.dialect.supports_qualify() {
             plan = rewrite_qualify(plan)?;
@@ -206,7 +213,7 @@ impl Unparser<'_> {
     fn extension_to_statement(
         &self,
         node: &dyn UserDefinedLogicalNode,
-    ) -> Result<ast::Statement> {
+    ) -> Result<ast::Statement<'static>> {
         let mut statement = None;
         for unparser in &self.extension_unparsers {
             match unparser.unparse_to_statement(node, self)? {
@@ -243,21 +250,24 @@ impl Unparser<'_> {
         not_impl_err!("Unsupported extension node: {node:?}")
     }
 
-    fn select_to_sql_statement(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
+    fn select_to_sql_statement(
+        &self,
+        plan: &LogicalPlan,
+    ) -> Result<ast::Statement<'static>> {
         let mut query_builder = Some(QueryBuilder::default());
 
         let body = self.select_to_sql_expr(plan, &mut query_builder)?;
 
         let query = query_builder.unwrap().body(Box::new(body)).build()?;
 
-        Ok(ast::Statement::Query(Box::new(query)))
+        Ok(ast::StatementKind::Query(Box::new(query)).into())
     }
 
     fn select_to_sql_expr(
         &self,
         plan: &LogicalPlan,
         query: &mut Option<QueryBuilder>,
-    ) -> Result<SetExpr> {
+    ) -> Result<SetExpr<'static>> {
         let mut select_builder = SelectBuilder::default();
         select_builder.push_from(TableWithJoinsBuilder::default());
         let mut relation_builder = RelationBuilder::default();
@@ -276,9 +286,7 @@ impl Unparser<'_> {
         // If no projection is set, add a wildcard projection to the select
         // which will be translated to `SELECT *` in the SQL statement
         if !select_builder.already_projected() {
-            select_builder.projection(vec![ast::SelectItem::Wildcard(
-                ast::WildcardAdditionalOptions::default(),
-            )]);
+            select_builder.projection(vec![select_wildcard()]);
         }
 
         let mut twj = select_builder.pop_from().unwrap();
@@ -384,7 +392,7 @@ impl Unparser<'_> {
                     .collect::<Result<Vec<_>>>()?;
 
                 select.projection(items);
-                select.group_by(ast::GroupByExpr::Expressions(
+                select.group_by(
                     agg.group_expr
                         .iter()
                         .cloned()
@@ -392,8 +400,7 @@ impl Unparser<'_> {
                             self.expr_to_sql(&unparser_agg_scope.normalize(expr)?)
                         })
                         .collect::<Result<Vec<_>>>()?,
-                    vec![],
-                ));
+                );
                 Ok(true)
             }
             (None, Some(window)) => {
@@ -590,7 +597,7 @@ impl Unparser<'_> {
         &self,
         plan: &LogicalPlan,
         relation: &mut RelationBuilder,
-        alias: Option<ast::TableAlias>,
+        alias: Option<ast::TableAlias<'static>>,
         lateral: bool,
     ) -> Result<()> {
         let preserve_names = matches!(plan, LogicalPlan::Projection(_))
@@ -607,7 +614,7 @@ impl Unparser<'_> {
         }
         derived_builder.lateral(lateral).alias(alias).subquery({
             let inner_statement = self.plan_to_sql(plan)?;
-            if let ast::Statement::Query(inner_query) = inner_statement {
+            if let ast::StatementKind::Query(inner_query) = inner_statement.kind {
                 inner_query
             } else {
                 return internal_err!(
@@ -626,7 +633,7 @@ impl Unparser<'_> {
         plan: &LogicalPlan,
         relation: &mut RelationBuilder,
         lateral: bool,
-        columns: Vec<Ident>,
+        columns: Vec<Ident<'static>>,
     ) -> Result<()> {
         if self.dialect.requires_derived_table_alias() || !columns.is_empty() {
             self.derive(
@@ -694,12 +701,10 @@ impl Unparser<'_> {
                     )
                 })?;
 
-                flatten.alias(Some(ast::TableAlias {
-                    name: Ident::with_quote('"', &flatten_alias_name),
-                    columns: vec![],
-                    explicit: true,
-                    at: None,
-                }));
+                flatten.alias(Some(table_alias(
+                    quoted_ident(flatten_alias_name.as_str(), Some('"')),
+                    vec![],
+                )));
 
                 if !select.already_projected() {
                     self.reconstruct_select_statement(plan, p, select, true)?;
@@ -719,12 +724,11 @@ impl Unparser<'_> {
                 let flatten_factor = flatten.build().map_err(|e| {
                     internal_datafusion_err!("Failed to build FLATTEN: {e}")
                 })?;
-                let cross_join = ast::Join {
-                    relation: flatten_factor,
-                    global: false,
-                    join_operator: ast::JoinOperator::CrossJoin(
-                        ast::JoinConstraint::None,
-                    ),
+                let cross_join = Join {
+                    kind: JoinKind::Cross,
+                    spelled_out: false,
+                    table: flatten_factor,
+                    constraint: ast::JoinConstraint::None,
                 };
                 if let Some(mut from) = select.pop_from() {
                     from.push_join(cross_join);
@@ -751,9 +755,7 @@ impl Unparser<'_> {
         let mut items = if select.already_projected() {
             select.pop_projections()
         } else {
-            vec![ast::SelectItem::Wildcard(
-                ast::WildcardAdditionalOptions::default(),
-            )]
+            vec![select_wildcard()]
         };
 
         items.extend(
@@ -868,7 +870,7 @@ impl Unparser<'_> {
                 table_parts.push(
                     self.new_ident_quoted_if_needs(scan.table_name.table().to_string()),
                 );
-                builder.name(ast::ObjectName::from(table_parts));
+                builder.name(object_name(table_parts));
                 relation.table(builder);
 
                 Ok(())
@@ -1063,10 +1065,7 @@ impl Unparser<'_> {
                                         query_ref.limit(Some(self.expr_to_sql(fetch)?));
                                     }
                                     if let Some(skip) = &limit.skip {
-                                        query_ref.offset(Some(ast::Offset {
-                                            rows: ast::OffsetRows::None,
-                                            value: self.expr_to_sql(skip)?,
-                                        }));
+                                        query_ref.offset(Some(self.expr_to_sql(skip)?));
                                     }
                                     have_direct_limit = true;
                                 }
@@ -1187,19 +1186,10 @@ impl Unparser<'_> {
                         );
                     };
                     if let Some(fetch) = combined_fetch {
-                        query_ref.limit(Some(ast::Expr::value(ast::Value::Number(
-                            fetch.to_string(),
-                            false,
-                        ))));
+                        query_ref.limit(Some(number(fetch.to_string())));
                     }
                     if combined_skip > 0 {
-                        query_ref.offset(Some(ast::Offset {
-                            rows: ast::OffsetRows::None,
-                            value: ast::Expr::value(ast::Value::Number(
-                                combined_skip.to_string(),
-                                false,
-                            )),
-                        }));
+                        query_ref.offset(Some(number(combined_skip.to_string())));
                     }
                 }
 
@@ -1289,10 +1279,7 @@ impl Unparser<'_> {
                         );
                     };
 
-                    query.offset(Some(ast::Offset {
-                        rows: ast::OffsetRows::None,
-                        value: self.expr_to_sql(skip)?,
-                    }));
+                    query.offset(Some(self.expr_to_sql(skip)?));
                 }
 
                 self.select_to_sql_recursively(
@@ -1321,10 +1308,7 @@ impl Unparser<'_> {
                 };
 
                 if let Some(fetch) = sort.fetch {
-                    query_ref.limit(Some(ast::Expr::value(ast::Value::Number(
-                        fetch.to_string(),
-                        false,
-                    ))));
+                    query_ref.limit(Some(number(fetch.to_string())));
                 }
 
                 let derived_input_scope = Self::derived_input_scope(plan, select);
@@ -1375,7 +1359,7 @@ impl Unparser<'_> {
                         .collect::<Result<Vec<_>>>()?;
                     select.projection(exprs);
 
-                    select.group_by(ast::GroupByExpr::Expressions(
+                    select.group_by(
                         agg.group_expr
                             .iter()
                             .cloned()
@@ -1383,8 +1367,7 @@ impl Unparser<'_> {
                                 self.expr_to_sql(&unparser_agg_scope.normalize(expr)?)
                             })
                             .collect::<Result<Vec<_>>>()?,
-                        vec![],
-                    ));
+                    );
                 } else if Self::contains_aggregate_before_relation(agg.input.as_ref()) {
                     return self.derive_with_dialect_alias(
                         "derived_aggregate",
@@ -1430,7 +1413,7 @@ impl Unparser<'_> {
                 }
 
                 let (select_distinct, input) = match distinct {
-                    Distinct::All(input) => (ast::Distinct::Distinct, input.as_ref()),
+                    Distinct::All(input) => (SelectDistinct::Distinct, input.as_ref()),
                     Distinct::On(on) => {
                         let exprs = on
                             .on_expr
@@ -1452,7 +1435,7 @@ impl Unparser<'_> {
                             }
                         }
                         select.projection(items);
-                        (ast::Distinct::On(exprs), on.input.as_ref())
+                        (SelectDistinct::On(exprs), on.input.as_ref())
                     }
                 };
                 select.distinct(Some(select_distinct));
@@ -1488,12 +1471,12 @@ impl Unparser<'_> {
                     relation,
                 )?;
 
-                let left_projection: Option<Vec<ast::SelectItem>> = if !already_projected
-                {
-                    Some(select.pop_projections())
-                } else {
-                    None
-                };
+                let left_projection: Option<Vec<SelectItem<'static>>> =
+                    if !already_projected {
+                        Some(select.pop_projections())
+                    } else {
+                        None
+                    };
 
                 let right_plan = Self::extract_join_input_table_scan_filters(
                     right_plan,
@@ -1531,12 +1514,12 @@ impl Unparser<'_> {
                     join_filters.as_ref(),
                 )?;
 
-                let right_projection: Option<Vec<ast::SelectItem>> = if !already_projected
-                {
-                    Some(select.pop_projections())
-                } else {
-                    None
-                };
+                let right_projection: Option<Vec<SelectItem<'static>>> =
+                    if !already_projected {
+                        Some(select.pop_projections())
+                    } else {
+                        None
+                    };
 
                 match join.join_type {
                     JoinType::LeftSemi
@@ -1558,9 +1541,7 @@ impl Unparser<'_> {
                                 self.expr_to_sql(&left.clone().eq(right.clone()))?,
                             ));
                         }
-                        exists_select.projection(vec![ast::SelectItem::UnnamedExpr(
-                            ast::Expr::value(ast::Value::Number("1".to_string(), false)),
-                        )]);
+                        exists_select.projection(vec![select_expr(number("1"))]);
                         query_builder.body(Box::new(SetExpr::Select(Box::new(
                             exists_select.build()?,
                         ))));
@@ -1573,9 +1554,16 @@ impl Unparser<'_> {
                             JoinType::LeftAnti | JoinType::RightAnti => true,
                             _ => unreachable!(),
                         };
-                        let exists_expr = ast::Expr::Exists {
-                            subquery: Box::new(query_builder.build()?),
-                            negated,
+                        let exists_expr: ast::Expr<'static> =
+                            ExprKind::Exists(Box::new(query_builder.build()?)).into();
+                        let exists_expr = if negated {
+                            ExprKind::Unary {
+                                op: UnaryOp::Not,
+                                expr: Box::new(exists_expr),
+                            }
+                            .into()
+                        } else {
+                            exists_expr
                         };
 
                         match join.join_type {
@@ -1608,12 +1596,8 @@ impl Unparser<'_> {
                         let Ok(Some(relation)) = right_relation.build() else {
                             return internal_err!("Failed to build right relation");
                         };
-                        let ast_join = ast::Join {
-                            relation,
-                            global: false,
-                            join_operator: self
-                                .join_operator_to_sql(join.join_type, join_constraint)?,
-                        };
+                        let ast_join =
+                            self.join_to_sql(join.join_type, join_constraint, relation)?;
                         let mut from = select.pop_from().unwrap();
                         from.push_join(ast_join);
                         select.push_from(from);
@@ -1699,9 +1683,7 @@ impl Unparser<'_> {
                 // if the child plan is a TableScan with pushdown operations, we don't need to
                 // create an additional subquery for it
                 if !select.already_projected() && unparsed_table_scan.is_none() {
-                    select.projection(vec![ast::SelectItem::Wildcard(
-                        ast::WildcardAdditionalOptions::default(),
-                    )]);
+                    select.projection(vec![select_wildcard()]);
                 }
                 let plan = unparsed_table_scan.unwrap_or_else(|| plan.clone());
                 select.enter_subquery_alias();
@@ -1761,7 +1743,7 @@ impl Unparser<'_> {
                     );
                 }
 
-                let input_exprs: Vec<SetExpr> = union
+                let input_exprs: Vec<SetExpr<'static>> = union
                     .inputs
                     .iter()
                     .map(|input| self.select_to_sql_expr(input, query))
@@ -1788,7 +1770,8 @@ impl Unparser<'_> {
                     .rev()
                     .reduce(|a, b| SetExpr::SetOperation {
                         op: ast::SetOperator::Union,
-                        set_quantifier,
+                        quantifier: set_quantifier,
+                        by_name: false,
                         left: Box::new(b),
                         right: Box::new(a),
                     })
@@ -1882,12 +1865,10 @@ impl Unparser<'_> {
                     // handler so SELECT items and the FLATTEN relation
                     // reference the same name.
                     if let Some(alias) = select.current_flatten_alias() {
-                        flatten_relation.alias(Some(ast::TableAlias {
-                            name: Ident::with_quote('"', &alias),
-                            columns: vec![],
-                            explicit: true,
-                            at: None,
-                        }));
+                        flatten_relation.alias(Some(table_alias(
+                            quoted_ident(alias, Some('"')),
+                            vec![],
+                        )));
                     }
                     relation.flatten(flatten_relation);
                 }
@@ -2028,12 +2009,13 @@ impl Unparser<'_> {
             join.match_condition.op,
             Box::new(join.match_condition.right.clone()),
         )))?;
-        let ast_join = ast::Join {
-            relation,
-            global: false,
-            join_operator: ast::JoinOperator::AsOf {
-                match_condition,
-                constraint,
+        let ast_join = Join {
+            kind: JoinKind::AsOf,
+            spelled_out: false,
+            table: relation,
+            constraint: ast::JoinConstraint::AsOf {
+                condition: match_condition,
+                constraint: Box::new(constraint),
             },
         };
         let mut from = select
@@ -2103,10 +2085,7 @@ impl Unparser<'_> {
                 if let Some(skip) = &limit.skip
                     && let Some(q) = query.as_mut()
                 {
-                    q.offset(Some(ast::Offset {
-                        rows: ast::OffsetRows::None,
-                        value: self.expr_to_sql(skip)?,
-                    }));
+                    q.offset(Some(self.expr_to_sql(skip)?));
                 }
                 self.peel_to_unnest_with_modifiers(
                     limit.input.as_ref(),
@@ -2121,10 +2100,7 @@ impl Unparser<'_> {
                     );
                 };
                 if let Some(fetch) = sort.fetch {
-                    query_ref.limit(Some(ast::Expr::value(ast::Value::Number(
-                        fetch.to_string(),
-                        false,
-                    ))));
+                    query_ref.limit(Some(number(fetch.to_string())));
                 }
                 // When a flatten_alias is provided, rewrite
                 // __unnest_placeholder(...) columns in sort expressions to
@@ -2297,17 +2273,17 @@ impl Unparser<'_> {
         &self,
         flatten_alias: &str,
         user_alias: Option<&str>,
-    ) -> ast::SelectItem {
-        let compound = ast::Expr::CompoundIdentifier(vec![
+    ) -> SelectItem<'static> {
+        let compound = name_expr(vec![
             self.new_ident_quoted_if_needs(flatten_alias.to_string()),
-            Ident::with_quote('"', "VALUE"),
+            quoted_ident("VALUE", Some('"')),
         ]);
         match user_alias {
-            Some(alias) => ast::SelectItem::ExprWithAlias {
-                expr: compound,
-                alias: self.new_ident_quoted_if_needs(alias.to_string()),
-            },
-            None => ast::SelectItem::UnnamedExpr(compound),
+            Some(alias) => select_expr_with_alias(
+                compound,
+                self.new_ident_quoted_if_needs(alias.to_string()),
+            ),
+            None => select_expr(compound),
         }
     }
 
@@ -2416,7 +2392,7 @@ impl Unparser<'_> {
         &self,
         plan: &LogicalPlan,
         qualifier: Option<&TableReference>,
-    ) -> Result<Vec<ast::SelectItem>> {
+    ) -> Result<Vec<SelectItem<'static>>> {
         plan.schema()
             .iter()
             .map(|(field_qualifier, field)| {
@@ -2719,25 +2695,25 @@ impl Unparser<'_> {
         }
     }
 
-    fn select_item_to_sql(&self, expr: &Expr) -> Result<ast::SelectItem> {
+    fn select_item_to_sql(&self, expr: &Expr) -> Result<SelectItem<'static>> {
         match expr {
             Expr::Alias(Alias { expr, name, .. }) => {
                 let inner = self.expr_to_sql(expr)?;
 
-                Ok(ast::SelectItem::ExprWithAlias {
-                    expr: inner,
-                    alias: self.column_alias_to_sql(name)?,
-                })
+                Ok(select_expr_with_alias(
+                    inner,
+                    self.column_alias_to_sql(name)?,
+                ))
             }
             _ => {
                 let inner = self.expr_to_sql(expr)?;
 
-                Ok(ast::SelectItem::UnnamedExpr(inner))
+                Ok(select_expr(inner))
             }
         }
     }
 
-    fn column_alias_to_sql(&self, name: &str) -> Result<Ident> {
+    fn column_alias_to_sql(&self, name: &str) -> Result<Ident<'static>> {
         let name = self
             .dialect
             .col_alias_overrides(name)?
@@ -2745,41 +2721,44 @@ impl Unparser<'_> {
         Ok(self.new_ident_quoted_if_needs(name))
     }
 
-    fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<OrderByKind> {
-        Ok(OrderByKind::Expressions(
-            sort_exprs
-                .iter()
-                .map(|sort_expr| self.sort_to_sql(sort_expr))
-                .collect::<Result<Vec<_>>>()?,
-        ))
+    fn sorts_to_sql(&self, sort_exprs: &[SortExpr]) -> Result<Vec<OrderByItem<'static>>> {
+        sort_exprs
+            .iter()
+            .map(|sort_expr| self.sort_to_sql(sort_expr))
+            .collect()
     }
 
-    fn join_operator_to_sql(
+    fn join_to_sql(
         &self,
         join_type: JoinType,
-        constraint: ast::JoinConstraint,
-    ) -> Result<ast::JoinOperator> {
-        Ok(match join_type {
+        constraint: ast::JoinConstraint<'static>,
+        table: ast::TableRef<'static>,
+    ) -> Result<Join<'static>> {
+        let (kind, spelled_out) = match join_type {
             JoinType::Inner => match &constraint {
-                ast::JoinConstraint::On(_)
-                | ast::JoinConstraint::Using(_)
-                | ast::JoinConstraint::Natural => ast::JoinOperator::Inner(constraint),
                 ast::JoinConstraint::None => {
                     // Inner joins with no conditions or filters are not valid SQL in most systems,
                     // return a CROSS JOIN instead
-                    ast::JoinOperator::CrossJoin(constraint)
+                    (JoinKind::Cross, false)
                 }
+                _ => (JoinKind::Inner, true),
             },
-            JoinType::Left => ast::JoinOperator::LeftOuter(constraint),
-            JoinType::Right => ast::JoinOperator::RightOuter(constraint),
-            JoinType::Full => ast::JoinOperator::FullOuter(constraint),
-            JoinType::LeftAnti => ast::JoinOperator::LeftAnti(constraint),
-            JoinType::LeftSemi => ast::JoinOperator::LeftSemi(constraint),
-            JoinType::RightAnti => ast::JoinOperator::RightAnti(constraint),
-            JoinType::RightSemi => ast::JoinOperator::RightSemi(constraint),
+            JoinType::Left => (JoinKind::Left, true),
+            JoinType::Right => (JoinKind::Right, true),
+            JoinType::Full => (JoinKind::Full, true),
+            JoinType::LeftAnti => (JoinKind::LeftAnti, false),
+            JoinType::LeftSemi => (JoinKind::LeftSemi, false),
+            JoinType::RightAnti => (JoinKind::RightAnti, false),
+            JoinType::RightSemi => (JoinKind::RightSemi, false),
             JoinType::LeftMark | JoinType::RightMark => {
                 unimplemented!("Unparsing of Mark join type")
             }
+        };
+        Ok(Join {
+            kind,
+            spelled_out,
+            table,
+            constraint,
         })
     }
 
@@ -2789,7 +2768,7 @@ impl Unparser<'_> {
     fn join_using_to_sql(
         &self,
         join_conditions: &[(Expr, Expr)],
-    ) -> Option<ast::JoinConstraint> {
+    ) -> Option<ast::JoinConstraint<'static>> {
         let mut object_names = Vec::with_capacity(join_conditions.len());
         for (left, right) in join_conditions {
             match (left, right) {
@@ -2809,7 +2788,7 @@ impl Unparser<'_> {
                     // this is represented as two columns like `[t1.id, t2.id]`
                     // This code forms `id` (without relation name)
                     let ident = self.new_ident_quoted_if_needs(left_name.to_string());
-                    object_names.push(ast::ObjectName::from(vec![ident]));
+                    object_names.push(ident);
                 }
                 // USING is only valid with matching column names; arbitrary expressions
                 // are not allowed
@@ -2825,7 +2804,7 @@ impl Unparser<'_> {
         constraint: JoinConstraint,
         conditions: &[(Expr, Expr)],
         filter: Option<&Expr>,
-    ) -> Result<ast::JoinConstraint> {
+    ) -> Result<ast::JoinConstraint<'static>> {
         match (constraint, conditions, filter) {
             // No constraints
             (JoinConstraint::On | JoinConstraint::Using, [], None) => {
@@ -2861,14 +2840,14 @@ impl Unparser<'_> {
         &self,
         join_conditions: &[(Expr, Expr)],
         filter: Option<&Expr>,
-    ) -> Result<ast::JoinConstraint> {
+    ) -> Result<ast::JoinConstraint<'static>> {
         let mut condition = None;
         // AND the join conditions together to create the overall condition
         for (left, right) in join_conditions {
             // Parse left and right
             let l = self.expr_to_sql(left)?;
             let r = self.expr_to_sql(right)?;
-            let e = self.binary_op_to_sql(l, r, ast::BinaryOperator::Eq);
+            let e = self.binary_op_to_sql(l, r, BinaryOp::Eq);
             condition = match condition {
                 Some(expr) => Some(self.and_op_to_sql(expr, e)),
                 None => Some(e),
@@ -2893,27 +2872,23 @@ impl Unparser<'_> {
         Ok(constraint)
     }
 
-    fn and_op_to_sql(&self, lhs: ast::Expr, rhs: ast::Expr) -> ast::Expr {
-        self.binary_op_to_sql(lhs, rhs, ast::BinaryOperator::And)
+    fn and_op_to_sql(
+        &self,
+        lhs: ast::Expr<'static>,
+        rhs: ast::Expr<'static>,
+    ) -> ast::Expr<'static> {
+        self.binary_op_to_sql(lhs, rhs, BinaryOp::And)
     }
 
-    fn new_table_alias(&self, alias: String, columns: Vec<Ident>) -> ast::TableAlias {
-        let columns = columns
-            .into_iter()
-            .map(|ident| TableAliasColumnDef {
-                name: ident,
-                data_type: None,
-            })
-            .collect();
-        ast::TableAlias {
-            name: self.new_ident_quoted_if_needs(alias),
-            columns,
-            explicit: true,
-            at: None,
-        }
+    fn new_table_alias(
+        &self,
+        alias: String,
+        columns: Vec<Ident<'static>>,
+    ) -> ast::TableAlias<'static> {
+        table_alias(self.new_ident_quoted_if_needs(alias), columns)
     }
 
-    fn dml_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement> {
+    fn dml_to_sql(&self, plan: &LogicalPlan) -> Result<ast::Statement<'static>> {
         not_impl_err!("Unsupported plan: {plan:?}")
     }
 

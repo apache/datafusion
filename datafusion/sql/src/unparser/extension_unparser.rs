@@ -2,10 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::ast::Statement;
 use crate::unparser::Unparser;
 use crate::unparser::ast::{QueryBuilder, RelationBuilder, SelectBuilder};
 use datafusion_expr::UserDefinedLogicalNode;
-use sqlparser::ast::Statement;
 
 /// This trait allows users to define custom unparser logic for their custom logical nodes.
 pub trait UserDefinedLogicalNodeUnparser {
@@ -51,10 +51,9 @@ pub enum UnparseWithinStatementResult {
 }
 
 /// The result of unparsing a custom logical node to a statement.
-#[expect(clippy::large_enum_variant)]
 pub enum UnparseToStatementResult {
     /// If the custom logical node was successfully unparsed to a statement.
-    Modified(Statement),
+    Modified(Statement<'static>),
     /// If the custom logical node wasn't unparsed.
     Unmodified,
 }

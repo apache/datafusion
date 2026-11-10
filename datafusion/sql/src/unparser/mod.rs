@@ -6,6 +6,7 @@
 
 pub mod ast;
 mod expr;
+mod keywords;
 mod plan;
 mod rewrite;
 mod utils;

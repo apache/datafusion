@@ -10,12 +10,12 @@ use std::sync::Arc;
 use datafusion::common::DFSchemaRef;
 use datafusion::common::ScalarValue;
 use datafusion::error::Result;
-use datafusion::logical_expr::sqlparser::ast::Statement;
 use datafusion::logical_expr::{
     Extension, LogicalPlan, LogicalPlanBuilder, UserDefinedLogicalNode,
     UserDefinedLogicalNodeCore,
 };
 use datafusion::prelude::*;
+use datafusion::sql::ast::StatementKind;
 use datafusion::sql::unparser::ast::{
     DerivedRelationBuilder, QueryBuilder, RelationBuilder, SelectBuilder,
 };
@@ -257,7 +257,8 @@ impl UserDefinedLogicalNodeUnparser for PlanToSubquery {
         relation: &mut Option<&mut RelationBuilder>,
     ) -> Result<UnparseWithinStatementResult> {
         if let Some(plan) = node.as_any().downcast_ref::<MyLogicalPlan>() {
-            let Statement::Query(input) = unparser.plan_to_sql(&plan.input)? else {
+            let StatementKind::Query(input) = unparser.plan_to_sql(&plan.input)?.kind
+            else {
                 return Ok(UnparseWithinStatementResult::Unmodified);
             };
             let mut derived_builder = DerivedRelationBuilder::default();
