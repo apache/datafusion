@@ -97,6 +97,8 @@ sql = [
     "sqlparser",
 ]
 string_expressions = ["datafusion-functions/string_expressions"]
+# Enables converting logical plans and expressions back to SQL
+unparser = ["sql", "datafusion-sql/unparser"]
 unicode_expressions = [
     "datafusion-sql?/unicode_expressions",
     "datafusion-functions/unicode_expressions",

@@ -10,8 +10,7 @@ use std::cell::Cell;
 
 use crate::highlighter::{Color, NoSyntaxHighlighter, SyntaxHighlighter};
 
-use datafusion::sql::parser::{DFParser, DFParserBuilder, Statement};
-use datafusion::sql::sqlparser::dialect::dialect_from_str;
+use datafusion::sql::parser::{DFParser, DFParserBuilder, Statement, dialect_from_str};
 use datafusion_common::config::{Dialect, SqlParserOptions};
 
 use rustyline::completion::{Completer, FilenameCompleter, Pair};
@@ -71,7 +70,7 @@ impl CliHelper {
 
     fn validate_input(&self, input: &str) -> Result<ValidationResult> {
         if let Some(sql) = input.strip_suffix(';') {
-            let Some(dialect) = dialect_from_str(self.dialect) else {
+            let Some(dialect) = dialect_from_str(self.dialect.as_ref()) else {
                 return Ok(ValidationResult::Invalid(Some(format!(
                     "  🤔 Invalid dialect: {}",
                     self.dialect
@@ -80,7 +79,7 @@ impl CliHelper {
             let lines = split_from_semicolon(sql);
             for line in lines {
                 let statements = DFParserBuilder::new(line.as_str())
-                    .with_dialect(dialect.as_ref())
+                    .with_dialect(dialect)
                     .with_recursion_limit(self.recursion_limit)
                     .build()
                     .and_then(|mut parser| parser.parse_statements());

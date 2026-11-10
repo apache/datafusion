@@ -28,10 +28,9 @@ use datafusion_functions_window::planner::WindowFunctionPlanner;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{OptimizerConfig, OptimizerContext, OptimizerRule};
+use datafusion_sql::dialect::DataFusion;
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
-use datafusion_sql::sqlparser::ast::Statement;
-use datafusion_sql::sqlparser::dialect::GenericDialect;
-use datafusion_sql::sqlparser::parser::Parser;
+use datafusion_sql::sqlparser::parse_sql;
 use insta::assert_snapshot;
 
 #[cfg(test)]
@@ -601,8 +600,7 @@ fn recursive_cte_projection_pushdown_baseline() -> Result<()> {
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
-    let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
-    let ast: Vec<Statement> = Parser::parse_sql(&dialect, sql).unwrap();
+    let ast = parse_sql::<DataFusion>(sql).unwrap();
     let statement = &ast[0];
     let context_provider = MyContextProvider::default()
         .with_udaf(sum_udaf())
@@ -695,10 +693,8 @@ fn limit_offset_parameters_leave_cast_inputs_unresolved_after_optimization() -> 
 
 #[test]
 fn limit_parameter_binding_with_inferred_type() -> Result<()> {
-    let statements = Parser::parse_sql(
-        &GenericDialect {},
-        "SELECT $1 + CAST(1 AS INT) AS value LIMIT $1",
-    )?;
+    let statements =
+        parse_sql::<DataFusion>("SELECT $1 + CAST(1 AS INT) AS value LIMIT $1")?;
     let context_provider = MyContextProvider::default();
     let plan =
         SqlToRel::new(&context_provider).sql_statement_to_plan(statements[0].clone())?;

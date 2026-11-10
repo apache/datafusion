@@ -18,8 +18,7 @@ use datafusion::physical_plan::operator_statistics::StatisticsRegistry;
 use datafusion::physical_plan::statistics::{StatisticsArgs, StatisticsContext};
 use datafusion::physical_plan::{ExecutionPlan, collect};
 use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
-use datafusion::sql::parser::{DFParserBuilder, Statement};
-use datafusion::sql::sqlparser::dialect::dialect_from_str;
+use datafusion::sql::parser::{DFParserBuilder, Statement, dialect_from_str};
 use datafusion_common::config::{Dialect, SqlParserOptions};
 use datafusion_common::config_err;
 use datafusion_common::stats::Precision;
@@ -154,7 +153,7 @@ impl RunOpt {
     async fn report_statement(
         &self,
         ctx: &SessionContext,
-        statement: Statement,
+        statement: Statement<'_>,
     ) -> Result<Vec<OperatorReport>> {
         let state = ctx.state();
         let logical_plan = state.statement_to_plan(statement).await?;
@@ -604,8 +603,11 @@ fn serialize_report(report: &[QueryReport]) -> Result<String> {
         .map_err(|error| DataFusionError::External(Box::new(error)))
 }
 
-fn sql_statements(sql: &str, options: &SqlParserOptions) -> Result<VecDeque<Statement>> {
-    let dialect = dialect_from_str(options.dialect).ok_or_else(|| {
+fn sql_statements<'a>(
+    sql: &'a str,
+    options: &SqlParserOptions,
+) -> Result<VecDeque<Statement<'a>>> {
+    let dialect = dialect_from_str(options.dialect.as_ref()).ok_or_else(|| {
         DataFusionError::Plan(format!(
             "Unsupported SQL dialect: {}. Available dialects: {}.",
             options.dialect,
@@ -614,7 +616,7 @@ fn sql_statements(sql: &str, options: &SqlParserOptions) -> Result<VecDeque<Stat
     })?;
 
     DFParserBuilder::new(sql)
-        .with_dialect(dialect.as_ref())
+        .with_dialect(dialect)
         .with_recursion_limit(options.recursion_limit.get())
         .build()?
         .parse_statements()

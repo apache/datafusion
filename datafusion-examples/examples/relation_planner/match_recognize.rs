@@ -61,7 +61,7 @@ use std::{any::Any, cmp::Ordering, hash::Hasher, sync::Arc};
 
 use arrow::array::{ArrayRef, Float64Array, Int32Array, StringArray};
 use arrow::record_batch::RecordBatch;
-use datafusion::common::{DFSchemaRef, Result};
+use datafusion::common::{DFSchemaRef, Result, not_impl_err};
 use datafusion::logical_expr::{
     Expr, UserDefinedLogicalNode,
     logical_plan::{Extension, InvariantLevel, LogicalPlan},
@@ -70,7 +70,7 @@ use datafusion::logical_expr::{
     },
 };
 use datafusion::prelude::*;
-use datafusion::sql::sqlparser::ast::TableFactor;
+use datafusion::sql::ast::{MatchRecognize, TableFactor};
 use insta::assert_snapshot;
 
 // ============================================================================
@@ -82,7 +82,10 @@ use insta::assert_snapshot;
 /// Note: This example demonstrates **logical planning only**. Physical execution
 /// would require additional implementation of an [`ExecutionPlan`].
 pub async fn match_recognize() -> Result<()> {
-    let ctx = SessionContext::new();
+    // Parse with a dialect that has MATCH_RECOGNIZE, such as Snowflake's.
+    let config =
+        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "snowflake");
+    let ctx = SessionContext::new_with_config(config);
     ctx.register_relation_planner(Arc::new(MatchRecognizePlanner))?;
     register_sample_data(&ctx)?;
 
@@ -336,32 +339,36 @@ impl UserDefinedLogicalNode for MiniMatchRecognizeNode {
 struct MatchRecognizePlanner;
 
 impl RelationPlanner for MatchRecognizePlanner {
-    fn plan_relation(
+    fn plan_relation<'a>(
         &self,
-        relation: TableFactor,
+        relation: TableFactor<'a>,
         ctx: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning> {
-        let TableFactor::MatchRecognize {
+    ) -> Result<RelationPlanning<'a>> {
+        let TableFactor::MatchRecognize(match_recognize) = relation else {
+            return Ok(RelationPlanning::Original(Box::new(relation)));
+        };
+        let MatchRecognize {
             table,
             measures,
             symbols,
-            alias,
             ..
-        } = relation
-        else {
-            return Ok(RelationPlanning::Original(Box::new(relation)));
-        };
+        } = *match_recognize;
 
-        // Plan the input table
-        let input = ctx.plan(*table)?;
+        // Plan the input table. An alias written before MATCH_RECOGNIZE names
+        // the input, so this example rejects it; the alias after the clause
+        // is applied by DataFusion to the plan returned here.
+        if table.alias.is_some() {
+            return not_impl_err!("An alias before MATCH_RECOGNIZE is not supported");
+        }
+        let input = ctx.plan(table.factor)?;
         let schema = input.schema().clone();
 
         // Convert MEASURES: SQL expressions → DataFusion expressions
         let planned_measures: Vec<(String, Expr)> = measures
             .iter()
-            .map(|m| {
-                let alias = ctx.normalize_ident(m.alias.clone());
-                let expr = ctx.sql_to_expr(m.expr.clone(), schema.as_ref())?;
+            .map(|(expr, alias)| {
+                let alias = ctx.normalize_ident(alias.clone());
+                let expr = ctx.sql_to_expr(expr.clone(), schema.as_ref())?;
                 Ok((alias, expr))
             })
             .collect::<Result<_>>()?;
@@ -369,9 +376,9 @@ impl RelationPlanner for MatchRecognizePlanner {
         // Convert DEFINE: symbol definitions → DataFusion expressions
         let planned_definitions: Vec<(String, Expr)> = symbols
             .iter()
-            .map(|s| {
-                let name = ctx.normalize_ident(s.symbol.clone());
-                let expr = ctx.sql_to_expr(s.definition.clone(), schema.as_ref())?;
+            .map(|(symbol, definition)| {
+                let name = ctx.normalize_ident(symbol.clone());
+                let expr = ctx.sql_to_expr(definition.clone(), schema.as_ref())?;
                 Ok((name, expr))
             })
             .collect::<Result<_>>()?;
@@ -389,7 +396,7 @@ impl RelationPlanner for MatchRecognizePlanner {
         });
 
         Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
-            plan, alias,
+            plan, None,
         ))))
     }
 }

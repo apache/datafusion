@@ -52,6 +52,7 @@ use std::sync::Arc;
 use arrow::array::{ArrayRef, Int64Array, StringArray};
 use arrow::record_batch::RecordBatch;
 use datafusion::common::{Result, ScalarValue, plan_datafusion_err};
+use datafusion::logical_expr::LogicalPlan;
 use datafusion::logical_expr::{
     Expr, case, col, lit,
     logical_plan::builder::LogicalPlanBuilder,
@@ -60,7 +61,10 @@ use datafusion::logical_expr::{
     },
 };
 use datafusion::prelude::*;
-use datafusion::sql::sqlparser::ast::{NullInclusion, PivotValueSource, TableFactor};
+use datafusion::sql::ast::{
+    Expr as SQLExpr, ExprWithAlias, Ident, Pivot, PivotClause, PivotSource, TableFactor,
+    TableRef, Unpivot, UnpivotClause,
+};
 use insta::assert_snapshot;
 
 // ============================================================================
@@ -69,7 +73,10 @@ use insta::assert_snapshot;
 
 /// Runs the PIVOT/UNPIVOT examples demonstrating data reshaping operations.
 pub async fn pivot_unpivot() -> Result<()> {
-    let ctx = SessionContext::new();
+    // Parse with a dialect that has PIVOT and UNPIVOT, such as Snowflake's.
+    let config =
+        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "snowflake");
+    let ctx = SessionContext::new_with_config(config);
     ctx.register_relation_planner(Arc::new(PivotUnpivotPlanner))?;
     register_sample_data(&ctx)?;
 
@@ -334,48 +341,65 @@ fn register_sample_data(ctx: &SessionContext) -> Result<()> {
 struct PivotUnpivotPlanner;
 
 impl RelationPlanner for PivotUnpivotPlanner {
-    fn plan_relation(
+    fn plan_relation<'a>(
         &self,
-        relation: TableFactor,
+        relation: TableFactor<'a>,
         ctx: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning> {
+    ) -> Result<RelationPlanning<'a>> {
+        // The alias after the clause, as in `PIVOT (...) AS p`, is not part of
+        // the factor: DataFusion applies it to the plan returned here.
         match relation {
-            TableFactor::Pivot {
-                table,
-                aggregate_functions,
-                value_column,
-                value_source,
-                alias,
-                ..
-            } => plan_pivot(
-                ctx,
-                *table,
-                &aggregate_functions,
-                &value_column,
-                value_source,
-                alias,
-            ),
+            TableFactor::Pivot(pivot) => {
+                let Pivot {
+                    table,
+                    clause:
+                        PivotClause {
+                            aggregates,
+                            columns,
+                            source,
+                            ..
+                        },
+                } = *pivot;
+                plan_pivot(ctx, table, &aggregates, &columns, source)
+            }
 
-            TableFactor::Unpivot {
-                table,
-                value,
-                name,
-                columns,
-                null_inclusion,
-                alias,
-            } => plan_unpivot(
-                ctx,
-                *table,
-                &value,
-                name,
-                &columns,
-                null_inclusion.as_ref(),
-                alias,
-            ),
+            TableFactor::Unpivot(unpivot) => {
+                let Unpivot {
+                    table,
+                    clause:
+                        UnpivotClause {
+                            include_nulls,
+                            value,
+                            name,
+                            columns,
+                        },
+                } = *unpivot;
+                plan_unpivot(ctx, table, &value, name, &columns, include_nulls)
+            }
 
             other => Ok(RelationPlanning::Original(Box::new(other))),
         }
     }
+}
+
+/// Plans the table a clause applies to, with its alias, as in
+/// `sales AS s PIVOT (...)`.
+fn plan_table(
+    ctx: &mut dyn RelationPlannerContext,
+    table: TableRef<'_>,
+) -> Result<LogicalPlan> {
+    let plan = ctx.plan(table.factor)?;
+    let Some(alias) = table.alias else {
+        return Ok(plan);
+    };
+    if !alias.columns.is_empty() {
+        return Err(plan_datafusion_err!(
+            "Column aliases before PIVOT or UNPIVOT are not supported"
+        ));
+    }
+    LogicalPlanBuilder::from(plan)
+        .alias(ctx.normalize_ident(alias.name))?
+        .build()
 }
 
 // ============================================================================
@@ -383,16 +407,15 @@ impl RelationPlanner for PivotUnpivotPlanner {
 // ============================================================================
 
 /// Rewrite PIVOT to GROUP BY with CASE expressions.
-fn plan_pivot(
+fn plan_pivot<'a>(
     ctx: &mut dyn RelationPlannerContext,
-    table: TableFactor,
-    aggregate_functions: &[datafusion::sql::sqlparser::ast::ExprWithAlias],
-    value_column: &[datafusion::sql::sqlparser::ast::Expr],
-    value_source: PivotValueSource,
-    alias: Option<datafusion::sql::sqlparser::ast::TableAlias>,
-) -> Result<RelationPlanning> {
+    table: TableRef<'_>,
+    aggregate_functions: &[ExprWithAlias<'_>],
+    value_column: &[SQLExpr<'_>],
+    value_source: PivotSource<'_>,
+) -> Result<RelationPlanning<'a>> {
     // Plan the input table
-    let input = ctx.plan(table)?;
+    let input = plan_table(ctx, table)?;
     let schema = input.schema();
 
     // Parse aggregate functions
@@ -412,7 +435,7 @@ fn plan_pivot(
 
     // Parse pivot values
     let pivot_values = match value_source {
-        PivotValueSource::List(list) => list
+        PivotSource::List(list) => list
             .iter()
             .map(|item| {
                 let alias = item
@@ -495,7 +518,7 @@ fn plan_pivot(
         .build()?;
 
     Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
-        plan, alias,
+        plan, None,
     ))))
 }
 
@@ -504,17 +527,16 @@ fn plan_pivot(
 // ============================================================================
 
 /// Rewrite UNPIVOT to UNION ALL of projections.
-fn plan_unpivot(
+fn plan_unpivot<'a>(
     ctx: &mut dyn RelationPlannerContext,
-    table: TableFactor,
-    value: &datafusion::sql::sqlparser::ast::Expr,
-    name: datafusion::sql::sqlparser::ast::Ident,
-    columns: &[datafusion::sql::sqlparser::ast::ExprWithAlias],
-    null_inclusion: Option<&NullInclusion>,
-    alias: Option<datafusion::sql::sqlparser::ast::TableAlias>,
-) -> Result<RelationPlanning> {
+    table: TableRef<'_>,
+    value: &SQLExpr<'_>,
+    name: Ident<'_>,
+    columns: &[ExprWithAlias<'_>],
+    include_nulls: Option<bool>,
+) -> Result<RelationPlanning<'a>> {
     // Plan the input table
-    let input = ctx.plan(table)?;
+    let input = plan_table(ctx, table)?;
     let schema = input.schema();
 
     // Output column names
@@ -569,16 +591,14 @@ fn plan_unpivot(
     }
 
     // Apply EXCLUDE NULLS filter (default behavior)
-    let exclude_nulls = null_inclusion.is_none()
-        || matches!(null_inclusion, Some(&NullInclusion::ExcludeNulls));
-    if exclude_nulls {
+    if include_nulls != Some(true) {
         plan = LogicalPlanBuilder::from(plan)
             .filter(col(&value_col_name).is_not_null())?
             .build()?;
     }
 
     Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
-        plan, alias,
+        plan, None,
     ))))
 }
 

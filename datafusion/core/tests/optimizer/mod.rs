@@ -26,10 +26,9 @@ use datafusion_functions::core::expr_ext::FieldAccessor;
 use datafusion_optimizer::analyzer::Analyzer;
 use datafusion_optimizer::optimizer::Optimizer;
 use datafusion_optimizer::{OptimizerConfig, OptimizerContext};
+use datafusion_sql::dialect::DataFusion;
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
-use datafusion_sql::sqlparser::ast::Statement;
-use datafusion_sql::sqlparser::dialect::GenericDialect;
-use datafusion_sql::sqlparser::parser::Parser;
+use datafusion_sql::sqlparser::parse_sql;
 
 use chrono::DateTime;
 use datafusion_expr::expr_rewriter::rewrite_with_guarantees;
@@ -144,8 +143,7 @@ fn expensive_regexp_like_is_deferred_to_execution() -> Result<()> {
 
 fn test_sql(sql: &str) -> Result<LogicalPlan> {
     // parse the SQL
-    let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
-    let ast: Vec<Statement> = Parser::parse_sql(&dialect, sql).unwrap();
+    let ast = parse_sql::<DataFusion>(sql).unwrap();
     let statement = &ast[0];
 
     // create a logical query plan

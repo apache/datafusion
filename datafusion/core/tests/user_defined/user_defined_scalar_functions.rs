@@ -31,6 +31,7 @@ use datafusion_common::{
     types::{NativeType, logical_int16},
 };
 use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
+use datafusion_expr::sql::Ident;
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
     OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
@@ -41,8 +42,6 @@ use datafusion_expr_common::signature::TypeSignature;
 use datafusion_functions_nested::range::range_udf;
 use parking_lot::Mutex;
 use regex::Regex;
-use sqlparser::ast::Ident;
-use sqlparser::tokenizer::Span;
 
 /// test that casting happens on udfs.
 /// c11 is f32, but `custom_sqrt` requires f64. Casting happens but the logical plan and
@@ -1338,21 +1337,13 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
         temporary: false,
         name: "strlen".into(),
         args: Some(vec![OperateFunctionArg {
-            name: Some(Ident {
-                value: "name".into(),
-                quote_style: None,
-                span: Span::empty(),
-            }),
+            name: Some(Ident::new("name")),
             field: Arc::new(Field::new("name", DataType::Utf8View, true)),
             default_expr: None,
         }]),
         return_field: Some(DataType::Int32.into_nullable_field_ref()),
         params: CreateFunctionBody {
-            language: Some(Ident {
-                value: "plrust".into(),
-                quote_style: None,
-                span: Span::empty(),
-            }),
+            language: Some(Ident::new("plrust")),
             behavior: None,
             function_body: Some(lit(body)),
         },

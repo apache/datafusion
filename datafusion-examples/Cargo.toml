@@ -22,6 +22,10 @@ rust-version = { workspace = true }
 [lints]
 workspace = true
 
+[features]
+# Runs the examples that convert plans and expressions back to SQL
+unparser = ["datafusion/unparser"]
+
 [dependencies]
 arrow = { workspace = true }
 arrow-schema = { workspace = true }
