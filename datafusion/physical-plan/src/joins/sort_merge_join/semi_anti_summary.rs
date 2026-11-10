@@ -14,7 +14,7 @@ use std::cmp::Ordering;
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, Datum, RecordBatch, Scalar};
 use arrow::buffer::BooleanBuffer;
 use arrow::compute::kernels::cmp;
-use arrow::compute::or;
+use arrow::compute::{is_not_null, or};
 use arrow::datatypes::{DataType, Schema};
 use datafusion_common::{JoinSide, Result, ScalarValue};
 use datafusion_expr::Operator;
@@ -28,6 +28,9 @@ use crate::joins::utils::{JoinFilter, boolean_mask_from_filter};
 const DIRECT_PROBES: usize = 2;
 /// Check the first small vector of rows before doubling the prefix length.
 const FIRST_PREFIX_ROWS: usize = 8;
+/// Also check a pending string winner before the next value crosses this budget.
+/// A single string can exceed the budget on its own.
+const STRING_PREFIX_BYTES: usize = 64 * 1024;
 
 /// A recognized comparison, normalized to `outer OP inner`.
 #[derive(Debug, Clone, Copy)]
@@ -39,34 +42,25 @@ pub(super) struct SemiAntiComparison {
 
 /// Cached once per buffered key group and reused across outer batches.
 #[derive(Debug)]
-pub(super) enum GroupSummary<S = Box<str>, N = Scalar<ArrayRef>> {
+pub(super) enum GroupSummary<S = Box<str>> {
     Scalars {
-        extreme: N,
-        other: Option<N>,
+        extreme: Scalar<ArrayRef>,
+        other: Option<Scalar<ArrayRef>>,
     },
-    Strings {
-        extreme: Option<S>,
-        other: Option<S>,
-    },
-}
-
-/// While scanning, fixed-width values use DataFusion's min/max kernels and
-/// string values borrow directly from the buffered input.
-type RunningExtrema<'a> = GroupSummary<&'a str, ScalarValue>;
-
-impl<'a> RunningExtrema<'a> {
-    fn snapshot(&self) -> Result<GroupSummary<&'a str>> {
-        Ok(match self {
-            Self::Scalars { extreme, other } => GroupSummary::Scalars {
-                extreme: extreme.to_scalar()?,
-                other: other.as_ref().map(ScalarValue::to_scalar).transpose()?,
-            },
-            &Self::Strings { extreme, other } => GroupSummary::Strings { extreme, other },
-        })
-    }
+    /// The range extremum or the single distinct non-null string for `!=`.
+    String(Option<S>),
+    /// Two distinct non-null strings witness `!=` for every non-null outer row.
+    AllNonNull,
 }
 
 impl GroupSummary<&str> {
+    fn from_scalars(extreme: &ScalarValue, other: Option<&ScalarValue>) -> Result<Self> {
+        Ok(Self::Scalars {
+            extreme: extreme.to_scalar()?,
+            other: other.map(ScalarValue::to_scalar).transpose()?,
+        })
+    }
+
     pub(super) fn memory_size(&self) -> usize {
         let array_size = |value: &Scalar<ArrayRef>| value.get().0.get_array_memory_size();
         size_of::<GroupSummary>()
@@ -74,9 +68,8 @@ impl GroupSummary<&str> {
                 Self::Scalars { extreme, other } => {
                     array_size(extreme) + other.as_ref().map_or(0, array_size)
                 }
-                Self::Strings { extreme, other } => {
-                    extreme.map_or(0, str::len) + other.map_or(0, str::len)
-                }
+                Self::String(value) => value.map_or(0, str::len),
+                Self::AllNonNull => 0,
             }
     }
 
@@ -85,10 +78,8 @@ impl GroupSummary<&str> {
     pub(super) fn into_owned(self) -> GroupSummary {
         match self {
             Self::Scalars { extreme, other } => GroupSummary::Scalars { extreme, other },
-            Self::Strings { extreme, other } => GroupSummary::Strings {
-                extreme: extreme.map(Box::from),
-                other: other.map(Box::from),
-            },
+            Self::String(value) => GroupSummary::String(value.map(Box::from)),
+            Self::AllNonNull => GroupSummary::AllNonNull,
         }
     }
 }
@@ -168,20 +159,25 @@ impl SemiAntiComparison {
         }))
     }
 
-    /// Apply two direct row probes, then check the extrema after 8, 16, 32, ...
-    /// rows. Only the newly reached rows enter each reduction, including when a
-    /// checkpoint crosses an input batch boundary. A witness at row k costs
-    /// O(k) inner rows even when the full group is much larger.
+    /// Probe the first two rows directly, then check extrema after 8, 16, 32, ...
+    /// rows, or earlier for wide strings. Each reduction visits only new rows
+    /// even when a checkpoint crosses an input batch. String `!=` probes the
+    /// first non-null value; a second distinct value determines every outer slice.
     ///
     /// The callback records the mask for this outer slice and returns true once
-    /// every matchable row has a witness. A complete scan returns the exact
-    /// summary for later outer slices. An early stop leaves the input buffered.
+    /// every matchable row has a witness. An exact summary can serve later
+    /// outer slices; an early stop without one leaves the input buffered.
     pub(super) fn scan<'a>(
         &self,
         batches: &'a [RecordBatch],
         outer: &RecordBatch,
         mut matches_all: impl FnMut(&BooleanArray) -> bool,
     ) -> Result<Option<GroupSummary<&'a str>>> {
+        let data_type = batches[0].column(self.inner_column).data_type();
+        if data_type.is_string() && self.op == Operator::NotEq {
+            return self.scan_string_not_equal(batches, outer, matches_all);
+        }
+
         let mut probes_left = DIRECT_PROBES;
         for batch in batches {
             let len = probes_left.min(batch.num_rows());
@@ -198,24 +194,17 @@ impl SemiAntiComparison {
 
         // The probes neither copy string payloads nor build reduction state.
         // Include their values in the first reduction for later outer slices.
-        let data_type = batches[0].column(self.inner_column).data_type();
         let wants_max = matches!(self.op, Operator::Lt | Operator::LtEq);
         let order = if wants_max {
             Ordering::Greater
         } else {
             Ordering::Less
         };
-        let mut state = if data_type.is_string() {
-            RunningExtrema::Strings {
-                extreme: None,
-                other: None,
-            }
-        } else {
-            let extreme = ScalarValue::try_from(data_type)?;
-            let other = (self.op == Operator::NotEq).then(|| extreme.clone());
-            RunningExtrema::Scalars { extreme, other }
-        };
-
+        if data_type.is_string() {
+            return self.scan_string_range(batches, outer, order, matches_all);
+        }
+        let mut extreme = ScalarValue::try_from(data_type)?;
+        let mut other = (self.op == Operator::NotEq).then(|| extreme.clone());
         let mut scanned = 0;
         let mut checkpoint = FIRST_PREFIX_ROWS;
         let mut changed = false;
@@ -225,55 +214,110 @@ impl SemiAntiComparison {
             while start < column.len() {
                 let len = (checkpoint - scanned).min(column.len() - start);
                 let finished = index + 1 == batches.len() && start + len == column.len();
-                match &mut state {
-                    RunningExtrema::Scalars { extreme, other } => {
-                        let values = column.slice(start, len);
-                        let next = if wants_max {
-                            max_batch(&values)?
-                        } else {
-                            min_batch(&values)?
-                        };
-                        changed |= update_extreme(extreme, next, order);
-                        if let Some(max) = other {
-                            changed |= update_extreme(
-                                max,
-                                max_batch(&values)?,
-                                Ordering::Greater,
-                            );
-                        }
-                    }
-                    RunningExtrema::Strings { extreme, other } => {
-                        for value in strings(column).skip(start).take(len).flatten() {
-                            if extreme.is_none_or(|old| value.cmp(old) == order) {
-                                *extreme = Some(value);
-                                changed = true;
-                            }
-                            if self.op == Operator::NotEq
-                                && other.is_none_or(|old| value > old)
-                            {
-                                *other = Some(value);
-                                changed = true;
-                            }
-                        }
-                    }
+                let values = column.slice(start, len);
+                let next = if wants_max {
+                    max_batch(&values)?
+                } else {
+                    min_batch(&values)?
+                };
+                changed |= update_extreme(&mut extreme, next, order);
+                if let Some(max) = &mut other {
+                    changed |=
+                        update_extreme(max, max_batch(&values)?, Ordering::Greater);
                 }
                 start += len;
                 scanned += len;
                 if scanned == checkpoint && !finished {
-                    if changed && matches_all(&self.evaluate(&state.snapshot()?, outer)?)
-                    {
-                        return Ok(None);
+                    if changed {
+                        let summary =
+                            GroupSummary::from_scalars(&extreme, other.as_ref())?;
+                        if matches_all(&self.evaluate(&summary, outer)?) {
+                            return Ok(None);
+                        }
                     }
                     changed = false;
                     checkpoint = checkpoint.saturating_mul(2);
                 }
             }
         }
-        let summary = state.snapshot()?;
+        let summary = GroupSummary::from_scalars(&extreme, other.as_ref())?;
         if changed {
             matches_all(&self.evaluate(&summary, outer)?);
         }
         Ok(Some(summary))
+    }
+
+    fn scan_string_range<'a>(
+        &self,
+        batches: &'a [RecordBatch],
+        outer: &RecordBatch,
+        order: Ordering,
+        mut matches_all: impl FnMut(&BooleanArray) -> bool,
+    ) -> Result<Option<GroupSummary<&'a str>>> {
+        let mut extreme = None;
+        let mut changed = false;
+        let mut checkpoint = FIRST_PREFIX_ROWS;
+        let mut bytes = 0usize;
+        let values = batches
+            .iter()
+            .flat_map(|b| strings(b.column(self.inner_column)));
+        for (row, value) in values.enumerate() {
+            let len = value.map_or(0, str::len);
+            if row == checkpoint || len > STRING_PREFIX_BYTES.saturating_sub(bytes) {
+                if changed
+                    && matches_all(&self.evaluate(&GroupSummary::String(extreme), outer)?)
+                {
+                    return Ok(None);
+                }
+                changed = false;
+                bytes = 0;
+                if row == checkpoint {
+                    checkpoint = checkpoint.saturating_mul(2);
+                }
+            }
+            bytes = bytes.saturating_add(len);
+            if let Some(value) = value
+                && extreme.is_none_or(|old| value.cmp(old) == order)
+            {
+                extreme = Some(value);
+                // The direct probes already recorded matches for these rows.
+                changed |= row >= DIRECT_PROBES;
+            }
+        }
+        let summary = GroupSummary::String(extreme);
+        if changed {
+            matches_all(&self.evaluate(&summary, outer)?);
+        }
+        Ok(Some(summary))
+    }
+
+    fn scan_string_not_equal<'a>(
+        &self,
+        batches: &'a [RecordBatch],
+        outer: &RecordBatch,
+        mut matches_all: impl FnMut(&BooleanArray) -> bool,
+    ) -> Result<Option<GroupSummary<&'a str>>> {
+        let mut representative = None;
+        for batch in batches {
+            for (row, value) in strings(batch.column(self.inner_column)).enumerate() {
+                let Some(value) = value else { continue };
+                match representative {
+                    None => {
+                        representative = Some(value);
+                        if matches_all(&self.evaluate_inner_row(batch, row, outer)?) {
+                            return Ok(None);
+                        }
+                    }
+                    Some(first) if value != first => {
+                        let summary = GroupSummary::AllNonNull;
+                        matches_all(&self.evaluate(&summary, outer)?);
+                        return Ok(Some(summary));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(Some(GroupSummary::String(representative)))
     }
 
     pub(super) fn evaluate<S: AsRef<str>>(
@@ -289,16 +333,16 @@ impl SemiAntiComparison {
                     None => Ok(matched),
                 }
             }
-            GroupSummary::Strings { extreme, other } => {
-                let extreme = extreme.as_ref().map(AsRef::as_ref);
-                let other = other.as_ref().map(AsRef::as_ref);
+            GroupSummary::AllNonNull => Ok(is_not_null(outer.column(self.outer_column))?),
+            GroupSummary::String(value) => {
+                let extreme = value.as_ref().map(AsRef::as_ref);
                 let hits = strings(outer.column(self.outer_column)).map(|value| {
                     value.zip(extreme).is_some_and(|(x, y)| match self.op {
                         Operator::Lt => x < y,
                         Operator::LtEq => x <= y,
                         Operator::Gt => x > y,
                         Operator::GtEq => x >= y,
-                        Operator::NotEq => x != y || other.is_some_and(|z| x != z),
+                        Operator::NotEq => x != y,
                         _ => unreachable!("invalid semi/anti summary comparison"),
                     })
                 });

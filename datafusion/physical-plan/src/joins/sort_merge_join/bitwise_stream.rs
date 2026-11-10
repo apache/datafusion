@@ -809,18 +809,18 @@ impl BitwiseSortMergeJoinStream {
     }
 
     /// Apply the recognized comparison to this slice and cache a completed
-    /// summary if its owned values fit in the group's reservation. Returns
-    /// false if later slices of this key must use the original filter.
+    /// summary when a later slice can reuse it within the group's reservation.
     fn apply_summary(
         &mut self,
         comparison: SemiAntiComparison,
         outer: &RecordBatch,
         summary: &mut Option<Box<GroupSummary>>,
-    ) -> Result<bool> {
+        may_continue: bool,
+    ) -> Result<()> {
         let matchable =
             outer.num_rows() - outer.column(comparison.outer_column).null_count();
         if matchable == 0 {
-            return Ok(true);
+            return Ok(());
         }
         if let Some(values) = summary {
             merge_matches(
@@ -828,7 +828,7 @@ impl BitwiseSortMergeJoinStream {
                 self.outer_offset,
                 &comparison.evaluate(values, outer)?,
             );
-            return Ok(true);
+            return Ok(());
         }
 
         let start = self.outer_offset;
@@ -839,24 +839,28 @@ impl BitwiseSortMergeJoinStream {
                 .count_ones()
                 == matchable
         })?;
-        if let Some(values) = values {
+        if let Some(values) = values
+            && may_continue
+        {
             let retained = values.memory_size();
-            // A string prefix borrows the input. Admit its compact copy alongside
-            // the buffer before allocating it. On refusal the mask is already
-            // exact for this slice and later slices can still use the buffer.
-            let admitted = match values {
-                GroupSummary::Strings { .. } => self.reservation.try_grow(retained),
-                GroupSummary::Scalars { .. } => self.reservation.try_resize(retained),
-            };
-            if admitted.is_err() {
-                return Ok(false);
+            // A skewed string can exceed this group's prorated buffer charge.
+            // Keep the buffer in that case so a later outer batch cannot hold
+            // more of the shared pool than the buffered join would have held.
+            if retained > self.reservation.size() {
+                return Ok(());
             }
-            self.peak_mem_used.set_max(self.reservation.size());
+            if matches!(values, GroupSummary::String(Some(_))) {
+                // The input and its owned copy coexist until the buffer is cleared.
+                if self.reservation.try_grow(retained).is_err() {
+                    return Ok(());
+                }
+                self.peak_mem_used.set_max(self.reservation.size());
+            }
             *summary = Some(Box::new(values.into_owned()));
             self.clear_inner_key_group();
             self.reservation.resize(retained);
         }
-        Ok(true)
+        Ok(())
     }
 
     /// Process a key match with a filter. For each inner row in the buffered
@@ -868,7 +872,7 @@ impl BitwiseSortMergeJoinStream {
         &mut self,
         spill: Option<&Arc<dyn SpillFile>>,
         summary: &mut Option<Box<GroupSummary>>,
-        group_comparison: &mut Option<SemiAntiComparison>,
+        group_comparison: Option<SemiAntiComparison>,
     ) -> Result<()> {
         let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
 
@@ -894,10 +898,13 @@ impl BitwiseSortMergeJoinStream {
         let outer_batch = self.outer_batch.as_ref().unwrap();
         let outer_slice = outer_batch.slice(outer_group_start, outer_group_len);
 
-        if let Some(comparison) = *group_comparison {
-            if !self.apply_summary(comparison, &outer_slice, summary)? {
-                *group_comparison = None;
-            }
+        if let Some(comparison) = group_comparison {
+            self.apply_summary(
+                comparison,
+                &outer_slice,
+                summary,
+                outer_group_end == num_outer,
+            )?;
             self.outer_offset = outer_group_end;
             return Ok(());
         }
@@ -987,7 +994,7 @@ impl BitwiseSortMergeJoinStream {
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
         let mut summary = None;
-        let mut group_comparison = self.semi_anti_comparison.filter(|_| {
+        let group_comparison = self.semi_anti_comparison.filter(|_| {
             spill.is_none()
                 && self
                     .inner_key_buffer
@@ -1001,7 +1008,7 @@ impl BitwiseSortMergeJoinStream {
             self.process_key_match_with_filter(
                 spill.as_ref(),
                 &mut summary,
-                &mut group_comparison,
+                group_comparison,
             )
             .await?;
 

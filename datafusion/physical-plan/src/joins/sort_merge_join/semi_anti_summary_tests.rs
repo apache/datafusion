@@ -18,6 +18,7 @@ use datafusion_common::{
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
 use datafusion_execution::disk_manager::{DiskManagerBuilder, DiskManagerMode};
+use datafusion_execution::memory_pool::MemoryConsumer;
 use datafusion_execution::runtime_env::RuntimeEnvBuilder;
 use datafusion_expr::Operator;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, Literal, NotExpr};
@@ -270,8 +271,8 @@ async fn large_strings_produce_the_same_results_when_the_buffer_spills() -> Resu
     ];
     let outer = batch(Arc::new(StringArray::from(vec![values[0].as_str(), "m"])))?;
     let inner = batch(Arc::new(StringArray::from_iter_values(values.iter())))?;
-    // The two initial probes cross input batches. For != the first probe
-    // already matches "m", so its matched bit must survive the second probe.
+    // For != the first inner value matches "m". The third inner value
+    // also supplies a witness for the outer row equal to the first.
     for op in [Operator::NotEq, Operator::Lt] {
         for (limit, spill) in [(None, false), (Some(32 * 1024), true)] {
             let mut builder = RuntimeEnvBuilder::new();
@@ -296,19 +297,16 @@ async fn large_strings_produce_the_same_results_when_the_buffer_spills() -> Resu
 }
 
 #[tokio::test]
-async fn not_equal_reserves_both_compact_string_extrema() -> Result<()> {
-    let min = "a".repeat(16 * 1024);
-    let max = "z".repeat(32 * 1024);
-    let middle = "m".repeat(1024);
-    let mut values = vec![middle.as_str(); 7];
-    values[2] = min.as_str();
-    values[6] = max.as_str();
-    let values = Arc::new(StringArray::from(values));
+async fn uniform_not_equal_caches_one_string_when_the_copy_fits() -> Result<()> {
+    let long = "x".repeat(16 * 1024);
+    let values = Arc::new(StringArray::from(vec![long.as_str(); 7]));
     let inner = batch(Arc::clone(&values) as ArrayRef)?;
-    let outer = batch(Arc::new(StringArray::from(vec![middle.as_str()])))?;
+    let outer = batch(Arc::new(StringArray::from(vec![
+        long.as_str(),
+        long.as_str(),
+        "different",
+    ])))?;
 
-    // Until the cache is admitted, even extrema from different batches
-    // borrow their original Arrow payloads.
     let comparison = SemiAntiComparison::try_new(
         &filter(
             binary(column(0), Operator::NotEq, column(1)),
@@ -320,18 +318,62 @@ async fn not_equal_reserves_both_compact_string_extrema() -> Result<()> {
     )?
     .unwrap();
     let batches = [inner.slice(0, 4), inner.slice(4, 3)];
-    let Some(GroupSummary::Strings {
-        extreme: Some(lo),
-        other: Some(hi),
-    }) = comparison.scan(&batches, &outer, |_| false)?
+    let Some(GroupSummary::String(Some(value))) =
+        comparison.scan(&batches, &outer, |_| false)?
     else {
-        panic!("expected two string extrema");
+        panic!("expected one borrowed representative");
     };
-    assert!(std::ptr::eq(lo, values.value(2)));
-    assert!(std::ptr::eq(hi, values.value(6)));
+    assert!((0..inner.num_rows()).any(|row| std::ptr::eq(value, values.value(row))));
+    let buffered = inner.get_array_memory_size();
+    for (headroom, expect_cache) in [(0, false), (long.len() * 3 / 2, true)] {
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_limit(buffered + headroom, 1.0)
+            .build_arc()?;
+        let ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(SessionConfig::new().with_batch_size(1))
+                .with_runtime(Arc::clone(&runtime)),
+        );
+        let plan = join(
+            input(&outer, 1)?,
+            input(&inner, 7)?,
+            JoinType::LeftAnti,
+            Operator::NotEq,
+        )?;
+        let mut stream = plan.execute(0, ctx)?;
+        assert_eq!(row_ids(&stream.next().await.transpose()?.unwrap()), [0]);
+        let retained = runtime.memory_pool.reserved();
+        if expect_cache {
+            assert!((long.len()..2 * long.len()).contains(&retained));
+        } else {
+            assert_eq!(retained, buffered);
+        }
+        assert_eq!(row_ids(&stream.next().await.transpose()?.unwrap()), [1]);
+        assert_eq!(runtime.memory_pool.reserved(), retained);
+        assert!(stream.next().await.is_none());
+        assert_eq!(runtime.memory_pool.reserved(), 0);
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn mixed_not_equal_matches_all_later_non_nulls() -> Result<()> {
+    let first = "a".repeat(16 * 1024);
+    let second = "z".repeat(16 * 1024);
+    let mut values = vec![first.as_str(); 7];
+    values[2] = second.as_str();
+    let inner = batch(Arc::new(StringArray::from(values)))?;
+    let outer = batch(Arc::new(StringArray::from(vec![
+        Some(first.as_str()),
+        None,
+        None,
+        Some(first.as_str()),
+        Some(second.as_str()),
+        None,
+    ])))?;
     let plan = join(
-        input(&outer, 1)?,
-        input(&inner, 7)?,
+        input(&outer, 2)?,
+        input(&inner, 2)?,
         JoinType::LeftSemi,
         Operator::NotEq,
     )?;
@@ -339,25 +381,18 @@ async fn not_equal_reserves_both_compact_string_extrema() -> Result<()> {
     let pool = Arc::clone(ctx.memory_pool());
     let mut stream = plan.execute(0, ctx)?;
     assert_eq!(row_ids(&stream.next().await.transpose()?.unwrap()), [0]);
-
-    let retained = pool.reserved();
-    assert!(
-        retained >= min.len() + max.len(),
-        "both owned string payloads must be charged"
-    );
-    assert!(
-        retained < inner.get_array_memory_size(),
-        "the parent buffer was released"
-    );
-    drop(stream);
+    assert!(pool.reserved() < first.len());
+    assert_eq!(row_ids(&stream.next().await.transpose()?.unwrap()), [3]);
+    assert_eq!(row_ids(&stream.next().await.transpose()?.unwrap()), [4]);
+    assert!(stream.next().await.is_none());
     assert_eq!(pool.reserved(), 0);
     Ok(())
 }
 
 #[tokio::test]
-async fn oversized_extrema_fall_back_to_the_prorated_buffer() -> Result<()> {
-    // Group 1 ends inside the batch. Its seven rows fit at the group's
-    // per-row share, but even one of its two owned extrema exceeds the limit.
+async fn oversized_string_leaves_headroom_for_another_consumer() -> Result<()> {
+    // Group 1 ends inside the batch. Its share is smaller than a single copy
+    // of the string, although there is room in the pool to make that copy.
     let long = "x".repeat(16 * 1024);
     let mut keys = vec![2; 256];
     keys[..7].fill(1);
@@ -371,43 +406,96 @@ async fn oversized_extrema_fall_back_to_the_prorated_buffer() -> Result<()> {
         .div_ceil(inner.num_rows())
         * 7;
     assert!(buffered_size < long.len());
-    for (limit, expect_cache) in [(buffered_size, false), (long.len() * 8, true)] {
-        let runtime = RuntimeEnvBuilder::new()
-            .with_memory_limit(limit, 1.0)
-            .with_disk_manager_builder(
-                DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
-            )
-            .build_arc()?;
-        let ctx = Arc::new(
-            TaskContext::default()
-                .with_session_config(SessionConfig::new().with_batch_size(1))
-                .with_runtime(Arc::clone(&runtime)),
-        );
-        let plan = join(
-            input(&outer, 1)?,
-            input(&inner, inner.num_rows())?,
-            JoinType::LeftAnti,
-            Operator::NotEq,
-        )?;
-        let mut stream = plan.execute(0, ctx)?;
-        assert_eq!(row_ids(&stream.next().await.transpose()?.unwrap()), [0]);
-        // At the yield the same key may continue in the next outer batch.
-        let retained = runtime.memory_pool.reserved();
-        if expect_cache {
-            assert!(
-                retained >= long.len(),
-                "owned string extrema must be charged"
-            );
-        } else {
-            assert_eq!(
-                retained, buffered_size,
-                "keep the original group on refusal"
-            );
-        }
-        assert!(stream.next().await.is_none());
-        assert_eq!(plan.metrics().unwrap().spill_count().unwrap(), 0);
-        assert_eq!(runtime.memory_pool.reserved(), 0);
-    }
+    let limit = 8 * long.len();
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(limit, 1.0)
+        .with_disk_manager_builder(
+            DiskManagerBuilder::default().with_mode(DiskManagerMode::Disabled),
+        )
+        .build_arc()?;
+    let ctx = Arc::new(
+        TaskContext::default()
+            .with_session_config(SessionConfig::new().with_batch_size(1))
+            .with_runtime(Arc::clone(&runtime)),
+    );
+    let plan = join(
+        input(&outer, 1)?,
+        input(&inner, inner.num_rows())?,
+        JoinType::LeftAnti,
+        Operator::NotEq,
+    )?;
+    let mut stream = plan.execute(0, ctx)?;
+    assert_eq!(row_ids(&stream.next().await.transpose()?.unwrap()), [0]);
+    assert_eq!(runtime.memory_pool.reserved(), buffered_size);
+    let competitor = MemoryConsumer::new("other operator").register(&runtime.memory_pool);
+    competitor.try_grow(limit - buffered_size)?;
+    assert_eq!(runtime.memory_pool.reserved(), limit);
+    assert!(stream.next().await.is_none());
+    assert_eq!(plan.metrics().unwrap().spill_count().unwrap(), 0);
+    assert_eq!(runtime.memory_pool.reserved(), competitor.size());
+    drop(competitor);
+    assert_eq!(runtime.memory_pool.reserved(), 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn mid_batch_key_boundary_avoids_a_string_cache_copy() -> Result<()> {
+    let long = "z".repeat(16 * 1024);
+    let outer = keyed_batch(
+        vec![1, 2],
+        Arc::new(StringArray::from(vec![long.as_str(); 2])),
+    )?;
+    let inner = batch(Arc::new(StringArray::from(vec![long.as_str(); 7])))?;
+    let plan = join(
+        input(&outer, 2)?,
+        input(&inner, 7)?,
+        JoinType::LeftAnti,
+        Operator::Lt,
+    )?;
+    assert_eq!(ids(&plan, single_row_context()).await?, [0, 1]);
+    assert_eq!(
+        plan.metrics()
+            .unwrap()
+            .sum_by_name("peak_mem_used")
+            .unwrap()
+            .as_usize(),
+        inner.get_array_memory_size(),
+        "the last slice of this key has no later use for a copied extremum"
+    );
+    Ok(())
+}
+
+#[test]
+fn range_checks_the_third_string_before_a_wide_tail() -> Result<()> {
+    let wide = "z".repeat(256 * 1024);
+    let inner = batch(Arc::new(StringArray::from(vec![
+        "x", "x", "y", &wide, &wide, &wide, &wide, &wide,
+    ])))?;
+    let outer = batch(Arc::new(StringArray::from(vec!["x", "z"])))?;
+    let comparison = SemiAntiComparison::try_new(
+        &filter(binary(column(0), Operator::Lt, column(1)), DataType::Utf8),
+        true,
+        &outer.schema(),
+        &inner.schema(),
+    )?
+    .unwrap();
+    let mut masks = Vec::new();
+    let batches = [inner];
+    let summary = comparison.scan(&batches, &outer, |mask| {
+        masks.push(mask.clone());
+        mask.value(0)
+    })?;
+    // "x" matches the third row. "z" would also match if any wide string
+    // had entered the reduction before this checkpoint.
+    assert_eq!(
+        masks,
+        [
+            BooleanArray::from(vec![false, false]),
+            BooleanArray::from(vec![false, false]),
+            BooleanArray::from(vec![true, false]),
+        ]
+    );
+    assert!(summary.is_none());
     Ok(())
 }
 
