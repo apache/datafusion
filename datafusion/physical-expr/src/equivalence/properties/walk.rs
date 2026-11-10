@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use super::EquivalenceProperties;
+use super::{EquivalenceProperties, column_range};
 use crate::equivalence::ordering::is_partial_const;
 use crate::expressions::{Column, Literal};
 use crate::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
@@ -216,8 +216,8 @@ impl<'a> SortKeyWalk<'a> {
     ///
     /// - An intermediate node takes its order and range from its children,
     ///   through [`PhysicalExpr::get_properties`]. A `Literal` leaf is a
-    ///   singleton with a point range. A `Column` leaf is unordered, with an
-    ///   unbounded range of its data type.
+    ///   singleton with a point range. A `Column` leaf is unordered, with its
+    ///   trusted range or an unbounded range of its data type.
     /// - Then, whatever its children said: a node that is fixed or partially
     ///   constant is a singleton, and a node that heads an ordering is ordered
     ///   like the first ordering it heads.
@@ -244,8 +244,11 @@ impl<'a> SortKeyWalk<'a> {
             node.data = node.expr.get_properties(&[])?;
         } else if node.expr.is::<Column>() {
             // We have a Column, which is the other possible leaf node type:
-            node.data.range =
-                Interval::make_unbounded(&node.expr.data_type(self.props.schema())?)?;
+            node.data.range = column_range(
+                &node.expr,
+                self.props.schema(),
+                self.props.column_ranges.as_deref(),
+            )?;
             // A column is the identity mapping of itself, which is trivially
             // strict:
             node.data.strictly_order_preserving = true;
@@ -322,7 +325,8 @@ mod tests {
     use arrow::compute::SortOptions;
     use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
     use datafusion_common::config::ConfigOptions;
-    use datafusion_common::{Result, ScalarValue};
+    use datafusion_common::stats::Precision;
+    use datafusion_common::{ColumnStatistics, Result, ScalarValue};
     use datafusion_expr::physical_planning_context::{
         ScalarSubqueryResults, SubqueryIndex,
     };
@@ -357,6 +361,42 @@ mod tests {
         assert!(properties.ordering_satisfy(required)?);
         // Without `k` first, nothing is known about `c`:
         assert!(!properties.ordering_satisfy([PhysicalSortExpr::new_default(c)])?);
+        Ok(())
+    }
+
+    /// Exact bounds allow arithmetic keys to preserve ordering after an
+    /// earlier key is pinned. Potential overflow still prevents inference.
+    #[test]
+    fn bounded_arithmetic_after_pinning() -> Result<()> {
+        let schema = Arc::new(Schema::new(
+            ["k", "a"]
+                .map(|name| Field::new(name, DataType::Int32, true))
+                .to_vec(),
+        ));
+        let [k, a] = ["k", "a"].map(|name| col(name, &schema).unwrap());
+        let a_plus_one =
+            Arc::new(BinaryExpr::new(Arc::clone(&a), Operator::Plus, lit(1i32)))
+                as Arc<dyn PhysicalExpr>;
+        let sort = |expr: &Arc<dyn PhysicalExpr>| {
+            PhysicalSortExpr::new_default(Arc::clone(expr))
+        };
+
+        for max in [3, i32::MAX] {
+            let statistics = [
+                ColumnStatistics::new_unknown(),
+                ColumnStatistics {
+                    min_value: Precision::Exact(ScalarValue::Int32(Some(1))),
+                    max_value: Precision::Exact(ScalarValue::Int32(Some(max))),
+                    ..ColumnStatistics::new_unknown()
+                },
+            ];
+            let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
+            properties.add_ordering([sort(&k), sort(&a)]);
+            let required = [sort(&k), sort(&a_plus_one)];
+            assert!(!properties.ordering_satisfy(required.clone())?);
+            let properties = properties.with_column_statistics(&statistics);
+            assert_eq!(properties.ordering_satisfy(required)?, max == 3);
+        }
         Ok(())
     }
 

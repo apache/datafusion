@@ -1808,6 +1808,75 @@ mod tests {
     }
 
     #[test]
+    fn project_shares_ranges_with_trusted_integer_bounds() -> Result<()> {
+        use datafusion_common::stats::Precision;
+        use datafusion_common::{ColumnStatistics, ScalarValue};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int64, true),
+            Field::new(
+                "s",
+                DataType::Struct(Fields::from(vec![Field::new(
+                    "x",
+                    DataType::Int64,
+                    true,
+                )])),
+                true,
+            ),
+        ]));
+        let bounds =
+            Interval::try_new(ScalarValue::Int64(Some(1)), ScalarValue::Int64(Some(3)))?;
+        let input = EquivalenceProperties::new_with_orderings(
+            Arc::clone(&schema),
+            ["a", "s"].map(|name| {
+                vec![PhysicalSortExpr::new_default(col(name, &schema).unwrap())]
+            }),
+        )
+        .with_column_statistics(&[
+            ColumnStatistics {
+                min_value: Precision::Exact(bounds.lower().clone()),
+                max_value: Precision::Exact(bounds.upper().clone()),
+                ..ColumnStatistics::new_unknown()
+            },
+            ColumnStatistics::new_unknown(),
+        ]);
+        let (mapping, seen) = probe_mapping(
+            vec![
+                (col("a", &schema)?, 0, false),
+                (col("a", &schema)?, 1, false),
+                (col("s", &schema)?, 2, false),
+                (col("s", &schema)?, 3, false),
+            ],
+            &schema,
+        )?;
+        let projected = input.project(&mapping, output_schema(&mapping, &schema)?);
+        assert_eq!(
+            sorted_orderings(&projected),
+            vec!["p0@0 ASC", "p1@1 ASC", "p2@2 ASC", "p3@3 ASC"]
+        );
+        for probe in &seen[..2] {
+            let ranges = probe.lock().unwrap();
+            assert!(ranges.len() >= 3);
+            assert!(ranges.iter().all(|range| range == &bounds));
+        }
+        // Bound propagation, ordering substitution and ordering derivation all
+        // reuse the same unbounded struct range, even with trusted integer bounds.
+        let mut arrays = vec![];
+        for probe in &seen[2..] {
+            let ranges = probe.lock().unwrap();
+            assert!(ranges.len() >= 3);
+            for range in ranges.iter() {
+                let ScalarValue::Struct(array) = range.lower() else {
+                    panic!("{range:?}");
+                };
+                arrays.push(Arc::clone(array));
+            }
+        }
+        assert!(arrays.iter().all(|array| Arc::ptr_eq(array, &arrays[0])));
+        Ok(())
+    }
+
+    #[test]
     fn project_does_not_reuse_a_column_range_across_calls() -> Result<()> {
         for data_type in [DataType::Utf8, DataType::Int64] {
             let schema =
