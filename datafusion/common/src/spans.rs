@@ -70,7 +70,11 @@ impl Span {
     /// [`Span`]. An empty span gives [`None`].
     #[cfg(feature = "sql")]
     pub fn from_sqlparser_span(span: sqlparser::ast::Span, sql: &str) -> Option<Span> {
-        if span == sqlparser::ast::Span::default() {
+        let in_sql = |offset: u32| sql.is_char_boundary(offset as usize);
+        if span == sqlparser::ast::Span::default()
+            || !in_sql(span.start)
+            || !in_sql(span.end)
+        {
             return None;
         }
         Some(Span {

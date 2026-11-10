@@ -54,7 +54,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         },
                     alias: None,
                 } = &item.kind
-                    && let Some(span) = Span::try_from_sqlparser_span(ident.span)
+                    && let Some(span) = self.sql_span(ident.span)
                 {
                     spans.add_span(span);
                 }
@@ -108,7 +108,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if let SelectItemKind::Expr {
                     alias: Some(alias), ..
                 } = &item.kind
-                    && let Some(span) = Span::try_from_sqlparser_span(alias.span)
+                    && let Some(span) = self.sql_span(alias.span)
                 {
                     spans.add_span(span);
                 }
@@ -184,7 +184,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 if let SelectItemKind::Expr {
                     alias: Some(alias), ..
                 } = &item.kind
-                    && let Some(span) = Span::try_from_sqlparser_span(alias.span)
+                    && let Some(span) = self.sql_span(alias.span)
                 {
                     spans.add_span(span);
                 }

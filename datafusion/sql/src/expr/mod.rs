@@ -60,20 +60,27 @@ pub(crate) use binary_op::binary_op_to_static;
     clippy::option_option,
     reason = "The two levels mean different things, see above"
 )]
-fn null_value_span(expr: &SQLExpr<'_>) -> Option<Option<Span>> {
+fn null_value_span(
+    expr: &SQLExpr<'_>,
+    to_span: &dyn Fn(SQLSpan) -> Option<Span>,
+) -> Option<Option<Span>> {
     if let ExprKind::Literal(SQLLiteral::Null) = expr.kind {
-        Some(Span::try_from_sqlparser_span(expr.span))
+        Some(to_span(expr.span))
     } else {
         None
     }
 }
 
-fn null_equality_warning(expr: &SQLExpr<'_>) -> Option<Diagnostic> {
+fn null_equality_warning(
+    expr: &SQLExpr<'_>,
+    to_span: &dyn Fn(SQLSpan) -> Option<Span>,
+) -> Option<Diagnostic> {
     let ExprKind::Binary { left, op, right } = &expr.kind else {
         return None;
     };
 
-    let null_span = null_value_span(left).or_else(|| null_value_span(right))?;
+    let null_span =
+        null_value_span(left, to_span).or_else(|| null_value_span(right, to_span))?;
 
     let (message, help) = match op {
         BinaryOp::Eq => (
@@ -87,10 +94,7 @@ fn null_equality_warning(expr: &SQLExpr<'_>) -> Option<Diagnostic> {
         _ => return None,
     };
 
-    Some(
-        Diagnostic::new_warning(message, Span::try_from_sqlparser_span(expr.span))
-            .with_help(help, null_span),
-    )
+    Some(Diagnostic::new_warning(message, to_span(expr.span)).with_help(help, null_span))
 }
 
 struct NullEqualityPredicateVisitor<'a, 'b, S: ContextProvider> {
@@ -124,7 +128,8 @@ impl<'s, S: ContextProvider> Visitor<'s, Builtin>
 
     fn pre_visit_expr(&mut self, expr: &SQLExpr<'s>) -> ControlFlow<Self::Break> {
         if self.subquery_depth == 0
-            && let Some(warning) = null_equality_warning(expr)
+            && let Some(warning) =
+                null_equality_warning(expr, &|span| self.sql_to_rel.sql_span(span))
         {
             self.sql_to_rel.add_warning(warning);
         }
@@ -301,7 +306,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             span: None,
         };
         let _ = expr.visit(&mut visitor);
-        Span::try_from_sqlparser_span(visitor.span.unwrap_or(expr.span))
+        self.sql_span(visitor.span.unwrap_or(expr.span))
     }
 
     pub(crate) fn sql_expr_to_logical_expr_with_alias(

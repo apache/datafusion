@@ -10,7 +10,7 @@ use crate::ast::{
 };
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{
-    DFSchema, Dependency, Diagnostic, HashSet, Result, Span, datatype::FieldExt,
+    DFSchema, Dependency, Diagnostic, HashSet, Result, datatype::FieldExt,
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
@@ -986,7 +986,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if let Some(suggested_func_name) =
             suggest_valid_function(&name, is_function_window, self.context_provider)
         {
-            let span = Span::try_from_sqlparser_span(sql_parser_span);
+            let span = self.sql_span(sql_parser_span);
             let mut diagnostic =
                 Diagnostic::new_error(format!("Invalid function '{name}'"), span);
             diagnostic
@@ -1033,23 +1033,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 &mut planner_context,
             )?),
         })
-    }
-
-    pub(super) fn sql_fn_name_to_expr(
-        &self,
-        expr: SQLExpr<'_>,
-        fn_name: &str,
-        schema: &DFSchema,
-        planner_context: &mut PlannerContext,
-    ) -> Result<Expr> {
-        let fun = self
-            .context_provider
-            .get_function_meta(fn_name)
-            .ok_or_else(|| {
-                internal_datafusion_err!("Unable to find expected '{fn_name}' function")
-            })?;
-        let args = vec![self.sql_expr_to_logical_expr(expr, schema, planner_context)?];
-        Ok(Expr::ScalarFunction(ScalarFunction::new_udf(fun, args)))
     }
 
     pub(super) fn find_window_func(

@@ -53,7 +53,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let mut lambda_var =
                     LambdaVariable::new(normalize_ident, Some(Arc::clone(field)));
                 if self.options.collect_spans
-                    && let Some(span) = Span::try_from_sqlparser_span(id_span)
+                    && let Some(span) = self.sql_span(id_span)
                 {
                     lambda_var.spans_mut().add_span(span);
                 }
@@ -69,7 +69,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     normalize_ident,
                 );
                 if self.options.collect_spans
-                    && let Some(span) = Span::try_from_sqlparser_span(id_span)
+                    && let Some(span) = self.sql_span(id_span)
                 {
                     column.spans_mut().add_span(span);
                 }
@@ -92,7 +92,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // Default case
             let mut column = Column::new_unqualified(normalize_ident);
             if self.options.collect_spans
-                && let Some(span) = Span::try_from_sqlparser_span(id_span)
+                && let Some(span) = self.sql_span(id_span)
             {
                 column.spans_mut().add_span(span);
             }
@@ -108,10 +108,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ) -> Result<Expr> {
         assert_or_internal_err!(ids.len() >= 2, "Not a compound identifier: {ids:?}");
 
-        let ids_span = Span::union_iter(
-            ids.iter()
-                .filter_map(|id| Span::try_from_sqlparser_span(id.span)),
-        );
+        let ids_span =
+            Span::union_iter(ids.iter().filter_map(|id| self.sql_span(id.span)));
 
         if ids[0].text.starts_with('@') && ids[0].quote.is_none() {
             let var_names: Vec<_> = ids

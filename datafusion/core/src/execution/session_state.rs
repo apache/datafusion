@@ -640,6 +640,17 @@ impl SessionState {
         &self,
         statement: Statement<'_>,
     ) -> datafusion_common::Result<LogicalPlan> {
+        self.statement_to_plan_with_source(statement, None).await
+    }
+
+    /// Like [`Self::statement_to_plan`], given the SQL text the statement was
+    /// parsed from, so that diagnostics can give lines and columns.
+    #[cfg(feature = "sql")]
+    pub async fn statement_to_plan_with_source(
+        &self,
+        statement: Statement<'_>,
+        sql: Option<&str>,
+    ) -> datafusion_common::Result<LogicalPlan> {
         let references = self.resolve_table_references(&statement)?;
 
         let mut provider = SessionContextProvider {
@@ -659,7 +670,10 @@ impl SessionState {
             }
         }
 
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
+        let mut query = SqlToRel::new_with_options(&provider, self.get_parser_options());
+        if let Some(sql) = sql {
+            query = query.with_source(sql);
+        }
         query.statement_to_plan(statement)
     }
 
@@ -701,7 +715,9 @@ impl SessionState {
     ) -> datafusion_common::Result<LogicalPlan> {
         let dialect = self.config().options().sql_parser.dialect;
         let statement = self.sql_to_statement(sql, &dialect)?;
-        let plan = self.statement_to_plan(statement).await?;
+        let plan = self
+            .statement_to_plan_with_source(statement, Some(sql))
+            .await?;
         Ok(plan)
     }
 
@@ -718,7 +734,13 @@ impl SessionState {
 
         let sql_expr = self.sql_to_expr_with_alias(sql, &dialect)?;
 
-        self.create_logical_expr_from_sql_expr(sql_expr, df_schema)
+        let provider = SessionContextProvider {
+            state: self,
+            tables: HashMap::new(),
+        };
+        let query = SqlToRel::new_with_options(&provider, self.get_parser_options())
+            .with_source(sql);
+        query.sql_to_expr_with_alias(sql_expr, df_schema, &mut PlannerContext::new())
     }
 
     /// Creates a datafusion style AST [`Expr`] from a SQL expression.

@@ -445,6 +445,8 @@ pub struct SqlToRel<'a, S: ContextProvider> {
     pub(crate) options: ParserOptions,
     pub(crate) ident_normalizer: IdentNormalizer,
     warnings: Mutex<Vec<Diagnostic>>,
+    /// The SQL text the statements came from, for the locations in diagnostics.
+    source: Option<Arc<str>>,
 }
 
 impl<'a, S: ContextProvider> SqlToRel<'a, S> {
@@ -468,7 +470,25 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             options,
             ident_normalizer: IdentNormalizer::new(ident_normalize),
             warnings: Mutex::new(vec![]),
+            source: None,
         }
+    }
+
+    /// Sets the SQL text that the planned statements were parsed from, so that
+    /// diagnostics can give the line and column of what they report.
+    pub fn with_source(mut self, sql: &str) -> Self {
+        self.source = Some(Arc::from(sql));
+        self
+    }
+
+    /// The line and column range of `span` in the SQL text, if it is known.
+    pub(crate) fn sql_span(
+        &self,
+        span: sqlparser::ast::Span,
+    ) -> Option<datafusion_common::Span> {
+        self.source
+            .as_deref()
+            .and_then(|sql| datafusion_common::Span::from_sqlparser_span(span, sql))
     }
 
     pub(crate) fn add_warning(&self, warning: Diagnostic) {
