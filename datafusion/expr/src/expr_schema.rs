@@ -507,6 +507,8 @@ impl ExprSchemable for Expr {
     /// - **Aliases**: Merge underlying expr metadata with alias-specific metadata, preferring the alias metadata
     /// - **List unnesting**: Preserve the element field metadata
     /// - **Binary expressions**: field metadata is empty
+    /// - **CASE expressions**: Merges the metadata of the THEN and ELSE branches; the operand
+    ///   and WHEN conditions do not contribute
     /// - **Boolean expressions**: field metadata is empty
     /// - **Cast expressions**: Type-only casts pass through source metadata (stripping extension
     ///   type keys); casts with explicit target fields use target metadata exactly

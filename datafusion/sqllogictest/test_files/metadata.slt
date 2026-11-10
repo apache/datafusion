@@ -793,17 +793,66 @@ arrow.json arrow.json arrow.json arrow.json arrow.json
 arrow.json arrow.json arrow.json arrow.json arrow.json
 arrow.json arrow.json arrow.json arrow.json arrow.json
 
-# A CASE whose WHEN is always false simplifies to NULL, which keeps the
-# extension type of the CASE
-query T
-select arrow_metadata(
-  case when 1 = 0 then cast(name as json) end,
-  'ARROW:extension:name')
+# A CASE with a constant WHEN keeps its extension type when it is simplified:
+# - no ELSE, or a NULL ELSE: the CASE becomes a NULL with the extension type
+# - a branch that is dropped has the extension type: the CASE is kept
+query TTTTT
+select
+  arrow_metadata(
+    case when 1 = 0 then cast(name as json) end,
+    'ARROW:extension:name'),
+  arrow_metadata(
+    case when 1 = 0 then cast(name as json) else NULL end,
+    'ARROW:extension:name'),
+  arrow_metadata(
+    case when 1 = 0 then cast(name as json) else upper(l_name) end,
+    'ARROW:extension:name'),
+  arrow_metadata(
+    case when 1 = 1 then upper(l_name) else cast(name as json) end,
+    'ARROW:extension:name'),
+  arrow_metadata(
+    case when id > 1 then upper(l_name) when 1 = 0 then cast(name as json) end,
+    'ARROW:extension:name')
 from table_with_metadata;
 ----
-arrow.json
-arrow.json
-arrow.json
+arrow.json arrow.json arrow.json arrow.json arrow.json
+arrow.json arrow.json arrow.json arrow.json arrow.json
+arrow.json arrow.json arrow.json arrow.json arrow.json
+
+# The same applies to coalesce and nvl2, whose first argument here is never
+# NULL, so their CASE always takes its first branch
+query TT
+select
+  arrow_metadata(
+    coalesce(nonnull_name, cast(name as json)),
+    'ARROW:extension:name'),
+  arrow_metadata(
+    nvl2(nonnull_name, upper(l_name), cast(name as json)),
+    'ARROW:extension:name')
+from table_with_metadata;
+----
+arrow.json arrow.json
+arrow.json arrow.json
+arrow.json arrow.json
+
+# A Boolean CASE is not rewritten to AND/OR when a branch has metadata
+statement ok
+create table bool_with_metadata as
+select
+  id > 1 as p,
+  with_metadata(id < 3, 'ARROW:extension:name', 'a.type') as f
+from table_with_metadata;
+
+query T
+select arrow_metadata(case when p then f end, 'ARROW:extension:name')
+from bool_with_metadata;
+----
+a.type
+a.type
+a.type
+
+statement ok
+drop table bool_with_metadata;
 
 statement ok
 drop table table_with_metadata;
