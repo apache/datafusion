@@ -14,7 +14,7 @@ use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
     FilterBuilder, FilterPredicate, is_not_null, not, nullif, prep_null_mask_filter,
 };
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef, UInt32Type, UnionMode};
+use arrow::datatypes::{DataType, Field, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
 use datafusion_common::{
@@ -304,8 +304,12 @@ pub struct CaseExpr {
 /// Decisions must be immutable. The permission object's identity is part of CASE
 /// equality so generic expression substitution cannot introduce a different grant.
 pub trait RequiredOperandReusePolicy: Debug + Send + Sync {
-    /// The child evaluated before this expression can fail or evaluate any other child.
-    /// Unknown evaluation orders must return `None`.
+    /// The child evaluated unconditionally, exactly once, before this expression can
+    /// fail or evaluate any other child. It must receive the original input batch,
+    /// with the same rows and column positions, without prior slicing or projection.
+    /// Replacing that child with a column must preserve the parent's behavior, and
+    /// `with_new_children` must recompute any derived state that depends on the child.
+    /// Return `None` when any of these conditions is unknown.
     fn first_required_child(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<usize>;
 
     /// Whether a rewrite retained the authorized call, excluding its rewritten arguments.
@@ -322,7 +326,7 @@ struct RequiredOperandReuse {
     policy: Arc<dyn RequiredOperandReusePolicy>,
     first_path: Vec<usize>,
     // Prepared expressions only: never cache values or share a batch between evaluations.
-    prepared: Mutex<Option<(SchemaRef, Arc<CaseExpr>)>>,
+    prepared: Mutex<Option<(usize, Arc<CaseExpr>)>>,
 }
 
 impl RequiredOperandReuse {
@@ -346,11 +350,25 @@ impl RequiredOperandReuse {
             first_path.push(index);
             current = next;
         }
-        Some(Self {
+        let reuse = Self {
             policy,
             first_path,
             prepared: Mutex::new(None),
-        })
+        };
+        // Exclude unknown leaves in the remaining body before evaluating the operand.
+        // The operand itself is replaced, so it need not support column projection.
+        let bound = reuse
+            .bind_case(body, Arc::new(Column::new("__case_required_operand", 0)))
+            .ok()?;
+        match &bound.eval_method {
+            EvalMethod::ExpressionOrExpression(projected)
+            | EvalMethod::NoExpression(projected)
+                if projected.supports_projection =>
+            {
+                Some(reuse)
+            }
+            _ => None,
+        }
     }
 
     fn replace_first(
@@ -369,30 +387,30 @@ impl RequiredOperandReuse {
     fn prepared_case(
         &self,
         owner: &CaseExpr,
-        input: &SchemaRef,
+        input_columns: usize,
     ) -> Result<Arc<CaseExpr>> {
         let mut cache = self
             .prepared
             .lock()
             .map_err(|_| internal_datafusion_err!("CASE preparation lock poisoned"))?;
-        if let Some((schema, prepared)) = cache.as_ref()
-            && schema == input
+        if let Some((columns, prepared)) = cache.as_ref()
+            && *columns == input_columns
         {
             return Ok(Arc::clone(prepared));
         }
         let value: Arc<dyn PhysicalExpr> =
-            Arc::new(Column::new("__case_required_operand", input.fields().len()));
-        let prepared = Arc::new(self.bind_case(owner, value)?);
-        *cache = Some((Arc::clone(input), Arc::clone(&prepared)));
+            Arc::new(Column::new("__case_required_operand", input_columns));
+        let prepared = Arc::new(self.bind_case(&owner.body, value)?);
+        *cache = Some((input_columns, Arc::clone(&prepared)));
         Ok(prepared)
     }
 
     fn bind_case(
         &self,
-        owner: &CaseExpr,
+        body: &CaseBody,
         value: Arc<dyn PhysicalExpr>,
     ) -> Result<CaseExpr> {
-        let mut branches = owner.body.when_then_expr.clone();
+        let mut branches = body.when_then_expr.clone();
         branches[0].0 =
             Self::replace_first(Arc::clone(&branches[0].0), &self.first_path, &value)?;
         // Derive projection only after replacing the two authorized uses.
@@ -413,7 +431,7 @@ impl RequiredOperandReuse {
                 return internal_err!("required CASE operand must evaluate to an array");
             }
         };
-        let prepared = self.prepared_case(owner, batch.schema_ref())?;
+        let prepared = self.prepared_case(owner, batch.num_columns())?;
         let mut fields = batch.schema().fields().to_vec();
         fields.push(Arc::new(Field::new(
             "__case_required_operand",
@@ -857,6 +875,11 @@ impl CaseExpr {
     /// The caller must authorize reuse of this array-valued operand. It is evaluated
     /// at its existing position in the first WHEN, not hoisted above the CASE.
     /// This does not change the volatility of the operand or authorize reuse elsewhere.
+    /// The caller must also ensure that the remaining expressions, including custom
+    /// intermediate nodes, observe input columns only through their declared children:
+    /// projecting unused columns or adding a trailing private column must not change
+    /// their behavior. Unknown leaves in the rewritten body disable reuse, but this
+    /// check alone cannot establish that property for arbitrary custom expressions.
     /// A CASE carrying this permission cannot use the generic protobuf encoding.
     pub fn with_required_operand_reuse(
         mut self,
@@ -4273,9 +4296,202 @@ mod required_operand_tests {
             .iter()
             .collect()
     }
+    #[derive(Debug, PartialEq, Eq, Hash)]
+    struct BatchWidth;
+
+    impl std::fmt::Display for BatchWidth {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "batch_width")
+        }
+    }
+
+    impl PhysicalExpr for BatchWidth {
+        fn data_type(&self, _: &Schema) -> Result<DataType> {
+            Ok(DataType::Int32)
+        }
+        fn nullable(&self, _: &Schema) -> Result<bool> {
+            Ok(false)
+        }
+        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+            Ok(ColumnarValue::Scalar(ScalarValue::Int32(Some(
+                batch.num_columns() as i32,
+            ))))
+        }
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![]
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            assert!(children.is_empty());
+            Ok(self)
+        }
+        fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            std::fmt::Display::fmt(self, f)
+        }
+    }
+
+    #[test]
+    fn required_operand_does_not_expose_private_column_to_unknown_leaf() {
+        for values in [vec![Some(1), Some(1)], vec![Some(1), Some(2), None]] {
+            let input = batch(values.clone());
+            let expected: Vec<_> = values
+                .iter()
+                .map(|v| if *v == Some(1) { Some(3) } else { *v })
+                .collect();
+            for reuse in [false, true] {
+                let rows = Arc::new(AtomicUsize::new(0));
+                let case = make_case(&input, &rows, Arc::new(BatchWidth), reuse);
+                assert_eq!(result(&case, &input), expected);
+                // Reject before evaluating the operand, rather than evaluate and fall back.
+                let else_rows = values.iter().filter(|v| **v != Some(1)).count();
+                assert_eq!(rows.load(Ordering::SeqCst), values.len() + else_rows);
+            }
+        }
+    }
+
+    #[test]
+    fn required_operand_multibranch_root_and_nested_paths() {
+        for depth in [0, 2] {
+            for empty in [false, true] {
+                let (values, later) = if empty {
+                    (vec![], vec![])
+                } else {
+                    (
+                        vec![Some(true), Some(false), Some(false), None],
+                        vec![false, true, false, false],
+                    )
+                };
+                let input = RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![
+                        Field::new("value", DataType::Boolean, true),
+                        Field::new("later", DataType::Boolean, false),
+                    ])),
+                    vec![
+                        Arc::new(BooleanArray::from(values)),
+                        Arc::new(BooleanArray::from(later)),
+                    ],
+                )
+                .unwrap();
+                let rows = Arc::new(AtomicUsize::new(0));
+                let operand = counted("value", 0, 7, &rows, false);
+                let mut condition = Arc::clone(&operand);
+                for _ in 0..depth {
+                    condition =
+                        Arc::new(BinaryExpr::new(condition, Operator::Eq, lit(true)));
+                }
+                let plain = CaseExpr::try_new(
+                    None,
+                    vec![
+                        (condition, lit(false)),
+                        (Arc::new(Column::new("later", 1)), lit(true)),
+                    ],
+                    Some(Arc::clone(&operand)),
+                )
+                .unwrap();
+                let reused = CaseExpr::try_new(
+                    None,
+                    plain.body.when_then_expr.clone(),
+                    Some(Arc::clone(&operand)),
+                )
+                .unwrap()
+                .with_required_operand_reuse(&operand, Arc::new(Policy));
+                let expected = if empty {
+                    vec![]
+                } else {
+                    vec![Some(false), Some(true), Some(false), None]
+                };
+                let evaluate = |expr: &CaseExpr| {
+                    let output = expr
+                        .evaluate(&input)
+                        .unwrap()
+                        .into_array(input.num_rows())
+                        .unwrap();
+                    output
+                        .as_any()
+                        .downcast_ref::<BooleanArray>()
+                        .unwrap()
+                        .iter()
+                        .collect::<Vec<_>>()
+                };
+                assert_eq!(evaluate(&plain), expected);
+                rows.store(0, Ordering::SeqCst);
+                assert_eq!(evaluate(&reused), expected);
+                assert_eq!(rows.load(Ordering::SeqCst), input.num_rows());
+            }
+        }
+    }
+
+    #[test]
+    fn required_operand_preserves_first_error_inside_when() {
+        let input = RecordBatch::try_new(
+            Arc::new(Schema::new(vec![
+                Field::new("value", DataType::Utf8, false),
+                Field::new("later", DataType::Utf8, false),
+            ])),
+            vec![
+                Arc::new(StringArray::from(vec!["bad_operand", "2"])),
+                Arc::new(StringArray::from(vec!["1", "bad_later"])),
+            ],
+        )
+        .unwrap();
+        let rows = Arc::new(AtomicUsize::new(0));
+        let operand: Arc<dyn PhysicalExpr> = Arc::new(Counted {
+            arg: Arc::new(CastExpr::new(
+                Arc::new(Column::new("value", 0)),
+                DataType::Int32,
+                None,
+            )),
+            program: 7,
+            rows,
+            cheap: false,
+        });
+        let later: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            Arc::new(Column::new("later", 1)),
+            DataType::Int32,
+            None,
+        ));
+        let plain = CaseExpr::try_new(
+            None,
+            vec![(
+                Arc::new(BinaryExpr::new(
+                    Arc::clone(&operand),
+                    Operator::Eq,
+                    Arc::clone(&later),
+                )),
+                lit(100i32),
+            )],
+            Some(Arc::clone(&operand)),
+        )
+        .unwrap();
+        let reused = CaseExpr::try_new(
+            None,
+            plain.body.when_then_expr.clone(),
+            Some(Arc::clone(&operand)),
+        )
+        .unwrap()
+        .with_required_operand_reuse(&operand, Arc::new(Policy));
+        assert_ne!(plain, reused, "the test must acquire permission");
+        for case in [plain, reused] {
+            let error = case.evaluate(&input).unwrap_err().to_string();
+            assert!(error.contains("bad_operand"), "{error}");
+            assert!(!error.contains("bad_later"), "{error}");
+        }
+        // The sibling really can fail with a distinguishable error.
+        assert!(
+            later
+                .evaluate(&input)
+                .unwrap_err()
+                .to_string()
+                .contains("bad_later")
+        );
+    }
+
     #[test]
     fn required_operand_uniform_null_and_mixed_bind_exactly_once() {
         for values in [
+            vec![],
             vec![Some(1), Some(1)],
             vec![Some(2), Some(3)],
             vec![None, None],
@@ -4298,6 +4514,15 @@ mod required_operand_tests {
                 // A cached plan must not cache a previous batch's values.
                 let next = batch(vec![Some(4), None]);
                 assert_eq!(result(&case, &next), vec![Some(4), None]);
+                // The same CASE can receive a different number of unused input columns.
+                let mut fields = next.schema().fields().to_vec();
+                fields.push(Arc::new(Field::new("extra", DataType::Int32, false)));
+                let mut columns = next.columns().to_vec();
+                columns.push(Arc::new(Int32Array::from(vec![0; next.num_rows()])));
+                let wider =
+                    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap();
+                assert_eq!(result(&case, &wider), vec![Some(4), None]);
+                assert_eq!(result(&case, &next), vec![Some(4), None]);
             }
         }
     }
@@ -4312,6 +4537,7 @@ mod required_operand_tests {
         assert_eq!(other.load(Ordering::SeqCst), 0);
         let mixed = batch(vec![Some(1), None, Some(2)]);
         assert_eq!(result(&case, &mixed), vec![Some(9), None, Some(2)]);
+        assert_eq!(other.load(Ordering::SeqCst), 1);
         let cache = case
             .required_operand
             .as_ref()
