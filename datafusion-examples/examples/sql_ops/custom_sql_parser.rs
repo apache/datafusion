@@ -10,6 +10,14 @@
 //! is a partial reimplementation of the existing functionality to demonstrate how to extend the
 //! SQL parser.
 //!
+//! DataFusion parses SQL with [`DFParser`], which reads DataFusion's own
+//! statements (such as `CREATE EXTERNAL TABLE`) and leaves the rest to
+//! `sqlparser` with DataFusion's dialect,
+//! [`DataFusion`](datafusion::sql::dialect::DataFusion). This example does the
+//! same one level up: it reads `CREATE FOREIGN CATALOG` with `sqlparser`'s
+//! [`Parser`] and DataFusion's dialect, and leaves every other statement to
+//! [`DFParser`].
+//!
 //! ### Custom Syntax
 //! ```sql
 //! CREATE FOREIGN CATALOG my_catalog
@@ -33,16 +41,14 @@ use datafusion::catalog::{
 };
 use datafusion::common::{DFSchema, TableReference, plan_datafusion_err, plan_err};
 use datafusion::datasource::listing_table_factory::ListingTableFactory;
-use datafusion::error::{DataFusionError, Result};
+use datafusion::error::Result;
 use datafusion::logical_expr::CreateExternalTable;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::{
-    parser::{DFParser, DFParserBuilder, Statement},
-    sqlparser::{
-        ast::{ObjectName, Value},
-        keywords::Keyword,
-        tokenizer::Token,
-    },
+    ast::ObjectName,
+    dialect::DataFusion,
+    parser::{DFParser, Statement},
+    sqlparser::{grammar, parser::Parser},
 };
 use futures::StreamExt;
 use insta::assert_snapshot;
@@ -85,7 +91,7 @@ pub async fn custom_sql_parser() -> Result<()> {
         .expect_err("Expected the standard parser to reject CREATE FOREIGN CATALOG (custom DDL syntax)");
 
     println!("Error: {err}\n");
-    assert_snapshot!(err.to_string(), @r#"SQL error: ParserError("Expected: an object type after CREATE, found: FOREIGN at Line: 1, Column: 8")"#);
+    assert_snapshot!(err.to_string(), @"SQL error: expected an object type after CREATE, found FOREIGN at Line: 1, Column: 8");
 
     // =========================================================================
     // Part 2: Custom parser handles the statement
@@ -95,8 +101,7 @@ pub async fn custom_sql_parser() -> Result<()> {
 
     let ctx = SessionContext::new();
 
-    let mut parser = CustomParser::new(&create_catalog_sql)?;
-    let statement = parser.parse_statement()?;
+    let statement = parse_custom_statement(&create_catalog_sql)?;
     match statement {
         CustomStatement::CreateForeignCatalog(stmt) => {
             handle_create_foreign_catalog(&ctx, stmt).await?;
@@ -136,7 +141,7 @@ async fn execute_sql(ctx: &SessionContext, sql: &str) -> Result<String> {
 /// Custom handler for the `CREATE FOREIGN CATALOG` statement.
 async fn handle_create_foreign_catalog(
     ctx: &SessionContext,
-    stmt: CreateForeignCatalog,
+    stmt: CreateForeignCatalog<'_>,
 ) -> Result<()> {
     let factory = ListingTableFactory::new();
     let catalog = Arc::new(MemoryCatalogProvider::new());
@@ -147,19 +152,10 @@ async fn handle_create_foreign_catalog(
     let mut table_options = HashMap::new();
 
     for (k, v) in stmt.options {
-        let val_str = match v {
-            Value::SingleQuotedString(ref s) | Value::DoubleQuotedString(ref s) => {
-                s.to_string()
-            }
-            Value::Number(ref n, _) => n.to_string(),
-            Value::Boolean(b) => b.to_string(),
-            _ => v.to_string(),
-        };
-
         if k == "schema_name" {
-            schema_name = val_str;
+            schema_name = v;
         } else {
-            table_options.insert(k, val_str);
+            table_options.insert(k, v);
         }
     }
 
@@ -229,23 +225,25 @@ async fn handle_create_foreign_catalog(
 
 /// Possible statements returned by our custom parser.
 #[derive(Debug, Clone)]
-pub enum CustomStatement {
+pub enum CustomStatement<'a> {
     /// Standard DataFusion statement
-    DFStatement(Box<Statement>),
+    DFStatement(Box<Statement<'a>>),
     /// Custom `CREATE FOREIGN CATALOG` statement
-    CreateForeignCatalog(CreateForeignCatalog),
+    CreateForeignCatalog(CreateForeignCatalog<'a>),
 }
 
 /// Data structure for `CREATE FOREIGN CATALOG`.
+///
+/// Like `sqlparser`'s syntax tree, it borrows from the SQL text.
 #[derive(Debug, Clone)]
-pub struct CreateForeignCatalog {
-    pub name: ObjectName,
+pub struct CreateForeignCatalog<'a> {
+    pub name: ObjectName<'a>,
     pub catalog_type: String,
     pub location: String,
-    pub options: Vec<(String, Value)>,
+    pub options: Vec<(String, String)>,
 }
 
-impl Display for CustomStatement {
+impl Display for CustomStatement<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::DFStatement(s) => write!(f, "{s}"),
@@ -254,7 +252,7 @@ impl Display for CustomStatement {
     }
 }
 
-impl Display for CreateForeignCatalog {
+impl Display for CreateForeignCatalog<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
@@ -275,124 +273,91 @@ impl Display for CreateForeignCatalog {
     }
 }
 
-/// A parser that extends `DFParser` with custom syntax.
-struct CustomParser<'a> {
-    df_parser: DFParser<'a>,
+/// Parses one statement, which may be `CREATE FOREIGN CATALOG`.
+///
+/// `CREATE FOREIGN CATALOG` is read with `sqlparser`'s [`Parser`] and
+/// DataFusion's dialect, so names and strings follow DataFusion's rules. Any
+/// other statement goes to [`DFParser`].
+fn parse_custom_statement(sql: &str) -> Result<CustomStatement<'_>> {
+    let mut p = Parser::<DataFusion>::new(sql)?;
+    if p.at_keyword("CREATE")
+        && p.peek_nth(1).is_word("FOREIGN")
+        && p.peek_nth(2).is_word("CATALOG")
+    {
+        p.expect_keywords(&["CREATE", "FOREIGN", "CATALOG"])?;
+        let statement = parse_create_foreign_catalog(&mut p)?;
+        p.eat_op(";");
+        p.expect_eof()?;
+        return Ok(CustomStatement::CreateForeignCatalog(statement));
+    }
+
+    let mut statements = DFParser::parse_sql(sql)?;
+    match (statements.pop_front(), statements.is_empty()) {
+        (Some(statement), true) => Ok(CustomStatement::DFStatement(Box::new(statement))),
+        _ => plan_err!("Expected exactly one statement"),
+    }
 }
 
-impl<'a> CustomParser<'a> {
-    fn new(sql: &'a str) -> Result<Self> {
-        Ok(Self {
-            df_parser: DFParserBuilder::new(sql).build()?,
-        })
-    }
+/// Parses a `CREATE FOREIGN CATALOG` statement, after its keywords.
+fn parse_create_foreign_catalog<'a>(
+    p: &mut Parser<'a, DataFusion>,
+) -> Result<CreateForeignCatalog<'a>> {
+    let name = grammar::parse_object_name(p)?;
 
-    pub fn parse_statement(&mut self) -> Result<CustomStatement> {
-        if let Some(cfc) = self.parse_create_foreign_catalog()? {
-            return Ok(CustomStatement::CreateForeignCatalog(cfc));
-        }
+    let mut catalog_type = None;
+    let mut location = None;
+    let mut options = vec![];
 
-        Ok(CustomStatement::DFStatement(Box::new(
-            self.df_parser.parse_statement()?,
-        )))
-    }
-
-    /// Parses a `CREATE FOREIGN CATALOG` statement.
-    fn parse_create_foreign_catalog(&mut self) -> Result<Option<CreateForeignCatalog>> {
-        if !self.df_parser.parser.parse_keywords(&[
-            Keyword::CREATE,
-            Keyword::FOREIGN,
-            Keyword::CATALOG,
-        ]) {
-            return Ok(None);
-        }
-
-        let name = self
-            .df_parser
-            .parser
-            .parse_object_name(false)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        let mut catalog_type = None;
-        let mut location = None;
-        let mut options = vec![];
-
-        while let Some(keyword) = self.df_parser.parser.parse_one_of_keywords(&[
-            Keyword::STORED,
-            Keyword::LOCATION,
-            Keyword::OPTIONS,
-        ]) {
-            match keyword {
-                Keyword::STORED => {
-                    if catalog_type.is_some() {
-                        return plan_err!("Duplicate STORED AS");
-                    }
-                    self.df_parser
-                        .parser
-                        .expect_keyword(Keyword::AS)
-                        .map_err(|e| DataFusionError::External(Box::new(e)))?;
-                    catalog_type = Some(
-                        self.df_parser
-                            .parser
-                            .parse_identifier()
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?
-                            .value,
-                    );
-                }
-                Keyword::LOCATION => {
-                    if location.is_some() {
-                        return plan_err!("Duplicate LOCATION");
-                    }
-                    location = Some(
-                        self.df_parser
-                            .parser
-                            .parse_literal_string()
-                            .map_err(|e| DataFusionError::External(Box::new(e)))?,
-                    );
-                }
-                Keyword::OPTIONS => {
-                    if !options.is_empty() {
-                        return plan_err!("Duplicate OPTIONS");
-                    }
-                    options = self.parse_value_options()?;
-                }
-                _ => unreachable!(),
+    loop {
+        if p.eat_keyword("STORED") {
+            if catalog_type.is_some() {
+                return plan_err!("Duplicate STORED AS");
             }
-        }
-
-        Ok(Some(CreateForeignCatalog {
-            name,
-            catalog_type: catalog_type
-                .ok_or_else(|| plan_datafusion_err!("Missing STORED AS"))?,
-            location: location.ok_or_else(|| plan_datafusion_err!("Missing LOCATION"))?,
-            options,
-        }))
-    }
-
-    /// Parse options in the form: (key [=] value, key [=] value, ...)
-    fn parse_value_options(&mut self) -> Result<Vec<(String, Value)>> {
-        let mut options = vec![];
-        self.df_parser
-            .parser
-            .expect_token(&Token::LParen)
-            .map_err(|e| DataFusionError::External(Box::new(e)))?;
-
-        loop {
-            let key = self.df_parser.parse_option_key()?;
-            // Support optional '=' between key and value
-            let _ = self.df_parser.parser.consume_token(&Token::Eq);
-            let value = self.df_parser.parse_option_value()?;
-            options.push((key, value));
-
-            let comma = self.df_parser.parser.consume_token(&Token::Comma);
-            if self.df_parser.parser.consume_token(&Token::RParen) {
-                break;
-            } else if !comma {
-                return plan_err!("Expected ',' or ')' in OPTIONS");
+            p.expect_keyword("AS")?;
+            catalog_type = Some(p.parse_ident()?.value().into_owned());
+        } else if p.eat_keyword("LOCATION") {
+            if location.is_some() {
+                return plan_err!("Duplicate LOCATION");
             }
+            location = Some(grammar::parse_string(p)?.value().into_owned());
+        } else if p.eat_keyword("OPTIONS") {
+            if !options.is_empty() {
+                return plan_err!("Duplicate OPTIONS");
+            }
+            options = parse_options(p)?;
+        } else {
+            break;
         }
-        Ok(options)
     }
+
+    Ok(CreateForeignCatalog {
+        name,
+        catalog_type: catalog_type
+            .ok_or_else(|| plan_datafusion_err!("Missing STORED AS"))?,
+        location: location.ok_or_else(|| plan_datafusion_err!("Missing LOCATION"))?,
+        options,
+    })
+}
+
+/// Parses options in the form `('key' [=] 'value', ...)`.
+fn parse_options(p: &mut Parser<'_, DataFusion>) -> Result<Vec<(String, String)>> {
+    p.expect_op("(")?;
+    let mut options = vec![];
+    loop {
+        let key = grammar::parse_string(p)?.value().into_owned();
+        // Support optional '=' between key and value
+        p.eat_op("=");
+        let value = grammar::parse_string(p)?.value().into_owned();
+        options.push((key, value));
+
+        let comma = p.eat_op(",");
+        if p.eat_op(")") {
+            break;
+        } else if !comma {
+            return Err(p.expected("',' or ')' in OPTIONS").into());
+        }
+    }
+    Ok(options)
 }
 
 /// Returns the workspace root directory (parent of datafusion-examples).

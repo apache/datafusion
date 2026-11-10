@@ -16,8 +16,8 @@ use datafusion::optimizer::{
     Analyzer, AnalyzerRule, Optimizer, OptimizerConfig, OptimizerContext, OptimizerRule,
 };
 use datafusion::sql::planner::{ContextProvider, SqlToRel};
-use datafusion::sql::sqlparser::dialect::PostgreSqlDialect;
-use datafusion::sql::sqlparser::parser::Parser;
+use datafusion::sql::sqlparser::dialect::Postgres;
+use datafusion::sql::sqlparser::parse_sql;
 use std::sync::Arc;
 
 /// This example shows how to use DataFusion's SQL planner to parse SQL text and
@@ -33,12 +33,11 @@ use std::sync::Arc;
 /// In this example, we demonstrate how to use the lower level APIs directly,
 /// which only requires the `datafusion-sql` dependency.
 pub fn frontend() -> Result<()> {
-    // First, we parse the SQL string. Note that we use the DataFusion
-    // Parser, which wraps the `sqlparser-rs` SQL parser and adds DataFusion
-    // specific syntax such as `CREATE EXTERNAL TABLE`
-    let dialect = PostgreSqlDialect {};
+    // First, we parse the SQL string with `sqlparser`, using PostgreSQL's
+    // dialect. (`datafusion::sql::parser::DFParser` also parses DataFusion
+    // specific syntax such as `CREATE EXTERNAL TABLE`.)
     let sql = "SELECT name FROM person WHERE age BETWEEN 21 AND 32";
-    let statements = Parser::parse_sql(&dialect, sql)?;
+    let statements = parse_sql::<Postgres>(sql)?;
 
     // Now, use DataFusion's SQL planner, called `SqlToRel` to create a
     // `LogicalPlan` from the parsed statement

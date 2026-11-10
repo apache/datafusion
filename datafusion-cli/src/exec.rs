@@ -23,9 +23,9 @@ use datafusion::logical_expr::{DdlStatement, LogicalPlan};
 use datafusion::physical_plan::execution_plan::EmissionType;
 use datafusion::physical_plan::spill::get_record_batch_memory_size;
 use datafusion::physical_plan::{ExecutionPlanProperties, execute_stream};
+use datafusion::sql::ast::StatementKind;
+use datafusion::sql::parser::dialect_from_str;
 use datafusion::sql::parser::{DFParserBuilder, Statement};
-use datafusion::sql::sqlparser;
-use datafusion::sql::sqlparser::dialect::dialect_from_str;
 use futures::StreamExt;
 use log::warn;
 use object_store::Error::Generic;
@@ -203,7 +203,7 @@ pub(super) async fn exec_and_print(
     let task_ctx = ctx.task_ctx();
     let options = task_ctx.session_config().options();
     let dialect = &options.sql_parser.dialect;
-    let dialect = dialect_from_str(dialect).ok_or_else(|| {
+    let dialect = dialect_from_str(dialect.as_ref()).ok_or_else(|| {
         plan_datafusion_err!(
             "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
             Dialect::available()
@@ -211,12 +211,12 @@ pub(super) async fn exec_and_print(
     })?;
 
     let statements = DFParserBuilder::new(sql.as_str())
-        .with_dialect(dialect.as_ref())
+        .with_dialect(dialect)
         .with_recursion_limit(options.sql_parser.recursion_limit.get())
         .build()?
         .parse_statements()?;
     for statement in statements {
-        StatementExecutor::new(statement)
+        StatementExecutor::new(statement, &sql)
             .execute(ctx, print_options)
             .await?;
     }
@@ -225,19 +225,22 @@ pub(super) async fn exec_and_print(
 }
 
 /// Executor for SQL statements, including special handling for S3 region detection retry logic
-struct StatementExecutor {
-    statement: Statement,
-    statement_for_retry: Option<Statement>,
+struct StatementExecutor<'a> {
+    statement: Statement<'a>,
+    statement_for_retry: Option<Statement<'a>>,
+    /// The SQL the statement was parsed from, for diagnostics.
+    sql: &'a str,
 }
 
-impl StatementExecutor {
-    fn new(statement: Statement) -> Self {
+impl<'a> StatementExecutor<'a> {
+    fn new(statement: Statement<'a>, sql: &'a str) -> Self {
         let statement_for_retry = matches!(statement, Statement::CreateExternalTable(_))
             .then(|| statement.clone());
 
         Self {
             statement,
             statement_for_retry,
+            sql,
         }
     }
 
@@ -316,7 +319,7 @@ impl StatementExecutor {
         let adjusted = AdjustedPrintOptions::new(print_options.clone())
             .with_statement(&self.statement);
 
-        let plan = create_plan(ctx, self.statement, false).await?;
+        let plan = create_plan(ctx, self.statement, self.sql, false).await?;
         let adjusted = adjusted.with_plan(&plan);
 
         let df = match ctx.execute_logical_plan(plan).await {
@@ -328,9 +331,8 @@ impl StatementExecutor {
                 warn!(
                     "S3 region is incorrect, auto-detecting the correct region (this may be slow). Consider updating your region configuration."
                 );
-                let plan =
-                    create_plan(ctx, self.statement_for_retry.take().unwrap(), true)
-                        .await?;
+                let statement = self.statement_for_retry.take().unwrap();
+                let plan = create_plan(ctx, statement, self.sql, true).await?;
                 ctx.execute_logical_plan(plan).await
             }
             Err(e) => Err(e),
@@ -352,9 +354,17 @@ impl AdjustedPrintOptions {
     }
     /// Adjust print options based on any statement specific requirements
     fn with_statement(mut self, statement: &Statement) -> Self {
-        if let Statement::Statement(sql_stmt) = statement {
-            // SHOW / SHOW ALL
-            if let sqlparser::ast::Statement::ShowVariable { .. } = sql_stmt.as_ref() {
+        if let Statement::Statement(sql_stmt) = statement
+            && let StatementKind::Show(show) = &sql_stmt.kind
+        {
+            // SHOW <variable> / SHOW ALL: anything but the listings of tables,
+            // columns and functions and `SHOW CREATE`.
+            let shows_variable = show.object.first().is_none_or(|word| {
+                !["TABLES", "EXTERNAL", "COLUMNS", "FUNCTIONS", "CREATE"]
+                    .iter()
+                    .any(|listing| word.eq_ignore_ascii_case(listing))
+            });
+            if shows_variable {
                 self.inner.maxrows = MaxRows::Unlimited
             }
         }
@@ -395,10 +405,14 @@ fn config_file_type_from_str(ext: &str) -> Option<ConfigFileType> {
 
 async fn create_plan(
     ctx: &dyn CliSessionContext,
-    statement: Statement,
+    statement: Statement<'_>,
+    sql: &str,
     resolve_region: bool,
 ) -> Result<LogicalPlan, DataFusionError> {
-    let mut plan = ctx.session_state().statement_to_plan(statement).await?;
+    let mut plan = ctx
+        .session_state()
+        .statement_to_plan_with_source(statement, Some(sql))
+        .await?;
 
     // Note that cmd is a mutable reference so that create_external_table function can remove all
     // datafusion-cli specific options before passing through to datafusion. Otherwise, datafusion
@@ -605,7 +619,7 @@ mod tests {
         let ctx = SessionContext::new();
         let task_ctx = ctx.task_ctx();
         let dialect = &task_ctx.session_config().options().sql_parser.dialect;
-        let dialect = dialect_from_str(dialect).ok_or_else(|| {
+        let dialect = dialect_from_str(dialect.as_ref()).ok_or_else(|| {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
                 Dialect::available()
@@ -613,10 +627,10 @@ mod tests {
         })?;
         for location in locations {
             let sql = format!("copy (values (1,2)) to '{location}' STORED AS PARQUET;");
-            let statements = DFParser::parse_sql_with_dialect(&sql, dialect.as_ref())?;
+            let statements = DFParser::parse_sql_with_dialect(&sql, dialect)?;
             for statement in statements {
                 //Should not fail
-                let mut plan = create_plan(&ctx, statement, false).await?;
+                let mut plan = create_plan(&ctx, statement, &sql, false).await?;
                 if let LogicalPlan::Copy(copy_to) = &mut plan {
                     assert_eq!(copy_to.output_url, location);
                     assert_eq!(copy_to.file_type.get_ext(), "parquet".to_string());

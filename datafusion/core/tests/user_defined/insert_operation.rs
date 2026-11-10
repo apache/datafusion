@@ -34,14 +34,18 @@ async fn insert_operation_is_passed_correctly_to_table_provider() {
     let sql = "INSERT INTO testing (column) VALUES (1)";
     assert_insert_op(&ctx, sql, InsertOp::Append).await;
 
-    let sql = "INSERT OVERWRITE testing (column) VALUES (1)";
-    assert_insert_op(&ctx, sql, InsertOp::Overwrite).await;
-
     let sql = "REPLACE INTO testing (column) VALUES (1)";
     assert_insert_op(&ctx, sql, InsertOp::Replace).await;
 
     let sql = "INSERT OR REPLACE INTO testing (column) VALUES (1)";
     assert_insert_op(&ctx, sql, InsertOp::Replace).await;
+
+    // SQLite has no `INSERT OVERWRITE`, so use Spark's syntax for it.
+    let ctx = session_ctx_with_dialect("Spark");
+    ctx.register_table("testing", table_provider.clone())
+        .unwrap();
+    let sql = "INSERT OVERWRITE testing (column) VALUES (1)";
+    assert_insert_op(&ctx, sql, InsertOp::Overwrite).await;
 }
 
 async fn assert_insert_op(ctx: &SessionContext, sql: &str, insert_op: InsertOp) {

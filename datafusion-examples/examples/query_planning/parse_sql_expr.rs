@@ -8,6 +8,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use datafusion::common::DFSchema;
 use datafusion::common::ScalarValue;
 use datafusion::logical_expr::{col, lit};
+#[cfg(feature = "unparser")]
 use datafusion::sql::unparser::Unparser;
 use datafusion::{
     assert_batches_eq,
@@ -36,6 +37,7 @@ pub async fn parse_sql_expr() -> Result<()> {
     simple_session_context_parse_sql_expr_demo()?;
     simple_dataframe_parse_sql_expr_demo().await?;
     query_parquet_demo().await?;
+    #[cfg(feature = "unparser")]
     round_trip_parse_sql_expr_demo().await?;
     Ok(())
 }
@@ -121,6 +123,7 @@ async fn query_parquet_demo() -> Result<()> {
     Ok(())
 }
 
+#[cfg(feature = "unparser")]
 /// DataFusion can parse a SQL text and convert it back to SQL using [`Unparser`].
 async fn round_trip_parse_sql_expr_demo() -> Result<()> {
     let sql = "((car = 'red') OR (speed > 1.0))";

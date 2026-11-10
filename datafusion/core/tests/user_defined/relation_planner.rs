@@ -17,7 +17,7 @@ use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::planner::{
     PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
 };
-use datafusion_sql::sqlparser::ast::{TableAlias, TableFactor};
+use datafusion_sql::ast::{Expr as SQLExpr, ExprKind, TableFactor};
 use insta::assert_snapshot;
 
 // ============================================================================
@@ -34,46 +34,49 @@ use insta::assert_snapshot;
 // - `pivot_unpivot.rs`: PIVOT/UNPIVOT via SQL rewriting
 // - `match_recognize.rs`: MATCH_RECOGNIZE logical planning
 
+/// True if `call` is a call of the function `function_name`.
+fn is_call_of(call: &SQLExpr<'_>, function_name: &str) -> bool {
+    matches!(
+        &call.kind,
+        ExprKind::Function { name, .. }
+            if name.to_string().eq_ignore_ascii_case(function_name)
+    )
+}
+
 /// Helper to build simple static values-backed virtual tables used by the
 /// example planners below.
-fn plan_static_values_table(
-    relation: TableFactor,
+fn plan_static_values_table<'a>(
+    relation: TableFactor<'a>,
     context: &dyn RelationPlannerContext,
     table_name: &str,
     column_name: &str,
     values: Vec<ScalarValue>,
-) -> Result<RelationPlanning> {
-    let alias = match &relation {
-        TableFactor::Table { name, alias, .. }
-            if name.to_string().eq_ignore_ascii_case(table_name) =>
-        {
-            alias.clone()
+) -> Result<RelationPlanning<'a>> {
+    match &relation {
+        TableFactor::Named(name) if name.to_string().eq_ignore_ascii_case(table_name) => {
+            let table_ref = context.object_name_to_table_reference(name.clone())?;
+
+            // RelationPlanner extensions run before DataFusion resolves CTEs. A
+            // name-based planner should defer when a CTE with that name is
+            // visible, so SQL's normal lexical CTE precedence is preserved.
+            if context.get_cte(&table_ref).is_some() {
+                return Ok(RelationPlanning::Original(Box::new(relation)));
+            }
         }
+        // A call such as `numbers(1)` is a table function, which a CTE cannot
+        // shadow.
+        TableFactor::Function { call, .. } if is_call_of(call, table_name) => {}
         _ => return Ok(RelationPlanning::Original(Box::new(relation))),
-    };
-
-    if let TableFactor::Table {
-        name, args: None, ..
-    } = &relation
-    {
-        let table_ref = context.object_name_to_table_reference(name.clone())?;
-
-        // RelationPlanner extensions run before DataFusion resolves CTEs. A
-        // name-based planner should defer when a CTE with that name is visible,
-        // so SQL's normal lexical CTE precedence is preserved.
-        if context.get_cte(&table_ref).is_some() {
-            return Ok(RelationPlanning::Original(Box::new(relation)));
-        }
     }
 
-    plan_static_values(alias, column_name, values)
+    // DataFusion applies the relation's alias, if any, to the returned plan.
+    plan_static_values(column_name, values)
 }
 
-fn plan_static_values(
-    alias: Option<TableAlias>,
+fn plan_static_values<'a>(
     column_name: &str,
     values: Vec<ScalarValue>,
-) -> Result<RelationPlanning> {
+) -> Result<RelationPlanning<'a>> {
     let rows = values
         .into_iter()
         .map(|v| vec![Expr::Literal(v, None)])
@@ -84,7 +87,7 @@ fn plan_static_values(
         .build()?;
 
     Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
-        plan, alias,
+        plan, None,
     ))))
 }
 
@@ -94,11 +97,11 @@ fn plan_static_values(
 struct NumbersPlanner;
 
 impl RelationPlanner for NumbersPlanner {
-    fn plan_relation(
+    fn plan_relation<'a>(
         &self,
-        relation: TableFactor,
+        relation: TableFactor<'a>,
         context: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning> {
+    ) -> Result<RelationPlanning<'a>> {
         plan_static_values_table(
             relation,
             context,
@@ -120,11 +123,11 @@ impl RelationPlanner for NumbersPlanner {
 struct QualifiedNumbersPlanner;
 
 impl RelationPlanner for QualifiedNumbersPlanner {
-    fn plan_relation(
+    fn plan_relation<'a>(
         &self,
-        relation: TableFactor,
+        relation: TableFactor<'a>,
         context: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning> {
+    ) -> Result<RelationPlanning<'a>> {
         plan_static_values_table(
             relation,
             context,
@@ -141,11 +144,11 @@ impl RelationPlanner for QualifiedNumbersPlanner {
 struct ColorsPlanner;
 
 impl RelationPlanner for ColorsPlanner {
-    fn plan_relation(
+    fn plan_relation<'a>(
         &self,
-        relation: TableFactor,
+        relation: TableFactor<'a>,
         context: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning> {
+    ) -> Result<RelationPlanning<'a>> {
         plan_static_values_table(
             relation,
             context,
@@ -166,11 +169,11 @@ impl RelationPlanner for ColorsPlanner {
 struct AlternativeNumbersPlanner;
 
 impl RelationPlanner for AlternativeNumbersPlanner {
-    fn plan_relation(
+    fn plan_relation<'a>(
         &self,
-        relation: TableFactor,
+        relation: TableFactor<'a>,
         context: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning> {
+    ) -> Result<RelationPlanning<'a>> {
         plan_static_values_table(
             relation,
             context,
@@ -187,16 +190,16 @@ impl RelationPlanner for AlternativeNumbersPlanner {
 struct ReservedNumbersPlanner;
 
 impl RelationPlanner for ReservedNumbersPlanner {
-    fn plan_relation(
+    fn plan_relation<'a>(
         &self,
-        relation: TableFactor,
+        relation: TableFactor<'a>,
         _context: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning> {
+    ) -> Result<RelationPlanning<'a>> {
         match relation {
-            TableFactor::Table { name, alias, .. }
+            TableFactor::Named(name)
                 if name.to_string().eq_ignore_ascii_case("numbers") =>
             {
-                plan_static_values(alias, "number", vec![ScalarValue::Int64(Some(999))])
+                plan_static_values("number", vec![ScalarValue::Int64(Some(999))])
             }
             other => Ok(RelationPlanning::Original(Box::new(other))),
         }
@@ -209,21 +212,24 @@ impl RelationPlanner for ReservedNumbersPlanner {
 struct SamplingJoinPlanner;
 
 impl RelationPlanner for SamplingJoinPlanner {
-    fn plan_relation(
+    fn plan_relation<'a>(
         &self,
-        relation: TableFactor,
+        relation: TableFactor<'a>,
         context: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning> {
+    ) -> Result<RelationPlanning<'a>> {
         match relation {
-            TableFactor::NestedJoin {
-                table_with_joins,
-                alias,
-                ..
-            } if table_with_joins.joins.len() == 1 => {
+            // `context.plan()` plans a bare table factor, so only handle sides
+            // without their own alias.
+            TableFactor::NestedJoin(table_with_joins)
+                if table_with_joins.joins.len() == 1
+                    && table_with_joins.relation.alias.is_none()
+                    && table_with_joins.joins[0].table.alias.is_none() =>
+            {
                 // Use context.plan() to recursively plan both sides
                 // This ensures other planners (like NumbersPlanner) can handle them
-                let left = context.plan(table_with_joins.relation.clone())?;
-                let right = context.plan(table_with_joins.joins[0].relation.clone())?;
+                let left = context.plan(table_with_joins.relation.factor.clone())?;
+                let right =
+                    context.plan(table_with_joins.joins[0].table.factor.clone())?;
 
                 // Sample each table to 2 rows
                 let left_sampled =
@@ -238,7 +244,7 @@ impl RelationPlanner for SamplingJoinPlanner {
                     .build()?;
 
                 Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
-                    plan, alias,
+                    plan, None,
                 ))))
             }
             other => Ok(RelationPlanning::Original(Box::new(other))),
@@ -252,11 +258,11 @@ impl RelationPlanner for SamplingJoinPlanner {
 struct PassThroughPlanner;
 
 impl RelationPlanner for PassThroughPlanner {
-    fn plan_relation(
+    fn plan_relation<'a>(
         &self,
-        relation: TableFactor,
+        relation: TableFactor<'a>,
         _context: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning> {
+    ) -> Result<RelationPlanning<'a>> {
         // Never handles anything - always delegates
         Ok(RelationPlanning::Original(Box::new(relation)))
     }
@@ -269,17 +275,19 @@ impl RelationPlanner for PassThroughPlanner {
 struct PremiumFeaturePlanner;
 
 impl RelationPlanner for PremiumFeaturePlanner {
-    fn plan_relation(
+    fn plan_relation<'a>(
         &self,
-        relation: TableFactor,
+        relation: TableFactor<'a>,
         _context: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning> {
+    ) -> Result<RelationPlanning<'a>> {
         match relation {
-            TableFactor::UNNEST { .. } => Err(datafusion_common::DataFusionError::Plan(
-                "UNNEST is a premium feature! Please upgrade to DataFusion Pro™ \
+            TableFactor::Function { call, .. } if is_call_of(&call, "unnest") => {
+                Err(datafusion_common::DataFusionError::Plan(
+                    "UNNEST is a premium feature! Please upgrade to DataFusion Pro™ \
                      to unlock advanced array operations."
-                    .to_string(),
-            )),
+                        .to_string(),
+                ))
+            }
             other => Ok(RelationPlanning::Original(Box::new(other))),
         }
     }

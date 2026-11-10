@@ -2777,7 +2777,7 @@ mod tests {
                     SELECT i, 'a' AS cat FROM catalog_a.schema_a.table_a
                     UNION ALL
                     SELECT i, 'b' AS cat FROM catalog_b.schema_b.table_b
-                ) AS all
+                ) AS \"all\"
                 GROUP BY cat
                 ORDER BY cat
                 ",
@@ -2968,22 +2968,26 @@ mod tests {
     struct MyTypePlanner {}
 
     impl TypePlanner for MyTypePlanner {
-        fn plan_type_field(&self, sql_type: &ast::DataType) -> Result<Option<FieldRef>> {
-            match sql_type {
-                ast::DataType::Datetime(precision) => {
-                    let precision = match precision {
-                        Some(0) => TimeUnit::Second,
-                        Some(3) => TimeUnit::Millisecond,
-                        Some(6) => TimeUnit::Microsecond,
-                        None | Some(9) => TimeUnit::Nanosecond,
-                        _ => unreachable!(),
-                    };
-                    Ok(Some(
-                        DataType::Timestamp(precision, None).into_nullable_field_ref(),
-                    ))
-                }
-                _ => Ok(None),
+        fn plan_type_field(
+            &self,
+            sql_type: &ast::DataType<'_>,
+        ) -> Result<Option<FieldRef>> {
+            if !sql_type.qualifier.is_empty()
+                || !sql_type.name.value().eq_ignore_ascii_case("DATETIME")
+            {
+                return Ok(None);
             }
+            let precision = match sql_type.args.as_slice() {
+                [p] if p == "0" => TimeUnit::Second,
+                [p] if p == "3" => TimeUnit::Millisecond,
+                [p] if p == "6" => TimeUnit::Microsecond,
+                [] => TimeUnit::Nanosecond,
+                [p] if p == "9" => TimeUnit::Nanosecond,
+                _ => unreachable!(),
+            };
+            Ok(Some(
+                DataType::Timestamp(precision, None).into_nullable_field_ref(),
+            ))
         }
     }
 

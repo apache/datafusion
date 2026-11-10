@@ -12,7 +12,7 @@ use datafusion::error::Result;
 use datafusion::execution::FunctionRegistry;
 use datafusion::logical_expr::Operator;
 use datafusion::prelude::*;
-use datafusion::sql::sqlparser::ast::BinaryOperator;
+use datafusion::sql::sqlparser::ast::BinaryOp;
 use datafusion_common::ScalarValue;
 use datafusion_expr::BinaryExpr;
 use datafusion_expr::expr::Alias;
@@ -32,7 +32,7 @@ impl ExprPlanner for DeferColonPlanner {
         expr: RawBinaryExpr,
         _schema: &DFSchema,
     ) -> Result<PlannerResult<RawBinaryExpr>> {
-        if matches!(&expr.op, BinaryOperator::Custom(op) if op == ":") {
+        if matches!(&expr.op, BinaryOp::Named(op) if op == ":") {
             self.colon_seen.store(true, Ordering::Relaxed);
         }
         Ok(PlannerResult::Original(expr))
@@ -46,28 +46,28 @@ impl ExprPlanner for MyCustomPlanner {
         _schema: &DFSchema,
     ) -> Result<PlannerResult<RawBinaryExpr>> {
         match &expr.op {
-            BinaryOperator::Arrow => {
+            BinaryOp::Named(op) if op == "->" => {
                 Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr {
                     left: Box::new(expr.left.clone()),
                     right: Box::new(expr.right.clone()),
                     op: Operator::StringConcat,
                 })))
             }
-            BinaryOperator::LongArrow => {
+            BinaryOp::Named(op) if op == "->>" => {
                 Ok(PlannerResult::Planned(Expr::BinaryExpr(BinaryExpr {
                     left: Box::new(expr.left.clone()),
                     right: Box::new(expr.right.clone()),
                     op: Operator::Plus,
                 })))
             }
-            BinaryOperator::Question => {
+            BinaryOp::Named(op) if op == "?" => {
                 Ok(PlannerResult::Planned(Expr::Alias(Alias::new(
                     Expr::Literal(ScalarValue::Boolean(Some(true)), None),
                     None::<&str>,
                     format!("{} ? {}", expr.left, expr.right),
                 ))))
             }
-            BinaryOperator::Custom(op) if op == ":" => {
+            BinaryOp::Named(op) if op == ":" => {
                 Ok(PlannerResult::Planned(Expr::Alias(Alias::new(
                     Expr::Literal(ScalarValue::Boolean(Some(true)), None),
                     None::<&str>,

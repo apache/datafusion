@@ -92,9 +92,11 @@ async fn keeps_join_with_lambda_filter() -> Result<()> {
             .with_physical_optimizer_rules(vec![])
             .build(),
     );
+    // Databricks has no `[...]` array literal, so build the arrays with a call.
     ctx.sql(
         "CREATE TABLE lists AS \
-         SELECT * FROM (VALUES ([1, 30], 'a', 7), ([40], 'b', 8)) AS v(l, k, n)",
+         SELECT * FROM (VALUES (make_array(1, 30), 'a', 7), (make_array(40), 'b', 8)) \
+         AS v(l, k, n)",
     )
     .await?
     .collect()

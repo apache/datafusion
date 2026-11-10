@@ -99,9 +99,8 @@ use datafusion::logical_expr::{
         PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
     },
 };
-use datafusion::sql::sqlparser::ast::{
-    self, TableFactor, TableSampleMethod, TableSampleUnit,
-};
+use datafusion::sql::ast::{SampleAmount, SampleClause, TableFactor, TableSample};
+use datafusion::sql::sqlparser::ast::SampleUnit;
 use datafusion::{
     catalog::Session,
     execution::{
@@ -130,7 +129,12 @@ use insta::assert_snapshot;
 /// Runs the TABLESAMPLE examples demonstrating various sampling techniques.
 pub async fn table_sample() -> Result<()> {
     // Build session with custom query planner for physical planning
+    // Parse with a dialect that has TABLESAMPLE with a method and a seed, such
+    // as Snowflake's.
+    let config =
+        SessionConfig::new().set_str("datafusion.sql_parser.dialect", "snowflake");
     let state = SessionStateBuilder::new()
+        .with_config(config)
         .with_default_features()
         .with_query_planner(Arc::new(TableSampleQueryPlanner))
         .build();
@@ -304,38 +308,28 @@ fn register_sample_data(ctx: &SessionContext) -> Result<()> {
 struct TableSamplePlanner;
 
 impl RelationPlanner for TableSamplePlanner {
-    fn plan_relation(
+    fn plan_relation<'a>(
         &self,
-        relation: TableFactor,
+        relation: TableFactor<'a>,
         context: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning> {
-        // Only handle Table relations with TABLESAMPLE clause
-        let TableFactor::Table {
-            sample: Some(sample),
-            alias,
-            name,
-            args,
-            with_hints,
-            version,
-            with_ordinality,
-            partitions,
-            json_path,
-            index_hints,
-        } = relation
-        else {
+    ) -> Result<RelationPlanning<'a>> {
+        // Only handle relations with a TABLESAMPLE clause
+        let TableFactor::Sampled(sampled) = relation else {
             return Ok(RelationPlanning::Original(Box::new(relation)));
         };
-
-        // Extract sample spec (handles both before/after alias positions)
-        let sample = match sample {
-            ast::TableSampleKind::BeforeTableAlias(s)
-            | ast::TableSampleKind::AfterTableAlias(s) => s,
-        };
+        let TableSample { table, sample } = *sampled;
+        let SampleClause {
+            method,
+            amount,
+            seed,
+            offset,
+            ..
+        } = sample;
 
         // Validate sampling method
-        if let Some(method) = &sample.name
-            && *method != TableSampleMethod::Bernoulli
-            && *method != TableSampleMethod::Row
+        if let Some(method) = &method
+            && !method.eq_ignore_ascii_case("BERNOULLI")
+            && !method.eq_ignore_ascii_case("ROW")
         {
             return not_impl_err!(
                 "Sampling method {} is not supported (only BERNOULLI and ROW)",
@@ -344,71 +338,56 @@ impl RelationPlanner for TableSamplePlanner {
         }
 
         // Offset sampling (ClickHouse-style) not supported
-        if sample.offset.is_some() {
+        if offset.is_some() {
             return not_impl_err!(
                 "TABLESAMPLE with OFFSET is not supported (requires total row count)"
             );
         }
 
         // Parse optional REPEATABLE seed
-        let seed = sample
-            .seed
+        let seed = seed
             .map(|s| {
-                s.value.to_string().parse::<u64>().map_err(|_| {
+                s.value.parse::<u64>().map_err(|_| {
                     plan_datafusion_err!("REPEATABLE seed must be an integer")
                 })
             })
             .transpose()?;
 
-        // Plan the underlying table without the sample clause
-        let base_relation = TableFactor::Table {
-            sample: None,
-            alias: alias.clone(),
-            name,
-            args,
-            with_hints,
-            version,
-            with_ordinality,
-            partitions,
-            json_path,
-            index_hints,
-        };
-        let input = context.plan(base_relation)?;
+        // Plan the sampled table. Its alias, as in `t AS a TABLESAMPLE (10)`, is
+        // on the table reference rather than the factor, so it goes with the
+        // planned relation.
+        let input = context.plan(table.factor)?;
+        let alias = table.alias;
 
-        // Handle bucket sampling (Hive-style: TABLESAMPLE(BUCKET x OUT OF y))
-        if let Some(bucket) = sample.bucket {
-            if bucket.on.is_some() {
-                return not_impl_err!(
-                    "TABLESAMPLE BUCKET with ON clause requires CLUSTERED BY table"
-                );
-            }
-            let bucket_num: u64 =
-                bucket.bucket.to_string().parse().map_err(|_| {
+        let (value, unit) = match amount {
+            // Handle bucket sampling (Hive-style: TABLESAMPLE(BUCKET x OUT OF y))
+            SampleAmount::Bucket { bucket, total, on } => {
+                if on.is_some() {
+                    return not_impl_err!(
+                        "TABLESAMPLE BUCKET with ON clause requires CLUSTERED BY table"
+                    );
+                }
+                let bucket_num: u64 = bucket.parse().map_err(|_| {
                     plan_datafusion_err!("bucket number must be an integer")
                 })?;
-            let total: u64 =
-                bucket.total.to_string().parse().map_err(|_| {
+                let total: u64 = total.parse().map_err(|_| {
                     plan_datafusion_err!("bucket total must be an integer")
                 })?;
 
-            let fraction = bucket_num as f64 / total as f64;
-            let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
-            return Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
-                plan, alias,
-            ))));
-        }
-
-        // Handle quantity-based sampling
-        let Some(quantity) = sample.quantity else {
-            return plan_err!(
-                "TABLESAMPLE requires a quantity (percentage, fraction, or row count)"
-            );
+                let fraction = bucket_num as f64 / total as f64;
+                let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
+                return Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
+                    plan, alias,
+                ))));
+            }
+            // Handle quantity-based sampling
+            SampleAmount::Quantity { value, unit } => (value, unit),
         };
-        let quantity_value_expr = context.sql_to_expr(quantity.value, input.schema())?;
+        let quantity_value_expr = context.sql_to_expr(value, input.schema())?;
 
-        match quantity.unit {
+        match unit {
             // TABLESAMPLE (N ROWS) - exact row limit
-            Some(TableSampleUnit::Rows) => {
+            Some(SampleUnit::Rows) => {
                 let rows: i64 = parse_literal::<Int64Type>(&quantity_value_expr)?;
                 if rows < 0 {
                     return plan_err!("row count must be non-negative, got {}", rows);
@@ -422,7 +401,7 @@ impl RelationPlanner for TableSamplePlanner {
             }
 
             // TABLESAMPLE (N PERCENT) - percentage sampling
-            Some(TableSampleUnit::Percent) => {
+            Some(SampleUnit::Percent) => {
                 let percent: f64 = parse_literal::<Float64Type>(&quantity_value_expr)?;
                 let fraction = percent / 100.0;
                 let plan = TableSamplePlanNode::new(input, fraction, seed).into_plan();
