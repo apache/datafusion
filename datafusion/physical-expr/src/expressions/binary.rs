@@ -6,12 +6,13 @@ mod kernels;
 
 use crate::PhysicalExpr;
 use crate::expressions::SqlSimilarToPattern;
+use crate::expressions::column_projection::ColumnProjection;
 use crate::expressions::translate_scalar;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::Hash;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use arrow::array::*;
 use arrow::buffer::NullBuffer;
@@ -44,13 +45,42 @@ use kernels::{
 };
 
 /// Binary expression
-#[derive(Debug, Clone, Eq)]
+#[derive(Clone, Eq)]
 pub struct BinaryExpr {
     left: Arc<dyn PhysicalExpr>,
     op: Operator,
     right: Arc<dyn PhysicalExpr>,
     /// Specifies whether an error is returned on overflow or not
     fail_on_overflow: bool,
+    /// Lazily derived from the other fields, see [`BinaryExpr::projected_children`].
+    projected: OnceLock<ProjectedChildren>,
+}
+
+/// The children of a [`BinaryExpr`] rewritten to be evaluated against a batch
+/// that only retains the input columns they use.
+///
+/// This avoids filtering unused input columns when short-circuit evaluation
+/// evaluates children on a subset of the input rows. See [`ColumnProjection`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ProjectedChildren {
+    /// The input columns used by `exprs`.
+    columns: ColumnProjection,
+    /// The rewritten children:
+    /// - `AND`: every conjunct, in [`for_each_conjunct`] order.
+    /// - Otherwise: only the right child.
+    exprs: Vec<Arc<dyn PhysicalExpr>>,
+}
+
+// Manually implement Debug to exclude the derived `projected` field
+impl std::fmt::Debug for BinaryExpr {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BinaryExpr")
+            .field("left", &self.left)
+            .field("op", &self.op)
+            .field("right", &self.right)
+            .field("fail_on_overflow", &self.fail_on_overflow)
+            .finish()
+    }
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
@@ -83,6 +113,7 @@ impl BinaryExpr {
             op,
             right,
             fail_on_overflow: false,
+            projected: OnceLock::new(),
         }
     }
 
@@ -93,6 +124,7 @@ impl BinaryExpr {
             op: self.op,
             right: self.right,
             fail_on_overflow,
+            projected: self.projected,
         }
     }
 
@@ -109,6 +141,29 @@ impl BinaryExpr {
     /// Get the operator for this binary expression
     pub fn op(&self) -> &Operator {
         &self.op
+    }
+
+    /// Returns the children rewritten to be evaluated against a batch that only
+    /// retains the input columns they use, deriving them on first use.
+    fn projected_children(&self) -> &ProjectedChildren {
+        self.projected.get_or_init(|| {
+            let mut exprs = vec![];
+            if self.op == Operator::And {
+                let mut push = |conjunct: &Arc<dyn PhysicalExpr>| {
+                    exprs.push(Arc::clone(conjunct));
+                    Ok(true)
+                };
+                for_each_conjunct(&self.left, &mut push)
+                    .and_then(|_| for_each_conjunct(&self.right, &mut push))
+                    .expect("Closure cannot fail");
+            } else {
+                exprs.push(Arc::clone(&self.right));
+            }
+
+            let columns = ColumnProjection::new(&exprs);
+            let exprs = exprs.iter().map(|e| columns.project_expr(e)).collect();
+            ProjectedChildren { columns, exprs }
+        })
     }
 
     /// Mathematical intervals do not cover values produced by wrapping arithmetic.
@@ -569,8 +624,17 @@ impl PhysicalExpr for BinaryExpr {
                 //
                 // Use `filter_record_batch` directly because `evaluate_selection`
                 // scatters the RHS back to the original batch length.
-                let selection_batch = filter_record_batch(batch, &mask)?;
-                let right_ret = self.right.evaluate(&selection_batch)?;
+                //
+                // Only filter the columns used by the RHS.
+                let projected = self.projected_children();
+                let right_ret = match projected.columns.projection_for(batch) {
+                    Some(projection) => {
+                        let selection_batch =
+                            filter_record_batch(&batch.project(&projection)?, &mask)?;
+                        projected.exprs[0].evaluate(&selection_batch)?
+                    }
+                    None => self.right.evaluate(&filter_record_batch(batch, &mask)?)?,
+                };
 
                 match &right_ret {
                     ColumnarValue::Array(array) => {
@@ -982,6 +1046,8 @@ impl PhysicalExpr for BinaryExpr {
             op,
             right,
             fail_on_overflow,
+            // Derived from the other fields, not serialized.
+            projected: _,
         } = self;
 
         // Linearize a nested binary expression tree with the same operator and
@@ -1204,9 +1270,15 @@ impl BinaryExpr {
         let mut selections = vec![];
         let mut input = Cow::Borrowed(batch);
         let mut result = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
+        // Set once `input` only retains the columns used by the conjuncts.
+        // From then on, the projected conjuncts must be evaluated instead.
+        let mut projected_conjuncts = None;
+        let mut conjunct_index = 0;
 
         // Returns whether to go on to the next conjunct.
         let mut evaluate = |conjunct: &Arc<dyn PhysicalExpr>| -> Result<bool> {
+            let index = conjunct_index;
+            conjunct_index += 1;
             if let Some(undecided) = rows_to_filter_before(
                 conjunct,
                 &result,
@@ -1220,11 +1292,22 @@ impl BinaryExpr {
                 } else {
                     ColumnarValue::Array(filter(&array, &undecided)?)
                 };
+                if projected_conjuncts.is_none() {
+                    // Only filter the columns used by the conjuncts.
+                    let projected = self.projected_children();
+                    if let Some(projection) = projected.columns.projection_for(&input) {
+                        input = Cow::Owned(input.project(&projection)?);
+                        projected_conjuncts = Some(&projected.exprs);
+                    }
+                }
                 input = Cow::Owned(filter_record_batch(&input, &undecided)?);
                 selections.push(undecided);
             }
 
-            let value = conjunct.evaluate(&input)?;
+            let value = match projected_conjuncts {
+                Some(conjuncts) => conjuncts[index].evaluate(&input)?,
+                None => conjunct.evaluate(&input)?,
+            };
             let so_far =
                 std::mem::replace(&mut result, ColumnarValue::Scalar(ScalarValue::Null));
             result = and_kleene_columnar(so_far, value, input.num_rows())?;
@@ -6548,9 +6631,10 @@ mod tests {
         ))
     }
 
-    type RowCountLog = Arc<std::sync::Mutex<Vec<(usize, usize)>>>;
+    /// `(id, num_rows, num_columns)` of each batch a [`RowCountRecorder`] evaluated.
+    type RowCountLog = Arc<std::sync::Mutex<Vec<(usize, usize, usize)>>>;
 
-    /// Records rows seen by each conjunct and bypasses the cheap-expression path.
+    /// Records rows and columns seen by each conjunct and bypasses the cheap-expression path.
     #[derive(Debug)]
     struct RowCountRecorder {
         id: usize,
@@ -6603,7 +6687,11 @@ mod tests {
         }
 
         fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
-            self.log.lock().unwrap().push((self.id, batch.num_rows()));
+            self.log.lock().unwrap().push((
+                self.id,
+                batch.num_rows(),
+                batch.num_columns(),
+            ));
             self.inner.evaluate(batch)
         }
 
@@ -6693,7 +6781,7 @@ mod tests {
         }
         // Filtering did kick in.
         let log = log.lock().unwrap();
-        assert!(log.iter().any(|(_, rows)| (8..100).contains(rows)));
+        assert!(log.iter().any(|(_, rows, _)| (8..100).contains(rows)));
         Ok(())
     }
 
@@ -6717,7 +6805,8 @@ mod tests {
         ] {
             let result = expr.evaluate(batch)?.into_array(batch.num_rows())?;
             let log = std::mem::take(&mut *log.lock().unwrap());
-            let (ids, rows): (Vec<_>, Vec<_>) = log.into_iter().unzip();
+            let (ids, rows): (Vec<_>, Vec<_>) =
+                log.into_iter().map(|(id, rows, _)| (id, rows)).unzip();
             assert_eq!(ids, (0..conjuncts.len()).collect::<Vec<_>>(), "{expr}");
             outcomes.push((result, rows));
         }
@@ -6826,6 +6915,87 @@ mod tests {
             let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
             assert_eq!(&expected, result.as_boolean(), "{expr}");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_conjunction_filters_only_used_columns() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("unused_a", DataType::Int32, false),
+            Field::new("id", DataType::Int32, false),
+            Field::new("unused_b", DataType::Utf8, false),
+            Field::new("x", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..100)),
+                Arc::new(Int32Array::from_iter_values(0..100)),
+                Arc::new(StringArray::from_iter_values(
+                    (0..100).map(|i| i.to_string()),
+                )),
+                Arc::new(Int32Array::from_iter_values((0..100).map(|i| i % 7))),
+            ],
+        )?;
+        let log = RowCountLog::default();
+        let conjuncts = [
+            logical2physical(&logical_col("id").lt(expr_lit(10)), &schema),
+            logical2physical(&logical_col("x").gt_eq(expr_lit(1)), &schema),
+            logical2physical(&logical_col("id").gt(expr_lit(2)), &schema),
+        ]
+        .iter()
+        .enumerate()
+        .map(|(id, conjunct)| RowCountRecorder::wrap(id, conjunct, &log))
+        .collect::<Vec<_>>();
+
+        let expected: BooleanArray = (0..100)
+            .map(|i| Some(i < 10 && i % 7 >= 1 && i > 2))
+            .collect();
+        for expr in [
+            left_deep_and(&conjuncts),
+            right_deep_and(&conjuncts),
+            balanced_and(&conjuncts),
+        ] {
+            let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+            assert_eq!(&expected, result.as_boolean(), "{expr}");
+            // Once filtered, only `id` and `x` are kept.
+            let log = std::mem::take(&mut *log.lock().unwrap());
+            assert_eq!(log, vec![(0, 100, 4), (1, 10, 2), (2, 8, 2)], "{expr}");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_or_pre_selection_filters_only_used_columns() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("unused", DataType::Int32, false),
+            Field::new("c", DataType::Boolean, false),
+            Field::new("d", DataType::Int32, false),
+        ]));
+        // `c` is false for 10% of the rows, which triggers pre-selection.
+        let c: BooleanArray = (0..100).map(|i| Some(i % 10 != 0)).collect();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..100)),
+                Arc::new(c),
+                Arc::new(Int32Array::from_iter_values(0..100)),
+            ],
+        )?;
+        let log = RowCountLog::default();
+        let rhs = RowCountRecorder::wrap(
+            0,
+            &logical2physical(&logical_col("d").gt(expr_lit(50)), &schema),
+            &log,
+        );
+        let expr = BinaryExpr::new(col("c", &schema)?, Operator::Or, rhs);
+
+        let result = expr.evaluate(&batch)?.into_array(batch.num_rows())?;
+        let expected: BooleanArray =
+            (0..100).map(|i| Some(i % 10 != 0 || i > 50)).collect();
+        assert_eq!(&expected, result.as_boolean());
+        // The RHS only sees the 10 false rows of `c`, with only column `d`.
+        assert_eq!(*log.lock().unwrap(), vec![(0, 10, 1)]);
         Ok(())
     }
 

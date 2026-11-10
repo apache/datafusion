@@ -5,10 +5,9 @@
 mod literal_lookup_table;
 
 use super::{Column, Literal};
-use crate::expressions::{
-    BinaryExpr, CastExpr, LambdaVariable, NegativeExpr, NotExpr, lit, try_cast,
-};
-use crate::{PhysicalExpr, ScalarFunctionExpr};
+use crate::PhysicalExpr;
+use crate::expressions::column_projection::ColumnProjection;
+use crate::expressions::{BinaryExpr, CastExpr, NegativeExpr, NotExpr, lit, try_cast};
 use arrow::array::*;
 use arrow::compute::kernels::zip::zip;
 use arrow::compute::{
@@ -24,15 +23,13 @@ use datafusion_common::{
 use datafusion_expr::ColumnarValue;
 use datafusion_expr_common::interval_arithmetic::NullableInterval;
 use datafusion_expr_common::operator::Operator;
-use indexmap::IndexMap;
 use std::borrow::Cow;
-use std::collections::BTreeSet;
 use std::hash::Hash;
 use std::sync::Arc;
 
 use crate::expressions::case::literal_lookup_table::LiteralLookupTable;
 use arrow::compute::kernels::merge::{MergeIndex, merge, merge_n};
-use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
+use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_physical_expr_common::datum::compare_with_eq;
 use datafusion_physical_expr_common::utils::scatter;
 use itertools::Itertools;
@@ -118,102 +115,29 @@ struct CaseBody {
 
 impl CaseBody {
     /// Derives a [ProjectedCaseBody] from this [CaseBody].
-    fn project(&self) -> Result<ProjectedCaseBody> {
+    fn project(&self) -> ProjectedCaseBody {
         // Determine the set of columns that are used in all the expressions of the case body.
-        // Use an ordered set so lambda variables continue to be positioned after columns
-        let mut used_column_indices = BTreeSet::<usize>::new();
-        let mut supports_projection = true;
-        let mut collect_column_indices = |expr: &Arc<dyn PhysicalExpr>| {
-            expr.apply(|expr| {
-                if let Some(column) = expr.downcast_ref::<Column>() {
-                    used_column_indices.insert(column.index());
-                } else if let Some(lambda_variable) =
-                    expr.downcast_ref::<LambdaVariable>()
-                {
-                    used_column_indices.insert(lambda_variable.index());
-                } else if expr.downcast_ref::<Literal>().is_none()
-                    && expr.downcast_ref::<ScalarFunctionExpr>().is_none()
-                    && expr.children().is_empty()
-                {
-                    // Unknown leaves may read input columns without exposing a Column child.
-                    supports_projection = false;
-                }
-                Ok(TreeNodeRecursion::Continue)
-            })
-            .expect("Closure cannot fail");
-        };
-
-        if let Some(e) = &self.expr {
-            collect_column_indices(e);
-        }
-        self.when_then_expr.iter().for_each(|(w, t)| {
-            collect_column_indices(w);
-            collect_column_indices(t);
-        });
-        if let Some(e) = &self.else_expr {
-            collect_column_indices(e);
-        }
-
-        // Construct a mapping from the original column index to the projected column index.
-        let column_index_map = used_column_indices
-            .iter()
-            .enumerate()
-            .map(|(projected, original)| (*original, projected))
-            .collect::<IndexMap<usize, usize>>();
+        let columns = ColumnProjection::new(
+            self.expr
+                .iter()
+                .chain(self.when_then_expr.iter().flat_map(|(w, t)| [w, t]))
+                .chain(self.else_expr.iter()),
+        );
 
         // Construct the projected body by rewriting each expression from the original body
-        // using the column index mapping.
-        let project = |expr: &Arc<dyn PhysicalExpr>| -> Result<Arc<dyn PhysicalExpr>> {
-            Arc::clone(expr)
-                .transform_down(|e| {
-                    if let Some(column) = e.downcast_ref::<Column>() {
-                        let original = column.index();
-                        let projected = *column_index_map.get(&original).unwrap();
-                        if projected != original {
-                            return Ok(Transformed::yes(Arc::new(Column::new(
-                                column.name(),
-                                projected,
-                            ))));
-                        }
-                    } else if let Some(lambda_variable) =
-                        e.downcast_ref::<LambdaVariable>()
-                    {
-                        let original = lambda_variable.index();
-                        let projected = *column_index_map.get(&original).unwrap();
-                        if projected != original {
-                            return Ok(Transformed::yes(Arc::new(LambdaVariable::new(
-                                projected,
-                                Arc::clone(lambda_variable.field()),
-                            ))));
-                        }
-                    }
-                    Ok(Transformed::no(e))
-                })
-                .map(|t| t.data)
-        };
-
-        let projected_body = CaseBody {
-            expr: self.expr.as_ref().map(project).transpose()?,
+        // using the column projection.
+        let project = |expr: &Arc<dyn PhysicalExpr>| columns.project_expr(expr);
+        let body = CaseBody {
+            expr: self.expr.as_ref().map(project),
             when_then_expr: self
                 .when_then_expr
                 .iter()
-                .map(|(e, t)| Ok((project(e)?, project(t)?)))
-                .collect::<Result<Vec<_>>>()?,
-            else_expr: self.else_expr.as_ref().map(project).transpose()?,
+                .map(|(e, t)| (project(e), project(t)))
+                .collect(),
+            else_expr: self.else_expr.as_ref().map(project),
         };
 
-        // Construct the projection vector
-        let projection = column_index_map
-            .iter()
-            .sorted_by_key(|(_, v)| **v)
-            .map(|(k, _)| *k)
-            .collect::<Vec<_>>();
-
-        Ok(ProjectedCaseBody {
-            projection,
-            body: projected_body,
-            supports_projection,
-        })
+        ProjectedCaseBody { columns, body }
     }
 }
 
@@ -222,53 +146,19 @@ impl CaseBody {
 ///
 /// This is used to avoid filtering columns that are not used in the
 /// input `RecordBatch` when progressively evaluating a `CASE` expression's
-/// remainder batches. Filtering these columns is wasteful since for a record
-/// batch of `n` rows, filtering requires at worst a copy of `n - 1` values
-/// per array. If these filtered values will never be accessed, the time spent
-/// producing them is better avoided.
-///
-/// For example, if we are evaluating the following case expression that
-/// only references columns B and D:
-///
-/// ```sql
-/// SELECT CASE WHEN B > 10 THEN D ELSE NULL END FROM (VALUES (...)) T(A, B, C, D)
-/// ```
-///
-/// Of the 4 input columns `[A, B, C, D]`, the `CASE` expression only access `B` and `D`.
-/// Filtering `A` and `C` would be unnecessary and wasteful.
-///
-/// If we only retain columns `B` and `D` using `RecordBatch::project` and the projection vector
-/// `[1, 3]`, the indices of these two columns will change to `[0, 1]`. To evaluate the
-/// case expression, it will need to be rewritten from `CASE WHEN B@1 > 10 THEN D@3 ELSE NULL END`
-/// to `CASE WHEN B@0 > 10 THEN D@1 ELSE NULL END`.
-///
-/// The projection vector and the rewritten expression (which only differs from the original in
-/// column reference indices) are held in a `ProjectedCaseBody`.
-///
-/// When `supports_projection` is false, evaluation uses the original body and full batch because
-/// the expression may depend on input columns that are not visible in its children.
+/// remainder batches. See [`ColumnProjection`] for details.
 #[derive(Debug, Hash, PartialEq, Eq)]
 struct ProjectedCaseBody {
-    projection: Vec<usize>,
+    /// The input columns used by `body`.
+    columns: ColumnProjection,
+    /// The case body rewritten to be evaluated against a batch projected with `columns`.
     body: CaseBody,
-    /// Whether `body` is safe to evaluate against a projected batch.
-    ///
-    /// When false, `projection` and the rewritten `body` must not be used because an
-    /// expression may read input columns without exposing them through its children.
-    supports_projection: bool,
 }
 
 impl ProjectedCaseBody {
     /// Returns a projection when evaluating the derived body can avoid unused input columns.
     fn projection_for(&self, batch: &RecordBatch) -> Option<Vec<usize>> {
-        let projection = self
-            .projection
-            .iter()
-            .copied()
-            .filter(|index| *index < batch.num_columns())
-            .collect::<Vec<_>>();
-        (self.supports_projection && projection.len() < batch.num_columns())
-            .then_some(projection)
+        self.columns.projection_for(batch)
     }
 }
 
@@ -704,7 +594,7 @@ impl CaseExpr {
                 return Ok(EvalMethod::WithExprScalarLookupTable(mapping));
             }
 
-            return Ok(EvalMethod::WithExpression(body.project()?));
+            return Ok(EvalMethod::WithExpression(body.project()));
         }
 
         Ok(
@@ -720,9 +610,9 @@ impl CaseExpr {
             {
                 EvalMethod::ScalarOrScalar
             } else if body.when_then_expr.len() == 1 {
-                EvalMethod::ExpressionOrExpression(body.project()?)
+                EvalMethod::ExpressionOrExpression(body.project())
             } else {
-                EvalMethod::NoExpression(body.project()?)
+                EvalMethod::NoExpression(body.project())
             },
         )
     }
@@ -1582,6 +1472,7 @@ pub fn case(
 mod tests {
     use super::*;
 
+    use crate::ScalarFunctionExpr;
     use crate::expressions;
     use crate::expressions::{binary, cast, col, is_not_null};
     use arrow::buffer::Buffer;
@@ -1984,7 +1875,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::WithExpression(projected) => {
-                assert!(!projected.supports_projection);
+                assert!(!projected.columns.supports_projection());
             }
             method => panic!("expected WithExpression, got {method:?}"),
         }
@@ -2016,7 +1907,7 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::ExpressionOrExpression(projected) => {
-                assert!(!projected.supports_projection);
+                assert!(!projected.columns.supports_projection());
             }
             method => panic!("expected ExpressionOrExpression, got {method:?}"),
         }
@@ -2049,8 +1940,8 @@ mod tests {
 
         match &expr.eval_method {
             EvalMethod::ExpressionOrExpression(projected) => {
-                assert!(projected.supports_projection);
-                assert_eq!(projected.projection, vec![1, 2]);
+                assert!(projected.columns.supports_projection());
+                assert_eq!(projected.columns.projection(), [1, 2]);
             }
             method => panic!("expected ExpressionOrExpression, got {method:?}"),
         }

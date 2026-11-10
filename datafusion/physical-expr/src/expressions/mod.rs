@@ -9,6 +9,7 @@ mod binary;
 mod case;
 mod cast;
 mod column;
+mod column_projection;
 mod dynamic_filters;
 mod in_list;
 mod is_not_null;
