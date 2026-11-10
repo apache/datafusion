@@ -1661,11 +1661,7 @@ config_namespace! {
         /// pattern of the form `Filter(row_number() = 1)` over a `PARTITION BY` window into an
         /// `Aggregate(first_value(... ORDER BY ...) GROUP BY partition)`.
         /// This avoids buffering / fully sorting the input, which is especially beneficial on wide payloads.
-        /// Disabled by default because on nested/wide value types the aggregate only becomes memory
-        /// efficient once the columnar nested-type `GroupsAccumulator` fast
-        /// path is available; enabling it without that support can route wide
-        /// payloads onto the slow per-group accumulator path.
-        pub enable_row_number_to_aggregate: bool, default = false
+        pub enable_row_number_to_aggregate: bool, default = true
 
         /// When set to true, the optimizer will push TopK (Sort with fetch)
         /// below hash repartition when the partition key is a prefix of the

@@ -14,7 +14,7 @@ CREATE TABLE t (p INT, o INT, payload VARCHAR) AS VALUES
   (2, 30, 'd');
 
 # ---------------------------------------------------------------------------
-# Rule disabled (the default): the plan keeps the Window + Filter shape.
+# Rule disabled via config: the plan keeps the Window + Filter shape.
 # ---------------------------------------------------------------------------
 
 statement ok
