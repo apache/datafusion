@@ -4,6 +4,8 @@
 
 use std::{collections::HashSet, sync::Arc};
 
+use crate::ast::Ident;
+use crate::unparser::ast::ident;
 use datafusion_common::tree_node::TreeNodeContainer;
 use datafusion_common::{
     Column, DFSchema, HashMap, Result, TableReference,
@@ -11,7 +13,6 @@ use datafusion_common::{
 };
 use datafusion_expr::expr::{Alias, UNNEST_COLUMN_PREFIX};
 use datafusion_expr::{Expr, LogicalPlan, Projection, Sort, SortExpr};
-use sqlparser::ast::Ident;
 
 /// Normalize the schema of a union plan to remove qualifiers from the schema fields and sort expressions.
 ///
@@ -321,7 +322,7 @@ pub(super) fn rewrite_plan_for_sort_on_non_projected_fields(
 /// Column in the Projections. Once the parser side is fixed, this logic should work
 pub(super) fn subquery_alias_inner_query_and_columns(
     subquery_alias: &datafusion_expr::SubqueryAlias,
-) -> (&LogicalPlan, Vec<Ident>) {
+) -> (&LogicalPlan, Vec<Ident<'static>>) {
     let plan: &LogicalPlan = subquery_alias.input.as_ref();
 
     if let LogicalPlan::Subquery(subquery) = plan {
@@ -330,7 +331,7 @@ pub(super) fn subquery_alias_inner_query_and_columns(
         else {
             return (plan, vec![]);
         };
-        return (inner_projection, vec![Ident::new(column)]);
+        return (inner_projection, vec![ident(column)]);
     }
 
     let LogicalPlan::Projection(outer_projections) = plan else {
@@ -342,7 +343,7 @@ pub(super) fn subquery_alias_inner_query_and_columns(
         return (plan, vec![]);
     };
 
-    let mut columns: Vec<Ident> = vec![];
+    let mut columns: Vec<Ident<'static>> = vec![];
     // Check if the inner projection and outer projection have a matching pattern like
     //     Projection: j1.j1_id AS id
     //       Projection: j1.j1_id
@@ -366,7 +367,7 @@ pub(super) fn subquery_alias_inner_query_and_columns(
             return (plan, vec![]);
         }
 
-        columns.push(outer_alias.name.as_str().into());
+        columns.push(ident(outer_alias.name.as_str()));
     }
 
     (outer_projections.input.as_ref(), columns)
@@ -423,7 +424,7 @@ pub(super) fn find_unnest_column_alias(
 /// - `SELECT col1 AS alias_1, col2 AS some_alias_2 FROM table LIMIT 10`
 pub(super) fn inject_column_aliases_into_subquery(
     plan: LogicalPlan,
-    aliases: Vec<Ident>,
+    aliases: Vec<Ident<'static>>,
 ) -> Result<LogicalPlan> {
     match &plan {
         LogicalPlan::Projection(inner_p) => Ok(inject_column_aliases(inner_p, aliases)),
@@ -449,7 +450,7 @@ pub(super) fn inject_column_aliases_into_subquery(
 /// - `SELECT col1 AS alias_1, col2 AS some_alias_2 FROM table`
 pub(super) fn inject_column_aliases(
     projection: &Projection,
-    aliases: impl IntoIterator<Item = Ident>,
+    aliases: impl IntoIterator<Item = Ident<'static>>,
 ) -> LogicalPlan {
     let mut updated_projection = projection.clone();
 
@@ -466,7 +467,7 @@ pub(super) fn inject_column_aliases(
             Expr::Alias(Alias {
                 expr: Box::new(expr.clone()),
                 relation,
-                name: col_alias.value,
+                name: col_alias.value().into_owned(),
                 metadata: None,
             })
         })
