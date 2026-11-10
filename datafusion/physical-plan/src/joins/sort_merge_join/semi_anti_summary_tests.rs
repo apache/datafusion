@@ -297,7 +297,7 @@ async fn large_strings_produce_the_same_results_when_the_buffer_spills() -> Resu
 }
 
 #[tokio::test]
-async fn uniform_not_equal_caches_one_string_when_the_copy_fits() -> Result<()> {
+async fn uniform_not_equal_caches_one_string_when_the_first_copy_fits() -> Result<()> {
     let long = "x".repeat(16 * 1024);
     let values = Arc::new(StringArray::from(vec![long.as_str(); 7]));
     let inner = batch(Arc::clone(&values) as ArrayRef)?;
@@ -325,10 +325,16 @@ async fn uniform_not_equal_caches_one_string_when_the_copy_fits() -> Result<()> 
     };
     assert!((0..inner.num_rows()).any(|row| std::ptr::eq(value, values.value(row))));
     let buffered = inner.get_array_memory_size();
-    for (headroom, expect_cache) in [(0, false), (long.len() * 3 / 2, true)] {
+    let headroom = long.len() * 3 / 2;
+    for expect_cache in [false, true] {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(buffered + headroom, 1.0)
             .build_arc()?;
+        let competitor =
+            MemoryConsumer::new("other operator").register(&runtime.memory_pool);
+        if !expect_cache {
+            competitor.try_grow(headroom)?;
+        }
         let ctx = Arc::new(
             TaskContext::default()
                 .with_session_config(SessionConfig::new().with_batch_size(1))
@@ -342,6 +348,9 @@ async fn uniform_not_equal_caches_one_string_when_the_copy_fits() -> Result<()> 
         )?;
         let mut stream = plan.execute(0, ctx)?;
         assert_eq!(row_ids(&stream.next().await.transpose()?.unwrap()), [0]);
+        // A refused cache would now fit. The next outer batch of the same
+        // key must keep using the buffer without retrying the reservation.
+        drop(competitor);
         let retained = runtime.memory_pool.reserved();
         if expect_cache {
             assert!((long.len()..2 * long.len()).contains(&retained));
@@ -593,5 +602,41 @@ async fn cached_summary_is_released_on_outer_error_or_drop() -> Result<()> {
         drop(stream);
         assert_eq!(pool.reserved(), 0);
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn cached_summary_releases_exhausted_inner_keys_before_yielding() -> Result<()> {
+    use arrow::array::AsArray;
+
+    let key = "x".repeat(16 * 1024);
+    let make_batch = |rows| {
+        RecordBatch::try_from_iter([
+            (
+                "key",
+                Arc::new(StringArray::from(vec![key.as_str(); rows])) as ArrayRef,
+            ),
+            (
+                "value",
+                Arc::new(Int32Array::from(vec![0; rows])) as ArrayRef,
+            ),
+        ])
+    };
+    let outer = make_batch(2)?;
+    let inner = make_batch(7)?;
+    let key_values = inner.column(0).as_string::<i32>().values().clone();
+    let mut stream = join(
+        input(&outer, 1)?,
+        input(&inner, 7)?,
+        JoinType::LeftAnti,
+        Operator::Lt,
+    )?
+    .execute(0, single_row_context())?;
+    drop(inner);
+
+    assert_eq!(stream.next().await.transpose()?.unwrap().num_rows(), 1);
+    assert_eq!(key_values.strong_count(), 1);
+    assert_eq!(stream.next().await.transpose()?.unwrap().num_rows(), 1);
+    assert!(stream.next().await.is_none());
     Ok(())
 }

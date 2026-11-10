@@ -331,6 +331,13 @@ pub(crate) struct BitwiseSortMergeJoinStream {
 /// in the small-group benchmarks.
 const MIN_SUMMARY_ROWS: usize = 7;
 
+enum SummaryCache {
+    Pending,
+    Cached(Box<GroupSummary>),
+    /// Keep scanning the buffered group without retrying the reservation.
+    Declined,
+}
+
 impl BitwiseSortMergeJoinStream {
     /// Creates a sort-merge join stream for semi, anti, and mark joins.
     ///
@@ -605,6 +612,10 @@ impl BitwiseSortMergeJoinStream {
                     // Release the inner input pipeline's resources.
                     let inner_schema = self.inner.schema();
                     self.inner = Box::pin(EmptyRecordBatchStream::new(inner_schema));
+                    // The exhausted cursor and its comparators own the last batch's keys.
+                    self.inner_key_arrays.clear();
+                    self.inner_self_cmp = None;
+                    self.outer_inner_cmp = None;
                     return Ok(false);
                 }
                 Some(Err(e)) => return Err(e),
@@ -814,7 +825,7 @@ impl BitwiseSortMergeJoinStream {
         &mut self,
         comparison: SemiAntiComparison,
         outer: &RecordBatch,
-        summary: &mut Option<Box<GroupSummary>>,
+        cache: &mut SummaryCache,
         may_continue: bool,
     ) -> Result<()> {
         let matchable =
@@ -822,7 +833,7 @@ impl BitwiseSortMergeJoinStream {
         if matchable == 0 {
             return Ok(());
         }
-        if let Some(values) = summary {
+        if let SummaryCache::Cached(values) = cache {
             merge_matches(
                 &mut self.matched,
                 self.outer_offset,
@@ -841,22 +852,25 @@ impl BitwiseSortMergeJoinStream {
         })?;
         if let Some(values) = values
             && may_continue
+            && matches!(cache, SummaryCache::Pending)
         {
             let retained = values.memory_size();
             // A skewed string can exceed this group's prorated buffer charge.
             // Keep the buffer in that case so a later outer batch cannot hold
             // more of the shared pool than the buffered join would have held.
             if retained > self.reservation.size() {
+                *cache = SummaryCache::Declined;
                 return Ok(());
             }
             if matches!(values, GroupSummary::String(Some(_))) {
                 // The input and its owned copy coexist until the buffer is cleared.
                 if self.reservation.try_grow(retained).is_err() {
+                    *cache = SummaryCache::Declined;
                     return Ok(());
                 }
                 self.peak_mem_used.set_max(self.reservation.size());
             }
-            *summary = Some(Box::new(values.into_owned()));
+            *cache = SummaryCache::Cached(Box::new(values.into_owned()));
             self.clear_inner_key_group();
             self.reservation.resize(retained);
         }
@@ -871,14 +885,16 @@ impl BitwiseSortMergeJoinStream {
     async fn process_key_match_with_filter(
         &mut self,
         spill: Option<&Arc<dyn SpillFile>>,
-        summary: &mut Option<Box<GroupSummary>>,
+        cache: &mut SummaryCache,
         group_comparison: Option<SemiAntiComparison>,
     ) -> Result<()> {
         let num_outer = self.outer_batch.as_ref().unwrap().num_rows();
 
         // buffer_inner_key_group must be called before this function
         debug_assert!(
-            !self.inner_key_buffer.is_empty() || spill.is_some() || summary.is_some(),
+            !self.inner_key_buffer.is_empty()
+                || spill.is_some()
+                || matches!(cache, SummaryCache::Cached(_)),
             "process_key_match_with_filter called with no inner key data"
         );
         debug_assert!(
@@ -902,7 +918,7 @@ impl BitwiseSortMergeJoinStream {
             self.apply_summary(
                 comparison,
                 &outer_slice,
-                summary,
+                cache,
                 outer_group_end == num_outer,
             )?;
             self.outer_offset = outer_group_end;
@@ -993,7 +1009,7 @@ impl BitwiseSortMergeJoinStream {
         spill: Option<Arc<dyn SpillFile>>,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<()> {
-        let mut summary = None;
+        let mut cache = SummaryCache::Pending;
         let group_comparison = self.semi_anti_comparison.filter(|_| {
             spill.is_none()
                 && self
@@ -1007,7 +1023,7 @@ impl BitwiseSortMergeJoinStream {
         loop {
             self.process_key_match_with_filter(
                 spill.as_ref(),
-                &mut summary,
+                &mut cache,
                 group_comparison,
             )
             .await?;
@@ -1038,7 +1054,7 @@ impl BitwiseSortMergeJoinStream {
             }
         }
 
-        if summary.is_some() {
+        if matches!(cache, SummaryCache::Cached(_)) {
             self.reservation.free();
         }
         self.clear_inner_key_group();
