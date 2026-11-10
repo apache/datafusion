@@ -29,7 +29,7 @@ pub use crate::PhysicalSortExpr;
 pub use crate::aggregate::stats::StatsType;
 
 pub use binary::{BinaryExpr, binary, similar_to};
-pub use case::{CaseExpr, case};
+pub use case::{CaseExpr, RequiredOperandReusePolicy, case};
 pub use cast::{CastExpr, cast, is_order_preserving_cast};
 pub use column::{Column, col, with_new_schema};
 pub use datafusion_expr::utils::format_state_name;
