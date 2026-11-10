@@ -1439,6 +1439,7 @@ mod tests {
           repeated int96 bare;
           optional group avro (LIST) {
             repeated group array {
+              optional int64 ns (TIMESTAMP(NANOS,false));
               optional int96 ts;
               optional int32 id;
             }
@@ -1461,44 +1462,40 @@ mod tests {
             parse_message_type(schema).expect("should parse schema"),
         ));
         let arrow_schema = parquet_to_arrow_schema(&descr, None).unwrap();
-
-        fn leaf_types(data_type: &DataType, leaves: &mut Vec<DataType>) {
-            match data_type {
-                DataType::Struct(children) => children
-                    .iter()
-                    .for_each(|child| leaf_types(child.data_type(), leaves)),
-                DataType::List(item) | DataType::Map(item, _) => {
-                    leaf_types(item.data_type(), leaves)
-                }
-                leaf => leaves.push(leaf.clone()),
-            }
-        }
-        let schema_leaf_types = |schema: &Schema| {
-            let mut leaves = vec![];
-            schema
-                .fields()
-                .iter()
-                .for_each(|field| leaf_types(field.data_type(), &mut leaves));
-            leaves
-        };
         let micros = DataType::Timestamp(TimeUnit::Microsecond, None);
+        let nanos = DataType::Timestamp(TimeUnit::Nanosecond, None);
 
         let result = Int96Coercer::new(&descr, &arrow_schema, &TimeUnit::Microsecond)
             .coerce()
             .unwrap();
-        assert_eq!(
-            schema_leaf_types(&result),
-            vec![
-                micros.clone(),
-                micros.clone(),
-                micros.clone(),
-                DataType::Int32,
-                micros.clone(),
-                DataType::Int32,
-                micros.clone(),
-                DataType::Timestamp(TimeUnit::Nanosecond, None),
-            ]
-        );
+        let expected = Schema::new(vec![
+            Field::new_list("hive", Field::new("bag", micros.clone(), false), true),
+            Field::new_list("bare", Field::new("bare", micros.clone(), false), false),
+            Field::new_list(
+                "avro",
+                Field::new_struct(
+                    "array",
+                    vec![
+                        Field::new("ns", nanos.clone(), true),
+                        Field::new("ts", micros.clone(), true),
+                        Field::new("id", DataType::Int32, true),
+                    ],
+                    false,
+                ),
+                true,
+            ),
+            Field::new_list("three", Field::new("element", micros.clone(), true), true),
+            Field::new_map(
+                "m",
+                "key_value",
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", micros, true),
+                false,
+                true,
+            ),
+            Field::new("nanos", nanos, true),
+        ]);
+        assert_eq!(result, expected);
 
         // A projection of the file schema, in another order, matches its fields by name
         let projected = Schema::new(vec![
@@ -1509,8 +1506,11 @@ mod tests {
             .coerce()
             .unwrap();
         assert_eq!(
-            schema_leaf_types(&result),
-            vec![DataType::Int32, micros.clone(), micros]
+            result,
+            Schema::new(vec![
+                expected.field_with_name("m").unwrap().clone(),
+                expected.field_with_name("hive").unwrap().clone(),
+            ])
         );
     }
 
