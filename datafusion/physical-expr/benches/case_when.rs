@@ -87,6 +87,7 @@ fn criterion_benchmark(c: &mut Criterion) {
 
     benchmark_lookup_table_case_when(c, 8192);
     benchmark_divide_by_zero_protection(c, 8192);
+    operand_reuse::benchmarks(c);
 }
 
 fn run_benchmarks(c: &mut Criterion, batch: &RecordBatch) {
@@ -587,6 +588,287 @@ fn benchmark_divide_by_zero_protection(c: &mut Criterion, batch_size: usize) {
     }
 
     group.finish();
+}
+
+// Physical callers opt in through an API that SQL planning does not expose.
+mod operand_reuse {
+    use super::*;
+    use arrow::array::StringViewArray;
+    use datafusion_common::Result;
+    use datafusion_common::config::ConfigOptions;
+    use datafusion_expr::ColumnarValue;
+    use datafusion_physical_expr::ScalarFunctionExpr;
+    use datafusion_physical_expr::expressions::{CaseExpr, RequiredOperandReusePolicy};
+    use std::hash::{Hash, Hasher};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    const ROWS: usize = 8192;
+    // MD5 of 4096 ASCII 'a' and 'b' bytes, respectively.
+    const HASH_A: &str = "21a199c53f422a380e20b162fb6ebe9c";
+    const HASH_B: &str = "bdb166b6061ee9331efe719dcee62b41";
+
+    #[derive(Debug)]
+    struct Policy;
+
+    impl RequiredOperandReusePolicy for Policy {
+        fn first_required_child(&self, expr: &Arc<dyn PhysicalExpr>) -> Option<usize> {
+            // Only Eq's left child is traversed in these fixtures.
+            expr.downcast_ref::<BinaryExpr>()
+                .filter(|expr| *expr.op() == Operator::Eq)
+                .map(|_| 0)
+        }
+
+        fn same_call(
+            &self,
+            authorized: &Arc<dyn PhysicalExpr>,
+            rewritten: &Arc<dyn PhysicalExpr>,
+        ) -> bool {
+            authorized.eq(rewritten)
+        }
+    }
+
+    // Used only by untimed validation. Timed expressions contain the raw operand.
+    #[derive(Debug)]
+    struct Counted {
+        inner: Arc<dyn PhysicalExpr>,
+        rows: Arc<AtomicUsize>,
+    }
+
+    impl PartialEq for Counted {
+        fn eq(&self, other: &Self) -> bool {
+            self.inner.eq(&other.inner)
+        }
+    }
+    impl Eq for Counted {}
+    impl Hash for Counted {
+        fn hash<H: Hasher>(&self, state: &mut H) {
+            self.inner.hash(state);
+        }
+    }
+    impl Display for Counted {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "counted({})", self.inner)
+        }
+    }
+    impl PhysicalExpr for Counted {
+        fn data_type(&self, schema: &Schema) -> Result<arrow::datatypes::DataType> {
+            self.inner.data_type(schema)
+        }
+        fn nullable(&self, schema: &Schema) -> Result<bool> {
+            self.inner.nullable(schema)
+        }
+        fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
+            self.rows.fetch_add(batch.num_rows(), Ordering::Relaxed);
+            self.inner.evaluate(batch)
+        }
+        fn children(&self) -> Vec<&Arc<dyn PhysicalExpr>> {
+            vec![&self.inner]
+        }
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn PhysicalExpr>>,
+        ) -> Result<Arc<dyn PhysicalExpr>> {
+            assert_eq!(children.len(), 1);
+            Ok(Arc::new(Self {
+                inner: Arc::clone(&children[0]),
+                rows: Arc::clone(&self.rows),
+            }))
+        }
+        fn fmt_sql(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            Display::fmt(self, f)
+        }
+    }
+
+    struct Fixture {
+        batches: Vec<RecordBatch>,
+        expected: Vec<ArrayRef>,
+        operand: Arc<dyn PhysicalExpr>,
+        when_value: ScalarValue,
+        then_value: ScalarValue,
+        else_rows: usize,
+    }
+
+    impl Fixture {
+        fn new(expensive: bool, column_count: usize, else_percent: usize) -> Self {
+            let else_rows = ROWS * else_percent / 100;
+            let mut batches = Vec::new();
+            let mut expected: Vec<ArrayRef> = Vec::new();
+            // Rotate which rows reach ELSE between batches, keeping its fraction fixed.
+            for offset in [0, ROWS / 2] {
+                let is_else = |row: usize| (row + offset) % ROWS < else_rows;
+                let values: ArrayRef = if expensive {
+                    let a = "a".repeat(4096);
+                    let b = "b".repeat(4096);
+                    expected.push(Arc::new(StringViewArray::from_iter_values(
+                        (0..ROWS).map(|row| if is_else(row) { HASH_B } else { "then" }),
+                    )));
+                    Arc::new(StringArray::from_iter_values(
+                        (0..ROWS).map(
+                            |row| if is_else(row) { b.as_str() } else { a.as_str() },
+                        ),
+                    ))
+                } else {
+                    expected.push(Arc::new(Int32Array::from_iter_values(
+                        (0..ROWS).map(|row| if is_else(row) { 2 } else { 0 }),
+                    )));
+                    Arc::new(Int32Array::from_iter_values(
+                        (0..ROWS).map(|row| i32::from(is_else(row))),
+                    ))
+                };
+                let mut columns = vec![values];
+                // Unreferenced columns exercise input-schema and batch-append costs.
+                // Sharing their buffer keeps their contents irrelevant to the fixture.
+                let unused: ArrayRef = Arc::new(Int32Array::from(vec![0; ROWS]));
+                columns.resize_with(column_count, || Arc::clone(&unused));
+                let fields = columns
+                    .iter()
+                    .enumerate()
+                    .map(|(index, array)| {
+                        let name = if index == 0 {
+                            "value".to_owned()
+                        } else {
+                            format!("unused_{index}")
+                        };
+                        Field::new(name, array.data_type().clone(), false)
+                    })
+                    .collect::<Vec<_>>();
+                batches.push(
+                    RecordBatch::try_new(Arc::new(Schema::new(fields)), columns).unwrap(),
+                );
+            }
+            let value = col("value", batches[0].schema_ref()).unwrap();
+            let (operand, when_value, then_value): (Arc<dyn PhysicalExpr>, _, _) =
+                if expensive {
+                    (
+                        Arc::new(
+                            ScalarFunctionExpr::try_new(
+                                datafusion_functions::crypto::md5(),
+                                vec![value],
+                                batches[0].schema_ref(),
+                                Arc::new(ConfigOptions::new()),
+                            )
+                            .unwrap(),
+                        ),
+                        ScalarValue::Utf8View(Some(HASH_A.to_owned())),
+                        ScalarValue::Utf8View(Some("then".to_owned())),
+                    )
+                } else {
+                    (
+                        Arc::new(BinaryExpr::new(value, Operator::Plus, lit(1i32))),
+                        ScalarValue::Int32(Some(1)),
+                        ScalarValue::Int32(Some(0)),
+                    )
+                };
+            Self {
+                batches,
+                expected,
+                operand,
+                when_value,
+                then_value,
+                else_rows,
+            }
+        }
+
+        fn case(&self, reuse: bool, operand: &Arc<dyn PhysicalExpr>) -> CaseExpr {
+            let condition = Arc::new(BinaryExpr::new(
+                Arc::clone(operand),
+                Operator::Eq,
+                lit(self.when_value.clone()),
+            ));
+            let expr = CaseExpr::try_new(
+                None,
+                vec![(condition, lit(self.then_value.clone()))],
+                Some(Arc::clone(operand)),
+            )
+            .unwrap();
+            if reuse {
+                expr.with_required_operand_reuse(operand, Arc::new(Policy))
+            } else {
+                expr
+            }
+        }
+
+        fn validate(&self) {
+            // Equality includes the grant: verify the unwrapped timed tree did not fall back.
+            assert_ne!(
+                self.case(true, &self.operand),
+                self.case(false, &self.operand)
+            );
+            for reuse in [false, true] {
+                let rows = Arc::new(AtomicUsize::new(0));
+                let counted: Arc<dyn PhysicalExpr> = Arc::new(Counted {
+                    inner: Arc::clone(&self.operand),
+                    rows: Arc::clone(&rows),
+                });
+                let counted = self.case(reuse, &counted);
+                let timed = self.case(reuse, &self.operand);
+                // Check both first and subsequent evaluations, including changed rows.
+                for (batch, expected) in self.batches.iter().zip(&self.expected) {
+                    rows.store(0, Ordering::Relaxed);
+                    let actual =
+                        counted.evaluate(batch).unwrap().into_array(ROWS).unwrap();
+                    assert_eq!(actual.as_ref(), expected.as_ref());
+                    assert_eq!(
+                        rows.load(Ordering::Relaxed),
+                        ROWS + if reuse { 0 } else { self.else_rows }
+                    );
+                    let actual = timed.evaluate(batch).unwrap().into_array(ROWS).unwrap();
+                    assert_eq!(actual.as_ref(), expected.as_ref());
+                }
+            }
+        }
+    }
+
+    pub fn benchmarks(c: &mut Criterion) {
+        let mut group = c.benchmark_group("case_operand_reuse");
+        for (kind, expensive, columns) in [
+            ("add_1col", false, 1),
+            ("add_100cols", false, 100),
+            ("md5_4096_1col", true, 1),
+        ] {
+            for else_percent in [0, 50, 100] {
+                let fixture = Fixture::new(expensive, columns, else_percent);
+                fixture.validate();
+                eprintln!(
+                    "validated {kind}/else_{else_percent}: outputs and operand rows; off={}, on={ROWS}",
+                    ROWS + fixture.else_rows
+                );
+                for reuse in [false, true] {
+                    let mode = if reuse { "on" } else { "off" };
+                    group.bench_function(
+                        format!("{kind}/else_{else_percent}/first/{mode}"),
+                        |b| {
+                            let mut index = 0;
+                            b.iter(|| {
+                                let batch = black_box(&fixture.batches[index]);
+                                index ^= 1;
+                                // Include CASE construction, permission checks and its lazy
+                                // prepared plan. The operand and inputs are preplanned.
+                                let expr = fixture.case(reuse, &fixture.operand);
+                                black_box(expr.evaluate(batch).unwrap())
+                            });
+                        },
+                    );
+                    group.bench_function(
+                        format!("{kind}/else_{else_percent}/repeated/{mode}"),
+                        |b| {
+                            let expr = fixture.case(reuse, &fixture.operand);
+                            black_box(expr.evaluate(&fixture.batches[0]).unwrap());
+                            let mut index = 0;
+                            b.iter(|| {
+                                let batch = black_box(&fixture.batches[index]);
+                                index ^= 1;
+                                // Arrow evaluation is eager: consume the entire result
+                                // without adding a separate checksum scan to timing.
+                                black_box(expr.evaluate(batch).unwrap())
+                            });
+                        },
+                    );
+                }
+            }
+        }
+        group.finish();
+    }
 }
 
 criterion_group!(benches, criterion_benchmark);
