@@ -1,26 +1,14 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use arrow::array::{Array, ArrayRef, BooleanArray, make_comparator};
+use arrow::array::{Array, ArrayRef, BooleanArray, make_array, make_comparator};
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::Result;
+use datafusion_common::float_semantics::{has_float_leaf, normalize_floats};
 use datafusion_common::hash_utils::{RandomState, with_hashes};
 use hashbrown::HashTable;
 
@@ -53,6 +41,8 @@ impl ArrayStaticFilter {
             });
         }
 
+        // Hashing treats both signed zeros alike; the comparator must do so too.
+        let in_array = normalize_floats(&in_array);
         let state = RandomState::default();
         let table = Self::build_haystack_table(&in_array, &state)?;
 
@@ -67,7 +57,7 @@ impl ArrayStaticFilter {
         haystack: &ArrayRef,
         state: &RandomState,
     ) -> Result<HashTable<usize>> {
-        let mut table = HashTable::new();
+        let mut table = HashTable::with_capacity(haystack.len() - haystack.null_count());
 
         with_hashes([haystack.as_ref()], state, |hashes| -> Result<()> {
             let cmp = make_comparator(haystack, haystack, SortOptions::default())?;
@@ -138,6 +128,11 @@ impl StaticFilter for ArrayStaticFilter {
             ));
         }
 
-        self.find_needles_in_haystack(v, negated)
+        if has_float_leaf(v.data_type()) {
+            let normalized = normalize_floats(&make_array(v.to_data()));
+            self.find_needles_in_haystack(normalized.as_ref(), negated)
+        } else {
+            self.find_needles_in_haystack(v, negated)
+        }
     }
 }

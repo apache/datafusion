@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This file implements the `ProjectionPushdown` physical optimization rule.
 //! The function [`remove_unnecessary_projections`] tries to push down all
@@ -30,14 +17,19 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
-use datafusion_common::{JoinSide, JoinType, Result};
-use datafusion_physical_expr::expressions::Column;
+use datafusion_common::{JoinSide, JoinType, Result, internal_datafusion_err};
+use datafusion_expr::ExpressionPlacement;
+use datafusion_physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
+use datafusion_physical_expr::projection::ProjectionExpr;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
-use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
 use datafusion_physical_plan::projection::{
     ProjectionExec, remove_unnecessary_projections,
+};
+use datafusion_physical_plan::repartition::RepartitionExec;
+use datafusion_physical_plan::{
+    ChildrenPropertiesMode, ExecutionPlan, Partitioning, ReplaceChildrenOptions,
 };
 
 /// This rule inspects `ProjectionExec`'s in the given physical plan and tries to
@@ -74,7 +66,20 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
             })
             .map(|t| t.data)?;
 
-        plan.transform_down(remove_unnecessary_projections).data()
+        // Push what can already descend, then split the projections that are
+        // stuck above a `RepartitionExec`. The split needs no cleanup pass of
+        // its own: the outer projection it leaves either keeps every expression
+        // a plain column, and is then no narrower than the widened child, or it
+        // narrows and holds a computed one. `RepartitionExec` declines both, it
+        // is not removable because it renames, and nothing else moved.
+        let plan = plan.transform_down(remove_unnecessary_projections).data()?;
+        plan.transform_down(|plan| {
+            Ok(match try_split_leaf_projection(&plan)? {
+                Some(new_plan) => Transformed::yes(new_plan),
+                None => Transformed::no(plan),
+            })
+        })
+        .data()
     }
 
     fn name(&self) -> &str {
@@ -130,14 +135,15 @@ fn try_push_down_join_filter(
         rhs_rewrite.data.1.column_indices(),
         lhs_rewrite.data.0.schema().as_ref(),
         rhs_rewrite.data.0.schema().as_ref(),
-    );
+    )?;
 
     let new_lhs_length = lhs_rewrite.data.0.schema().fields.len();
     let projections = match projections.as_ref() {
         None => match join.join_type() {
             JoinType::Inner | JoinType::Left | JoinType::Right | JoinType::Full => {
                 // Build projections that ignore the newly projected columns.
-                let mut projections = Vec::new();
+                let mut projections =
+                    Vec::with_capacity(original_lhs_length + original_rhs_length);
                 projections.extend(0..original_lhs_length);
                 projections.extend(new_lhs_length..new_lhs_length + original_rhs_length);
                 projections
@@ -218,8 +224,14 @@ fn try_push_down_projection(
             })
             .collect::<Fields>();
 
-        let join_filter = JoinFilter::new(
+        let expression = remap_filter_expr(
             new_expr.data,
+            join_filter.schema().fields().len(),
+            rewriter.intermediate_column_indices.len(),
+            |column| Ok(column.clone()),
+        )?;
+        let join_filter = JoinFilter::new(
+            expression,
             rewriter.intermediate_column_indices,
             Arc::new(Schema::new(intermediate_schema)),
         );
@@ -239,15 +251,14 @@ fn minimize_join_filter(
     old_column_indices: &[ColumnIndex],
     lhs_schema: &Schema,
     rhs_schema: &Schema,
-) -> JoinFilter {
-    let mut used_columns = HashSet::new();
+) -> Result<JoinFilter> {
+    let mut used_columns = HashSet::with_capacity(old_column_indices.len());
     expr.apply(|expr| {
         if let Some(col) = expr.downcast_ref::<Column>() {
             used_columns.insert(col.index());
         }
         Ok(TreeNodeRecursion::Continue)
-    })
-    .expect("Closure cannot fail");
+    })?;
 
     let new_column_indices = old_column_indices
         .iter()
@@ -264,27 +275,24 @@ fn minimize_join_filter(
         })
         .collect::<Fields>();
 
-    let final_expr = expr
-        .transform_up(|expr| match expr.downcast_ref::<Column>() {
-            None => Ok(Transformed::no(expr)),
-            Some(column) => {
-                let new_idx = used_columns
-                    .iter()
-                    .filter(|idx| **idx < column.index())
-                    .count();
-                let new_column = Column::new(column.name(), new_idx);
-                Ok(Transformed::yes(
-                    Arc::new(new_column) as Arc<dyn PhysicalExpr>
-                ))
-            }
-        })
-        .expect("Closure cannot fail");
+    let final_expr = remap_filter_expr(
+        expr,
+        old_column_indices.len(),
+        new_column_indices.len(),
+        |column| {
+            let new_idx = used_columns
+                .iter()
+                .filter(|idx| **idx < column.index())
+                .count();
+            Ok(Column::new(column.name(), new_idx))
+        },
+    )?;
 
-    JoinFilter::new(
-        final_expr.data,
+    Ok(JoinFilter::new(
+        final_expr,
         new_column_indices,
         Arc::new(Schema::new(fields)),
-    )
+    ))
 }
 
 /// Implements the push-down machinery.
@@ -299,6 +307,7 @@ struct JoinFilterRewriter<'a> {
     join_side_schema: &'a Schema,
     join_side_projections: Vec<(Arc<dyn PhysicalExpr>, String)>,
     intermediate_column_indices: Vec<ColumnIndex>,
+    original_filter_column_count: usize,
     alias_generator: &'a AliasGenerator,
 }
 
@@ -326,6 +335,7 @@ impl<'a> JoinFilterRewriter<'a> {
             join_side,
             join_side_schema,
             join_side_projections: projections,
+            original_filter_column_count: column_indices.len(),
             intermediate_column_indices: column_indices,
             alias_generator,
         }
@@ -338,6 +348,11 @@ impl<'a> JoinFilterRewriter<'a> {
         &mut self,
         expr: Arc<dyn PhysicalExpr>,
     ) -> Result<Transformed<Arc<dyn PhysicalExpr>>> {
+        // A lambda is evaluated by its enclosing high-order function. Keep its
+        // body in that scope; a complete high-order function may still be moved.
+        if expr.is::<LambdaExpr>() {
+            return Ok(Transformed::no(expr));
+        }
         let depends_on_this_side = self.depends_on_join_side(&expr, self.join_side)?;
         // We don't push down things that do not depend on this side (other side or no side).
         if !depends_on_this_side {
@@ -377,22 +392,21 @@ impl<'a> JoinFilterRewriter<'a> {
         // First, add a new projection. The expression must be rewritten, as it is no longer
         // executed against the filter schema.
         let new_idx = self.join_side_projections.len();
-        let rewritten_expr = expr.transform_up(|expr| {
-            Ok(match expr.downcast_ref::<Column>() {
-                None => Transformed::no(expr),
-                Some(column) => {
-                    let intermediate_column =
-                        &self.intermediate_column_indices[column.index()];
-                    assert_eq!(intermediate_column.side, self.join_side);
+        let rewritten_expr = remap_filter_expr(
+            expr,
+            self.original_filter_column_count,
+            self.join_side_schema.fields().len(),
+            |column| {
+                let intermediate_column =
+                    &self.intermediate_column_indices[column.index()];
+                assert_eq!(intermediate_column.side, self.join_side);
 
-                    let join_side_index = intermediate_column.index;
-                    let field = self.join_side_schema.field(join_side_index);
-                    let new_column = Column::new(field.name(), join_side_index);
-                    Transformed::yes(Arc::new(new_column) as Arc<dyn PhysicalExpr>)
-                }
-            })
-        })?;
-        self.join_side_projections.push((rewritten_expr.data, name));
+                let join_side_index = intermediate_column.index;
+                let field = self.join_side_schema.field(join_side_index);
+                Ok(Column::new(field.name(), join_side_index))
+            },
+        )?;
+        self.join_side_projections.push((rewritten_expr, name));
 
         // Then, update the column indices
         let new_intermediate_idx = self.intermediate_column_indices.len();
@@ -405,27 +419,267 @@ impl<'a> JoinFilterRewriter<'a> {
         Ok(new_intermediate_idx)
     }
 
-    /// Checks whether the entire expression depends on the given `join_side`.
+    /// Checks whether the expression references any columns from `join_side`.
     fn depends_on_join_side(
-        &mut self,
+        &self,
         expr: &Arc<dyn PhysicalExpr>,
         join_side: JoinSide,
     ) -> Result<bool> {
-        let mut result = false;
-        expr.apply(|expr| match expr.downcast_ref::<Column>() {
-            None => Ok(TreeNodeRecursion::Continue),
-            Some(c) => {
-                let column_index = &self.intermediate_column_indices[c.index()];
-                if column_index.side == join_side {
-                    result = true;
-                    return Ok(TreeNodeRecursion::Stop);
-                }
-                Ok(TreeNodeRecursion::Continue)
-            }
-        })?;
-
-        Ok(result)
+        expr.exists(|expr| {
+            Ok(expr.downcast_ref::<Column>().is_some_and(|c| {
+                self.intermediate_column_indices[c.index()].side == join_side
+            }))
+        })
     }
+}
+
+/// Remaps captured columns and rebases lambda parameters when the input changes.
+/// Parameters are appended after the input columns, including at nested lambda
+/// scopes. Moving a complete high-order expression preserves their relative
+/// offsets, so every parameter shifts by the change in the root input width.
+fn remap_filter_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    old_input_len: usize,
+    new_input_len: usize,
+    map_column: impl Fn(&Column) -> Result<Column>,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    expr.transform_up(|expr| {
+        if let Some(column) = expr.downcast_ref::<Column>() {
+            let new_column = map_column(column)?;
+            if new_column != *column {
+                return Ok(Transformed::yes(Arc::new(new_column) as _));
+            }
+        } else if let Some(variable) = expr.downcast_ref::<LambdaVariable>()
+            && old_input_len != new_input_len
+        {
+            let rebased = rebase_lambda_variable(variable, old_input_len, new_input_len)?;
+            return Ok(Transformed::yes(rebased));
+        }
+        Ok(Transformed::no(expr))
+    })
+    .data()
+}
+
+/// Shifts a lambda parameter by the change in input width, for the reason
+/// [`remap_filter_expr`] documents.
+fn rebase_lambda_variable(
+    variable: &LambdaVariable,
+    old_input_len: usize,
+    new_input_len: usize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    let offset = variable.index().checked_sub(old_input_len).ok_or_else(|| {
+        internal_datafusion_err!(
+            "Lambda parameter {variable} precedes the {old_input_len} input columns"
+        )
+    })?;
+    Ok(Arc::new(LambdaVariable::new(
+        new_input_len + offset,
+        Arc::clone(variable.field()),
+    )))
+}
+
+/// Prefix for the columns this rule adds when it splits a projection.
+const LEAF_COLUMN_PREFIX: &str = "__datafusion_leaf";
+
+/// Name of the column the split adds for the leaf expression at `index`.
+///
+/// Single source of truth: the lower projection's alias and the reference the
+/// outer projection is rewritten to must agree, or the rewrite silently points
+/// at nothing.
+fn leaf_column_name(index: usize) -> String {
+    format!("{LEAF_COLUMN_PREFIX}_{index}")
+}
+
+/// Splits a `ProjectionExec` that mixes leaf expressions with ones that must
+/// stay in place, moving the leaves into a projection the source absorbs.
+///
+/// `benefits_from_input_partitioning` is true as soon as any expression is
+/// `KeepInPlace`, which both inserts a `RepartitionExec` below the projection
+/// and stops that projection descending past it, so a `MoveTowardsLeafNodes`
+/// expression sharing it never reaches the source. Splitting leaves the
+/// computation above the repartition, still parallelised.
+fn try_split_leaf_projection(
+    plan: &Arc<dyn ExecutionPlan>,
+) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+    let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
+        return Ok(None);
+    };
+    let Some(repartition) = projection.input().downcast_ref::<RepartitionExec>() else {
+        return Ok(None);
+    };
+    // Hash and Range partitioning reference columns by index, which would have
+    // to be remapped against the rewritten child schema. Round robin carries no
+    // column references, and is what `EnsureRequirements` inserts here.
+    if !matches!(repartition.partitioning(), Partitioning::RoundRobinBatch(_)) {
+        return Ok(None);
+    }
+
+    let leaves = collect_leaf_exprs(projection.expr())?;
+    if leaves.is_empty() {
+        return Ok(None);
+    }
+
+    // Pass through only the child columns the outer expressions still need. A
+    // column used *only* inside an extracted leaf must be dropped, otherwise the
+    // source keeps reading it: for `s['a'] + 1` that would read the whole struct
+    // alongside the extracted field, which is worse than not splitting at all.
+    let child = repartition.input();
+    let child_schema = child.schema();
+    let passthrough_indices = collect_outer_columns(projection.expr(), &leaves)?;
+    let mut lower_exprs = passthrough_indices
+        .iter()
+        .map(|&idx| {
+            let field = child_schema.field(idx);
+            ProjectionExpr {
+                expr: Arc::new(Column::new(field.name(), idx)),
+                alias: field.name().to_string(),
+            }
+        })
+        .collect::<Vec<_>>();
+    for (index, leaf) in leaves.iter().enumerate() {
+        lower_exprs.push(ProjectionExpr {
+            expr: Arc::clone(leaf),
+            alias: leaf_column_name(index),
+        });
+    }
+    let lower_projection = ProjectionExec::try_new(lower_exprs, Arc::clone(child))?;
+
+    // Only commit the split if the child really absorbs the leaf projection.
+    // Otherwise this would just add a projection that helps nobody.
+    let Some(new_child) = child.try_swapping_with_projection(&lower_projection)? else {
+        return Ok(None);
+    };
+
+    let new_exprs = projection
+        .expr()
+        .iter()
+        .map(|proj_expr| {
+            Ok(ProjectionExpr {
+                expr: rewrite_outer_expr(
+                    Arc::clone(&proj_expr.expr),
+                    &leaves,
+                    &passthrough_indices,
+                    child_schema.fields().len(),
+                )?,
+                alias: proj_expr.alias.clone(),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // The child gained the leaf columns, so the repartition's properties have to
+    // be recomputed rather than carried over.
+    let new_repartition = Arc::clone(projection.input()).replace_children(
+        vec![new_child],
+        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+    )?;
+    // `try_new` would derive the output schema from the expressions alone and
+    // drop the metadata the planner set, which `schema_check` then rejects.
+    Ok(Some(Arc::new(
+        ProjectionExec::try_new_with_schema_metadata(
+            new_exprs,
+            new_repartition,
+            projection.schema().as_ref(),
+        )?,
+    )))
+}
+
+/// Collects the distinct outermost [`ExpressionPlacement::MoveTowardsLeafNodes`]
+/// sub-expressions of `exprs`.
+///
+/// Recursion stops at a leaf, so one nested inside another is not collected too:
+/// that would add a column no expression reads, and read more of the struct than
+/// the outer leaf needs. Plain SQL does not reach it, because the logical
+/// optimizer folds nested field access into a single call.
+fn collect_leaf_exprs(exprs: &[ProjectionExpr]) -> Result<Vec<Arc<dyn PhysicalExpr>>> {
+    let mut leaves: Vec<Arc<dyn PhysicalExpr>> = vec![];
+    for proj_expr in exprs {
+        proj_expr.expr.apply(|node| {
+            if node.placement() == ExpressionPlacement::MoveTowardsLeafNodes {
+                if !leaves.iter().any(|leaf| leaf == node) {
+                    leaves.push(Arc::clone(node));
+                }
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    Ok(leaves)
+}
+
+/// Collects the child column indices that `exprs` still reference *outside* the
+/// extracted leaf sub-expressions, sorted and deduplicated.
+///
+/// Recursion stops at a leaf: columns used only inside one are supplied by the
+/// lower projection itself and must not be passed through.
+fn collect_outer_columns(
+    exprs: &[ProjectionExpr],
+    leaves: &[Arc<dyn PhysicalExpr>],
+) -> Result<Vec<usize>> {
+    let mut indices: Vec<usize> = vec![];
+    for proj_expr in exprs {
+        proj_expr.expr.apply(|node| {
+            if leaves.iter().any(|leaf| leaf == node) {
+                return Ok(TreeNodeRecursion::Jump);
+            }
+            if let Some(column) = node.downcast_ref::<Column>() {
+                indices.push(column.index());
+            }
+            Ok(TreeNodeRecursion::Continue)
+        })?;
+    }
+    indices.sort_unstable();
+    indices.dedup();
+    Ok(indices)
+}
+
+/// Rewrites an outer projection expression against the split child schema:
+/// every leaf sub-expression becomes a reference to the column the split added
+/// for it, and every surviving column or lambda parameter is remapped to its
+/// new index. `old_input_len` is the child's width before the split.
+fn rewrite_outer_expr(
+    expr: Arc<dyn PhysicalExpr>,
+    leaves: &[Arc<dyn PhysicalExpr>],
+    passthrough_indices: &[usize],
+    old_input_len: usize,
+) -> Result<Arc<dyn PhysicalExpr>> {
+    // The leaf columns were appended after the passthrough ones.
+    let first_leaf = passthrough_indices.len();
+    let new_input_len = first_leaf + leaves.len();
+    expr.transform_down(|node| {
+        if let Some(pos) = leaves.iter().position(|leaf| leaf == &node) {
+            let column = Column::new(&leaf_column_name(pos), first_leaf + pos);
+            return Ok(Transformed::new(
+                Arc::new(column) as Arc<dyn PhysicalExpr>,
+                true,
+                TreeNodeRecursion::Jump,
+            ));
+        }
+        if let Some(column) = node.downcast_ref::<Column>() {
+            let new_index = passthrough_indices
+                .iter()
+                .position(|&idx| idx == column.index())
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "projection split dropped column {} that is still referenced",
+                        column.index()
+                    )
+                })?;
+            if new_index != column.index() {
+                let remapped = Column::new(column.name(), new_index);
+                return Ok(Transformed::yes(Arc::new(remapped) as Arc<dyn PhysicalExpr>));
+            }
+        }
+        // The split widens the input, which moves the lambda parameters indexed
+        // after it; see `remap_filter_expr`.
+        if let Some(variable) = node.downcast_ref::<LambdaVariable>()
+            && old_input_len != new_input_len
+        {
+            let rebased = rebase_lambda_variable(variable, old_input_len, new_input_len)?;
+            return Ok(Transformed::yes(rebased));
+        }
+        Ok(Transformed::no(node))
+    })
+    .data()
 }
 
 #[cfg(test)]

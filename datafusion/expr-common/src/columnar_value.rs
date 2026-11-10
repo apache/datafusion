@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`ColumnarValue`] represents the result of evaluating an expression.
 
@@ -294,7 +281,7 @@ impl ColumnarValue {
     pub fn cast_to(
         &self,
         cast_type: &DataType,
-        cast_options: Option<&CastOptions<'static>>,
+        cast_options: Option<&CastOptions<'_>>,
     ) -> Result<ColumnarValue> {
         let cast_options = cast_options.cloned().unwrap_or(DEFAULT_CAST_OPTIONS);
         match self {
@@ -312,7 +299,7 @@ impl ColumnarValue {
 fn cast_array_by_name(
     array: &ArrayRef,
     cast_type: &DataType,
-    cast_options: &CastOptions<'static>,
+    cast_options: &CastOptions<'_>,
 ) -> Result<ArrayRef> {
     // If types are already equal, no cast needed
     if array.data_type() == cast_type {

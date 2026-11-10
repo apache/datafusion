@@ -1,0 +1,55 @@
+---
+source: datafusion/sql/tests/cases/params.rs
+expression: "plans.join(\"\\n\")"
+---
+SELECT $1 AS value
+** Initial Plan:
+Projection: $1 AS value
+  EmptyRelation: rows=1
+** Final Plan:
+Projection: Utf8("1") AS value
+  EmptyRelation: rows=1
+SELECT $1 AS value LIMIT CAST($1 AS INT)
+** Initial Plan:
+Limit: skip=0, fetch=CAST($1 AS Int32)
+  Projection: $1 AS value
+    EmptyRelation: rows=1
+** Final Plan:
+Limit: skip=0, fetch=CAST(Utf8("1") AS Int32)
+  Projection: Utf8("1") AS value
+    EmptyRelation: rows=1
+SELECT $1 AS value LIMIT CAST($1 AS BIGINT)
+** Initial Plan:
+Limit: skip=0, fetch=CAST($1 AS Int64)
+  Projection: $1 AS value
+    EmptyRelation: rows=1
+** Final Plan:
+Limit: skip=0, fetch=CAST(Utf8("1") AS Int64)
+  Projection: Utf8("1") AS value
+    EmptyRelation: rows=1
+SELECT $1 AS value FROM (VALUES (1), (2)) AS t(v) OFFSET CAST($1 AS BIGINT)
+** Initial Plan:
+Limit: skip=CAST($1 AS Int64), fetch=None
+  Projection: $1 AS value
+    SubqueryAlias: t
+      Projection: column1 AS v
+        Values: (Int64(1)), (Int64(2))
+** Final Plan:
+Limit: skip=CAST(Utf8("1") AS Int64), fetch=None
+  Projection: Utf8("1") AS value
+    SubqueryAlias: t
+      Projection: column1 AS v
+        Values: (Int64(1)), (Int64(2))
+SELECT $1 AS value FROM (SELECT 1 LIMIT CAST($1 AS BIGINT)) AS t
+** Initial Plan:
+Projection: $1 AS value
+  SubqueryAlias: t
+    Limit: skip=0, fetch=CAST($1 AS Int64)
+      Projection: Int64(1)
+        EmptyRelation: rows=1
+** Final Plan:
+Projection: Utf8("1") AS value
+  SubqueryAlias: t
+    Limit: skip=0, fetch=CAST(Utf8("1") AS Int64)
+      Projection: Int64(1)
+        EmptyRelation: rows=1

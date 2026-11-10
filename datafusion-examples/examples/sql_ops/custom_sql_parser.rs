@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This example demonstrates extending the DataFusion SQL parser to support
 //! custom DDL statements, specifically `CREATE FOREIGN CATALOG`.
@@ -44,8 +31,10 @@ use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider,
     TableProviderFactory,
 };
+use datafusion::common::{DFSchema, TableReference, plan_datafusion_err, plan_err};
 use datafusion::datasource::listing_table_factory::ListingTableFactory;
 use datafusion::error::{DataFusionError, Result};
+use datafusion::logical_expr::CreateExternalTable;
 use datafusion::prelude::SessionContext;
 use datafusion::sql::{
     parser::{DFParser, DFParserBuilder, Statement},
@@ -55,8 +44,6 @@ use datafusion::sql::{
         tokenizer::Token,
     },
 };
-use datafusion_common::{DFSchema, TableReference, plan_datafusion_err, plan_err};
-use datafusion_expr::CreateExternalTable;
 use futures::StreamExt;
 use insta::assert_snapshot;
 use object_store::ObjectStore;

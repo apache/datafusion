@@ -1,27 +1,14 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use arrow::array::{
     Array, ArrayData, ArrayRef, FixedSizeListArray, GenericListArray,
     GenericListViewArray, MapArray, OffsetSizeTrait, PrimitiveArray, RunArray,
     StructArray, UInt64Array, UnionArray, cast::AsArray, downcast_run_array, make_array,
 };
-use arrow::buffer::{OffsetBuffer, ScalarBuffer};
-use arrow::compute::{cast, take};
+use arrow::buffer::{NullBuffer, OffsetBuffer, ScalarBuffer};
+use arrow::compute::{cast, interleave, take};
 use arrow::datatypes::{DataType, Field, FieldRef, RunEndIndexType, UnionMode};
 use arrow_select::dictionary::garbage_collect_any_dictionary;
 use datafusion_common::utils::SingleRowListArrayBuilder;
@@ -32,7 +19,7 @@ use datafusion_expr::{Accumulator, AggregateUDFImpl, Signature, Volatility};
 use datafusion_functions_aggregate::array_agg::{
     ArrayAggAccumulator, DistinctArrayAggAccumulator,
 };
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 // Spark implementation of collect_list/collect_set aggregate function.
@@ -170,10 +157,10 @@ fn normalize_array(
             DataType::Dictionary(target_key, target_value),
         ) if source_key == target_key => {
             let compact = garbage_collect_any_dictionary(value.as_any_dictionary())?;
-            let dictionary = compact.as_any_dictionary();
-            let values =
-                normalize_array(dictionary.values(), target_value, require_non_null)?;
-            let dictionary = dictionary.with_values(values);
+            let dictionary =
+                datafusion_common::utils::map_dictionary_values(&compact, |values| {
+                    normalize_array(values, target_value, require_non_null)
+                })?;
             if dictionary.null_count() == 0 && dictionary.to_data().nulls().is_some() {
                 let data = dictionary.to_data().into_builder().nulls(None).build()?;
                 make_array(data)
@@ -200,23 +187,22 @@ fn normalize_array(
         }
         (DataType::Struct(_), DataType::Struct(fields)) => {
             let source = value.as_struct();
+            if source.null_count() == source.len() {
+                return Ok(arrow::array::new_null_array(target_type, source.len()));
+            }
             let columns = fields
                 .iter()
                 .zip(source.columns())
                 .map(|(field, column)| {
-                    let column = materialize_masked_values(
-                        column,
-                        source.nulls(),
-                        field.data_type(),
-                        !field.is_nullable(),
-                    )?;
+                    let column = materialize_masked_values(column, source.nulls())?;
                     normalize_array(&column, field.data_type(), !field.is_nullable())
                 })
                 .collect::<Result<Vec<_>>>()?;
-            Arc::new(StructArray::try_new(
+            Arc::new(StructArray::try_new_with_length(
                 fields.clone(),
                 columns,
                 source.nulls().cloned(),
+                source.len(),
             )?) as ArrayRef
         }
         (DataType::Map(_, _), DataType::Map(field, ordered)) => {
@@ -253,38 +239,359 @@ fn normalize_array(
 
 fn materialize_masked_values(
     value: &ArrayRef,
-    parent_nulls: Option<&arrow::buffer::NullBuffer>,
-    target_type: &DataType,
-    require_non_null: bool,
+    parent_nulls: Option<&NullBuffer>,
 ) -> Result<ArrayRef> {
-    let Some(parent_nulls) = parent_nulls else {
+    let Some(parent_nulls) = parent_nulls.filter(|nulls| nulls.null_count() != 0) else {
         return Ok(Arc::clone(value));
     };
-    let mut valid_parent_indices = parent_nulls.valid_indices();
-    let Some(first_valid_parent) = valid_parent_indices.next() else {
-        return ScalarValue::new_default(target_type)?.to_array_of_size(value.len());
-    };
-    let fallback = if require_non_null {
-        std::iter::once(first_valid_parent)
-            .chain(valid_parent_indices)
-            .find(|index| value.is_valid(*index))
-    } else {
-        Some(first_valid_parent)
-    };
-    let Some(fallback) = fallback else {
-        // The nulls are logically visible because the parent rows are valid.
-        // Preserve them so the declared non-null field validation rejects the
-        // input instead of silently replacing user data with defaults.
-        return Ok(Arc::clone(value));
-    };
-    let indices = UInt64Array::from_iter_values((0..value.len()).map(|index| {
-        if parent_nulls.is_valid(index) {
-            index as u64
-        } else {
-            fallback as u64
+    // Use an inexpensive default, not a retained value: copying a visible string
+    // or list into every masked slot multiplies its payload by the row count.
+    // Visible nulls are left untouched so narrowing still rejects invalid data.
+    let default = masked_default(value.data_type())?.to_array()?;
+    let indices = (0..value.len())
+        .map(|index| {
+            if parent_nulls.is_valid(index) {
+                (0, index)
+            } else {
+                (1, 0)
+            }
+        })
+        .collect::<Vec<_>>();
+    interleave_rows(value, &default, &indices)
+}
+
+/// A cheap replacement for an unreachable value. Prefer a non-null union arm:
+/// the first arm may be NULL even when a required union has valid values.
+fn masked_default(data_type: &DataType) -> Result<ScalarValue> {
+    match data_type {
+        DataType::Union(fields, mode) => {
+            for (id, field) in fields.iter() {
+                let value = masked_default(field.data_type())?;
+                if !value.is_null() {
+                    return Ok(ScalarValue::Union(
+                        Some((id, Box::new(value))),
+                        fields.clone(),
+                        *mode,
+                    ));
+                }
+            }
+            ScalarValue::new_default(data_type)
         }
-    }));
-    Ok(take(value.as_ref(), &indices, None)?)
+        DataType::Struct(fields) => {
+            let columns = fields
+                .iter()
+                .map(|field| masked_default(field.data_type())?.to_array())
+                .collect::<Result<Vec<_>>>()?;
+            let nulls = fields
+                .iter()
+                .zip(&columns)
+                .any(|(field, column)| {
+                    !field.is_nullable() && column.logical_null_count() != 0
+                })
+                .then(|| NullBuffer::new_null(1));
+            Ok(ScalarValue::Struct(Arc::new(
+                StructArray::try_new_with_length(fields.clone(), columns, nulls, 1)?,
+            )))
+        }
+        DataType::FixedSizeList(field, size) => {
+            let len = usize::try_from(*size)
+                .map_err(|_| internal_datafusion_err!("negative fixed-size-list size"))?;
+            let values = masked_default(field.data_type())?.to_array_of_size(len)?;
+            let nulls = (!field.is_nullable() && values.logical_null_count() != 0)
+                .then(|| NullBuffer::new_null(1));
+            Ok(ScalarValue::FixedSizeList(Arc::new(
+                FixedSizeListArray::try_new_with_length(
+                    Arc::clone(field),
+                    *size,
+                    values,
+                    nulls,
+                    1,
+                )?,
+            )))
+        }
+        DataType::Dictionary(key, value) => Ok(ScalarValue::Dictionary(
+            key.clone(),
+            Box::new(masked_default(value)?),
+        )),
+        DataType::RunEndEncoded(run_ends, value) => Ok(ScalarValue::RunEndEncoded(
+            Arc::clone(run_ends),
+            Arc::clone(value),
+            Box::new(masked_default(value.data_type())?),
+        )),
+        _ => ScalarValue::new_default(data_type),
+    }
+}
+
+/// Preserve shared dense-union offsets when selecting from masked structures.
+/// Arrow's generic selection kernels materialize a union child per selected row.
+fn interleave_rows(
+    left: &ArrayRef,
+    right: &ArrayRef,
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef> {
+    match left.data_type() {
+        DataType::Map(field, ordered) => {
+            let sources = [left.as_map(), right.as_map()];
+            let mut offsets = vec![0_i32];
+            let mut selected = vec![];
+            for &(source, row) in indices {
+                if sources[source].is_valid(row) {
+                    let range = &sources[source].value_offsets()[row..=row + 1];
+                    selected.extend(
+                        (range[0] as usize..range[1] as usize)
+                            .map(|index| (source, index)),
+                    );
+                }
+                offsets.push(i32::try_from(selected.len()).map_err(|_| {
+                    internal_datafusion_err!("map child length exceeds i32")
+                })?);
+            }
+            let entries = interleave_rows(
+                &(Arc::new(sources[0].entries().clone()) as ArrayRef),
+                &(Arc::new(sources[1].entries().clone()) as ArrayRef),
+                &selected,
+            )?;
+            let nulls = NullBuffer::from_iter(
+                indices
+                    .iter()
+                    .map(|(source, row)| sources[*source].is_valid(*row)),
+            );
+            Ok(Arc::new(MapArray::try_new(
+                Arc::clone(field),
+                OffsetBuffer::new(ScalarBuffer::from(offsets)),
+                entries.as_struct().clone(),
+                Some(nulls),
+                *ordered,
+            )?))
+        }
+        DataType::List(field) => interleave_lists::<i32>(left, right, field, indices),
+        DataType::LargeList(field) => {
+            interleave_lists::<i64>(left, right, field, indices)
+        }
+        DataType::FixedSizeList(field, size) => {
+            let sources = [left.as_fixed_size_list(), right.as_fixed_size_list()];
+            let size = usize::try_from(*size)
+                .map_err(|_| internal_datafusion_err!("negative fixed-size-list size"))?;
+            let mut selected = Vec::new();
+            for &(source, row) in indices {
+                let start = row.checked_mul(size).ok_or_else(|| {
+                    internal_datafusion_err!("fixed-size-list child offset overflow")
+                })?;
+                selected.extend((start..start + size).map(|index| (source, index)));
+            }
+            let values =
+                interleave_rows(sources[0].values(), sources[1].values(), &selected)?;
+            let nulls = NullBuffer::from_iter(
+                indices
+                    .iter()
+                    .map(|(source, row)| sources[*source].is_valid(*row)),
+            );
+            Ok(Arc::new(FixedSizeListArray::try_new_with_length(
+                Arc::clone(field),
+                size.try_into().map_err(|_| {
+                    internal_datafusion_err!("fixed-size-list size exceeds i32")
+                })?,
+                values,
+                Some(nulls),
+                indices.len(),
+            )?))
+        }
+        DataType::Struct(fields) => {
+            let sources = [left.as_struct(), right.as_struct()];
+            let columns = (0..fields.len())
+                .map(|index| {
+                    interleave_rows(
+                        sources[0].column(index),
+                        sources[1].column(index),
+                        indices,
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let nulls = NullBuffer::from_iter(
+                indices
+                    .iter()
+                    .map(|(source, row)| sources[*source].is_valid(*row)),
+            );
+            Ok(Arc::new(StructArray::try_new_with_length(
+                fields.clone(),
+                columns,
+                Some(nulls),
+                indices.len(),
+            )?))
+        }
+        DataType::Union(fields, UnionMode::Dense) => {
+            let sources = [left.as_union(), right.as_union()];
+            let mut referenced = vec![BTreeMap::new(); fields.len()];
+            let mut selected = vec![vec![]; fields.len()];
+            let mut type_ids = Vec::with_capacity(indices.len());
+            let mut offsets = Vec::with_capacity(indices.len());
+            for &(source, row) in indices {
+                let type_id = sources[source].type_id(row);
+                let field =
+                    fields
+                        .iter()
+                        .position(|(id, _)| id == type_id)
+                        .ok_or_else(|| {
+                            internal_datafusion_err!(
+                                "unknown dense union type id {type_id}"
+                            )
+                        })?;
+                let key = (source, sources[source].value_offset(row));
+                let offset = if let Some(offset) = referenced[field].get(&key) {
+                    *offset
+                } else {
+                    let offset = i32::try_from(selected[field].len()).map_err(|_| {
+                        internal_datafusion_err!("dense union child length exceeds i32")
+                    })?;
+                    selected[field].push(key);
+                    referenced[field].insert(key, offset);
+                    offset
+                };
+                type_ids.push(type_id);
+                offsets.push(offset);
+            }
+            let children = fields
+                .iter()
+                .zip(selected)
+                .map(|((id, _), selected)| {
+                    interleave_rows(sources[0].child(id), sources[1].child(id), &selected)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(Arc::new(UnionArray::try_new(
+                fields.clone(),
+                ScalarBuffer::from(type_ids),
+                Some(ScalarBuffer::from(offsets)),
+                children,
+            )?))
+        }
+        DataType::Union(fields, UnionMode::Sparse) => {
+            let sources = [left.as_union(), right.as_union()];
+            let children = fields
+                .iter()
+                .map(|(id, _)| {
+                    interleave_rows(sources[0].child(id), sources[1].child(id), indices)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let type_ids = indices
+                .iter()
+                .map(|(source, row)| sources[*source].type_id(*row))
+                .collect::<Vec<_>>();
+            Ok(Arc::new(UnionArray::try_new(
+                fields.clone(),
+                ScalarBuffer::from(type_ids),
+                None,
+                children,
+            )?))
+        }
+        _ => Ok(interleave(&[left.as_ref(), right.as_ref()], indices)?),
+    }
+}
+
+fn interleave_lists<Offset: OffsetSizeTrait>(
+    left: &ArrayRef,
+    right: &ArrayRef,
+    field: &FieldRef,
+    indices: &[(usize, usize)],
+) -> Result<ArrayRef> {
+    let sources = [left.as_list::<Offset>(), right.as_list::<Offset>()];
+    let mut offsets = Vec::with_capacity(indices.len() + 1);
+    let mut selected = vec![];
+    offsets.push(Offset::zero());
+    for &(source, row) in indices {
+        if sources[source].is_valid(row) {
+            let range = &sources[source].value_offsets()[row..=row + 1];
+            selected.extend(
+                (range[0].as_usize()..range[1].as_usize()).map(|index| (source, index)),
+            );
+        }
+        offsets.push(Offset::from_usize(selected.len()).ok_or_else(|| {
+            internal_datafusion_err!("list child length exceeds offset type")
+        })?);
+    }
+    let values = interleave_rows(sources[0].values(), sources[1].values(), &selected)?;
+    let nulls = NullBuffer::from_iter(
+        indices
+            .iter()
+            .map(|(source, row)| sources[*source].is_valid(*row)),
+    );
+    Ok(Arc::new(GenericListArray::<Offset>::try_new(
+        Arc::clone(field),
+        OffsetBuffer::new(ScalarBuffer::from(offsets)),
+        values,
+        Some(nulls),
+    )?))
+}
+
+/// Select dense-union rows without expanding a shared child offset once per
+/// occurrence. Child normalization subsequently retains each referenced offset
+/// once, including when logical null rows were removed.
+fn take_rows(value: &ArrayRef, indices: &UInt64Array) -> Result<ArrayRef> {
+    if matches!(
+        value.data_type(),
+        DataType::List(_)
+            | DataType::LargeList(_)
+            | DataType::FixedSizeList(_, _)
+            | DataType::Map(_, _)
+            | DataType::Union(_, UnionMode::Sparse)
+    ) {
+        let indices = indices
+            .values()
+            .iter()
+            .map(|index| {
+                usize::try_from(*index)
+                    .map(|index| (0, index))
+                    .map_err(|_| internal_datafusion_err!("row index exceeds usize"))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        return interleave_rows(
+            value,
+            &arrow::array::new_empty_array(value.data_type()),
+            &indices,
+        );
+    }
+    if let DataType::Struct(fields) = value.data_type() {
+        let source = value.as_struct();
+        let columns = source
+            .columns()
+            .iter()
+            .map(|column| take_rows(column, indices))
+            .collect::<Result<Vec<_>>>()?;
+        let nulls = source.nulls().map(|nulls| {
+            NullBuffer::from_iter(
+                indices
+                    .values()
+                    .iter()
+                    .map(|index| nulls.is_valid(*index as usize)),
+            )
+        });
+        return Ok(Arc::new(StructArray::try_new_with_length(
+            fields.clone(),
+            columns,
+            nulls,
+            indices.len(),
+        )?));
+    }
+    if let DataType::Union(fields, UnionMode::Dense) = value.data_type() {
+        let source = value.as_union();
+        let mut type_ids = Vec::with_capacity(indices.len());
+        let mut offsets = Vec::with_capacity(indices.len());
+        for index in indices.values() {
+            let index = usize::try_from(*index)
+                .map_err(|_| internal_datafusion_err!("union row index exceeds usize"))?;
+            type_ids.push(source.type_id(index));
+            offsets.push(source.offsets().expect("dense union has offsets")[index]);
+        }
+        return Ok(Arc::new(UnionArray::try_new(
+            fields.clone(),
+            ScalarBuffer::from(type_ids),
+            Some(ScalarBuffer::from(offsets)),
+            fields
+                .iter()
+                .map(|(id, _)| Arc::clone(source.child(id)))
+                .collect(),
+        )?));
+    }
+    Ok(take(value.as_ref(), indices, None)?)
 }
 
 fn normalize_run_end<R: RunEndIndexType>(
@@ -326,11 +633,7 @@ fn normalize_list<Offset: OffsetSizeTrait>(
             internal_datafusion_err!("list offset exceeds target offset type")
         })?);
     }
-    let values = take(
-        source.values().as_ref(),
-        &UInt64Array::from_iter_values(indices),
-        None,
-    )?;
+    let values = take_rows(source.values(), &UInt64Array::from_iter_values(indices))?;
     let values = normalize_array(&values, field.data_type(), !field.is_nullable())?;
     Ok(Arc::new(GenericListArray::<Offset>::try_new(
         Arc::clone(field),
@@ -414,11 +717,7 @@ fn normalize_list_view<Offset: OffsetSizeTrait>(
         indices.extend((*start..*end).map(|index| index as u64));
     }
 
-    let values = take(
-        source.values().as_ref(),
-        &UInt64Array::from_iter_values(indices),
-        None,
-    )?;
+    let values = take_rows(source.values(), &UInt64Array::from_iter_values(indices))?;
     let values = normalize_array(&values, field.data_type(), !field.is_nullable())?;
 
     let mut offsets = Vec::new();
@@ -492,43 +791,8 @@ fn normalize_fixed_size_list(
         );
     }
 
-    let values = if source.null_count() == 0 && source.values().offset() == 0 {
-        Arc::clone(source.values())
-    } else if let Some(fallback_row) =
-        (0..source.len()).find(|index| source.is_valid(*index))
-    {
-        let mut indices = Vec::new();
-        indices.try_reserve(values_len).map_err(|error| {
-            internal_datafusion_err!(
-                "failed to reserve fixed-size-list child indices: {error}"
-            )
-        })?;
-        for row in 0..source.len() {
-            let source_row = if source.is_valid(row) {
-                row
-            } else {
-                fallback_row
-            };
-            let start = source_row.checked_mul(size).ok_or_else(|| {
-                internal_datafusion_err!("fixed-size-list child offset overflow")
-            })?;
-            for offset in 0..size {
-                let index = start.checked_add(offset).ok_or_else(|| {
-                    internal_datafusion_err!("fixed-size-list child offset overflow")
-                })?;
-                indices.push(u64::try_from(index).map_err(|_| {
-                    internal_datafusion_err!("fixed-size-list child offset exceeds u64")
-                })?);
-            }
-        }
-        take(
-            source.values().as_ref(),
-            &UInt64Array::from_iter_values(indices),
-            None,
-        )?
-    } else {
-        ScalarValue::new_default(field.data_type())?.to_array_of_size(values_len)?
-    };
+    let child_nulls = source.nulls().map(|nulls| nulls.expand(size));
+    let values = materialize_masked_values(source.values(), child_nulls.as_ref())?;
     let values = normalize_array(&values, field.data_type(), !field.is_nullable())?;
     Ok(Arc::new(FixedSizeListArray::try_new_with_length(
         Arc::clone(field),
@@ -583,10 +847,9 @@ fn normalize_map(value: &ArrayRef, field: &FieldRef, ordered: bool) -> Result<Ar
                 internal_datafusion_err!("compacted map offset exceeds i32")
             })?);
         }
-        let entries = take(
-            source.entries(),
+        let entries = take_rows(
+            &(Arc::new(source.entries().clone()) as ArrayRef),
             &UInt64Array::from_iter_values(indices),
-            None,
         )?;
         (OffsetBuffer::new(ScalarBuffer::from(offsets)), entries)
     } else {
@@ -649,32 +912,20 @@ fn normalize_sparse_union(
             let child = source.child(*source_type_id);
             let first_active =
                 (0..source.len()).find(|index| source.type_id(*index) == *source_type_id);
-            let child = match first_active {
-                None => ScalarValue::new_default(target_field.data_type())?
-                    .to_array_of_size(source.len())?,
-                Some(first_active) => {
-                    if require_non_null
-                        && (first_active..source.len()).any(|index| {
-                            source.type_id(index) == *source_type_id
-                                && child.is_null(index)
-                        })
-                    {
-                        return internal_err!(
-                            "Found unmasked nulls for non-nullable sparse union field {}",
-                            target_field.name()
-                        );
-                    }
-                    let indices =
-                        UInt64Array::from_iter_values((0..source.len()).map(|index| {
-                            if source.type_id(index) == *source_type_id {
-                                index as u64
-                            } else {
-                                first_active as u64
-                            }
-                        }));
-                    take(child.as_ref(), &indices, None)?
-                }
-            };
+            if require_non_null
+                && (0..source.len()).any(|index| {
+                    source.type_id(index) == *source_type_id && child.is_null(index)
+                })
+            {
+                return internal_err!(
+                    "Found unmasked nulls for non-nullable sparse union field {}",
+                    target_field.name()
+                );
+            }
+            let active = NullBuffer::from_iter(
+                (0..source.len()).map(|index| source.type_id(index) == *source_type_id),
+            );
+            let child = materialize_masked_values(child, Some(&active))?;
             let child =
                 normalize_array(&child, target_field.data_type(), require_non_null)?;
             if require_non_null
@@ -758,7 +1009,7 @@ fn normalize_dense_union(
         let referenced = referenced.into_iter().collect::<Vec<_>>();
         let indices =
             UInt64Array::from_iter_values(referenced.iter().map(|offset| *offset as u64));
-        let child = take(child.as_ref(), &indices, None)?;
+        let child = take_rows(child, &indices)?;
         let child = normalize_array(&child, target_field.data_type(), require_non_null)?;
         if require_non_null && child.logical_null_count() != 0 {
             return internal_err!(
@@ -1018,13 +1269,15 @@ impl<T: Accumulator> NullToEmptyListAccumulator<T> {
         } else {
             // Materialize only retained rows before narrowing nested fields.
             // A slice can still reference null payload outside its logical rows.
-            let indices = match value.logical_nulls() {
-                Some(nulls) => UInt64Array::from_iter_values(
-                    nulls.valid_indices().map(|index| index as u64),
-                ),
-                None => UInt64Array::from_iter_values(0..value.len() as u64),
+            let value = match value.logical_nulls() {
+                Some(nulls) if nulls.null_count() != 0 => {
+                    let indices = UInt64Array::from_iter_values(
+                        nulls.valid_indices().map(|index| index as u64),
+                    );
+                    take_rows(value, &indices)?
+                }
+                _ => Arc::clone(value),
             };
-            let value = take(value.as_ref(), &indices, None)?;
             normalize_array(&value, field.data_type(), true)
         }
     }
@@ -1214,6 +1467,654 @@ mod tests {
     }
 
     #[test]
+    fn review_regression_masked_map_defaults() -> Result<()> {
+        let entries = StructArray::try_new(
+            Fields::from(vec![
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", DataType::Int32, false),
+            ]),
+            vec![
+                Arc::new(Int32Array::from(vec![1])),
+                Arc::new(Int32Array::from(vec![7])),
+            ],
+            None,
+        )?;
+        let map = Arc::new(MapArray::try_new(
+            Arc::new(Field::new("entries", entries.data_type().clone(), false)),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0_i32, 1])),
+            entries,
+            None,
+            false,
+        )?) as ArrayRef;
+        let optional = Arc::new(StructArray::try_new(
+            Fields::from(vec![Field::new("map", map.data_type().clone(), false)]),
+            vec![Arc::clone(&map)],
+            Some(NullBuffer::new_null(1)),
+        )?) as ArrayRef;
+        let values = Arc::new(StructArray::try_new(
+            Fields::from(vec![Field::new(
+                "optional",
+                optional.data_type().clone(),
+                true,
+            )]),
+            vec![optional],
+            None,
+        )?) as ArrayRef;
+        values.to_data().validate_full()?;
+        for distinct in [false, true] {
+            let mut accumulator = accumulator(values.data_type(), distinct)?;
+            accumulator.update_batch(std::slice::from_ref(&values))?;
+            let ScalarValue::List(result) = accumulator.evaluate()? else {
+                panic!("expected list")
+            };
+            result.to_data().validate_full()?;
+            let rows = result.value(0);
+            assert!(rows.as_struct().column(0).is_null(0));
+        }
+
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("integer", DataType::Int32, false),
+                Field::new("map", map.data_type().clone(), false),
+            ],
+        )?;
+        let union = Arc::new(UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(vec![0_i8]),
+            None,
+            vec![Arc::new(Int32Array::from(vec![1])), map],
+        )?) as ArrayRef;
+        assert_accumulator_outputs(union, false, &["{integer=1}"])
+    }
+
+    #[test]
+    fn review_regression_masked_payload_is_not_replicated() -> Result<()> {
+        const ROWS: usize = 1_024;
+        const BYTES: usize = 4_096;
+        let payload = "x".repeat(BYTES);
+        let strings = Arc::new(StringArray::from_iter(
+            std::iter::once(Some(payload.as_str()))
+                .chain(std::iter::repeat_n(None, ROWS - 1)),
+        )) as ArrayRef;
+        let optional = Arc::new(StructArray::try_new(
+            Fields::from(vec![Field::new("payload", DataType::Utf8, true)]),
+            vec![strings],
+            Some(NullBuffer::from_iter((0..ROWS).map(|row| row == 0))),
+        )?) as ArrayRef;
+        let values = Arc::new(StructArray::try_new(
+            Fields::from(vec![Field::new(
+                "optional",
+                optional.data_type().clone(),
+                true,
+            )]),
+            vec![optional],
+            None,
+        )?) as ArrayRef;
+        let mut accumulator = accumulator(values.data_type(), false)?;
+        accumulator.update_batch(&[values])?;
+        let ScalarValue::List(result) = accumulator.evaluate()? else {
+            panic!("expected list")
+        };
+        result.to_data().validate_full()?;
+        let rows = result.value(0);
+        let optional = rows.as_struct().column(0).as_struct();
+        assert_eq!(optional.null_count(), ROWS - 1);
+        assert!(optional.is_valid(0));
+        assert_eq!(optional.column(0).as_string::<i32>().value(0), payload);
+        assert_eq!(
+            optional.column(0).as_string::<i32>().value_data().len(),
+            BYTES
+        );
+
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("integer", DataType::Int32, false),
+                Field::new("string", DataType::Utf8, false),
+            ],
+        )?;
+        let union = Arc::new(UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(
+                (0..ROWS).map(|row| i8::from(row == 0)).collect::<Vec<_>>(),
+            ),
+            None,
+            vec![
+                Arc::new(Int32Array::from_iter_values(0..ROWS as i32)),
+                Arc::new(StringArray::from_iter_values(
+                    std::iter::once(payload.as_str())
+                        .chain(std::iter::repeat_n("", ROWS - 1)),
+                )),
+            ],
+        )?) as ArrayRef;
+        let normalized = normalize_array(&union, union.data_type(), true)?;
+        assert_eq!(
+            normalized.as_union().type_ids(),
+            union.as_union().type_ids()
+        );
+        assert_eq!(
+            normalized.as_union().child(1).as_string::<i32>().value(0),
+            payload
+        );
+        assert_eq!(
+            normalized
+                .as_union()
+                .child(1)
+                .as_string::<i32>()
+                .value_data()
+                .len(),
+            BYTES
+        );
+        normalized.to_data().validate_full()?;
+
+        let fixed = Arc::new(FixedSizeListArray::try_new(
+            Arc::new(Field::new_list_field(DataType::Utf8, true)),
+            1,
+            Arc::new(StringArray::from_iter(
+                std::iter::once(Some(payload.as_str()))
+                    .chain(std::iter::repeat_n(None, ROWS - 1)),
+            )),
+            Some(NullBuffer::from_iter((0..ROWS).map(|row| row == 0))),
+        )?) as ArrayRef;
+        let normalized = normalize_array(&fixed, fixed.data_type(), false)?;
+        normalized.to_data().validate_full()?;
+        let fixed = normalized.as_fixed_size_list();
+        assert_eq!(fixed.null_count(), ROWS - 1);
+        assert_eq!(fixed.values().as_string::<i32>().value_data().len(), BYTES);
+        assert_eq!(fixed.values().as_string::<i32>().value(0), payload);
+        Ok(())
+    }
+
+    #[test]
+    fn review_regression_dense_union_keeps_shared_offsets() -> Result<()> {
+        const ROWS: usize = 1_024;
+        const BYTES: usize = 4_096;
+        let fields = UnionFields::try_new(
+            vec![0],
+            vec![Field::new("string", DataType::Utf8, false)],
+        )?;
+        let values = Arc::new(UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(vec![0_i8; ROWS]),
+            Some(ScalarBuffer::from(vec![0_i32; ROWS])),
+            vec![Arc::new(StringArray::from(vec!["x".repeat(BYTES)]))],
+        )?) as ArrayRef;
+        values.to_data().validate_full()?;
+        let mut acc = accumulator(values.data_type(), false)?;
+        acc.update_batch(&[values])?;
+        let ScalarValue::List(result) = acc.evaluate()? else {
+            panic!("expected list")
+        };
+        result.to_data().validate_full()?;
+        let rows = result.value(0);
+        assert_eq!(rows.len(), ROWS);
+        let union = rows.as_union();
+        assert_eq!(union.child(0).len(), 1);
+        assert_eq!(union.child(0).as_string::<i32>().value_data().len(), BYTES);
+        assert_eq!(
+            union.child(0).as_string::<i32>().value(0),
+            "x".repeat(BYTES)
+        );
+        assert!(union.offsets().unwrap().iter().all(|offset| *offset == 0));
+
+        // Removing a logical null must select only union metadata, rather than
+        // expanding the retained shared offset through Arrow's generic take.
+        let fields = UnionFields::try_new(
+            vec![0],
+            vec![Field::new("string", DataType::Utf8, true)],
+        )?;
+        let mut offsets = vec![0_i32; ROWS];
+        offsets[1] = 1;
+        let values = Arc::new(UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(vec![0_i8; ROWS]),
+            Some(ScalarBuffer::from(offsets)),
+            vec![Arc::new(StringArray::from(vec![
+                Some("x".repeat(BYTES)),
+                None,
+            ]))],
+        )?) as ArrayRef;
+        values.to_data().validate_full()?;
+        let mut acc = accumulator(values.data_type(), false)?;
+        acc.update_batch(&[values])?;
+        let ScalarValue::List(result) = acc.evaluate()? else {
+            panic!("expected list")
+        };
+        result.to_data().validate_full()?;
+        let rows = result.value(0);
+        assert_eq!(rows.len(), ROWS - 1);
+        let union = rows.as_union();
+        assert_eq!(union.child(0).len(), 1);
+        assert_eq!(union.child(0).as_string::<i32>().value_data().len(), BYTES);
+        assert_eq!(
+            union.child(0).as_string::<i32>().value(0),
+            "x".repeat(BYTES)
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn review_regression_zero_field_struct_keeps_length() -> Result<()> {
+        let optional = Arc::new(StructArray::new_empty_fields(
+            1,
+            Some(NullBuffer::new_null(1)),
+        )) as ArrayRef;
+        let values = Arc::new(StructArray::try_new(
+            Fields::from(vec![Field::new(
+                "optional",
+                optional.data_type().clone(),
+                true,
+            )]),
+            vec![optional],
+            None,
+        )?) as ArrayRef;
+        values.to_data().validate_full()?;
+        for distinct in [false, true] {
+            let mut accumulator = accumulator(values.data_type(), distinct)?;
+            accumulator.update_batch(std::slice::from_ref(&values))?;
+            let ScalarValue::List(result) = accumulator.evaluate()? else {
+                panic!("expected list")
+            };
+            result.to_data().validate_full()?;
+            let rows = result.value(0);
+            assert_eq!(rows.len(), 1);
+            let optional = rows.as_struct().column(0).as_struct();
+            assert_eq!(optional.len(), 1);
+            assert!(optional.is_null(0));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn review_regression_masked_list_preserves_item_field() -> Result<()> {
+        let item = Arc::new(
+            Field::new("custom_item", DataType::Int32, false).with_metadata(
+                HashMap::from([("tag".to_string(), "preserved".to_string())]),
+            ),
+        );
+        let lists = vec![
+            Arc::new(ListArray::try_new(
+                Arc::clone(&item),
+                OffsetBuffer::from_lengths([1, 1]),
+                Arc::new(Int32Array::from(vec![7, 8])),
+                None,
+            )?) as ArrayRef,
+            Arc::new(arrow::array::LargeListArray::try_new(
+                Arc::clone(&item),
+                OffsetBuffer::from_lengths([1, 1]),
+                Arc::new(Int32Array::from(vec![7, 8])),
+                None,
+            )?) as ArrayRef,
+        ];
+        for list in lists {
+            let optional = Arc::new(StructArray::try_new(
+                Fields::from(vec![Field::new("items", list.data_type().clone(), false)]),
+                vec![list],
+                Some(NullBuffer::from(vec![true, false])),
+            )?) as ArrayRef;
+            let input = Arc::new(StructArray::try_new(
+                Fields::from(vec![Field::new(
+                    "optional",
+                    optional.data_type().clone(),
+                    true,
+                )]),
+                vec![optional],
+                None,
+            )?) as ArrayRef;
+            for distinct in [false, true] {
+                let mut acc = accumulator(input.data_type(), distinct)?;
+                acc.update_batch(std::slice::from_ref(&input))?;
+                let ScalarValue::List(result) = acc.evaluate()? else {
+                    panic!("expected list")
+                };
+                result.to_data().validate_full()?;
+                let rows = result.value(0);
+                assert_eq!(rows.data_type(), input.data_type());
+                let optional = rows.as_struct().column(0).as_struct();
+                assert_eq!(optional.len(), 2);
+                assert_eq!(optional.null_count(), 1);
+                let visible = (0..2).find(|index| optional.is_valid(*index)).unwrap();
+                assert_eq!(
+                    array_value_to_string(optional.column(0).as_ref(), visible)?,
+                    "[7]"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn review_regression_nested_dense_union_keeps_shared_offsets() -> Result<()> {
+        const ROWS: usize = 1_024;
+        const BYTES: usize = 4_096;
+        let fields = UnionFields::try_new(
+            vec![0],
+            vec![Field::new("string", DataType::Utf8, false)],
+        )?;
+        let union = Arc::new(UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(vec![0_i8; ROWS]),
+            Some(ScalarBuffer::from(vec![0_i32; ROWS])),
+            vec![Arc::new(StringArray::from(vec!["x".repeat(BYTES)]))],
+        )?) as ArrayRef;
+        let structure = Arc::new(StructArray::try_new(
+            Fields::from(vec![Field::new("value", union.data_type().clone(), false)]),
+            vec![union],
+            Some(NullBuffer::from_iter((0..ROWS).map(|row| row != ROWS - 1))),
+        )?) as ArrayRef;
+        let outer = Arc::new(StructArray::try_new(
+            Fields::from(vec![Field::new(
+                "optional",
+                structure.data_type().clone(),
+                true,
+            )]),
+            vec![Arc::clone(&structure)],
+            None,
+        )?) as ArrayRef;
+        let normalized = normalize_array(&outer, outer.data_type(), true)?;
+        normalized.to_data().validate_full()?;
+        let optional = normalized.as_struct().column(0).as_struct();
+        assert_eq!(optional.null_count(), 1);
+        assert_eq!(
+            optional
+                .column(0)
+                .as_union()
+                .child(0)
+                .as_string::<i32>()
+                .value_data()
+                .len(),
+            BYTES
+        );
+
+        let mut acc = accumulator(structure.data_type(), false)?;
+        acc.update_batch(&[structure])?;
+        let ScalarValue::List(result) = acc.evaluate()? else {
+            panic!("expected list")
+        };
+        result.to_data().validate_full()?;
+        let rows = result.value(0);
+        assert_eq!(rows.len(), ROWS - 1);
+        let union = rows.as_struct().column(0).as_union();
+        assert_eq!(union.child(0).as_string::<i32>().value_data().len(), BYTES);
+        assert!(union.offsets().unwrap().iter().all(|offset| *offset == 0));
+        Ok(())
+    }
+
+    #[test]
+    fn review_regression_masked_null_first_union() -> Result<()> {
+        for mode in [UnionMode::Dense, UnionMode::Sparse] {
+            let fields = UnionFields::try_new(
+                vec![3, 7],
+                vec![
+                    Field::new("null", DataType::Null, true),
+                    Field::new("integer", DataType::Int32, false),
+                ],
+            )?;
+            let union = Arc::new(UnionArray::try_new(
+                fields,
+                ScalarBuffer::from(vec![7_i8; 3]),
+                (mode == UnionMode::Dense).then(|| ScalarBuffer::from(vec![0_i32, 1, 0])),
+                vec![
+                    Arc::new(NullArray::new(3)),
+                    Arc::new(Int32Array::from(vec![42, 99, 12])),
+                ],
+            )?) as ArrayRef;
+            let source = Arc::new(StructArray::try_new(
+                Fields::from(vec![Field::new("value", union.data_type().clone(), false)]),
+                vec![union],
+                Some(NullBuffer::from(vec![true, false, true])),
+            )?) as ArrayRef;
+            let normalized = normalize_array(&source, source.data_type(), true)?;
+            normalized.to_data().validate_full()?;
+            assert!(normalized.is_null(1));
+            let union = normalized.as_struct().column(0).as_union();
+            assert_eq!(union.type_id(0), 7);
+            assert_eq!(union.type_id(2), 7);
+            assert_eq!(
+                union
+                    .child(7)
+                    .as_primitive::<Int32Type>()
+                    .value(union.value_offset(0)),
+                42
+            );
+            assert_eq!(
+                union
+                    .child(7)
+                    .as_primitive::<Int32Type>()
+                    .value(union.value_offset(2)),
+                if mode == UnionMode::Dense { 42 } else { 12 }
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn review_regression_wrapped_dense_union_keeps_shared_offsets() -> Result<()> {
+        const ROWS: usize = 1024;
+        const BYTES: usize = 4096;
+        for wrapper in [2, 0, 1] {
+            let fields = UnionFields::try_new(
+                vec![3, 7],
+                vec![
+                    Field::new("text", DataType::Utf8, false),
+                    Field::new("integer", DataType::Int32, false),
+                ],
+            )?;
+            let union = Arc::new(UnionArray::try_new(
+                fields,
+                ScalarBuffer::from(
+                    (0..ROWS)
+                        .map(|row| if row % 2 == 0 { 3_i8 } else { 7_i8 })
+                        .collect::<Vec<_>>(),
+                ),
+                Some(ScalarBuffer::from(vec![0_i32; ROWS])),
+                vec![
+                    Arc::new(StringArray::from(vec!["x".repeat(BYTES)])),
+                    Arc::new(Int32Array::from(vec![42])),
+                ],
+            )?) as ArrayRef;
+            let field = Arc::new(Field::new("item", union.data_type().clone(), false));
+            let wrapped = if wrapper == 1 {
+                Arc::new(FixedSizeListArray::try_new(field, 1, union, None)?) as ArrayRef
+            } else if wrapper == 2 {
+                let entries = StructArray::try_new(
+                    Fields::from(vec![
+                        Field::new("key", DataType::Int32, false),
+                        Field::new("value", union.data_type().clone(), false),
+                    ]),
+                    vec![
+                        Arc::new(Int32Array::from_iter_values(0..ROWS as i32)),
+                        union,
+                    ],
+                    None,
+                )?;
+                let field =
+                    Arc::new(Field::new("entries", entries.data_type().clone(), false));
+                Arc::new(MapArray::try_new(
+                    field,
+                    OffsetBuffer::new(ScalarBuffer::from(
+                        (0..=ROWS as i32).collect::<Vec<_>>(),
+                    )),
+                    entries,
+                    None,
+                    true,
+                )?) as ArrayRef
+            } else {
+                Arc::new(ListArray::try_new(
+                    field,
+                    OffsetBuffer::new(ScalarBuffer::from(
+                        (0..=ROWS as i32).collect::<Vec<_>>(),
+                    )),
+                    union,
+                    None,
+                )?) as ArrayRef
+            };
+            let source = Arc::new(StructArray::try_new(
+                Fields::from(vec![Field::new(
+                    "value",
+                    wrapped.data_type().clone(),
+                    false,
+                )]),
+                vec![wrapped],
+                Some(NullBuffer::from_iter((0..ROWS).map(|row| row != ROWS - 1))),
+            )?) as ArrayRef;
+            let mut acc = accumulator(source.data_type(), false)?;
+            acc.update_batch(&[source])?;
+            let ScalarValue::List(result) = acc.evaluate()? else {
+                panic!("expected list")
+            };
+            result.to_data().validate_full()?;
+            let rows = result.value(0);
+            assert_eq!(rows.len(), ROWS - 1);
+            let wrapped = rows.as_struct().column(0);
+            let values = if wrapper == 1 {
+                wrapped.as_fixed_size_list().values()
+            } else if wrapper == 2 {
+                assert!(matches!(wrapped.data_type(), DataType::Map(_, true)));
+                wrapped.as_map().values()
+            } else {
+                wrapped.as_list::<i32>().values()
+            };
+            let union = values.as_union();
+            assert_eq!(union.child(3).as_string::<i32>().value_data().len(), BYTES);
+            for row in 0..ROWS - 1 {
+                assert_eq!(union.type_id(row), if row % 2 == 0 { 3 } else { 7 });
+                assert_eq!(union.value_offset(row), 0);
+                if row % 2 == 0 {
+                    assert_eq!(
+                        union.child(3).as_string::<i32>().value(0),
+                        "x".repeat(BYTES)
+                    );
+                } else {
+                    assert_eq!(union.child(7).as_primitive::<Int32Type>().value(0), 42);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn review_regression_inactive_null_union_grouped_and_window_sql() -> Result<()>
+    {
+        let fields = UnionFields::try_new(
+            vec![0, 1],
+            vec![
+                Field::new("integer", DataType::Int32, false),
+                Field::new("null", DataType::Null, true),
+            ],
+        )?;
+        let values = Arc::new(UnionArray::try_new(
+            fields,
+            ScalarBuffer::from(vec![0_i8; 4]),
+            None,
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2, 1, 2])),
+                Arc::new(NullArray::new(4)),
+            ],
+        )?) as ArrayRef;
+        values.to_data().validate_full()?;
+        let element_type = values.data_type().clone();
+        for target_partitions in [1, 4] {
+            let ctx = SessionContext::new_with_config(
+                SessionConfig::new().with_target_partitions(target_partitions),
+            );
+            ctx.register_udaf(AggregateUDF::new_from_impl(SparkCollectList::new()));
+            ctx.register_udaf(AggregateUDF::new_from_impl(SparkCollectSet::new()));
+            ctx.register_batch(
+                "sparse_null_arm",
+                RecordBatch::try_new(
+                    Arc::new(Schema::new(vec![
+                        Field::new("g", DataType::Int32, false),
+                        Field::new("id", DataType::Int32, false),
+                        Field::new("x", element_type.clone(), false),
+                    ])),
+                    vec![
+                        Arc::new(Int32Array::from(vec![0, 0, 1, 1])),
+                        Arc::new(Int32Array::from(vec![0, 1, 2, 3])),
+                        Arc::clone(&values),
+                    ],
+                )?,
+            )?;
+            for aggregate in ["collect_list", "collect_set"] {
+                for (query, expected) in [
+                    (
+                        format!(
+                            "SELECT g, {aggregate}(x) FROM sparse_null_arm GROUP BY g ORDER BY g"
+                        ),
+                        vec![(0, vec![1, 2]), (1, vec![1, 2])],
+                    ),
+                    (
+                        format!(
+                            "SELECT id, {aggregate}(x) OVER (ORDER BY id ROWS BETWEEN 2 PRECEDING AND CURRENT ROW) FROM sparse_null_arm ORDER BY id"
+                        ),
+                        if aggregate == "collect_list" {
+                            vec![
+                                (0, vec![1]),
+                                (1, vec![1, 2]),
+                                (2, vec![1, 1, 2]),
+                                (3, vec![1, 2, 2]),
+                            ]
+                        } else {
+                            vec![
+                                (0, vec![1]),
+                                (1, vec![1, 2]),
+                                (2, vec![1, 2]),
+                                (3, vec![1, 2]),
+                            ]
+                        },
+                    ),
+                ] {
+                    let output = ctx.sql(&query).await?.collect().await?;
+                    let mut actual = vec![];
+                    for batch in output {
+                        assert_eq!(
+                            batch.schema().field(1).data_type(),
+                            &list_type(element_type.clone())
+                        );
+                        assert!(!batch.schema().field(1).is_nullable());
+                        for column in batch.columns() {
+                            column.to_data().validate_full()?;
+                        }
+                        for row in 0..batch.num_rows() {
+                            let ScalarValue::List(result) =
+                                ScalarValue::try_from_array(batch.column(1), row)?
+                                    .compacted()
+                            else {
+                                panic!("expected list")
+                            };
+                            result.to_data().validate_full()?;
+                            let values = result.value(0);
+                            assert_eq!(values.data_type(), &element_type);
+                            assert_eq!(values.logical_null_count(), 0);
+                            let union = values.as_union();
+                            let mut collected = (0..union.len())
+                                .map(|index| {
+                                    assert_eq!(union.type_id(index), 0);
+                                    union
+                                        .child(0)
+                                        .as_primitive::<Int32Type>()
+                                        .value(union.value_offset(index))
+                                })
+                                .collect::<Vec<_>>();
+                            collected.sort_unstable();
+                            actual.push((
+                                batch.column(0).as_primitive::<Int32Type>().value(row),
+                                collected,
+                            ));
+                        }
+                    }
+                    assert_eq!(
+                        actual, expected,
+                        "{query}, target_partitions={target_partitions}"
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn collect_types_have_non_nullable_elements() -> Result<()> {
         let element_type = DataType::Int32;
         let expected = list_type(element_type.clone());
@@ -1222,7 +2123,6 @@ mod tests {
             &SparkCollectList::new() as &dyn AggregateUDFImpl,
             &SparkCollectSet::new() as &dyn AggregateUDFImpl,
         ] {
-            assert!(!aggregate.is_nullable());
             assert_eq!(
                 aggregate.return_type(std::slice::from_ref(&element_type))?,
                 expected
@@ -2249,9 +3149,9 @@ mod tests {
             .downcast_ref::<UnionArray>()
             .expect("expected union");
         let strings = union.child(1).as_string::<i32>();
-        assert_eq!(strings.value(0), "visible");
+        assert_eq!(strings.value(0), "");
         assert_eq!(strings.value(1), "visible");
-        assert_eq!(strings.value(2), "visible");
+        assert_eq!(strings.value(2), "");
         Ok(())
     }
 
@@ -2280,7 +3180,7 @@ mod tests {
         let structure = normalized.as_struct().column(0).as_struct();
         assert!(structure.is_null(0));
         let child = structure.column(0).as_string::<i32>();
-        assert_eq!(child.value(0), "visible");
+        assert_eq!(child.value(0), "");
         assert_eq!(child.value(1), "visible");
         Ok(())
     }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Shared serialization of the format-agnostic [`FileScanConfig`] spine.
 //!
@@ -106,7 +93,7 @@ impl FileScanConfig {
             .map(TryInto::try_into)
             .collect::<Result<Vec<_>>>()?;
 
-        let mut proto_output_ordering = vec![];
+        let mut proto_output_ordering = Vec::with_capacity(output_ordering.len());
         for order in output_ordering {
             let nodes = sort_exprs_try_to_proto(order.iter(), &ctx.expr_ctx())?;
             proto_output_ordering.push(protobuf::PhysicalSortExprNodeCollection {
@@ -125,7 +112,7 @@ impl FileScanConfig {
 
         // Partition fields must be added to the schema so they can persist in
         // protobuf and then be removed again in `parse_table_schema_from_proto`.
-        let mut fields = file_schema.fields().iter().cloned().collect::<Vec<_>>();
+        let mut fields = file_schema.fields().to_vec();
         fields.extend(table_partition_cols.iter().cloned());
         let schema = Schema::new(fields).with_metadata(file_schema.metadata.clone());
 
@@ -242,7 +229,7 @@ impl FileScanConfig {
             true => ObjectStoreUrl::local_filesystem(),
         };
 
-        let mut decoded_output_ordering = vec![];
+        let mut decoded_output_ordering = Vec::with_capacity(output_ordering.len());
         for node_collection in output_ordering {
             let protobuf::PhysicalSortExprNodeCollection {
                 physical_sort_expr_nodes,

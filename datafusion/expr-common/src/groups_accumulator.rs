@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Vectorized [`GroupsAccumulator`]
 
@@ -381,6 +368,14 @@ pub trait GroupsAccumulator: Send + std::any::Any {
     ///
     /// May be expensive; check the implementation before calling on hot paths.
     fn size(&self) -> usize;
+
+    /// Keeps the stored groups but releases capacity they do not need, such as
+    /// per-batch scratch buffers, so that [`Self::size`] reflects the stored
+    /// groups. For example, after [`EmitTo::First`] removes most groups, an
+    /// accumulator may keep a buffer it sized for the last input batch.
+    ///
+    /// The default does nothing.
+    fn shrink_to_fit(&mut self) {}
 }
 
 #[cfg(test)]

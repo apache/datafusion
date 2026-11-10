@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::fmt::Display;
@@ -22,14 +9,18 @@ use std::sync::Arc;
 use std::vec::IntoIter;
 
 use super::ProjectionMapping;
-use crate::expressions::Literal;
+use crate::expressions::{Column, Literal};
 use crate::physical_expr::add_offset_to_expr;
 use crate::projection::ProjectionTargets;
+use crate::scalar_subquery::ScalarSubqueryExpr;
 use crate::{PhysicalExpr, PhysicalExprRef, PhysicalSortExpr, PhysicalSortRequirement};
 
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinType, Result, ScalarValue};
-use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
+use datafusion_expr::sort_properties::SortProperties;
+use datafusion_physical_expr_common::physical_expr::{
+    format_physical_expr_list, is_volatile,
+};
 
 use indexmap::{IndexMap, IndexSet};
 
@@ -184,6 +175,14 @@ pub struct EquivalenceClass {
 }
 
 impl EquivalenceClass {
+    /// Keeps what still holds on a join side whose unmatched rows are padded
+    /// with NULLs: padded columns stay equal to each other, but constants and
+    /// computed members do not (`coalesce(a, 0)` is 0 where `a` is NULL).
+    fn null_pad(&mut self) {
+        self.constant = None;
+        self.exprs.retain(|expr| expr.is::<Column>());
+    }
+
     // Create a new equivalence class from a pre-existing collection.
     pub fn new(exprs: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>) -> Self {
         let mut class = Self::default();
@@ -245,7 +244,8 @@ impl EquivalenceClass {
     }
 
     /// Adds the given offset to all columns in the expressions inside this
-    /// class. This is used when schemas are appended, e.g. in joins.
+    /// class, keeping its constant value. This is used when schemas are
+    /// appended, e.g. in joins.
     pub fn try_with_offset(&self, offset: isize) -> Result<Self> {
         let mut cls = Self::default();
         for expr_result in self
@@ -256,6 +256,7 @@ impl EquivalenceClass {
         {
             cls.push(expr_result?);
         }
+        cls.constant.clone_from(&self.constant);
         Ok(cls)
     }
 }
@@ -359,8 +360,9 @@ impl EquivalenceGroup {
             return;
         }
         // If the expression is not in any equivalence class, but has the same
-        // constant value with some class, add it to that class:
-        if let AcrossPartitions::Uniform(_) = &const_expr.across_partitions {
+        // constant value with some class, add it to that class. An unknown
+        // value is never known to match, so it gets a class of its own:
+        if let AcrossPartitions::Uniform(Some(_)) = &const_expr.across_partitions {
             for (idx, cls) in self.classes.iter_mut().enumerate() {
                 if cls
                     .constant
@@ -624,19 +626,43 @@ impl EquivalenceGroup {
             .filter(|req| !self.is_uniform_constant(&req.expr))
     }
 
-    /// Perform an indirect projection of `expr` by consulting the equivalence
-    /// classes.
+    /// Projects `expr` through its children or an equivalent expression in the
+    /// mapping, preferring to preserve its structure.
     fn project_expr_indirect(
         aug_mapping: &AugmentedMapping,
         expr: &Arc<dyn PhysicalExpr>,
     ) -> Option<Arc<dyn PhysicalExpr>> {
-        // Literals don't need to be projected
-        if expr.downcast_ref::<Literal>().is_some() {
+        // These leaves do not read columns from the projected input schema.
+        if expr.is::<Literal>() || expr.is::<ScalarSubqueryExpr>() {
             return Some(Arc::clone(expr));
         }
 
-        // The given expression is not inside the mapping, so we try to project
-        // indirectly using equivalence classes.
+        // Preserve expression structure when its children can be projected.
+        // Otherwise, projecting a class such as a + 1 = b can collapse it to
+        // b = b, losing the equivalence even when a survives the projection.
+        let children = expr.children();
+        if !children.is_empty() {
+            let projected_children = children
+                .into_iter()
+                .map(|child| {
+                    // First, we try to project children with an exact match. If
+                    // we are unable to do this, we consult equivalence classes.
+                    if let Some((targets, _)) = aug_mapping.get(child) {
+                        // If we match the source, we can project directly:
+                        let (target, _) = targets.first();
+                        Some(Arc::clone(target))
+                    } else {
+                        Self::project_expr_indirect(aug_mapping, child)
+                    }
+                })
+                .collect::<Option<Vec<_>>>();
+            if let Some(children) = projected_children {
+                return Some(Arc::clone(expr).with_new_children(children).unwrap());
+            }
+        }
+
+        // Project expressions whose children could not be projected by consulting
+        // equivalence classes.
         for (targets, eq_class) in aug_mapping.values() {
             // If we match an equivalent expression to a source expression in
             // the mapping, then we can project. For example, if we have the
@@ -647,27 +673,7 @@ impl EquivalenceGroup {
                 return Some(Arc::clone(target));
             }
         }
-        // Project a non-leaf expression by projecting its children.
-        let children = expr.children();
-        if children.is_empty() {
-            // A leaf expression should be inside the mapping.
-            return None;
-        }
-        children
-            .into_iter()
-            .map(|child| {
-                // First, we try to project children with an exact match. If
-                // we are unable to do this, we consult equivalence classes.
-                if let Some((targets, _)) = aug_mapping.get(child) {
-                    // If we match the source, we can project directly:
-                    let (target, _) = targets.first();
-                    Some(Arc::clone(target))
-                } else {
-                    Self::project_expr_indirect(aug_mapping, child)
-                }
-            })
-            .collect::<Option<Vec<_>>>()
-            .map(|children| Arc::clone(expr).with_new_children(children).unwrap())
+        None
     }
 
     fn augment_projection_mapping<'a>(
@@ -677,7 +683,17 @@ impl EquivalenceGroup {
         mapping
             .iter()
             .map(|(k, v)| {
-                let eq_class = self.get_equivalence_class(k);
+                // A source expression may only be in a class in its normalized
+                // form. For example, if `a == b`, `a + c` is in a class, and
+                // the mapping has `b + c`, then the class of `b + c` is found
+                // only through `a + c`. A leaf that is in no class normalizes
+                // to itself, so only expressions with children are normalized.
+                let eq_class = self.get_equivalence_class(k).or_else(|| {
+                    if k.children().is_empty() {
+                        return None;
+                    }
+                    self.get_equivalence_class(&self.normalize_expr(Arc::clone(k)))
+                });
                 (k, (v, eq_class))
             })
             .collect()
@@ -727,13 +743,19 @@ impl EquivalenceGroup {
     pub fn project(&self, mapping: &ProjectionMapping) -> Self {
         let projected_classes = self.iter().map(|cls| {
             let new_exprs = self.project_expressions(mapping, cls.iter());
-            EquivalenceClass::new(new_exprs.flatten())
+            let mut projected = EquivalenceClass::new(new_exprs.flatten());
+            // Projection changes column references, not constant values or how
+            // they are distributed across partitions.
+            projected.constant = projected.constant.or_else(|| cls.constant.clone());
+            projected
         });
 
         // The key is the source expression, and the value is the equivalence
         // class that contains the corresponding target expression.
         let mut new_constants = vec![];
-        let mut new_classes = IndexMap::<_, EquivalenceClass>::new();
+        let mut new_classes =
+            IndexMap::<_, EquivalenceClass>::with_capacity(mapping.len());
+        let mut augmented = None;
         for (source, targets) in mapping.iter() {
             // We need to find equivalent projected expressions. For example,
             // consider a table with columns `[a, b, c]` with `a` == `b`, and
@@ -744,6 +766,15 @@ impl EquivalenceGroup {
             let cls = new_classes.entry(normalized_expr).or_default();
             for (target, _) in targets.iter() {
                 cls.push(Arc::clone(target));
+            }
+            // Retain deterministic expressions as equalities so orderings derived
+            // through strict functions can be inferred after a merge clears orderings.
+            if !source.children().is_empty() && !is_volatile(source) {
+                let augmented = augmented
+                    .get_or_insert_with(|| self.augment_projection_mapping(mapping));
+                if let Some(projected) = Self::project_expr_indirect(augmented, source) {
+                    cls.push(projected);
+                }
             }
             // Save new constants arising from the projection:
             if let Some(across) = self.is_expr_constant(source) {
@@ -785,9 +816,21 @@ impl EquivalenceGroup {
         // TODO: This function should be able to return values of non-literal
         //       complex constants as well; e.g. it should return `8` for the
         //       expression `3 + 5`, not an unknown `heterogenous` value.
+        // A volatile expression can change from row to row, even when all of
+        // its inputs are constant
+        if expr.is_volatile_node() {
+            return None;
+        }
         let children = expr.children();
         if children.is_empty() {
-            return None;
+            // A leaf that reads no column can still be constant, e.g. an
+            // uncorrelated scalar subquery, which reports itself as a
+            // singleton. It does not depend on the row or the partition, so
+            // its value is the same everywhere, even if it is not known yet.
+            let singleton = expr
+                .get_properties(&[])
+                .is_ok_and(|props| props.sort_properties == SortProperties::Singleton);
+            return singleton.then_some(AcrossPartitions::Uniform(None));
         }
         for child in children {
             self.is_expr_constant(child)?;
@@ -815,12 +858,35 @@ impl EquivalenceGroup {
         let group = match join_type {
             JoinType::Inner | JoinType::Left | JoinType::Full | JoinType::Right => {
                 let mut result = Self::new(
-                    self.iter().cloned().chain(
-                        right_equivalences
-                            .iter()
-                            .map(|cls| cls.try_with_offset(left_size as _))
-                            .collect::<Result<Vec<_>>>()?,
-                    ),
+                    self.iter()
+                        .cloned()
+                        .map(|mut cls| {
+                            // Rows without a match on the left side are
+                            // padded with NULLs, so its constants and computed
+                            // equalities no longer hold.
+                            if matches!(join_type, JoinType::Right | JoinType::Full) {
+                                cls.null_pad();
+                            }
+                            cls
+                        })
+                        .chain(
+                            right_equivalences
+                                .iter()
+                                .map(|cls| {
+                                    let mut cls = cls.try_with_offset(left_size as _)?;
+                                    // Rows without a match on the right side are
+                                    // padded with NULLs, so its constants and computed
+                                    // equalities no longer hold.
+                                    if matches!(
+                                        join_type,
+                                        JoinType::Left | JoinType::Full
+                                    ) {
+                                        cls.null_pad();
+                                    }
+                                    Ok(cls)
+                                })
+                                .collect::<Result<Vec<_>>>()?,
+                        ),
                 );
                 // In we have an inner join, expressions in the "on" condition
                 // are equal in the resulting table.
@@ -1273,6 +1339,149 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_project_preserves_constant_metadata() -> Result<()> {
+        let schema = abc_schema();
+        let expr = binary(col("b", &schema)?, Operator::Divide, lit(2i32), &schema)?;
+        let mapping = ProjectionMapping::from_indices(&[1], &schema)?;
+        let dropped_mapping = ProjectionMapping::from_indices(&[0], &schema)?;
+        let projected_b: Arc<dyn PhysicalExpr> = Arc::new(Column::new("b", 0));
+        let projected_expr: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&projected_b),
+            Operator::Divide,
+            lit(2i32),
+        ));
+
+        for across in [
+            AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(2)))),
+            AcrossPartitions::Uniform(None),
+            AcrossPartitions::Heterogeneous,
+        ] {
+            let mut group = EquivalenceGroup::default();
+            // The class has no literal member, so `EquivalenceClass::new` cannot
+            // restore the constant.
+            group.add_constant(ConstExpr::new(Arc::clone(&expr), across.clone()));
+
+            let mut projected = group.project(&mapping);
+            assert_eq!(
+                projected.is_expr_constant(&projected_expr),
+                Some(across.clone())
+            );
+            // A constant expression does not imply that its argument is constant.
+            assert_eq!(projected.is_expr_constant(&projected_b), None);
+            assert!(group.project(&dropped_mapping).is_empty());
+
+            let heterogeneous = across == AcrossPartitions::Heterogeneous;
+            assert_eq!(projected.clear_per_partition_constants(), heterogeneous);
+            assert_eq!(
+                projected.is_expr_constant(&projected_expr),
+                (!heterogeneous).then_some(across)
+            );
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_constant_of_equivalent_source() -> Result<()> {
+        // - columns: [a, b, c].
+        // - "a" and "b" in the same equivalence class, and a + c = 7.
+        // - then after a b + c projection, col(0) must be the constant 7.
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(col("a", &schema)?, col("b", &schema)?);
+        group.add_equal_conditions(
+            binary(
+                col("a", &schema)?,
+                Operator::Plus,
+                col("c", &schema)?,
+                &schema,
+            )?,
+            lit(7),
+        );
+
+        let projected_schema =
+            Arc::new(Schema::new(vec![Field::new("b+c", DataType::Int32, false)]));
+        let mapping = std::iter::once((
+            binary(
+                col("b", &schema)?,
+                Operator::Plus,
+                col("c", &schema)?,
+                &schema,
+            )?,
+            vec![(col("b+c", &projected_schema)?, 0)].into(),
+        ))
+        .collect::<ProjectionMapping>();
+
+        let projected = group.project(&mapping);
+
+        assert_eq!(
+            projected.is_expr_constant(&col("b+c", &projected_schema)?),
+            Some(AcrossPartitions::Uniform(Some(ScalarValue::Int32(Some(7)))))
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_class_of_equivalent_source() -> Result<()> {
+        // - columns: [a, b, c, d].
+        // - "a" and "b" in the same equivalence class, and a + c = d * 2.
+        // - then after a b + c, d projection, col(0) and col(1) * 2 must be
+        // in the same class.
+        let schema = abc_schema();
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(col("a", &schema)?, col("b", &schema)?);
+        group.add_equal_conditions(
+            binary(
+                col("a", &schema)?,
+                Operator::Plus,
+                col("c", &schema)?,
+                &schema,
+            )?,
+            binary(col("d", &schema)?, Operator::Multiply, lit(2), &schema)?,
+        );
+
+        let projected_schema = Arc::new(Schema::new(vec![
+            Field::new("b+c", DataType::Int32, false),
+            Field::new("d", DataType::Int32, false),
+        ]));
+        let mapping = [
+            (
+                binary(
+                    col("b", &schema)?,
+                    Operator::Plus,
+                    col("c", &schema)?,
+                    &schema,
+                )?,
+                vec![(col("b+c", &projected_schema)?, 0)].into(),
+            ),
+            (
+                col("d", &schema)?,
+                vec![(col("d", &projected_schema)?, 1)].into(),
+            ),
+        ]
+        .into_iter()
+        .collect::<ProjectionMapping>();
+
+        let projected = group.project(&mapping);
+
+        let first_normalized = projected.normalize_expr(col("b+c", &projected_schema)?);
+        let second_normalized = projected.normalize_expr(binary(
+            col("d", &projected_schema)?,
+            Operator::Multiply,
+            lit(2),
+            &projected_schema,
+        )?);
+        assert!(first_normalized.eq(&second_normalized));
+
+        Ok(())
+    }
+
     /// Builds a group from a list of equated column pairs.
     fn group_of(schema: &SchemaRef, pairs: &[(&str, &str)]) -> Result<EquivalenceGroup> {
         let mut group = EquivalenceGroup::default();
@@ -1342,6 +1551,170 @@ mod tests {
             !group_of(&schema, &[("a", "b")])?
                 .has_same_classes(&group_of(&schema, &[("a", "b"), ("b", "c")])?)
         );
+
+        Ok(())
+    }
+
+    /// An uncorrelated scalar subquery is a leaf with no columns, so the only
+    /// way to know it is constant is to ask the expression itself.
+    /// <https://github.com/apache/datafusion/issues/26572>
+    #[test]
+    fn test_scalar_subquery_is_uniform_constant() -> Result<()> {
+        use crate::scalar_subquery::ScalarSubqueryExpr;
+        use datafusion_expr::physical_planning_context::{
+            ScalarSubqueryResults, SubqueryIndex,
+        };
+
+        let subquery: Arc<dyn PhysicalExpr> = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int32,
+            true,
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
+        ));
+        let group = EquivalenceGroup::default();
+        assert_eq!(
+            group.is_expr_constant(&subquery),
+            Some(AcrossPartitions::Uniform(None))
+        );
+        // A column is a leaf too, but it is not constant
+        let schema = abc_schema();
+        assert_eq!(group.is_expr_constant(&col("a", &schema)?), None);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_volatile_function_of_constants_is_not_constant() -> Result<()> {
+        use crate::ScalarFunctionExpr;
+        use crate::scalar_subquery::ScalarSubqueryExpr;
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_expr::physical_planning_context::{
+            ScalarSubqueryResults, SubqueryIndex,
+        };
+        use datafusion_expr::{ColumnarValue, Volatility, create_udf};
+
+        let schema = abc_schema();
+        let group = EquivalenceGroup::default();
+        let subquery: Arc<dyn PhysicalExpr> = Arc::new(ScalarSubqueryExpr::new(
+            DataType::Int32,
+            true,
+            SubqueryIndex::new(0),
+            ScalarSubqueryResults::new(1),
+        ));
+        let call = |volatility, arg: Arc<dyn PhysicalExpr>| -> Result<_> {
+            let udf = Arc::new(create_udf(
+                "f",
+                vec![DataType::Int32],
+                DataType::Int32,
+                volatility,
+                Arc::new(|args: &[ColumnarValue]| Ok(args[0].clone())),
+            ));
+            let expr = ScalarFunctionExpr::try_new(
+                udf,
+                vec![arg],
+                &schema,
+                Arc::new(ConfigOptions::new()),
+            )?;
+            Ok(Arc::new(expr) as Arc<dyn PhysicalExpr>)
+        };
+
+        // A volatile function can return a new value for every row, even
+        // when its argument is constant
+        for arg in [lit(1i32), Arc::clone(&subquery)] {
+            let volatile = call(Volatility::Volatile, arg)?;
+            assert_eq!(group.is_expr_constant(&volatile), None);
+        }
+        // A stable function of a constant is constant
+        let stable = call(Volatility::Stable, subquery)?;
+        assert_eq!(
+            group.is_expr_constant(&stable),
+            Some(AcrossPartitions::Heterogeneous)
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unknown_constants_stay_apart() -> Result<()> {
+        // Two constants whose values are unknown are not known to be equal,
+        // so they must not be merged into one class
+        let schema = abc_schema();
+        let mut group = EquivalenceGroup::default();
+        group.add_constant(ConstExpr::new(
+            col("a", &schema)?,
+            AcrossPartitions::Uniform(None),
+        ));
+        group.add_constant(ConstExpr::new(
+            col("b", &schema)?,
+            AcrossPartitions::Uniform(None),
+        ));
+        assert_eq!(group.len(), 2);
+
+        // Two constants with the same known value are merged
+        let mut group = EquivalenceGroup::default();
+        let one = Some(ScalarValue::Int32(Some(1)));
+        group.add_constant(ConstExpr::new(
+            col("a", &schema)?,
+            AcrossPartitions::Uniform(one.clone()),
+        ));
+        group.add_constant(ConstExpr::new(
+            col("b", &schema)?,
+            AcrossPartitions::Uniform(one),
+        ));
+        assert_eq!(group.len(), 1);
+
+        Ok(())
+    }
+
+    /// A constant on the right side of a join stays constant in the join
+    /// output, unless unmatched rows pad the right side with NULLs.
+    /// <https://github.com/apache/datafusion/issues/26283>
+    #[test]
+    fn test_join_keeps_right_constants() -> Result<()> {
+        let schema = abc_schema();
+        let mut right = EquivalenceGroup::default();
+        right.add_constant(ConstExpr::from(col("a", &schema)?));
+        // `a` of the right side is column 4 of the join output
+        let right_a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 4));
+
+        for (join_type, expected) in [
+            (JoinType::Inner, true),
+            (JoinType::Right, true),
+            (JoinType::Left, false),
+            (JoinType::Full, false),
+        ] {
+            let joined = EquivalenceGroup::default().join(&right, &join_type, 4, &[])?;
+            assert_eq!(
+                joined.is_expr_constant(&right_a).is_some(),
+                expected,
+                "{join_type}"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// The same for a constant on the left side, whose rows are padded with
+    /// NULLs by a right or full join.
+    #[test]
+    fn test_join_keeps_left_constants() -> Result<()> {
+        let schema = abc_schema();
+        let mut left = EquivalenceGroup::default();
+        left.add_constant(ConstExpr::from(col("a", &schema)?));
+        let left_a = col("a", &schema)?;
+        for (join_type, expected) in [
+            (JoinType::Inner, true),
+            (JoinType::Left, true),
+            (JoinType::Right, false),
+            (JoinType::Full, false),
+        ] {
+            let joined = left.join(&EquivalenceGroup::default(), &join_type, 4, &[])?;
+            assert_eq!(
+                joined.is_expr_constant(&left_a).is_some(),
+                expected,
+                "{join_type}"
+            );
+        }
 
         Ok(())
     }

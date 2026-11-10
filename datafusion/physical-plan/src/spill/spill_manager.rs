@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Define the `SpillManager` struct, which is responsible for reading and writing `RecordBatch`es to raw files based on the provided configurations.
 
@@ -140,29 +127,32 @@ impl SpillManager {
         Ok(file.map(|f| (f, max_record_batch_size)))
     }
 
-    /// Spill a stream of `RecordBatch`es to disk and return the spill file and the size of the largest batch in memory
-    pub(crate) async fn spill_record_batch_stream_and_return_max_batch_memory(
+    /// Spill a stream of `RecordBatch`es and return the file, maximum batch memory,
+    /// and maximum batch row count.
+    pub(crate) async fn spill_record_batch_stream_and_return_max_batch_stats(
         &self,
         stream: &mut SendableRecordBatchStream,
         request_description: &str,
-    ) -> Result<Option<(Arc<dyn SpillFile>, usize)>> {
+    ) -> Result<Option<(Arc<dyn SpillFile>, usize, usize)>> {
         use futures::StreamExt;
 
         let mut in_progress_file = self.create_in_progress_file(request_description)?;
 
         let result = async {
             let mut max_record_batch_size = 0;
+            let mut max_batch_rows = 0;
 
             while let Some(batch) = stream.next().await {
                 let batch = batch?;
                 let gc_sliced_size = in_progress_file.append_batch_async(&batch).await?;
 
                 max_record_batch_size = max_record_batch_size.max(gc_sliced_size);
+                max_batch_rows = max_batch_rows.max(batch.num_rows());
             }
 
             let file = in_progress_file.finish_async().await?;
 
-            Ok(file.map(|f| (f, max_record_batch_size)))
+            Ok(file.map(|f| (f, max_record_batch_size, max_batch_rows)))
         }
         .await;
 
@@ -449,7 +439,7 @@ mod tests {
             Box::pin(RecordBatchStreamAdapter::new(schema, input));
 
         let error = manager
-            .spill_record_batch_stream_and_return_max_batch_memory(
+            .spill_record_batch_stream_and_return_max_batch_stats(
                 &mut stream,
                 "abort-test",
             )

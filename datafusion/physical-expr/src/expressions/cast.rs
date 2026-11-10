@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::fmt;
 use std::hash::Hash;
@@ -24,6 +11,7 @@ use crate::physical_expr::PhysicalExpr;
 use arrow::compute::{CastOptions, can_cast_types};
 use arrow::datatypes::{DataType, DataType::*, Field, FieldRef, Metadata, Schema};
 use arrow::record_batch::RecordBatch;
+use arrow::util::display::{ArrayFormatterFactory, DurationFormat, FormatOptions};
 use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::format::DEFAULT_FORMAT_OPTIONS;
@@ -44,6 +32,94 @@ const DEFAULT_SAFE_CAST_OPTIONS: CastOptions<'static> = CastOptions {
     safe: true,
     format_options: DEFAULT_FORMAT_OPTIONS,
 };
+
+/// Owns Arrow's borrowed format strings so protobuf decoding does not leak them.
+#[derive(Debug, Clone)]
+struct OwnedCastOptions {
+    safe: bool,
+    format_safe: bool,
+    null: String,
+    date_format: Option<String>,
+    datetime_format: Option<String>,
+    timestamp_format: Option<String>,
+    timestamp_tz_format: Option<String>,
+    time_format: Option<String>,
+    duration_format: DurationFormat,
+    types_info: bool,
+    quoted_strings: bool,
+    formatter_factory: Option<&'static dyn ArrayFormatterFactory>,
+}
+
+impl From<CastOptions<'static>> for OwnedCastOptions {
+    fn from(options: CastOptions<'static>) -> Self {
+        let CastOptions {
+            safe,
+            format_options,
+        } = options;
+        Self {
+            safe,
+            format_safe: format_options.safe(),
+            null: format_options.null().to_owned(),
+            date_format: format_options.date_format().map(str::to_owned),
+            datetime_format: format_options.datetime_format().map(str::to_owned),
+            timestamp_format: format_options.timestamp_format().map(str::to_owned),
+            timestamp_tz_format: format_options.timestamp_tz_format().map(str::to_owned),
+            time_format: format_options.time_format().map(str::to_owned),
+            duration_format: format_options.duration_format(),
+            types_info: format_options.types_info(),
+            quoted_strings: format_options.quoted_strings(),
+            formatter_factory: format_options.formatter_factory(),
+        }
+    }
+}
+
+impl OwnedCastOptions {
+    fn as_arrow(&self) -> CastOptions<'_> {
+        let Self {
+            safe,
+            format_safe,
+            null,
+            date_format,
+            datetime_format,
+            timestamp_format,
+            timestamp_tz_format,
+            time_format,
+            duration_format,
+            types_info,
+            quoted_strings,
+            formatter_factory,
+        } = self;
+        CastOptions {
+            safe: *safe,
+            format_options: FormatOptions::new()
+                .with_display_error(*format_safe)
+                .with_null(null)
+                .with_date_format(date_format.as_deref())
+                .with_datetime_format(datetime_format.as_deref())
+                .with_timestamp_format(timestamp_format.as_deref())
+                .with_timestamp_tz_format(timestamp_tz_format.as_deref())
+                .with_time_format(time_format.as_deref())
+                .with_duration_format(*duration_format)
+                .with_types_info(*types_info)
+                .with_quoted_strings(*quoted_strings)
+                .with_formatter_factory(*formatter_factory),
+        }
+    }
+}
+
+impl PartialEq for OwnedCastOptions {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_arrow() == other.as_arrow()
+    }
+}
+
+impl Eq for OwnedCastOptions {}
+
+impl Hash for OwnedCastOptions {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.as_arrow().hash(state);
+    }
+}
 
 /// Check if name-based struct casting is allowed by validating field compatibility.
 ///
@@ -73,7 +149,7 @@ pub struct CastExpr {
     /// nullability describe the output field exactly.
     explicit_target: bool,
     /// Cast options
-    cast_options: CastOptions<'static>,
+    cast_options: OwnedCastOptions,
 }
 
 // Manually derive PartialEq and Hash to work around https://github.com/rust-lang/rust/issues/78808
@@ -126,7 +202,7 @@ impl CastExpr {
             expr,
             target_field: cast_type.into_nullable_field_ref(),
             explicit_target: false,
-            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
+            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS).into(),
         }
     }
 
@@ -152,7 +228,7 @@ impl CastExpr {
             expr,
             target_field,
             explicit_target: true,
-            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS),
+            cast_options: cast_options.unwrap_or(DEFAULT_CAST_OPTIONS).into(),
         }
     }
 
@@ -194,9 +270,23 @@ impl CastExpr {
         &self.target_field
     }
 
-    /// The cast options
-    pub fn cast_options(&self) -> &CastOptions<'static> {
-        &self.cast_options
+    /// The cast options, borrowing custom format strings from this expression.
+    pub fn cast_options(&self) -> CastOptions<'_> {
+        self.cast_options.as_arrow()
+    }
+
+    /// Rebuild this cast with a new child and explicit target while preserving its options.
+    pub fn with_new_expr_and_target_field(
+        &self,
+        expr: Arc<dyn PhysicalExpr>,
+        target_field: FieldRef,
+    ) -> Self {
+        Self {
+            expr,
+            target_field,
+            explicit_target: true,
+            cast_options: self.cast_options.clone(),
+        }
     }
 
     /// Whether this cast has explicit metadata (vs pass-through from source).
@@ -289,38 +379,67 @@ fn is_fixed_offset(tz: &str) -> bool {
     tz == "UTC" || tz.starts_with(['+', '-'])
 }
 
-/// Whether successful casts preserve order when conversion failures return errors.
-/// Unlike `check_bigger_cast`, this allows precision loss and is not sufficient
-/// for propagating distinct counts or the ordering of subsequent sort keys.
-fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) -> bool {
-    use arrow::datatypes::TimeUnit::*;
+fn is_binary(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        Binary | LargeBinary | BinaryView | FixedSizeBinary(_)
+    )
+}
+
+/// Temporal types stored as a count of units since the epoch (or midnight),
+/// which a cast from or to a number reads or writes as that count.
+fn is_temporal_count(data_type: &DataType) -> bool {
+    matches!(
+        data_type,
+        Date32 | Date64 | Timestamp(_, _) | Time32(_) | Time64(_) | Duration(_)
+    )
+}
+
+/// Whether the cast never reverses the order of two values that both convert:
+/// `a <= b` implies `cast(a) <= cast(b)`. Precision loss may merge values, so
+/// this is not sufficient for propagating distinct counts or the ordering of
+/// subsequent sort keys (see [`CastExpr::check_bigger_cast`] for that).
+///
+/// Values that fail to convert are not covered: callers must account for the
+/// error or NULL a failure produces.
+pub fn is_order_preserving_cast(source_type: &DataType, target_type: &DataType) -> bool {
     if source_type == target_type
         || (source_type.is_numeric() || *source_type == Boolean)
             && target_type.is_numeric()
+        // Changing the string or binary encoding keeps the byte order.
+        || source_type.is_string() && target_type.is_string()
+        || is_binary(source_type) && is_binary(target_type)
+        || source_type.is_numeric() && is_temporal_count(target_type)
+        || is_temporal_count(source_type) && target_type.is_numeric()
     {
         return true;
     }
     // Temporal casts are not generally monotonic: extracting time-of-day wraps
     // at midnight, and timezone transitions can reverse the local date.
     match (source_type, target_type) {
-        (Date32 | Date64, Date32 | Date64)
-        | (Date32 | Date64, Timestamp(_, None))
-        | (Timestamp(_, None), Date32) => true,
-        (Timestamp(_, Some(tz)), Date32) => is_fixed_offset(tz),
-        // Arrow converts timestamps to Date64 by scaling the epoch value,
-        // whereas Date32 extracts the date in the timestamp's timezone.
-        (Timestamp(_, _), Date64) => true,
-        // Only admit scaling that cannot wrap on overflow. Time64 widening
-        // and narrowing to Time32 do not currently check overflow in Arrow.
-        (Time32(Second | Millisecond), Time32(Second | Millisecond))
-        | (Time32(Second | Millisecond), Time64(Microsecond | Nanosecond))
-        | (Time64(Nanosecond), Time64(Microsecond))
-        | (Duration(_), Duration(_)) => true,
-        (Timestamp(_, from_tz), Timestamp(_, to_tz)) => {
-            // Adding a timezone to naive timestamps interprets local times;
-            // other timezone changes only change metadata on the epoch value.
-            from_tz.is_some() || to_tz.as_deref().is_none_or(is_fixed_offset)
+        (Date32 | Date64, Date32 | Date64) | (Timestamp(_, None), Date32 | Date64) => {
+            true
         }
+        // Both date types take the date in the timestamp's timezone.
+        (Timestamp(_, Some(tz)), Date32 | Date64) => is_fixed_offset(tz),
+        // Arrow checks every scaling that can overflow, so a value that does
+        // not fit fails to convert instead of wrapping.
+        (Time32(_) | Time64(_), Time32(_) | Time64(_)) | (Duration(_), Duration(_)) => {
+            true
+        }
+        // Changing the timezone only changes metadata on the epoch value.
+        (Timestamp(_, Some(_)), Timestamp(_, _)) => true,
+        // Adding a timezone reads a naive timestamp (or a Date64, which may
+        // hold any time of day) as a local time. Arrow moves a local time that
+        // a transition skips forward by the length of the gap, past the local
+        // times just after the gap, so only a fixed offset keeps the order.
+        (Timestamp(_, None) | Date64, Timestamp(_, tz)) => {
+            tz.as_deref().is_none_or(is_fixed_offset)
+        }
+        // A Date32 reads as local midnight. A skipped midnight moves forward
+        // by the gap, and no gap is longer than a day, so it never passes the
+        // next midnight.
+        (Date32, Timestamp(_, _)) => true,
         _ => false,
     }
 }
@@ -352,9 +471,124 @@ pub(crate) fn cast_expr_properties(
     }
 }
 
+#[cfg(feature = "proto")]
+fn serialize_cast_options(
+    options: &OwnedCastOptions,
+) -> Result<Option<datafusion_proto_models::protobuf::PhysicalCastOptions>> {
+    use datafusion_proto_models::protobuf;
+
+    let options = options.as_arrow();
+    if options.format_options.formatter_factory().is_some() {
+        return not_impl_err!(
+            "CastExpr serialization does not support a custom formatter_factory"
+        );
+    }
+    if options == DEFAULT_CAST_OPTIONS {
+        return Ok(None);
+    }
+
+    let CastOptions {
+        safe,
+        format_options,
+    } = options;
+    let duration_format = match format_options.duration_format() {
+        DurationFormat::ISO8601 => protobuf::PhysicalDurationFormat::Iso8601,
+        DurationFormat::Pretty => protobuf::PhysicalDurationFormat::Pretty,
+        _ => {
+            return not_impl_err!(
+                "CastExpr serialization does not support this duration format"
+            );
+        }
+    };
+
+    Ok(Some(protobuf::PhysicalCastOptions {
+        safe,
+        format_options: Some(protobuf::PhysicalFormatOptions {
+            safe: format_options.safe(),
+            null: format_options.null().to_owned(),
+            date_format: format_options.date_format().map(str::to_owned),
+            datetime_format: format_options.datetime_format().map(str::to_owned),
+            timestamp_format: format_options.timestamp_format().map(str::to_owned),
+            timestamp_tz_format: format_options.timestamp_tz_format().map(str::to_owned),
+            time_format: format_options.time_format().map(str::to_owned),
+            duration_format: duration_format.into(),
+            types_info: format_options.types_info(),
+            quoted_strings: format_options.quoted_strings(),
+        }),
+    }))
+}
+
+#[cfg(feature = "proto")]
+fn deserialize_cast_options(
+    options: Option<&datafusion_proto_models::protobuf::PhysicalCastOptions>,
+) -> Result<OwnedCastOptions> {
+    use datafusion_common::internal_datafusion_err;
+    use datafusion_proto_models::protobuf;
+
+    let Some(options) = options else {
+        return Ok(DEFAULT_CAST_OPTIONS.into());
+    };
+    let protobuf::PhysicalCastOptions {
+        safe,
+        format_options,
+    } = options;
+    let format_options = format_options.as_ref().ok_or_else(|| {
+        internal_datafusion_err!(
+            "CastExpr cast_options is missing required field 'format_options'"
+        )
+    })?;
+    let protobuf::PhysicalFormatOptions {
+        safe: format_safe,
+        null,
+        date_format,
+        datetime_format,
+        timestamp_format,
+        timestamp_tz_format,
+        time_format,
+        duration_format,
+        types_info,
+        quoted_strings,
+    } = format_options;
+    let duration_format = match protobuf::PhysicalDurationFormat::try_from(
+        *duration_format,
+    )
+    .map_err(|_| {
+        internal_datafusion_err!(
+            "CastExpr has invalid duration format value {duration_format}"
+        )
+    })? {
+        protobuf::PhysicalDurationFormat::Iso8601 => DurationFormat::ISO8601,
+        protobuf::PhysicalDurationFormat::Pretty => DurationFormat::Pretty,
+    };
+
+    Ok(OwnedCastOptions {
+        safe: *safe,
+        format_safe: *format_safe,
+        null: null.clone(),
+        date_format: date_format.clone(),
+        datetime_format: datetime_format.clone(),
+        timestamp_format: timestamp_format.clone(),
+        timestamp_tz_format: timestamp_tz_format.clone(),
+        time_format: time_format.clone(),
+        duration_format,
+        types_info: *types_info,
+        quoted_strings: *quoted_strings,
+        // Runtime formatter factories have no protobuf representation; the
+        // encoder rejects them rather than silently dropping behavior.
+        formatter_factory: None,
+    })
+}
+
 impl fmt::Display for CastExpr {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "CAST({} AS {})", self.expr, self.cast_type())
+        write!(f, "CAST({} AS {}", self.expr, self.cast_type())?;
+        // A cast to an explicit field can change only the nullability (for
+        // example when a union aligns its inputs), so show it the way schemas
+        // do: `;N` marks a nullable field.
+        if self.explicit_target && self.target_field.is_nullable() {
+            write!(f, ";N")?;
+        }
+        write!(f, ")")
     }
 }
 
@@ -376,8 +610,9 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {
         let value = self.expr.evaluate(batch)?;
+        let cast_options = self.cast_options();
         value
-            .cast_to(self.cast_type(), Some(&self.cast_options))
+            .cast_to(self.cast_type(), Some(&cast_options))
             .map_err(|error| {
                 let source = self
                     .expr
@@ -416,7 +651,7 @@ impl PhysicalExpr for CastExpr {
 
     fn evaluate_bounds(&self, children: &[&Interval]) -> Result<Interval> {
         // Cast current node's interval to the right type:
-        children[0].cast_to(self.cast_type(), &self.cast_options)
+        children[0].cast_to(self.cast_type(), &self.cast_options())
     }
 
     fn propagate_constraints(
@@ -454,12 +689,28 @@ impl PhysicalExpr for CastExpr {
     ) -> Result<Option<datafusion_proto_models::protobuf::PhysicalExprNode>> {
         use datafusion_proto_models::protobuf;
 
+        let Self {
+            expr,
+            target_field,
+            explicit_target,
+            cast_options,
+        } = self;
+        // Presence carries `explicit_target`, even for a default-shaped field.
+        let target_field_proto = if *explicit_target {
+            Some(target_field.as_ref().try_into()?)
+        } else {
+            None
+        };
+        let cast_options_proto = serialize_cast_options(cast_options)?;
+
         Ok(Some(protobuf::PhysicalExprNode {
             expr_id: None,
             expr_type: Some(protobuf::physical_expr_node::ExprType::Cast(Box::new(
                 protobuf::PhysicalCastNode {
-                    expr: Some(Box::new(ctx.encode_child(self.expr())?)),
-                    arrow_type: Some(self.cast_type().try_into()?),
+                    expr: Some(Box::new(ctx.encode_child(expr)?)),
+                    arrow_type: Some(target_field.data_type().try_into()?),
+                    target_field: target_field_proto,
+                    cast_options: cast_options_proto,
                 },
             ))),
         }))
@@ -492,27 +743,50 @@ impl CastExpr {
         node: &datafusion_proto_models::protobuf::PhysicalExprNode,
         ctx: &datafusion_physical_expr_common::physical_expr::proto_decode::PhysicalExprDecodeCtx<'_>,
     ) -> Result<Arc<dyn PhysicalExpr>> {
-        use datafusion_common::internal_datafusion_err;
         use datafusion_common::internal_err;
+        use datafusion_physical_expr_common::expect_expr_variant;
+        use datafusion_physical_expr_common::physical_expr::proto_decode::require_proto_field;
         use datafusion_proto_models::protobuf;
 
-        let cast_expr = match &node.expr_type {
-            Some(protobuf::physical_expr_node::ExprType::Cast(cast_expr)) => {
-                cast_expr.as_ref()
-            }
-            _ => return internal_err!("PhysicalExprNode is not a CastExpr"),
+        let cast_expr = expect_expr_variant!(
+            node,
+            protobuf::physical_expr_node::ExprType::Cast,
+            "CastExpr",
+        );
+        let protobuf::PhysicalCastNode {
+            expr,
+            arrow_type,
+            target_field,
+            cast_options,
+        } = &**cast_expr;
+        let expr = ctx.decode_required_expression(expr.as_deref(), "CastExpr", "expr")?;
+        let arrow_type =
+            require_proto_field(arrow_type.as_ref(), "CastExpr", "arrow_type")?;
+        let cast_type: DataType = arrow_type.try_into()?;
+        let target_field = target_field
+            .as_ref()
+            .map(|field| {
+                let field: Field = field.try_into()?;
+                if field.data_type() != &cast_type {
+                    return internal_err!(
+                        "CastExpr target_field type does not match arrow_type"
+                    );
+                }
+                Ok(Arc::new(field))
+            })
+            .transpose()?;
+        let cast_options = deserialize_cast_options(cast_options.as_ref())?;
+        let (target_field, explicit_target) = match target_field {
+            Some(target_field) => (target_field, true),
+            None => (cast_type.into_nullable_field_ref(), false),
         };
 
-        let expr = ctx.decode_required_expression(
-            cast_expr.expr.as_deref(),
-            "CastExpr",
-            "expr",
-        )?;
-        let arrow_type = cast_expr.arrow_type.as_ref().ok_or_else(|| {
-            internal_datafusion_err!("CastExpr is missing required field 'arrow_type'")
-        })?;
-
-        Ok(Arc::new(CastExpr::new(expr, arrow_type.try_into()?, None)))
+        Ok(Arc::new(CastExpr {
+            expr,
+            target_field,
+            explicit_target,
+            cast_options,
+        }))
     }
 }
 
@@ -1590,6 +1864,33 @@ mod tests {
     }
 
     #[test]
+    fn test_display_explicit_target_nullability() -> Result<()> {
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
+
+        // A same-type cast to a nullable field only relabels the nullability
+        let expr = CastExpr::new_with_target_field(
+            col("a", &schema)?,
+            Arc::new(Field::new("a", Int32, true)),
+            None,
+        );
+        assert_eq!(expr.to_string(), "CAST(a@0 AS Int32;N)");
+        assert_eq!(fmt_sql(&expr).to_string(), "CAST(a AS Int32)");
+
+        let expr = CastExpr::new_with_target_field(
+            col("a", &schema)?,
+            Arc::new(Field::new("a", Int32, false)),
+            None,
+        );
+        assert_eq!(expr.to_string(), "CAST(a@0 AS Int32)");
+
+        // A cast to a bare type is unchanged
+        let expr = CastExpr::new(col("a", &schema)?, Int64, None);
+        assert_eq!(expr.to_string(), "CAST(a@0 AS Int64)");
+
+        Ok(())
+    }
+
+    #[test]
     fn type_only_cast_strips_extension_metadata() -> Result<()> {
         // When using type-only cast (new()), extension metadata from source should NOT propagate
         let source_meta = HashMap::from([
@@ -1914,11 +2215,16 @@ mod tests {
             (Date64, Date32, true),
             (Date32, Timestamp(Nanosecond, None), true),
             (Date64, Timestamp(Second, None), true),
+            (Date32, Timestamp(Second, timezone.clone()), true),
+            (Date64, Timestamp(Second, Some("+08:00".into())), true),
+            (Date64, Timestamp(Second, timezone.clone()), false),
             (Timestamp(Second, None), Date32, true),
+            (Timestamp(Second, None), Date64, true),
             (Timestamp(Second, Some("UTC".into())), Date32, true),
             (Timestamp(Second, Some("+08:00".into())), Date32, true),
+            (Timestamp(Second, Some("+08:00".into())), Date64, true),
             (Timestamp(Second, timezone.clone()), Date32, false),
-            (Timestamp(Second, timezone.clone()), Date64, true),
+            (Timestamp(Second, timezone.clone()), Date64, false),
             (Timestamp(Second, None), Timestamp(Nanosecond, None), true),
             (Timestamp(Nanosecond, None), Timestamp(Second, None), true),
             (
@@ -1947,8 +2253,8 @@ mod tests {
             (Time32(Millisecond), Time32(Second), true),
             (Time32(Second), Time64(Nanosecond), true),
             (Time64(Nanosecond), Time64(Microsecond), true),
-            (Time64(Microsecond), Time64(Nanosecond), false),
-            (Time64(Nanosecond), Time32(Second), false),
+            (Time64(Microsecond), Time64(Nanosecond), true),
+            (Time64(Nanosecond), Time32(Second), true),
             (Duration(Second), Duration(Nanosecond), true),
             (Duration(Nanosecond), Duration(Second), true),
             (Null, Timestamp(Second, None), false),
@@ -1989,6 +2295,250 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// Sorted, distinct, non-null sample values of `data_type`, obtained by
+    /// casting a fixed set of seeds and keeping the values that convert.
+    fn order_samples(data_type: &DataType) -> Option<ArrayRef> {
+        use arrow::array::{
+            BooleanArray, FixedSizeBinaryArray, Float64Array, TimestampSecondArray,
+            UInt32Array, make_comparator,
+        };
+        use arrow::compute::{
+            SortOptions, concat, filter, is_not_null, sort_to_indices, take,
+        };
+
+        let seeds: Vec<ArrayRef> = vec![
+            Arc::new(Int64Array::from(vec![
+                i64::MIN,
+                -2_147_483_649,
+                -129,
+                -1,
+                0,
+                1,
+                9,
+                10,
+                127,
+                128,
+                255,
+                256,
+                // As dates, 2011-12-29 to 2011-12-31: Pacific/Apia skipped
+                // all of 2011-12-30.
+                15_337,
+                15_338,
+                15_339,
+                86_399,
+                // America/Goose_Bay fell back from 00:01 to 23:01 the previous
+                // day at this instant, so the local date goes backwards.
+                562_129_259,
+                562_129_260,
+                2_147_483_647,
+                i64::MAX,
+            ])),
+            Arc::new(Float64Array::from(vec![
+                f64::NEG_INFINITY,
+                -1.5,
+                -0.5,
+                0.0,
+                0.5,
+                1.7,
+                1e300,
+                f64::INFINITY,
+            ])),
+            Arc::new(StringArray::from(vec!["", "-1", "0", "1", "10", "9", "a"])),
+            Arc::new(BooleanArray::from(vec![false, true])),
+            Arc::new(
+                FixedSizeBinaryArray::try_from_iter(
+                    ["abcd", "abce", "zzzz"].into_iter().map(str::as_bytes),
+                )
+                .expect("valid fixed size binary"),
+            ),
+            Arc::new(TimestampSecondArray::from(vec![
+                // 23:00, 00:00 and 01:00 around midnight
+                82_800,
+                86_400,
+                90_000,
+                // Local times around the America/New_York transitions of
+                // 2024: before, inside and after the skipped hour in March and
+                // the repeated hour in November.
+                1_710_035_999,
+                1_710_037_800,
+                1_710_039_600,
+                1_730_595_599,
+                1_730_597_400,
+                1_730_599_200,
+            ])),
+        ];
+        // Cast each seed on its own, so one value that fails to convert does
+        // not discard the others.
+        let parts = seeds
+            .iter()
+            .flat_map(|seed| (0..seed.len()).map(|i| seed.slice(i, 1)))
+            .filter_map(|seed| arrow::compute::cast(&seed, data_type).ok())
+            .map(|array| filter(&array, &is_not_null(&array).unwrap()).unwrap())
+            .filter(|array| !array.is_empty())
+            .collect::<Vec<_>>();
+        if parts.is_empty() {
+            return None;
+        }
+        let parts = parts.iter().map(|a| a.as_ref()).collect::<Vec<_>>();
+        let all = concat(&parts).unwrap();
+        let sorted =
+            take(&all, &sort_to_indices(&all, None, None).unwrap(), None).unwrap();
+        let cmp = make_comparator(&sorted, &sorted, SortOptions::default()).unwrap();
+        let distinct = (0..sorted.len())
+            .filter(|&i| i == 0 || cmp(i - 1, i).is_ne())
+            .map(|i| i as u32)
+            .collect::<UInt32Array>();
+        Some(take(&sorted, &distinct, None).unwrap())
+    }
+
+    /// Casts the sorted `samples` to `target` with the strict cast that
+    /// `CastExpr` runs by default (`safe = false`) or the cast that
+    /// `TryCastExpr` runs (`safe = true`), and returns the first pair of
+    /// converted values whose order the cast reverses. Each value is cast on
+    /// its own, and values that fail to convert are skipped:
+    /// `is_order_preserving_cast` does not cover them.
+    fn order_violation(
+        samples: &ArrayRef,
+        target: &DataType,
+        safe: bool,
+    ) -> Option<String> {
+        use arrow::array::make_comparator;
+        use arrow::compute::SortOptions;
+
+        let options = CastOptions {
+            safe,
+            format_options: DEFAULT_FORMAT_OPTIONS,
+        };
+        let converted = (0..samples.len())
+            .filter_map(|i| {
+                let value = ColumnarValue::Array(samples.slice(i, 1));
+                match value.cast_to(target, Some(&options)) {
+                    Ok(ColumnarValue::Array(output)) if output.is_valid(0) => {
+                        Some((i, output))
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>();
+        converted.windows(2).find_map(|w| {
+            let ((i, left), (j, right)) = (&w[0], &w[1]);
+            let cmp = make_comparator(left, right, SortOptions::default()).unwrap();
+            cmp(0, 0).is_gt().then(|| {
+                let value = |array: &ArrayRef, i| {
+                    ScalarValue::try_from_array(array, i).unwrap().to_string()
+                };
+                format!(
+                    "{} -> {}, but {} -> {}",
+                    value(samples, *i),
+                    value(left, 0),
+                    value(samples, *j),
+                    value(right, 0),
+                )
+            })
+        })
+    }
+
+    /// Checks `is_order_preserving_cast` against the casts that `CastExpr` and
+    /// `TryCastExpr` run: every pair it accepts must keep the order of the
+    /// sample values that convert.
+    /// Pruning (for both casts) and sort elimination (for the strict cast) rely
+    /// on this rule, so a wrong entry drops matching rows or returns unsorted
+    /// output.
+    #[test]
+    fn test_order_preserving_cast_matches_cast_kernel() {
+        use TimeUnit::*;
+        use arrow::array::{AsArray, Date32Array};
+
+        let tz = |unit, tz: &str| Timestamp(unit, Some(tz.into()));
+        let types = [
+            Boolean,
+            Int8,
+            Int16,
+            Int32,
+            Int64,
+            UInt8,
+            UInt16,
+            UInt32,
+            UInt64,
+            Float32,
+            Float64,
+            Decimal128(10, 2),
+            Decimal256(40, 2),
+            Utf8,
+            LargeUtf8,
+            Utf8View,
+            Binary,
+            LargeBinary,
+            BinaryView,
+            FixedSizeBinary(4),
+            Date32,
+            Date64,
+            Timestamp(Second, None),
+            Timestamp(Nanosecond, None),
+            tz(Millisecond, "UTC"),
+            tz(Second, "+05:00"),
+            tz(Second, "America/New_York"),
+            tz(Second, "America/Goose_Bay"),
+            tz(Second, "Pacific/Apia"),
+            Time32(Second),
+            Time32(Millisecond),
+            Time64(Microsecond),
+            Time64(Nanosecond),
+            Duration(Second),
+            Duration(Nanosecond),
+        ];
+        let mut violations = vec![];
+        for source in &types {
+            let Some(samples) = order_samples(source) else {
+                continue;
+            };
+            for target in &types {
+                if !can_cast_types(source, target)
+                    || !is_order_preserving_cast(source, target)
+                {
+                    continue;
+                }
+                for safe in [false, true] {
+                    if let Some(e) = order_violation(&samples, target, safe) {
+                        violations
+                            .push(format!("{source} -> {target} (safe={safe}): {e}"));
+                    }
+                }
+            }
+        }
+        assert!(violations.is_empty(), "{}", violations.join("\n"));
+
+        // The samples are able to expose the casts the rule rejects.
+        for (source, target) in [
+            (Utf8, Int32),
+            (Int32, Boolean),
+            (Int16, Binary),
+            (Timestamp(Second, None), Time32(Second)),
+            (tz(Second, "+05:00"), Time64(Nanosecond)),
+            (tz(Second, "America/Goose_Bay"), Date32),
+            (tz(Second, "America/Goose_Bay"), Date64),
+            (Timestamp(Second, None), tz(Second, "America/New_York")),
+        ] {
+            assert!(!is_order_preserving_cast(&source, &target));
+            let samples = order_samples(&source).unwrap();
+            assert!(
+                order_violation(&samples, &target, false).is_some(),
+                "{source} -> {target}: no sample exposes the reversed order"
+            );
+        }
+
+        // The samples reach the edge of the Date32 entry: a skipped day starts
+        // at the same instant as the day after it.
+        let skipped =
+            ColumnarValue::Array(Arc::new(Date32Array::from(vec![15_338, 15_339])))
+                .cast_to(&tz(Second, "Pacific/Apia"), None)
+                .unwrap()
+                .into_array(2)
+                .unwrap();
+        let skipped = skipped.as_primitive::<TimestampSecondType>();
+        assert_eq!(skipped.value(0), skipped.value(1));
     }
 
     #[test]
@@ -2113,6 +2663,25 @@ mod proto_tests {
         PhysicalCastNode, PhysicalExprNode, physical_expr_node,
     };
 
+    #[derive(Debug)]
+    struct TestFormatterFactory;
+
+    impl ArrayFormatterFactory for TestFormatterFactory {
+        fn create_array_formatter<'formatter>(
+            &self,
+            _array: &'formatter dyn arrow::array::Array,
+            _options: &FormatOptions<'formatter>,
+            _field: Option<&'formatter Field>,
+        ) -> std::result::Result<
+            Option<arrow::util::display::ArrayFormatter<'formatter>>,
+            arrow::error::ArrowError,
+        > {
+            Ok(None)
+        }
+    }
+
+    static TEST_FORMATTER_FACTORY: TestFormatterFactory = TestFormatterFactory;
+
     /// A `CastExpr` over an `Int32` column, casting to `Int64`.
     fn proto_cast_fixture() -> CastExpr {
         let schema = Schema::new(vec![Field::new("a", Int32, false)]);
@@ -2123,7 +2692,7 @@ mod proto_tests {
         (&Int64).try_into().unwrap()
     }
 
-    /// Build a `CastExpr` proto node with the given child and target type.
+    /// Build a legacy `CastExpr` proto node with the given child and target type.
     fn proto_cast_node(
         expr: Option<Box<PhysicalExprNode>>,
         arrow_type: Option<ArrowType>,
@@ -2131,8 +2700,56 @@ mod proto_tests {
         PhysicalExprNode {
             expr_id: None,
             expr_type: Some(physical_expr_node::ExprType::Cast(Box::new(
-                PhysicalCastNode { expr, arrow_type },
+                PhysicalCastNode {
+                    expr,
+                    arrow_type,
+                    target_field: None,
+                    cast_options: None,
+                },
             ))),
+        }
+    }
+
+    fn encode_cast(cast: &CastExpr) -> PhysicalCastNode {
+        let encoder = StubEncoder::ok();
+        let node = cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+            .unwrap()
+            .expect("CastExpr should encode to Some(node)");
+        match node.expr_type {
+            Some(physical_expr_node::ExprType::Cast(cast)) => *cast,
+            other => panic!("expected a Cast node, got {other:?}"),
+        }
+    }
+
+    fn round_trip_cast(cast: &CastExpr, schema: &Schema) -> CastExpr {
+        let encoder = StubEncoder::ok();
+        let node = cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+            .unwrap()
+            .expect("CastExpr should encode to Some(node)");
+        let decoder = StubDecoder::ok();
+        CastExpr::try_from_proto(&node, &PhysicalExprDecodeCtx::new(schema, &decoder))
+            .unwrap()
+            .downcast_ref::<CastExpr>()
+            .expect("decoded expr should be a CastExpr")
+            .clone()
+    }
+
+    fn non_default_cast_options() -> CastOptions<'static> {
+        CastOptions {
+            safe: true,
+            format_options: FormatOptions::new()
+                .with_display_error(false)
+                .with_null("NULL")
+                .with_date_format(Some("%d/%m/%Y"))
+                .with_datetime_format(Some("%d/%m/%Y %H:%M:%S"))
+                .with_timestamp_format(Some("%s"))
+                .with_timestamp_tz_format(Some("%+"))
+                .with_time_format(Some("%H-%M-%S"))
+                .with_duration_format(DurationFormat::ISO8601)
+                .with_types_info(true)
+                .with_quoted_strings(true),
         }
     }
 
@@ -2160,6 +2777,102 @@ mod proto_tests {
             .expect("cast type should be encoded");
         let data_type: DataType = arrow_type.try_into().unwrap();
         assert_eq!(data_type, Int64);
+        assert!(cast_node.target_field.is_none());
+        assert!(cast_node.cast_options.is_none());
+    }
+
+    #[test]
+    fn cast_target_field_survives_proto_round_trip() {
+        let schema = Schema::new(vec![Field::new("a", Int32, true)]);
+        let target = Arc::new(Field::new("target", Int64, false).with_metadata(
+            Metadata::from([("extension".to_string(), "value".to_string())]),
+        ));
+        let cast = CastExpr::new_with_target_field(
+            col("a", &schema).unwrap(),
+            Arc::clone(&target),
+            None,
+        );
+
+        assert!(encode_cast(&cast).target_field.is_some());
+        let decoded = round_trip_cast(&cast, &schema);
+
+        assert_eq!(decoded.target_field(), &target);
+        assert_eq!(decoded.target_metadata(), Some(target.metadata()));
+        assert_eq!(decoded.target_nullable(), Some(false));
+        assert!(!decoded.return_field(&schema).unwrap().is_nullable());
+    }
+
+    #[test]
+    fn explicit_default_shaped_cast_target_is_encoded() {
+        let schema = Schema::new(vec![Field::new("a", Int32, false).with_metadata(
+            Metadata::from([("source".to_string(), "value".to_string())]),
+        )]);
+        let cast = CastExpr::new_with_target_field(
+            col("a", &schema).unwrap(),
+            Int64.into_nullable_field_ref(),
+            None,
+        );
+
+        assert!(encode_cast(&cast).target_field.is_some());
+        let decoded = round_trip_cast(&cast, &schema);
+        assert_eq!(decoded.target_metadata(), Some(&Metadata::default()));
+        assert_eq!(decoded.target_nullable(), Some(true));
+        let output = decoded.return_field(&schema).unwrap();
+        assert!(output.metadata().is_empty());
+        assert!(output.is_nullable());
+    }
+
+    #[test]
+    fn type_only_cast_target_is_omitted_and_remains_type_only() {
+        let metadata = Metadata::from([("source".to_string(), "value".to_string())]);
+        let schema = Schema::new(vec![
+            Field::new("a", Int32, false).with_metadata(metadata.clone()),
+        ]);
+        let cast = CastExpr::new(col("a", &schema).unwrap(), Int64, None);
+
+        assert!(encode_cast(&cast).target_field.is_none());
+        let decoded = round_trip_cast(&cast, &schema);
+
+        assert_eq!(decoded.target_metadata(), None);
+        assert_eq!(decoded.target_nullable(), None);
+        let output = decoded.return_field(&schema).unwrap();
+        assert_eq!(output.metadata(), &metadata);
+        assert!(!output.is_nullable());
+    }
+
+    #[test]
+    fn cast_options_survive_proto_round_trip() {
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
+        let options = non_default_cast_options();
+        let cast =
+            CastExpr::new(col("a", &schema).unwrap(), Int64, Some(options.clone()));
+
+        assert!(encode_cast(&cast).cast_options.is_some());
+        assert_eq!(round_trip_cast(&cast, &schema).cast_options(), options);
+    }
+
+    #[test]
+    fn custom_formatter_factory_is_rejected() {
+        let schema = Schema::new(vec![Field::new("a", Int32, false)]);
+        let cast = CastExpr::new(
+            col("a", &schema).unwrap(),
+            Int64,
+            Some(CastOptions {
+                safe: false,
+                format_options: DEFAULT_FORMAT_OPTIONS
+                    .with_formatter_factory(Some(&TEST_FORMATTER_FACTORY)),
+            }),
+        );
+        let encoder = StubEncoder::ok();
+
+        let err = cast
+            .try_to_proto(&PhysicalExprEncodeCtx::new(&encoder))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            DataFusionError::NotImplemented(msg)
+                if msg.contains("custom formatter_factory")
+        ));
     }
 
     #[test]
@@ -2176,7 +2889,7 @@ mod proto_tests {
     }
 
     #[test]
-    fn try_from_proto_decodes_cast_expr() {
+    fn try_from_proto_decodes_legacy_cast_expr() {
         let node = proto_cast_node(
             Some(Box::new(column_node("a"))),
             Some(proto_int64_arrow_type()),
@@ -2192,6 +2905,32 @@ mod proto_tests {
 
         assert_eq!(cast.cast_type(), &Int64);
         assert!(cast.expr().downcast_ref::<Column>().is_some());
+        assert_eq!(cast.target_metadata(), None);
+        assert_eq!(cast.target_nullable(), None);
+        assert_eq!(cast.cast_options(), DEFAULT_CAST_OPTIONS);
+    }
+
+    #[test]
+    fn try_from_proto_rejects_mismatched_target_field_type() {
+        let mut node = proto_cast_node(
+            Some(Box::new(column_node("a"))),
+            Some(proto_int64_arrow_type()),
+        );
+        let Some(physical_expr_node::ExprType::Cast(cast)) = node.expr_type.as_mut()
+        else {
+            unreachable!()
+        };
+        cast.target_field =
+            Some((&Field::new("target", Int32, true)).try_into().unwrap());
+        let schema = Schema::empty();
+        let decoder = StubDecoder::ok();
+
+        let err = CastExpr::try_from_proto(
+            &node,
+            &PhysicalExprDecodeCtx::new(&schema, &decoder),
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("target_field type"));
     }
 
     #[test]

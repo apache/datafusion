@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ##########
 ## Math expression Tests
@@ -87,6 +74,16 @@ query RRRRRRRR
 SELECT round(125.2345, -3), round(125.2345, -2), round(125.2345, -1), round(125.2345), round(125.2345, 0), round(125.2345, 1), round(125.2345, 2), round(125.2345, 3)
 ----
 0 100 130 125 125 125.2 125.23 125.235
+
+query RR
+SELECT 1.0 / trunc(column1), 1.0 / trunc(column1, 0) FROM (VALUES (CAST(-0.0 AS DOUBLE)));
+----
+-Infinity -Infinity
+
+query RR
+SELECT 1.0 / trunc(column1), 1.0 / trunc(column1, 0) FROM (VALUES (CAST(-0.0 AS REAL)));
+----
+-Infinity -Infinity
 
 # Round signed and unsigned integer scalar widths
 query IIIIIIII
@@ -175,10 +172,10 @@ NULL
 query error DataFusion error: Error during planning: 'round' does not support zero arguments
 SELECT round();
 
-query error Error during planning: Internal error: Function 'round' failed to match any signature
+query error Error during planning: Function 'round' failed to match any signature
 SELECT round(1, 2, 3);
 
-query error Error during planning: Internal error: Function 'round' failed to match any signature
+query error Error during planning: Function 'round' failed to match any signature
 SELECT round('x');
 
 query error round decimal_places 2147483648 is out of supported i32 range
@@ -777,6 +774,19 @@ SELECT c1%1, c2%1 FROM test_non_nullable_float
 NaN NaN
 
 statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT c2 % 1 AS remainder FROM test_non_nullable_float;
+----
+logical_plan
+01)Projection: test_non_nullable_float.c2 % Float64(1) AS remainder
+02)--TableScan: test_non_nullable_float projection=[c2]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+statement ok
 drop table test_non_nullable_float
 
 
@@ -864,7 +874,7 @@ statement ok
 CREATE TABLE test_non_nullable_decimal(c1 DECIMAL(9,2) NOT NULL);
 
 query I
-INSERT INTO test_non_nullable_decimal VALUES(1)
+INSERT INTO test_non_nullable_decimal VALUES(1.50)
 ----
 1
 
@@ -878,6 +888,29 @@ SELECT c1/0 FROM test_non_nullable_decimal
 
 query error DataFusion error: Arrow error: Divide by zero error
 SELECT c1%0 FROM test_non_nullable_decimal
+
+query RR
+SELECT c1 % 1 AS int_literal, c1 % CAST(1 AS DECIMAL(9,2)) AS decimal_literal FROM test_non_nullable_decimal
+----
+0.50 0.50
+
+query I
+SELECT count(*) FROM test_non_nullable_decimal WHERE c1 % 1 = 0
+----
+0
+
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+query TT
+EXPLAIN SELECT c1 % CAST(1 AS DECIMAL(9,2)) AS remainder FROM test_non_nullable_decimal;
+----
+logical_plan
+01)Projection: test_non_nullable_decimal.c1 % Decimal128(1.00,9,2) AS remainder
+02)--TableScan: test_non_nullable_decimal projection=[c1]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
 
 statement ok
 drop table test_non_nullable_decimal
@@ -1259,21 +1292,79 @@ FROM (VALUES (2000.0::double), (-2000.0::double)) t(a);
 Infinity Infinity
 -Infinity -Infinity
 
-# Float 16/32/64 for log
+# log(base, value) widens float arguments to the wider of the two, so a wider
+# base is not narrowed to the value's type (#22581). Here base 2.5 is Float64.
 query RT
 SELECT log(2.5, arrow_cast(10.9, 'Float16')), arrow_typeof(log(2.5, arrow_cast(10.9, 'Float16')));
 ----
-2.6074219 Float16
+2.606835742462 Float64
 
 query RT
 SELECT log(2.5, 10.9::float), arrow_typeof(log(2.5, 10.9::float));
 ----
-2.606992 Float32
+2.606992159958 Float64
 
 query RT
 SELECT log(2.5, 10.9::double), arrow_typeof(log(2.5, 10.9::double));
 ----
 2.606992198152 Float64
+
+# Homogeneous float widths are preserved
+query RT
+SELECT log(arrow_cast(2.5, 'Float16'), arrow_cast(10.9, 'Float16')), arrow_typeof(log(arrow_cast(2.5, 'Float16'), arrow_cast(10.9, 'Float16')));
+----
+2.6074219 Float16
+
+# Unary Float16 log uses a Float16 default base.
+query RT
+SELECT log(arrow_cast(100.0, 'Float16')), arrow_typeof(log(arrow_cast(100.0, 'Float16')));
+----
+2 Float16
+
+query RT
+SELECT log(2.5::float, 10.9::float), arrow_typeof(log(2.5::float, 10.9::float));
+----
+2.606992 Float32
+
+# A Float16 base is widened to a Float32 value's type
+query RT
+SELECT log(arrow_cast(2.5, 'Float16'), 10.9::float), arrow_typeof(log(arrow_cast(2.5, 'Float16'), 10.9::float));
+----
+2.606992 Float32
+
+# #22581: a Float64 base must keep full precision against a Float32 value.
+# 16777217 is not representable in Float32, so an f32 computation would round it.
+query RT
+SELECT log(arrow_cast(16777217, 'Float64'), arrow_cast(2.0, 'Float32')), arrow_typeof(log(arrow_cast(16777217, 'Float64'), arrow_cast(2.0, 'Float32')));
+----
+0.041666666517 Float64
+
+# NULL arguments keep their existing result types
+query RT
+SELECT log(2.5::float, NULL), arrow_typeof(log(2.5::float, NULL));
+----
+NULL Float64
+
+query RT
+SELECT log(NULL, 2.0::float), arrow_typeof(log(NULL, 2.0::float));
+----
+NULL Float32
+
+query RT
+SELECT log(NULL, NULL), arrow_typeof(log(NULL, NULL));
+----
+NULL Float64
+
+# A Float16 base is widened to a wider value's type
+query RT
+SELECT log(arrow_cast(2.5, 'Float16'), 1.0::double), arrow_typeof(log(arrow_cast(2.5, 'Float16'), 1.0::double));
+----
+0 Float64
+
+query RT
+SELECT log(arrow_cast(2.5, 'Float16'), arrow_cast(1.0, 'Float16')), arrow_typeof(log(arrow_cast(2.5, 'Float16'), arrow_cast(1.0, 'Float16')));
+----
+0 Float16
 
 # lcm with array and scalar
 

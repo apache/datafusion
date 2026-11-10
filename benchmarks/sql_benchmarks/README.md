@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # SQL Benchmarks
@@ -39,7 +26,9 @@ in the community:
 | `nlj`                 | Nested‑loop join benchmark                                         |
 | `null_aware_join`     | Null-aware (`NOT IN`) hash join micro-benchmarks. Q01-Q03 are uncorrelated `NOT IN` across NULL fractions and are linear in the table size (`NAJ_LARGE_ROWS`, default `1000000`). Q04-Q08 are correlated, so the correlation predicate stays behind as a join filter that the join applies per candidate (build row × probe row) pair while deciding which outer rows are UNKNOWN; without an equality correlation there are no scope keys to narrow those pairs, so their cost grows with the square of `NAJ_ROWS` (default `10000`). Q08 adds an equality correlation, which turns those pairs into a hash lookup. All tables are built inline from `range()`, so there is no data step. |
 | `push_down_topk`      | `ORDER BY ... LIMIT` over outer joins (TPC-H data); exercises pushing a TopK through a join |
+| `pwmj`                | Piecewise merge join: classic `INNER`/`LEFT`/`RIGHT`/`FULL` joins over `lhs.key < rhs.key`. Subgroups (`--subgroup`) are match regimes: `no_match`, `null_heavy`, `half_match`, `selective`, `all_match`. Generated with `range()`, no data needed. |
 | `smj`                 | Sort‑merge join benchmark                                          |
+| [`sort_pushdown`](sort_pushdown/README.md) | SQL counterparts of the five sort pushdown variants, using existing Parquet data and query files. |
 | `sort tpch`           | Sorting benchmarks against the TPC-H lineitem table                |
 | `taxi`                | NYC taxi dataset benchmark                                         |
 | `tpcds`               | TPC‑DS queries                                                     |
@@ -48,7 +37,7 @@ in the community:
 | `predicate_eval`      | Conjunctive (AND) filter-evaluation micro-benchmarks; each subgroup is a different predicate pattern, to test how an adaptive predicate-ordering system behaves across them ([#11262](https://github.com/apache/datafusion/issues/11262)). Subgroups (`--subgroup`): `costsel`, `cost`, `selectivity`, `cardinality`, `width`, `scale`, `neutral`, `correlation`, `drift`, `nulls`. The suite sets no engine config of its own, so by default it measures DataFusion's built-in left-deep `AND` short-circuit; point it at a system under test by exporting that system's own DataFusion setting (the harness builds its `SessionConfig` with `SessionConfig::from_env`). Every query is a `count(*)`, and the counts are checked in under `predicate_eval/results/`, so `--result-mode validate` also checks that a reordering under test still returns the same rows; the checked-in counts were persisted at the suite defaults (`PRED_ROWS=1000000`, `PRED_FILL=30`), so validation assumes those (the `scale` and `width` subgroups pin their own values per query and validate at any setting). |
 | `parquet_row_filter_skip` | Micro-benchmark for the per-row-group fully-matched RowFilter skip on Parquet scans ([#23696](https://github.com/apache/datafusion/issues/23696)). Subgroups (`--subgroup`): `skip` (clustered key, most row groups fully matched by statistics so the per-row filter is skipped), `control` (scrambled key, no row group is ever fully matched). Size the data with `PRED_ROWS` and the row-group size with `RG_SIZE`. |
 | `spill_views` | Sort and `GROUP BY` queries that spill `StringView` and `BinaryView` columns read from Parquet ([#23564](https://github.com/apache/datafusion/issues/23564)). Each query sets its own memory limit and `target_partitions = 4`, so it spills in any environment. Subgroups (`--subgroup`): `repeated` (sort with a low-cardinality payload that shares one dictionary buffer, where spill compaction can remove data), `distinct` (sort and `GROUP BY` on all-distinct strings, where compaction cannot remove data). Set the memory limit of each subgroup with `SPILL_VIEWS_LIMIT_REPEATED` (default `40M`) and `SPILL_VIEWS_LIMIT_DISTINCT` (default `96M`), for example to let both sides of a comparison finish when one of them runs out of memory at the default. The queries must still spill, so check a raised limit with `EXPLAIN ANALYZE` and keep it well below the working set: `q05` stops spilling at about `192M`. Give a whole number of K, M or G units, because the run asserts the limit that the memory pool reports back. |
-| `projection_subquery` | `IN`, `NOT IN` and `EXISTS` subqueries that sit in the `SELECT` list instead of a filter ([#25341](https://github.com/apache/datafusion/issues/25341)). Every query projects the boolean subquery result and aggregates it, so the measured cost is the decorrelation plan and not the size of the output. `q07` correlates on `<` instead of `=`, so it keeps the nested-loop plan and is the control that must not change. Size the two inline tables with `PSQ_ROWS` (default `30000`). The counts are checked in under `projection_subquery/results/`, so `--result-mode validate` also proves that a change to the decorrelation still returns the same rows; the checked-in counts were persisted at the default `PSQ_ROWS`, so validation assumes that value. |
+| `projection_subquery` | `IN`, `NOT IN` and `EXISTS` subqueries that sit in the `SELECT` list instead of a filter ([#25341](https://github.com/apache/datafusion/issues/25341)). Every query projects the boolean subquery result and aggregates it, so the measured cost is the decorrelation plan and not the size of the output. `q07` correlates on `<` instead of `=`, so the correlation stays a residual filter of the mark join. Size the two inline tables with `PSQ_ROWS` (default `30000`). The counts are checked in under `projection_subquery/results/`, so `--result-mode validate` also proves that a change to the decorrelation still returns the same rows; the checked-in counts were persisted at the default `PSQ_ROWS`, so validation assumes that value. |
 
 # Running Benchmarks
 
@@ -139,6 +128,31 @@ compatibility with benchmark files and direct Criterion runs. Direct
 `cargo bench --bench sql` invocations cannot accept custom arguments, so they
 still use environment variables.
 
+DataFusion session settings are read through `SessionConfig::from_env()` in both
+CLI and direct Criterion runs. Use the standard `DATAFUSION_*` environment variables:
+
+| Setting                        | Environment variable                                |
+| ------------------------------ | --------------------------------------------------- |
+| Parallel partitions            | `DATAFUSION_EXECUTION_TARGET_PARTITIONS`            |
+| Batch size                     | `DATAFUSION_EXECUTION_BATCH_SIZE`                   |
+| Sort spill reservation (bytes) | `DATAFUSION_EXECUTION_SORT_SPILL_RESERVATION_BYTES` |
+| Prefer hash joins              | `DATAFUSION_OPTIMIZER_PREFER_HASH_JOIN`             |
+| Enable Piecewise Merge Join    | `DATAFUSION_OPTIMIZER_ENABLE_PIECEWISE_MERGE_JOIN`  |
+| Hash join buffering capacity   | `DATAFUSION_EXECUTION_HASH_JOIN_BUFFERING_CAPACITY` |
+| Collect statistics             | `DATAFUSION_EXECUTION_COLLECT_STATISTICS`           |
+
+Explicit CLI settings override environment settings; otherwise DataFusion's defaults
+apply. The old `PARTITIONS`, `BATCH_SIZE`, `SORT_SPILL_RESERVATION_BYTES`,
+`PREFER_HASH_JOIN`, and `HASH_JOIN_BUFFERING_CAPACITY` environment variables are
+no longer used. For example:
+
+```shell
+DATAFUSION_EXECUTION_TARGET_PARTITIONS=2 DATAFUSION_OPTIMIZER_PREFER_HASH_JOIN=false cargo bench --bench sql
+```
+
+Memory limits and pool types configure `RuntimeEnv` separately. `MEMORY_LIMIT`
+(or `--memory-limit`) takes precedence over `DATAFUSION_RUNTIME_MEMORY_LIMIT`.
+
 The SQL benchmarking tool uses the following environment variables:
 
 | Environment Variable  | Description                                                                                                                                                                                       |
@@ -169,8 +183,6 @@ Some benchmarks use custom environment variables as outlined below:
 | H2O_FILE_TYPE                | Used in the h2o benchmark to specify which file type to query against. The valid options are `csv` and `parquet`         | `csv`         |
 | CLICKBENCH_TYPE              | The type of partitioning for the clickbench benchmark. Valid options are `single` and `partitioned`                      | `single`      | 
 | H2O_BENCH_SIZE               | Used in the h2o benchmark. The valid options are `small`, `medium` and `big`                                             | `small`       |                           
-| PREFER_HASH_JOIN             | Control datafusion's config option `datafusion.optimizer.prefer_hash_join`                                               | true          |
-| HASH_JOIN_BUFFERING_CAPACITY | Control datafusion's config option `datafusion.execution.hash_join_buffering_capacity`                                   | 0             |
 | BENCH_SORTED                 | Used in the sort_tpch benchmark to indicate whether the lineitem table should be sorted.                                 | false         |
 | SORTED_BY                    | Used in the clickbench_sorted benchmark to indicate the column to sort by.                                               | `EventTime`   |
 | SORTED_ORDER                 | Used in the clickbench_sorted benchmark to indicate the sort order of the column.                                        | `ASC`         |
@@ -420,7 +432,7 @@ QUERY_NUMBER_PADDED=01
 The echo directive allows for echoing a string to stdout during the execution of the benchmark and may be useful for
 debugging.<br/><br/>Example:<br/>
 <blockquote>
-echo The value for batch size is ${BATCH_SIZE:-8192}
+echo The value for batch size is ${DATAFUSION_EXECUTION_BATCH_SIZE:-8192}
 </blockquote>
 
 </td>

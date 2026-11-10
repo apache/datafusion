@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Release Process
@@ -79,33 +66,47 @@ We then publish the code in the approved artifacts to crates.io.
 
 First create a new release branch from `main` in the `apache` repository.
 
-For example, to create the `branch-50` branch for the `50.x.y` release series:
+For example, to create the `branch-56` branch for the `56.x.y` release series:
 
 ```shell
 git fetch apache             # make sure we are up to date
 git checkout apache/main     # checkout current latest development branch
-git checkout -b branch-50    # create local branch
-git push -u apache branch-50 # push branch to apache remote
+git checkout -b branch-56    # create local branch
+git push -u apache branch-56 # push branch to apache remote
 ```
 
-### 2. Prepare PR to Update the Release Version
+### 2. Bump Version on main
 
-Manually update the DataFusion version in the root `Cargo.toml` to
-reflect the new release version. Ensure `Cargo.lock` is updated accordingly by
-running:
+After creating a new major release branch, open a "version bump PR"
+against `main` that bumps the version to the next development version.
+
+For example, after creating `branch-56` from `main`, bump `main` to `57.0.0-dev`:
 
 ```shell
-cargo check -p datafusion
+python3 dev/update_datafusion_versions.py 57.0.0-dev
+cargo update --workspace       # updates Cargo.lock
+# reformat the docs (version is updated)
+./ci/scripts/doc_prettier_check.sh --write --allow-dirty
 ```
 
-Within the user documentation there are references to the current version number.
-Update these to the current version. At the time of this writing we need to manually
-update the following files
+### 3. Prepare PR to Update the Release Version
 
-- `docs/source/download.md`
-- `docs/source/user-guide/configs.md`
-- `docs/source/user-guide/crate-configuration.md`
-- `docs/source/user-guide/example-usage.md`
+On the release branch, update the DataFusion version using the following
+Python script:
+
+```shell
+# replace NEW_VERSION before executing (e.g., 56.0.0)
+python3 dev/update_datafusion_versions.py NEW_VERSION
+```
+
+This updates the DataFusion version across all files, including documentation.
+The only extra steps required are to update the `Cargo.lock` file and
+regenerate the configuration docs, using the following commands:
+
+```shell
+cargo update --workspace
+./dev/update_config_docs.sh    # regenerates docs/source/user-guide/configs.md
+```
 
 Then commit the changes and create a PR targeting the release branch `branch-N`.
 
@@ -113,40 +114,40 @@ Then commit the changes and create a PR targeting the release branch `branch-N`.
 git commit -a -m 'Update version'
 ```
 
-### 3. Protect Release Branch
+### 4. Protect Release Branch
 
 To protect a release candidate branch from accidental merges, create PR against `main`:
 
 ```shell
-git fetch apache && git checkout -b protect_branch_50
-./dev/release/add-branch-protection.sh 50
+git fetch apache && git checkout -b protect_branch_55
+./dev/release/add-branch-protection.sh 55
 ```
 
 The script will modify `.asf.yaml` and add following block:
 
 ```yaml
-branch-50:
+branch-55:
   required_pull_request_reviews:
     required_approving_review_count: 1
 ```
 
 - Commit changes
-- Push to `origin/protect_branch_50`
+- Push to `origin/protect_branch_55`
 - Create a PR against `main`.
 - Merge to `main`.
 - Notify community in Discord/Slack that release branch is created
 
-### 4. Backporting urgent changes
+### 5. Backporting urgent changes
 
 After release branch `branch-N` created, protected and got its version updated, please check if there are any backports expected from the community.
 Please refer to [Backport Flow](../../docs/source/contributor-guide/release_management.md#backport-workflow) for more details.
 
 Backports are important and sometimes unexpected, so please proceed to next release steps once all expected backports are applied.
 
-### 5. Prepare PR to Update Changelog
+### 6. Prepare PR to Update Changelog
 
 Update the changelog in `dev/changelog/`. Each release has its
-own file, such as `dev/changelog/50.0.0.md`, which should include all changes
+own file, such as `dev/changelog/55.2.0.md`, which should include all changes
 since the previous release.
 
 The changelog is generated using a Python script, which requires a GitHub
@@ -160,7 +161,7 @@ uv sync
 To generate the changelog, set the `GITHUB_TOKEN` environment variable and run
 `./dev/release/generate-changelog.py` with two commit IDs or tags followed by
 the release version. For example, to generate a changelog of all changes
-between the `50.3.0` tag and `branch-51` for release `51.0.0`:
+between the `55.1.0` tag and `branch-55` for release `55.2.0`:
 
 > [!NOTE]
 >
@@ -173,7 +174,7 @@ between the `50.3.0` tag and `branch-51` for release `51.0.0`:
 
 ```shell
 export GITHUB_TOKEN=<your-token-here>
-uv run ./dev/release/generate-changelog.py 50.3.0 branch-51 51.0.0 > dev/changelog/51.0.0.md
+uv run ./dev/release/generate-changelog.py 55.1.0 branch-55 55.2.0 > dev/changelog/55.2.0.md
 ```
 
 This script creates a changelog from GitHub PRs based on the labels associated with them as well as looking for
@@ -182,7 +183,7 @@ titles starting with `feat:`, `fix:`, or `docs:`.
 Once the changelog is generated, run `prettier` to format the document:
 
 ```shell
-prettier -w dev/changelog/51.0.0.md
+prettier -w dev/changelog/55.2.0.md
 ```
 
 Then commit the changes and create a PR targeting the release branch.
@@ -191,7 +192,7 @@ Then commit the changes and create a PR targeting the release branch.
 git commit -a -m 'Update changelog'
 ```
 
-### 6. Prepare Release Candidate Artifacts
+### 7. Prepare Release Candidate Artifacts
 
 After the changelog updates merged to `branch-N`, you are ready to create release artifacts based off the
 merged commit.
@@ -209,17 +210,17 @@ Pick numbers in sequential order, with `1` for `rc1`, `2` for `rc2`, etc.
 
 While the official release artifacts are signed tarballs and zip files, we also
 tag the commit it was created from for convenience and code archaeology. Release tags
-look like `50.3.0`, and release candidate tags look like `50.3.0-rc1`. See [the list of existing
+look like `55.2.0`, and release candidate tags look like `55.2.0-rc1`. See [the list of existing
 tags].
 
 [the list of existing tags]: https://github.com/apache/datafusion/tags
 
-Create and push the RC tag, for example, to create the `50.3.0-rc1` tag from `branch-50`, use:
+Create and push the RC tag, for example, to create the `55.2.0-rc1` tag from `branch-55`, use:
 
 ```shell
 git fetch apache
-git tag 50.3.0-rc1 apache/branch-50
-git push apache 50.3.0-rc1
+git tag 55.2.0-rc1 apache/branch-55
+git push apache 55.2.0-rc1
 ```
 
 Please make sure the format is correct, tools like Homebrew listens for tags and in case of malformed tags users would be notified for non-existent version
@@ -228,10 +229,10 @@ Please make sure the format is correct, tools like Homebrew listens for tags and
 
 Run the `create-tarball.sh` script with the `<version>` tag and `<rc>` number you determined in previous steps:
 
-For example, to create the `50.3.0-rc1` artifacts:
+For example, to create the `55.2.0-rc1` artifacts:
 
 ```shell
-GITHUB_TOKEN=<TOKEN> ./dev/release/create-tarball.sh 50.3.0 1
+GITHUB_TOKEN=<TOKEN> ./dev/release/create-tarball.sh 55.2.0 1
 ```
 
 The `create-tarball.sh` script
@@ -243,7 +244,13 @@ The `create-tarball.sh` script
 2. Provides you an email template to
    send to `dev@datafusion.apache.org` for release voting.
 
-### 7. Vote on Release Candidate Artifacts
+Check that the artifacts were uploaded to SVN:
+
+```shell
+svn ls https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-55.2.0-rc1/
+```
+
+### 8. Vote on Release Candidate Artifacts
 
 Send the email output from the script to `dev@datafusion.apache.org`.
 
@@ -257,12 +264,12 @@ review the release candidate.
 `dev/release/verify-release-candidate.sh` is a script in this repository that can assist in the verification process. Run it like this:
 
 ```shell
-./dev/release/verify-release-candidate.sh 50.3.0 1
+./dev/release/verify-release-candidate.sh 55.2.0 1
 ```
 
 #### If Changes Are Requested
 
-If the release is not approved or urgent backports requested, please start over from [here](#4-backporting-urgent-changes)
+If the release is not approved or urgent backports requested, please start over from [here](#5-backporting-urgent-changes)
 
 #### If the Vote Passes: Announce the Result
 
@@ -277,31 +284,69 @@ The vote has passed with <NUMBER> +1 votes. Thank you to all who helped
 with the release verification.
 ```
 
-### 8. Finalize the Release
+### 9. Finalize the Release
 
 NOTE: steps in this section can only be done by PMC members after release is approved.
 
 Move artifacts to the release location in SVN, e.g.
-https://dist.apache.org/repos/dist/release/datafusion/datafusion-50.3.0/, using
+https://dist.apache.org/repos/dist/release/datafusion/datafusion-55.2.0/, using
 the `release-tarball.sh` script:
 
 ```shell
-./dev/release/release-tarball.sh 50.3.0 1
+./dev/release/release-tarball.sh 55.2.0 1
+```
+
+Check that the artifacts are in the release location:
+
+```shell
+svn ls https://dist.apache.org/repos/dist/release/datafusion/datafusion-55.2.0/
 ```
 
 Congratulations! The release is now official!
 
-### 9. Create Release git tags
+### 10. Create Release git tags
 
 Tag the same release candidate commit with the final release tag
 
 ```shell
-git checkout 50.3.0-rc1
-git tag 50.3.0
-git push apache 50.3.0
+git checkout 55.2.0-rc1
+git tag 55.2.0
+git push apache 55.2.0
 ```
 
-### 10. Publish on Crates.io
+#### Publish the versioned documentation
+
+Open a PR against `main` that adds the release to
+`docs/source/_static/versions.json` immediately after the `Development (main)`
+entry and marks it with `"preferred": true` (remove `"preferred"` from the
+previous release).
+
+The version picker only lists the most recent release of each major version.
+If the new release is a minor or patch release (e.g. `55.2.0`), move the
+previous release of the same major version (e.g. `55.1.0`) from `versions.json`
+to `docs/source/_static/old_versions.json`. Releases in `old_versions.json`
+are still built and published under `/versions/<version>/`, so existing links
+keep working, but they are not shown in the version picker.
+
+Once the PR is merged, the
+[Deploy DataFusion versioned docs](../../.github/workflows/docs_versions.yaml)
+workflow builds the documentation for each release and
+pushes the result to the `asf-site` branch.
+
+To preview a release locally before opening the PR, build the current site
+and then the release with `docs/scripts/build_versions.sh <version>` and serve
+`docs/build/html` over HTTP:
+
+```shell
+cd docs
+uv run --package datafusion-docs ./build.sh
+scripts/build_versions.sh 55.2.0
+python3 -m http.server --directory build/html 8000
+```
+
+Then open http://localhost:8000/ and check the version picker in the navigation bar.
+
+### 11. Publish on Crates.io
 
 Only approved releases of the tarball should be published to
 crates.io, in order to conform to Apache Software Foundation
@@ -315,10 +360,17 @@ instructions](https://doc.rust-lang.org/cargo/reference/publishing.html) to
 create an account and login to crates.io before asking to be added as an owner
 to all DataFusion crates.
 
-Download and unpack the official release tarball
+Download and unpack the official release tarball:
+
+```shell
+svn export https://dist.apache.org/repos/dist/release/datafusion/datafusion-55.2.0
+cd datafusion-55.2.0
+tar xzf apache-datafusion-55.2.0.tar.gz
+cd apache-datafusion-55.2.0
+```
 
 Verify that the Cargo.toml in the tarball contains the correct version
-(e.g. `version = "50.3.0"`) and then publish the crates by running the following commands
+(e.g. `version = "55.2.0"`) and then publish the crates by running the following commands
 
 ```shell
 (cd datafusion/common && cargo publish)
@@ -370,10 +422,10 @@ If it happens crates.io fails with wrong dependency message like below, just rer
 error: failed to prepare local package for uploading
 
 Caused by:
-  failed to select a version for the requirement `datafusion-proto = "^53.1.0"`
-  candidate versions found which didn't match: 53.0.0, 52.5.0, 52.4.0, ...
+  failed to select a version for the requirement `datafusion-proto = "^55.2.0"`
+  candidate versions found which didn't match: 55.1.0, 55.0.0, 54.1.0, ...
   location searched: crates.io index
-  required by package `datafusion-ffi v53.1.0 (/private/tmp/apache-datafusion-53.1.0/datafusion/ffi)`
+  required by package `datafusion-ffi v55.2.0 (/private/tmp/apache-datafusion-55.2.0/datafusion/ffi)`
 ```
 
 ### Publish datafusion-cli on Homebrew
@@ -381,22 +433,37 @@ Caused by:
 Note: [`datafusion` formula](https://formulae.brew.sh/formula/datafusion) is [updated automatically](https://github.com/Homebrew/homebrew-core/pulls?q=is%3Apr+datafusion+is%3Aclosed),
 so no action is needed.
 
-### 11. Sync Changelog and Version to main
+### 12. Sync Changelog and Documentation to main
 
-To sync changelog version and create PR against `main`:
+The crate version is **not** synced back to `main`: `main` already carries the
+next development version (such as `57.0.0-dev`) from
+[Bump Version on main](#2-bump-version-on-main), and the released version
+must never appear on `main`.
+
+Instead, create a PR against `main` that syncs the changelog and updates the
+user-facing documentation to reference the new release:
 
 ```shell
-git fetch apache && git checkout -b sync_change_log_version
+git fetch apache && git checkout -b sync_change_log apache/main
 ```
 
-- Cherry-pick or patch the version updates from step 2
-- Cherry-pick or patch the changelog updates from step 5
-- Commit changes, `git commit -a -m 'Sync changelog and version to main'`
-- Push to `origin/sync_change_log_version`
+- Cherry-pick or patch the changelog updates from step 6
+- Update the crate version in the user-facing examples (such as
+  `docs/source/download.md`) to the newly released version, for example `56.0.0`:
+
+  ```shell
+  python3 dev/update_datafusion_versions.py --user-facing-docs-only 56.0.0
+  ```
+
+- Commit changes, `git commit -a -m 'Sync changelog and docs for 56.0.0 to main'`
+- Push to `origin/sync_change_log`
 - Create a PR against `main`.
 - Merge to `main`.
 
-### 12. Add the release to Apache Reporter
+The version picker for the published documentation is updated separately, see
+[Publish the versioned documentation](#publish-the-versioned-documentation).
+
+### 13. Add the release to Apache Reporter
 
 When you have published the release, please help the project by adding the release to
 [Apache Reporter](https://reporter.apache.org/). The reporter system should
@@ -407,7 +474,7 @@ the examples from previous releases.
 The release information is used to generate a template for a board report (see example from Apache Arrow project
 [here](https://github.com/apache/arrow/pull/14357)).
 
-### 13. Delete Old RCs and Releases
+### 14. Delete Old RCs and Releases
 
 See the ASF documentation on [when to archive](https://www.apache.org/legal/release-policy.html#when-to-archive)
 for more information.
@@ -423,22 +490,21 @@ svn ls https://dist.apache.org/repos/dist/dev/datafusion
 To delete a release candidate:
 
 ```shell
-svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-50.0.0-rc1/
+svn delete -m "delete old DataFusion RC" https://dist.apache.org/repos/dist/dev/datafusion/apache-datafusion-55.2.0-rc1/
 ```
 
 #### Delete old releases from `release` SVN
 
-Only the latest release should be available. Delete old releases after
-publishing the new release.
+Keep the last major release (`X.0.0`) and the releases after it. Delete older releases after
+publishing the new release. For example, after publishing 55.2.0 keep `datafusion-55.0.0`,
+`datafusion-55.1.0` and `datafusion-55.2.0`, and delete every 54.x release.
 
-To get a list of DataFusion releases:
-
-```shell
-svn ls https://dist.apache.org/repos/dist/release/datafusion
-```
-
-To delete a release:
+The following prints, but does not run, the `svn delete` commands for all releases that do not
+belong to the `major` version. Check the printed commands and then run them:
 
 ```shell
-svn delete -m "delete old DataFusion release" https://dist.apache.org/repos/dist/release/datafusion/datafusion-50.0.0
+major=55
+for release in $(svn ls https://dist.apache.org/repos/dist/release/datafusion | grep -E "^datafusion-[0-9]+\." | grep -v "^datafusion-$major\."); do
+  echo "svn delete -m 'delete old DataFusion release' https://dist.apache.org/repos/dist/release/datafusion/$release"
+done
 ```

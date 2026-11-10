@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::any::Any;
 use std::borrow::Cow;
@@ -46,7 +33,8 @@ use datafusion_physical_plan::ExecutionPlan;
 ///
 /// 1. [`Self::schema`]: The schema (columns and their types) of the table
 /// 2. [`Self::supports_filters_pushdown`]: Should filters be pushed into this scan
-/// 2. [`Self::scan`]: An [`ExecutionPlan`] that can read data
+/// 3. [`Self::supports_skip_pushdown`]: Should `skip` (offset) be pushed into this scan
+/// 4. [`Self::scan`]: An [`ExecutionPlan`] that can read data
 ///
 /// [`RecordBatch`]: https://docs.rs/arrow/latest/arrow/record_batch/struct.RecordBatch.html
 /// [`CatalogProvider`]: super::CatalogProvider
@@ -184,6 +172,11 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     ///
     /// As noted above, columns referenced only by pushed-down filters may be
     /// absent from `projection`.
+    ///
+    /// # Note
+    ///
+    /// Overriding [`TableProvider::scan_with_args`] will give you access to more arguments,
+    /// e.g. [`ScanArgs::skip`]
     async fn scan(
         &self,
         state: &dyn Session,
@@ -209,6 +202,30 @@ pub trait TableProvider: Any + Debug + Sync + Send {
     /// A [`ScanResult`] containing the [`ExecutionPlan`] for scanning the table
     ///
     /// See [`Self::scan`] for detailed documentation about projection, filters, and limits.
+    ///
+    /// # Evaluation Order
+    ///
+    /// The logical evaluation order is [`ScanArgs::filters`], then [`ScanArgs::skip`]
+    /// and [`ScanArgs::limit`], and finally `projection`.
+    ///
+    /// Note that `limit` and `skip` apply to the filtered result, not to the unfiltered
+    /// input, and `projection` affects only which columns are returned, not which rows qualify.
+    ///
+    /// For example, if a scan receives:
+    ///
+    /// - `projection = [a]`
+    /// - `filters = [b > 5]`
+    /// - `limit = Some(3)`
+    /// - `skip = Some(5)`
+    ///
+    /// It must logically produce results equivalent to:
+    ///
+    /// ```text
+    /// PROJECTION a (OFFSET 5 LIMIT 3 (SCAN WHERE b > 5))
+    /// ```
+    ///
+    /// As noted above, columns referenced only by pushed-down filters may be
+    /// absent from `projection`.
     // Hand-written `#[async_trait]` expansion to reduce compile time. See
     // <https://github.com/apache/datafusion/issues/13814>.
     fn scan_with_args<'a, 'life0, 'life1, 'async_trait>(
@@ -229,6 +246,17 @@ pub trait TableProvider: Any + Debug + Sync + Send {
             args.limit(),
         );
         Box::pin(async move { Ok(plan.await?.into()) })
+    }
+
+    /// Specify if DataFusion should provide the offset/skip to the
+    /// TableProvider to apply *during* the scan.
+    ///
+    /// # Note
+    ///
+    /// Make sure [`TableProvider::scan_with_args`] is overridden too
+    /// and [`ScanArgs::skip`] is used!
+    fn supports_skip_pushdown(&self) -> bool {
+        false
     }
 
     /// Specify if DataFusion should provide filter expressions to the
@@ -538,6 +566,7 @@ pub struct ScanArgs<'a> {
     filters: Option<&'a [Expr]>,
     projection: Option<&'a [usize]>,
     limit: Option<usize>,
+    skip: Option<usize>,
     statistics_requests: &'a [StatisticsRequest],
 }
 
@@ -599,6 +628,25 @@ impl<'a> ScanArgs<'a> {
     /// Returns the row limit, or `None` if no limit was specified.
     pub fn limit(&self) -> Option<usize> {
         self.limit
+    }
+
+    /// Set the number of rows to skip from the scan.
+    ///
+    /// If specified, the scan should skip this many rows. This is typically
+    /// used to optimize queries with `OFFSET` clauses.
+    ///
+    /// # Arguments
+    /// * `skip` - Optional number of rows to skip
+    pub fn with_skip(mut self, skip: Option<usize>) -> Self {
+        self.skip = skip;
+        self
+    }
+
+    /// Get the number of rows to skip from the scan.
+    ///
+    /// Returns the row offsets/skip, or `None` if no such was specified.
+    pub fn skip(&self) -> Option<usize> {
+        self.skip
     }
 
     /// Specifies the statistics the caller may use when optimizing the query.

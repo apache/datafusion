@@ -1,23 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_expr::expr::{
-    AggregateFunctionParams, HigherOrderFunction, WindowFunctionParams,
+    AggregateFunctionParams, HigherOrderFunction, NullTreatment, WindowFunctionParams,
 };
 use datafusion_expr::expr::{Lambda, Unnest};
 use sqlparser::ast::Value::SingleQuotedString;
@@ -91,6 +78,13 @@ const LOWEST: &BinaryOperator = &BinaryOperator::Or;
 // Closest precedence we have to IS operator is BitwiseAnd (any other) in PG docs
 // (https://www.postgresql.org/docs/7.2/sql-precedence.html)
 const IS: &BinaryOperator = &BinaryOperator::BitwiseAnd;
+
+fn null_treatment_to_sql(null_treatment: NullTreatment) -> ast::NullTreatment {
+    match null_treatment {
+        NullTreatment::IgnoreNulls => ast::NullTreatment::IgnoreNulls,
+        NullTreatment::RespectNulls => ast::NullTreatment::RespectNulls,
+    }
+}
 
 impl Unparser<'_> {
     pub fn expr_to_sql(&self, expr: &Expr) -> Result<ast::Expr> {
@@ -239,20 +233,14 @@ impl Unparser<'_> {
                     })
                     .collect::<Result<Vec<CaseWhen>>>()?;
 
-                let operand = match expr.as_ref() {
-                    Some(e) => match self.expr_to_sql_inner(e) {
-                        Ok(sql_expr) => Some(Box::new(sql_expr)),
-                        Err(_) => None,
-                    },
-                    None => None,
-                };
-                let else_result = match else_expr.as_ref() {
-                    Some(e) => match self.expr_to_sql_inner(e) {
-                        Ok(sql_expr) => Some(Box::new(sql_expr)),
-                        Err(_) => None,
-                    },
-                    None => None,
-                };
+                let operand = expr
+                    .as_ref()
+                    .map(|e| self.expr_to_sql_inner(e).map(Box::new))
+                    .transpose()?;
+                let else_result = else_expr
+                    .as_ref()
+                    .map(|e| self.expr_to_sql_inner(e).map(Box::new))
+                    .transpose()?;
 
                 Ok(ast::Expr::Case {
                     operand,
@@ -276,7 +264,7 @@ impl Unparser<'_> {
                             window_frame,
                             filter,
                             distinct,
-                            ..
+                            null_treatment,
                         },
                 } = window_fun.as_ref();
                 let func_name = fun.name();
@@ -343,7 +331,7 @@ impl Unparser<'_> {
                         .as_ref()
                         .map(|f| self.expr_to_sql_inner(f).map(Box::new))
                         .transpose()?,
-                    null_treatment: None,
+                    null_treatment: null_treatment.map(null_treatment_to_sql),
                     over,
                     within_group: vec![],
                     parameters: ast::FunctionArguments::None,
@@ -405,21 +393,32 @@ impl Unparser<'_> {
                     args,
                     filter,
                     order_by,
-                    ..
+                    null_treatment,
                 } = &agg.params;
 
-                // if this is a WITHIN GROUP aggregate, skip the prepended arg
-                let (args_to_use, within_group) =
-                    if agg.func.supports_within_group_clause() && !order_by.is_empty() {
-                        let args_to_use = self.function_args_to_sql(&args[1..])?;
-                        let within_group = order_by
-                            .iter()
-                            .map(|sort_expr| self.sort_to_sql(sort_expr))
-                            .collect::<Result<Vec<ast::OrderByExpr>>>()?;
-                        (args_to_use, within_group)
+                // An aggregate's `order_by` is spelled one of two ways in SQL:
+                // `WITHIN GROUP (ORDER BY ..)` for ordered-set aggregates, and an
+                // `ORDER BY` clause inside the argument list for every other
+                // aggregate. Both map onto `params.order_by`.
+                let (args_to_use, within_group, clauses) = if order_by.is_empty() {
+                    (self.function_args_to_sql(args)?, vec![], vec![])
+                } else {
+                    let order_by_sql = order_by
+                        .iter()
+                        .map(|sort_expr| self.sort_to_sql(sort_expr))
+                        .collect::<Result<Vec<ast::OrderByExpr>>>()?;
+                    if agg.func.supports_within_group_clause() {
+                        // Ordered-set aggregates carry the ordered value as their
+                        // first argument, so skip it.
+                        (self.function_args_to_sql(&args[1..])?, order_by_sql, vec![])
                     } else {
-                        (self.function_args_to_sql(args)?, Vec::new())
-                    };
+                        (
+                            self.function_args_to_sql(args)?,
+                            vec![],
+                            vec![ast::FunctionArgumentClause::OrderBy(order_by_sql)],
+                        )
+                    }
+                };
 
                 let filter = match filter {
                     Some(filter) => Some(Box::new(self.expr_to_sql_inner(filter)?)),
@@ -435,10 +434,10 @@ impl Unparser<'_> {
                         duplicate_treatment: distinct
                             .then_some(DuplicateTreatment::Distinct),
                         args: args_to_use,
-                        clauses: vec![],
+                        clauses,
                     }),
                     filter,
-                    null_treatment: None,
+                    null_treatment: null_treatment.map(null_treatment_to_sql),
                     over: None,
                     within_group,
                     parameters: ast::FunctionArguments::None,
@@ -708,7 +707,7 @@ impl Unparser<'_> {
     }
 
     fn scalar_value_list_to_sql(&self, array: &ArrayRef) -> Result<ast::Expr> {
-        let mut elem = Vec::new();
+        let mut elem = Vec::with_capacity(array.len());
         for i in 0..array.len() {
             let value = ScalarValue::try_from_array(&array, i)?;
             elem.push(self.scalar_to_sql(&value)?);
@@ -1253,7 +1252,7 @@ impl Unparser<'_> {
         Ok(ast::Expr::Cast {
             kind: ast::CastKind::Cast,
             expr: Box::new(ast::Expr::value(SingleQuotedString(ts))),
-            data_type: self.dialect.timestamp_cast_dtype(&time_unit, &None),
+            data_type: self.dialect.timestamp_cast_dtype(&time_unit, &tz.cloned()),
             format: None,
         })
     }
@@ -1846,13 +1845,13 @@ impl Unparser<'_> {
             }
             DataType::Boolean => Ok(ast::DataType::Bool),
             DataType::Int8 => Ok(self.dialect.int8_cast_dtype()),
-            DataType::Int16 => Ok(ast::DataType::SmallInt(None)),
+            DataType::Int16 => Ok(self.dialect.int16_cast_dtype()),
             DataType::Int32 => Ok(self.dialect.int32_cast_dtype()),
             DataType::Int64 => Ok(self.dialect.int64_cast_dtype()),
-            DataType::UInt8 => Ok(ast::DataType::TinyIntUnsigned(None)),
-            DataType::UInt16 => Ok(ast::DataType::SmallIntUnsigned(None)),
-            DataType::UInt32 => Ok(ast::DataType::IntegerUnsigned(None)),
-            DataType::UInt64 => Ok(ast::DataType::BigIntUnsigned(None)),
+            DataType::UInt8 => Ok(self.dialect.uint8_cast_dtype()),
+            DataType::UInt16 => Ok(self.dialect.uint16_cast_dtype()),
+            DataType::UInt32 => Ok(self.dialect.uint32_cast_dtype()),
+            DataType::UInt64 => Ok(self.dialect.uint64_cast_dtype()),
             DataType::Float16 => {
                 not_impl_err!("Unsupported DataType: conversion: {data_type}")
             }
@@ -1946,7 +1945,7 @@ mod tests {
     use std::ops::{Add, Sub};
     use std::{sync::Arc, vec};
 
-    use crate::unparser::dialect::{MySqlDialect, SqliteDialect};
+    use crate::unparser::dialect::{MySqlDialect, SnowflakeDialect, SqliteDialect};
     use arrow::array::{LargeListArray, LargeListViewArray, ListArray, ListViewArray};
     use arrow::datatypes::{DataType::Int8, Field, Int32Type, Schema, TimeUnit};
     use ast::ObjectName;
@@ -2202,7 +2201,7 @@ mod tests {
                     ScalarValue::TimestampSecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01T10:46:41+08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T10:46:41+08:00' AS TIMESTAMP WITH TIME ZONE)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampMillisecond(Some(10001), None), None),
@@ -2213,7 +2212,7 @@ mod tests {
                     ScalarValue::TimestampMillisecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01T08:00:10.001+08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:10.001+08:00' AS TIMESTAMP WITH TIME ZONE)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampMicrosecond(Some(10001), None), None),
@@ -2224,7 +2223,7 @@ mod tests {
                     ScalarValue::TimestampMicrosecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01T08:00:00.010001+08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:00.010001+08:00' AS TIMESTAMP WITH TIME ZONE)"#,
             ),
             (
                 Expr::Literal(ScalarValue::TimestampNanosecond(Some(10001), None), None),
@@ -2235,7 +2234,7 @@ mod tests {
                     ScalarValue::TimestampNanosecond(Some(10001), Some("+08:00".into())),
                     None,
                 ),
-                r#"CAST('1970-01-01T08:00:00.000010001+08:00' AS TIMESTAMP)"#,
+                r#"CAST('1970-01-01T08:00:00.000010001+08:00' AS TIMESTAMP WITH TIME ZONE)"#,
             ),
             (
                 Expr::Literal(ScalarValue::Time32Second(Some(10001)), None),
@@ -3070,21 +3069,143 @@ mod tests {
             )
             .build();
 
-        for (dialect, identifier) in [
-            (&default_dialect, "TIMESTAMP"),
-            (&mysql_dialect, "DATETIME"),
+        let timestamp = ScalarValue::TimestampMillisecond(Some(1738285549123), None);
+        let timestamp_with_tz =
+            ScalarValue::TimestampMillisecond(Some(1738285549123), Some("+08:00".into()));
+
+        for (dialect, scalar, expected) in [
+            (
+                &default_dialect,
+                &timestamp,
+                "CAST('2025-01-31 01:05:49.123' AS TIMESTAMP)",
+            ),
+            (
+                &default_dialect,
+                &timestamp_with_tz,
+                "CAST('2025-01-31T09:05:49.123+08:00' AS TIMESTAMP WITH TIME ZONE)",
+            ),
+            (
+                &mysql_dialect,
+                &timestamp,
+                "CAST('2025-01-31 01:05:49.123' AS DATETIME)",
+            ),
+            (
+                &mysql_dialect,
+                &timestamp_with_tz,
+                "CAST('2025-01-31T09:05:49.123+08:00' AS DATETIME)",
+            ),
         ] {
             let unparser = Unparser::new(dialect);
-            let expr = Expr::Literal(
-                ScalarValue::TimestampMillisecond(Some(1738285549123), None),
-                None,
-            );
+            let expr = Expr::Literal(scalar.clone(), None);
             let ast = unparser.expr_to_sql(&expr)?;
 
             let actual = format!("{ast}");
-            let expected = format!(r#"CAST('2025-01-31 01:05:49.123' AS {identifier})"#);
 
             assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    // MySQL `DATETIME` without precision is `DATETIME(0)` and rounds the
+    // literal to whole seconds, which breaks equality and keyset seeks on
+    // sub-second timestamps. The MySQL dialect must carry the unit's precision.
+    #[test]
+    fn mysql_timestamp_cast_keeps_fractional_precision() -> Result<()> {
+        let unparser = Unparser::new(&MySqlDialect {});
+
+        for (scalar, expected) in [
+            (
+                ScalarValue::TimestampSecond(Some(1789980940), None),
+                "CAST('2026-09-21 08:55:40' AS DATETIME)",
+            ),
+            (
+                ScalarValue::TimestampMillisecond(Some(1789980940006), None),
+                "CAST('2026-09-21 08:55:40.006' AS DATETIME(3))",
+            ),
+            (
+                ScalarValue::TimestampMicrosecond(Some(1789980940006000), None),
+                "CAST('2026-09-21 08:55:40.006' AS DATETIME(6))",
+            ),
+            (
+                ScalarValue::TimestampNanosecond(Some(1789980940006000000), None),
+                "CAST('2026-09-21 08:55:40.006' AS DATETIME(6))",
+            ),
+        ] {
+            let ast = unparser.expr_to_sql(&Expr::Literal(scalar, None))?;
+            assert_eq!(format!("{ast}"), expected);
+        }
+
+        let expr = Expr::Cast(Cast::new(
+            Box::new(col("a")),
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+        ));
+        let ast = unparser.expr_to_sql(&expr)?;
+        assert_eq!(format!("{ast}"), "CAST(`a` AS DATETIME(6))");
+        Ok(())
+    }
+
+    // MySQL's `CAST` only accepts `SIGNED` and `UNSIGNED` as integer target types.
+    #[test]
+    fn mysql_integer_casts() -> Result<()> {
+        let unparser = Unparser::new(&MySqlDialect {});
+        for (data_type, expected) in [
+            (Int8, "CAST(`a` AS SIGNED)"),
+            (DataType::Int16, "CAST(`a` AS SIGNED)"),
+            (DataType::Int32, "CAST(`a` AS SIGNED)"),
+            (DataType::Int64, "CAST(`a` AS SIGNED)"),
+            (DataType::UInt8, "CAST(`a` AS UNSIGNED)"),
+            (DataType::UInt16, "CAST(`a` AS UNSIGNED)"),
+            (DataType::UInt32, "CAST(`a` AS UNSIGNED)"),
+            (DataType::UInt64, "CAST(`a` AS UNSIGNED)"),
+        ] {
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), data_type));
+            let ast = unparser.expr_to_sql(&expr)?;
+            assert_eq!(format!("{ast}"), expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn default_and_custom_dialect_integer_casts() -> Result<()> {
+        let custom_dialect = CustomDialectBuilder::new()
+            .with_int8_cast_dtype(ast::DataType::SmallInt(None))
+            .with_int16_cast_dtype(ast::DataType::Integer(None))
+            .with_uint8_cast_dtype(ast::DataType::SmallInt(None))
+            .with_uint16_cast_dtype(ast::DataType::Integer(None))
+            .with_uint32_cast_dtype(ast::DataType::BigInt(None))
+            .with_uint64_cast_dtype(ast::DataType::Numeric(ExactNumberInfo::None))
+            .build();
+        let default_unparser = Unparser::new(&DefaultDialect {});
+        let custom_unparser = Unparser::new(&custom_dialect);
+        for (data_type, default_expected, custom_expected) in [
+            (Int8, "CAST(a AS TINYINT)", "CAST(a AS SMALLINT)"),
+            (DataType::Int16, "CAST(a AS SMALLINT)", "CAST(a AS INTEGER)"),
+            (
+                DataType::UInt8,
+                "CAST(a AS TINYINT UNSIGNED)",
+                "CAST(a AS SMALLINT)",
+            ),
+            (
+                DataType::UInt16,
+                "CAST(a AS SMALLINT UNSIGNED)",
+                "CAST(a AS INTEGER)",
+            ),
+            (
+                DataType::UInt32,
+                "CAST(a AS INTEGER UNSIGNED)",
+                "CAST(a AS BIGINT)",
+            ),
+            (
+                DataType::UInt64,
+                "CAST(a AS BIGINT UNSIGNED)",
+                "CAST(a AS NUMERIC)",
+            ),
+        ] {
+            let expr = Expr::Cast(Cast::new(Box::new(col("a")), data_type));
+            let ast = default_unparser.expr_to_sql(&expr)?;
+            assert_eq!(format!("{ast}"), default_expected);
+            let ast = custom_unparser.expr_to_sql(&expr)?;
+            assert_eq!(format!("{ast}"), custom_expected);
         }
         Ok(())
     }
@@ -3436,6 +3557,28 @@ mod tests {
     }
 
     #[test]
+    fn case_propagates_operand_and_else_errors() {
+        let unsupported = Expr::Literal(ScalarValue::DurationSecond(Some(1)), None);
+        let expressions = [
+            Expr::Case(Case::new(
+                Some(Box::new(unsupported.clone())),
+                vec![(Box::new(lit(1)), Box::new(lit(2)))],
+                None,
+            )),
+            Expr::Case(Case::new(
+                None,
+                vec![(Box::new(lit(true)), Box::new(lit(1)))],
+                Some(Box::new(unsupported)),
+            )),
+        ];
+
+        for expr in expressions {
+            let error = expr_to_sql(&expr).expect_err("unsupported CASE child");
+            assert!(error.to_string().contains("Unsupported scalar"));
+        }
+    }
+
+    #[test]
     fn test_window_func_support_window_frame() -> Result<()> {
         let default_dialect: Arc<dyn Dialect> =
             Arc::new(CustomDialectBuilder::new().build());
@@ -3712,12 +3855,13 @@ mod tests {
 
         let duckdb_dialect: Arc<dyn Dialect> = Arc::new(DuckDBDialect::new());
         let bigquery_dialect: Arc<dyn Dialect> = Arc::new(BigQueryDialect::new());
+        let snowflake_dialect: Arc<dyn Dialect> = Arc::new(SnowflakeDialect::new());
 
         for (dialect, scalar, expected) in [
             (
                 Arc::clone(&default_dialect),
                 ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
-                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3725,7 +3869,7 @@ mod tests {
                     Some(1757934000123),
                     Some("+01:00".into()),
                 ),
-                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3733,7 +3877,7 @@ mod tests {
                     Some(1757934000123456),
                     Some("-01:00".into()),
                 ),
-                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&default_dialect),
@@ -3741,12 +3885,12 @@ mod tests {
                     Some(1757934000123456789),
                     Some("+00:00".into()),
                 ),
-                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
                 ScalarValue::TimestampSecond(Some(1757934000), Some("+00:00".into())),
-                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00+00:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3754,7 +3898,7 @@ mod tests {
                     Some(1757934000123),
                     Some("+01:00".into()),
                 ),
-                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3762,7 +3906,7 @@ mod tests {
                     Some(1757934000123456),
                     Some("-01:00".into()),
                 ),
-                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T10:00:00.123456-01:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&duckdb_dialect),
@@ -3770,7 +3914,7 @@ mod tests {
                     Some(1757934000123456789),
                     Some("+00:00".into()),
                 ),
-                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
+                "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
             (
                 Arc::clone(&bigquery_dialect),
@@ -3800,12 +3944,70 @@ mod tests {
                     Some("+00:00".into()),
                 ),
                 "CAST('2025-09-15T11:00:00.123456789+00:00' AS TIMESTAMP)",
+            ),
+            (
+                Arc::clone(&snowflake_dialect),
+                ScalarValue::TimestampMillisecond(
+                    Some(1757934000123),
+                    Some("+01:00".into()),
+                ),
+                "CAST('2025-09-15T12:00:00.123+01:00' AS TIMESTAMP WITH TIME ZONE)",
             ),
         ] {
             let unparser = Unparser::new(dialect.as_ref());
 
             let expr = Expr::Literal(scalar, None);
 
+            let actual = format!("{}", unparser.expr_to_sql(&expr)?);
+            assert_eq!(actual, expected);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_timestamp_literal_passes_tz_to_dialect() -> Result<()> {
+        // Puts the time zone it receives into the cast type, so the generated
+        // SQL shows which zone the unparser passed to the dialect.
+        struct TzEchoDialect;
+
+        impl Dialect for TzEchoDialect {
+            fn identifier_quote_style(&self, _identifier: &str) -> Option<char> {
+                None
+            }
+
+            fn timestamp_cast_dtype(
+                &self,
+                _time_unit: &TimeUnit,
+                tz: &Option<Arc<str>>,
+            ) -> ast::DataType {
+                match tz {
+                    Some(tz) => ast::DataType::Custom(
+                        ObjectName::from(vec![Ident::new("TIMESTAMPTZ")]),
+                        vec![tz.to_string()],
+                    ),
+                    None => ast::DataType::Timestamp(None, TimezoneInfo::None),
+                }
+            }
+        }
+
+        let unparser = Unparser::new(&TzEchoDialect);
+
+        let literal = Expr::Literal(
+            ScalarValue::TimestampSecond(Some(1704078000), Some("Asia/Tokyo".into())),
+            None,
+        );
+        let cast_expr = cast(
+            col("a"),
+            DataType::Timestamp(TimeUnit::Second, Some("Asia/Tokyo".into())),
+        );
+
+        for (expr, expected) in [
+            (
+                literal,
+                "CAST('2024-01-01T12:00:00+09:00' AS TIMESTAMPTZ(Asia/Tokyo))",
+            ),
+            (cast_expr, "CAST(a AS TIMESTAMPTZ(Asia/Tokyo))"),
+        ] {
             let actual = format!("{}", unparser.expr_to_sql(&expr)?);
             assert_eq!(actual, expected);
         }
@@ -3954,5 +4156,139 @@ mod tests {
                 .to_string(),
             "NULL"
         );
+    }
+
+    #[test]
+    fn test_random_function() -> Result<()> {
+        let duckdb_dialect = DuckDBDialect::new();
+        let dialects = vec![
+            (Unparser::new(&DefaultDialect {}), "random()"),
+            (Unparser::new(&PostgreSqlDialect {}), "random()"),
+            (Unparser::new(&duckdb_dialect), "random()"),
+            (Unparser::new(&MySqlDialect {}), "rand()"),
+            (Unparser::new(&SqliteDialect {}), "random()"),
+            (Unparser::new(&BigQueryDialect {}), "rand()"),
+            (Unparser::new(&SnowflakeDialect {}), "random()"),
+        ];
+
+        let expr = Expr::ScalarFunction(ScalarFunction {
+            func: Arc::new(ScalarUDF::from(
+                datafusion_functions::math::random::RandomFunc::new(),
+            )),
+            args: vec![],
+        });
+
+        for (unparser, result) in dialects {
+            assert_eq!(unparser.expr_to_sql(&expr)?.to_string(), result);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_unparse_null_treatment_window_and_aggregate() -> Result<()> {
+        use datafusion_expr::expr::NullTreatment;
+        use datafusion_functions_aggregate::first_last::first_value_udaf;
+        use datafusion_functions_window::nth_value::first_value_udwf;
+
+        // Window function with IgnoreNulls
+        let window_ignore = Expr::from(WindowFunction {
+            fun: WindowFunctionDefinition::WindowUDF(first_value_udwf()),
+            params: WindowFunctionParams {
+                args: vec![col("a")],
+                partition_by: vec![],
+                order_by: vec![Sort::new(col("b"), true, true)],
+                window_frame: WindowFrame::new(None),
+                null_treatment: Some(NullTreatment::IgnoreNulls),
+                distinct: false,
+                filter: None,
+            },
+        });
+
+        // Window function with RespectNulls
+        let window_respect = Expr::from(WindowFunction {
+            fun: WindowFunctionDefinition::WindowUDF(first_value_udwf()),
+            params: WindowFunctionParams {
+                args: vec![col("a")],
+                partition_by: vec![],
+                order_by: vec![Sort::new(col("b"), true, true)],
+                window_frame: WindowFrame::new(None),
+                null_treatment: Some(NullTreatment::RespectNulls),
+                distinct: false,
+                filter: None,
+            },
+        });
+
+        // Window function with None (Control)
+        let window_none = Expr::from(WindowFunction {
+            fun: WindowFunctionDefinition::WindowUDF(first_value_udwf()),
+            params: WindowFunctionParams {
+                args: vec![col("a")],
+                partition_by: vec![],
+                order_by: vec![Sort::new(col("b"), true, true)],
+                window_frame: WindowFrame::new(None),
+                null_treatment: None,
+                distinct: false,
+                filter: None,
+            },
+        });
+
+        // Aggregate function with IgnoreNulls
+        let agg_ignore =
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                first_value_udaf(),
+                vec![col("a")],
+                false,
+                None,
+                vec![],
+                Some(NullTreatment::IgnoreNulls),
+            ));
+
+        // Aggregate function with RespectNulls
+        let agg_respect =
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                first_value_udaf(),
+                vec![col("a")],
+                false,
+                None,
+                vec![],
+                Some(NullTreatment::RespectNulls),
+            ));
+
+        // Aggregate function with None (Control)
+        let agg_none =
+            Expr::AggregateFunction(datafusion_expr::expr::AggregateFunction::new_udf(
+                first_value_udaf(),
+                vec![col("a")],
+                false,
+                None,
+                vec![],
+                None,
+            ));
+
+        let actual_window_ignore = expr_to_sql(&window_ignore)?.to_string();
+        let actual_window_respect = expr_to_sql(&window_respect)?.to_string();
+        let actual_window_none = expr_to_sql(&window_none)?.to_string();
+        let actual_agg_ignore = expr_to_sql(&agg_ignore)?.to_string();
+        let actual_agg_respect = expr_to_sql(&agg_respect)?.to_string();
+        let actual_agg_none = expr_to_sql(&agg_none)?.to_string();
+
+        assert_eq!(
+            actual_window_ignore,
+            "first_value(a) IGNORE NULLS OVER (ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"
+        );
+        assert_eq!(
+            actual_window_respect,
+            "first_value(a) RESPECT NULLS OVER (ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"
+        );
+        assert_eq!(
+            actual_window_none,
+            "first_value(a) OVER (ORDER BY b ASC NULLS FIRST ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"
+        );
+        assert_eq!(actual_agg_ignore, "first_value(a) IGNORE NULLS");
+        assert_eq!(actual_agg_respect, "first_value(a) RESPECT NULLS");
+        assert_eq!(actual_agg_none, "first_value(a)");
+
+        Ok(())
     }
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Sort(fetch) → Join pushdown — a sub-module of `push_down_limit`.
 //!
@@ -1380,14 +1367,12 @@ mod test {
     }
 
     /// `Limit(skip=0) → Sort(no fetch) → Join`: `rewrite_limit` merges the
-    /// Limit's fetch into the Sort on one visit, but only strips the now-
-    /// redundant `Limit(skip=0)` wrapper on a *later* visit to that same
-    /// node (it only recognizes the wrapper as redundant once the Sort
-    /// already carries the matching fetch). Confirms the TopK-through-join
-    /// pushdown and the Limit/Sort merge both still converge to the fully
-    /// collapsed form with two passes.
+    /// Limit's fetch into the Sort and drops the redundant `Limit(skip=0)`
+    /// in the same visit. Confirms that the TopK-through-join pushdown
+    /// still applies to that Sort, so one pass reaches the fully collapsed
+    /// form.
     #[test]
-    fn topk_pushed_through_limit_then_sort_with_two_passes() -> Result<()> {
+    fn topk_pushed_through_limit_then_sort_in_one_pass() -> Result<()> {
         let t1 = test_table_scan_with_name("t1")?;
         let t2 = test_table_scan_with_name("t2")?;
 
@@ -1402,7 +1387,7 @@ mod test {
             .limit(0, Some(3))?
             .build()?;
 
-        let optimizer_ctx = OptimizerContext::new().with_max_passes(2);
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
         let rules: Vec<Arc<dyn crate::OptimizerRule + Send + Sync>> =
             vec![Arc::new(PushDownLimit::new())];
         assert_optimized_plan_eq_snapshot!(
@@ -1417,6 +1402,57 @@ mod test {
             TableScan: t2
         "
         )
+    }
+
+    /// A `Limit` over a `Sort` that already has an equal or smaller fetch is
+    /// dropped, and the `Sort` replaces it as the visited node. The TopK must
+    /// still move through the join in the same pass.
+    fn optimize_limit_over_sort_with_fetch(limit_fetch: usize) -> Result<LogicalPlan> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        let plan = LogicalPlanBuilder::from(t1)
+            .join(
+                LogicalPlanBuilder::from(t2).build()?,
+                JoinType::Left,
+                (vec!["a"], vec!["a"]),
+                None,
+            )?
+            .sort_with_limit(vec![col("t1.b").sort(true, false)], Some(3))?
+            .limit(0, Some(limit_fetch))?
+            .build()?;
+
+        let optimizer_ctx = OptimizerContext::new().with_max_passes(1);
+        crate::Optimizer::with_rules(vec![Arc::new(PushDownLimit::new())]).optimize(
+            plan,
+            &optimizer_ctx,
+            |_, _| {},
+        )
+    }
+
+    #[test]
+    fn topk_pushed_through_limit_over_sort_with_same_fetch_in_one_pass() -> Result<()> {
+        insta::assert_snapshot!(optimize_limit_over_sort_with_fetch(3)?, @r"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Left Join: t1.a = t2.a
+            Sort: t1.b ASC NULLS LAST, fetch=3
+              TableScan: t1
+            TableScan: t2
+        ");
+        Ok(())
+    }
+
+    #[test]
+    fn topk_pushed_through_limit_over_sort_with_smaller_fetch_in_one_pass() -> Result<()>
+    {
+        insta::assert_snapshot!(optimize_limit_over_sort_with_fetch(5)?, @r"
+        Sort: t1.b ASC NULLS LAST, fetch=3
+          Left Join: t1.a = t2.a
+            Sort: t1.b ASC NULLS LAST, fetch=3
+              TableScan: t1
+            TableScan: t2
+        ");
+        Ok(())
     }
 
     /// Running the optimizer a second time on its own output must be a
