@@ -1099,6 +1099,10 @@ impl<K: ArrowPrimitiveType> FirstLastPrimitiveKeyGroupsAccumulator<K> {
         let orderings = as_primitive_array::<K>(orderings)?;
         // Push to a local: pushing through `self` makes the loop reload its fields.
         let mut updates = std::mem::take(&mut self.updates);
+        // Sized once per batch: at most one update per row
+        updates.try_reserve(group_indices.len()).map_err(|e| {
+            arrow_datafusion_err!(arrow::error::ArrowError::MemoryError(e.to_string()))
+        })?;
         match rows {
             Some(rows) => self.find_winners(
                 orderings,
