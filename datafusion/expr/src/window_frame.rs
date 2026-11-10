@@ -16,7 +16,9 @@ use std::hash::Hash;
 
 use datafusion_common::{Result, ScalarValue, plan_err};
 #[cfg(feature = "sql")]
-use sqlparser::ast::{self, ValueWithSpan};
+use sqlparser::ast::{self, ExprKind, Literal};
+#[cfg(feature = "sql")]
+use sqlparser::dialect::AstExt;
 
 /// The frame specification determines which output rows are read by an aggregate
 /// window function. The ending frame boundary can be omitted if the `BETWEEN`
@@ -102,12 +104,12 @@ impl fmt::Debug for WindowFrame {
 }
 
 #[cfg(feature = "sql")]
-impl TryFrom<ast::WindowFrame> for WindowFrame {
+impl<X: AstExt> TryFrom<ast::WindowFrame<'_, X>> for WindowFrame {
     type Error = datafusion_common::error::DataFusionError;
 
-    fn try_from(value: ast::WindowFrame) -> Result<Self> {
-        let start_bound = WindowFrameBound::try_parse(value.start_bound, &value.units)?;
-        let end_bound = match value.end_bound {
+    fn try_from(value: ast::WindowFrame<'_, X>) -> Result<Self> {
+        let start_bound = WindowFrameBound::try_parse(value.start, &value.units)?;
+        let end_bound = match value.end {
             Some(bound) => WindowFrameBound::try_parse(bound, &value.units)?,
             None => WindowFrameBound::CurrentRow,
         };
@@ -339,58 +341,57 @@ impl WindowFrameBound {
 
 impl WindowFrameBound {
     #[cfg(feature = "sql")]
-    fn try_parse(
-        value: ast::WindowFrameBound,
-        units: &ast::WindowFrameUnits,
+    fn try_parse<X: AstExt>(
+        value: ast::FrameBound<'_, X>,
+        units: &ast::FrameUnits,
     ) -> Result<Self> {
         Ok(match value {
-            ast::WindowFrameBound::Preceding(Some(v)) => {
-                Self::Preceding(convert_frame_bound_to_scalar_value(*v, units)?)
+            ast::FrameBound::Preceding(v) => {
+                Self::Preceding(convert_frame_bound_to_scalar_value(v, units)?)
             }
-            ast::WindowFrameBound::Preceding(None) => {
+            ast::FrameBound::UnboundedPreceding => {
                 Self::Preceding(ScalarValue::UInt64(None))
             }
-            ast::WindowFrameBound::Following(Some(v)) => {
-                Self::Following(convert_frame_bound_to_scalar_value(*v, units)?)
+            ast::FrameBound::Following(v) => {
+                Self::Following(convert_frame_bound_to_scalar_value(v, units)?)
             }
-            ast::WindowFrameBound::Following(None) => {
+            ast::FrameBound::UnboundedFollowing => {
                 Self::Following(ScalarValue::UInt64(None))
             }
-            ast::WindowFrameBound::CurrentRow => Self::CurrentRow,
+            ast::FrameBound::CurrentRow => Self::CurrentRow,
         })
     }
 }
 
+/// The text of a string literal, for an interval's value.
 #[cfg(feature = "sql")]
-fn convert_frame_bound_to_scalar_value(
-    v: ast::Expr,
-    units: &ast::WindowFrameUnits,
+fn interval_text<X: AstExt>(value: ast::Expr<'_, X>) -> Result<String> {
+    use datafusion_common::exec_err;
+    match value.kind {
+        ExprKind::Literal(Literal::String(item)) => Ok(item.value().into_owned()),
+        e => exec_err!("INTERVAL expression cannot be {e:?}"),
+    }
+}
+
+#[cfg(feature = "sql")]
+fn convert_frame_bound_to_scalar_value<X: AstExt>(
+    v: ast::Expr<'_, X>,
+    units: &ast::FrameUnits,
 ) -> Result<ScalarValue> {
     use arrow::datatypes::DataType;
-    use datafusion_common::exec_err;
     match units {
         // For ROWS and GROUPS we are sure that the ScalarValue must be a non-negative integer ...
-        ast::WindowFrameUnits::Rows | ast::WindowFrameUnits::Groups => match v {
-            ast::Expr::Value(ValueWithSpan {
-                value: ast::Value::Number(value, false),
-                span: _,
-            }) => Ok(ScalarValue::try_from_string(value, &DataType::UInt64)?),
-            ast::Expr::Interval(ast::Interval {
-                value,
-                leading_field: None,
-                leading_precision: None,
-                last_field: None,
-                fractional_seconds_precision: None,
-            }) => {
-                let value = match *value {
-                    ast::Expr::Value(ValueWithSpan {
-                        value: ast::Value::SingleQuotedString(item),
-                        span: _,
-                    }) => item,
-                    e => {
-                        return exec_err!("INTERVAL expression cannot be {e:?}");
-                    }
-                };
+        ast::FrameUnits::Rows | ast::FrameUnits::Groups => match v.kind {
+            ExprKind::Literal(Literal::Number(value)) => Ok(
+                ScalarValue::try_from_string(value.into_owned(), &DataType::UInt64)?,
+            ),
+            ExprKind::Interval(interval)
+                if interval.leading_field.is_none()
+                    && interval.leading_precision.is_none()
+                    && interval.last_field.is_none()
+                    && interval.fractional_seconds_precision.is_none() =>
+            {
+                let value = interval_text(interval.value)?;
                 Ok(ScalarValue::try_from_string(value, &DataType::UInt64)?)
             }
             _ => plan_err!(
@@ -399,27 +400,13 @@ fn convert_frame_bound_to_scalar_value(
         },
         // ... instead for RANGE it could be anything depending on the type of the ORDER BY clause,
         // so we use a ScalarValue::Utf8.
-        ast::WindowFrameUnits::Range => Ok(ScalarValue::Utf8(Some(match v {
-            ast::Expr::Value(ValueWithSpan {
-                value: ast::Value::Number(value, false),
-                span: _,
-            }) => value,
-            ast::Expr::Interval(ast::Interval {
-                value,
-                leading_field,
-                ..
-            }) => {
-                let result = match *value {
-                    ast::Expr::Value(ValueWithSpan {
-                        value: ast::Value::SingleQuotedString(item),
-                        span: _,
-                    }) => item,
-                    e => {
-                        return exec_err!("INTERVAL expression cannot be {e:?}");
-                    }
-                };
+        ast::FrameUnits::Range => Ok(ScalarValue::Utf8(Some(match v.kind {
+            ExprKind::Literal(Literal::Number(value)) => value.into_owned(),
+            ExprKind::Interval(interval) => {
+                let leading_field = interval.leading_field.clone();
+                let result = interval_text(interval.value)?;
                 if let Some(leading_field) = leading_field {
-                    format!("{result} {leading_field}")
+                    format!("{result} {}", leading_field.to_ascii_uppercase())
                 } else {
                     result
                 }
@@ -483,55 +470,67 @@ impl fmt::Display for WindowFrameUnits {
 }
 
 #[cfg(feature = "sql")]
-impl From<ast::WindowFrameUnits> for WindowFrameUnits {
-    fn from(value: ast::WindowFrameUnits) -> Self {
+impl From<ast::FrameUnits> for WindowFrameUnits {
+    fn from(value: ast::FrameUnits) -> Self {
         match value {
-            ast::WindowFrameUnits::Range => Self::Range,
-            ast::WindowFrameUnits::Groups => Self::Groups,
-            ast::WindowFrameUnits::Rows => Self::Rows,
+            ast::FrameUnits::Range => Self::Range,
+            ast::FrameUnits::Groups => Self::Groups,
+            ast::FrameUnits::Rows => Self::Rows,
         }
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "sql"))]
 mod tests {
     use super::*;
+    use sqlparser::dialect::{Builtin, DuckDb};
+
+    /// The frame of `f() OVER (frame)`.
+    fn frame(sql: &str) -> ast::WindowFrame<'_, Builtin> {
+        let expr = sqlparser::parse_expr::<DuckDb>(sql).unwrap();
+        let ExprKind::Function {
+            options: Some(options),
+            ..
+        } = expr.kind
+        else {
+            panic!("not a call: {sql}");
+        };
+        match options.over {
+            Some(ast::WindowOver::Spec(spec)) => spec.frame.unwrap(),
+            other => panic!("no window frame: {other:?}"),
+        }
+    }
+
+    /// The start bound of `f() OVER (units bound)`.
+    fn bound(units: &str, bound: &str) -> Result<WindowFrameBound> {
+        let sql = format!("f() OVER (ORDER BY a {units} {bound})");
+        let frame = frame(&sql);
+        WindowFrameBound::try_parse(frame.start.clone(), &frame.units)
+    }
 
     #[test]
     fn test_window_frame_creation() -> Result<()> {
-        let window_frame = ast::WindowFrame {
-            units: ast::WindowFrameUnits::Range,
-            start_bound: ast::WindowFrameBound::Following(None),
-            end_bound: None,
-        };
-        let err = WindowFrame::try_from(window_frame).unwrap_err();
+        let err = WindowFrame::try_from(frame(
+            "f() OVER (ORDER BY a RANGE UNBOUNDED FOLLOWING)",
+        ))
+        .unwrap_err();
         assert_eq!(
             err.strip_backtrace(),
             "Error during planning: Invalid window frame: start bound cannot be UNBOUNDED FOLLOWING".to_owned()
         );
 
-        let window_frame = ast::WindowFrame {
-            units: ast::WindowFrameUnits::Range,
-            start_bound: ast::WindowFrameBound::Preceding(None),
-            end_bound: Some(ast::WindowFrameBound::Preceding(None)),
-        };
-        let err = WindowFrame::try_from(window_frame).unwrap_err();
+        let err = WindowFrame::try_from(frame(
+            "f() OVER (ORDER BY a RANGE BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED PRECEDING)",
+        ))
+        .unwrap_err();
         assert_eq!(
             err.strip_backtrace(),
             "Error during planning: Invalid window frame: end bound cannot be UNBOUNDED PRECEDING".to_owned()
         );
 
-        let window_frame = ast::WindowFrame {
-            units: ast::WindowFrameUnits::Rows,
-            start_bound: ast::WindowFrameBound::Preceding(Some(Box::new(
-                ast::Expr::value(ast::Value::Number("2".to_string(), false)),
-            ))),
-            end_bound: Some(ast::WindowFrameBound::Preceding(Some(Box::new(
-                ast::Expr::value(ast::Value::Number("1".to_string(), false)),
-            )))),
-        };
-
-        let window_frame = WindowFrame::try_from(window_frame)?;
+        let window_frame = WindowFrame::try_from(frame(
+            "f() OVER (ORDER BY a ROWS BETWEEN 2 PRECEDING AND 1 PRECEDING)",
+        ))?;
         assert_eq!(window_frame.units, WindowFrameUnits::Rows);
         assert_eq!(
             window_frame.start_bound,
@@ -545,83 +544,34 @@ mod tests {
         Ok(())
     }
 
-    macro_rules! test_bound {
-        ($unit:ident, $value:expr, $expected:expr) => {
-            let preceding = WindowFrameBound::try_parse(
-                ast::WindowFrameBound::Preceding($value),
-                &ast::WindowFrameUnits::$unit,
-            )?;
-            assert_eq!(preceding, WindowFrameBound::Preceding($expected));
-            let following = WindowFrameBound::try_parse(
-                ast::WindowFrameBound::Following($value),
-                &ast::WindowFrameUnits::$unit,
-            )?;
-            assert_eq!(following, WindowFrameBound::Following($expected));
-        };
-    }
-
-    macro_rules! test_bound_err {
-        ($unit:ident, $value:expr, $expected:expr) => {
-            let err = WindowFrameBound::try_parse(
-                ast::WindowFrameBound::Preceding($value),
-                &ast::WindowFrameUnits::$unit,
-            )
-            .unwrap_err();
-            assert_eq!(err.strip_backtrace(), $expected);
-            let err = WindowFrameBound::try_parse(
-                ast::WindowFrameBound::Following($value),
-                &ast::WindowFrameUnits::$unit,
-            )
-            .unwrap_err();
-            assert_eq!(err.strip_backtrace(), $expected);
-        };
-    }
-
     #[test]
     fn test_window_frame_bound_creation() -> Result<()> {
-        //  Unbounded
-        test_bound!(Rows, None, ScalarValue::UInt64(None));
-        test_bound!(Groups, None, ScalarValue::UInt64(None));
-        test_bound!(Range, None, ScalarValue::UInt64(None));
-
-        // Number
-        let number = Some(Box::new(ast::Expr::Value(
-            ast::Value::Number("42".to_string(), false).into(),
-        )));
-        test_bound!(Rows, number.clone(), ScalarValue::UInt64(Some(42)));
-        test_bound!(Groups, number.clone(), ScalarValue::UInt64(Some(42)));
-        test_bound!(
-            Range,
-            number.clone(),
-            ScalarValue::Utf8(Some("42".to_string()))
+        for units in ["ROWS", "GROUPS", "RANGE"] {
+            assert_eq!(
+                bound(units, "UNBOUNDED PRECEDING")?,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(None))
+            );
+        }
+        for units in ["ROWS", "GROUPS"] {
+            assert_eq!(
+                bound(units, "42 PRECEDING")?,
+                WindowFrameBound::Preceding(ScalarValue::UInt64(Some(42)))
+            );
+            assert_eq!(
+                bound(units, "INTERVAL '1' DAY PRECEDING")
+                    .unwrap_err()
+                    .strip_backtrace(),
+                "Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers"
+            );
+        }
+        assert_eq!(
+            bound("RANGE", "42 PRECEDING")?,
+            WindowFrameBound::Preceding(ScalarValue::Utf8(Some("42".to_string())))
         );
-
-        // Interval
-        let number = Some(Box::new(ast::Expr::Interval(ast::Interval {
-            value: Box::new(ast::Expr::Value(
-                ast::Value::SingleQuotedString("1".to_string()).into(),
-            )),
-            leading_field: Some(ast::DateTimeField::Day),
-            fractional_seconds_precision: None,
-            last_field: None,
-            leading_precision: None,
-        })));
-        test_bound_err!(
-            Rows,
-            number.clone(),
-            "Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers"
+        assert_eq!(
+            bound("RANGE", "INTERVAL '1' DAY PRECEDING")?,
+            WindowFrameBound::Preceding(ScalarValue::Utf8(Some("1 DAY".to_string())))
         );
-        test_bound_err!(
-            Groups,
-            number.clone(),
-            "Error during planning: Invalid window frame: frame offsets for ROWS / GROUPS must be non negative integers"
-        );
-        test_bound!(
-            Range,
-            number.clone(),
-            ScalarValue::Utf8(Some("1 DAY".to_string()))
-        );
-
         Ok(())
     }
 }

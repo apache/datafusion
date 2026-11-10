@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::ast::{CaseWhen, Expr as SQLExpr, Ident};
 use arrow::datatypes::FieldRef;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
@@ -11,7 +12,6 @@ use datafusion_common::{
 use datafusion_expr::expr::LambdaVariable;
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Case, Expr};
-use sqlparser::ast::{CaseWhen, Expr as SQLExpr, Ident};
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
@@ -20,14 +20,14 @@ use datafusion_expr::UNNAMED_TABLE;
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_identifier_to_expr(
         &self,
-        id: Ident,
+        id: Ident<'_>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let id_span = id.span;
-        if id.value.starts_with('@') && id.quote_style.is_none() {
+        if id.text.starts_with('@') && id.quote.is_none() {
             // TODO: figure out if ScalarVariables should be insensitive.
-            let var_names = vec![id.value];
+            let var_names = vec![id.value().into_owned()];
             let field = self
                 .context_provider
                 .get_variable_field(&var_names)
@@ -102,7 +102,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(crate) fn sql_compound_identifier_to_expr(
         &self,
-        ids: Vec<Ident>,
+        ids: Vec<Ident<'_>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -113,7 +113,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .filter_map(|id| Span::try_from_sqlparser_span(id.span)),
         );
 
-        if ids[0].value.starts_with('@') && ids[0].quote_style.is_none() {
+        if ids[0].text.starts_with('@') && ids[0].quote.is_none() {
             let var_names: Vec<_> = ids
                 .into_iter()
                 .map(|id| self.ident_normalizer.normalize(id))
@@ -219,15 +219,15 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(super) fn sql_case_identifier_to_expr(
         &self,
-        operand: Option<Box<SQLExpr>>,
-        conditions: Vec<CaseWhen>,
-        else_result: Option<Box<SQLExpr>>,
+        operand: Option<SQLExpr<'_>>,
+        conditions: Vec<CaseWhen<'_>>,
+        else_result: Option<SQLExpr<'_>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         let expr = if let Some(e) = operand {
             Some(Box::new(self.sql_expr_to_logical_expr(
-                *e,
+                e,
                 schema,
                 planner_context,
             )?))
@@ -253,7 +253,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .collect::<Result<Vec<_>>>()?;
         let else_expr = if let Some(e) = else_result {
             Some(Box::new(self.sql_expr_to_logical_expr(
-                *e,
+                e,
                 schema,
                 planner_context,
             )?))

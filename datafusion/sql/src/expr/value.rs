@@ -2,6 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::ast::{
+    BinaryOp, Expr as SQLExpr, ExprKind, Interval, Literal as SQLLiteral, StringLiteral,
+    UnaryOp,
+};
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use arrow::compute::kernels::cast_utils::{
     IntervalParseConfig, IntervalUnit, parse_interval_month_day_nano_config,
@@ -19,39 +23,32 @@ use datafusion_expr::expr::{BinaryExpr, Placeholder};
 use datafusion_expr::planner::PlannerResult;
 use datafusion_expr::{Expr, Operator, lit};
 use log::debug;
-use sqlparser::ast::{
-    BinaryOperator, Expr as SQLExpr, Interval, UnaryOperator, Value, ValueWithSpan,
-};
-use sqlparser::parser::ParserError::ParserError;
+use sqlparser::ast::StringPrefix;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::ops::Neg;
 use std::str::FromStr;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
-    pub(crate) fn parse_value(
-        &self,
-        value: Value,
-        param_data_types: &[Option<FieldRef>],
-    ) -> Result<Expr> {
+    /// Plans a literal. Placeholders are [`ExprKind::Placeholder`] and are
+    /// planned by [`Self::create_placeholder_expr`].
+    pub(crate) fn parse_value(&self, value: SQLLiteral<'_>) -> Result<Expr> {
         match value {
-            Value::Number(n, _) => self.parse_sql_number(&n, false),
-            Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => Ok(lit(s)),
-            Value::Null => Ok(Expr::Literal(ScalarValue::Null, None)),
-            Value::Boolean(n) => Ok(lit(n)),
-            Value::Placeholder(param) => {
-                Self::create_placeholder_expr(param, param_data_types)
-            }
-            Value::HexStringLiteral(s) => {
+            SQLLiteral::Number(n) => self.parse_sql_number(&n, false),
+            SQLLiteral::String(s) => match string_literal_value(&s) {
+                Some(value) => Ok(lit(value)),
+                None => plan_err!("Unsupported Value '{s:?}'"),
+            },
+            SQLLiteral::Null => Ok(Expr::Literal(ScalarValue::Null, None)),
+            SQLLiteral::Boolean(n) => Ok(lit(n)),
+            SQLLiteral::HexString(s) => {
                 if let Some(v) = try_decode_hex_literal(&s) {
                     Ok(lit(v))
                 } else {
                     plan_err!("Invalid HexStringLiteral '{s}'")
                 }
             }
-            Value::DollarQuotedString(s) => Ok(lit(s.value)),
-            Value::EscapedStringLiteral(s) => Ok(lit(s)),
-            _ => plan_err!("Unsupported Value '{value:?}'"),
+            SQLLiteral::DollarQuoted { text, .. } => Ok(lit(text.into_owned())),
         }
     }
 
@@ -97,17 +94,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if self.options.parse_float_as_decimal {
             parse_decimal(unsigned_number, negative)
         } else {
-            signed_number.parse::<f64>().map(lit).map_err(|_| {
-                DataFusionError::from(ParserError(format!(
-                    "Cannot parse {signed_number} as f64"
-                )))
-            })
+            signed_number
+                .parse::<f64>()
+                .map(lit)
+                .map_err(|_| sql_error(format!("Cannot parse {signed_number} as f64")))
         }
     }
 
     /// Create a placeholder expression
     /// Both named (`$foo`) and positional (`$1`, `$2`, ...) placeholder styles are supported.
-    fn create_placeholder_expr(
+    pub(super) fn create_placeholder_expr(
         param: String,
         param_data_types: &[Option<FieldRef>],
     ) -> Result<Expr> {
@@ -155,7 +151,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(super) fn sql_array_literal(
         &self,
-        elements: Vec<SQLExpr>,
+        elements: Vec<SQLExpr<'_>>,
         schema: &DFSchema,
     ) -> Result<Expr> {
         let values = elements
@@ -193,74 +189,95 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_interval_to_expr(
         &self,
         negative: bool,
-        interval: Interval,
+        interval: Interval<'_>,
     ) -> Result<Expr> {
         sql_interval_to_expr_impl(negative, interval)
     }
 }
 
-fn sql_interval_to_expr_impl(negative: bool, interval: Interval) -> Result<Expr> {
-    if interval.leading_precision.is_some() {
+/// The value of a string literal, or `None` for a kind of string that
+/// DataFusion does not plan (such as a byte string or a national string).
+fn string_literal_value(s: &StringLiteral<'_>) -> Option<String> {
+    match s.prefix {
+        StringPrefix::None | StringPrefix::Escape if !s.national => {
+            Some(s.value().into_owned())
+        }
+        _ => None,
+    }
+}
+
+fn sql_interval_to_expr_impl(negative: bool, interval: Interval<'_>) -> Result<Expr> {
+    let Interval {
+        value,
+        leading_field,
+        leading_precision,
+        last_field,
+        fractional_seconds_precision,
+    } = interval;
+
+    if leading_precision.is_some() {
         return not_impl_err!(
             "Unsupported Interval Expression with leading_precision {:?}",
-            interval.leading_precision
+            leading_precision
         );
     }
 
-    if interval.last_field.is_some() {
+    if last_field.is_some() {
         return not_impl_err!(
             "Unsupported Interval Expression with last_field {:?}",
-            interval.last_field
+            last_field
         );
     }
 
-    if interval.fractional_seconds_precision.is_some() {
+    if fractional_seconds_precision.is_some() {
         return not_impl_err!(
             "Unsupported Interval Expression with fractional_seconds_precision {:?}",
-            interval.fractional_seconds_precision
+            fractional_seconds_precision
         );
     }
 
-    if let SQLExpr::BinaryOp { left, op, right } = *interval.value {
-        let df_op = match op {
-            BinaryOperator::Plus => Operator::Plus,
-            BinaryOperator::Minus => Operator::Minus,
-            _ => {
-                return not_impl_err!("Unsupported interval operator: {op:?}");
-            }
-        };
-        let left_expr = sql_interval_to_expr_impl(
-            negative,
-            Interval {
-                value: left,
-                leading_field: interval.leading_field.clone(),
-                leading_precision: None,
-                last_field: None,
-                fractional_seconds_precision: None,
-            },
-        )?;
-        let right_expr = sql_interval_to_expr_impl(
-            false,
-            Interval {
-                value: right,
-                leading_field: interval.leading_field,
-                leading_precision: None,
-                last_field: None,
-                fractional_seconds_precision: None,
-            },
-        )?;
-        return Ok(Expr::BinaryExpr(BinaryExpr::new(
-            Box::new(left_expr),
-            df_op,
-            Box::new(right_expr),
-        )));
-    }
-
-    let value = interval_literal(*interval.value, negative)?;
+    let span = value.span;
+    let value = match value.kind {
+        ExprKind::Binary { left, op, right } => {
+            let df_op = match op {
+                BinaryOp::Add => Operator::Plus,
+                BinaryOp::Sub => Operator::Minus,
+                _ => {
+                    return not_impl_err!("Unsupported interval operator: {op:?}");
+                }
+            };
+            let left_expr = sql_interval_to_expr_impl(
+                negative,
+                Interval {
+                    value: *left,
+                    leading_field: leading_field.clone(),
+                    leading_precision: None,
+                    last_field: None,
+                    fractional_seconds_precision: None,
+                },
+            )?;
+            let right_expr = sql_interval_to_expr_impl(
+                false,
+                Interval {
+                    value: *right,
+                    leading_field,
+                    leading_precision: None,
+                    last_field: None,
+                    fractional_seconds_precision: None,
+                },
+            )?;
+            return Ok(Expr::BinaryExpr(BinaryExpr::new(
+                Box::new(left_expr),
+                df_op,
+                Box::new(right_expr),
+            )));
+        }
+        kind => interval_literal(SQLExpr::new(kind, span), negative)?,
+    };
 
     // leading_field really means the unit if specified
     // For example, "month" in  `INTERVAL '5' month`
-    let value = match interval.leading_field.as_ref() {
+    let value = match leading_field.as_ref() {
         Some(leading_field) => format!("{value} {leading_field}"),
         None => value,
     };
@@ -270,28 +287,18 @@ fn sql_interval_to_expr_impl(negative: bool, interval: Interval) -> Result<Expr>
     Ok(lit(ScalarValue::IntervalMonthDayNano(Some(val))))
 }
 
-fn interval_literal(interval_value: SQLExpr, negative: bool) -> Result<String> {
-    let s = match interval_value {
-        SQLExpr::Value(ValueWithSpan {
-            value: Value::SingleQuotedString(s) | Value::DoubleQuotedString(s),
-            span: _,
-        }) => s,
-        SQLExpr::Value(ValueWithSpan {
-            value: Value::Number(ref v, long),
-            span: _,
-        }) => {
-            if long {
-                return not_impl_err!(
-                    "Unsupported interval argument. Long number not supported: {interval_value:?}"
-                );
-            } else {
-                v.to_string()
-            }
+fn interval_literal(interval_value: SQLExpr<'_>, negative: bool) -> Result<String> {
+    let s = match interval_value.kind {
+        ExprKind::Literal(SQLLiteral::String(ref s))
+            if string_literal_value(s).is_some() =>
+        {
+            s.value().into_owned()
         }
-        SQLExpr::UnaryOp { op, expr } => {
+        ExprKind::Literal(SQLLiteral::Number(ref v)) => v.to_string(),
+        ExprKind::Unary { op, expr } => {
             let negative = match op {
-                UnaryOperator::Minus => !negative,
-                UnaryOperator::Plus => negative,
+                UnaryOp::Neg => !negative,
+                UnaryOp::Plus => negative,
                 _ => {
                     return not_impl_err!(
                         "Unsupported SQL unary operator in interval {op:?}"
@@ -307,6 +314,15 @@ fn interval_literal(interval_value: SQLExpr, negative: bool) -> Result<String> {
         }
     };
     if negative { Ok(format!("-{s}")) } else { Ok(s) }
+}
+
+/// An error like the ones the SQL parser reports, for numbers that it lexed
+/// but that DataFusion cannot represent.
+fn sql_error(message: String) -> DataFusionError {
+    DataFusionError::from(sqlparser::ParseError {
+        message,
+        span: Default::default(),
+    })
 }
 
 /// Try to decode bytes from hex literal string.
@@ -365,9 +381,7 @@ fn bigint_to_i256(v: &BigInt) -> Option<i256> {
 
 fn parse_decimal(unsigned_number: &str, negative: bool) -> Result<Expr> {
     let mut dec = BigDecimal::from_str(unsigned_number).map_err(|e| {
-        DataFusionError::from(ParserError(format!(
-            "Cannot parse {unsigned_number} as BigDecimal: {e}"
-        )))
+        sql_error(format!("Cannot parse {unsigned_number} as BigDecimal: {e}"))
     })?;
     if negative {
         dec = dec.neg();

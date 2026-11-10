@@ -10,7 +10,7 @@ use datafusion_expr::AggregateUDF;
 use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::expr::{AggregateFunction, AggregateFunctionParams};
 #[cfg(feature = "sql")]
-use datafusion_expr::sqlparser::ast::BinaryOperator;
+use datafusion_expr::sqlparser::ast::BinaryOp as BinaryOperator;
 use datafusion_expr::{
     Expr, ExprSchemable, GetFieldAccess,
     planner::{ExprPlanner, PlannerResult, RawBinaryExpr, RawFieldAccessExpr},
@@ -65,14 +65,14 @@ impl ExprPlanner for NestedFunctionPlanner {
             } else if left_list_ndims < right_list_ndims {
                 return Ok(PlannerResult::Planned(array_prepend(left, right)));
             }
-        } else if matches!(op, BinaryOperator::AtArrow | BinaryOperator::ArrowAt) {
+        } else if is_contains(&op) || is_contained_by(&op) {
             let left_type = left.get_type(schema)?;
             let right_type = right.get_type(schema)?;
             let left_list_ndims = list_ndims(&left_type);
             let right_list_ndims = list_ndims(&right_type);
             // if both are list
             if left_list_ndims > 0 && right_list_ndims > 0 {
-                if op == BinaryOperator::AtArrow {
+                if is_contains(&op) {
                     // array1 @> array2 -> array_has_all(array1, array2)
                     return Ok(PlannerResult::Planned(array_has_all(left, right)));
                 } else {
@@ -180,4 +180,26 @@ impl ExprPlanner for FieldAccessPlanner {
 
 fn is_array_agg(func: &Arc<AggregateUDF>) -> bool {
     func.name() == "array_agg"
+}
+
+/// True for `@>`.
+#[cfg(feature = "sql")]
+fn is_contains(op: &BinaryOperator) -> bool {
+    matches!(op, BinaryOperator::Named(name) if name == "@>")
+}
+
+/// True for `<@`.
+#[cfg(feature = "sql")]
+fn is_contained_by(op: &BinaryOperator) -> bool {
+    matches!(op, BinaryOperator::Named(name) if name == "<@")
+}
+
+#[cfg(not(feature = "sql"))]
+fn is_contains(op: &BinaryOperator) -> bool {
+    *op == BinaryOperator::AtArrow
+}
+
+#[cfg(not(feature = "sql"))]
+fn is_contained_by(op: &BinaryOperator) -> bool {
+    *op == BinaryOperator::ArrowAt
 }

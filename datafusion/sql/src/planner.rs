@@ -8,6 +8,10 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::vec;
 
+use crate::ast::{
+    AngleArguments, ArrayType, ColumnDef as SQLColumnDef, ColumnOption,
+    DataType as SQLDataType, DataTypeSuffix, Ident, ObjectName, TableAlias,
+};
 use crate::utils::make_decimal_type;
 use arrow::datatypes::*;
 use arrow_schema::extension::{Json, Uuid};
@@ -24,9 +28,6 @@ use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::{LogicalPlan, LogicalPlanBuilder};
 pub use datafusion_expr::planner::ContextProvider;
 use datafusion_expr::utils::find_column_exprs;
-use sqlparser::ast::{ArrayElemTypeDef, ExactNumberInfo, TimezoneInfo};
-use sqlparser::ast::{ColumnDef as SQLColumnDef, ColumnOption};
-use sqlparser::ast::{DataType as SQLDataType, Ident, ObjectName, TableAlias};
 
 /// SQL parser options
 #[derive(Debug, Clone, Copy)]
@@ -220,11 +221,11 @@ impl IdentNormalizer {
         Self { normalize }
     }
 
-    pub fn normalize(&self, ident: Ident) -> String {
+    pub fn normalize(&self, ident: Ident<'_>) -> String {
         if self.normalize {
             crate::utils::normalize_ident(ident)
         } else {
-            ident.value
+            ident.value().into_owned()
         }
     }
 }
@@ -487,15 +488,13 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
         )
     }
 
-    pub fn build_schema(&self, columns: Vec<SQLColumnDef>) -> Result<Schema> {
+    pub fn build_schema(&self, columns: Vec<SQLColumnDef<'_>>) -> Result<Schema> {
         let mut fields = Vec::with_capacity(columns.len());
 
         for column in columns {
             let data_type = self.convert_data_type_to_field(&column.data_type)?;
-            let not_nullable = column
-                .options
-                .iter()
-                .any(|x| x.option == ColumnOption::NotNull);
+            let not_nullable = column_options(&column.options)
+                .any(|option| matches!(option, ColumnOption::NotNull));
             fields.push(
                 data_type
                     .as_ref()
@@ -511,7 +510,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     /// Returns a vector of (column_name, default_expr) pairs
     pub(super) fn build_column_defaults(
         &self,
-        columns: &Vec<SQLColumnDef>,
+        columns: &[SQLColumnDef<'_>],
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<(String, Expr)>> {
         let mut column_defaults = vec![];
@@ -531,7 +530,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
         for column in columns {
             if let Some(default_sql_expr) =
-                column.options.iter().find_map(|o| match &o.option {
+                column_options(&column.options).find_map(|option| match option {
                     ColumnOption::Default(expr) => Some(expr),
                     _ => None,
                 })
@@ -552,9 +551,9 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn apply_table_alias(
         &self,
         plan: LogicalPlan,
-        alias: TableAlias,
+        alias: TableAlias<'_>,
     ) -> Result<LogicalPlan> {
-        let idents = alias.columns.into_iter().map(|c| c.name).collect();
+        let idents = alias.columns;
         let plan = self.apply_expr_alias(plan, idents)?;
 
         LogicalPlanBuilder::from(plan)
@@ -567,7 +566,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
     pub(crate) fn apply_expr_alias(
         &self,
         plan: LogicalPlan,
-        idents: Vec<Ident>,
+        idents: Vec<Ident<'_>>,
     ) -> Result<LogicalPlan> {
         if idents.is_empty() {
             Ok(plan)
@@ -654,7 +653,7 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 
     pub(crate) fn convert_data_type_to_field(
         &self,
-        sql_type: &SQLDataType,
+        sql_type: &SQLDataType<'_>,
     ) -> Result<FieldRef> {
         // First check if any of the registered type_planner can handle this type
         if let Some(type_planner) = self.context_provider.get_type_planner()
@@ -663,112 +662,178 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
             return Ok(data_type);
         }
 
-        // If no type_planner can handle this type, use the default conversion
-        match sql_type {
+        // `INT[]`, `INT[3]` and `INT ARRAY`: the element type is the same type
+        // without its last dimension.
+        match &sql_type.array {
+            ArrayType::None => {}
+            ArrayType::Brackets(dimensions) => {
+                let mut element = sql_type.clone();
+                let mut inner = dimensions.clone();
+                let size = inner.pop().flatten();
+                element.array = if inner.is_empty() {
+                    ArrayType::None
+                } else {
+                    ArrayType::Brackets(inner)
+                };
+                return self.array_field(&element, size.as_deref());
+            }
+            ArrayType::Keyword(size) => {
+                let mut element = sql_type.clone();
+                element.array = ArrayType::None;
+                return self.array_field(&element, size.as_deref());
+            }
+        }
+
+        let name = type_name(sql_type);
+        match name.as_str() {
             // Canonical Arrow extension types
-            SQLDataType::Uuid => Ok(Arc::new(
+            "UUID" => Ok(Arc::new(
                 Field::new("", DataType::FixedSizeBinary(16), true)
                     .with_extension_type(Uuid),
             )),
-            SQLDataType::JSON => Ok(Arc::new(
+            "JSON" => Ok(Arc::new(
                 Field::new("", DataType::Utf8, true).with_extension_type(Json::default()),
             )),
-            SQLDataType::Array(ArrayElemTypeDef::AngleBracket(inner_sql_type)) => {
-                // Arrays may be multi-dimensional.
-                Ok(self.convert_data_type_to_field(inner_sql_type)?.into_list())
-            }
-            SQLDataType::Array(ArrayElemTypeDef::SquareBracket(
-                inner_sql_type,
-                maybe_array_size,
-            )) => {
-                let inner_field = self.convert_data_type_to_field(inner_sql_type)?;
-                if let Some(array_size) = maybe_array_size {
-                    let array_size: i32 = (*array_size).try_into().map_err(|_| {
-                        plan_datafusion_err!(
-                            "Array size must be a positive 32 bit integer, got {array_size}"
-                        )
-                    })?;
-                    Ok(inner_field.into_fixed_size_list(array_size))
-                } else {
-                    Ok(inner_field.into_list())
+            "ARRAY" => match sql_type.angle.as_deref() {
+                Some(
+                    AngleArguments::Types(types) | AngleArguments::ParenTypes(types),
+                ) if types.len() == 1 => {
+                    // Arrays may be multi-dimensional.
+                    Ok(self.convert_data_type_to_field(&types[0])?.into_list())
                 }
-            }
-            SQLDataType::Array(ArrayElemTypeDef::None) => {
-                not_impl_err!("Arrays with unspecified type is not supported")
-            }
-            other => Ok(self
-                .convert_simple_data_type(other)?
+                _ => not_impl_err!("Arrays with unspecified type is not supported"),
+            },
+            _ => Ok(self
+                .convert_simple_data_type(sql_type)?
                 .into_nullable_field_ref()),
         }
     }
 
-    fn convert_simple_data_type(&self, sql_type: &SQLDataType) -> Result<DataType> {
-        match sql_type {
-            SQLDataType::Boolean | SQLDataType::Bool => Ok(DataType::Boolean),
-            SQLDataType::TinyInt(_) => Ok(DataType::Int8),
-            SQLDataType::SmallInt(_) | SQLDataType::Int2(_) => Ok(DataType::Int16),
-            SQLDataType::Int(_) | SQLDataType::Integer(_) | SQLDataType::Int4(_) => {
-                Ok(DataType::Int32)
+    /// A list of `element`, of fixed size if `size` is given.
+    fn array_field(
+        &self,
+        element: &SQLDataType<'_>,
+        size: Option<&str>,
+    ) -> Result<FieldRef> {
+        let inner_field = self.convert_data_type_to_field(element)?;
+        match size {
+            Some(size) => {
+                let array_size: i32 = size.parse().map_err(|_| {
+                    plan_datafusion_err!(
+                        "Array size must be a positive 32 bit integer, got {size}"
+                    )
+                })?;
+                Ok(inner_field.into_fixed_size_list(array_size))
             }
-            SQLDataType::BigInt(_) | SQLDataType::Int8(_) => Ok(DataType::Int64),
-            SQLDataType::TinyIntUnsigned(_) | SQLDataType::UTinyInt => Ok(DataType::UInt8),
-            SQLDataType::SmallIntUnsigned(_)
-            | SQLDataType::Int2Unsigned(_)
-            | SQLDataType::USmallInt => {
+            None => Ok(inner_field.into_list()),
+        }
+    }
+
+    fn convert_simple_data_type(&self, sql_type: &SQLDataType<'_>) -> Result<DataType> {
+        let unsupported = || not_impl_err!("Unsupported SQL type {sql_type}");
+        if sql_type.angle.is_some()
+            && !matches!(type_name(sql_type).as_str(), "STRUCT" | "MAP")
+        {
+            return unsupported();
+        }
+        let unsigned = sql_type.suffix == DataTypeSuffix::Unsigned;
+        let suffix = if unsigned {
+            DataTypeSuffix::None
+        } else {
+            sql_type.suffix
+        };
+        let args = &sql_type.args;
+        let string_type = || {
+            if self.options.map_string_types_to_utf8view {
+                DataType::Utf8View
+            } else {
+                DataType::Utf8
+            }
+        };
+        let name = type_name(sql_type);
+        if unsigned
+            && !matches!(
+                name.as_str(),
+                "TINYINT"
+                    | "SMALLINT"
+                    | "INT2"
+                    | "INT"
+                    | "INTEGER"
+                    | "INT4"
+                    | "BIGINT"
+                    | "INT8"
+            )
+        {
+            return unsupported();
+        }
+        match (name.as_str(), suffix) {
+            ("BOOLEAN" | "BOOL", DataTypeSuffix::None) => Ok(DataType::Boolean),
+            ("TINYINT", DataTypeSuffix::None) if unsigned => Ok(DataType::UInt8),
+            ("TINYINT", DataTypeSuffix::None) => Ok(DataType::Int8),
+            ("UTINYINT", DataTypeSuffix::None) => Ok(DataType::UInt8),
+            ("SMALLINT" | "INT2", DataTypeSuffix::None) if unsigned => {
                 Ok(DataType::UInt16)
             }
-            SQLDataType::IntUnsigned(_)
-            | SQLDataType::IntegerUnsigned(_)
-            | SQLDataType::Int4Unsigned(_) => Ok(DataType::UInt32),
-            SQLDataType::Varchar(length)
-            | SQLDataType::Nvarchar(length)
-            | SQLDataType::CharacterVarying(length)
-            | SQLDataType::CharVarying(length) => {
-                match (length, self.options.support_varchar_with_length) {
-                    (Some(_), false) => plan_err!(
+            ("SMALLINT" | "INT2", DataTypeSuffix::None) => Ok(DataType::Int16),
+            ("USMALLINT", DataTypeSuffix::None) => Ok(DataType::UInt16),
+            ("INT" | "INTEGER" | "INT4", DataTypeSuffix::None) if unsigned => {
+                Ok(DataType::UInt32)
+            }
+            ("INT" | "INTEGER" | "INT4", DataTypeSuffix::None) => Ok(DataType::Int32),
+            ("BIGINT" | "INT8", DataTypeSuffix::None) if unsigned => Ok(DataType::UInt64),
+            ("BIGINT" | "INT8", DataTypeSuffix::None) => Ok(DataType::Int64),
+            ("UBIGINT", DataTypeSuffix::None) => Ok(DataType::UInt64),
+            ("VARCHAR" | "NVARCHAR", DataTypeSuffix::None)
+            | ("CHARACTER" | "CHAR", DataTypeSuffix::Varying) => {
+                match (args.is_empty(), self.options.support_varchar_with_length) {
+                    (false, false) => plan_err!(
                         "does not support Varchar with length, \
                     please set `support_varchar_with_length` to be true"
                     ),
-                    _ => {
-                        if self.options.map_string_types_to_utf8view {
-                            Ok(DataType::Utf8View)
-                        } else {
-                            Ok(DataType::Utf8)
-                        }
-                    }
+                    _ => Ok(string_type()),
                 }
             }
-            SQLDataType::BigIntUnsigned(_)
-            | SQLDataType::Int8Unsigned(_)
-            | SQLDataType::UBigInt => {
-                Ok(DataType::UInt64)
+            ("FLOAT", DataTypeSuffix::None) => Ok(DataType::Float32),
+            ("REAL" | "FLOAT4", DataTypeSuffix::None) if args.is_empty() => {
+                Ok(DataType::Float32)
             }
-            SQLDataType::Float(_)
-            | SQLDataType::Real
-            | SQLDataType::Float4 => Ok(DataType::Float32),
-            SQLDataType::Double(ExactNumberInfo::None)
-            | SQLDataType::DoublePrecision
-            | SQLDataType::Float8 => Ok(DataType::Float64),
-            SQLDataType::Double(
-                ExactNumberInfo::Precision(_) | ExactNumberInfo::PrecisionAndScale(_, _),
-            ) => {
-                not_impl_err!(
-                    "Unsupported SQL type (precision/scale not supported) {sql_type}"
-                )
-            }
-            SQLDataType::Char(_) | SQLDataType::Text | SQLDataType::String(_) => {
-                if self.options.map_string_types_to_utf8view {
-                    Ok(DataType::Utf8View)
-                } else {
-                    Ok(DataType::Utf8)
-                }
-            }
-            SQLDataType::Timestamp(precision, tz_info)
-                if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
+            ("DOUBLE", DataTypeSuffix::None) if !args.is_empty() => not_impl_err!(
+                "Unsupported SQL type (precision/scale not supported) {sql_type}"
+            ),
+            ("DOUBLE", DataTypeSuffix::None | DataTypeSuffix::Precision)
+            | ("FLOAT8", DataTypeSuffix::None)
+                if args.is_empty() =>
             {
-                let tz = if *tz_info == TimezoneInfo::Tz
-                    || *tz_info == TimezoneInfo::WithTimeZone
+                Ok(DataType::Float64)
+            }
+            ("CHAR" | "TEXT" | "STRING", DataTypeSuffix::None) => Ok(string_type()),
+            ("TIMESTAMP" | "TIMESTAMPTZ" | "DATETIME", _) => {
+                let with_time_zone = name == "TIMESTAMPTZ"
+                    || (name == "TIMESTAMP" && suffix == DataTypeSuffix::WithTimeZone);
+                if !matches!(
+                    suffix,
+                    DataTypeSuffix::None
+                        | DataTypeSuffix::WithTimeZone
+                        | DataTypeSuffix::WithoutTimeZone
+                ) || (name == "DATETIME" && suffix != DataTypeSuffix::None)
                 {
+                    return unsupported();
+                }
+                let precision = match args.as_slice() {
+                    [] => None,
+                    [precision] => Some(precision.parse::<u64>().map_err(|_| {
+                        plan_datafusion_err!("Invalid precision in {sql_type}")
+                    })?),
+                    _ => return unsupported(),
+                };
+                let precision = match precision {
+                    Some(0) => TimeUnit::Second,
+                    Some(3) => TimeUnit::Millisecond,
+                    Some(6) => TimeUnit::Microsecond,
+                    None | Some(9) => TimeUnit::Nanosecond,
+                    _ => return unsupported(),
+                };
+                let tz = if with_time_zone {
                     // Timestamp With Time Zone
                     // INPUT : [SQLDataType]   TimestampTz + [Config] Time Zone
                     // OUTPUT: [ArrowDataType] Timestamp<TimeUnit, Time Zone>
@@ -788,165 +853,95 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                     // Timestamp Without Time zone
                     None
                 };
-                let precision = match precision {
-                    Some(0) => TimeUnit::Second,
-                    Some(3) => TimeUnit::Millisecond,
-                    Some(6) => TimeUnit::Microsecond,
-                    None | Some(9) => TimeUnit::Nanosecond,
-                    _ => unreachable!(),
-                };
                 Ok(DataType::Timestamp(precision, tz.map(Into::into)))
             }
-            SQLDataType::Datetime(precision)
-                if precision.is_none() || [0, 3, 6, 9].contains(&precision.unwrap()) =>
+            ("DATE", DataTypeSuffix::None) => Ok(DataType::Date32),
+            ("TIME", DataTypeSuffix::None | DataTypeSuffix::WithoutTimeZone)
+                if args.is_empty() =>
             {
-                self.convert_simple_data_type(&SQLDataType::Timestamp(
-                    *precision,
-                    TimezoneInfo::None,
-                ))
+                Ok(DataType::Time64(TimeUnit::Nanosecond))
             }
-            SQLDataType::Date => Ok(DataType::Date32),
-            SQLDataType::Time(None, tz_info) => {
-                if *tz_info == TimezoneInfo::None
-                    || *tz_info == TimezoneInfo::WithoutTimeZone
-                {
-                    Ok(DataType::Time64(TimeUnit::Nanosecond))
-                } else {
-                    // We don't support TIMETZ and TIME WITH TIME ZONE for now
-                    not_impl_err!("Unsupported SQL type {sql_type}")
-                }
-            }
-            SQLDataType::Numeric(exact_number_info)
-            | SQLDataType::Decimal(exact_number_info) => {
-                let (precision, scale) = match *exact_number_info {
-                    ExactNumberInfo::None => (None, None),
-                    ExactNumberInfo::Precision(precision) => (Some(precision), None),
-                    ExactNumberInfo::PrecisionAndScale(precision, scale) => {
-                        (Some(precision), Some(scale))
-                    }
+            ("NUMERIC" | "DECIMAL", DataTypeSuffix::None) => {
+                let number = |text: &str| {
+                    text.parse::<i64>()
+                        .map_err(|_| plan_datafusion_err!("Invalid number in {sql_type}"))
                 };
-                make_decimal_type(precision, scale.map(|s| s as u64))
+                let (precision, scale) = match args.as_slice() {
+                    [] => (None, None),
+                    [precision] => (Some(number(precision)? as u64), None),
+                    [precision, scale] => {
+                        (Some(number(precision)? as u64), Some(number(scale)? as u64))
+                    }
+                    _ => return unsupported(),
+                };
+                make_decimal_type(precision, scale)
             }
-            SQLDataType::Bytea
-            | SQLDataType::Blob(None)
-            | SQLDataType::Binary(None)
-            | SQLDataType::Varbinary(None)
-            | SQLDataType::Bytes(None) => Ok(DataType::Binary),
-            SQLDataType::Interval { fields, precision } => {
-                if fields.is_some() || precision.is_some() {
-                    return not_impl_err!("Unsupported SQL type {sql_type}");
-                }
+            ("BYTEA", DataTypeSuffix::None) => Ok(DataType::Binary),
+            ("BLOB" | "BINARY" | "VARBINARY" | "BYTES", DataTypeSuffix::None)
+                if args.is_empty() =>
+            {
+                Ok(DataType::Binary)
+            }
+            ("INTERVAL", DataTypeSuffix::None) if args.is_empty() => {
                 Ok(DataType::Interval(IntervalUnit::MonthDayNano))
             }
-            SQLDataType::Struct(fields, _) => {
+            ("STRUCT", DataTypeSuffix::None) => {
+                let fields = match sql_type.angle.as_deref() {
+                    Some(
+                        AngleArguments::Fields(fields)
+                        | AngleArguments::ParenFields(fields),
+                    ) => fields,
+                    _ => return unsupported(),
+                };
                 let fields = fields
                     .iter()
                     .enumerate()
                     .map(|(idx, sql_struct_field)| {
-                        let field = self.convert_data_type_to_field(&sql_struct_field.field_type)?;
-                        let field_name = match &sql_struct_field.field_name {
-                            Some(ident) => ident.clone(),
-                            None => Ident::new(format!("c{idx}")),
+                        let field =
+                            self.convert_data_type_to_field(&sql_struct_field.data_type)?;
+                        let field_name = match &sql_struct_field.name {
+                            Some(ident) => self.ident_normalizer.normalize(ident.clone()),
+                            None => format!("c{idx}"),
                         };
-                        Ok(field.as_ref().clone().with_name(self.ident_normalizer.normalize(field_name)))
+                        Ok(field.as_ref().clone().with_name(field_name))
                     })
                     .collect::<Result<Vec<_>>>()?;
                 Ok(DataType::Struct(Fields::from(fields)))
             }
-            SQLDataType::Map(key_type, value_type, _) => {
+            ("MAP", DataTypeSuffix::None) => {
+                let [key_type, value_type] = match sql_type.angle.as_deref() {
+                    Some(
+                        AngleArguments::Types(types) | AngleArguments::ParenTypes(types),
+                    ) if types.len() == 2 => [&types[0], &types[1]],
+                    _ => return unsupported(),
+                };
                 let key_field = Arc::new(Field::new(
-                    "key", self.convert_data_type_to_field(key_type)?.data_type().clone(), false
+                    "key",
+                    self.convert_data_type_to_field(key_type)?
+                        .data_type()
+                        .clone(),
+                    false,
                 ));
                 let value_field = Arc::new(Field::new(
-                    "value", self.convert_data_type_to_field(value_type)?.data_type().clone(), true)
-                );
+                    "value",
+                    self.convert_data_type_to_field(value_type)?
+                        .data_type()
+                        .clone(),
+                    true,
+                ));
                 let entries = DataType::Struct(Fields::from([key_field, value_field]));
-                Ok(DataType::Map(Arc::new(Field::new("entries", entries, false)), false))
+                Ok(DataType::Map(
+                    Arc::new(Field::new("entries", entries, false)),
+                    false,
+                ))
             }
-            | SQLDataType::JSON
-            | SQLDataType::Uuid
-            | SQLDataType::Binary(_)
-            | SQLDataType::Varbinary(_)
-            | SQLDataType::Blob(_)
-            | SQLDataType::Datetime(_)
-            | SQLDataType::Regclass
-            | SQLDataType::Custom(_, _)
-            | SQLDataType::Array(_)
-            | SQLDataType::Enum(_, _)
-            | SQLDataType::Set(_)
-            | SQLDataType::MediumInt(_)
-            | SQLDataType::MediumIntUnsigned(_)
-            | SQLDataType::Character(_)
-            | SQLDataType::CharacterLargeObject(_)
-            | SQLDataType::CharLargeObject(_)
-            | SQLDataType::Timestamp(_, _)
-            | SQLDataType::Time(Some(_), _)
-            | SQLDataType::Dec(_)
-            | SQLDataType::BigNumeric(_)
-            | SQLDataType::BigDecimal(_)
-            | SQLDataType::Clob(_)
-            | SQLDataType::Bytes(_)
-            | SQLDataType::Int64
-            | SQLDataType::Float64
-            | SQLDataType::JSONB
-            | SQLDataType::Unspecified
-            | SQLDataType::Int16
-            | SQLDataType::Int32
-            | SQLDataType::Int128
-            | SQLDataType::Int256
-            | SQLDataType::UInt8
-            | SQLDataType::UInt16
-            | SQLDataType::UInt32
-            | SQLDataType::UInt64
-            | SQLDataType::UInt128
-            | SQLDataType::UInt256
-            | SQLDataType::Float32
-            | SQLDataType::Date32
-            | SQLDataType::Datetime64(_, _)
-            | SQLDataType::FixedString(_)
-            | SQLDataType::Tuple(_)
-            | SQLDataType::Nested(_)
-            | SQLDataType::Union(_)
-            | SQLDataType::Nullable(_)
-            | SQLDataType::LowCardinality(_)
-            | SQLDataType::Trigger
-            | SQLDataType::TinyBlob
-            | SQLDataType::MediumBlob
-            | SQLDataType::LongBlob
-            | SQLDataType::TinyText
-            | SQLDataType::MediumText
-            | SQLDataType::LongText
-            | SQLDataType::Bit(_)
-            | SQLDataType::BitVarying(_)
-            | SQLDataType::Signed
-            | SQLDataType::SignedInteger
-            | SQLDataType::Unsigned
-            | SQLDataType::UnsignedInteger
-            | SQLDataType::AnyType
-            | SQLDataType::Table(_)
-            | SQLDataType::VarBit(_)
-            | SQLDataType::HugeInt
-            | SQLDataType::UHugeInt
-            | SQLDataType::TimestampNtz{..}
-            | SQLDataType::NamedTable { .. }
-            | SQLDataType::TsVector
-            | SQLDataType::TsQuery
-            | SQLDataType::GeometricType(_)
-            | SQLDataType::DecimalUnsigned(_) // deprecated mysql type
-            | SQLDataType::FloatUnsigned(_) // deprecated mysql type
-            | SQLDataType::RealUnsigned // deprecated mysql type
-            | SQLDataType::DecUnsigned(_) // deprecated mysql type
-            | SQLDataType::DoubleUnsigned(_) // deprecated mysql type
-            | SQLDataType::DoublePrecisionUnsigned // deprecated mysql type
-            => {
-                not_impl_err!("Unsupported SQL type {sql_type}")
-            }
+            _ => unsupported(),
         }
     }
 
     pub(crate) fn object_name_to_table_reference(
         &self,
-        object_name: ObjectName,
+        object_name: ObjectName<'_>,
     ) -> Result<TableReference> {
         object_name_to_table_reference(
             object_name,
@@ -966,34 +961,21 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
 /// ['foo', '"Bar"'] -> Partial { schema: "foo", table: "Bar" }
 /// ```
 pub fn object_name_to_table_reference(
-    object_name: ObjectName,
+    object_name: ObjectName<'_>,
     enable_normalization: bool,
 ) -> Result<TableReference> {
-    // Use destructure to make it clear no fields on ObjectName are ignored
-    let ObjectName(object_name_parts) = object_name;
-    let idents = object_name_parts
-        .into_iter()
-        .map(|object_name_part| {
-            object_name_part.as_ident().cloned().ok_or_else(|| {
-                plan_datafusion_err!(
-                    "Expected identifier, but found: {:?}",
-                    object_name_part
-                )
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    idents_to_table_reference(idents, enable_normalization)
+    idents_to_table_reference(object_name.parts, enable_normalization)
 }
 
-struct IdentTaker {
+struct IdentTaker<'a> {
     normalizer: IdentNormalizer,
-    idents: Vec<Ident>,
+    idents: Vec<Ident<'a>>,
 }
 
 /// Take the next identifier from the back of idents, panic'ing if
 /// there are none left
-impl IdentTaker {
-    fn new(idents: Vec<Ident>, enable_normalization: bool) -> Self {
+impl<'a> IdentTaker<'a> {
+    fn new(idents: Vec<Ident<'a>>, enable_normalization: bool) -> Self {
         Self {
             normalizer: IdentNormalizer::new(enable_normalization),
             idents,
@@ -1012,7 +994,7 @@ impl IdentTaker {
 }
 
 // impl Display for a nicer error message
-impl std::fmt::Display for IdentTaker {
+impl std::fmt::Display for IdentTaker<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut first = true;
         for ident in self.idents.iter() {
@@ -1029,7 +1011,7 @@ impl std::fmt::Display for IdentTaker {
 
 /// Create a [`TableReference`] after normalizing the specified identifier
 pub(crate) fn idents_to_table_reference(
-    idents: Vec<Ident>,
+    idents: Vec<Ident<'_>>,
     enable_normalization: bool,
 ) -> Result<TableReference> {
     let mut taker = IdentTaker::new(idents, enable_normalization);
@@ -1061,33 +1043,44 @@ pub(crate) fn idents_to_table_reference(
 /// Construct a WHERE qualifier suitable for e.g. information_schema filtering
 /// from the provided object identifiers (catalog, schema and table names).
 pub fn object_name_to_qualifier(
-    sql_table_name: &ObjectName,
+    sql_table_name: &ObjectName<'_>,
     enable_normalization: bool,
 ) -> Result<String> {
     let columns = vec!["table_name", "table_schema", "table_catalog"].into_iter();
     let normalizer = IdentNormalizer::new(enable_normalization);
-    sql_table_name
-        .0
+    Ok(sql_table_name
+        .parts
         .iter()
         .rev()
         .zip(columns)
-        .map(|(object_name_part, column_name)| {
-            object_name_part
-                .as_ident()
-                .map(|ident| {
-                    format!(
-                        r#"{} = '{}'"#,
-                        column_name,
-                        normalizer.normalize(ident.clone())
-                    )
-                })
-                .ok_or_else(|| {
-                    plan_datafusion_err!(
-                        "Expected identifier, but found: {:?}",
-                        object_name_part
-                    )
-                })
+        .map(|(ident, column_name)| {
+            format!(
+                r#"{} = '{}'"#,
+                column_name,
+                normalizer.normalize(ident.clone())
+            )
         })
-        .collect::<Result<Vec<_>>>()
-        .map(|parts| parts.join(" AND "))
+        .collect::<Vec<_>>()
+        .join(" AND "))
+}
+
+/// The upper-case name of a type, or the qualified name for a qualified type.
+fn type_name(sql_type: &SQLDataType<'_>) -> String {
+    if !sql_type.qualifier.is_empty() {
+        return sql_type.to_string();
+    }
+    sql_type.name.text.to_ascii_uppercase()
+}
+
+/// The options of a column, looking through `CONSTRAINT name`.
+pub(crate) fn column_options<'o, 'a>(
+    options: &'o [ColumnOption<'a>],
+) -> impl Iterator<Item = &'o ColumnOption<'a>> {
+    options.iter().map(|option| {
+        let mut option = option;
+        while let ColumnOption::Named { option: inner, .. } = option {
+            option = inner;
+        }
+        option
+    })
 }

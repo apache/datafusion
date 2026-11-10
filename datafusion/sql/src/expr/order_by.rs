@@ -2,18 +2,16 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::ast::{Expr as SQLExpr, ExprKind, Literal as SQLLiteral, OrderByItem};
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{
     Column, DFSchema, Result, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::expr::Sort;
 use datafusion_expr::{Expr, SortExpr};
-use sqlparser::ast::{
-    Expr as SQLExpr, OrderByExpr, OrderByOptions, OrderBySort, Value, ValueWithSpan,
-};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
-    /// Convert sql [OrderByExpr] to `Vec<Expr>`.
+    /// Convert sql [OrderByItem] to `Vec<Expr>`.
     ///
     /// `input_schema` and `additional_schema` are used to resolve column references in the order-by expressions.
     /// `input_schema` is the schema of the input logical plan, typically derived from the SELECT list.
@@ -28,7 +26,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// If false, interpret numeric literals as constant values.
     pub(crate) fn order_by_to_sort_expr(
         &self,
-        order_by_exprs: Vec<OrderByExpr>,
+        order_by_exprs: Vec<OrderByItem<'_>>,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
         literal_to_column: bool,
@@ -60,30 +58,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         for order_by_expr in order_by_exprs {
-            let OrderByExpr {
+            let OrderByItem {
                 expr,
-                options: OrderByOptions { sort, nulls_first },
-                with_fill,
+                asc,
+                nulls_first,
+                using,
+                ext,
             } = order_by_expr;
 
-            if let Some(with_fill) = with_fill {
+            if let Some(with_fill) = ext.with_fill {
                 return not_impl_err!("ORDER BY WITH FILL is not supported: {with_fill}");
             }
+            if ext.interpolate.is_some() {
+                return not_impl_err!("ORDER BY INTERPOLATE is not supported");
+            }
+            if let Some(op) = using {
+                return not_impl_err!("ORDER BY USING is not supported: {op}");
+            }
 
-            let asc = match sort {
-                Some(OrderBySort::Asc) => Some(true),
-                Some(OrderBySort::Desc) => Some(false),
-                Some(OrderBySort::Using(op)) => {
-                    return not_impl_err!("ORDER BY USING is not supported: {op}");
-                }
-                None => None,
-            };
-
-            let expr = match expr {
-                SQLExpr::Value(ValueWithSpan {
-                    value: Value::Number(v, _),
-                    span: _,
-                }) if literal_to_column => {
+            let span = expr.span;
+            let expr = match expr.kind {
+                ExprKind::Literal(SQLLiteral::Number(v)) if literal_to_column => {
                     let field_index = v
                         .parse::<usize>()
                         .map_err(|err| plan_datafusion_err!("{}", err))?;
@@ -104,9 +99,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         input_schema.qualified_field(field_index - 1),
                     ))
                 }
-                e => {
+                kind => {
                     let expr = self.sql_expr_to_logical_expr(
-                        e,
+                        SQLExpr::new(kind, span),
                         order_by_schema,
                         planner_context,
                     )?;

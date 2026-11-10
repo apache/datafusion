@@ -2,18 +2,19 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::ast::{
+    BinaryOp, Expr as SQLExpr, ExprKind, Query, SelectItemKind, SetExpr, SpecialExpr,
+};
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, Diagnostic, Result, Span, Spans, plan_err};
 use datafusion_expr::expr::{Exists, InSubquery, SetComparison, SetQuantifier};
 use datafusion_expr::{Expr, LogicalPlan, Subquery};
-use sqlparser::ast::Expr as SQLExpr;
-use sqlparser::ast::{BinaryOperator, Query, SelectItem, SetExpr};
 use std::sync::Arc;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn parse_exists_subquery(
         &self,
-        subquery: Query,
+        subquery: Query<'_>,
         negated: bool,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
@@ -34,8 +35,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(super) fn parse_in_subquery(
         &self,
-        expr: SQLExpr,
-        subquery: Query,
+        expr: SQLExpr<'_>,
+        subquery: Query<'_>,
         negated: bool,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
@@ -43,9 +44,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context.append_outer_query_schema(Arc::new(input_schema.clone()));
 
         let mut spans = Spans::new();
-        if let SetExpr::Select(select) = &subquery.body.as_ref() {
+        if let SetExpr::Select(select) = &subquery.body {
             for item in &select.projection {
-                if let SelectItem::UnnamedExpr(SQLExpr::Identifier(ident)) = item
+                if let SelectItemKind::Expr {
+                    expr:
+                        SQLExpr {
+                            kind: ExprKind::Ident(ident),
+                            ..
+                        },
+                    alias: None,
+                } = &item.kind
                     && let Some(span) = Span::try_from_sqlparser_span(ident.span)
                 {
                     spans.add_span(span);
@@ -61,7 +69,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // tuple element (the counts are checked once the tuple is planned, see
         // `in_subquery_tuple_values`); anything else compares a single value,
         // so the subquery must return exactly one column.
-        if !matches!(expr, SQLExpr::Tuple(_)) {
+        let is_tuple = matches!(
+            &expr.kind,
+            ExprKind::Special(special) if matches!(**special, SpecialExpr::Tuple(_))
+        );
+        if !is_tuple {
             self.validate_single_column(
                 &sub_plan,
                 &spans,
@@ -85,15 +97,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(super) fn parse_scalar_subquery(
         &self,
-        subquery: Query,
+        subquery: Query<'_>,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         planner_context.append_outer_query_schema(Arc::new(input_schema.clone()));
         let mut spans = Spans::new();
-        if let SetExpr::Select(select) = subquery.body.as_ref() {
+        if let SetExpr::Select(select) = &subquery.body {
             for item in &select.projection {
-                if let SelectItem::ExprWithAlias { alias, .. } = item
+                if let SelectItemKind::Expr {
+                    alias: Some(alias), ..
+                } = &item.kind
                     && let Some(span) = Span::try_from_sqlparser_span(alias.span)
                 {
                     spans.add_span(span);
@@ -155,9 +169,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(super) fn parse_set_comparison_subquery(
         &self,
-        left_expr: SQLExpr,
-        subquery: Query,
-        compare_op: &BinaryOperator,
+        left_expr: SQLExpr<'_>,
+        subquery: Query<'_>,
+        compare_op: &BinaryOp<'_>,
         quantifier: SetQuantifier,
         input_schema: &DFSchema,
         planner_context: &mut PlannerContext,
@@ -165,9 +179,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context.append_outer_query_schema(Arc::new(input_schema.clone()));
 
         let mut spans = Spans::new();
-        if let SetExpr::Select(select) = subquery.body.as_ref() {
+        if let SetExpr::Select(select) = &subquery.body {
             for item in &select.projection {
-                if let SelectItem::ExprWithAlias { alias, .. } = item
+                if let SelectItemKind::Expr {
+                    alias: Some(alias), ..
+                } = &item.kind
                     && let Some(span) = Span::try_from_sqlparser_span(alias.span)
                 {
                     spans.add_span(span);

@@ -2,10 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use datafusion::sql::parser::{DFParserBuilder, Statement};
+use datafusion::sql::ast::SetExpr;
+use datafusion::sql::parser::{DFParserBuilder, Statement, dialect_from_str};
+use datafusion::sql::sqlparser::ast::StatementKind;
 use sqllogictest::{AsyncDB, Record};
-use sqlparser::ast::{SetExpr, Statement as SqlStatement};
-use sqlparser::dialect::dialect_from_str;
 use std::path::Path;
 use std::str::FromStr;
 
@@ -121,7 +121,7 @@ pub fn should_skip_record<D: AsyncDB>(
     true
 }
 
-fn statement_is_skippable(statement: &Statement) -> bool {
+fn statement_is_skippable(statement: &Statement<'_>) -> bool {
     // Only SQL statements can be skipped.
     let Statement::Statement(sql_stmt) = statement else {
         return false;
@@ -129,8 +129,8 @@ fn statement_is_skippable(statement: &Statement) -> bool {
 
     // Cannot skip SELECT INTO statements, as they can also create tables
     // that further test cases will use.
-    if let SqlStatement::Query(v) = sql_stmt.as_ref()
-        && let SetExpr::Select(v) = v.body.as_ref()
+    if let StatementKind::Query(v) = &sql_stmt.kind
+        && let SetExpr::Select(v) = &v.body
         && v.into.is_some()
     {
         return false;
@@ -139,14 +139,14 @@ fn statement_is_skippable(statement: &Statement) -> bool {
     // Only SELECT and EXPLAIN statements can be skipped, as any other
     // statement might be populating tables that future test cases will use.
     matches!(
-        sql_stmt.as_ref(),
-        SqlStatement::Query(_) | SqlStatement::Explain { .. }
+        sql_stmt.kind,
+        StatementKind::Query(_) | StatementKind::Explain(_)
     )
 }
 
-fn parse_or_none(sql: &str, dialect: &str) -> Option<Statement> {
+fn parse_or_none<'a>(sql: &'a str, dialect: &str) -> Option<Statement<'a>> {
     let Ok(Ok(Some(statement))) = DFParserBuilder::new(sql)
-        .with_dialect(dialect_from_str(dialect).unwrap().as_ref())
+        .with_dialect(dialect_from_str(dialect).unwrap())
         .build()
         .map(|mut v| v.parse_statements().map(|mut v| v.pop_front()))
     else {

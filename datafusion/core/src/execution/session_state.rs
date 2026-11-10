@@ -76,15 +76,15 @@ use datafusion_sql::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+#[cfg(feature = "sql")]
+use datafusion_sql::{
+    ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias},
+    parser::dialect_from_str,
+};
 use futures::future::BoxFuture;
 use itertools::Itertools;
 use log::{debug, info};
 use object_store::ObjectStore;
-#[cfg(feature = "sql")]
-use sqlparser::{
-    ast::{Expr as SQLExpr, ExprWithAlias as SQLExprWithAlias},
-    dialect::dialect_from_str,
-};
 use url::Url;
 use uuid::Uuid;
 
@@ -542,12 +542,12 @@ impl SessionState {
     ///
     /// [`SessionContext::sql`]: crate::execution::context::SessionContext::sql
     #[cfg(feature = "sql")]
-    pub fn sql_to_statement(
+    pub fn sql_to_statement<'s>(
         &self,
-        sql: &str,
+        sql: &'s str,
         dialect: &Dialect,
-    ) -> datafusion_common::Result<Statement> {
-        let dialect = dialect_from_str(dialect).ok_or_else(|| {
+    ) -> datafusion_common::Result<Statement<'s>> {
+        let dialect = dialect_from_str(dialect.as_ref()).ok_or_else(|| {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
                 Dialect::available()
@@ -557,7 +557,7 @@ impl SessionState {
         let recursion_limit = self.config().options().sql_parser.recursion_limit.get();
 
         let mut statements = DFParserBuilder::new(sql)
-            .with_dialect(dialect.as_ref())
+            .with_dialect(dialect)
             .with_recursion_limit(recursion_limit)
             .build()?
             .parse_statements()?;
@@ -578,11 +578,11 @@ impl SessionState {
     ///
     /// See [`Self::create_logical_expr`] for parsing sql to [`Expr`].
     #[cfg(feature = "sql")]
-    pub fn sql_to_expr(
+    pub fn sql_to_expr<'s>(
         &self,
-        sql: &str,
+        sql: &'s str,
         dialect: &Dialect,
-    ) -> datafusion_common::Result<SQLExpr> {
+    ) -> datafusion_common::Result<SQLExpr<'s>> {
         self.sql_to_expr_with_alias(sql, dialect).map(|x| x.expr)
     }
 
@@ -590,12 +590,12 @@ impl SessionState {
     ///
     /// See [`Self::create_logical_expr`] for parsing sql to [`Expr`].
     #[cfg(feature = "sql")]
-    pub fn sql_to_expr_with_alias(
+    pub fn sql_to_expr_with_alias<'s>(
         &self,
-        sql: &str,
+        sql: &'s str,
         dialect: &Dialect,
-    ) -> datafusion_common::Result<SQLExprWithAlias> {
-        let dialect = dialect_from_str(dialect).ok_or_else(|| {
+    ) -> datafusion_common::Result<SQLExprWithAlias<'s>> {
+        let dialect = dialect_from_str(dialect.as_ref()).ok_or_else(|| {
             plan_datafusion_err!(
                 "Unsupported SQL dialect: {dialect}. Available dialects: {}.",
                 Dialect::available()
@@ -604,7 +604,7 @@ impl SessionState {
 
         let recursion_limit = self.config().options().sql_parser.recursion_limit.get();
         let expr = DFParserBuilder::new(sql)
-            .with_dialect(dialect.as_ref())
+            .with_dialect(dialect)
             .with_recursion_limit(recursion_limit)
             .build()?
             .parse_into_expr()?;
@@ -620,7 +620,7 @@ impl SessionState {
     #[cfg(feature = "sql")]
     pub fn resolve_table_references(
         &self,
-        statement: &Statement,
+        statement: &Statement<'_>,
     ) -> datafusion_common::Result<Vec<TableReference>> {
         let enable_ident_normalization = self
             .config()
@@ -638,7 +638,7 @@ impl SessionState {
     #[cfg(feature = "sql")]
     pub async fn statement_to_plan(
         &self,
-        statement: Statement,
+        statement: Statement<'_>,
     ) -> datafusion_common::Result<LogicalPlan> {
         let references = self.resolve_table_references(&statement)?;
 
@@ -725,7 +725,7 @@ impl SessionState {
     #[cfg(feature = "sql")]
     pub fn create_logical_expr_from_sql_expr(
         &self,
-        sql_expr: SQLExprWithAlias,
+        sql_expr: SQLExprWithAlias<'_>,
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Expr> {
         let provider = SessionContextProvider {
@@ -2597,7 +2597,7 @@ mod tests {
     fn test_configured_dialect_names_are_accepted_by_sqlparser() {
         for info in Dialect::metadata() {
             assert!(
-                sqlparser::dialect::dialect_from_str(info.canonical_name).is_some(),
+                datafusion_sql::parser::dialect_from_str(info.canonical_name).is_some(),
                 "sqlparser should accept configured dialect {}",
                 info.canonical_name
             );

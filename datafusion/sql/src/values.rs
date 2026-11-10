@@ -4,35 +4,23 @@
 
 use std::sync::Arc;
 
+use crate::ast::Expr as SQLExpr;
 use crate::expr::reject_window_functions;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
-use datafusion_common::{DFSchema, HashMap, Result, not_impl_err};
+use datafusion_common::{DFSchema, HashMap, Result};
 use datafusion_expr::{LogicalPlan, LogicalPlanBuilder};
-use sqlparser::ast::Values as SQLValues;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_values_to_plan(
         &self,
-        values: SQLValues,
+        rows: Vec<Vec<SQLExpr<'_>>>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let SQLValues {
-            explicit_row: _,
-            rows,
-            value_keyword,
-        } = values;
-        if value_keyword {
-            return not_impl_err!(
-                "`VALUE` keyword not supported. Did you mean `VALUES`?"
-            )?;
-        }
-
         let empty_schema = Arc::new(DFSchema::empty());
         let values = rows
             .into_iter()
             .map(|row| {
-                row.content
-                    .into_iter()
+                row.into_iter()
                     .map(|v| {
                         let window_span = self.window_function_span(&v, &HashMap::new());
                         let expr = self.sql_to_expr(v, &empty_schema, planner_context)?;

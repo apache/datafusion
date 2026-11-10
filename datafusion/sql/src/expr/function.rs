@@ -4,6 +4,10 @@
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
+use crate::ast::{
+    BuiltinExpr, Expr as SQLExpr, ExprKind, FunctionArg, FunctionOptions, Ident,
+    ObjectName, OrderByItem, SpecialExpr, WindowOver,
+};
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{
     DFSchema, Dependency, Diagnostic, HashSet, Result, Span, datatype::FieldExt,
@@ -20,11 +24,7 @@ use datafusion_expr::{
     planner::{PlannerResult, RawAggregateExpr, RawScalarExpr, RawWindowExpr},
     type_coercion::functions::value_fields_with_higher_order_udf,
 };
-use sqlparser::ast::{
-    DuplicateTreatment, Expr as SQLExpr, Function as SQLFunction, FunctionArg,
-    FunctionArgExpr, FunctionArgumentClause, FunctionArgumentList, FunctionArguments,
-    LambdaFunction, ObjectName, OrderByExpr, Spanned, WindowType,
-};
+use sqlparser::dialect::duckdb::{DuckDbExpr, DuckDbLambda};
 
 /// Suggest a valid function based on an invalid input function name
 ///
@@ -63,136 +63,107 @@ fn find_closest_match(candidates: Vec<String>, target: &str) -> Option<String> {
 
 /// Arguments for a function call extracted from the SQL AST
 #[derive(Debug)]
-struct FunctionArgs {
+pub(super) struct FunctionArgs<'s> {
     /// Function name
-    name: ObjectName,
+    name: ObjectName<'s>,
     /// Argument expressions
-    args: Vec<FunctionArg>,
+    args: Vec<FunctionArg<'s>>,
     /// ORDER BY clause, if any
-    order_by: Vec<OrderByExpr>,
+    order_by: Vec<OrderByItem<'s>>,
     /// OVER clause, if any
-    over: Option<WindowType>,
+    over: Option<WindowOver<'s>>,
     /// FILTER clause, if any
-    filter: Option<Box<SQLExpr>>,
+    filter: Option<SQLExpr<'s>>,
     /// NULL treatment clause, if any
     null_treatment: Option<NullTreatment>,
     /// DISTINCT
     distinct: bool,
     /// WITHIN GROUP clause, if any
-    within_group: Vec<OrderByExpr>,
+    within_group: Vec<OrderByItem<'s>>,
     /// Was the function called without parenthesis, i.e. could this also be a column reference?
     function_without_parentheses: bool,
 }
 
-impl FunctionArgs {
-    fn try_new(function: SQLFunction) -> Result<Self> {
-        let SQLFunction {
+impl<'s> FunctionArgs<'s> {
+    /// A call written without parentheses, such as `current_date`.
+    pub(super) fn without_parentheses(name: ObjectName<'s>) -> Self {
+        Self {
             name,
-            args,
-            over,
-            filter,
-            mut null_treatment,
-            within_group,
-            ..
-        } = function;
+            args: vec![],
+            order_by: vec![],
+            over: None,
+            filter: None,
+            null_treatment: None,
+            distinct: false,
+            within_group: vec![],
+            function_without_parentheses: true,
+        }
+    }
 
-        // Handle no argument form (aka `current_time`  as opposed to `current_time()`)
-        let FunctionArguments::List(args) = args else {
+    fn try_new(
+        name: ObjectName<'s>,
+        args: Vec<FunctionArg<'s>>,
+        options: Option<Box<FunctionOptions<'s>>>,
+    ) -> Result<Self> {
+        let Some(options) = options else {
             return Ok(Self {
                 name,
-                args: vec![],
+                args,
                 order_by: vec![],
-                over,
-                filter,
-                null_treatment: null_treatment.map(|v| v.into()),
+                over: None,
+                filter: None,
+                null_treatment: None,
                 distinct: false,
-                within_group,
-                function_without_parentheses: args == FunctionArguments::None,
+                within_group: vec![],
+                function_without_parentheses: false,
             });
         };
 
-        let FunctionArgumentList {
-            duplicate_treatment,
-            args,
-            clauses,
-        } = args;
+        let FunctionOptions {
+            parameters,
+            quantifier,
+            order_by,
+            within_group,
+            filter,
+            null_treatment,
+            inner_null_treatment,
+            separator,
+            on_overflow,
+            over,
+        } = *options;
 
-        let distinct = match duplicate_treatment {
-            Some(DuplicateTreatment::Distinct) => true,
-            Some(DuplicateTreatment::All) => false,
-            None => false,
+        if !parameters.is_empty() {
+            return not_impl_err!(
+                "Calling {name}: parametric function calls are not supported"
+            );
+        }
+
+        if let Some(sep) = separator {
+            return not_impl_err!(
+                "Calling {name}: SEPARATOR not supported in function arguments: {sep:?}"
+            );
+        }
+
+        if on_overflow.is_some() {
+            return not_impl_err!(
+                "Calling {name}: ON OVERFLOW not supported in function arguments"
+            );
+        }
+
+        let null_treatment = match (null_treatment, inner_null_treatment) {
+            (Some(_), Some(_)) => {
+                return not_impl_err!("Calling {name}: Duplicated null treatment clause");
+            }
+            (outer, inner) => outer.or(inner),
         };
 
-        // Pull out argument handling
-        let mut order_by = None;
-        for clause in clauses {
-            match clause {
-                FunctionArgumentClause::IgnoreOrRespectNulls(nt) => {
-                    if null_treatment.is_some() {
-                        return not_impl_err!(
-                            "Calling {name}: Duplicated null treatment clause"
-                        );
-                    }
-                    null_treatment = Some(nt);
-                }
-                FunctionArgumentClause::OrderBy(oby) => {
-                    if order_by.is_some() {
-                        if !within_group.is_empty() {
-                            return plan_err!(
-                                "ORDER BY clause is only permitted in WITHIN GROUP clause when a WITHIN GROUP is used"
-                            );
-                        }
-                        return not_impl_err!(
-                            "Calling {name}: Duplicated ORDER BY clause in function arguments"
-                        );
-                    }
-                    order_by = Some(oby);
-                }
-                FunctionArgumentClause::Limit(limit) => {
-                    return not_impl_err!(
-                        "Calling {name}: LIMIT not supported in function arguments: {limit}"
-                    );
-                }
-                FunctionArgumentClause::Where(predicate) => {
-                    return not_impl_err!(
-                        "Calling {name}: WHERE not supported in function arguments: {predicate}"
-                    );
-                }
-                FunctionArgumentClause::OnOverflow(overflow) => {
-                    return not_impl_err!(
-                        "Calling {name}: ON OVERFLOW not supported in function arguments: {overflow}"
-                    );
-                }
-                FunctionArgumentClause::Having(having) => {
-                    return not_impl_err!(
-                        "Calling {name}: HAVING not supported in function arguments: {having}"
-                    );
-                }
-                FunctionArgumentClause::Separator(sep) => {
-                    return not_impl_err!(
-                        "Calling {name}: SEPARATOR not supported in function arguments: {sep}"
-                    );
-                }
-                FunctionArgumentClause::JsonNullClause(jn) => {
-                    return not_impl_err!(
-                        "Calling {name}: JSON NULL clause not supported in function arguments: {jn}"
-                    );
-                }
-                FunctionArgumentClause::JsonReturningClause(jr) => {
-                    return not_impl_err!(
-                        "Calling {name}: JSON RETURNING clause not supported in function arguments: {jr}"
-                    );
-                }
-            }
-        }
+        let distinct = quantifier == sqlparser::ast::SetQuantifier::Distinct;
 
         if within_group.len() > 1 {
             return not_impl_err!(
                 "Only a single ordering expression is permitted in a WITHIN GROUP clause"
             );
         }
-
-        let order_by = order_by.unwrap_or_default();
 
         Ok(Self {
             name,
@@ -208,17 +179,128 @@ impl FunctionArgs {
     }
 }
 
+/// A lambda function argument: `x -> body` or DuckDB's `lambda x: body`.
+#[derive(Debug, Clone)]
+struct SqlLambda<'s> {
+    params: Vec<Ident<'s>>,
+    body: SQLExpr<'s>,
+}
+
+impl<'s> SqlLambda<'s> {
+    /// Returns the lambda if `arg` is an unnamed lambda argument.
+    fn from_arg(arg: FunctionArg<'s>) -> std::result::Result<Self, FunctionArg<'s>> {
+        let FunctionArg::Expr(expr) = arg else {
+            return Err(arg);
+        };
+        match expr.kind {
+            ExprKind::Special(special)
+                if matches!(*special, SpecialExpr::Lambda { .. }) =>
+            {
+                let SpecialExpr::Lambda { params, body, .. } = *special else {
+                    unreachable!()
+                };
+                Ok(Self { params, body })
+            }
+            ExprKind::Ext(BuiltinExpr::DuckDb(DuckDbExpr::Lambda(lambda))) => {
+                let DuckDbLambda { params, body } = *lambda;
+                Ok(Self { params, body })
+            }
+            kind => Err(FunctionArg::Expr(SQLExpr::new(kind, expr.span))),
+        }
+    }
+}
+
+/// The arguments and options of a call, handed back when it is not planned.
+type CallParts<'s> = (Vec<FunctionArg<'s>>, Option<Box<FunctionOptions<'s>>>);
+
 // Helper type for extracting WITHIN GROUP ordering and prepended args
 type WithinGroupExtraction = (Vec<SortExpr>, Vec<Expr>, Vec<Option<ArgumentName>>);
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
-    pub(super) fn sql_function_to_expr(
+    pub(super) fn sql_function_to_expr<'s>(
         &self,
-        function: SQLFunction,
+        name: ObjectName<'s>,
+        args: Vec<FunctionArg<'s>>,
+        options: Option<Box<FunctionOptions<'s>>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
-        let function_args = FunctionArgs::try_new(function)?;
+        // `SUBSTRING(a, b, c)` and `TRIM(a, b)` are planned like their keyword
+        // forms, `SUBSTRING(a FROM b FOR c)` and `TRIM(b FROM a)`.
+        let (args, options) = match self.try_plan_special_function(
+            &name,
+            args,
+            options,
+            schema,
+            planner_context,
+        )? {
+            Ok(expr) => return Ok(expr),
+            Err(original) => original,
+        };
+        let function_args = FunctionArgs::try_new(name, args, options)?;
+        self.function_args_to_logical_expr(function_args, schema, planner_context)
+    }
+
+    /// Plans `SUBSTRING(...)`, `SUBSTR(...)` and `TRIM(...)` written with
+    /// commas, as the parser of an earlier version of `sqlparser` gave them
+    /// their own expressions. Hands the arguments back for other functions.
+    fn try_plan_special_function<'s>(
+        &self,
+        name: &ObjectName<'s>,
+        args: Vec<FunctionArg<'s>>,
+        options: Option<Box<FunctionOptions<'s>>>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<std::result::Result<Expr, CallParts<'s>>> {
+        let [part] = name.parts.as_slice() else {
+            return Ok(Err((args, options)));
+        };
+        if options.is_some()
+            || part.quote.is_some()
+            || !args.iter().all(|arg| matches!(arg, FunctionArg::Expr(_)))
+        {
+            return Ok(Err((args, options)));
+        }
+        let is_substring = part.text.eq_ignore_ascii_case("substring")
+            || part.text.eq_ignore_ascii_case("substr");
+        let is_trim = part.text.eq_ignore_ascii_case("trim");
+        let arity_ok = (is_substring && (args.len() == 2 || args.len() == 3))
+            || (is_trim && (args.len() == 1 || args.len() == 2));
+        if !arity_ok {
+            return Ok(Err((args, options)));
+        }
+        let mut exprs = args.into_iter().map(|arg| match arg {
+            FunctionArg::Expr(expr) => expr,
+            _ => unreachable!("checked above"),
+        });
+        let first = exprs.next().unwrap();
+        let second = exprs.next();
+        let third = exprs.next();
+        let expr = if is_substring {
+            #[cfg(feature = "unicode_expressions")]
+            {
+                self.sql_substring_to_expr(first, second, third, schema, planner_context)?
+            }
+            #[cfg(not(feature = "unicode_expressions"))]
+            {
+                let _ = (first, second, third);
+                return internal_err!(
+                    "statement substring requires compilation with feature flag: unicode_expressions."
+                );
+            }
+        } else {
+            self.sql_trim_to_expr(first, None, second, schema, planner_context)?
+        };
+        Ok(Ok(expr))
+    }
+
+    pub(super) fn function_args_to_logical_expr(
+        &self,
+        function_args: FunctionArgs<'_>,
+        schema: &DFSchema,
+        planner_context: &mut PlannerContext,
+    ) -> Result<Expr> {
+        let distinct_arg = function_args.distinct;
         let FunctionArgs {
             name: object_name,
             args,
@@ -248,21 +330,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // it shouldn't have ordering requirement as function argument
         // required ordering should be defined in OVER clause.
         let is_function_window = over.is_some();
-        let sql_parser_span = object_name.0[0].span();
-        let name = if object_name.0.len() > 1 {
+        let sql_parser_span = object_name.parts[0].span;
+        let name = if object_name.parts.len() > 1 {
             // DF doesn't handle compound identifiers
             // (e.g. "foo.bar") for function names yet
             object_name.to_string()
         } else {
-            match object_name.0[0].as_ident() {
-                Some(ident) => crate::utils::normalize_ident(ident.clone()),
-                None => {
-                    return plan_err!(
-                        "Expected an identifier in function name, but found {:?}",
-                        object_name.0[0]
-                    );
-                }
-            }
+            crate::utils::normalize_ident(object_name.parts[0].clone())
         };
 
         // handle make_map and map functions
@@ -370,27 +444,30 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // plan non-lambda arguments first so we can get theirs datatype and call
             // HigherOrderUDFImpl::lambda_parameters to then plan the lambda arguments with
             // resolved lambda variables
-            enum ExprOrLambda {
+            enum ExprOrLambda<'s> {
                 Expr(Expr),
-                Lambda(LambdaFunction),
+                Lambda(SqlLambda<'s>),
             }
 
             let partially_planned = args
                 .into_iter()
-                .map(|a| match a {
-                    FunctionArg::Unnamed(FunctionArgExpr::Expr(SQLExpr::Lambda(
-                        lambda,
-                    ))) => {
+                .map(|a| match SqlLambda::from_arg(a) {
+                    Ok(lambda) => {
                         if !all_unique(&lambda.params) {
+                            let params = lambda
+                                .params
+                                .iter()
+                                .map(|p| p.to_string())
+                                .collect::<Vec<_>>()
+                                .join(", ");
                             return plan_err!(
-                                "lambda parameters names must be unique, got {}",
-                                lambda.params
+                                "lambda parameters names must be unique, got ({params})"
                             );
                         }
 
                         Ok(ExprOrLambda::Lambda(lambda))
                     }
-                    _ => Ok(ExprOrLambda::Expr(self.sql_fn_arg_to_logical_expr(
+                    Err(a) => Ok(ExprOrLambda::Expr(self.sql_fn_arg_to_logical_expr(
                         a,
                         schema,
                         planner_context,
@@ -571,13 +648,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             );
         }
         // Then, window function
-        if let Some(WindowType::WindowSpec(window)) = over {
+        if let Some(WindowOver::Spec(window)) = over {
             let partition_by = window
                 .partition_by
                 .into_iter()
                 // Ignore window spec PARTITION BY for scalar values
                 // as they do not change and thus do not generate new partitions
-                .filter(|e| !matches!(e, sqlparser::ast::Expr::Value { .. },))
+                .filter(|e| !matches!(e.kind, ExprKind::Literal(_)))
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
             let mut order_by = self.order_by_to_sort_expr(
@@ -610,7 +687,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             });
 
             let window_frame = window
-                .window_frame
+                .frame
                 .as_ref()
                 .map(|window_frame| {
                     let window_frame: WindowFrame = window_frame.clone().try_into()?;
@@ -656,7 +733,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 // Plan FILTER clause if present
                 let filter = filter
-                    .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
+                    .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                     .transpose()?
                     .map(Box::new);
 
@@ -668,7 +745,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     window_frame,
                     filter,
                     null_treatment,
-                    distinct: function_args.distinct,
+                    distinct: distinct_arg,
                 };
 
                 for planner in self.context_provider.get_expr_planners().iter() {
@@ -804,7 +881,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
 
                 let filter: Option<Box<Expr>> = filter
-                    .map(|e| self.sql_expr_to_logical_expr(*e, schema, planner_context))
+                    .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                     .transpose()?
                     .map(Box::new);
 
@@ -880,25 +957,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
         // workaround for https://github.com/apache/datafusion-sqlparser-rs/issues/1909
         if function_without_parentheses {
-            let maybe_ids = object_name
-                .0
-                .iter()
-                .map(|part| part.as_ident().cloned().ok_or(()))
-                .collect::<Result<Vec<_>, ()>>();
-            if let Ok(ids) = maybe_ids {
-                if ids.len() == 1 {
-                    return self.sql_identifier_to_expr(
-                        ids.into_iter().next().unwrap(),
-                        schema,
-                        planner_context,
-                    );
-                } else {
-                    return self.sql_compound_identifier_to_expr(
-                        ids,
-                        schema,
-                        planner_context,
-                    );
-                }
+            let ids = object_name.parts;
+            if ids.len() == 1 {
+                return self.sql_identifier_to_expr(
+                    ids.into_iter().next().unwrap(),
+                    schema,
+                    planner_context,
+                );
+            } else {
+                return self.sql_compound_identifier_to_expr(
+                    ids,
+                    schema,
+                    planner_context,
+                );
             }
         }
 
@@ -921,7 +992,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         &self,
         planner_context: &mut PlannerContext,
         schema: &DFSchema,
-        lambda: LambdaFunction,
+        lambda: SqlLambda<'_>,
         lambda_params: Vec<FieldRef>,
     ) -> Result<Lambda> {
         if lambda.params.len() > lambda_params.len() {
@@ -932,15 +1003,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             );
         }
 
-        if lambda.params.iter().any(|p| p.data_type.is_some()) {
-            return not_impl_err!(
-                "Lambda parameters with explicit data types are not supported"
-            );
-        }
         let params = lambda
             .params
             .iter()
-            .map(|p| crate::utils::normalize_ident(p.name.clone()))
+            .map(|p| crate::utils::normalize_ident(p.clone()))
             .collect();
 
         let lambda_parameters = std::iter::zip(lambda_params, &params)
@@ -953,7 +1019,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Ok(Lambda {
             params,
             body: Box::new(self.sql_expr_to_logical_expr(
-                *lambda.body,
+                lambda.body,
                 schema,
                 &mut planner_context,
             )?),
@@ -962,7 +1028,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(super) fn sql_fn_name_to_expr(
         &self,
-        expr: SQLExpr,
+        expr: SQLExpr<'_>,
         fn_name: &str,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
@@ -1002,7 +1068,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn sql_fn_arg_to_logical_expr(
         &self,
-        sql: FunctionArg,
+        sql: FunctionArg<'_>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -1013,44 +1079,26 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn sql_fn_arg_to_logical_expr_with_name(
         &self,
-        sql: FunctionArg,
+        sql: FunctionArg<'_>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<(Expr, Option<ArgumentName>)> {
         match sql {
-            FunctionArg::Named {
-                name,
-                arg: FunctionArgExpr::Expr(arg),
-                operator: _,
-            } => {
-                let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
+            FunctionArg::Named { name, value }
+            | FunctionArg::NamedWith { name, value, .. } => {
+                let expr =
+                    self.sql_expr_to_logical_expr(value, schema, planner_context)?;
                 let arg_name = ArgumentName {
-                    value: name.value,
-                    is_quoted: name.quote_style.is_some(),
+                    value: name.value().into_owned(),
+                    is_quoted: name.quote.is_some(),
                 };
                 Ok((expr, Some(arg_name)))
             }
-            FunctionArg::Named {
-                name,
-                arg: FunctionArgExpr::Wildcard,
-                operator: _,
-            } => {
-                #[expect(deprecated)]
-                let expr = Expr::Wildcard {
-                    qualifier: None,
-                    options: Box::new(WildcardOptions::default()),
-                };
-                let arg_name = ArgumentName {
-                    value: name.value,
-                    is_quoted: name.quote_style.is_some(),
-                };
-                Ok((expr, Some(arg_name)))
-            }
-            FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
+            FunctionArg::Expr(arg) => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
                 Ok((expr, None))
             }
-            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
+            FunctionArg::Wildcard => {
                 #[expect(deprecated)]
                 let expr = Expr::Wildcard {
                     qualifier: None,
@@ -1058,7 +1106,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 Ok((expr, None))
             }
-            FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(object_name)) => {
+            FunctionArg::QualifiedWildcard(object_name) => {
                 let qualifier = self.object_name_to_table_reference(object_name)?;
                 // Sanity check on qualifier with schema
                 let qualified_indices = schema.fields_indices_with_qualified(&qualifier);
@@ -1073,42 +1121,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 Ok((expr, None))
             }
-            // PostgreSQL dialect uses ExprNamed variant with expression for name
-            FunctionArg::ExprNamed {
-                name: SQLExpr::Identifier(name),
-                arg: FunctionArgExpr::Expr(arg),
-                operator: _,
-            } => {
-                let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
-                let arg_name = ArgumentName {
-                    value: name.value,
-                    is_quoted: name.quote_style.is_some(),
-                };
-                Ok((expr, Some(arg_name)))
-            }
-            FunctionArg::ExprNamed {
-                name: SQLExpr::Identifier(name),
-                arg: FunctionArgExpr::Wildcard,
-                operator: _,
-            } => {
-                #[expect(deprecated)]
-                let expr = Expr::Wildcard {
-                    qualifier: None,
-                    options: Box::new(WildcardOptions::default()),
-                };
-                let arg_name = ArgumentName {
-                    value: name.value,
-                    is_quoted: name.quote_style.is_some(),
-                };
-                Ok((expr, Some(arg_name)))
-            }
-            _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }
     }
 
     pub(super) fn function_args_to_expr(
         &self,
-        args: Vec<FunctionArg>,
+        args: Vec<FunctionArg<'_>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<Expr>> {
@@ -1119,7 +1137,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(super) fn function_args_to_expr_with_names(
         &self,
-        args: Vec<FunctionArg>,
+        args: Vec<FunctionArg<'_>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<(Vec<Expr>, Vec<Option<ArgumentName>>)> {
@@ -1139,7 +1157,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     #[expect(dead_code)]
     fn extract_and_prepend_within_group_args(
         &self,
-        within_group: Vec<OrderByExpr>,
+        within_group: Vec<OrderByItem<'_>>,
         mut args: Vec<Expr>,
         mut arg_names: Vec<Option<ArgumentName>>,
         schema: &DFSchema,
@@ -1191,19 +1209,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 /// After normalization with [normalize_ident], check whether all params are unique
 ///
 /// [normalize_ident]: crate::utils::normalize_ident
-fn all_unique(params: &[sqlparser::ast::LambdaFunctionParameter]) -> bool {
+fn all_unique(params: &[Ident<'_>]) -> bool {
     match params.len() {
         0 | 1 => true,
         2 => {
-            crate::utils::normalize_ident(params[0].name.clone())
-                != crate::utils::normalize_ident(params[1].name.clone())
+            crate::utils::normalize_ident(params[0].clone())
+                != crate::utils::normalize_ident(params[1].clone())
         }
         _ => {
             let mut set = HashSet::with_capacity(params.len());
 
             params
                 .iter()
-                .map(|p| crate::utils::normalize_ident(p.name.clone()))
+                .map(|p| crate::utils::normalize_ident(p.clone()))
                 .all(|p| set.insert(p))
         }
     }

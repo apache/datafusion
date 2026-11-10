@@ -43,13 +43,31 @@ use datafusion_expr::{
     LogicalPlanBuilderOptions, Partitioning, SortExpr,
 };
 
-use indexmap::IndexMap;
-use sqlparser::ast::{
-    Distinct, Expr as SQLExpr, GroupByExpr, Ident, NamedWindowExpr, OrderBy, Query,
-    SelectItemQualifiedWildcardKind, VisitMut, VisitorMut, WildcardAdditionalOptions,
-    WindowSpec, WindowType,
+use crate::ast::{
+    Builtin, Expr as SQLExpr, ExprKind as SQLExprKind, Ident, NamedWindow, ObjectName,
+    OrderByItem, Query, QueryDistribution, Select, SelectItem, SelectItemKind,
+    SetQuantifier, TableWithJoins, WildcardOptions as SQLWildcardOptions, WindowOver,
+    WindowSpec,
 };
-use sqlparser::ast::{NamedWindowDefinition, Select, SelectItem, TableWithJoins};
+use datafusion_expr::sql as df_sql;
+use indexmap::IndexMap;
+use sqlparser::ast::{VisitMut, VisitorMut};
+
+/// The `DISTINCT` form of a `SELECT`.
+enum DistinctKind<'s> {
+    All,
+    Distinct,
+    On(Vec<SQLExpr<'s>>),
+}
+
+/// Converts a parser identifier to DataFusion's owned identifier.
+fn to_df_ident(ident: &Ident<'_>) -> df_sql::Ident {
+    df_sql::Ident {
+        value: ident.value().into_owned(),
+        quote_style: ident.quote,
+        span: String::new(),
+    }
+}
 
 /// Result of the `aggregate` function, containing the aggregate plan and
 /// rewritten expressions that reference the aggregate output columns.
@@ -86,26 +104,53 @@ fn flatten_expr_groups(expr_groups: Vec<Vec<Expr>>) -> Vec<Expr> {
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logic plan from an SQL select
-    pub(super) fn select_to_plan(
+    pub(super) fn select_to_plan<'s>(
         &self,
-        mut select: Select,
-        mut query_order_by: Option<OrderBy>,
+        mut select: Select<'s>,
+        mut query_order_by: Vec<OrderByItem<'s>>,
+        distribution: Option<QueryDistribution<'s>>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        // Check for unsupported syntax first
-        if !select.cluster_by.is_empty() {
-            return not_impl_err!("CLUSTER BY");
-        }
+        let distribute_by = match distribution {
+            Some(distribution) => {
+                // Check for unsupported syntax first
+                if !distribution.cluster_by.is_empty() {
+                    return not_impl_err!("CLUSTER BY");
+                }
+                if !distribution.sort_by.is_empty() {
+                    return not_impl_err!("SORT BY");
+                }
+                distribution.distribute_by
+            }
+            None => vec![],
+        };
         if !select.lateral_views.is_empty() {
             return not_impl_err!("LATERAL VIEWS");
         }
 
-        if select.top.is_some() {
+        if select.modifiers.top.is_some()
+            || select.modifiers.teradata_top.is_some()
+            || select.modifiers.mssql_top.is_some()
+        {
             return not_impl_err!("TOP");
         }
-        if !select.sort_by.is_empty() {
-            return not_impl_err!("SORT BY");
+        if select.group_by_modifier.is_some() {
+            return not_impl_err!(
+                "GROUP BY ... WITH ROLLUP/CUBE/TOTALS is not yet supported with the new SQL parser"
+            );
         }
+        if select.grouping_sets.is_some() {
+            return not_impl_err!(
+                "GROUP BY ... GROUPING SETS after a GROUP BY list is not yet supported with the new SQL parser"
+            );
+        }
+        let distinct = match select.modifiers.distinct_on.take() {
+            Some(exprs) => DistinctKind::On(exprs),
+            None => match select.quantifier {
+                SetQuantifier::Distinct => DistinctKind::Distinct,
+                SetQuantifier::All | SetQuantifier::None => DistinctKind::All,
+            },
+        };
 
         // Capture and clear set expression schema so it doesn't leak
         // into subqueries planned during FROM clause handling.
@@ -119,11 +164,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let base_plan = self.plan_selection(select.selection, plan, planner_context)?;
 
         // Handle named windows before processing the projection expression
-        check_conflicting_windows(&select.named_window)?;
-        self.match_window_definitions(&mut select.projection, &select.named_window)?;
-        self.match_window_definitions(&mut select.having, &select.named_window)?;
-        self.match_window_definitions(&mut select.qualify, &select.named_window)?;
-        self.match_window_definitions(&mut query_order_by, &select.named_window)?;
+        check_conflicting_windows(&select.windows)?;
+        self.match_window_definitions(&mut select.projection, &select.windows)?;
+        self.match_window_definitions(&mut select.having, &select.windows)?;
+        self.match_window_definitions(&mut select.qualify, &select.windows)?;
+        self.match_window_definitions(&mut query_order_by, &select.windows)?;
 
         // Process the SELECT expressions
         let select_exprs = self.prepare_select_exprs(
@@ -164,7 +209,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // DISTINCT ON expressions are parsed alongside HAVING / QUALIFY so
         // they participate in aggregate / window discovery and get rebased
         // through the same pipeline. The SQL nodes are taken out of
-        // `select.distinct` so the later match on `Distinct::On` still fires
+        // `distinct` so the later match on `DistinctKind::On` still fires
         // but does not move the original Vec.
         //
         // Resolution precedence matches PostgreSQL and ORDER BY: SELECT
@@ -172,8 +217,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         //   SELECT DISTINCT ON (b) a AS b ... GROUP BY a
         // resolves `b` to the alias for `a`, not to a same-named input
         // column.
-        let on_exprs_sql: Vec<SQLExpr> = match &mut select.distinct {
-            Some(Distinct::On(exprs)) => std::mem::take(exprs),
+        let mut distinct = distinct;
+        let on_exprs_sql: Vec<SQLExpr> = match &mut distinct {
+            DistinctKind::On(exprs) => std::mem::take(exprs),
             _ => Vec::new(),
         };
         let mut on_expr_schema = projected_plan.schema().as_ref().clone();
@@ -263,8 +309,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             .flatten();
 
         // All of the group by expressions
-        let group_by_exprs = if let GroupByExpr::Expressions(exprs, _) = select.group_by {
-            exprs
+        let group_by_exprs = if !select.group_by_all {
+            select
+                .group_by
                 .into_iter()
                 .map(|e| {
                     // Aliases from the projection can conflict with same-named expressions in the input
@@ -540,14 +587,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         // tie-breakers that aren't in the user SELECT stay in scope.
         // DistinctOn provides the projection in that case (its select_expr
         // list is wrapped in FIRST_VALUE during lowering).
-        let plan = match select.distinct {
-            None | Some(Distinct::All) => {
+        let plan = match distinct {
+            DistinctKind::All => {
                 let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
                 let plan =
                     self.filter_post_projection(plan, having_post_projection, "HAVING")?;
                 self.filter_post_projection(plan, qualify_post_projection, "QUALIFY")?
             }
-            Some(Distinct::Distinct) => {
+            DistinctKind::Distinct => {
                 let plan = self.try_process_unnest(plan, select_exprs_post_aggr)?;
                 // HAVING and QUALIFY are evaluated before DISTINCT
                 let plan =
@@ -559,7 +606,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )?;
                 LogicalPlanBuilder::from(plan).distinct()?.build()?
             }
-            Some(Distinct::On(_))
+            DistinctKind::On(_)
                 if having_post_projection.is_some()
                     || qualify_post_projection.is_some() =>
             {
@@ -567,7 +614,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     "HAVING and QUALIFY expressions that reference aliases of volatile expressions are not supported with DISTINCT ON. Use a subquery instead"
                 );
             }
-            Some(Distinct::On(_)) => {
+            DistinctKind::On(_) => {
                 if aggr_exprs.is_empty()
                     && group_by_exprs.is_empty()
                     && window_func_exprs.is_empty()
@@ -623,16 +670,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         };
 
         // DISTRIBUTE BY
-        let plan = if !select.distribute_by.is_empty() {
-            let x = select
-                .distribute_by
-                .iter()
+        let plan = if !distribute_by.is_empty() {
+            let x = distribute_by
+                .into_iter()
                 .map(|e| {
-                    self.sql_expr_to_logical_expr(
-                        e.clone(),
-                        &combined_schema,
-                        planner_context,
-                    )
+                    self.sql_expr_to_logical_expr(e, &combined_schema, planner_context)
                 })
                 .collect::<Result<Vec<_>>>()?;
             LogicalPlanBuilder::from(plan)
@@ -1010,7 +1052,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(crate) fn plan_selection(
         &self,
-        selection: Option<SQLExpr>,
+        selection: Option<SQLExpr<'_>>,
         plan: LogicalPlan,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
@@ -1070,7 +1112,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(crate) fn plan_from_tables(
         &self,
-        mut from: Vec<TableWithJoins>,
+        mut from: Vec<TableWithJoins<'_>>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         match from.len() {
@@ -1108,7 +1150,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn prepare_select_exprs(
         &self,
         plan: &LogicalPlan,
-        projection: Vec<SelectItem>,
+        projection: Vec<SelectItem<'_>>,
         empty_from: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<SelectExpr>> {
@@ -1127,13 +1169,13 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a relational expression from a select SQL expression
     fn sql_select_to_rex(
         &self,
-        sql: SelectItem,
+        sql: SelectItem<'_>,
         plan: &LogicalPlan,
         empty_from: bool,
         planner_context: &mut PlannerContext,
     ) -> Result<SelectExpr> {
-        match sql {
-            SelectItem::UnnamedExpr(expr) => {
+        match sql.kind {
+            SelectItemKind::Expr { expr, alias: None } => {
                 let expr = self.sql_to_expr(expr, plan.schema(), planner_context)?;
                 let col = normalize_col_with_schemas_and_ambiguity_check(
                     expr,
@@ -1143,7 +1185,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 Ok(SelectExpr::Expression(col))
             }
-            SelectItem::ExprWithAlias { expr, alias } => {
+            SelectItemKind::Expr {
+                expr,
+                alias: Some(alias),
+            } => {
                 let select_expr =
                     self.sql_to_expr(expr, plan.schema(), planner_context)?;
                 let col = normalize_col_with_schemas_and_ambiguity_check(
@@ -1160,11 +1205,44 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 Ok(SelectExpr::Expression(expr))
             }
-            SelectItem::ExprWithAliases { .. } => {
+            SelectItemKind::ExprWithAliases { .. } => {
                 not_impl_err!("SELECT item with multiple aliases is not supported")
             }
-            SelectItem::Wildcard(options) => {
-                Self::check_wildcard_options(&options)?;
+            SelectItemKind::Wildcard => {
+                self.plan_wildcard(None, None, plan, empty_from, planner_context)
+            }
+            SelectItemKind::QualifiedWildcard(object_name) => self.plan_wildcard(
+                Some(object_name),
+                None,
+                plan,
+                empty_from,
+                planner_context,
+            ),
+            SelectItemKind::WildcardWithOptions { qualifier, options } => self
+                .plan_wildcard(
+                    qualifier,
+                    Some(*options),
+                    plan,
+                    empty_from,
+                    planner_context,
+                ),
+        }
+    }
+
+    /// Plans `*` or `qualifier.*`, with any options.
+    fn plan_wildcard(
+        &self,
+        qualifier: Option<ObjectName<'_>>,
+        options: Option<SQLWildcardOptions<'_>>,
+        plan: &LogicalPlan,
+        empty_from: bool,
+        planner_context: &mut PlannerContext,
+    ) -> Result<SelectExpr> {
+        if let Some(options) = &options {
+            Self::check_wildcard_options(options)?;
+        }
+        match qualifier {
+            None => {
                 if empty_from {
                     return plan_err!("SELECT * with no tables specified is not valid");
                 }
@@ -1174,21 +1252,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                     options,
                 )?;
-
                 Ok(SelectExpr::Wildcard(planned_options))
             }
-            SelectItem::QualifiedWildcard(object_name, options) => {
-                Self::check_wildcard_options(&options)?;
-                let object_name = match object_name {
-                    SelectItemQualifiedWildcardKind::ObjectName(object_name) => {
-                        object_name
-                    }
-                    SelectItemQualifiedWildcardKind::Expr(_) => {
-                        return plan_err!(
-                            "Qualified wildcard with expression not supported"
-                        );
-                    }
-                };
+            Some(object_name) => {
                 let qualifier = self.object_name_to_table_reference(object_name)?;
                 let planned_options = self.plan_wildcard_options(
                     plan,
@@ -1196,28 +1262,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     planner_context,
                     options,
                 )?;
-
                 Ok(SelectExpr::QualifiedWildcard(qualifier, planned_options))
             }
         }
     }
 
-    fn check_wildcard_options(options: &WildcardAdditionalOptions) -> Result<()> {
-        let WildcardAdditionalOptions {
-            // opt_exclude is handled
-            opt_exclude: _opt_exclude,
-            opt_except: _opt_except,
-            opt_rename,
-            opt_replace: _opt_replace,
-            opt_ilike: _opt_ilike,
-            opt_alias,
-            wildcard_token: _wildcard_token,
-        } = options;
-
-        if opt_rename.is_some() {
+    fn check_wildcard_options(options: &SQLWildcardOptions<'_>) -> Result<()> {
+        if !options.rename.is_empty() {
             not_impl_err!("wildcard * with RENAME not supported ")
-        } else if opt_alias.is_some() {
-            not_impl_err!("wildcard * with AS alias not supported")
         } else {
             Ok(())
         }
@@ -1231,43 +1283,102 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         plan: &LogicalPlan,
         empty_from: bool,
         planner_context: &mut PlannerContext,
-        options: WildcardAdditionalOptions,
+        options: Option<SQLWildcardOptions<'_>>,
     ) -> Result<WildcardOptions> {
-        let planned_option = WildcardOptions {
-            ilike: options.opt_ilike,
-            exclude: options.opt_exclude,
-            except: options.opt_except,
-            replace: None,
-            rename: options.opt_rename,
+        let Some(options) = options else {
+            return Ok(WildcardOptions::default());
         };
-        if let Some(replace) = options.opt_replace {
-            let replace_expr = replace
-                .items
-                .iter()
-                .map(|item| {
-                    self.sql_select_to_rex(
-                        SelectItem::UnnamedExpr(item.expr.clone()),
-                        plan,
-                        empty_from,
-                        planner_context,
-                    )
-                })
-                .collect::<Result<Vec<_>>>()?
-                .into_iter()
-                .filter_map(|expr| match expr {
-                    SelectExpr::Expression(expr) => Some(expr),
-                    _ => None,
-                })
-                .collect::<Vec<_>>();
+        let SQLWildcardOptions {
+            ilike,
+            exclude,
+            exclude_parens,
+            except_keyword,
+            replace,
+            rename,
+            rename_parens,
+        } = options;
 
-            let planned_replace = PlannedReplaceSelectItem {
-                items: replace.items.into_iter().map(|i| *i).collect(),
-                planned_expressions: replace_expr,
-            };
-            Ok(planned_option.with_replace(planned_replace))
+        let ilike = ilike.map(|pattern| df_sql::IlikeSelectItem {
+            pattern: pattern.value().into_owned(),
+        });
+        let mut exclude_idents = exclude.iter().map(to_df_ident);
+        let (exclude, except) = match exclude_idents.next() {
+            None => (None, None),
+            Some(first_element) if except_keyword => (
+                None,
+                Some(df_sql::ExceptSelectItem {
+                    first_element,
+                    additional_elements: exclude_idents.collect(),
+                }),
+            ),
+            Some(first) => {
+                let mut names = vec![df_sql::ObjectName::from(first)];
+                names.extend(exclude_idents.map(df_sql::ObjectName::from));
+                let item = if names.len() == 1 && !exclude_parens {
+                    df_sql::ExcludeSelectItem::Single(names.remove(0))
+                } else {
+                    df_sql::ExcludeSelectItem::Multiple(names)
+                };
+                (Some(item), None)
+            }
+        };
+        let rename = if rename.is_empty() {
+            None
         } else {
-            Ok(planned_option)
+            let mut items = rename
+                .iter()
+                .map(|(from, to)| format!("{from} AS {to}"))
+                .collect::<Vec<_>>();
+            Some(if items.len() == 1 && !rename_parens {
+                df_sql::RenameSelectItem::Single(items.remove(0))
+            } else {
+                df_sql::RenameSelectItem::Multiple(items)
+            })
+        };
+
+        let planned_option = WildcardOptions {
+            ilike,
+            exclude,
+            except,
+            replace: None,
+            rename,
+        };
+        if replace.is_empty() {
+            return Ok(planned_option);
         }
+        let mut items = Vec::with_capacity(replace.len());
+        let mut replace_exprs = Vec::with_capacity(replace.len());
+        for (expr, column_name) in replace {
+            items.push(df_sql::ReplaceSelectElement {
+                expr: expr.to_string(),
+                column_name: to_df_ident(&column_name),
+                as_keyword: true,
+            });
+            replace_exprs.push(expr);
+        }
+        let replace_expr = replace_exprs
+            .into_iter()
+            .map(|expr| {
+                self.sql_select_to_rex(
+                    SelectItemKind::Expr { expr, alias: None }.into(),
+                    plan,
+                    empty_from,
+                    planner_context,
+                )
+            })
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter_map(|expr| match expr {
+                SelectExpr::Expression(expr) => Some(expr),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        let planned_replace = PlannedReplaceSelectItem {
+            items,
+            planned_expressions: replace_expr,
+        };
+        Ok(planned_option.with_replace(planned_replace))
     }
 
     /// Wrap a plan in a projection
@@ -1536,14 +1647,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///
     /// Subqueries are skipped: each resolves names against its own `WINDOW`
     /// clause when it is planned.
-    fn match_window_definitions(
+    fn match_window_definitions<'s>(
         &self,
-        node: &mut impl VisitMut,
-        named_windows: &[NamedWindowDefinition],
+        node: &mut impl VisitMut<'s, Builtin>,
+        named_windows: &[NamedWindow<'s>],
     ) -> Result<()> {
-        let named_windows: Vec<(&NamedWindowDefinition, String)> = named_windows
+        let named_windows: Vec<(&NamedWindow<'s>, String)> = named_windows
             .iter()
-            .map(|w| (w, self.ident_normalizer.normalize(w.0.clone())))
+            .map(|w| (w, self.ident_normalizer.normalize(w.name.clone())))
             .collect();
         let mut resolver = NamedWindowResolver {
             planner: self,
@@ -1560,11 +1671,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     ///
     /// A window definition may only reference windows defined before it, so
     /// references cannot form a cycle.
-    fn resolve_named_window(
+    fn resolve_named_window<'s>(
         &self,
-        ident: &Ident,
-        named_windows: &[(&NamedWindowDefinition, String)],
-    ) -> Result<WindowSpec> {
+        ident: &Ident<'s>,
+        named_windows: &[(&NamedWindow<'s>, String)],
+    ) -> Result<WindowSpec<'s>> {
         let normalized_ident = self.ident_normalizer.normalize(ident.clone());
         let Some(position) = named_windows
             .iter()
@@ -1572,15 +1683,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         else {
             return plan_err!("The window {ident} is not defined!");
         };
-        let (NamedWindowDefinition(_, window_expr), _) = named_windows[position];
+        let (window, _) = named_windows[position];
         let earlier_windows = &named_windows[..position];
-        match window_expr {
-            NamedWindowExpr::NamedWindow(base) => {
-                self.resolve_named_window(base, earlier_windows)
-            }
-            NamedWindowExpr::WindowSpec(spec) => {
-                self.resolve_window_spec(spec, earlier_windows)
-            }
+        match &window.window {
+            WindowOver::Named(base) => self.resolve_named_window(base, earlier_windows),
+            WindowOver::Spec(spec) => self.resolve_window_spec(spec, earlier_windows),
         }
     }
 
@@ -1591,12 +1698,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     /// the referenced window's `PARTITION BY` and `ORDER BY`, may add an
     /// `ORDER BY` only when the referenced window has none, and may add a
     /// frame only when the referenced window has none.
-    fn resolve_window_spec(
+    fn resolve_window_spec<'s>(
         &self,
-        spec: &WindowSpec,
-        named_windows: &[(&NamedWindowDefinition, String)],
-    ) -> Result<WindowSpec> {
-        let Some(base_name) = &spec.window_name else {
+        spec: &WindowSpec<'s>,
+        named_windows: &[(&NamedWindow<'s>, String)],
+    ) -> Result<WindowSpec<'s>> {
+        let Some(base_name) = &spec.base else {
             return Ok(spec.clone());
         };
         let base = self.resolve_named_window(base_name, named_windows)?;
@@ -1608,7 +1715,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         if !spec.order_by.is_empty() && !base.order_by.is_empty() {
             return plan_err!("Cannot override ORDER BY clause of window {base_name}");
         }
-        if base.window_frame.is_some() {
+        if base.frame.is_some() {
             return plan_err!(
                 "Cannot copy window {base_name} because it has a frame clause"
             );
@@ -1619,54 +1726,60 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             spec.order_by.clone()
         };
         Ok(WindowSpec {
-            window_name: None,
+            base: None,
             partition_by: base.partition_by,
             order_by,
-            window_frame: spec.window_frame.clone(),
+            frame: spec.frame.clone(),
         })
     }
 }
 
 /// Resolves named window references in the expressions of a single `SELECT`.
-struct NamedWindowResolver<'a, 'b, S: ContextProvider> {
+struct NamedWindowResolver<'a, 'b, 's, S: ContextProvider> {
     planner: &'a SqlToRel<'b, S>,
-    named_windows: &'a [(&'a NamedWindowDefinition, String)],
+    named_windows: &'a [(&'a NamedWindow<'s>, String)],
     /// Number of subqueries enclosing the expression being visited.
     query_depth: usize,
 }
 
-impl<S: ContextProvider> VisitorMut for NamedWindowResolver<'_, '_, S> {
+impl<'s, S: ContextProvider> VisitorMut<'s, Builtin>
+    for NamedWindowResolver<'_, '_, 's, S>
+{
     type Break = DataFusionError;
 
-    fn pre_visit_query(&mut self, _query: &mut Query) -> ControlFlow<Self::Break> {
+    fn pre_visit_query(&mut self, _query: &mut Query<'s>) -> ControlFlow<Self::Break> {
         self.query_depth += 1;
         ControlFlow::Continue(())
     }
 
-    fn post_visit_query(&mut self, _query: &mut Query) -> ControlFlow<Self::Break> {
+    fn post_visit_query(&mut self, _query: &mut Query<'s>) -> ControlFlow<Self::Break> {
         self.query_depth -= 1;
         ControlFlow::Continue(())
     }
 
-    fn post_visit_expr(&mut self, expr: &mut SQLExpr) -> ControlFlow<Self::Break> {
+    fn post_visit_expr(&mut self, expr: &mut SQLExpr<'s>) -> ControlFlow<Self::Break> {
         if self.query_depth > 0 {
             return ControlFlow::Continue(());
         }
-        let SQLExpr::Function(f) = expr else {
+        let SQLExprKind::Function {
+            options: Some(options),
+            ..
+        } = &mut expr.kind
+        else {
             return ControlFlow::Continue(());
         };
-        let resolved = match &f.over {
-            Some(WindowType::NamedWindow(ident)) => {
+        let resolved = match &options.over {
+            Some(WindowOver::Named(ident)) => {
                 self.planner.resolve_named_window(ident, self.named_windows)
             }
-            Some(WindowType::WindowSpec(spec)) if spec.window_name.is_some() => {
+            Some(WindowOver::Spec(spec)) if spec.base.is_some() => {
                 self.planner.resolve_window_spec(spec, self.named_windows)
             }
             _ => return ControlFlow::Continue(()),
         };
         match resolved {
             Ok(spec) => {
-                f.over = Some(WindowType::WindowSpec(spec));
+                options.over = Some(WindowOver::Spec(spec));
                 ControlFlow::Continue(())
             }
             Err(e) => ControlFlow::Break(e),
@@ -1675,13 +1788,13 @@ impl<S: ContextProvider> VisitorMut for NamedWindowResolver<'_, '_, S> {
 }
 
 // If there are any multiple-defined windows, we raise an error.
-fn check_conflicting_windows(window_defs: &[NamedWindowDefinition]) -> Result<()> {
+fn check_conflicting_windows(window_defs: &[NamedWindow<'_>]) -> Result<()> {
     for (i, window_def_i) in window_defs.iter().enumerate() {
         for window_def_j in window_defs.iter().skip(i + 1) {
-            if window_def_i.0 == window_def_j.0 {
+            if window_def_i.name == window_def_j.name {
                 return plan_err!(
                     "The window {} is defined multiple times!",
-                    window_def_i.0
+                    window_def_i.name
                 );
             }
         }

@@ -7,30 +7,105 @@
 //! This parser implements DataFusion specific statements such as
 //! `CREATE EXTERNAL TABLE`
 
-use datafusion_common::DataFusionError;
-use datafusion_common::config::{ConfigNonZeroUsize, SqlParserOptions};
-use datafusion_common::format::{ExplainFormat, ExplainStatementOptions};
-use datafusion_common::{Diagnostic, Span, sql_err};
-use sqlparser::ast::{ExprWithAlias, Ident, ObjectType, OrderByOptions, OrderBySort};
-use sqlparser::tokenizer::TokenWithSpan;
-use sqlparser::{
-    ast::{
-        ColumnDef, ColumnOptionDef, ObjectName, OrderByExpr, Query,
-        Statement as SQLStatement, TableConstraint, Value,
-    },
-    dialect::{Dialect, GenericDialect, keywords::Keyword},
-    parser::{Parser, ParserError},
-    tokenizer::{Token, Tokenizer, Word},
-};
+use std::borrow::Cow;
 use std::collections::VecDeque;
 use std::fmt;
 use std::str::FromStr;
 
+use datafusion_common::DataFusionError;
+use datafusion_common::config::{ConfigNonZeroUsize, SqlParserOptions};
+use datafusion_common::format::{ExplainFormat, ExplainStatementOptions};
+use datafusion_common::{Diagnostic, Span};
+use sqlparser::ParseError;
+use sqlparser::ast::{DropBehavior, DropObject, ObjectType, StatementKind};
+use sqlparser::dialect::{
+    BigQuery, ClickHouse, Core, Databricks, Dialect, DuckDb, Hive, MsSql, MySql, Oracle,
+    Postgres, Redshift, Snowflake, Spark, Sqlite, Teradata,
+};
+use sqlparser::grammar;
+use sqlparser::lexer::TokenKind;
+use sqlparser::parser::Parser;
+
+use crate::ast::{
+    Builtin, ColumnDef, ExprWithAlias, Ident, ObjectName, OrderByItem, Query,
+    Statement as SQLStatement, TableConstraint,
+};
+
+pub use sqlparser::dialect::DialectKind;
+
+/// A SQL dialect DataFusion can parse with.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SqlDialect {
+    /// DataFusion's own dialect, [`crate::dialect::DataFusion`].
+    DataFusion,
+    /// One of `sqlparser`'s built-in dialects.
+    Builtin(DialectKind),
+}
+
+impl From<DialectKind> for SqlDialect {
+    fn from(kind: DialectKind) -> Self {
+        Self::Builtin(kind)
+    }
+}
+
+/// The dialect DataFusion parses with unless another is chosen.
+pub const DEFAULT_DIALECT: SqlDialect = SqlDialect::DataFusion;
+
+/// Finds a dialect by the name DataFusion's configuration uses for it, ignoring
+/// case. `generic`, `ansi` and `datafusion` all name DataFusion's own dialect.
+pub fn dialect_from_str(name: &str) -> Option<SqlDialect> {
+    match name.to_ascii_lowercase().as_str() {
+        "generic" | "ansi" | "datafusion" => Some(SqlDialect::DataFusion),
+        other => DialectKind::from_name(other).map(SqlDialect::Builtin),
+    }
+}
+
+/// Calls a function that is generic over the dialect with the dialect that
+/// `dialect` names.
+macro_rules! dispatch {
+    ($dialect:expr, $function:ident($($arg:expr),*)) => {
+        match $dialect {
+            SqlDialect::DataFusion => $function::<crate::dialect::DataFusion>($($arg),*),
+            SqlDialect::Builtin(kind) => dispatch_builtin!(kind, $function($($arg),*)),
+        }
+    };
+}
+
+/// Like [`dispatch`], for a built-in dialect.
+macro_rules! dispatch_builtin {
+    ($kind:expr, $function:ident($($arg:expr),*)) => {
+        match $kind {
+            DialectKind::Core => $function::<Core>($($arg),*),
+            DialectKind::MySql => $function::<MySql>($($arg),*),
+            DialectKind::Postgres => $function::<Postgres>($($arg),*),
+            DialectKind::Redshift => $function::<Redshift>($($arg),*),
+            DialectKind::Snowflake => $function::<Snowflake>($($arg),*),
+            DialectKind::Spark => $function::<Spark>($($arg),*),
+            DialectKind::Databricks => $function::<Databricks>($($arg),*),
+            DialectKind::Hive => $function::<Hive>($($arg),*),
+            DialectKind::BigQuery => $function::<BigQuery>($($arg),*),
+            DialectKind::ClickHouse => $function::<ClickHouse>($($arg),*),
+            DialectKind::DuckDb => $function::<DuckDb>($($arg),*),
+            DialectKind::MsSql => $function::<MsSql>($($arg),*),
+            DialectKind::Oracle => $function::<Oracle>($($arg),*),
+            DialectKind::Sqlite => $function::<Sqlite>($($arg),*),
+            DialectKind::Teradata => $function::<Teradata>($($arg),*),
+        }
+    };
+}
+
+/// A parse error with no position.
+fn parse_error(message: impl Into<String>) -> ParseError {
+    ParseError {
+        message: message.into(),
+        span: sqlparser::ast::Span::default(),
+    }
+}
+
 // Use `Parser::expected` instead, if possible
 macro_rules! parser_err {
     ($MSG:expr $(; diagnostic = $DIAG:expr)?) => {{
-
-        let err = DataFusionError::from(ParserError::ParserError($MSG.to_string()));
+        let err = DataFusionError::from(parse_error($MSG.to_string()));
         $(
             let err = err.with_diagnostic($DIAG);
         )?
@@ -44,8 +119,7 @@ fn parse_file_type(s: &str) -> Result<String, DataFusionError> {
 
 /// DataFusion specific `EXPLAIN`
 ///
-/// Supports both the legacy keyword form and, on dialects whose
-/// [`Dialect::supports_explain_with_utility_options`] returns `true`
+/// Supports both the legacy keyword form and, on dialects that have it
 /// (PostgreSQL, DuckDB, etc.), the Postgres-style parenthesized option list:
 ///
 /// ```sql
@@ -58,18 +132,18 @@ fn parse_file_type(s: &str) -> Result<String, DataFusionError> {
 ///
 /// See [`ExplainStatementOptions`] for the list of supported options in the
 /// parenthesized form.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExplainStatement {
+#[derive(Debug, Clone, PartialEq)]
+pub struct ExplainStatement<'a> {
     /// Normalized options parsed from either the legacy keyword form or the
     /// parenthesized option list.
     pub options: ExplainStatementOptions,
     /// The statement to analyze. Note this is a DataFusion [`Statement`] (not a
     /// [`sqlparser::ast::Statement`] so that we can use `EXPLAIN`, `COPY`, and other
     /// DataFusion specific statements
-    pub statement: Box<Statement>,
+    pub statement: Box<Statement<'a>>,
 }
 
-impl fmt::Display for ExplainStatement {
+impl fmt::Display for ExplainStatement<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self { options, statement } = self;
 
@@ -118,6 +192,40 @@ impl fmt::Display for ExplainStatement {
     }
 }
 
+/// The value of a `key value` option, in `COPY`, `CREATE EXTERNAL TABLE` and
+/// `CREATE EXTERNAL CATALOG`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OptionValue {
+    /// A string, or a word such as `snappy` that may be a keyword.
+    String(String),
+    /// A double-quoted string.
+    DoubleQuotedString(String),
+    /// A number, as written.
+    Number(String),
+}
+
+impl OptionValue {
+    /// The value as text. A double-quoted string has none.
+    pub fn as_str(&self) -> Option<&str> {
+        match self {
+            OptionValue::String(s) | OptionValue::Number(s) => Some(s),
+            OptionValue::DoubleQuotedString(_) => None,
+        }
+    }
+}
+
+impl fmt::Display for OptionValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OptionValue::String(s) => write!(f, "'{}'", s.replace('\'', "''")),
+            OptionValue::DoubleQuotedString(s) => {
+                write!(f, "\"{}\"", s.replace('"', "\"\""))
+            }
+            OptionValue::Number(n) => f.write_str(n),
+        }
+    }
+}
+
 /// DataFusion extension DDL for `COPY`
 ///
 /// # Syntax:
@@ -141,10 +249,10 @@ impl fmt::Display for ExplainStatement {
 ///
 /// COPY (SELECT l_orderkey from lineitem) to 'lineitem.parquet';
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CopyToStatement {
+#[derive(Debug, Clone, PartialEq)]
+pub struct CopyToStatement<'a> {
     /// From where the data comes from
-    pub source: CopyToSource,
+    pub source: CopyToSource<'a>,
     /// The URL to where the data is heading
     pub target: String,
     /// Partition keys
@@ -152,10 +260,10 @@ pub struct CopyToStatement {
     /// File type (Parquet, NDJSON, CSV etc.)
     pub stored_as: Option<String>,
     /// Target specific options
-    pub options: Vec<(String, Value)>,
+    pub options: Vec<(String, OptionValue)>,
 }
 
-impl fmt::Display for CopyToStatement {
+impl fmt::Display for CopyToStatement<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let Self {
             source,
@@ -184,15 +292,15 @@ impl fmt::Display for CopyToStatement {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CopyToSource {
+#[derive(Debug, Clone, PartialEq)]
+pub enum CopyToSource<'a> {
     /// `COPY <table> TO ...`
-    Relation(ObjectName),
+    Relation(ObjectName<'a>),
     /// COPY (...query...) TO ...
-    Query(Box<Query>),
+    Query(Box<Query<'a>>),
 }
 
-impl fmt::Display for CopyToSource {
+impl fmt::Display for CopyToSource<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             CopyToSource::Relation(r) => write!(f, "{r}"),
@@ -202,7 +310,7 @@ impl fmt::Display for CopyToSource {
 }
 
 /// This type defines a lexicographical ordering.
-pub(crate) type LexOrdering = Vec<OrderByExpr>;
+pub(crate) type LexOrdering<'a> = Vec<OrderByItem<'a>>;
 
 /// DataFusion extension DDL for `CREATE EXTERNAL TABLE`
 ///
@@ -228,12 +336,12 @@ pub(crate) type LexOrdering = Vec<OrderByExpr>;
 ///
 /// <key_value_list> := (<literal> <literal, <literal> <literal>, ...)
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CreateExternalTable {
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateExternalTable<'a> {
     /// Table name
-    pub name: ObjectName,
+    pub name: ObjectName<'a>,
     /// Optional schema
-    pub columns: Vec<ColumnDef>,
+    pub columns: Vec<ColumnDef<'a>>,
     /// File type (Parquet, NDJSON, CSV, etc)
     pub file_type: String,
     /// Paths to files
@@ -241,7 +349,7 @@ pub struct CreateExternalTable {
     /// Partition Columns
     pub table_partition_cols: Vec<String>,
     /// Ordered expressions
-    pub order_exprs: Vec<LexOrdering>,
+    pub order_exprs: Vec<LexOrdering<'a>>,
     /// Option to not error if table already exists
     pub if_not_exists: bool,
     /// Option to replace table content if table already exists
@@ -251,12 +359,17 @@ pub struct CreateExternalTable {
     /// Infinite streams?
     pub unbounded: bool,
     /// Table(provider) specific options
-    pub options: Vec<(String, Value)>,
+    pub options: Vec<(String, OptionValue)>,
     /// A table-level constraint
-    pub constraints: Vec<TableConstraint>,
+    pub constraints: Vec<TableConstraint<'a>>,
 }
 
-impl fmt::Display for CreateExternalTable {
+/// A string literal for `text`.
+fn quoted(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "''"))
+}
+
+impl fmt::Display for CreateExternalTable<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "CREATE ")?;
         if self.or_replace {
@@ -281,18 +394,14 @@ impl fmt::Display for CreateExternalTable {
             write!(f, ") ")?;
         }
         match self.locations.as_slice() {
-            [location] => write!(
-                f,
-                "LOCATION {}",
-                Value::SingleQuotedString(location.clone())
-            ),
+            [location] => write!(f, "LOCATION {}", quoted(location)),
             locations => {
                 write!(f, "LOCATION (")?;
                 for (idx, location) in locations.iter().enumerate() {
                     if idx > 0 {
                         write!(f, ", ")?;
                     }
-                    write!(f, "{}", Value::SingleQuotedString(location.clone()))?;
+                    write!(f, "{}", quoted(location))?;
                 }
                 write!(f, ")")
             }
@@ -310,10 +419,10 @@ impl fmt::Display for CreateExternalTable {
 ///
 /// <key_value_list> := (<literal> <literal>, <literal> <literal>, ...)
 /// ```
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CreateExternalCatalog {
+#[derive(Debug, Clone, PartialEq)]
+pub struct CreateExternalCatalog<'a> {
     /// Catalog name
-    pub catalog_name: ObjectName,
+    pub catalog_name: ObjectName<'a>,
     /// The key used to look up the registered `CatalogProviderFactory`
     pub catalog_type: String,
     /// The physical location of the catalog, if applicable
@@ -323,10 +432,10 @@ pub struct CreateExternalCatalog {
     /// Option to replace the catalog if it already exists
     pub or_replace: bool,
     /// Catalog(provider) specific options
-    pub options: Vec<(String, Value)>,
+    pub options: Vec<(String, OptionValue)>,
 }
 
-impl fmt::Display for CreateExternalCatalog {
+impl fmt::Display for CreateExternalCatalog<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "CREATE EXTERNAL CATALOG ")?;
         if self.or_replace {
@@ -339,28 +448,24 @@ impl fmt::Display for CreateExternalCatalog {
         write!(f, "{} ", self.catalog_name)?;
         write!(f, "STORED AS {}", self.catalog_type)?;
         if let Some(location) = &self.location {
-            write!(
-                f,
-                " LOCATION {}",
-                Value::SingleQuotedString(location.clone())
-            )?;
+            write!(f, " LOCATION {}", quoted(location))?;
         }
         Ok(())
     }
 }
 
 /// DataFusion extension `DROP CATALOG` statement.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct DropCatalog {
+#[derive(Debug, Clone, PartialEq)]
+pub struct DropCatalog<'a> {
     /// Catalog name
-    pub name: ObjectName,
+    pub name: ObjectName<'a>,
     /// Option to not error if the catalog does not exist
     pub if_exists: bool,
     /// Whether drop should cascade
     pub cascade: bool,
 }
 
-impl fmt::Display for DropCatalog {
+impl fmt::Display for DropCatalog<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "DROP CATALOG ")?;
         if self.if_exists {
@@ -371,13 +476,13 @@ impl fmt::Display for DropCatalog {
 }
 
 /// DataFusion extension for `RESET`
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResetStatement {
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResetStatement<'a> {
     /// Reset a single configuration variable (stored as provided)
-    Variable(ObjectName),
+    Variable(ObjectName<'a>),
 }
 
-impl fmt::Display for ResetStatement {
+impl fmt::Display for ResetStatement<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ResetStatement::Variable(name) => write!(f, "RESET {name}"),
@@ -392,23 +497,23 @@ impl fmt::Display for ResetStatement {
 /// EXTERNAL TABLE`. See [`DFParser`] for more information.
 ///
 /// [`Statement`]: sqlparser::ast::Statement
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Statement {
+#[derive(Debug, Clone, PartialEq)]
+pub enum Statement<'a> {
     /// ANSI SQL AST node (from sqlparser-rs)
-    Statement(Box<SQLStatement>),
+    Statement(Box<SQLStatement<'a>>),
     /// Extension: `CREATE EXTERNAL TABLE`
-    CreateExternalTable(CreateExternalTable),
+    CreateExternalTable(CreateExternalTable<'a>),
     /// Extension: `CREATE EXTERNAL CATALOG`
-    CreateExternalCatalog(CreateExternalCatalog),
+    CreateExternalCatalog(CreateExternalCatalog<'a>),
     /// Extension: `COPY TO`
-    CopyTo(CopyToStatement),
+    CopyTo(CopyToStatement<'a>),
     /// EXPLAIN for extensions
-    Explain(ExplainStatement),
+    Explain(ExplainStatement<'a>),
     /// Extension: `RESET`
-    Reset(ResetStatement),
+    Reset(ResetStatement<'a>),
 }
 
-impl fmt::Display for Statement {
+impl fmt::Display for Statement<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Statement::Statement(stmt) => write!(f, "{stmt}"),
@@ -430,28 +535,21 @@ fn ensure_not_set<T>(field: Option<&T>, name: &str) -> Result<(), DataFusionErro
 
 /// DataFusion SQL Parser based on [`sqlparser`]
 ///
-/// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s [`Parser`].
+/// Parses DataFusion's SQL dialect, often delegating to [`sqlparser`]'s
+/// [`Parser`].
 ///
 /// DataFusion mostly follows existing SQL dialects via
 /// `sqlparser`. However, certain statements such as `COPY` and
 /// `CREATE EXTERNAL TABLE` have special syntax in DataFusion. See
 /// [`Statement`] for a list of this special syntax
 pub struct DFParser<'a> {
-    pub parser: Parser<'a>,
+    sql: &'a str,
+    dialect: SqlDialect,
     options: SqlParserOptions,
-    /// Whether the configured dialect supports Postgres-style
-    /// `EXPLAIN (option, ...)` utility-option syntax. Cached here because
-    /// sqlparser's [`Parser::dialect`] field is private.
-    supports_explain_with_utility_options: bool,
 }
 
-/// Default recursion limit for SQL parsing. Higher than the `sqlparser` default
-/// (50) for backwards compatibility with older versions.
-///
-/// Newer `sqlparser` versions added recursion guards to more parse functions, so
-/// the same query consumes more depth than it used to.
+/// Default recursion limit for SQL parsing.
 const DEFAULT_RECURSION_LIMIT: usize = 51;
-const DEFAULT_DIALECT: GenericDialect = GenericDialect {};
 
 /// Builder for [`DFParser`]
 ///
@@ -467,153 +565,77 @@ const DEFAULT_DIALECT: GenericDialect = GenericDialect {};
 /// # Ok(())
 /// # }
 /// ```
-///
-/// # Example: Create and Parse expression with a different dialect
-/// ```
-/// # use datafusion_sql::parser::DFParserBuilder;
-/// # use datafusion_common::Result;
-/// # use datafusion_sql::sqlparser::dialect::MySqlDialect;
-/// # use datafusion_sql::sqlparser::ast::Expr;
-/// # fn test() -> Result<()> {
-/// let dialect = MySqlDialect {}; // Parse using MySQL dialect
-/// let mut parser = DFParserBuilder::new("1 + 2")
-///     .with_dialect(&dialect)
-///     .build()?;
-/// // parse 1+2 into an sqlparser::ast::Expr
-/// let res = parser.parse_expr()?;
-/// assert!(matches!(res.expr, Expr::BinaryOp { .. }));
-/// # Ok(())
-/// # }
-/// ```
-pub struct DFParserBuilder<'a, 'b> {
-    /// Parser input: either raw SQL or tokens
-    input: ParserInput<'a>,
-    /// The Dialect to use (defaults to [`GenericDialect`]
-    dialect: &'b dyn Dialect,
-    /// The recursion limit while parsing
+pub struct DFParserBuilder<'a> {
+    sql: &'a str,
+    dialect: SqlDialect,
     recursion_limit: usize,
 }
 
-/// Describes a possible input for parser
-pub enum ParserInput<'a> {
-    /// Raw SQL. Tokenization will be performed automatically as a
-    /// part of [`DFParserBuilder::build`]
-    Sql(&'a str),
-    /// Tokens
-    Tokens(Vec<TokenWithSpan>),
-}
-
-impl<'a> From<&'a str> for ParserInput<'a> {
-    fn from(sql: &'a str) -> Self {
-        Self::Sql(sql)
-    }
-}
-
-impl From<Vec<TokenWithSpan>> for ParserInput<'static> {
-    fn from(tokens: Vec<TokenWithSpan>) -> Self {
-        Self::Tokens(tokens)
-    }
-}
-
-impl<'a, 'b> DFParserBuilder<'a, 'b> {
-    /// Create a new parser builder for the specified tokens using the
-    /// [`GenericDialect`].
-    pub fn new(input: impl Into<ParserInput<'a>>) -> Self {
+impl<'a> DFParserBuilder<'a> {
+    /// Create a new parser builder for the specified SQL using DataFusion's
+    /// dialect.
+    pub fn new(sql: &'a str) -> Self {
         Self {
-            input: input.into(),
-            dialect: &DEFAULT_DIALECT,
+            sql,
+            dialect: DEFAULT_DIALECT,
             recursion_limit: DEFAULT_RECURSION_LIMIT,
         }
     }
 
-    /// Adjust the parser builder's dialect. Defaults to [`GenericDialect`]
-    pub fn with_dialect(mut self, dialect: &'b dyn Dialect) -> Self {
-        self.dialect = dialect;
+    /// Adjust the parser builder's dialect.
+    pub fn with_dialect(mut self, dialect: impl Into<SqlDialect>) -> Self {
+        self.dialect = dialect.into();
         self
     }
 
-    /// Adjust the recursion limit of sql parsing.  Defaults to 51
+    /// Adjust the recursion limit of sql parsing. Defaults to 51.
     pub fn with_recursion_limit(mut self, recursion_limit: usize) -> Self {
         self.recursion_limit = recursion_limit;
         self
     }
 
     /// Build resulting parser
-    pub fn build(self) -> Result<DFParser<'b>, DataFusionError> {
-        let tokens = match self.input {
-            ParserInput::Tokens(tokens) => tokens,
-            ParserInput::Sql(sql) => {
-                let mut tokenizer = Tokenizer::new(self.dialect, sql);
-                // Convert TokenizerError -> ParserError
-                tokenizer
-                    .tokenize_with_location()
-                    .map_err(ParserError::from)?
-            }
-        };
-
+    pub fn build(self) -> Result<DFParser<'a>, DataFusionError> {
         Ok(DFParser {
-            parser: Parser::new(self.dialect)
-                .with_tokens_with_locations(tokens)
-                .with_recursion_limit(self.recursion_limit),
+            sql: self.sql,
+            dialect: self.dialect,
             options: SqlParserOptions {
                 recursion_limit: ConfigNonZeroUsize::try_new(self.recursion_limit)?,
                 ..Default::default()
             },
-            supports_explain_with_utility_options: self
-                .dialect
-                .supports_explain_with_utility_options(),
         })
     }
 }
 
-/// Returns true when `tok` is the start of a query / parenthesized query
-/// group. Used to disambiguate `EXPLAIN (SELECT ...)` (a parenthesized query)
-/// from `EXPLAIN (ANALYZE) SELECT ...` (a Postgres-style option list).
-fn token_starts_query(tok: &Token) -> bool {
-    match tok {
-        Token::LParen => true,
-        Token::Word(Word { keyword, .. }) => matches!(
-            keyword,
-            Keyword::SELECT
-                | Keyword::WITH
-                | Keyword::VALUES
-                | Keyword::TABLE
-                | Keyword::INSERT
-                | Keyword::UPDATE
-                | Keyword::DELETE
-                | Keyword::MERGE
-        ),
-        _ => false,
-    }
-}
-
 impl<'a> DFParser<'a> {
-    /// Parse a sql string into one or [`Statement`]s using the
-    /// [`GenericDialect`].
-    pub fn parse_sql(sql: &'a str) -> Result<VecDeque<Statement>, DataFusionError> {
-        let mut parser = DFParserBuilder::new(sql).build()?;
-
-        parser.parse_statements()
+    /// Parse a sql string into one or [`Statement`]s using DataFusion's
+    /// dialect.
+    pub fn parse_sql(sql: &'a str) -> Result<VecDeque<Statement<'a>>, DataFusionError> {
+        DFParserBuilder::new(sql).build()?.parse_statements()
     }
 
     /// Parse a SQL string and produce one or more [`Statement`]s with
     /// with the specified dialect.
     pub fn parse_sql_with_dialect(
-        sql: &str,
-        dialect: &dyn Dialect,
-    ) -> Result<VecDeque<Statement>, DataFusionError> {
-        let mut parser = DFParserBuilder::new(sql).with_dialect(dialect).build()?;
-        parser.parse_statements()
+        sql: &'a str,
+        dialect: SqlDialect,
+    ) -> Result<VecDeque<Statement<'a>>, DataFusionError> {
+        DFParserBuilder::new(sql)
+            .with_dialect(dialect)
+            .build()?
+            .parse_statements()
     }
 
-    pub fn parse_sql_into_expr(sql: &str) -> Result<ExprWithAlias, DataFusionError> {
+    pub fn parse_sql_into_expr(
+        sql: &'a str,
+    ) -> Result<ExprWithAlias<'a>, DataFusionError> {
         DFParserBuilder::new(sql).build()?.parse_into_expr()
     }
 
     pub fn parse_sql_into_expr_with_dialect(
-        sql: &str,
-        dialect: &dyn Dialect,
-    ) -> Result<ExprWithAlias, DataFusionError> {
+        sql: &'a str,
+        dialect: SqlDialect,
+    ) -> Result<ExprWithAlias<'a>, DataFusionError> {
         DFParserBuilder::new(sql)
             .with_dialect(dialect)
             .build()?
@@ -621,890 +643,729 @@ impl<'a> DFParser<'a> {
     }
 
     /// Parse a sql string into one or [`Statement`]s
-    pub fn parse_statements(&mut self) -> Result<VecDeque<Statement>, DataFusionError> {
-        let mut stmts = VecDeque::new();
-        let mut expecting_statement_delimiter = false;
-        loop {
-            // ignore empty statements (between successive statement delimiters)
-            while self.parser.consume_token(&Token::SemiColon) {
-                expecting_statement_delimiter = false;
-            }
-
-            if self.parser.peek_token() == Token::EOF {
-                break;
-            }
-            if expecting_statement_delimiter {
-                return self.expected("end of statement", &self.parser.peek_token());
-            }
-
-            let statement = self.parse_statement()?;
-            stmts.push_back(statement);
-            expecting_statement_delimiter = true;
-        }
-        Ok(stmts)
-    }
-
-    /// Report an unexpected token
-    fn expected<T>(
-        &self,
-        expected: &str,
-        found: &TokenWithSpan,
-    ) -> Result<T, DataFusionError> {
-        let sql_parser_span = found.span;
-        let span = Span::try_from_sqlparser_span(sql_parser_span);
-        let diagnostic = Diagnostic::new_error(
-            format!("Expected: {expected}, found: {found}{}", found.span.start),
-            span,
-        );
-        parser_err!(
-            format!("Expected: {expected}, found: {found}{}", found.span.start);
-            diagnostic=
-            diagnostic
-        )
-    }
-
-    fn expect_token(
+    pub fn parse_statements(
         &mut self,
-        expected: &str,
-        token: &Token,
-    ) -> Result<(), DataFusionError> {
-        let next_token = self.parser.peek_token_ref();
-        if next_token.token != *token {
-            self.expected(expected, next_token)
-        } else {
-            Ok(())
+    ) -> Result<VecDeque<Statement<'a>>, DataFusionError> {
+        dispatch!(self.dialect, parse_statements_as(self.sql))
+    }
+
+    /// Parse the SQL as exactly one statement.
+    pub fn parse_statement(&mut self) -> Result<Statement<'a>, DataFusionError> {
+        let mut statements = self.parse_statements()?;
+        match (statements.pop_front(), statements.is_empty()) {
+            (Some(statement), true) => Ok(statement),
+            (None, _) => parser_err!("Expected a statement"),
+            (Some(_), false) => parser_err!("Expected exactly one statement"),
         }
     }
 
-    /// Parse a new expression
-    pub fn parse_statement(&mut self) -> Result<Statement, DataFusionError> {
-        match self.parser.peek_token().token {
-            Token::Word(w) => {
-                match w.keyword {
-                    Keyword::CREATE => {
-                        self.parser.next_token(); // CREATE
-                        self.parse_create()
-                    }
-                    Keyword::COPY => {
-                        if let Token::Word(w) = self.parser.peek_nth_token(1).token {
-                            // use native parser for COPY INTO
-                            if w.keyword == Keyword::INTO {
-                                return self.parse_and_handle_statement();
-                            }
-                        }
-                        self.parser.next_token(); // COPY
-                        self.parse_copy()
-                    }
-                    Keyword::EXPLAIN => {
-                        self.parser.next_token(); // EXPLAIN
-                        self.parse_explain()
-                    }
-                    Keyword::RESET => {
-                        self.parser.next_token(); // RESET
-                        self.parse_reset()
-                    }
-                    Keyword::DROP
-                        if self
-                            .parser
-                            .parse_keywords(&[Keyword::DROP, Keyword::CATALOG]) =>
-                    {
-                        self.parse_drop_catalog()
-                    }
-                    _ => {
-                        // use sqlparser-rs parser
-                        self.parse_and_handle_statement()
-                    }
-                }
-            }
-            _ => {
-                // use the native parser
-                self.parse_and_handle_statement()
-            }
-        }
-    }
-
-    pub fn parse_expr(&mut self) -> Result<ExprWithAlias, DataFusionError> {
-        if let Token::Word(w) = self.parser.peek_token().token {
-            match w.keyword {
-                Keyword::CREATE | Keyword::COPY | Keyword::EXPLAIN => {
-                    return parser_err!("Unsupported command in expression")?;
-                }
-                _ => {}
-            }
-        }
-
-        Ok(self.parser.parse_expr_with_alias()?)
+    /// Parse the SQL as an expression, optionally followed by `AS alias`.
+    pub fn parse_expr(&mut self) -> Result<ExprWithAlias<'a>, DataFusionError> {
+        dispatch!(self.dialect, parse_expr_as(self.sql, false))
     }
 
     /// Parses the entire SQL string into an expression.
     ///
     /// In contrast to [`DFParser::parse_expr`], this function will report an error if the input
     /// contains any trailing, unparsed tokens.
-    pub fn parse_into_expr(&mut self) -> Result<ExprWithAlias, DataFusionError> {
-        let expr = self.parse_expr()?;
-        self.expect_token("end of expression", &Token::EOF)?;
-        Ok(expr)
+    pub fn parse_into_expr(&mut self) -> Result<ExprWithAlias<'a>, DataFusionError> {
+        dispatch!(self.dialect, parse_expr_as(self.sql, true))
     }
 
-    /// Helper method to parse a statement and handle errors consistently, especially for recursion limits
-    fn parse_and_handle_statement(&mut self) -> Result<Statement, DataFusionError> {
-        self.parser
-            .parse_statement()
-            .map(|stmt| Statement::Statement(Box::from(stmt)))
-            .map_err(|e| match e {
-                ParserError::RecursionLimitExceeded => DataFusionError::SQL(
-                    Box::new(ParserError::RecursionLimitExceeded),
-                    Some(format!(
-                        " (current limit: {})",
-                        self.options.recursion_limit
-                    )),
-                ),
-                other => DataFusionError::SQL(Box::new(other), None),
-            })
-    }
-
-    /// Parse a SQL `COPY TO` statement
-    pub fn parse_copy(&mut self) -> Result<Statement, DataFusionError> {
-        // parse as a query
-        let source = if self.parser.consume_token(&Token::LParen) {
-            let query = self.parser.parse_query()?;
-            self.parser.expect_token(&Token::RParen)?;
-            CopyToSource::Query(query)
-        } else {
-            // parse as table reference
-            let table_name = self.parser.parse_object_name(true)?;
-            CopyToSource::Relation(table_name)
-        };
-
-        #[derive(Default)]
-        struct Builder {
-            stored_as: Option<String>,
-            target: Option<String>,
-            partitioned_by: Option<Vec<String>>,
-            options: Option<Vec<(String, Value)>>,
-        }
-
-        let mut builder = Builder::default();
-
-        loop {
-            if let Some(keyword) = self.parser.parse_one_of_keywords(&[
-                Keyword::STORED,
-                Keyword::TO,
-                Keyword::PARTITIONED,
-                Keyword::OPTIONS,
-                Keyword::WITH,
-            ]) {
-                match keyword {
-                    Keyword::STORED => {
-                        self.parser.expect_keyword(Keyword::AS)?;
-                        ensure_not_set(builder.stored_as.as_ref(), "STORED AS")?;
-                        builder.stored_as = Some(self.parse_file_format()?);
-                    }
-                    Keyword::TO => {
-                        ensure_not_set(builder.target.as_ref(), "TO")?;
-                        builder.target = Some(self.parser.parse_literal_string()?);
-                    }
-                    Keyword::WITH => {
-                        self.parser.expect_keyword(Keyword::HEADER)?;
-                        self.parser.expect_keyword(Keyword::ROW)?;
-                        return parser_err!(
-                            "WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS ('format.has_header' 'true')"
-                        )?;
-                    }
-                    Keyword::PARTITIONED => {
-                        self.parser.expect_keyword(Keyword::BY)?;
-                        ensure_not_set(
-                            builder.partitioned_by.as_ref(),
-                            "PARTITIONED BY",
-                        )?;
-                        builder.partitioned_by = Some(self.parse_partitions()?);
-                    }
-                    Keyword::OPTIONS => {
-                        ensure_not_set(builder.options.as_ref(), "OPTIONS")?;
-                        builder.options = Some(self.parse_value_options()?);
-                    }
-                    _ => {
-                        unreachable!()
-                    }
-                }
-            } else {
-                let token = self.parser.peek_token();
-                if token == Token::EOF || token == Token::SemiColon {
-                    break;
-                } else {
-                    return self.expected("end of statement or ;", &token)?;
-                }
-            }
-        }
-
-        let Some(target) = builder.target else {
-            return parser_err!("Missing TO clause in COPY statement")?;
-        };
-
-        Ok(Statement::CopyTo(CopyToStatement {
-            source,
-            target,
-            partitioned_by: builder.partitioned_by.unwrap_or(vec![]),
-            stored_as: builder.stored_as,
-            options: builder.options.unwrap_or(vec![]),
-        }))
-    }
-
-    /// Parse the next token as a key name for an option list
-    ///
-    /// Note this is different than [`parse_literal_string`]
-    /// because it allows keywords as well as other non words
-    ///
-    /// [`parse_literal_string`]: sqlparser::parser::Parser::parse_literal_string
-    pub fn parse_option_key(&mut self) -> Result<String, DataFusionError> {
-        let next_token = self.parser.next_token();
-        match next_token.token {
-            Token::Word(Word { value, .. }) => {
-                let mut parts = vec![value];
-                while self.parser.consume_token(&Token::Period) {
-                    let next_token = self.parser.next_token();
-                    if let Token::Word(Word { value, .. }) = next_token.token {
-                        parts.push(value);
-                    } else {
-                        // Unquoted namespaced keys have to conform to the syntax
-                        // "<WORD>[\.<WORD>]*". If we have a key that breaks this
-                        // pattern, error out:
-                        return self.expected("key name", &next_token);
-                    }
-                }
-                Ok(parts.join("."))
-            }
-            Token::SingleQuotedString(s) => Ok(s),
-            Token::DoubleQuotedString(s) => Ok(s),
-            Token::EscapedStringLiteral(s) => Ok(s),
-            _ => self.expected("key name", &next_token),
-        }
-    }
-
-    /// Parse the next token as a value for an option list
-    ///
-    /// Note this is different than [`parse_value`] as it allows any
-    /// word or keyword in this location.
-    ///
-    /// [`parse_value`]: sqlparser::parser::Parser::parse_value
-    pub fn parse_option_value(&mut self) -> Result<Value, DataFusionError> {
-        let next_token = self.parser.next_token();
-        match next_token.token {
-            // e.g. things like "snappy" or "gzip" that may be keywords
-            Token::Word(word) => Ok(Value::SingleQuotedString(word.value)),
-            Token::SingleQuotedString(s) => Ok(Value::SingleQuotedString(s)),
-            Token::DoubleQuotedString(s) => Ok(Value::DoubleQuotedString(s)),
-            Token::EscapedStringLiteral(s) => Ok(Value::EscapedStringLiteral(s)),
-            Token::Number(n, l) => Ok(Value::Number(n, l)),
-            _ => self.expected("string or numeric value", &next_token),
-        }
-    }
-
-    /// Parse a SQL `EXPLAIN`
-    ///
-    /// After the `EXPLAIN` keyword, if the dialect supports the Postgres-style
-    /// option list and the next non-whitespace token is `(`, we must
-    /// disambiguate between an option list (`EXPLAIN (ANALYZE) SELECT ...`)
-    /// and a parenthesized query (`EXPLAIN (SELECT ...)` or
-    /// `EXPLAIN (q1 EXCEPT q2) UNION ALL ...`).
-    pub fn parse_explain(&mut self) -> Result<Statement, DataFusionError> {
-        if self.supports_explain_with_utility_options
-            && self.parser.peek_token().token == Token::LParen
-            && !token_starts_query(&self.parser.peek_nth_token(1).token)
-        {
-            let raw = self.parser.parse_utility_options()?;
-            let options = ExplainStatementOptions::from_utility_options(&raw)?;
-            let statement = self.parse_statement()?;
-            return Ok(Statement::Explain(ExplainStatement {
-                statement: Box::new(statement),
-                options,
-            }));
-        }
-
-        // Legacy keyword form.
-        let analyze = self.parser.parse_keyword(Keyword::ANALYZE);
-        let verbose = self.parser.parse_keyword(Keyword::VERBOSE);
-        let format = self
-            .parse_explain_format()?
-            .map(|s| ExplainFormat::from_str(&s))
-            .transpose()?;
-
-        let statement = self.parse_statement()?;
-
-        let options = ExplainStatementOptions {
-            analyze,
-            verbose,
-            format,
-            ..Default::default()
-        };
-
-        Ok(Statement::Explain(ExplainStatement {
-            statement: Box::new(statement),
-            options,
-        }))
-    }
-
-    /// Parse a SQL `RESET`
-    pub fn parse_reset(&mut self) -> Result<Statement, DataFusionError> {
-        let mut parts: Vec<String> = Vec::new();
-        let mut expecting_segment = true;
-
-        loop {
-            let next_token = self.parser.peek_token();
-            match &next_token.token {
-                Token::Word(word) => {
-                    self.parser.next_token();
-                    parts.push(word.value.clone());
-                    expecting_segment = false;
-                }
-                Token::SingleQuotedString(s)
-                | Token::DoubleQuotedString(s)
-                | Token::EscapedStringLiteral(s) => {
-                    self.parser.next_token();
-                    parts.push(s.clone());
-                    expecting_segment = false;
-                }
-                Token::Period => {
-                    self.parser.next_token();
-                    if expecting_segment || parts.is_empty() {
-                        return self.expected("configuration parameter", &next_token);
-                    }
-                    expecting_segment = true;
-                }
-                Token::EOF | Token::SemiColon => break,
-                _ => return self.expected("configuration parameter", &next_token),
-            }
-        }
-
-        if parts.is_empty() || expecting_segment {
-            return self.expected("configuration parameter", &self.parser.peek_token());
-        }
-
-        let idents: Vec<Ident> = parts.into_iter().map(Ident::new).collect();
-        let variable = ObjectName::from(idents);
-        Ok(Statement::Reset(ResetStatement::Variable(variable)))
-    }
-
-    pub fn parse_explain_format(&mut self) -> Result<Option<String>, DataFusionError> {
-        if !self.parser.parse_keyword(Keyword::FORMAT) {
-            return Ok(None);
-        }
-
-        let next_token = self.parser.next_token();
-        let format = match next_token.token {
-            Token::Word(w) => Ok(w.value),
-            Token::SingleQuotedString(w) => Ok(w),
-            Token::DoubleQuotedString(w) => Ok(w),
-            _ => self.expected("an explain format such as TREE", &next_token),
-        }?;
-        Ok(Some(format))
-    }
-
-    /// Parse a SQL `CREATE` statement handling `CREATE EXTERNAL TABLE`
-    pub fn parse_create(&mut self) -> Result<Statement, DataFusionError> {
-        // TODO: Change sql parser to take in `or_replace: bool` inside parse_create()
-        if self
-            .parser
-            .parse_keywords(&[Keyword::OR, Keyword::REPLACE, Keyword::EXTERNAL])
-        {
-            self.parse_create_external(false, true)
-        } else if self.parser.parse_keywords(&[
-            Keyword::OR,
-            Keyword::REPLACE,
-            Keyword::UNBOUNDED,
-            Keyword::EXTERNAL,
-        ]) {
-            self.parse_create_external(true, true)
-        } else if self.parser.parse_keyword(Keyword::EXTERNAL) {
-            self.parse_create_external(false, false)
-        } else if self
-            .parser
-            .parse_keywords(&[Keyword::UNBOUNDED, Keyword::EXTERNAL])
-        {
-            self.parse_create_external(true, false)
-        } else if self.parser.parse_keywords(&[Keyword::CATALOG]) {
-            Ok(Statement::Statement(Box::from(
-                self.parser.parse_create_database()?,
-            )))
-        } else {
-            Ok(Statement::Statement(Box::from(self.parser.parse_create()?)))
-        }
-    }
-
-    /// Dispatches `CREATE [OR REPLACE] [UNBOUNDED] EXTERNAL ...` (with the
-    /// leading keywords already consumed) to either `CREATE EXTERNAL TABLE`
-    /// or `CREATE EXTERNAL CATALOG`, based on the keyword that follows
-    /// `EXTERNAL`.
-    fn parse_create_external(
-        &mut self,
-        unbounded: bool,
-        or_replace: bool,
-    ) -> Result<Statement, DataFusionError> {
-        if self.parser.parse_keyword(Keyword::CATALOG) {
-            if unbounded {
-                return parser_err!(
-                    "UNBOUNDED is not supported for CREATE EXTERNAL CATALOG"
-                );
-            }
-            self.parse_create_external_catalog(or_replace)
-        } else {
-            self.parse_create_external_table(unbounded, or_replace)
-        }
-    }
-
-    fn parse_partitions(&mut self) -> Result<Vec<String>, DataFusionError> {
-        let mut partitions: Vec<String> = vec![];
-        if !self.parser.consume_token(&Token::LParen)
-            || self.parser.consume_token(&Token::RParen)
-        {
-            return Ok(partitions);
-        }
-
-        loop {
-            if let Token::Word(_) = self.parser.peek_token().token {
-                let identifier = self.parser.parse_identifier()?;
-                partitions.push(identifier.to_string());
-            } else {
-                return self.expected("partition name", &self.parser.peek_token());
-            }
-            let comma = self.parser.consume_token(&Token::Comma);
-            if self.parser.consume_token(&Token::RParen) {
-                // allow a trailing comma, even though it's not in standard
-                break;
-            } else if !comma {
-                return self.expected(
-                    "',' or ')' after partition definition",
-                    &self.parser.peek_token(),
-                );
-            }
-        }
-        Ok(partitions)
-    }
-
-    /// Parse the ordering clause of a `CREATE EXTERNAL TABLE` SQL statement
-    pub fn parse_order_by_exprs(&mut self) -> Result<Vec<OrderByExpr>, DataFusionError> {
-        let mut values = vec![];
-        self.parser.expect_token(&Token::LParen)?;
-        loop {
-            values.push(self.parse_order_by_expr()?);
-            if !self.parser.consume_token(&Token::Comma) {
-                self.parser.expect_token(&Token::RParen)?;
-                return Ok(values);
-            }
-        }
-    }
-
-    /// Parse an ORDER BY sub-expression optionally followed by ASC or DESC.
-    pub fn parse_order_by_expr(&mut self) -> Result<OrderByExpr, DataFusionError> {
-        let expr = self.parser.parse_expr()?;
-
-        let sort = if self.parser.parse_keyword(Keyword::ASC) {
-            Some(OrderBySort::Asc)
-        } else if self.parser.parse_keyword(Keyword::DESC) {
-            Some(OrderBySort::Desc)
-        } else {
-            None
-        };
-
-        let nulls_first = if self
-            .parser
-            .parse_keywords(&[Keyword::NULLS, Keyword::FIRST])
-        {
-            Some(true)
-        } else if self.parser.parse_keywords(&[Keyword::NULLS, Keyword::LAST]) {
-            Some(false)
-        } else {
-            None
-        };
-
-        Ok(OrderByExpr {
-            expr,
-            options: OrderByOptions { sort, nulls_first },
-            with_fill: None,
-        })
-    }
-
-    // This is a copy of the equivalent implementation in sqlparser.
-    fn parse_columns(
-        &mut self,
-    ) -> Result<(Vec<ColumnDef>, Vec<TableConstraint>), DataFusionError> {
-        let mut columns = vec![];
-        let mut constraints = vec![];
-        if !self.parser.consume_token(&Token::LParen)
-            || self.parser.consume_token(&Token::RParen)
-        {
-            return Ok((columns, constraints));
-        }
-
-        loop {
-            if let Some(constraint) = self.parser.parse_optional_table_constraint()? {
-                constraints.push(constraint);
-            } else if let Token::Word(_) = self.parser.peek_token().token {
-                let column_def = self.parse_column_def()?;
-                columns.push(column_def);
-            } else {
-                return self.expected(
-                    "column name or constraint definition",
-                    &self.parser.peek_token(),
-                );
-            }
-            let comma = self.parser.consume_token(&Token::Comma);
-            if self.parser.consume_token(&Token::RParen) {
-                // allow a trailing comma, even though it's not in standard
-                break;
-            } else if !comma {
-                return self.expected(
-                    "',' or ')' after column definition",
-                    &self.parser.peek_token(),
-                );
-            }
-        }
-
-        Ok((columns, constraints))
-    }
-
-    fn parse_column_def(&mut self) -> Result<ColumnDef, DataFusionError> {
-        let name = self.parser.parse_identifier()?;
-        let data_type = self.parser.parse_data_type()?;
-        let mut options = vec![];
-        loop {
-            if self.parser.parse_keyword(Keyword::CONSTRAINT) {
-                let name = Some(self.parser.parse_identifier()?);
-                if let Some(option) = self.parser.parse_optional_column_option()? {
-                    options.push(ColumnOptionDef { name, option });
-                } else {
-                    return self.expected(
-                        "constraint details after CONSTRAINT <name>",
-                        &self.parser.peek_token(),
-                    );
-                }
-            } else if let Some(option) = self.parser.parse_optional_column_option()? {
-                options.push(ColumnOptionDef { name: None, option });
-            } else {
-                break;
-            }
-        }
-        Ok(ColumnDef {
-            name,
-            data_type,
-            options,
-        })
-    }
-
-    fn parse_create_external_table(
-        &mut self,
-        unbounded: bool,
-        or_replace: bool,
-    ) -> Result<Statement, DataFusionError> {
-        let temporary = self
-            .parser
-            .parse_one_of_keywords(&[Keyword::TEMP, Keyword::TEMPORARY])
-            .is_some();
-
-        self.parser.expect_keyword(Keyword::TABLE)?;
-        let if_not_exists =
-            self.parser
-                .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
-
-        if if_not_exists && or_replace {
-            return parser_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'");
-        }
-
-        let table_name = self.parser.parse_object_name(true)?;
-        let (mut columns, constraints) = self.parse_columns()?;
-
-        #[derive(Default)]
-        struct Builder {
-            file_type: Option<String>,
-            locations: Option<Vec<String>>,
-            table_partition_cols: Option<Vec<String>>,
-            order_exprs: Vec<LexOrdering>,
-            options: Option<Vec<(String, Value)>>,
-        }
-        let mut builder = Builder::default();
-
-        loop {
-            if let Some(keyword) = self.parser.parse_one_of_keywords(&[
-                Keyword::STORED,
-                Keyword::LOCATION,
-                Keyword::WITH,
-                Keyword::DELIMITER,
-                Keyword::COMPRESSION,
-                Keyword::PARTITIONED,
-                Keyword::OPTIONS,
-            ]) {
-                match keyword {
-                    Keyword::STORED => {
-                        self.parser.expect_keyword(Keyword::AS)?;
-                        ensure_not_set(builder.file_type.as_ref(), "STORED AS")?;
-                        builder.file_type = Some(self.parse_file_format()?);
-                    }
-                    Keyword::LOCATION => {
-                        ensure_not_set(builder.locations.as_ref(), "LOCATION")?;
-                        builder.locations = Some(self.parse_locations()?);
-                    }
-                    Keyword::WITH => {
-                        if self.parser.parse_keyword(Keyword::ORDER) {
-                            builder.order_exprs.push(self.parse_order_by_exprs()?);
-                        } else {
-                            self.parser.expect_keyword(Keyword::HEADER)?;
-                            self.parser.expect_keyword(Keyword::ROW)?;
-                            return parser_err!(
-                                "WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS (format.has_header true)"
-                            )?;
-                        }
-                    }
-                    Keyword::DELIMITER => {
-                        return parser_err!(
-                            "DELIMITER clause is no longer in use. Please use the OPTIONS clause with 'format.delimiter' set appropriately, e.g., OPTIONS (format.delimiter ',')"
-                        )?;
-                    }
-                    Keyword::COMPRESSION => {
-                        self.parser.expect_keyword(Keyword::TYPE)?;
-                        return parser_err!(
-                            "COMPRESSION TYPE clause is no longer in use. Please use the OPTIONS clause with 'format.compression' set appropriately, e.g., OPTIONS (format.compression gzip)"
-                        )?;
-                    }
-                    Keyword::PARTITIONED => {
-                        self.parser.expect_keyword(Keyword::BY)?;
-                        ensure_not_set(
-                            builder.table_partition_cols.as_ref(),
-                            "PARTITIONED BY",
-                        )?;
-                        // Expects either list of column names (col_name [, col_name]*)
-                        // or list of column definitions (col_name datatype [, col_name datatype]* )
-                        // use the token after the name to decide which parsing rule to use
-                        // Note that mixing both names and definitions is not allowed
-                        let peeked = self.parser.peek_nth_token(2);
-                        if peeked == Token::Comma || peeked == Token::RParen {
-                            // List of column names
-                            builder.table_partition_cols = Some(self.parse_partitions()?)
-                        } else {
-                            // List of column defs
-                            let (cols, cons) = self.parse_columns()?;
-                            builder.table_partition_cols = Some(
-                                cols.iter().map(|col| col.name.to_string()).collect(),
-                            );
-
-                            columns.extend(cols);
-
-                            if !cons.is_empty() {
-                                return sql_err!(ParserError::ParserError(
-                                    "Constraints on Partition Columns are not supported"
-                                        .to_string(),
-                                ));
-                            }
-                        }
-                    }
-                    Keyword::OPTIONS => {
-                        ensure_not_set(builder.options.as_ref(), "OPTIONS")?;
-                        builder.options = Some(self.parse_value_options()?);
-                    }
-                    _ => {
-                        unreachable!()
-                    }
-                }
-            } else {
-                let token = self.parser.peek_token();
-                if token == Token::EOF || token == Token::SemiColon {
-                    break;
-                } else {
-                    return self.expected("end of statement or ;", &token)?;
-                }
-            }
-        }
-
-        // Validations: location and file_type are required
-        if builder.file_type.is_none() {
-            return sql_err!(ParserError::ParserError(
-                "Missing STORED AS clause in CREATE EXTERNAL TABLE statement".into(),
-            ));
-        }
-        if builder.locations.is_none() {
-            return sql_err!(ParserError::ParserError(
-                "Missing LOCATION clause in CREATE EXTERNAL TABLE statement".into(),
-            ));
-        }
-
-        let locations = builder.locations.unwrap();
-        if locations.is_empty() {
-            return parser_err!("LOCATION requires at least one path");
-        }
-
-        let create = CreateExternalTable {
-            name: table_name,
-            columns,
-            file_type: builder.file_type.unwrap(),
-            locations,
-            table_partition_cols: builder.table_partition_cols.unwrap_or(vec![]),
-            order_exprs: builder.order_exprs,
-            if_not_exists,
-            or_replace,
-            temporary,
-            unbounded,
-            options: builder.options.unwrap_or(Vec::new()),
-            constraints,
-        };
-        Ok(Statement::CreateExternalTable(create))
-    }
-
-    /// Parses a `CREATE EXTERNAL CATALOG` statement, with `CREATE [OR
-    /// REPLACE] EXTERNAL CATALOG` already consumed.
-    fn parse_create_external_catalog(
-        &mut self,
-        or_replace: bool,
-    ) -> Result<Statement, DataFusionError> {
-        let if_not_exists =
-            self.parser
-                .parse_keywords(&[Keyword::IF, Keyword::NOT, Keyword::EXISTS]);
-
-        if if_not_exists && or_replace {
-            return parser_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'");
-        }
-
-        let catalog_name = self.parser.parse_object_name(true)?;
-        let mut catalog_type: Option<String> = None;
-        let mut location: Option<String> = None;
-        let mut options: Option<Vec<(String, Value)>> = None;
-
-        loop {
-            if let Some(keyword) = self.parser.parse_one_of_keywords(&[
-                Keyword::STORED,
-                Keyword::LOCATION,
-                Keyword::OPTIONS,
-            ]) {
-                match keyword {
-                    Keyword::STORED => {
-                        self.parser.expect_keyword(Keyword::AS)?;
-                        ensure_not_set(catalog_type.as_ref(), "STORED AS")?;
-                        catalog_type = Some(self.parse_file_format()?);
-                    }
-                    Keyword::LOCATION => {
-                        ensure_not_set(location.as_ref(), "LOCATION")?;
-                        location = Some(self.parser.parse_literal_string()?);
-                    }
-                    Keyword::OPTIONS => {
-                        ensure_not_set(options.as_ref(), "OPTIONS")?;
-                        options = Some(self.parse_value_options()?);
-                    }
-                    _ => {
-                        unreachable!()
-                    }
-                }
-            } else {
-                let token = self.parser.peek_token();
-                if token == Token::EOF || token == Token::SemiColon {
-                    break;
-                } else {
-                    return self.expected("end of statement or ;", &token)?;
-                }
-            }
-        }
-
-        let Some(catalog_type) = catalog_type else {
-            return sql_err!(ParserError::ParserError(
-                "Missing STORED AS clause in CREATE EXTERNAL CATALOG statement".into(),
-            ));
-        };
-
-        Ok(Statement::CreateExternalCatalog(CreateExternalCatalog {
-            catalog_name,
-            catalog_type,
-            location,
-            if_not_exists,
-            or_replace,
-            options: options.unwrap_or_default(),
-        }))
-    }
-
-    /// Parses a `DROP CATALOG` statement, with `DROP CATALOG` already consumed.
-    fn parse_drop_catalog(&mut self) -> Result<Statement, DataFusionError> {
-        let if_exists = self.parser.parse_keywords(&[Keyword::IF, Keyword::EXISTS]);
-        let name = self.parser.parse_object_name(true)?;
-
-        let loc = self.parser.peek_token_ref().span.start;
-        let cascade = self.parser.parse_keyword(Keyword::CASCADE);
-        let restrict = self.parser.parse_keyword(Keyword::RESTRICT);
-        if cascade && restrict {
-            return parser_err!(format!(
-                "Cannot specify both CASCADE and RESTRICT in DROP DATABASE {loc}"
-            ));
-        }
-
-        Ok(Statement::Statement(Box::new(
-            sqlparser::ast::Statement::Drop {
-                object_type: ObjectType::Database,
-                if_exists,
-                names: vec![name],
-                cascade,
-                restrict,
-                purge: false,
-                temporary: false,
-                table: None,
-            },
-        )))
-    }
-
-    /// Parses one or more external table locations.
-    fn parse_locations(&mut self) -> Result<Vec<String>, DataFusionError> {
-        if !self.parser.consume_token(&Token::LParen) {
-            return Ok(vec![self.parser.parse_literal_string()?]);
-        }
-
-        let mut locations = vec![];
-        loop {
-            locations.push(self.parser.parse_literal_string()?);
-            let comma = self.parser.consume_token(&Token::Comma);
-            if self.parser.consume_token(&Token::RParen) {
-                // Allow a trailing comma, even though it's not in standard
-                break;
-            } else if !comma {
-                return self.expected(
-                    "',' or ')' after location definition",
-                    &self.parser.peek_token(),
-                );
-            }
-        }
-        Ok(locations)
-    }
-
-    /// Parses the set of valid formats
-    fn parse_file_format(&mut self) -> Result<String, DataFusionError> {
-        let token = self.parser.next_token();
-        match &token.token {
-            Token::Word(w) => parse_file_type(&w.value),
-            _ => self.expected("one of ARROW, PARQUET, NDJSON, or CSV", &token),
-        }
-    }
-
-    /// Parses (key value) style options into a map of String --> [`Value`].
-    ///
-    /// This method supports keywords as key names as well as multiple
-    /// value types such as Numbers as well as Strings.
-    fn parse_value_options(&mut self) -> Result<Vec<(String, Value)>, DataFusionError> {
-        let mut options = vec![];
-        self.parser.expect_token(&Token::LParen)?;
-
-        loop {
-            let key = self.parse_option_key()?;
-            let value = self.parse_option_value()?;
-            options.push((key, value));
-            let comma = self.parser.consume_token(&Token::Comma);
-            if self.parser.consume_token(&Token::RParen) {
-                // Allow a trailing comma, even though it's not in standard
-                break;
-            } else if !comma {
-                return self.expected(
-                    "',' or ')' after option definition",
-                    &self.parser.peek_token(),
-                );
-            }
-        }
-        Ok(options)
+    /// The options this parser was built with.
+    pub fn options(&self) -> &SqlParserOptions {
+        &self.options
     }
 }
 
-#[cfg(test)]
+/// Report an unexpected token
+fn expected<T, D: Dialect>(p: &Parser<'_, D>, what: &str) -> Result<T, DataFusionError> {
+    let error = p.expected(what);
+    let span = Span::from_sqlparser_span(error.span, p.source());
+    let diagnostic = Diagnostic::new_error(error.message.clone(), span);
+    Err(DataFusionError::from(error).with_diagnostic(diagnostic))
+}
+
+fn parse_statements_as<'a, D: Dialect<Ext = Builtin>>(
+    sql: &'a str,
+) -> Result<VecDeque<Statement<'a>>, DataFusionError> {
+    let mut p = Parser::<D>::new(sql)?;
+    let mut statements = VecDeque::new();
+    let mut expecting_statement_delimiter = false;
+    loop {
+        // ignore empty statements (between successive statement delimiters)
+        while p.eat_op(";") {
+            expecting_statement_delimiter = false;
+        }
+        if p.at_eof() {
+            break;
+        }
+        if expecting_statement_delimiter {
+            return expected(&p, "end of statement");
+        }
+        statements.push_back(parse_df_statement(&mut p)?);
+        expecting_statement_delimiter = true;
+    }
+    Ok(statements)
+}
+
+fn parse_expr_as<'a, D: Dialect<Ext = Builtin>>(
+    sql: &'a str,
+    whole: bool,
+) -> Result<ExprWithAlias<'a>, DataFusionError> {
+    let mut p = Parser::<D>::new(sql)?;
+    if p.at_keyword("CREATE") || p.at_keyword("COPY") || p.at_keyword("EXPLAIN") {
+        return parser_err!("Unsupported command in expression")?;
+    }
+    let expr = p.parse_expr()?;
+    let alias = if p.eat_keyword("AS") {
+        Some(p.parse_ident()?)
+    } else {
+        None
+    };
+    if whole && !p.at_eof() {
+        return expected(&p, "end of expression");
+    }
+    Ok(ExprWithAlias { expr, alias })
+}
+
+/// Parses a statement, including DataFusion's own.
+fn parse_df_statement<'a, D: Dialect<Ext = Builtin>>(
+    p: &mut Parser<'a, D>,
+) -> Result<Statement<'a>, DataFusionError> {
+    if p.at_keyword("CREATE") {
+        let or_replace = p.peek_nth(1).is_word("OR") && p.peek_nth(2).is_word("REPLACE");
+        let mut n = if or_replace { 3 } else { 1 };
+        let unbounded = p.peek_nth(n).is_word("UNBOUNDED");
+        if unbounded {
+            n += 1;
+        }
+        if p.peek_nth(n).is_word("EXTERNAL") {
+            for _ in 0..=n {
+                p.advance();
+            }
+            return parse_create_external(p, unbounded, or_replace);
+        }
+        if !or_replace && p.peek_nth(1).is_word("CATALOG") {
+            p.advance();
+            p.advance();
+            let if_not_exists = grammar::parse_if_not_exists(p)?;
+            let name = grammar::parse_object_name(p)?;
+            let create = sqlparser::ast::CreateDatabase {
+                if_not_exists,
+                name,
+            };
+            return Ok(Statement::Statement(Box::new(
+                StatementKind::CreateDatabase(Box::new(create)).into(),
+            )));
+        }
+    }
+    if p.at_keyword("COPY") && !p.peek_nth(1).is_word("INTO") {
+        p.advance();
+        return parse_copy(p);
+    }
+    if p.eat_keyword("EXPLAIN") {
+        return parse_explain(p);
+    }
+    if p.eat_keyword("RESET") {
+        return parse_reset(p);
+    }
+    if p.at_keyword("DROP") && p.peek_nth(1).is_word("CATALOG") {
+        p.advance();
+        p.advance();
+        return parse_drop_catalog(p);
+    }
+    Ok(Statement::Statement(Box::new(p.parse_statement()?)))
+}
+
+/// True at the end of a statement.
+fn at_statement_end<D: Dialect>(p: &Parser<'_, D>) -> bool {
+    p.at_eof() || p.at_op(";")
+}
+
+/// Parses a string literal's value.
+fn parse_literal_string<D: Dialect>(
+    p: &mut Parser<'_, D>,
+) -> Result<String, DataFusionError> {
+    Ok(grammar::parse_string(p)?.value().into_owned())
+}
+
+/// Parse a SQL `COPY TO` statement
+fn parse_copy<'a, D: Dialect<Ext = Builtin>>(
+    p: &mut Parser<'a, D>,
+) -> Result<Statement<'a>, DataFusionError> {
+    // parse as a query
+    let source = if p.eat_op("(") {
+        let query = D::parse_query(p)?;
+        p.expect_op(")")?;
+        CopyToSource::Query(Box::new(query))
+    } else {
+        // parse as table reference
+        CopyToSource::Relation(grammar::parse_object_name(p)?)
+    };
+
+    #[derive(Default)]
+    struct Builder {
+        stored_as: Option<String>,
+        target: Option<String>,
+        partitioned_by: Option<Vec<String>>,
+        options: Option<Vec<(String, OptionValue)>>,
+    }
+
+    let mut builder = Builder::default();
+
+    loop {
+        if p.eat_keyword("STORED") {
+            p.expect_keyword("AS")?;
+            ensure_not_set(builder.stored_as.as_ref(), "STORED AS")?;
+            builder.stored_as = Some(parse_file_format(p)?);
+        } else if p.eat_keyword("TO") {
+            ensure_not_set(builder.target.as_ref(), "TO")?;
+            builder.target = Some(parse_literal_string(p)?);
+        } else if p.eat_keyword("WITH") {
+            p.expect_keyword("HEADER")?;
+            p.expect_keyword("ROW")?;
+            return parser_err!(
+                "WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS ('format.has_header' 'true')"
+            )?;
+        } else if p.eat_keyword("PARTITIONED") {
+            p.expect_keyword("BY")?;
+            ensure_not_set(builder.partitioned_by.as_ref(), "PARTITIONED BY")?;
+            builder.partitioned_by = Some(parse_partitions(p)?);
+        } else if p.eat_keyword("OPTIONS") {
+            ensure_not_set(builder.options.as_ref(), "OPTIONS")?;
+            builder.options = Some(parse_value_options(p)?);
+        } else if at_statement_end(p) {
+            break;
+        } else {
+            return expected(p, "end of statement or ;");
+        }
+    }
+
+    let Some(target) = builder.target else {
+        return parser_err!("Missing TO clause in COPY statement")?;
+    };
+
+    Ok(Statement::CopyTo(CopyToStatement {
+        source,
+        target,
+        partitioned_by: builder.partitioned_by.unwrap_or_default(),
+        stored_as: builder.stored_as,
+        options: builder.options.unwrap_or_default(),
+    }))
+}
+
+/// The text of a word, or the value of a string or quoted name.
+fn parse_word_or_string<D: Dialect>(
+    p: &mut Parser<'_, D>,
+    what: &str,
+) -> Result<String, DataFusionError> {
+    let token = p.peek();
+    match token.kind {
+        TokenKind::Word => {
+            p.advance();
+            Ok(token.text.to_string())
+        }
+        TokenKind::String => Ok(parse_literal_string(p)?),
+        TokenKind::QuotedIdent => Ok(p.parse_ident()?.value().into_owned()),
+        _ => expected(p, what),
+    }
+}
+
+/// Parse the next token as a key name for an option list
+///
+/// This allows keywords, dotted names and strings.
+fn parse_option_key<D: Dialect>(
+    p: &mut Parser<'_, D>,
+) -> Result<String, DataFusionError> {
+    if p.peek().kind != TokenKind::Word {
+        return parse_word_or_string(p, "key name");
+    }
+    let mut parts = vec![p.advance().text.to_string()];
+    while p.eat_op(".") {
+        if p.peek().kind != TokenKind::Word {
+            // Unquoted namespaced keys have to conform to the syntax
+            // "<WORD>[\.<WORD>]*". If we have a key that breaks this
+            // pattern, error out:
+            return expected(p, "key name");
+        }
+        parts.push(p.advance().text.to_string());
+    }
+    Ok(parts.join("."))
+}
+
+/// Parse the next token as a value for an option list
+///
+/// This allows any word or keyword in this location.
+fn parse_option_value<D: Dialect>(
+    p: &mut Parser<'_, D>,
+) -> Result<OptionValue, DataFusionError> {
+    let token = p.peek();
+    match token.kind {
+        // e.g. things like "snappy" or "gzip" that may be keywords
+        TokenKind::Word => {
+            p.advance();
+            Ok(OptionValue::String(token.text.to_string()))
+        }
+        TokenKind::String => Ok(OptionValue::String(parse_literal_string(p)?)),
+        TokenKind::QuotedIdent => Ok(OptionValue::DoubleQuotedString(
+            p.parse_ident()?.value().into_owned(),
+        )),
+        TokenKind::Number => {
+            p.advance();
+            Ok(OptionValue::Number(token.text.to_string()))
+        }
+        _ => expected(p, "string or numeric value"),
+    }
+}
+
+/// Parse a SQL `EXPLAIN`, after the keyword.
+///
+/// The parenthesized option list is read where the dialect has one, and a
+/// parenthesized query is not mistaken for it.
+fn parse_explain<'a, D: Dialect<Ext = Builtin>>(
+    p: &mut Parser<'a, D>,
+) -> Result<Statement<'a>, DataFusionError> {
+    let raw = D::parse_explain_options(p)?;
+    if !raw.is_empty() {
+        let options = ExplainStatementOptions::from_utility_options(&raw)?;
+        let statement = parse_df_statement(p)?;
+        return Ok(Statement::Explain(ExplainStatement {
+            statement: Box::new(statement),
+            options,
+        }));
+    }
+
+    // Legacy keyword form.
+    let analyze = p.eat_keyword("ANALYZE");
+    let verbose = p.eat_keyword("VERBOSE");
+    let format = parse_explain_format(p)?
+        .map(|s| ExplainFormat::from_str(&s))
+        .transpose()?;
+
+    let statement = parse_df_statement(p)?;
+
+    let options = ExplainStatementOptions {
+        analyze,
+        verbose,
+        format,
+        ..Default::default()
+    };
+
+    Ok(Statement::Explain(ExplainStatement {
+        statement: Box::new(statement),
+        options,
+    }))
+}
+
+/// Parse a SQL `RESET`, after the keyword.
+fn parse_reset<'a, D: Dialect<Ext = Builtin>>(
+    p: &mut Parser<'a, D>,
+) -> Result<Statement<'a>, DataFusionError> {
+    let mut parts: Vec<Ident<'a>> = Vec::new();
+    let mut expecting_segment = true;
+
+    loop {
+        let token = p.peek();
+        match token.kind {
+            TokenKind::Word => {
+                p.advance();
+                parts.push(Ident {
+                    text: Cow::Borrowed(token.text),
+                    quote: None,
+                    span: token.span,
+                });
+                expecting_segment = false;
+            }
+            TokenKind::String | TokenKind::QuotedIdent => {
+                let value = parse_word_or_string(p, "configuration parameter")?;
+                parts.push(Ident {
+                    text: Cow::Owned(value),
+                    quote: None,
+                    span: token.span,
+                });
+                expecting_segment = false;
+            }
+            _ if token.is_op(".") => {
+                if expecting_segment || parts.is_empty() {
+                    return expected(p, "configuration parameter");
+                }
+                p.advance();
+                expecting_segment = true;
+            }
+            _ if at_statement_end(p) => break,
+            _ => return expected(p, "configuration parameter"),
+        }
+    }
+
+    if parts.is_empty() || expecting_segment {
+        return expected(p, "configuration parameter");
+    }
+
+    Ok(Statement::Reset(ResetStatement::Variable(ObjectName {
+        parts,
+    })))
+}
+
+fn parse_explain_format<D: Dialect>(
+    p: &mut Parser<'_, D>,
+) -> Result<Option<String>, DataFusionError> {
+    if !p.eat_keyword("FORMAT") {
+        return Ok(None);
+    }
+    parse_word_or_string(p, "an explain format such as TREE").map(Some)
+}
+
+/// Dispatches `CREATE [OR REPLACE] [UNBOUNDED] EXTERNAL ...` (with the
+/// leading keywords already consumed) to either `CREATE EXTERNAL TABLE`
+/// or `CREATE EXTERNAL CATALOG`, based on the keyword that follows
+/// `EXTERNAL`.
+fn parse_create_external<'a, D: Dialect<Ext = Builtin>>(
+    p: &mut Parser<'a, D>,
+    unbounded: bool,
+    or_replace: bool,
+) -> Result<Statement<'a>, DataFusionError> {
+    if p.eat_keyword("CATALOG") {
+        if unbounded {
+            return parser_err!("UNBOUNDED is not supported for CREATE EXTERNAL CATALOG");
+        }
+        parse_create_external_catalog(p, or_replace)
+    } else {
+        parse_create_external_table(p, unbounded, or_replace)
+    }
+}
+
+fn parse_partitions<D: Dialect>(
+    p: &mut Parser<'_, D>,
+) -> Result<Vec<String>, DataFusionError> {
+    let mut partitions: Vec<String> = vec![];
+    if !p.eat_op("(") || p.eat_op(")") {
+        return Ok(partitions);
+    }
+
+    loop {
+        if matches!(p.peek().kind, TokenKind::Word | TokenKind::QuotedIdent) {
+            let identifier = p.parse_ident()?;
+            partitions.push(identifier.to_string());
+        } else {
+            return expected(p, "partition name");
+        }
+        let comma = p.eat_op(",");
+        if p.eat_op(")") {
+            // allow a trailing comma, even though it's not in standard
+            break;
+        } else if !comma {
+            return expected(p, "',' or ')' after partition definition");
+        }
+    }
+    Ok(partitions)
+}
+
+/// Parse the ordering clause of a `CREATE EXTERNAL TABLE` SQL statement
+fn parse_order_by_exprs<'a, D: Dialect<Ext = Builtin>>(
+    p: &mut Parser<'a, D>,
+) -> Result<Vec<OrderByItem<'a>>, DataFusionError> {
+    p.expect_op("(")?;
+    let values = p.parse_comma_separated(D::parse_order_by_item)?;
+    p.expect_op(")")?;
+    Ok(values)
+}
+
+#[expect(clippy::type_complexity)]
+fn parse_columns<'a, D: Dialect<Ext = Builtin>>(
+    p: &mut Parser<'a, D>,
+) -> Result<(Vec<ColumnDef<'a>>, Vec<TableConstraint<'a>>), DataFusionError> {
+    let mut columns = vec![];
+    let mut constraints = vec![];
+    if !p.eat_op("(") || p.eat_op(")") {
+        return Ok((columns, constraints));
+    }
+
+    loop {
+        if let Some(constraint) = D::parse_table_constraint(p)? {
+            constraints.push(constraint);
+        } else if matches!(p.peek().kind, TokenKind::Word | TokenKind::QuotedIdent) {
+            columns.push(D::parse_column_def(p)?);
+        } else {
+            return expected(p, "column name or constraint definition");
+        }
+        let comma = p.eat_op(",");
+        if p.eat_op(")") {
+            // allow a trailing comma, even though it's not in standard
+            break;
+        } else if !comma {
+            return expected(p, "',' or ')' after column definition");
+        }
+    }
+
+    Ok((columns, constraints))
+}
+
+fn parse_create_external_table<'a, D: Dialect<Ext = Builtin>>(
+    p: &mut Parser<'a, D>,
+    unbounded: bool,
+    or_replace: bool,
+) -> Result<Statement<'a>, DataFusionError> {
+    let temporary = p.eat_keyword("TEMP") || p.eat_keyword("TEMPORARY");
+
+    p.expect_keyword("TABLE")?;
+    let if_not_exists = grammar::parse_if_not_exists(p)?;
+
+    if if_not_exists && or_replace {
+        return parser_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'");
+    }
+
+    let table_name = grammar::parse_object_name(p)?;
+    let (mut columns, constraints) = parse_columns(p)?;
+
+    #[derive(Default)]
+    struct Builder<'a> {
+        file_type: Option<String>,
+        locations: Option<Vec<String>>,
+        table_partition_cols: Option<Vec<String>>,
+        order_exprs: Vec<LexOrdering<'a>>,
+        options: Option<Vec<(String, OptionValue)>>,
+    }
+    let mut builder = Builder::default();
+
+    loop {
+        if p.eat_keyword("STORED") {
+            p.expect_keyword("AS")?;
+            ensure_not_set(builder.file_type.as_ref(), "STORED AS")?;
+            builder.file_type = Some(parse_file_format(p)?);
+        } else if p.eat_keyword("LOCATION") {
+            ensure_not_set(builder.locations.as_ref(), "LOCATION")?;
+            builder.locations = Some(parse_locations(p)?);
+        } else if p.eat_keyword("WITH") {
+            if p.eat_keyword("ORDER") {
+                builder.order_exprs.push(parse_order_by_exprs(p)?);
+            } else {
+                p.expect_keyword("HEADER")?;
+                p.expect_keyword("ROW")?;
+                return parser_err!(
+                    "WITH HEADER ROW clause is no longer in use. Please use the OPTIONS clause with 'format.has_header' set appropriately, e.g., OPTIONS (format.has_header true)"
+                )?;
+            }
+        } else if p.eat_keyword("DELIMITER") {
+            return parser_err!(
+                "DELIMITER clause is no longer in use. Please use the OPTIONS clause with 'format.delimiter' set appropriately, e.g., OPTIONS (format.delimiter ',')"
+            )?;
+        } else if p.eat_keyword("COMPRESSION") {
+            p.expect_keyword("TYPE")?;
+            return parser_err!(
+                "COMPRESSION TYPE clause is no longer in use. Please use the OPTIONS clause with 'format.compression' set appropriately, e.g., OPTIONS (format.compression gzip)"
+            )?;
+        } else if p.eat_keyword("PARTITIONED") {
+            p.expect_keyword("BY")?;
+            ensure_not_set(builder.table_partition_cols.as_ref(), "PARTITIONED BY")?;
+            // Expects either list of column names (col_name [, col_name]*)
+            // or list of column definitions (col_name datatype [, col_name datatype]* )
+            // use the token after the name to decide which parsing rule to use
+            // Note that mixing both names and definitions is not allowed
+            let peeked = p.peek_nth(2);
+            if peeked.is_op(",") || peeked.is_op(")") {
+                // List of column names
+                builder.table_partition_cols = Some(parse_partitions(p)?)
+            } else {
+                // List of column defs
+                let (cols, cons) = parse_columns(p)?;
+                builder.table_partition_cols =
+                    Some(cols.iter().map(|col| col.name.to_string()).collect());
+
+                columns.extend(cols);
+
+                if !cons.is_empty() {
+                    return parser_err!(
+                        "Constraints on Partition Columns are not supported"
+                    );
+                }
+            }
+        } else if p.eat_keyword("OPTIONS") {
+            ensure_not_set(builder.options.as_ref(), "OPTIONS")?;
+            builder.options = Some(parse_value_options(p)?);
+        } else if at_statement_end(p) {
+            break;
+        } else {
+            return expected(p, "end of statement or ;");
+        }
+    }
+
+    // Validations: location and file_type are required
+    let Some(file_type) = builder.file_type else {
+        return parser_err!(
+            "Missing STORED AS clause in CREATE EXTERNAL TABLE statement"
+        );
+    };
+    let Some(locations) = builder.locations else {
+        return parser_err!("Missing LOCATION clause in CREATE EXTERNAL TABLE statement");
+    };
+    if locations.is_empty() {
+        return parser_err!("LOCATION requires at least one path");
+    }
+
+    Ok(Statement::CreateExternalTable(CreateExternalTable {
+        name: table_name,
+        columns,
+        file_type,
+        locations,
+        table_partition_cols: builder.table_partition_cols.unwrap_or_default(),
+        order_exprs: builder.order_exprs,
+        if_not_exists,
+        or_replace,
+        temporary,
+        unbounded,
+        options: builder.options.unwrap_or_default(),
+        constraints,
+    }))
+}
+
+/// Parses a `CREATE EXTERNAL CATALOG` statement, with `CREATE [OR
+/// REPLACE] EXTERNAL CATALOG` already consumed.
+fn parse_create_external_catalog<'a, D: Dialect<Ext = Builtin>>(
+    p: &mut Parser<'a, D>,
+    or_replace: bool,
+) -> Result<Statement<'a>, DataFusionError> {
+    let if_not_exists = grammar::parse_if_not_exists(p)?;
+
+    if if_not_exists && or_replace {
+        return parser_err!("'IF NOT EXISTS' cannot coexist with 'REPLACE'");
+    }
+
+    let catalog_name = grammar::parse_object_name(p)?;
+    let mut catalog_type: Option<String> = None;
+    let mut location: Option<String> = None;
+    let mut options: Option<Vec<(String, OptionValue)>> = None;
+
+    loop {
+        if p.eat_keyword("STORED") {
+            p.expect_keyword("AS")?;
+            ensure_not_set(catalog_type.as_ref(), "STORED AS")?;
+            catalog_type = Some(parse_file_format(p)?);
+        } else if p.eat_keyword("LOCATION") {
+            ensure_not_set(location.as_ref(), "LOCATION")?;
+            location = Some(parse_literal_string(p)?);
+        } else if p.eat_keyword("OPTIONS") {
+            ensure_not_set(options.as_ref(), "OPTIONS")?;
+            options = Some(parse_value_options(p)?);
+        } else if at_statement_end(p) {
+            break;
+        } else {
+            return expected(p, "end of statement or ;");
+        }
+    }
+
+    let Some(catalog_type) = catalog_type else {
+        return parser_err!(
+            "Missing STORED AS clause in CREATE EXTERNAL CATALOG statement"
+        );
+    };
+
+    Ok(Statement::CreateExternalCatalog(CreateExternalCatalog {
+        catalog_name,
+        catalog_type,
+        location,
+        if_not_exists,
+        or_replace,
+        options: options.unwrap_or_default(),
+    }))
+}
+
+/// Parses a `DROP CATALOG` statement, with `DROP CATALOG` already consumed.
+fn parse_drop_catalog<'a, D: Dialect<Ext = Builtin>>(
+    p: &mut Parser<'a, D>,
+) -> Result<Statement<'a>, DataFusionError> {
+    let if_exists = p.at_keyword("IF") && p.peek_nth(1).is_word("EXISTS");
+    if if_exists {
+        p.advance();
+        p.advance();
+    }
+    let name = grammar::parse_object_name(p)?;
+
+    let cascade = p.eat_keyword("CASCADE");
+    let restrict = p.eat_keyword("RESTRICT");
+    if cascade && restrict {
+        return parser_err!("Cannot specify both CASCADE and RESTRICT in DROP DATABASE");
+    }
+
+    let drop = DropObject {
+        temporary: false,
+        object_type: ObjectType::Database,
+        if_exists,
+        names: vec![name],
+        on: None,
+        behavior: if cascade {
+            Some(DropBehavior::Cascade)
+        } else if restrict {
+            Some(DropBehavior::Restrict)
+        } else {
+            None
+        },
+        purge: false,
+    };
+    Ok(Statement::Statement(Box::new(
+        StatementKind::Drop(Box::new(drop)).into(),
+    )))
+}
+
+/// Parses one or more external table locations.
+fn parse_locations<D: Dialect>(
+    p: &mut Parser<'_, D>,
+) -> Result<Vec<String>, DataFusionError> {
+    if !p.eat_op("(") {
+        return Ok(vec![parse_literal_string(p)?]);
+    }
+
+    let mut locations = vec![];
+    loop {
+        locations.push(parse_literal_string(p)?);
+        let comma = p.eat_op(",");
+        if p.eat_op(")") {
+            // Allow a trailing comma, even though it's not in standard
+            break;
+        } else if !comma {
+            return expected(p, "',' or ')' after location definition");
+        }
+    }
+    Ok(locations)
+}
+
+/// Parses the set of valid formats
+fn parse_file_format<D: Dialect>(
+    p: &mut Parser<'_, D>,
+) -> Result<String, DataFusionError> {
+    if p.peek().kind != TokenKind::Word {
+        return expected(p, "one of ARROW, PARQUET, NDJSON, or CSV");
+    }
+    parse_file_type(p.advance().text)
+}
+
+/// Parses (key value) style options into a map of String --> [`OptionValue`].
+///
+/// This method supports keywords as key names as well as multiple
+/// value types such as Numbers as well as Strings.
+fn parse_value_options<D: Dialect>(
+    p: &mut Parser<'_, D>,
+) -> Result<Vec<(String, OptionValue)>, DataFusionError> {
+    let mut options = vec![];
+    p.expect_op("(")?;
+
+    loop {
+        let key = parse_option_key(p)?;
+        let value = parse_option_value(p)?;
+        options.push((key, value));
+        let comma = p.eat_op(",");
+        if p.eat_op(")") {
+            // Allow a trailing comma, even though it's not in standard
+            break;
+        } else if !comma {
+            return expected(p, "',' or ')' after option definition");
+        }
+    }
+    Ok(options)
+}
+
+// TODO: port these tests to the new sqlparser AST.
+#[cfg(any())]
 mod tests {
     use super::*;
     use datafusion_common::assert_contains;

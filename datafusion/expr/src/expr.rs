@@ -20,6 +20,10 @@ use crate::type_coercion::functions::value_fields_with_higher_order_udf;
 use crate::{AggregateUDF, LambdaParametersProgress, ValueOrLambda, Volatility};
 use crate::{ExprSchemable, Operator, Signature, WindowFrame, WindowUDF};
 
+pub use crate::sql::{
+    ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, RenameSelectItem,
+    ReplaceSelectElement,
+};
 use arrow::datatypes::{DataType, Field, FieldRef, Metadata};
 use datafusion_common::cse::{HashNode, NormalizeEq, Normalizeable};
 use datafusion_common::datatype::DataTypeExt;
@@ -33,17 +37,6 @@ use datafusion_common::{
 };
 use datafusion_expr_common::placement::ExpressionPlacement;
 use datafusion_functions_window_common::field::WindowUDFFieldArgs;
-#[cfg(feature = "sql")]
-pub use sqlparser::ast::{
-    ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, RenameSelectItem,
-    ReplaceSelectElement,
-};
-// Use shims for sqlparser types when the sql feature is disabled.
-#[cfg(not(feature = "sql"))]
-pub use crate::sql::{
-    ExceptSelectItem, ExcludeSelectItem, IlikeSelectItem, RenameSelectItem,
-    ReplaceSelectElement,
-};
 
 // Moved in 51.0.0 to datafusion_common
 pub use datafusion_common::metadata::FieldMetadata;
@@ -70,8 +63,8 @@ impl Display for NullTreatment {
 impl From<sqlparser::ast::NullTreatment> for NullTreatment {
     fn from(value: sqlparser::ast::NullTreatment) -> Self {
         match value {
-            sqlparser::ast::NullTreatment::IgnoreNulls => Self::IgnoreNulls,
-            sqlparser::ast::NullTreatment::RespectNulls => Self::RespectNulls,
+            sqlparser::ast::NullTreatment::Ignore => Self::IgnoreNulls,
+            sqlparser::ast::NullTreatment::Respect => Self::RespectNulls,
         }
     }
 }
@@ -3888,14 +3881,13 @@ pub fn physical_name(expr: &Expr) -> Result<String> {
 #[cfg(test)]
 mod test {
     use crate::expr_fn::col;
+    use crate::sql::Ident;
     use crate::test::function_stub::max_udaf;
     use crate::{
         ColumnarValue, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Volatility, case,
         lit, placeholder, qualified_wildcard, wildcard, wildcard_with_options,
     };
     use arrow::datatypes::{Field, Schema};
-    use sqlparser::ast;
-    use sqlparser::ast::{Ident, IdentWithAlias};
 
     #[test]
     fn infer_placeholder_in_clause() {
@@ -4488,7 +4480,7 @@ mod test {
                     None,
                     Some(PlannedReplaceSelectItem {
                         items: vec![ReplaceSelectElement {
-                            expr: ast::Expr::Identifier(Ident::from("c1")),
+                            expr: "c1".to_string(),
                             column_name: Ident::from("a1"),
                             as_keyword: false
                         }],
@@ -4507,10 +4499,7 @@ mod test {
                     None,
                     None,
                     None,
-                    Some(RenameSelectItem::Multiple(vec![IdentWithAlias {
-                        ident: Ident::from("c1"),
-                        alias: Ident::from("a1")
-                    }]))
+                    Some(RenameSelectItem::Multiple(vec!["c1 AS a1".to_string()]))
                 ))
             ),
             "* RENAME (c1 AS a1)"

@@ -12,7 +12,6 @@ use std::{
 };
 
 use crate::expr::{Exists, InSubquery, SetComparison, Sort};
-#[cfg(not(feature = "sql"))]
 use crate::sql::Ident;
 use arrow::datatypes::FieldRef;
 use datafusion_common::tree_node::{
@@ -21,8 +20,6 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     Constraints, DFSchema, DFSchemaRef, Result, SchemaReference, TableReference, plan_err,
 };
-#[cfg(feature = "sql")]
-use sqlparser::ast::Ident;
 
 /// Various types of DDL  (CREATE / DROP) catalog manipulation
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]

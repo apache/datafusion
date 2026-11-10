@@ -27,11 +27,11 @@ impl fmt::Debug for Location {
 }
 
 #[cfg(feature = "sql")]
-impl From<sqlparser::tokenizer::Location> for Location {
-    fn from(value: sqlparser::tokenizer::Location) -> Self {
+impl From<sqlparser::ast::Location> for Location {
+    fn from(value: sqlparser::ast::Location) -> Self {
         Self {
-            line: value.line,
-            column: value.column,
+            line: value.line as u64,
+            column: value.column as u64,
         }
     }
 }
@@ -55,26 +55,35 @@ impl Span {
         Self { start, end }
     }
 
-    /// Convert a [`Span`](sqlparser::tokenizer::Span) from the parser, into a
-    /// DataFusion [`Span`]. If the input span is empty (line 0 column 0, to
-    /// line 0 column 0), then [`None`] is returned.
+    /// Convert a [`Span`](sqlparser::ast::Span) from the parser into a
+    /// DataFusion [`Span`].
+    ///
+    /// The parser's spans are byte ranges, so converting one to lines and
+    /// columns needs the SQL text, which is not available here yet. Until it
+    /// is, this returns [`None`].
     #[cfg(feature = "sql")]
-    pub fn try_from_sqlparser_span(span: sqlparser::tokenizer::Span) -> Option<Span> {
-        if span == sqlparser::tokenizer::Span::empty() {
-            None
-        } else {
-            Some(Span {
-                start: span.start.into(),
-                end: span.end.into(),
-            })
+    pub fn try_from_sqlparser_span(_span: sqlparser::ast::Span) -> Option<Span> {
+        None
+    }
+
+    /// Convert a [`Span`](sqlparser::ast::Span) of `sql` into a DataFusion
+    /// [`Span`]. An empty span gives [`None`].
+    #[cfg(feature = "sql")]
+    pub fn from_sqlparser_span(span: sqlparser::ast::Span, sql: &str) -> Option<Span> {
+        if span == sqlparser::ast::Span::default() {
+            return None;
         }
+        Some(Span {
+            start: span.start_location(sql).into(),
+            end: span.end_location(sql).into(),
+        })
     }
 
     /// Returns the smallest Span that contains both `self` and `other`
     ///
     /// # Examples
     /// ```
-    /// # use sqlparser::tokenizer::{Span, Location};
+    /// # use datafusion_common::{Location, Span};
     /// // line 1, column1 -> line 2, column 5
     /// let span1 = Span::new(Location::new(1, 1), Location::new(2, 5));
     /// // line 2, column 3 -> line 3, column 7
@@ -107,7 +116,7 @@ impl Span {
     ///
     /// # Example
     /// ```
-    /// # use sqlparser::tokenizer::{Span, Location};
+    /// # use datafusion_common::{Location, Span};
     /// let spans = vec![
     ///     Span::new(Location::new(1, 1), Location::new(2, 5)),
     ///     Span::new(Location::new(2, 3), Location::new(3, 7)),

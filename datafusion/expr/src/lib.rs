@@ -73,7 +73,6 @@ pub mod statistics {
 mod predicate_bounds;
 pub mod preimage;
 pub mod ptr_eq;
-#[cfg(not(feature = "sql"))]
 pub mod sql;
 /// # Public Only for Internal Use:
 ///

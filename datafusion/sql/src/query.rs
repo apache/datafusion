@@ -4,26 +4,28 @@
 
 use std::sync::Arc;
 
+use crate::ast::{
+    Expr as SQLExpr, ExprKind as SQLExprKind, Literal, ObjectName, OrderByItem,
+    PipeAggregate, PipeOperator, Query, QueryDistribution, SelectInto, SetExpr,
+    SetOperator, SetQuantifier, TableAlias,
+};
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use datafusion_common::{Constraints, DFSchema, Result, not_impl_err};
 use datafusion_expr::expr::{Sort, WildcardOptions};
 
+use crate::ast::BuiltinExpr;
 use datafusion_expr::select_expr::SelectExpr;
 use datafusion_expr::{
     CreateMemoryTable, DdlStatement, Distinct, Expr, LogicalPlan, LogicalPlanBuilder,
 };
-use sqlparser::ast::{
-    Expr as SQLExpr, ExprWithAliasAndOrderBy, LimitClause, ObjectName, Offset,
-    OffsetRows, OrderBy, OrderByExpr, OrderByKind, PipeOperator, Query, SelectInto,
-    SetExpr, SetOperator, SetQuantifier, TableAlias, Value,
-};
+use sqlparser::dialect::duckdb::DuckDbExpr;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Generate a logical plan from an SQL query/subquery
     pub(crate) fn query_to_plan(
         &self,
-        query: Query,
+        query: Query<'_>,
         outer_planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         // Each query has its own planner context, including CTEs that are visible within that query.
@@ -35,13 +37,12 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             with,
             body,
             order_by,
-            limit_clause,
+            distribution,
+            limit,
             fetch,
             locks: _,
-            for_clause: _,
-            settings: _,
-            format_clause: _,
-            pipe_operators,
+            tail: _,
+            pipes,
         } = query;
 
         if fetch.is_some() {
@@ -49,21 +50,25 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         }
 
         let materialized_ctes = match with {
-            Some(with) => self.plan_with_clause(with, planner_context)?,
+            Some(with) => self.plan_with_clause(*with, planner_context)?,
             None => vec![],
         };
 
-        let set_expr = *body;
-        let plan = match set_expr {
+        let plan = match body {
             SetExpr::Select(mut select) => {
                 let select_into = select.into.take();
-                let plan =
-                    self.select_to_plan(*select, order_by.clone(), planner_context)?;
-                let plan = self.limit(plan, limit_clause.clone(), planner_context)?;
+                let plan = self.select_to_plan(
+                    *select,
+                    order_by,
+                    distribution.map(|d| *d),
+                    planner_context,
+                )?;
+                let plan = self.limit(plan, limit.map(|l| *l), planner_context)?;
                 // Process the `SELECT INTO` after `LIMIT`.
-                self.select_into(plan, select_into)
+                self.select_into(plan, select_into.map(|i| *i))
             }
             other => {
+                check_no_distribution(distribution.as_deref())?;
                 // The functions called from `set_expr_to_plan()` need more than 128KB
                 // stack in debug builds as investigated in:
                 // https://github.com/apache/datafusion/pull/13310#discussion_r1836813902
@@ -80,11 +85,11 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     None,
                 )?;
                 let plan = self.order_by(plan, order_by_rex)?;
-                self.limit(plan, limit_clause, planner_context)
+                self.limit(plan, limit.map(|l| *l), planner_context)
             }
         }?;
 
-        let plan = self.pipe_operators(plan, pipe_operators, planner_context)?;
+        let plan = self.pipe_operators(plan, pipes, planner_context)?;
         if !materialized_ctes.is_empty() && matches!(plan, LogicalPlan::Ddl(_)) {
             return not_impl_err!("MATERIALIZED CTEs are not supported with SELECT INTO");
         }
@@ -99,7 +104,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn pipe_operators(
         &self,
         mut plan: LogicalPlan,
-        pipe_operators: Vec<PipeOperator>,
+        pipe_operators: Vec<PipeOperator<'_>>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         for pipe_operator in pipe_operators {
@@ -112,14 +117,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn pipe_operator(
         &self,
         plan: LogicalPlan,
-        pipe_operator: PipeOperator,
+        pipe_operator: PipeOperator<'_>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         match pipe_operator {
-            PipeOperator::Where { expr } => {
+            PipeOperator::Where(expr) => {
                 self.plan_selection(Some(expr), plan, planner_context)
             }
-            PipeOperator::OrderBy { exprs } => {
+            PipeOperator::OrderBy(exprs) => {
                 let sort_exprs = self.order_by_to_sort_expr(
                     exprs,
                     plan.schema(),
@@ -129,25 +134,16 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 )?;
                 self.order_by(plan, sort_exprs)
             }
-            PipeOperator::Limit { expr, offset } => self.limit(
-                plan,
-                Some(LimitClause::LimitOffset {
-                    limit: Some(expr),
-                    offset: offset.map(|offset| Offset {
-                        value: offset,
-                        rows: OffsetRows::None,
-                    }),
-                    limit_by: vec![],
-                }),
-                planner_context,
-            ),
-            PipeOperator::Select { exprs } => {
+            PipeOperator::Limit { count, offset } => {
+                self.limit_exprs(plan, Some(count), offset, vec![], planner_context)
+            }
+            PipeOperator::Select(exprs) => {
                 let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
                 let select_exprs =
                     self.prepare_select_exprs(&plan, exprs, empty_from, planner_context)?;
                 self.project(plan, select_exprs, None)
             }
-            PipeOperator::Extend { exprs } => {
+            PipeOperator::Extend(exprs) => {
                 let empty_from = matches!(plan, LogicalPlan::EmptyRelation(_));
                 let extend_exprs =
                     self.prepare_select_exprs(&plan, exprs, empty_from, planner_context)?;
@@ -157,57 +153,38 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                         .collect();
                 self.project(plan, all_exprs, None)
             }
-            PipeOperator::As { alias } => self.apply_table_alias(
+            PipeOperator::As(alias) => self.apply_table_alias(
                 plan,
                 TableAlias {
                     name: alias,
+                    explicit: true,
                     // Apply to all fields
                     columns: vec![],
-                    explicit: true,
-                    at: None,
+                    column_types: vec![],
                 },
             ),
-            PipeOperator::Union {
-                set_quantifier,
+            PipeOperator::SetOperation {
+                op:
+                    op @ (SetOperator::Union | SetOperator::Intersect | SetOperator::Except),
+                quantifier,
+                by_name,
                 queries,
             } => self.pipe_operator_set(
                 plan,
-                SetOperator::Union,
-                set_quantifier,
-                queries,
-                planner_context,
-            ),
-            PipeOperator::Intersect {
-                set_quantifier,
-                queries,
-            } => self.pipe_operator_set(
-                plan,
-                SetOperator::Intersect,
-                set_quantifier,
-                queries,
-                planner_context,
-            ),
-            PipeOperator::Except {
-                set_quantifier,
-                queries,
-            } => self.pipe_operator_set(
-                plan,
-                SetOperator::Except,
-                set_quantifier,
+                op,
+                quantifier,
+                by_name,
                 queries,
                 planner_context,
             ),
             PipeOperator::Aggregate {
-                full_table_exprs,
-                group_by_expr,
-            } => self.pipe_operator_aggregate(
-                plan,
-                full_table_exprs,
-                group_by_expr,
-                planner_context,
-            ),
+                aggregates,
+                group_by,
+            } => {
+                self.pipe_operator_aggregate(plan, aggregates, group_by, planner_context)
+            }
             PipeOperator::Join(join) => {
-                self.parse_relation_join(plan, join, planner_context)
+                self.parse_relation_join(plan, *join, planner_context)
             }
 
             x => not_impl_err!("`{x}` pipe operator is not supported yet"),
@@ -220,7 +197,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         mut plan: LogicalPlan,
         set_operator: SetOperator,
         set_quantifier: SetQuantifier,
-        queries: Vec<Query>,
+        by_name: bool,
+        queries: Vec<Query<'_>>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         for query in queries {
@@ -230,6 +208,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 plan,
                 right_plan,
                 set_quantifier,
+                by_name,
             )?;
         }
 
@@ -240,44 +219,38 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn limit(
         &self,
         input: LogicalPlan,
-        limit_clause: Option<LimitClause>,
+        limit: Option<crate::ast::Limit<'_>>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let Some(limit_clause) = limit_clause else {
+        let Some(limit) = limit else {
             return Ok(input);
         };
+        self.limit_exprs(input, limit.count, limit.offset, limit.by, planner_context)
+    }
 
+    /// Wrap a plan in a limit with the given count, offset and `LIMIT BY` exprs
+    fn limit_exprs(
+        &self,
+        input: LogicalPlan,
+        count: Option<SQLExpr<'_>>,
+        offset: Option<SQLExpr<'_>>,
+        limit_by: Vec<SQLExpr<'_>>,
+        planner_context: &mut PlannerContext,
+    ) -> Result<LogicalPlan> {
         let empty_schema = DFSchema::empty();
 
-        let (skip, fetch, limit_by_exprs) = match limit_clause {
-            LimitClause::LimitOffset {
-                limit,
-                offset,
-                limit_by,
-            } => {
-                let skip = offset
-                    .map(|o| self.sql_to_expr(o.value, &empty_schema, planner_context))
-                    .transpose()?;
+        let skip = offset
+            .map(|o| self.sql_to_expr(o, &empty_schema, planner_context))
+            .transpose()?;
 
-                let fetch = limit
-                    .map(|e| self.sql_to_expr(e, &empty_schema, planner_context))
-                    .transpose()?;
+        let fetch = count
+            .map(|e| self.sql_to_expr(e, &empty_schema, planner_context))
+            .transpose()?;
 
-                let limit_by_exprs = limit_by
-                    .into_iter()
-                    .map(|e| self.sql_to_expr(e, &empty_schema, planner_context))
-                    .collect::<Result<Vec<_>>>()?;
-
-                (skip, fetch, limit_by_exprs)
-            }
-            LimitClause::OffsetCommaLimit { offset, limit } => {
-                let skip =
-                    Some(self.sql_to_expr(offset, &empty_schema, planner_context)?);
-                let fetch =
-                    Some(self.sql_to_expr(limit, &empty_schema, planner_context)?);
-                (skip, fetch, vec![])
-            }
-        };
+        let limit_by_exprs = limit_by
+            .into_iter()
+            .map(|e| self.sql_to_expr(e, &empty_schema, planner_context))
+            .collect::<Result<Vec<_>>>()?;
 
         if !limit_by_exprs.is_empty() {
             return not_impl_err!("LIMIT BY clause is not supported yet");
@@ -316,22 +289,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn pipe_operator_aggregate(
         &self,
         plan: LogicalPlan,
-        full_table_exprs: Vec<ExprWithAliasAndOrderBy>,
-        group_by_expr: Vec<ExprWithAliasAndOrderBy>,
+        full_table_exprs: Vec<PipeAggregate<'_>>,
+        group_by_expr: Vec<PipeAggregate<'_>>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         let plan_schema = plan.schema();
         let process_expr =
-            |expr_with_alias_and_order_by: ExprWithAliasAndOrderBy,
-             planner_context: &mut PlannerContext| {
-                let expr_with_alias = expr_with_alias_and_order_by.expr;
+            |pipe_aggregate: PipeAggregate<'_>, planner_context: &mut PlannerContext| {
+                let expr_with_alias = pipe_aggregate.expr;
                 let sql_expr = expr_with_alias.expr;
                 let alias = expr_with_alias.alias;
 
                 let df_expr = self.sql_to_expr(sql_expr, plan_schema, planner_context)?;
 
                 match alias {
-                    Some(alias_ident) => df_expr.alias_if_changed(alias_ident.value),
+                    Some(alias_ident) => {
+                        df_expr.alias_if_changed(alias_ident.value().into_owned())
+                    }
                     None => Ok(df_expr),
                 }
             };
@@ -355,15 +329,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn select_into(
         &self,
         plan: LogicalPlan,
-        select_into: Option<SelectInto>,
+        select_into: Option<SelectInto<'_>>,
     ) -> Result<LogicalPlan> {
         match select_into {
             Some(into) => {
-                let name = match into.targets.as_slice() {
-                    [SQLExpr::Identifier(ident)] => ObjectName::from(vec![ident.clone()]),
-                    [SQLExpr::CompoundIdentifier(idents)] => {
-                        ObjectName::from(idents.clone())
-                    }
+                let mut targets = into.targets;
+                let name = match targets.as_mut_slice() {
+                    [target] => match std::mem::replace(
+                        &mut target.kind,
+                        SQLExprKind::Literal(Literal::Null),
+                    ) {
+                        SQLExprKind::Ident(ident) => ObjectName { parts: vec![ident] },
+                        SQLExprKind::Compound(name) => name,
+                        _ => {
+                            return not_impl_err!(
+                                "SELECT INTO only supports a single table name target"
+                            );
+                        }
+                    },
                     _ => {
                         return not_impl_err!(
                             "SELECT INTO only supports a single table name target"
@@ -387,34 +370,60 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     }
 }
 
+/// Returns an error for Spark's `CLUSTER BY` / `DISTRIBUTE BY` / `SORT BY`
+/// on a query whose body is not a plain `SELECT`.
+fn check_no_distribution(distribution: Option<&QueryDistribution<'_>>) -> Result<()> {
+    match distribution {
+        Some(d) if !d.cluster_by.is_empty() => not_impl_err!("CLUSTER BY"),
+        Some(d) if !d.sort_by.is_empty() => not_impl_err!("SORT BY"),
+        Some(d) if !d.distribute_by.is_empty() => {
+            not_impl_err!("DISTRIBUTE BY is only supported on a SELECT")
+        }
+        _ => Ok(()),
+    }
+}
+
+/// True if `item` is DuckDB's `ALL` in `ORDER BY ALL`.
+fn is_order_by_all(item: &OrderByItem<'_>) -> bool {
+    matches!(
+        item.expr.kind,
+        SQLExprKind::Ext(BuiltinExpr::DuckDb(DuckDbExpr::AllColumns))
+    )
+}
+
 /// Returns the order by expressions from the query.
 fn to_order_by_exprs(
-    order_by: Option<OrderBy>,
+    order_by: Vec<OrderByItem<'_>>,
     order_by_all_column_count: usize,
-) -> Result<Vec<OrderByExpr>> {
-    let Some(OrderBy { kind, interpolate }) = order_by else {
-        return Ok(vec![]);
-    };
-    if let Some(_interpolate) = interpolate {
+) -> Result<Vec<OrderByItem<'_>>> {
+    if order_by.iter().any(|item| item.ext.interpolate.is_some()) {
         return not_impl_err!("ORDER BY INTERPOLATE is not supported");
     }
-    match kind {
-        OrderByKind::All(options) => Ok((1..=order_by_all_column_count)
-            .map(|position| OrderByExpr {
-                expr: SQLExpr::value(Value::Number(position.to_string(), false)),
-                options: options.clone(),
-                with_fill: None,
-            })
-            .collect()),
-        OrderByKind::Expressions(order_by_exprs) => Ok(order_by_exprs),
+    match order_by.as_slice() {
+        [item] if is_order_by_all(item) => {
+            let item = order_by.into_iter().next().expect("one item");
+            Ok((1..=order_by_all_column_count)
+                .map(|position| OrderByItem {
+                    expr: SQLExprKind::Literal(Literal::Number(
+                        position.to_string().into(),
+                    ))
+                    .into(),
+                    asc: item.asc,
+                    nulls_first: item.nulls_first,
+                    using: None,
+                    ext: Default::default(),
+                })
+                .collect())
+        }
+        _ => Ok(order_by),
     }
 }
 
 /// Returns the order by expressions from the query with the select expressions.
-pub(crate) fn to_order_by_exprs_with_select(
-    order_by: Option<OrderBy>,
+pub(crate) fn to_order_by_exprs_with_select<'s>(
+    order_by: Vec<OrderByItem<'s>>,
     select_exprs: Option<&Vec<Expr>>,
-) -> Result<Vec<OrderByExpr>> {
+) -> Result<Vec<OrderByItem<'s>>> {
     let Some(select_exprs) = select_exprs else {
         return to_order_by_exprs(order_by, 0);
     };

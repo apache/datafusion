@@ -15,8 +15,7 @@ use datafusion_common::ScalarValue;
 use datafusion_expr::lit;
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
-use datafusion_sql::sqlparser::dialect::GenericDialect;
-use datafusion_sql::sqlparser::parser::Parser;
+use datafusion_sql::sqlparser::dialect::DuckDb;
 use wasm_bindgen::prelude::*;
 pub fn set_panic_hook() {
     // When the `console_error_panic_hook` feature is enabled, we can call the
@@ -57,8 +56,8 @@ pub fn basic_exprs() {
 pub fn basic_parse() {
     // Parse SQL (using datafusion-sql)
     let sql = "SELECT 2 + 37";
-    let dialect = GenericDialect {}; // or AnsiDialect, or your own dialect ...
-    let ast = Parser::parse_sql(&dialect, sql).unwrap();
+    // DuckDB, or any other dialect, or your own
+    let ast = datafusion_sql::sqlparser::parse_sql::<DuckDb>(sql).unwrap();
     log(&format!("Parsed SQL: {ast:?}"));
 }
 
