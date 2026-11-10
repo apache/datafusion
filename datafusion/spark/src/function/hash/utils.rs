@@ -15,6 +15,34 @@ use arrow::array::{Array, PrimitiveArray};
 use arrow::datatypes::ArrowPrimitiveType;
 use datafusion_common::Result;
 
+/// Bytes Spark feeds to the hash for a `Float32` value.
+///
+/// Spark hashes floats through `Float.floatToIntBits`, which returns the
+/// canonical NaN bit pattern for every NaN, and hashes `-0.0` as `0.0`.
+#[inline]
+pub(crate) fn f32_hash_bytes(v: f32) -> [u8; 4] {
+    if v.is_nan() {
+        0x7fc0_0000_u32.to_le_bytes()
+    } else if v == 0.0 {
+        // `-0.0` also lands here: Spark uses 0 as the hash input for it.
+        0_u32.to_le_bytes()
+    } else {
+        v.to_le_bytes()
+    }
+}
+
+/// Bytes Spark feeds to the hash for a `Float64` value, see [`f32_hash_bytes`].
+#[inline]
+pub(crate) fn f64_hash_bytes(v: f64) -> [u8; 8] {
+    if v.is_nan() {
+        0x7ff8_0000_0000_0000_u64.to_le_bytes()
+    } else if v == 0.0 {
+        0_u64.to_le_bytes()
+    } else {
+        v.to_le_bytes()
+    }
+}
+
 /// Hash the values of a primitive array, calling `transform` to convert each
 /// value into a byte slice before feeding it to `hash_method`.
 #[inline]
@@ -175,23 +203,17 @@ macro_rules! hash_array_primitive {
     };
 }
 
-/// Hash a floating-point primitive array, normalizing `-0.0` to `0.0` per Spark.
+/// Hash a floating-point primitive array, normalizing `-0.0` to `0.0` and every
+/// NaN to the canonical NaN per Spark.
 #[macro_export]
 #[doc(hidden)]
 macro_rules! hash_array_primitive_float {
-    ($array_type:ident, $column:ident, $ty:ident, $ty2:ident, $hashes:ident, $hash_method:ident) => {
+    ($array_type:ident, $column:ident, $to_bytes:path, $hashes:ident, $hash_method:ident) => {
         let array = $crate::downcast_array!($column, $array_type);
         $crate::function::hash::utils::hash_primitive_values(
             array,
             $hashes,
-            |v| {
-                // Spark uses 0 as hash for -0.0, see `Murmur3Hash` expression.
-                if v == 0.0 && v.is_sign_negative() {
-                    (0 as $ty2).to_le_bytes()
-                } else {
-                    (v as $ty).to_le_bytes()
-                }
-            },
+            $to_bytes,
             $hash_method,
         );
     };
@@ -322,12 +344,12 @@ macro_rules! hash_list_with_primitive_elements {
             DataType::Float32 => {
                 let elem_array = $values.as_any().downcast_ref::<Float32Array>().unwrap();
                 $crate::hash_list_primitive!(offsets: $offsets, $list_array, elem_array, $hashes_buffer, $hash_method,
-                    |v: f32| if v == 0.0 && v.is_sign_negative() { (0_i32).to_le_bytes() } else { v.to_le_bytes() });
+                    $crate::function::hash::utils::f32_hash_bytes);
             }
             DataType::Float64 => {
                 let elem_array = $values.as_any().downcast_ref::<Float64Array>().unwrap();
                 $crate::hash_list_primitive!(offsets: $offsets, $list_array, elem_array, $hashes_buffer, $hash_method,
-                    |v: f64| if v == 0.0 && v.is_sign_negative() { (0_i64).to_le_bytes() } else { v.to_le_bytes() });
+                    $crate::function::hash::utils::f64_hash_bytes);
             }
             DataType::Boolean => {
                 let elem_array = $values.as_any().downcast_ref::<BooleanArray>().unwrap();
@@ -417,12 +439,12 @@ macro_rules! hash_list_with_primitive_elements {
             DataType::Float32 => {
                 let elem_array = $values.as_any().downcast_ref::<Float32Array>().unwrap();
                 $crate::hash_list_primitive!(fixed_size: $list_size, $list_array, elem_array, $hashes_buffer, $hash_method,
-                    |v: f32| if v == 0.0 && v.is_sign_negative() { (0_i32).to_le_bytes() } else { v.to_le_bytes() });
+                    $crate::function::hash::utils::f32_hash_bytes);
             }
             DataType::Float64 => {
                 let elem_array = $values.as_any().downcast_ref::<Float64Array>().unwrap();
                 $crate::hash_list_primitive!(fixed_size: $list_size, $list_array, elem_array, $hashes_buffer, $hash_method,
-                    |v: f64| if v == 0.0 && v.is_sign_negative() { (0_i64).to_le_bytes() } else { v.to_le_bytes() });
+                    $crate::function::hash::utils::f64_hash_bytes);
             }
             DataType::Boolean => {
                 let elem_array = $values.as_any().downcast_ref::<BooleanArray>().unwrap();
@@ -783,8 +805,7 @@ macro_rules! create_hashes_internal {
                     $crate::hash_array_primitive_float!(
                         Float32Array,
                         col,
-                        f32,
-                        i32,
+                        $crate::function::hash::utils::f32_hash_bytes,
                         $hashes_buffer,
                         $hash_method
                     );
@@ -793,8 +814,7 @@ macro_rules! create_hashes_internal {
                     $crate::hash_array_primitive_float!(
                         Float64Array,
                         col,
-                        f64,
-                        i64,
+                        $crate::function::hash::utils::f64_hash_bytes,
                         $hashes_buffer,
                         $hash_method
                     );
