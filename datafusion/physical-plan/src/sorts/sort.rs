@@ -390,7 +390,8 @@ impl ExternalSorter {
 
     /// Records that this partition has read all its input, and returns whether
     /// another partition still reads its own. Executing partitions again
-    /// without `reset_state` can wrap the count, which only keeps headroom.
+    /// without `reset_state` leaves the count wrong, which changes how much
+    /// headroom a merge keeps but never its output.
     fn finish_reading_input(&self) -> bool {
         self.partitions_reading_input.fetch_sub(1, Ordering::AcqRel) > 1
     }
