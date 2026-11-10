@@ -341,6 +341,18 @@ SELECT parse_url('http://spark.apache.org:99999/path', 'HOST');
 ----
 NULL
 
+# Mixed rows: a valid URL, a malformed URL and NULL
+query T
+SELECT parse_url(column1, 'HOST')
+FROM VALUES
+('http://spark.apache.org/path?query=1'),
+('inva lid://spark.apache.org/path?query=1'),
+(NULL);
+----
+spark.apache.org
+NULL
+NULL
+
 # A malformed URL raises an error when ANSI mode is on
 statement ok
 set datafusion.execution.enable_ansi_mode = true;
@@ -350,6 +362,12 @@ SELECT parse_url('inva lid://spark.apache.org/path?query=1', 'QUERY');
 
 query error DataFusion error: Execution error: InvalidPort
 SELECT parse_url('http://spark.apache.org:99999/path', 'HOST');
+
+# try_parse_url still returns NULL when ANSI mode is on
+query T
+SELECT try_parse_url('inva lid://spark.apache.org/path?query=1', 'QUERY');
+----
+NULL
 
 statement ok
 set datafusion.execution.enable_ansi_mode = false;
