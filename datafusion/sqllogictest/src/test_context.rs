@@ -63,6 +63,7 @@ use tempfile::TempDir;
 mod custom_sort_pushdown;
 mod evaluation_counter;
 mod range_partitioning;
+mod time_travel;
 
 /// Context for running tests
 pub struct TestContext {
@@ -246,6 +247,10 @@ impl TestContext {
             "dictionary_struct.slt" => {
                 info!("Registering table with dictionary-encoded struct column");
                 register_dictionary_struct_table(test_ctx.session_ctx());
+            }
+            "time_travel.slt" => {
+                info!("Registering versioned schema");
+                time_travel::register_versioned_schema(test_ctx.session_ctx());
             }
             "async_udf.slt" => {
                 info!("Registering dummy async udf");

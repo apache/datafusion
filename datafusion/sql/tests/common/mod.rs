@@ -12,8 +12,12 @@ use arrow::datatypes::*;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::file_options::file_type::FileType;
-use datafusion_common::{DFSchema, GetExt, Result, TableReference, plan_err};
-use datafusion_expr::planner::{ExprPlanner, PlannerResult, TypePlanner};
+use datafusion_common::{
+    DFSchema, GetExt, Result, TableReference, TableVersion, not_impl_err, plan_err,
+};
+use datafusion_expr::planner::{
+    ExprPlanner, PlannerResult, TableVersionExpr, TypePlanner,
+};
 use datafusion_expr::{
     AggregateUDF, Expr, HigherOrderUDF, ScalarUDF, TableSource, WindowUDF,
 };
@@ -333,6 +337,34 @@ impl ContextProvider for MockContextProvider {
         Ok(Arc::new(EmptyTable::new(schema)))
     }
 
+    /// Only literal versions are supported, as evaluating expressions
+    /// requires an `ExprSimplifier`
+    fn evaluate_table_version(&self, version: TableVersionExpr) -> Result<TableVersion> {
+        match version {
+            TableVersionExpr::Version(Expr::Literal(value, _)) => {
+                Ok(TableVersion::Version(value))
+            }
+            version => not_impl_err!("Unsupported table version: {version:?}"),
+        }
+    }
+
+    /// Only `person` supports time travel. For `j1`, the current version is
+    /// returned without reporting a version, which is invalid.
+    fn get_table_source_at(
+        &self,
+        name: TableReference,
+        version: &TableVersion,
+    ) -> Result<Arc<dyn TableSource>> {
+        match name.table() {
+            "person" => Ok(Arc::new(EmptyTable::new_with_version(
+                self.get_table_source(name)?.schema(),
+                version.clone(),
+            ))),
+            "j1" => self.get_table_source(name),
+            _ => not_impl_err!("Time travel is not supported for table '{name}'"),
+        }
+    }
+
     fn udf_names(&self) -> Vec<String> {
         self.state.scalar_functions.keys().cloned().collect()
     }
@@ -364,17 +396,32 @@ impl ContextProvider for MockContextProvider {
 
 struct EmptyTable {
     table_schema: SchemaRef,
+    version: Option<TableVersion>,
 }
 
 impl EmptyTable {
     fn new(table_schema: SchemaRef) -> Self {
-        Self { table_schema }
+        Self {
+            table_schema,
+            version: None,
+        }
+    }
+
+    fn new_with_version(table_schema: SchemaRef, version: TableVersion) -> Self {
+        Self {
+            table_schema,
+            version: Some(version),
+        }
     }
 }
 
 impl TableSource for EmptyTable {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
+    }
+
+    fn version(&self) -> Option<&TableVersion> {
+        self.version.as_ref()
     }
 }
 

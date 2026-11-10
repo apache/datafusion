@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::*;
 use async_trait::async_trait;
-use datafusion_common::{Result, project_schema};
+use datafusion_common::{Result, TableVersion, project_schema};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
@@ -22,6 +22,8 @@ use crate::TableProvider;
 pub struct EmptyTable {
     schema: SchemaRef,
     partitions: usize,
+    /// The version of the table this provider reads, if versioned
+    version: Option<TableVersion>,
 }
 
 impl EmptyTable {
@@ -30,7 +32,15 @@ impl EmptyTable {
         Self {
             schema,
             partitions: 1,
+            version: None,
         }
+    }
+
+    /// Set the version of the table this provider reads, for time travel
+    /// queries. See [`TableProvider::version`].
+    pub fn with_version(mut self, version: Option<TableVersion>) -> Self {
+        self.version = version;
+        self
     }
 
     /// Creates a new EmptyTable with specified partition number.
@@ -48,6 +58,10 @@ impl TableProvider for EmptyTable {
 
     fn table_type(&self) -> TableType {
         TableType::Base
+    }
+
+    fn version(&self) -> Option<&TableVersion> {
+        self.version.as_ref()
     }
 
     async fn scan(

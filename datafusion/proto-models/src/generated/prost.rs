@@ -129,6 +129,9 @@ pub struct ListingTableScanNode {
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "18")]
     pub skip: ::core::option::Option<u64>,
+    /// The version of the table to read, for time travel queries.
+    #[prost(message, optional, tag = "19")]
+    pub version: ::core::option::Option<TableVersion>,
     #[prost(
         oneof = "listing_table_scan_node::FileFormatType",
         tags = "10, 11, 12, 15, 16"
@@ -171,6 +174,9 @@ pub struct ViewTableScanNode {
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "8")]
     pub skip: ::core::option::Option<u64>,
+    /// The version of the table to read, for time travel queries.
+    #[prost(message, optional, tag = "9")]
+    pub version: ::core::option::Option<TableVersion>,
 }
 /// Logical Plan to Scan a CustomTableProvider registered at runtime
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -191,6 +197,9 @@ pub struct CustomTableScanNode {
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "8")]
     pub skip: ::core::option::Option<u64>,
+    /// The version of the table to read, for time travel queries.
+    #[prost(message, optional, tag = "9")]
+    pub version: ::core::option::Option<TableVersion>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionNode {
@@ -1390,6 +1399,24 @@ pub mod table_reference {
         Partial(super::PartialTableReference),
         #[prost(message, tag = "3")]
         Full(super::FullTableReference),
+    }
+}
+/// A version of a table, for time travel queries
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TableVersion {
+    #[prost(oneof = "table_version::TableVersionEnum", tags = "1, 2")]
+    pub table_version_enum: ::core::option::Option<table_version::TableVersionEnum>,
+}
+/// Nested message and enum types in `TableVersion`.
+pub mod table_version {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum TableVersionEnum {
+        /// A catalog specific version identifier, such as a snapshot id or a tag
+        #[prost(message, tag = "1")]
+        Version(super::super::datafusion_common::ScalarValue),
+        /// A point in time, in nanoseconds since the Unix epoch (UTC)
+        #[prost(int64, tag = "2")]
+        Timestamp(i64),
     }
 }
 /// PhysicalPlanNode is a nested type
@@ -2669,6 +2696,9 @@ pub struct EmptyTableScanNode {
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(message, repeated, tag = "4")]
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
+    /// The version of the table to read, for time travel queries.
+    #[prost(message, optional, tag = "5")]
+    pub version: ::core::option::Option<TableVersion>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GenerateSeriesArgsContainsNull {

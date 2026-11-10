@@ -11,8 +11,8 @@ use crate::TableProvider;
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::Column;
 use datafusion_common::error::Result;
+use datafusion_common::{Column, TableVersion};
 use datafusion_expr::TableType;
 use datafusion_expr::{Expr, LogicalPlan};
 use datafusion_expr::{LogicalPlanBuilder, TableProviderFilterPushDown};
@@ -28,6 +28,8 @@ pub struct ViewTable {
     table_schema: SchemaRef,
     /// SQL used to create the view, if available
     definition: Option<String>,
+    /// The version of the table this provider reads, if versioned
+    version: Option<TableVersion>,
 }
 
 impl ViewTable {
@@ -44,7 +46,15 @@ impl ViewTable {
             logical_plan,
             table_schema,
             definition,
+            version: None,
         }
+    }
+
+    /// Set the version of the table this provider reads, for time travel
+    /// queries. See [`TableProvider::version`].
+    pub fn with_version(mut self, version: Option<TableVersion>) -> Self {
+        self.version = version;
+        self
     }
 
     /// Get definition ref
@@ -70,6 +80,10 @@ impl TableProvider for ViewTable {
 
     fn table_type(&self) -> TableType {
         TableType::View
+    }
+
+    fn version(&self) -> Option<&TableVersion> {
+        self.version.as_ref()
     }
 
     fn get_table_definition(&self) -> Option<&str> {
