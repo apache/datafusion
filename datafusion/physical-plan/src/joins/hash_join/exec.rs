@@ -1113,55 +1113,10 @@ impl HashJoinExec {
             return false;
         }
 
-        // Under `preserve_file_partitions`, file groups can report Hash without following
-        // the dynamic filter hash router and look like a real hash repartition, so reject
-        // Hash. Range inputs with matching split points are safe.
-        // Follow-up work: enable dynamic filtering for preserve_file_partitioned scans (issue #20195).
-        // https://github.com/apache/datafusion/issues/20195
-        if config.optimizer.preserve_file_partitions > 0
-            && self.mode == PartitionMode::Partitioned
-            && matches!(
-                (
-                    self.left.output_partitioning(),
-                    self.right.output_partitioning()
-                ),
-                (Partitioning::Hash(_, _), Partitioning::Hash(_, _))
-            )
-        {
-            return false;
-        }
-
-        if self.mode == PartitionMode::Partitioned
-            && !self.has_partitioned_dynamic_filter_routing()
-        {
-            return false;
-        }
-
+        // The partitioning of the inputs does not matter. The filter holds the
+        // keys of all build partitions, so it passes every probe row that any
+        // build partition can match.
         true
-    }
-
-    fn has_partitioned_dynamic_filter_routing(&self) -> bool {
-        match (
-            self.left.output_partitioning(),
-            self.right.output_partitioning(),
-        ) {
-            (
-                Partitioning::Hash(_, left_partition_count),
-                Partitioning::Hash(_, right_partition_count),
-            ) => left_partition_count == right_partition_count,
-            (Partitioning::Range(_), Partitioning::Range(_)) => {
-                let children = [self.left.as_ref(), self.right.as_ref()];
-                matches!(
-                    self.input_distribution_requirements()
-                        .unsatisfied_co_partitioned_children(self.name(), &children),
-                    Ok(unsatisfied) if unsatisfied.is_empty()
-                )
-            }
-            (left_partitioning, right_partitioning) => {
-                left_partitioning.partition_count() == 1
-                    && right_partitioning.partition_count() == 1
-            }
-        }
     }
 
     /// left (build) side which gets hashed
@@ -12246,52 +12201,32 @@ mod tests {
             .build()
     }
 
+    /// The filter holds the keys of all build partitions, so it does not
+    /// depend on how the inputs are partitioned.
     #[test]
-    fn test_partitioned_dynamic_filter_pushdown_allows_supported_partitioning()
-    -> Result<()> {
-        let (range_join, on) = range_partitioned_dynamic_filter_test_join(10, 10)?;
-        let hash_join = with_hash_partitioned_children(&range_join, &on)?;
-        let mut session_config = SessionConfig::default();
-        session_config
-            .options_mut()
-            .optimizer
-            .enable_join_dynamic_filter_pushdown = true;
-
-        assert!(range_join.allow_join_dynamic_filter_pushdown(session_config.options()));
-        assert!(hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
-
-        session_config
-            .options_mut()
-            .optimizer
-            .preserve_file_partitions = 1;
-        assert!(range_join.allow_join_dynamic_filter_pushdown(session_config.options()));
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_partitioned_dynamic_filter_pushdown_rejects_unsupported_partitioning()
-    -> Result<()> {
+    fn test_partitioned_dynamic_filter_pushdown_allows_any_partitioning() -> Result<()> {
         let (range_join, on) = range_partitioned_dynamic_filter_test_join(10, 10)?;
         let hash_join = with_hash_partitioned_children(&range_join, &on)?;
         let (mismatched_range_join, _) =
             range_partitioned_dynamic_filter_test_join(10, 11)?;
+        let joins = [&range_join, &hash_join, &mismatched_range_join];
         let mut session_config = SessionConfig::default();
         session_config
             .options_mut()
             .optimizer
             .enable_join_dynamic_filter_pushdown = true;
 
-        assert!(
-            !mismatched_range_join
-                .allow_join_dynamic_filter_pushdown(session_config.options())
-        );
-
-        session_config
-            .options_mut()
-            .optimizer
-            .preserve_file_partitions = 1;
-        assert!(!hash_join.allow_join_dynamic_filter_pushdown(session_config.options()));
+        for preserve_file_partitions in [0, 1] {
+            session_config
+                .options_mut()
+                .optimizer
+                .preserve_file_partitions = preserve_file_partitions;
+            for join in joins {
+                assert!(
+                    join.allow_join_dynamic_filter_pushdown(session_config.options())
+                );
+            }
+        }
 
         Ok(())
     }
