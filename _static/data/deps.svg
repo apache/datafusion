@@ -296,53 +296,53 @@
 <path fill="none" stroke="black" d="M770.14,-1079.97C740.81,-1070.14 703.75,-1057.73 672.88,-1047.39"/>
 <polygon fill="black" stroke="black" points="673.68,-1043.97 663.09,-1044.11 671.46,-1050.61 673.68,-1043.97"/>
 </g>
-<!-- 22 -->
-<g id="node23" class="node">
-<title>22</title>
+<!-- 24 -->
+<g id="node25" class="node">
+<title>24</title>
 <polygon fill="none" stroke="black" points="940,-1044 704,-1044 704,-1008 940,-1008 940,-1044"/>
 <text text-anchor="middle" x="822" y="-1022.3" font-family="Times,serif" font-size="14.00">datafusion&#45;datasource&#45;parquet</text>
 </g>
-<!-- 21&#45;&gt;22 -->
+<!-- 21&#45;&gt;24 -->
 <g id="edge27" class="edge">
-<title>21&#45;&gt;22</title>
+<title>21&#45;&gt;24</title>
 <path fill="none" stroke="blue" d="M821.25,-1079.7C821.36,-1071.98 821.49,-1062.71 821.61,-1054.11"/>
 <polygon fill="blue" stroke="blue" points="825.11,-1054.15 821.76,-1044.1 818.11,-1054.05 825.11,-1054.15"/>
+</g>
+<!-- 22 -->
+<g id="node23" class="node">
+<title>22</title>
+<polygon fill="none" stroke="black" points="898,-972 746,-972 746,-936 898,-936 898,-972"/>
+<text text-anchor="middle" x="822" y="-950.3" font-family="Times,serif" font-size="14.00">datafusion&#45;pruning</text>
+</g>
+<!-- 22&#45;&gt;3 -->
+<g id="edge28" class="edge">
+<title>22&#45;&gt;3</title>
+<path fill="none" stroke="black" d="M746.32,-935.97C701.08,-925.78 643.48,-912.82 596.59,-902.26"/>
+<polygon fill="black" stroke="black" points="597.28,-898.83 586.75,-900.05 595.74,-905.66 597.28,-898.83"/>
 </g>
 <!-- 23 -->
 <g id="node24" class="node">
 <title>23</title>
-<polygon fill="none" stroke="black" points="898,-972 746,-972 746,-936 898,-936 898,-972"/>
-<text text-anchor="middle" x="822" y="-950.3" font-family="Times,serif" font-size="14.00">datafusion&#45;pruning</text>
-</g>
-<!-- 22&#45;&gt;23 -->
-<g id="edge28" class="edge">
-<title>22&#45;&gt;23</title>
-<path fill="none" stroke="black" d="M822,-1007.7C822,-999.98 822,-990.71 822,-982.11"/>
-<polygon fill="black" stroke="black" points="825.5,-982.1 822,-972.1 818.5,-982.1 825.5,-982.1"/>
-</g>
-<!-- 23&#45;&gt;3 -->
-<g id="edge29" class="edge">
-<title>23&#45;&gt;3</title>
-<path fill="none" stroke="black" d="M746.32,-935.97C701.08,-925.78 643.48,-912.82 596.59,-902.26"/>
-<polygon fill="black" stroke="black" points="597.28,-898.83 586.75,-900.05 595.74,-905.66 597.28,-898.83"/>
-</g>
-<!-- 24 -->
-<g id="node25" class="node">
-<title>24</title>
 <polygon fill="none" stroke="black" points="929.5,-900 714.5,-900 714.5,-864 929.5,-864 929.5,-900"/>
 <text text-anchor="middle" x="822" y="-878.3" font-family="Times,serif" font-size="14.00">datafusion&#45;functions&#45;nested</text>
 </g>
-<!-- 23&#45;&gt;24 -->
-<g id="edge30" class="edge">
-<title>23&#45;&gt;24</title>
+<!-- 22&#45;&gt;23 -->
+<g id="edge29" class="edge">
+<title>22&#45;&gt;23</title>
 <path fill="none" stroke="blue" d="M822,-935.7C822,-927.98 822,-918.71 822,-910.11"/>
 <polygon fill="blue" stroke="blue" points="825.5,-910.1 822,-900.1 818.5,-910.1 825.5,-910.1"/>
 </g>
-<!-- 24&#45;&gt;18 -->
-<g id="edge31" class="edge">
-<title>24&#45;&gt;18</title>
+<!-- 23&#45;&gt;18 -->
+<g id="edge30" class="edge">
+<title>23&#45;&gt;18</title>
 <path fill="none" stroke="black" d="M810.86,-863.85C786.51,-826.36 728.43,-736.95 699.69,-692.7"/>
 <polygon fill="black" stroke="black" points="702.58,-690.71 694.19,-684.23 696.71,-694.53 702.58,-690.71"/>
+</g>
+<!-- 24&#45;&gt;22 -->
+<g id="edge31" class="edge">
+<title>24&#45;&gt;22</title>
+<path fill="none" stroke="black" d="M822,-1007.7C822,-999.98 822,-990.71 822,-982.11"/>
+<polygon fill="black" stroke="black" points="825.5,-982.1 822,-972.1 818.5,-982.1 825.5,-982.1"/>
 </g>
 <!-- 25 -->
 <g id="node26" class="node">
@@ -502,15 +502,15 @@
 <path fill="none" stroke="blue" d="M1168,-935.97C1168,-888.29 1168,-753.18 1168,-694.63"/>
 <polygon fill="blue" stroke="blue" points="1171.5,-694.31 1168,-684.31 1164.5,-694.31 1171.5,-694.31"/>
 </g>
-<!-- 32&#45;&gt;24 -->
+<!-- 32&#45;&gt;23 -->
 <g id="edge48" class="edge">
-<title>32&#45;&gt;24</title>
+<title>32&#45;&gt;23</title>
 <path fill="none" stroke="black" d="M1109.31,-941.13C1056.52,-930.45 978.05,-914.57 916.44,-902.11"/>
 <polygon fill="black" stroke="black" points="916.82,-898.61 906.32,-900.06 915.43,-905.47 916.82,-898.61"/>
 </g>
-<!-- 33&#45;&gt;23 -->
+<!-- 33&#45;&gt;22 -->
 <g id="edge51" class="edge">
-<title>33&#45;&gt;23</title>
+<title>33&#45;&gt;22</title>
 <path fill="none" stroke="black" d="M1034.67,-1079.72C1015.58,-1060.29 982.33,-1028.73 949,-1008 928.5,-995.25 904.4,-984.31 882.73,-975.73"/>
 <polygon fill="black" stroke="black" points="883.88,-972.42 873.29,-972.08 881.35,-978.95 883.88,-972.42"/>
 </g>

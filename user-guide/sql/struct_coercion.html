@@ -649,6 +649,19 @@ SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one
 </section>
 <section id="limitations">
 <h3>Limitations<a class="headerlink" href="#limitations" title="Link to this heading">#</a></h3>
+<p><strong>Implicit coercion requires identical field name sets.</strong> Two structs coerce to a common type only when they have the same field names (in any order). Structs with different field names have no common type, and the query fails at plan time:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- Different field names: foo vs xxx</span>
+<span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">foo</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;baz&#39;</span><span class="err">}</span><span class="w"> </span><span class="k">UNION</span><span class="w"> </span><span class="k">ALL</span><span class="w"> </span><span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">xxx</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;blarg&#39;</span><span class="err">}</span><span class="p">;</span>
+<span class="c1">-- Error: Incompatible inputs for Union</span>
+
+<span class="k">SELECT</span><span class="w"> </span><span class="k">CASE</span><span class="w"> </span><span class="k">WHEN</span><span class="w"> </span><span class="n">a</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">1</span><span class="w"> </span><span class="k">THEN</span><span class="w"> </span><span class="err">{</span><span class="n">foo</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;baz&#39;</span><span class="err">}</span><span class="w"> </span><span class="k">ELSE</span><span class="w"> </span><span class="err">{</span><span class="n">xxx</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;blarg&#39;</span><span class="err">}</span><span class="w"> </span><span class="k">END</span><span class="w"> </span><span class="k">FROM</span><span class="w"> </span><span class="n">t</span><span class="p">;</span>
+<span class="c1">-- Error: Failed to coerce then (...) and else (...) to common types</span>
+<span class="c1">-- in CASE WHEN expression</span>
+
+<span class="k">SELECT</span><span class="w"> </span><span class="err">{</span><span class="n">foo</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;baz&#39;</span><span class="err">}</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="err">{</span><span class="n">xxx</span><span class="p">:</span><span class="w"> </span><span class="s1">&#39;blarg&#39;</span><span class="err">}</span><span class="p">;</span>
+<span class="c1">-- Error: Cannot infer common argument type for comparison operation</span>
+</pre></div>
+</div>
 <p><strong>Field count must match exactly.</strong> If structs have different numbers of fields and their field names don’t completely overlap, the query will fail:</p>
 <div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="c1">-- This fails because field sets don&#39;t match:</span>
 <span class="c1">-- t_left has {x, y} but t_right has {x, y, z}</span>
