@@ -490,21 +490,47 @@ async fn peek_header(
 }
 
 /// Reads the header row of an uncompressed file, growing the requested range
-/// until it is complete.
+/// until it is complete. Also returns the fetched prefix of the file, which
+/// reaches at least to the start of the header.
 async fn fetch_header(
     config: &CsvSource,
     store: &dyn ObjectStore,
     location: &Path,
     file_size: u64,
-) -> Result<HeaderRow> {
+) -> Result<(HeaderRow, Bytes)> {
     let mut len = file_size.min(64 * 1024);
     loop {
         let bytes = store.get_range(location, 0..len).await?;
         let eof = len >= file_size;
         if let Some(header) = config.find_header(&bytes, eof)? {
-            return Ok(header);
+            return Ok((header, bytes));
         }
         len = (len * 2).min(file_size);
+    }
+}
+
+/// Whether the byte-range partition starting at `raw_start` reads the header
+/// row, given a `prefix` of the file that reaches `header_start`.
+///
+/// [`AlignedBoundaryStream`] starts a partition after the first `line_end` at
+/// or after `raw_start - 1`, so a partition starting before the header only
+/// reads it when such a terminator precedes the header. Otherwise the header's
+/// own terminator is the one skipped and the partition starts at the first
+/// data row.
+fn range_owns_header(
+    prefix: &[u8],
+    header_start: usize,
+    raw_start: u64,
+    line_end: u8,
+) -> bool {
+    if raw_start == 0 {
+        return true;
+    }
+    match usize::try_from(raw_start) {
+        Ok(raw_start) if raw_start <= header_start => {
+            prefix[raw_start - 1..header_start].contains(&line_end)
+        }
+        _ => false,
     }
 }
 
@@ -778,12 +804,12 @@ impl FileOpener for CsvOpener {
                 // separately. Every byte-range partition of a file repeats this
                 // small request; cache per file if that becomes costly.
                 let mapping = if match_by_header {
-                    let header =
+                    let (header, prefix) =
                         fetch_header(&config, store.as_ref(), &location, file_size)
                             .await?;
-                    // A partition starting within leading comment lines owns
-                    // the header row, so it has to skip it.
-                    if raw_start <= header.start as u64 {
+                    // A partition starting within the lines that precede the
+                    // header can own the header row, so it has to skip it.
+                    if range_owns_header(&prefix, header.start, raw_start, line_end) {
                         config.options.has_header = Some(true);
                     }
                     config.header_mapping(
@@ -1428,6 +1454,32 @@ mod tests {
             find_header(b"# c1\na,b\n", Some(b'\n'), Some(b'#'), false),
             row(&["a", "b"], 5)
         );
+    }
+
+    #[test]
+    fn range_owns_header_follows_stream_alignment() {
+        // No terminator between the BOM and the header
+        let bom = b"\xef\xbb\xbfa,b\n1,x\n";
+        assert!(range_owns_header(bom, 3, 0, b'\n'));
+        for raw_start in 1..=4 {
+            assert!(!range_owns_header(bom, 3, raw_start, b'\n'));
+        }
+
+        // A blank record ended by `\r` is not a boundary the stream aligns to
+        assert!(!range_owns_header(b"\ra,b\n1,x\n", 1, 1, b'\n'));
+        assert!(range_owns_header(b"\na,b\n1,x\n", 1, 1, b'\n'));
+
+        let comment = b"# c\na,b\n1,x\n";
+        for raw_start in 0..=4 {
+            assert!(range_owns_header(comment, 4, raw_start, b'\n'));
+        }
+        assert!(!range_owns_header(comment, 4, 5, b'\n'));
+
+        let custom = b";;a,b;1,x;";
+        assert!(range_owns_header(custom, 2, 1, b';'));
+        assert!(range_owns_header(custom, 2, 2, b';'));
+        assert!(!range_owns_header(custom, 2, 3, b';'));
+        assert!(!range_owns_header(custom, 2, 1, b'\n'));
     }
 
     #[test]

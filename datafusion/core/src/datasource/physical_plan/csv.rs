@@ -27,7 +27,7 @@ mod tests {
     use datafusion_common::config::CsvOptions;
     use datafusion_common::test_util::arrow_test_data;
     use datafusion_common::test_util::batches_to_string;
-    use datafusion_common::{Result, assert_batches_eq};
+    use datafusion_common::{Result, assert_batches_eq, assert_batches_sorted_eq};
     use datafusion_execution::config::SessionConfig;
     use datafusion_physical_plan::ExecutionPlan;
     use datafusion_physical_plan::metrics::MetricsSet;
@@ -1040,6 +1040,71 @@ mod tests {
             | 4 |   | 40 | s |
             +---+---+----+---+
             ");
+        }
+        Ok(())
+    }
+
+    /// Wherever a file is split into two byte ranges, exactly one of them
+    /// skips the header row
+    #[rstest]
+    #[case::bom("\u{feff}a,b\n1,x\n2,y\n")]
+    #[case::carriage_return_blank_line("\ra,b\n1,x\n2,y\n")]
+    #[case::blank_line("\na,b\n1,x\n2,y\n")]
+    #[case::comment("# c\na,b\n1,x\n2,y\n")]
+    #[case::no_prefix("a,b\n1,x\n2,y\n")]
+    #[tokio::test]
+    async fn csv_match_columns_by_header_with_any_range_split(
+        #[case] contents: &str,
+    ) -> Result<()> {
+        use datafusion_datasource::PartitionedFile;
+        use datafusion_datasource::file_groups::FileGroup;
+
+        let tmp_dir = TempDir::new()?;
+        let path = tmp_dir.path().join("a.csv");
+        fs::write(&path, contents)?;
+        let path = path.to_str().unwrap();
+        let size = contents.len() as u64;
+
+        let table_schema = TableSchema::from(&Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Utf8, true),
+            Field::new("a", DataType::Int32, true),
+        ])));
+        let options = CsvOptions {
+            has_header: Some(true),
+            comment: Some(b'#'),
+            ..Default::default()
+        };
+        let source = Arc::new(
+            CsvSource::new(table_schema)
+                .with_csv_options(options)
+                .with_match_columns_by_header(true),
+        );
+
+        for split in 1..contents.len() as i64 {
+            let file_groups = [(0, split), (split, size as i64)]
+                .into_iter()
+                .map(|(start, end)| {
+                    FileGroup::new(vec![
+                        PartitionedFile::new(path, size).with_range(start, end),
+                    ])
+                })
+                .collect();
+            let config = partitioned_csv_config(file_groups, source.clone())?;
+            let csv = DataSourceExec::from_data_source(config);
+            let batches =
+                datafusion_physical_plan::collect(csv, SessionContext::new().task_ctx())
+                    .await?;
+            assert_batches_sorted_eq!(
+                [
+                    "+---+---+",
+                    "| b | a |",
+                    "+---+---+",
+                    "| x | 1 |",
+                    "| y | 2 |",
+                    "+---+---+",
+                ],
+                &batches
+            );
         }
         Ok(())
     }
