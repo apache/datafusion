@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Single-stage aggregate stream for raw input with group-clustering guarantees.
 
@@ -82,8 +69,9 @@ use crate::{RecordBatchStream, SendableRecordBatchStream};
 /// only the current group remains active after completed groups are emitted, and
 /// memory usage does not grow with the total number of groups.
 ///
-/// If a memory reservation nevertheless fails, the stream returns the error
-/// directly, indicating an unexpected behavior.
+/// If the reservation after an input batch fails, `ClusteredSingleAggregateStream`
+/// still emits the completed groups, and returns the error only when no group is
+/// complete.
 ///
 /// ## Partial group clustering
 ///
@@ -329,30 +317,35 @@ impl ClusteredSingleAggregateStream {
                             spill_context.as_deref(),
                         ));
                 timer.done();
-                match resize_result {
-                    Ok(()) => {}
+                // Check the reservation before taking completed groups, as the partial
+                // stream does, so spilling is unchanged. Without spilling, the refusal
+                // is returned below only if no group is complete.
+                let oom = match resize_result {
+                    Ok(()) => None,
                     Err(e @ DataFusionError::ResourcesExhausted(_)) => {
-                        let Some(spill_context) = spill_context else {
-                            // `None` means spilling is not supported, see comments
-                            // at `ClusteredSingleAggregateState` for details.
-                            return Self::break_with_err(e);
-                        };
-                        if table.is_empty() {
-                            return Self::break_with_internal_err(
-                                "Clustered single aggregate ran out of memory with no aggregated groups",
-                            );
+                        match spill_context {
+                            Some(spill_context) => {
+                                if table.is_empty() {
+                                    return Self::break_with_internal_err(
+                                        "Clustered single aggregate ran out of memory with no aggregated groups",
+                                    );
+                                }
+                                return ControlFlow::Continue(
+                                    ClusteredSingleAggregateState::Spilling {
+                                        table,
+                                        spill_context,
+                                    },
+                                );
+                            }
+                            // Spilling is not supported, see comments at
+                            // `ClusteredSingleAggregateState` for details.
+                            None => Some(e),
                         }
-                        return ControlFlow::Continue(
-                            ClusteredSingleAggregateState::Spilling {
-                                table,
-                                spill_context,
-                            },
-                        );
                     }
                     Err(e) => {
                         return Self::break_with_err(e);
                     }
-                }
+                };
 
                 let result = if spill_context
                     .as_ref()
@@ -368,10 +361,15 @@ impl ClusteredSingleAggregateStream {
                     result
                 };
 
-                match result {
+                match (result, oom) {
                     // Some finalized groups can be emitted. Yield them in
                     // slices, then continue aggregating input.
-                    Ok(Some(batch)) => {
+                    (Ok(Some(batch)), oom) => {
+                        if oom.is_some() {
+                            // Release the capacity the table grew for this batch
+                            // so that reserving the remaining groups can succeed.
+                            table.shrink_to_fit();
+                        }
                         let table_memory = Self::reservation_size_for_table(
                             &table,
                             spill_context.as_deref(),
@@ -385,14 +383,15 @@ impl ClusteredSingleAggregateStream {
                             },
                         )
                     }
+                    (Ok(None), Some(oom)) => Self::break_with_err(oom),
                     // Can't do early emit, continue aggregating.
-                    Ok(None) => ControlFlow::Continue(
+                    (Ok(None), None) => ControlFlow::Continue(
                         ClusteredSingleAggregateState::ReadingInput {
                             table,
                             spill_context,
                         },
                     ),
-                    Err(e) => Self::break_with_err(e),
+                    (Err(e), _) => Self::break_with_err(e),
                 }
             }
             Poll::Ready(Some(Err(e))) => Self::break_with_err(e),
@@ -762,6 +761,11 @@ impl RecordBatchStream for ClusteredSingleAggregateStream {
 mod tests {
     use super::*;
     use crate::aggregates::PhysicalGroupBy;
+    use crate::aggregates::clustered_test_util::{
+        assert_completed_groups_emitted_under_limit, assert_output_unchanged_under_limit,
+        assert_resources_exhausted_under_limit, distinct_key_batches, full_batches,
+        held_memory, single_key_batches, sum_over_sorted_input,
+    };
     use crate::collect;
     use crate::test::TestMemoryExec;
     use arrow::array::Int64Array;
@@ -850,5 +854,33 @@ mod tests {
             batches_to_sort_string(&expected)
         );
         Ok(())
+    }
+
+    #[tokio::test]
+    async fn fully_clustered_completed_groups_under_memory_pressure() -> Result<()> {
+        let plan = sum_over_sorted_input(AggregateMode::Single, &["k"], full_batches())?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_completed_groups_emitted_under_limit(&plan).await
+    }
+
+    /// The limit fits the active group, but not the capacity the table grows
+    /// for one batch, so the table must release it after the completed groups
+    /// are emitted.
+    #[tokio::test]
+    async fn completed_groups_release_batch_capacity() -> Result<()> {
+        let plan =
+            sum_over_sorted_input(AggregateMode::Single, &["k"], distinct_key_batches())?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_output_unchanged_under_limit(&plan, 100 * 1024).await
+    }
+
+    /// A single key never completes a group before the input ends. The limit
+    /// fits only the initial table.
+    #[tokio::test]
+    async fn memory_pressure_without_completed_groups() -> Result<()> {
+        let plan =
+            sum_over_sorted_input(AggregateMode::Single, &["k"], single_key_batches())?;
+        let limit = held_memory(&plan).await?;
+        assert_resources_exhausted_under_limit(&plan, limit).await
     }
 }

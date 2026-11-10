@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::{fmt::Write, sync::Arc, time::Duration};
 
@@ -29,6 +16,7 @@ use datafusion::{
     prelude::{SessionConfig, SessionContext},
 };
 use datafusion_execution::runtime_env::RuntimeEnv;
+use datafusion_physical_plan::{collect, execution_plan::reset_plan_states};
 use itertools::Itertools;
 use object_store::{
     ObjectStore, ObjectStoreExt,
@@ -80,7 +68,7 @@ fn create_parquet_file(rng: &mut StdRng, id_offset: usize) -> Bytes {
     let mut data = Vec::<u8>::new();
     let mut writer = ArrowWriter::try_new(&mut data, schema, Default::default()).unwrap();
     writer.write(&batch).unwrap();
-    writer.close().unwrap();
+    assert_eq!(writer.close().unwrap().num_row_groups(), 1);
 
     data.into()
 }
@@ -114,15 +102,19 @@ where
     Arc::new(ThrottledStore::new(object_store, config))
 }
 
-async fn setup_context(object_store: Arc<dyn ObjectStore>) -> SessionContext {
-    let config = SessionConfig::new().with_target_partitions(THREADS);
+async fn setup_context(
+    object_store: Arc<dyn ObjectStore>,
+    config: SessionConfig,
+) -> SessionContext {
     let rt = Arc::new(RuntimeEnv::default());
     rt.register_object_store(&Url::parse("data://my_store").unwrap(), object_store);
     let context = SessionContext::new_with_config_rt(config, rt);
 
     for table_id in 0..TABLES {
         let table_name = table_name(table_id);
-        let file_format = ParquetFormat::default().with_enable_pruning(true);
+        let file_format = ParquetFormat::default()
+            .with_options(context.copied_table_options().parquet)
+            .with_enable_pruning(true);
         let options = ListingOptions::new(Arc::new(file_format))
             .with_table_partition_cols(vec![(
                 String::from("partition"),
@@ -180,7 +172,8 @@ fn bench_query(
 
 fn criterion_benchmark(c: &mut Criterion) {
     env_logger::try_init().ok();
-    let store = make_store_slow(InMemory::new());
+    let store: Arc<dyn ObjectStore> = Arc::new(InMemory::new());
+    let slow_store = make_store_slow(Arc::clone(&store));
     let rt = tokio::runtime::Builder::new_multi_thread()
         .worker_threads(THREADS)
         .enable_time()
@@ -188,7 +181,10 @@ fn criterion_benchmark(c: &mut Criterion) {
         .unwrap();
 
     rt.block_on(setup_files(Arc::clone(&store)));
-    let ctx = rt.block_on(setup_context(store));
+    let ctx = rt.block_on(setup_context(
+        Arc::clone(&slow_store),
+        SessionConfig::new().with_target_partitions(THREADS),
+    ));
 
     let table0_name = table_name(0);
     let select_query = format!("SELECT * FROM {table0_name}");
@@ -257,6 +253,37 @@ fn criterion_benchmark(c: &mut Criterion) {
         &format!("{join_query} WHERE {table0_name}.partition = 0"),
         PARTITION_FILES * FILE_ROWS,
     );
+
+    // Each file contains one row group. Using one scan partition makes crossing
+    // a file boundary the only opportunity to read ahead into another group.
+    let mut group = c.benchmark_group("parquet_cross_file_projection");
+    group.sample_size(10);
+    group.sampling_mode(SamplingMode::Flat);
+    group.measurement_time(Duration::from_secs(25));
+    for (name, store) in [("in_memory", store), ("100ms_get", slow_store)] {
+        let config = SessionConfig::from_env().unwrap().with_target_partitions(1);
+        let ctx = rt.block_on(setup_context(store, config));
+        let plan = rt.block_on(async {
+            ctx.sql("SELECT sum(id) FROM table_0")
+                .await
+                .unwrap()
+                .create_physical_plan()
+                .await
+                .unwrap()
+        });
+        let rows_per_partition = (PARTITION_FILES * FILE_ROWS) as u64;
+        let expected =
+            TABLE_PARTITIONS as u64 * rows_per_partition * (rows_per_partition - 1) / 2;
+        let scan = || async {
+            let plan = reset_plan_states(Arc::clone(&plan)).unwrap();
+            let batches = collect(plan, ctx.task_ctx()).await.unwrap();
+            let sum =
+                datafusion_common::cast::as_uint64_array(batches[0].column(0)).unwrap();
+            assert_eq!(sum.value(0), expected);
+        };
+        group.bench_function(name, |b| b.to_async(&rt).iter(scan));
+    }
+    group.finish();
 }
 
 criterion_group!(benches, criterion_benchmark);

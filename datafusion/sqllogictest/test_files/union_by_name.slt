@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Portions of this file are derived from DuckDB and are licensed
 # under the MIT License (see below).
@@ -339,3 +326,84 @@ select x, y, z from t3 union all by name select z, y, x, 'd' as zz from t3;
 ----
 a b c NULL
 a b c d
+
+# Missing columns participate as NULL, including during dictionary coercion.
+query TTIT rowsort
+SELECT arrow_typeof(x), x, y, arrow_typeof(y) FROM (
+  SELECT 1 AS y
+  UNION ALL BY NAME
+  SELECT arrow_cast('a', 'Dictionary(Int32, Utf8)') AS x
+) u;
+----
+Utf8 NULL 1 Int64
+Utf8 a NULL Int64
+
+query TTIT rowsort
+SELECT arrow_typeof(x), x, y, arrow_typeof(y) FROM (
+  SELECT arrow_cast('a', 'Dictionary(Int32, Utf8)') AS x
+  UNION ALL BY NAME
+  SELECT 1 AS y
+) u;
+----
+Utf8 NULL 1 Int64
+Utf8 a NULL Int64
+
+query TRIT rowsort
+SELECT arrow_typeof(x), x, y, arrow_typeof(y) FROM (
+  SELECT CAST(1 AS SMALLINT) AS x, 1 AS y
+  UNION ALL BY NAME
+  SELECT 2 AS y, 2.5 AS x
+) u;
+----
+Float64 1 1 Int64
+Float64 2.5 2 Int64
+
+query TRIT rowsort
+SELECT arrow_typeof(x), x, y, arrow_typeof(y) FROM (
+  SELECT CAST(1 AS SMALLINT) AS x
+  UNION BY NAME
+  SELECT 2.5 AS x, 2 AS y
+) u;
+----
+Float64 1 NULL Int64
+Float64 2.5 2 Int64
+
+query TT rowsort
+SELECT arrow_typeof(x), x FROM (
+  SELECT arrow_cast('b', 'LargeUtf8') AS x
+  UNION BY NAME
+  SELECT arrow_cast('a', 'Utf8') AS x
+) u;
+----
+LargeUtf8 a
+LargeUtf8 b
+
+query TT rowsort
+SELECT arrow_typeof(x), x FROM (
+  SELECT arrow_cast('a', 'Utf8') AS x
+  UNION ALL BY NAME
+  SELECT arrow_cast('b', 'Utf8View') AS x
+) u;
+----
+Utf8View a
+Utf8View b
+
+query TR rowsort
+SELECT arrow_typeof(x), x FROM (
+  SELECT CASE WHEN false THEN 1 ELSE 2.5 END AS x
+  UNION BY NAME
+  SELECT NULL AS x
+) u;
+----
+Float64 2.5
+Float64 NULL
+
+query TI rowsort
+SELECT arrow_typeof(x), arrow_cast(x, 'Int64') FROM (
+  SELECT CAST(NULL AS TIMESTAMP) AS x
+  UNION ALL BY NAME
+  SELECT arrow_cast(1, 'Timestamp(Microsecond, Some("UTC"))') AS x
+) u;
+----
+Timestamp(ns, "UTC") 1000
+Timestamp(ns, "UTC") NULL

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Reexports the [`datafusion_datasource_json::source`] module, containing CSV based [`FileSource`].
 //!
@@ -24,7 +11,6 @@ pub use datafusion_datasource_csv::source::*;
 #[cfg(test)]
 mod tests {
 
-    use std::collections::HashMap;
     use std::fs::{self, File};
     use std::io::Write;
     use std::sync::Arc;
@@ -37,6 +23,7 @@ mod tests {
     use crate::prelude::CsvReadOptions;
     use crate::prelude::SessionContext;
     use crate::test::partitioned_file_groups;
+    use crate::test_util::aggr_test_schema;
     use datafusion_common::config::CsvOptions;
     use datafusion_common::test_util::arrow_test_data;
     use datafusion_common::test_util::batches_to_string;
@@ -61,28 +48,6 @@ mod tests {
     use rstest::*;
     use tempfile::TempDir;
     use url::Url;
-
-    fn aggr_test_schema() -> SchemaRef {
-        let mut f1 = Field::new("c1", DataType::Utf8, false);
-        f1.set_metadata(HashMap::from_iter(vec![("testing".into(), "test".into())]));
-        let schema = Schema::new(vec![
-            f1,
-            Field::new("c2", DataType::UInt32, false),
-            Field::new("c3", DataType::Int8, false),
-            Field::new("c4", DataType::Int16, false),
-            Field::new("c5", DataType::Int32, false),
-            Field::new("c6", DataType::Int64, false),
-            Field::new("c7", DataType::UInt8, false),
-            Field::new("c8", DataType::UInt16, false),
-            Field::new("c9", DataType::UInt32, false),
-            Field::new("c10", DataType::UInt64, false),
-            Field::new("c11", DataType::Float32, false),
-            Field::new("c12", DataType::Float64, false),
-            Field::new("c13", DataType::Utf8, false),
-        ]);
-
-        Arc::new(schema)
-    }
 
     #[rstest(
         file_compression_type,

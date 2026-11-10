@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Create a stream that do a multi level merge stream
 
@@ -154,6 +141,8 @@ pub(crate) struct MultiLevelMergeBuilder {
     expr: LexOrdering,
     metrics: BaselineMetrics,
     batch_size: usize,
+    /// See [`StreamingMergeBuilder::with_max_batch_bytes`]
+    max_batch_bytes: Option<usize>,
     reservation: MemoryReservation,
     /// Workspace retained across retries and intermediate spill passes.
     merge_pool: Option<Arc<MergeMemoryPool>>,
@@ -198,6 +187,7 @@ impl MultiLevelMergeBuilder {
             expr,
             metrics,
             batch_size,
+            max_batch_bytes: None,
             reservation,
             merge_pool: None,
             reserve_replay_headroom: false,
@@ -209,6 +199,13 @@ impl MultiLevelMergeBuilder {
 
     pub(super) fn with_merge_pool(mut self, pool: Option<Arc<MergeMemoryPool>>) -> Self {
         self.merge_pool = pool;
+        self
+    }
+
+    /// Applies [`StreamingMergeBuilder::with_max_batch_bytes`] to every pass,
+    /// including the passes whose output is spilled again.
+    pub(super) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
+        self.max_batch_bytes = max_batch_bytes;
         self
     }
 
@@ -542,7 +539,8 @@ impl MultiLevelMergeBuilder {
                 self.metrics.intermediate()
             })
             .with_round_robin_tie_breaker(self.enable_round_robin_tie_breaker)
-            .with_streams(streams);
+            .with_streams(streams)
+            .with_max_batch_bytes(self.max_batch_bytes);
 
         if !all_in_memory {
             // Don't track memory used by this stream as we reserve that memory by worst case sceneries

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! [`Optimizer`] and [`OptimizerRule`]
 
@@ -36,9 +23,9 @@ use datafusion_expr::dml::CopyTo;
 use datafusion_expr::logical_plan::LogicalPlan;
 use datafusion_expr::{
     Aggregate, Analyze, CreateMemoryTable, CreateView, DdlStatement, Distinct,
-    DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit, Projection,
-    RecursiveQuery, Repartition, Sort, Statement, Subquery, SubqueryAlias, Union, Unnest,
-    Window,
+    DistinctOn, DmlStatement, Explain, Expr, Extension, Filter, Join, Limit,
+    MaterializedCte, MaterializedCtePlan, Projection, RecursiveQuery, Repartition, Sort,
+    Statement, Subquery, SubqueryAlias, Union, Unnest, Window,
 };
 
 use crate::common_subexpr_eliminate::CommonSubexprEliminate;
@@ -62,6 +49,7 @@ use crate::propagate_empty_relation::PropagateEmptyRelation;
 use crate::push_down_filter::PushDownFilter;
 use crate::push_down_limit::PushDownLimit;
 use crate::replace_distinct_aggregate::ReplaceDistinctWithAggregate;
+use crate::replace_filter_top1::ReplaceFilterTop1;
 use crate::rewrite_set_comparison::RewriteSetComparison;
 use crate::scalar_subquery_to_join::ScalarSubqueryToJoin;
 use crate::simplify_expressions::SimplifyExpressions;
@@ -245,10 +233,45 @@ impl OptimizerConfig for OptimizerContext {
     }
 }
 
-/// A rule-based logical optimizer.
+/// A rule-based optimizer for [`LogicalPlan`]s.
 ///
 /// Applies rules in order for up to `datafusion.optimizer.max_passes` passes,
 /// stopping early if the plan repeats.
+///
+/// # Built-in Optimizer Rules
+///
+/// The rules are applied in the following order. Note: the list may change
+/// between releases.
+///
+/// | rule (name in EXPLAIN plan)               | struct name                      | summary                                                                                                                          |
+/// | ----------------------------------------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+/// | `rewrite_set_comparison`                  | [`RewriteSetComparison`]         | Rewrites `ANY` and `ALL` subqueries into `EXISTS` expressions with SQL NULL semantics.                                           |
+/// | `optimize_unions`                         | [`OptimizeUnions`]               | Flattens nested unions and removes single-input unions.                                                                          |
+/// | `unions_to_filter`                        | [`UnionsToFilter`]               | Merges `UNION DISTINCT` branches over the same source into one filtered branch.                                                  |
+/// | `simplify_expressions`                    | [`SimplifyExpressions`]          | Constant-folds and simplifies expressions.                                                                                       |
+/// | `replace_distinct_aggregate`              | [`ReplaceDistinctWithAggregate`] | Rewrites `DISTINCT` and `DISTINCT ON` into aggregates.                                                                           |
+/// | `eliminate_join`                          | [`EliminateJoin`]                | Rewrites inner joins to semi joins, drops unused outer join sides, and replaces always-false inner joins with an empty relation. |
+/// | `decorrelate_predicate_subquery`          | [`DecorrelatePredicateSubquery`] | Rewrites `IN` and `EXISTS` subqueries into semi or anti joins.                                                                   |
+/// | `scalar_subquery_to_join`                 | [`ScalarSubqueryToJoin`]         | Rewrites scalar subqueries into joins.                                                                                           |
+/// | `decorrelate_lateral_join`                | [`DecorrelateLateralJoin`]       | Rewrites lateral joins into regular joins.                                                                                       |
+/// | `extract_equijoin_predicate`              | [`ExtractEquijoinPredicate`]     | Splits join filters into equijoin keys and residual predicates.                                                                  |
+/// | `eliminate_duplicated_expr`               | [`EliminateDuplicatedExpr`]      | Removes duplicate expressions from projections, aggregates, and similar operators.                                               |
+/// | `eliminate_filter`                        | [`EliminateFilter`]              | Drops always-true filters and replaces always-false or NULL filters with an empty relation.                                      |
+/// | `eliminate_cross_join`                    | [`EliminateCrossJoin`]           | Replaces cross joins with inner joins when a filter supplies join keys.                                                          |
+/// | `eliminate_limit`                         | [`EliminateLimit`]               | Replaces `LIMIT 0` with an empty relation and removes no-op limits and offsets.                                                  |
+/// | `propagate_empty_relation`                | [`PropagateEmptyRelation`]       | Collapses operators whose inputs produce no rows.                                                                                |
+/// | `filter_null_join_keys`                   | [`FilterNullJoinKeys`]           | Adds `IS NOT NULL` filters on nullable equijoin keys.                                                                            |
+/// | `eliminate_outer_join`                    | [`EliminateOuterJoin`]           | Rewrites outer joins to inner joins when a later filter rejects the NULL-extended rows.                                          |
+/// | `push_down_limit`                         | [`PushDownLimit`]                | Pushes limits toward scans and merges adjacent limits.                                                                           |
+/// | `push_down_filter`                        | [`PushDownFilter`]               | Pushes filters as close to the sources as possible.                                                                              |
+/// | `eliminate_aggregate_distinct`            | [`EliminateAggregateDistinct`]   | Drops `DISTINCT` from aggregates it cannot affect, such as `min` and `max`.                                                      |
+/// | `single_distinct_aggregation_to_group_by` | [`SingleDistinctToGroupBy`]      | Rewrites single-column `DISTINCT` aggregates into two-stage `GROUP BY` plans.                                                    |
+/// | `eliminate_group_by_constant`             | [`EliminateGroupByConstant`]     | Removes constant expressions from `GROUP BY`.                                                                                    |
+/// | `common_sub_expression_eliminate`         | [`CommonSubexprEliminate`]       | Computes repeated subexpressions once.                                                                                           |
+/// | `extract_leaf_expressions`                | [`ExtractLeafExpressions`]       | Moves cheap leaf expressions closer to the sources.                                                                              |
+/// | `push_down_leaf_projections`              | [`PushDownLeafProjections`]      | Pushes the projections created by leaf extraction toward the sources.                                                            |
+/// | `optimize_projections`                    | [`OptimizeProjections`]          | Prunes unused columns and redundant projections.                                                                                 |
+/// | `replace_filter_top1`                     | [`ReplaceFilterTop1`]            | Rewrites `Filter(row_number() = 1)` over a partitioned window into a `first_value` aggregate.                                    |
 #[derive(Clone, Debug)]
 pub struct Optimizer {
     /// All optimizer rules to apply
@@ -274,7 +297,7 @@ impl Default for Optimizer {
 }
 
 impl Optimizer {
-    /// Create a new optimizer using the recommended list of rules
+    /// Create a new optimizer using the [built-in rules](Self#built-in-optimizer-rules)
     pub fn new() -> Self {
         // NOTEs:
         // - The order of rules in this list is important, as it determines the
@@ -315,6 +338,7 @@ impl Optimizer {
             Arc::new(ExtractLeafExpressions::new()),
             Arc::new(PushDownLeafProjections::new()),
             Arc::new(OptimizeProjections::new()),
+            Arc::new(ReplaceFilterTop1::new()),
         ];
 
         Self::with_rules(rules)
@@ -443,6 +467,15 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
             let r = f(Arc::make_mut(recursive_term))?;
             s || r
         }
+        LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+            cte,
+            continuation,
+            ..
+        })) => {
+            let b = f(Arc::make_mut(cte))?;
+            let c = f(Arc::make_mut(continuation))?;
+            b || c
+        }
         LogicalPlan::Statement(Statement::Prepare(p)) => f(Arc::make_mut(&mut p.input))?,
         LogicalPlan::Extension(Extension { node }) => {
             let inputs = node.inputs();
@@ -471,7 +504,8 @@ fn map_children_mut<F: FnMut(&mut LogicalPlan) -> Result<bool>>(
         LogicalPlan::TableScan { .. }
         | LogicalPlan::EmptyRelation { .. }
         | LogicalPlan::Values { .. }
-        | LogicalPlan::DescribeTable(_)
+        | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_))
+        | LogicalPlan::Show(_)
         | LogicalPlan::Ddl(DdlStatement::CreateExternalTable(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalogSchema(_))
         | LogicalPlan::Ddl(DdlStatement::CreateCatalog(_))
@@ -801,8 +835,27 @@ mod tests {
     use crate::optimizer::Optimizer;
     use crate::test::{test_table_scan, test_table_scan_with_name};
     use crate::{OptimizerConfig, OptimizerContext, OptimizerRule};
+    use datafusion_common::test_util::documented_rule_names;
 
     use super::ApplyOrder;
+
+    /// Verifies the rule table in the [`Optimizer`] docs matches the rules
+    /// (and their order) returned by [`Optimizer::new`]
+    #[test]
+    fn optimizer_rules_match_documented_order() {
+        let rules: Vec<_> = Optimizer::new()
+            .rules
+            .iter()
+            .map(|rule| rule.name().to_string())
+            .collect();
+
+        let documented = documented_rule_names(
+            include_str!("optimizer.rs"),
+            "/// # Built-in Optimizer Rules",
+        );
+
+        assert_eq!(documented, rules);
+    }
 
     #[test]
     fn skip_failing_rule() {

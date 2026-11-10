@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use insta::assert_snapshot;
 use std::sync::Arc;
@@ -50,7 +37,9 @@ use datafusion_physical_plan::collect;
 use datafusion_physical_plan::displayable;
 use datafusion_physical_plan::joins::utils::ColumnIndex;
 use datafusion_physical_plan::joins::utils::JoinFilter;
-use datafusion_physical_plan::joins::{HashJoinExec, NestedLoopJoinExec, PartitionMode};
+use datafusion_physical_plan::joins::{
+    HashJoinExec, HashJoinExecBuilder, NestedLoopJoinExec, PartitionMode,
+};
 use datafusion_physical_plan::operator_statistics::{
     ClosureStatisticsProvider, StatisticsRegistry, StatisticsResult,
 };
@@ -469,29 +458,45 @@ async fn test_join_with_swap_semi() {
     }
 }
 
+/// A null-aware `LeftAnti` swaps to a null-aware `RightAnti` that builds on
+/// the smaller subquery side. Besides the scalar `NOT IN`, this covers a
+/// multi-key one (a multi-column `NOT IN`, correlation scope keys, or both),
+/// which keeps the number of `NOT IN` value keys and the key order, and a
+/// filtered one (a decorrelated correlated `NOT IN`), whose filter sides are
+/// swapped with the inputs.
+///
+/// `PartitionMode::Partitioned` is deliberately not a case here: a null-aware
+/// `LeftAnti` cannot be constructed in that mode at all, so there is no input
+/// plan to optimize. See
+/// `HashJoinExec::not_in`/`NotIn::try_new`.
 #[rstest]
-#[case(PartitionMode::CollectLeft)]
-#[case(PartitionMode::Auto)]
-#[case(PartitionMode::Partitioned)]
+#[case::collect_left(PartitionMode::CollectLeft, 1, 1, false)]
+#[case::auto(PartitionMode::Auto, 1, 1, false)]
+#[case::filter(PartitionMode::CollectLeft, 1, 1, true)]
+#[case::scope_key(PartitionMode::CollectLeft, 2, 1, false)]
+#[case::multi_column(PartitionMode::CollectLeft, 2, 2, false)]
 #[tokio::test]
 async fn test_null_aware_left_anti_swaps_to_right_anti(
     #[case] partition_mode: PartitionMode,
+    #[case] num_keys: usize,
+    #[case] value_keys: usize,
+    #[case] with_filter: bool,
 ) -> Result<()> {
     let (big, small) = create_big_and_small();
-    let join = HashJoinExec::try_new(
+    let big_col = Arc::new(Column::new_with_schema("big_col", &big.schema())?) as _;
+    let small_col = Arc::new(Column::new_with_schema("small_col", &small.schema())?) as _;
+    let on = vec![(big_col, small_col); num_keys];
+    let join = HashJoinExecBuilder::new(
         Arc::clone(&big),
         Arc::clone(&small),
-        vec![(
-            Arc::new(Column::new_with_schema("big_col", &big.schema())?),
-            Arc::new(Column::new_with_schema("small_col", &small.schema())?),
-        )],
-        None,
-        &JoinType::LeftAnti,
-        None,
-        partition_mode,
-        NullEquality::NullEqualsNothing,
-        true,
-    )?;
+        on,
+        JoinType::LeftAnti,
+    )
+    .with_filter(if with_filter { nl_join_filter() } else { None })
+    .with_partition_mode(partition_mode)
+    .with_null_aware(true)
+    .with_null_aware_value_keys(value_keys)
+    .build()?;
     let original_schema = join.schema();
 
     let optimized_join =
@@ -503,9 +508,18 @@ async fn test_null_aware_left_anti_swaps_to_right_anti(
     assert_eq!(*swapped_join.join_type(), JoinType::RightAnti);
     assert_eq!(*swapped_join.partition_mode(), PartitionMode::CollectLeft);
     assert!(swapped_join.null_aware);
+    assert_eq!(swapped_join.null_aware_value_keys, value_keys);
+    assert_eq!(swapped_join.on().len(), num_keys);
     assert_eq!(swapped_join.left().schema().field(0).name(), "small_col");
     assert_eq!(swapped_join.right().schema().field(0).name(), "big_col");
     assert_eq!(swapped_join.schema(), original_schema);
+    let filter_sides = swapped_join
+        .filter()
+        .map(|filter| filter.column_indices().iter().map(|c| c.side).collect());
+    assert_eq!(
+        filter_sides,
+        with_filter.then(|| vec![JoinSide::Right, JoinSide::Left])
+    );
 
     Ok(())
 }
@@ -611,44 +625,6 @@ async fn test_null_aware_left_anti_respects_disabled_join_reordering() -> Result
     assert_eq!(*unswapped_join.join_type(), JoinType::LeftAnti);
     assert_eq!(*unswapped_join.partition_mode(), PartitionMode::CollectLeft);
     assert!(unswapped_join.null_aware);
-    assert_eq!(unswapped_join.left().schema().field(0).name(), "big_col");
-    assert_eq!(unswapped_join.right().schema().field(0).name(), "small_col");
-
-    Ok(())
-}
-
-/// A filtered null-aware `LeftAnti` (produced by decorrelating a correlated
-/// `NOT IN`) must not be swapped to `RightAnti`: the swap is only valid for
-/// unfiltered null-aware joins, since a filtered `RightAnti` would apply its
-/// build-side NULL short-circuit before the filter.
-#[tokio::test]
-async fn test_null_aware_left_anti_with_filter_does_not_swap() -> Result<()> {
-    let (big, small) = create_big_and_small();
-    let join = HashJoinExec::try_new(
-        Arc::clone(&big),
-        Arc::clone(&small),
-        vec![(
-            Arc::new(Column::new_with_schema("big_col", &big.schema())?),
-            Arc::new(Column::new_with_schema("small_col", &small.schema())?),
-        )],
-        nl_join_filter(),
-        &JoinType::LeftAnti,
-        None,
-        PartitionMode::CollectLeft,
-        NullEquality::NullEqualsNothing,
-        true,
-    )?;
-
-    let optimized_join =
-        JoinSelection::new().optimize(Arc::new(join), &ConfigOptions::new())?;
-    let unswapped_join = optimized_join
-        .downcast_ref::<HashJoinExec>()
-        .expect("filtered null-aware anti join should not swap");
-
-    assert_eq!(*unswapped_join.join_type(), JoinType::LeftAnti);
-    assert_eq!(*unswapped_join.partition_mode(), PartitionMode::CollectLeft);
-    assert!(unswapped_join.null_aware);
-    assert!(unswapped_join.filter().is_some());
     assert_eq!(unswapped_join.left().schema().field(0).name(), "big_col");
     assert_eq!(unswapped_join.right().schema().field(0).name(), "small_col");
 
