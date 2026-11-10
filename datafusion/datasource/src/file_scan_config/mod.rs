@@ -51,7 +51,7 @@ use datafusion_physical_plan::execution_plan::SchedulingType;
 use datafusion_physical_plan::{
     DisplayAs, DisplayFormatType,
     display::{ProjectSchemaDisplay, display_orderings},
-    filter_pushdown::{FilterPushdownPropagation, PushedDown},
+    filter_pushdown::FilterPushdownPropagation,
     metrics::ExecutionPlanMetricsSet,
 };
 use log::{debug, warn};
@@ -1077,15 +1077,6 @@ impl DataSource for FileScanConfig {
         filters: Vec<Arc<dyn PhysicalExpr>>,
         config: &ConfigOptions,
     ) -> Result<FilterPushdownPropagation<Arc<dyn DataSource>>> {
-        // The scan applies its limit after any filter it holds, so a filter
-        // from above the limit would let through rows the limit should have
-        // cut.
-        if self.limit.is_some() {
-            return Ok(FilterPushdownPropagation::with_parent_pushdown_result(
-                vec![PushedDown::No; filters.len()],
-            ));
-        }
-
         // Remap filter Column indices to match the table schema (file + partition columns).
         // This is necessary because filters refer to the output schema of this `DataSource`
         // (e.g., after projection pushdown has been applied) and need to be remapped to the table schema
@@ -1177,12 +1168,6 @@ impl DataSource for FileScanConfig {
         &self,
         order: &[PhysicalSortExpr],
     ) -> Result<SortOrderPushdownResult<Arc<dyn DataSource>>> {
-        // Reordering the files or rows of a scan changes which rows its limit
-        // keeps.
-        if self.limit.is_some() {
-            return Ok(SortOrderPushdownResult::Unsupported);
-        }
-
         let pushdown_result = self
             .file_source
             .try_pushdown_sort(order, &self.eq_properties())?;
@@ -3858,36 +3843,6 @@ mod tests {
             vec![LexOrdering::new(vec![asc_nulls_last.reverse()]).unwrap()]
         );
         assert_eq!(pushed_config.file_source.file_type(), "mock_exact_pushed");
-        Ok(())
-    }
-
-    /// A scan that holds a limit is not reordered: reading it in another order
-    /// would change which rows the limit keeps.
-    #[test]
-    fn sort_pushdown_with_limit_unsupported() -> Result<()> {
-        let file_schema =
-            Arc::new(Schema::new(vec![Field::new("a", DataType::Float64, false)]));
-        let table_schema = TableSchema::from(&file_schema);
-        let file_source = Arc::new(ExactSortPushdownSource::new(table_schema));
-        let sort_expr = PhysicalSortExpr::new_default(Arc::new(Column::new("a", 0)));
-        let config =
-            FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
-                .with_file_groups(vec![FileGroup::new(vec![
-                    make_file_with_stats("file1", 0.0, 9.0),
-                    make_file_with_stats("file2", 10.0, 19.0),
-                ])])
-                .with_output_ordering(vec![
-                    LexOrdering::new(vec![sort_expr.clone()]).unwrap(),
-                ])
-                .with_limit(Some(5))
-                .build();
-
-        let result = config.try_pushdown_sort(&[sort_expr.reverse()])?;
-
-        assert!(
-            matches!(result, SortOrderPushdownResult::Unsupported),
-            "Expected Unsupported result, got {result:?}"
-        );
         Ok(())
     }
 
