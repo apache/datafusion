@@ -43,8 +43,7 @@ use substrait::proto::{
 /// It can be implemented by users to allow for custom handling of relations, expressions, etc.
 ///
 /// Relation and expression callbacks receive their lexical scope explicitly.
-/// Inputs are consumed sequentially by default. Custom consumers may override
-/// [`Self::consume_rel_inputs`] to choose a different scheduling policy.
+/// Inputs are consumed sequentially by default.
 ///
 /// Combined with the [crate::logical_plan::producer::SubstraitProducer] this allows for fully
 /// customizable Substrait serde.
@@ -184,26 +183,6 @@ pub trait SubstraitConsumer: Send + Sync + Sized {
         context: &SubstraitConsumerContext,
     ) -> datafusion::common::Result<LogicalPlan> {
         from_substrait_rel(self, rel, context).await
-    }
-
-    /// Consumes independent inputs of a JOIN or UNION, returning plans in input order.
-    ///
-    /// Implementations must return exactly one plan per input, in the same order.
-    /// On error, implementations must drop any unfinished input futures.
-    ///
-    /// The default consumes inputs sequentially, stopping at the first error.
-    /// Overrides can provide a different scheduling policy, but must account for
-    /// any additional mutable traversal state in the custom consumer.
-    async fn consume_rel_inputs(
-        &self,
-        rels: &[&Rel],
-        context: &SubstraitConsumerContext,
-    ) -> datafusion::common::Result<Vec<LogicalPlan>> {
-        let mut plans = Vec::with_capacity(rels.len());
-        for rel in rels {
-            plans.push(self.consume_rel(rel, context).await?);
-        }
-        Ok(plans)
     }
 
     async fn consume_read(
