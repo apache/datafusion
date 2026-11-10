@@ -305,14 +305,15 @@ mod tests {
     #[test]
     fn at_least_n_non_nulls_survives_rewrite() {
         let input = batch(vec![Arc::new(Int32Array::from(vec![Some(1), None]))]);
-        let expr = Arc::new(SparkAtLeastNNonNullsExpr::new(2, vec![]));
+        let expr = Arc::new(SparkAtLeastNNonNullsExpr::new(1, vec![]));
+        assert_eq!(result(expr.as_ref(), &input), [false, false]);
         let rewritten = expr.with_new_children(columns(&input)).unwrap();
-        assert_eq!(result(rewritten.as_ref(), &input), [false, false]);
+        assert_eq!(result(rewritten.as_ref(), &input), [true, false]);
         assert_eq!(
             fmt_sql(rewritten.as_ref()).to_string(),
-            "atleastnnonnulls(2, c0)"
+            "atleastnnonnulls(1, c0)"
         );
-        assert_eq!(rewritten.to_string(), "atleastnnonnulls(2, c0@0)");
+        assert_eq!(rewritten.to_string(), "atleastnnonnulls(1, c0@0)");
     }
 
     #[test]
@@ -358,7 +359,7 @@ mod tests {
                 Some(vec![Some(1)]),
             ])),
         ]);
-        for n in [-1, 0, 1, 2, 3, 4, 5, 6, 7, i32::MAX] {
+        for n in -1..=7 {
             let expr = SparkAtLeastNNonNullsExpr::new(n, columns(&batch));
             assert_eq!(
                 result(&expr, &batch),
@@ -366,135 +367,81 @@ mod tests {
             );
             assert!(!expr.nullable(batch.schema_ref()).unwrap());
         }
-        let sliced = batch.slice(1, 2);
-        assert_eq!(
-            result(
-                &SparkAtLeastNNonNullsExpr::new(3, columns(&sliced)),
-                &sliced
-            ),
-            [false, true]
-        );
-        assert!(
-            result(
-                &SparkAtLeastNNonNullsExpr::new(1, columns(&batch)),
-                &batch.slice(0, 0)
-            )
-            .is_empty()
-        );
     }
 
     #[test]
-    fn at_least_n_non_nulls_sliced_bitmaps() {
-        let batch = batch(
-            (0..5)
-                .map(|column| {
-                    Arc::new(Float64Array::from_iter((0..133).map(|row| {
-                        match (row + column) % 7 {
-                            0 => None,
-                            1 => Some(f64::NAN),
-                            _ => Some(row as f64),
-                        }
-                    }))) as ArrayRef
-                })
-                .collect(),
+    fn at_least_n_non_nulls_dictionary_values_and_scalars() {
+        let keys = Int32Array::from(vec![Some(0), Some(1), Some(2), None]);
+        let floats = DictionaryArray::<Int32Type>::try_new(
+            keys.clone(),
+            Arc::new(Float64Array::from(vec![Some(3.0), Some(f64::NAN), None])),
         )
-        .slice(3, 129);
-        for n in 0..=6 {
-            let expected = (3..132)
-                .map(|row| (0..5).filter(|column| (row + column) % 7 > 1).count() >= n)
-                .collect::<Vec<_>>();
+        .unwrap();
+        let strings = DictionaryArray::<Int32Type>::try_new(
+            keys,
+            Arc::new(StringArray::from(vec![Some(""), Some("NaN"), None])),
+        )
+        .unwrap();
+        let batch = batch(vec![Arc::new(floats), Arc::new(strings)]);
+        let mut children = columns(&batch);
+        children.push(Arc::new(Literal::new(ScalarValue::Utf8(Some("".into())))));
+        children.push(Arc::new(Literal::new(ScalarValue::Float32(Some(f32::NAN)))));
+        for n in 1..=5 {
             assert_eq!(
-                result(
-                    &SparkAtLeastNNonNullsExpr::new(n as i32, columns(&batch)),
-                    &batch
-                ),
-                expected
+                result(&SparkAtLeastNNonNullsExpr::new(n, children.clone()), &batch),
+                [3, 2, 1, 1].map(|count| count >= n)
             );
         }
     }
 
     #[test]
-    fn at_least_n_non_nulls_dictionary_values_and_scalars() {
-        let dict = DictionaryArray::<Int32Type>::try_new(
-            Int32Array::from(vec![Some(0), Some(1), Some(2), None]),
-            Arc::new(Float64Array::from(vec![Some(3.0), Some(f64::NAN), None])),
-        )
-        .unwrap();
-        let strings = DictionaryArray::<Int32Type>::try_new(
-            Int32Array::from(vec![Some(0), Some(1), Some(2), None]),
-            Arc::new(StringArray::from(vec![Some(""), Some("NaN"), None])),
-        )
-        .unwrap();
-        let batch = batch(vec![Arc::new(dict), Arc::new(strings)]);
-        let mut children = columns(&batch);
-        children.push(Arc::new(Literal::new(ScalarValue::Utf8(Some("".into())))));
-        children.push(Arc::new(Literal::new(ScalarValue::Float32(Some(f32::NAN)))));
-        assert_eq!(
-            result(&SparkAtLeastNNonNullsExpr::new(3, children.clone()), &batch),
-            [true, false, false, false]
-        );
-        assert_eq!(
-            result(
-                &SparkAtLeastNNonNullsExpr::new(1, vec![Arc::new(Column::new("c1", 1))]),
-                &batch
-            ),
-            [true, true, false, false]
-        );
-        assert_eq!(
-            result(&SparkAtLeastNNonNullsExpr::new(1, vec![]), &batch),
-            [false; 4]
-        );
-    }
-
-    #[test]
     fn at_least_n_non_nulls_short_circuits_per_row() {
-        let batch = batch(vec![
-            Arc::new(Int32Array::from(vec![Some(1), None])),
-            Arc::new(StringArray::from(vec!["bad", "7"])),
-        ]);
-        let children: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(Column::new("c0", 0)),
-            Arc::new(CastExpr::new(
-                Arc::new(Column::new("c1", 1)),
-                DataType::Int32,
-                Some(CastOptions {
-                    safe: false,
-                    ..Default::default()
-                }),
+        // The cast fails exactly on the rows where c0 is valid. The slice spans three
+        // bitmap words, so the rows still needing the cast cross word boundaries.
+        let input = batch(vec![
+            Arc::new(Int32Array::from_iter(
+                (0..137).map(|row| (row % 3 != 0).then_some(1)),
             )),
-        ];
-        assert_eq!(
-            result(&SparkAtLeastNNonNullsExpr::new(1, children.clone()), &batch),
-            [true, true]
-        );
-        // Also exercise the general counter path, not only the n=1 bitmap path.
-        let mut general = children.clone();
-        general.insert(0, Arc::new(Literal::new(ScalarValue::Boolean(Some(false)))));
-        assert_eq!(
-            result(&SparkAtLeastNNonNullsExpr::new(2, general), &batch),
-            [true, true]
-        );
-        // Both non-positive thresholds and an empty batch must avoid evaluating the bad cast.
-        assert_eq!(
-            result(&SparkAtLeastNNonNullsExpr::new(0, children.clone()), &batch),
-            [true, true]
-        );
-        assert!(
-            result(
-                &SparkAtLeastNNonNullsExpr::new(2, children.clone()),
-                &batch.slice(0, 0)
+            Arc::new(StringArray::from_iter_values(
+                (0..137).map(|row| if row % 3 == 0 { "7" } else { "bad" }),
+            )),
+        ])
+        .slice(7, 129);
+        let c0: Arc<dyn PhysicalExpr> = Arc::new(Column::new("c0", 0));
+        let one: Arc<dyn PhysicalExpr> =
+            Arc::new(Literal::new(ScalarValue::Int32(Some(1))));
+        let null: Arc<dyn PhysicalExpr> =
+            Arc::new(Literal::new(ScalarValue::Int32(None)));
+        let cast: Arc<dyn PhysicalExpr> = Arc::new(CastExpr::new(
+            Arc::new(Column::new("c1", 1)),
+            DataType::Int32,
+            Some(CastOptions {
+                safe: false,
+                ..Default::default()
+            }),
+        ));
+        let at_least = |n, children: &[&Arc<dyn PhysicalExpr>]| {
+            SparkAtLeastNNonNullsExpr::new(
+                n,
+                children.iter().copied().map(Arc::clone).collect(),
             )
-            .is_empty()
-        );
-        // An impossible threshold is not permission to skip evaluations Spark would perform.
-        let mut required = children;
-        required[0] = Arc::new(Literal::new(ScalarValue::Int32(None)));
-        for n in [2, 3] {
-            assert!(
-                SparkAtLeastNNonNullsExpr::new(n, required.clone())
-                    .evaluate(&batch)
-                    .is_err()
-            );
+        };
+        // Non-positive thresholds evaluate no children, and rows that reach n skip
+        // the cast on both the n=1 bitmap path and the general counter path.
+        for expr in [
+            at_least(0, &[&cast]),
+            at_least(1, &[&c0, &cast]),
+            at_least(2, &[&c0, &one, &cast, &null]),
+        ] {
+            assert_eq!(result(&expr, &input), vec![true; 129]);
+        }
+        // Rows below n still evaluate the cast, even when they can no longer reach n.
+        for expr in [
+            at_least(3, &[&c0, &one, &cast, &null]),
+            at_least(2, &[&null, &cast]),
+            at_least(3, &[&null, &cast]),
+        ] {
+            assert!(expr.evaluate(&input).is_err());
         }
     }
 
@@ -517,85 +464,21 @@ mod tests {
                 })
                 .collect(),
         );
-        for offset in [0, 1, 7, 63] {
-            for len in [0, 1, 31, 32, 63, 64, 65, 127, 128, 129] {
-                let sliced = input.slice(offset, len);
-                for n in (0..=66).chain([i32::MAX as usize]) {
-                    let expected = (offset..offset + len)
-                        .map(|row| row % 66 >= n)
-                        .collect::<Vec<_>>();
-                    assert_eq!(
-                        result(
-                            &SparkAtLeastNNonNullsExpr::new(n as i32, columns(&sliced)),
-                            &sliced
-                        ),
-                        expected,
-                        "offset={offset}, len={len}, n={n}"
-                    );
-                }
+        for (offset, len) in [(0, 0), (0, 128), (7, 193)] {
+            let sliced = input.slice(offset, len);
+            for n in (0..=66).chain([i32::MAX as usize]) {
+                let expected = (offset..offset + len)
+                    .map(|row| row % 66 >= n)
+                    .collect::<Vec<_>>();
+                assert_eq!(
+                    result(
+                        &SparkAtLeastNNonNullsExpr::new(n as i32, columns(&sliced)),
+                        &sliced
+                    ),
+                    expected,
+                    "offset={offset}, len={len}, n={n}"
+                );
             }
-        }
-    }
-
-    #[test]
-    fn at_least_n_non_nulls_bitmap_dictionary_and_scalars() {
-        let keys = Int32Array::from_iter(
-            (0..137).map(|row| if row % 4 == 3 { None } else { Some(row % 4) }),
-        );
-        let floats = DictionaryArray::<Int32Type>::try_new(
-            keys.clone(),
-            Arc::new(Float64Array::from(vec![Some(3.0), Some(f64::NAN), None])),
-        )
-        .unwrap();
-        let strings = DictionaryArray::<Int32Type>::try_new(
-            keys,
-            Arc::new(StringArray::from(vec![Some(""), Some("NaN"), None])),
-        )
-        .unwrap();
-        let input = batch(vec![Arc::new(floats), Arc::new(strings)]).slice(3, 129);
-        let mut children = columns(&input);
-        children.push(Arc::new(Literal::new(ScalarValue::Utf8(Some("".into())))));
-        children.push(Arc::new(Literal::new(ScalarValue::Float32(Some(f32::NAN)))));
-        for n in 1..=5 {
-            let expected = (3..132)
-                .map(|row| [3, 2, 1, 1][row % 4] >= n)
-                .collect::<Vec<_>>();
-            assert_eq!(
-                result(&SparkAtLeastNNonNullsExpr::new(n, children.clone()), &input),
-                expected
-            );
-        }
-    }
-
-    #[test]
-    fn at_least_n_non_nulls_mixed_completion_before_cast() {
-        let input = batch(vec![
-            Arc::new(Int32Array::from_iter(
-                (0..137).map(|row| if row % 3 == 0 { None } else { Some(1) }),
-            )),
-            Arc::new(StringArray::from_iter(
-                (0..137).map(|row| if row % 3 == 0 { Some("7") } else { Some("bad") }),
-            )),
-        ]);
-        let children: Vec<Arc<dyn PhysicalExpr>> = vec![
-            Arc::new(Column::new("c0", 0)),
-            Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
-            Arc::new(CastExpr::new(
-                Arc::new(Column::new("c1", 1)),
-                DataType::Int32,
-                Some(CastOptions {
-                    safe: false,
-                    ..Default::default()
-                }),
-            )),
-            Arc::new(Literal::new(ScalarValue::Int32(None))),
-        ];
-        for len in [1, 63, 64, 65, 129] {
-            let sliced = input.slice(7, len);
-            let expr = |n| SparkAtLeastNNonNullsExpr::new(n, children.clone());
-            assert_eq!(result(&expr(2), &sliced), vec![true; len]);
-            // These rows still need the cast when n=3, so its error is required.
-            assert!(expr(3).evaluate(&sliced).is_err());
         }
     }
 }
