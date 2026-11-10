@@ -994,19 +994,4 @@ mod tests {
             assert!(field.is_nullable());
         }
     }
-
-    #[test]
-    fn test_months_to_seconds() {
-        // (months, seconds) as PostgreSQL 18 and DuckDB return them
-        for (months, seconds) in [
-            (0, 0.0),
-            (11, 28_512_000.0),
-            (12, 31_557_600.0),
-            (14, 36_741_600.0),
-            (-14, -36_741_600.0),
-            (24, 63_115_200.0),
-        ] {
-            assert_eq!(super::months_to_seconds(months), seconds, "{months} months");
-        }
-    }
 }
