@@ -96,7 +96,7 @@ impl Dialect for DataFusion {
         grammar::parse_optional_delete_using(p)
     }
 
-    fn eat_limit_all<'a>(p: &mut Parser<'a, Self>) -> bool {
+    fn eat_limit_all(p: &mut Parser<'_, Self>) -> bool {
         p.eat_keyword("ALL")
     }
 
@@ -192,7 +192,7 @@ impl Dialect for DataFusion {
         Ok(())
     }
 
-    fn at_query_values<'a>(p: &Parser<'a, Self>, n: usize) -> bool {
+    fn at_query_values(p: &Parser<'_, Self>, n: usize) -> bool {
         mysql::at_row_values(p, n) || grammar::at_query_values(p, n)
     }
 
@@ -276,8 +276,8 @@ impl Dialect for DataFusion {
         mysql::parse_query_values(p)
     }
 
-    fn parse_function_arg_null_treatment<'a>(
-        p: &mut Parser<'a, Self>,
+    fn parse_function_arg_null_treatment(
+        p: &mut Parser<'_, Self>,
     ) -> PResult<Option<NullTreatment>> {
         Ok(grammar::parse_null_treatment(p))
     }
@@ -302,7 +302,7 @@ impl Dialect for DataFusion {
         duckdb::parse_select(p)
     }
 
-    fn at_from_first<'a>(p: &Parser<'a, Self>, n: usize) -> bool {
+    fn at_from_first(p: &Parser<'_, Self>, n: usize) -> bool {
         p.peek_nth(n).is_word("FROM")
     }
 
@@ -345,7 +345,7 @@ impl Dialect for DataFusion {
         postgres::string_literal(token, false)
     }
 
-    fn parse_set_quantifier<'a>(p: &mut Parser<'a, Self>) -> (SetQuantifier, bool) {
+    fn parse_set_quantifier(p: &mut Parser<'_, Self>) -> (SetQuantifier, bool) {
         duckdb::parse_set_quantifier(p)
     }
 
@@ -408,7 +408,7 @@ impl Dialect for DataFusion {
         snowflake::parse_qualify(p)
     }
 
-    fn eat_group_by_all<'a>(p: &mut Parser<'a, Self>) -> bool {
+    fn eat_group_by_all(p: &mut Parser<'_, Self>) -> bool {
         p.eat_keyword("ALL")
     }
 
@@ -428,11 +428,11 @@ impl Dialect for DataFusion {
         grammar::parse_explain_option_list(p)
     }
 
-    fn parse_add_column_if_not_exists<'a>(p: &mut Parser<'a, Self>) -> PResult<bool> {
+    fn parse_add_column_if_not_exists(p: &mut Parser<'_, Self>) -> PResult<bool> {
         grammar::parse_if_not_exists(p)
     }
 
-    fn eat_drop_temporary<'a>(p: &mut Parser<'a, Self>) -> bool {
+    fn eat_drop_temporary(p: &mut Parser<'_, Self>) -> bool {
         p.eat_keyword("TEMPORARY")
     }
 

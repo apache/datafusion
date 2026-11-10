@@ -710,9 +710,9 @@ fn expected<T, D: Dialect>(p: &Parser<'_, D>, what: &str) -> Result<T, DataFusio
     Err(DataFusionError::from(error).with_diagnostic(diagnostic))
 }
 
-fn parse_statements_as<'a, D: Dialect<Ext = Builtin>>(
-    sql: &'a str,
-) -> Result<VecDeque<Statement<'a>>, DataFusionError> {
+fn parse_statements_as<D: Dialect<Ext = Builtin>>(
+    sql: &str,
+) -> Result<VecDeque<Statement<'_>>, DataFusionError> {
     let mut p = Parser::<D>::new(sql)?;
     let mut statements = VecDeque::new();
     let mut expecting_statement_delimiter = false;
@@ -733,10 +733,10 @@ fn parse_statements_as<'a, D: Dialect<Ext = Builtin>>(
     Ok(statements)
 }
 
-fn parse_expr_as<'a, D: Dialect<Ext = Builtin>>(
-    sql: &'a str,
+fn parse_expr_as<D: Dialect<Ext = Builtin>>(
+    sql: &str,
     whole: bool,
-) -> Result<ExprWithAlias<'a>, DataFusionError> {
+) -> Result<ExprWithAlias<'_>, DataFusionError> {
     let mut p = Parser::<D>::new(sql)?;
     if p.at_keyword("CREATE") || p.at_keyword("COPY") || p.at_keyword("EXPLAIN") {
         return parser_err!("Unsupported command in expression")?;
@@ -1095,7 +1095,6 @@ fn parse_order_by_exprs<'a, D: Dialect<Ext = Builtin>>(
     Ok(values)
 }
 
-#[expect(clippy::type_complexity)]
 fn parse_columns<'a, D: Dialect<Ext = Builtin>>(
     p: &mut Parser<'a, D>,
 ) -> Result<(Vec<ColumnDef<'a>>, Vec<TableConstraint<'a>>), DataFusionError> {

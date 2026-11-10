@@ -223,7 +223,9 @@ impl IdentNormalizer {
 
     pub fn normalize(&self, ident: Ident<'_>) -> String {
         if self.normalize {
-            crate::utils::normalize_ident(ident)
+            crate::utils::normalize_ident(&ident)
+        } else if ident.quote.is_none() {
+            ident.text.into_owned()
         } else {
             ident.value().into_owned()
         }
@@ -906,12 +908,11 @@ impl<'a, S: ContextProvider> SqlToRel<'a, S> {
                 Ok(DataType::Interval(IntervalUnit::MonthDayNano))
             }
             ("STRUCT", DataTypeSuffix::None) => {
-                let fields = match sql_type.angle.as_deref() {
-                    Some(
-                        AngleArguments::Fields(fields)
-                        | AngleArguments::ParenFields(fields),
-                    ) => fields,
-                    _ => return unsupported(),
+                let Some(
+                    AngleArguments::Fields(fields) | AngleArguments::ParenFields(fields),
+                ) = sql_type.angle.as_deref()
+                else {
+                    return unsupported();
                 };
                 let fields = fields
                     .iter()

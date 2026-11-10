@@ -187,7 +187,12 @@ struct SqlLambda<'s> {
 }
 
 impl<'s> SqlLambda<'s> {
-    /// Returns the lambda if `arg` is an unnamed lambda argument.
+    /// Returns the lambda if `arg` is an unnamed lambda argument, and hands
+    /// the argument back unchanged otherwise.
+    #[expect(
+        clippy::result_large_err,
+        reason = "the argument is handed back, not built"
+    )]
     fn from_arg(arg: FunctionArg<'s>) -> std::result::Result<Self, FunctionArg<'s>> {
         let FunctionArg::Expr(expr) = arg else {
             return Err(arg);
@@ -343,7 +348,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // (e.g. "foo.bar") for function names yet
             object_name.to_string()
         } else {
-            crate::utils::normalize_ident(object_name.parts[0].clone())
+            crate::utils::normalize_ident(&object_name.parts[0])
         };
 
         // handle make_map and map functions
@@ -1015,7 +1020,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         let params = lambda
             .params
             .iter()
-            .map(|p| crate::utils::normalize_ident(p.clone()))
+            .map(crate::utils::normalize_ident)
             .collect();
 
         let lambda_parameters = std::iter::zip(lambda_params, &params)
@@ -1205,15 +1210,15 @@ fn all_unique(params: &[Ident<'_>]) -> bool {
     match params.len() {
         0 | 1 => true,
         2 => {
-            crate::utils::normalize_ident(params[0].clone())
-                != crate::utils::normalize_ident(params[1].clone())
+            crate::utils::normalize_ident(&params[0])
+                != crate::utils::normalize_ident(&params[1])
         }
         _ => {
             let mut set = HashSet::with_capacity(params.len());
 
             params
                 .iter()
-                .map(|p| crate::utils::normalize_ident(p.clone()))
+                .map(crate::utils::normalize_ident)
                 .all(|p| set.insert(p))
         }
     }

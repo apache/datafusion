@@ -68,7 +68,7 @@ use sqlparser::dialect::sqlite::{SqliteInsert, SqliteStatement};
 type DropRoutine<'a> = sqlparser::ast::DropRoutine<'a, crate::ast::Builtin>;
 
 fn ident_to_string(ident: &Ident<'_>) -> String {
-    normalize_ident(ident.to_owned())
+    normalize_ident(ident)
 }
 
 fn object_name_to_string(object_name: &ObjectName<'_>) -> String {
@@ -2298,7 +2298,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan_err!("Insert OUTPUT clause not supported")?;
         }
         let source = insert_source_to_query(Some(source))?;
-        self.insert_to_plan(table, columns, source, modifiers.overwrite, replace_into)
+        self.insert_to_plan(table, columns, *source, modifiers.overwrite, replace_into)
     }
 
     /// `INSERT` with PostgreSQL's clauses
@@ -2362,7 +2362,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan_err!("Insert-returning clause not supported")?;
         }
         let source = insert_source_to_query(source)?;
-        self.insert_to_plan(table, columns, source, false, replace_into)
+        self.insert_to_plan(table, columns, *source, false, replace_into)
     }
 
     /// `INSERT [OVERWRITE]` with Spark's clauses
@@ -2384,14 +2384,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             plan_err!("After-columns clause not supported")?;
         }
         let source = insert_source_to_query(Some(source))?;
-        self.insert_to_plan(table, columns, source, overwrite, false)
+        self.insert_to_plan(table, columns, *source, overwrite, false)
     }
 
     fn insert_to_plan(
         &self,
         table_name: ObjectName<'_>,
         columns: Vec<Ident<'_>>,
-        source: Box<Query<'_>>,
+        source: Query<'_>,
         overwrite: bool,
         replace_into: bool,
     ) -> Result<LogicalPlan> {
@@ -2479,7 +2479,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context.set_table_schema(Some(DFSchemaRef::new(
             DFSchema::from_unqualified_fields(fields.clone(), Metadata::new())?,
         )));
-        let source = self.query_to_plan(*source, &mut planner_context)?;
+        let source = self.query_to_plan(source, &mut planner_context)?;
         if fields.len() != source.schema().fields().len() {
             plan_err!("Column count doesn't match insert query!")?;
         }

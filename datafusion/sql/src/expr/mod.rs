@@ -64,7 +64,7 @@ fn null_value_span(
     expr: &SQLExpr<'_>,
     to_span: &dyn Fn(SQLSpan) -> Option<Span>,
 ) -> Option<Option<Span>> {
-    if let ExprKind::Literal(SQLLiteral::Null) = expr.kind {
+    if expr.kind == ExprKind::Literal(SQLLiteral::Null) {
         Some(to_span(expr.span))
     } else {
         None
@@ -253,7 +253,11 @@ enum Access<'s> {
 type BinaryParts<'s> = (Box<SQLExpr<'s>>, BinaryOp<'static>, Box<SQLExpr<'s>>);
 
 /// Splits a binary operation, including those that dialects write as their
-/// own nodes, into its operands and operator.
+/// own nodes, into its operands and operator. Anything else is handed back.
+#[expect(
+    clippy::result_large_err,
+    reason = "the expression is handed back, not built"
+)]
 fn into_binary_parts(
     expr: SQLExpr<'_>,
 ) -> std::result::Result<BinaryParts<'_>, SQLExpr<'_>> {
@@ -716,7 +720,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 self.sql_position_to_expr(needle, haystack, schema, planner_context)
             }
             SpecialExpr::AtTimeZone { expr, zone } => {
-                self.sql_at_time_zone_to_expr(expr, zone, schema, planner_context)
+                self.sql_at_time_zone_to_expr(expr, &zone, schema, planner_context)
             }
 
             other => not_impl_err!("Unsupported ast node in sqltorel: {other:?}"),
@@ -1088,7 +1092,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn sql_at_time_zone_to_expr(
         &self,
         timestamp: SQLExpr<'_>,
-        time_zone: SQLExpr<'_>,
+        time_zone: &SQLExpr<'_>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -1621,9 +1625,19 @@ fn json_path_to_string(path: &[PathElement<'_>]) -> String {
     let mut rendered = String::new();
     for element in path {
         match element {
-            PathElement::Colon(key) => rendered.push_str(&format!(":{key}")),
-            PathElement::Dot(key) => rendered.push_str(&format!(".{key}")),
-            PathElement::Index(index) => rendered.push_str(&format!("[{index}]")),
+            PathElement::Colon(key) => {
+                rendered.push(':');
+                rendered.push_str(&key.to_string());
+            }
+            PathElement::Dot(key) => {
+                rendered.push('.');
+                rendered.push_str(&key.to_string());
+            }
+            PathElement::Index(index) => {
+                rendered.push('[');
+                rendered.push_str(&index.to_string());
+                rendered.push(']');
+            }
         }
     }
     rendered
