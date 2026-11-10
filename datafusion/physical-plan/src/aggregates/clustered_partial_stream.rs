@@ -606,10 +606,10 @@ mod tests {
     }
 
     /// Like [`completed_groups_release_accumulator_scratch`], with the native
-    /// `FIRST_VALUE(v ORDER BY ..)` accumulators. With two ORDER BY columns it
-    /// keeps a bitmap of the groups each batch updated, which grows to one bit
-    /// per group (16 KB for 131072 groups), so it must release that bitmap too.
-    /// With one, it keeps the rows each batch updated.
+    /// `FIRST_VALUE(v ORDER BY v, k)` accumulator. It keeps a bitmap of the
+    /// groups each batch updated, which grows to one bit per group (16 KB for
+    /// 131072 groups), so it must release that bitmap too. The second ORDER BY
+    /// column keeps it off the single primitive key accumulator.
     ///
     /// Skipped under `force_hash_collisions`, where the 131,072 colliding group
     /// keys make the aggregate quadratic and the test take many minutes.
@@ -619,24 +619,20 @@ mod tests {
         use crate::aggregates::clustered_test_util::aggregate_expr_over_sorted_input;
         use datafusion_functions_aggregate::first_last::first_value_udaf;
 
-        for order_by in [&["v"][..], &["v", "k"]] {
-            let plan = aggregate_expr_over_sorted_input(
-                AggregateMode::Partial,
-                &["k"],
-                vec![vec![(0..131072).collect()]],
-                first_value_udaf(),
-                |builder, schema| {
-                    let order_by = order_by
-                        .iter()
-                        .map(|name| Ok(PhysicalSortExpr::new_default(col(name, schema)?)))
-                        .collect::<Result<Vec<_>>>()?;
-                    Ok(builder.order_by(order_by))
-                },
-            )?;
-            assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
-            assert_output_unchanged_under_limit(&plan, 16 * 1024).await?;
-        }
-        Ok(())
+        let plan = aggregate_expr_over_sorted_input(
+            AggregateMode::Partial,
+            &["k"],
+            vec![vec![(0..131072).collect()]],
+            first_value_udaf(),
+            |builder, schema| {
+                Ok(builder.order_by(vec![
+                    PhysicalSortExpr::new_default(col("v", schema)?),
+                    PhysicalSortExpr::new_default(col("k", schema)?),
+                ]))
+            },
+        )?;
+        assert_eq!(plan.group_clustering_mode(), &GroupClusteringMode::Full);
+        assert_output_unchanged_under_limit(&plan, 16 * 1024).await
     }
 
     /// With partial group clustering, the stream emits every state under
