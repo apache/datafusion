@@ -796,11 +796,11 @@ query error DataFusion error: Invalid or Unsupported Configuration: Config value
 COPY source_table  to 'test_files/scratch/copy/table.json' STORED AS JSON OPTIONS ('format.row_group_size' 55);
 
 # Incomplete statement
-query error DataFusion error: SQL error: ParserError\("Expected: \), found: EOF"\)
+query error DataFusion error: SQL error: expected \), found end of input at Line: 1, Column: 47
 COPY (select col2, sum(col1) from source_table
 
 # Copy from table with non literal
-query error DataFusion error: SQL error: ParserError\("Expected: end of statement or ;, found: \( at Line: 1, Column: 44"\)
+query error DataFusion error: SQL error: expected end of statement or ;, found \( at Line: 1, Column: 44
 COPY source_table  to '/tmp/table.parquet' (row_group_size 55 + 102);
 
 # Copy using execution.keep_partition_by_columns with an invalid value

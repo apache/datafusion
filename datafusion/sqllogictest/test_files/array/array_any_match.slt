@@ -7,9 +7,6 @@
 #############
 
 statement ok
-set datafusion.sql_parser.dialect = databricks;
-
-statement ok
 CREATE TABLE t (list array<int>, number int)
 AS VALUES
 ([1, 50], 10),
@@ -122,5 +119,3 @@ true true true
 statement ok
 drop table t;
 
-statement ok
-set datafusion.sql_parser.dialect = generic;

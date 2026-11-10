@@ -296,7 +296,7 @@ query error DataFusion error: Error during planning: unnest\(\) requires exactly
 select unnest();
 
 ## Unnest empty expression in from clause
-query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 22"\)
+query error DataFusion error: Error during planning: UNNEST must have at least one argument
 select * from unnest();
 
 
@@ -410,10 +410,10 @@ select a from unnest([1,2]) as t(a);
 
 
 ## Unnest in from clause with offset is not supported
-query error DataFusion error: This feature is not implemented: UNNEST table factor with offset is not supported yet
+query error DataFusion error: SQL error: expected end of statement, found with at Line: 1, Column: 29
 select * from unnest([1,2]) with offset;
 
-query error DataFusion error: This feature is not implemented: UNNEST table factor with offset is not supported yet
+query error DataFusion error: SQL error: expected end of statement, found with at Line: 1, Column: 29
 select * from unnest([1,2]) with offset offset_alias;
 
 

@@ -647,6 +647,7 @@ impl<'a> DFParser<'a> {
         &mut self,
     ) -> Result<VecDeque<Statement<'a>>, DataFusionError> {
         dispatch!(self.dialect, parse_statements_as(self.sql))
+            .map_err(|e| locate(e, self.sql))
     }
 
     /// Parse the SQL as exactly one statement.
@@ -662,6 +663,7 @@ impl<'a> DFParser<'a> {
     /// Parse the SQL as an expression, optionally followed by `AS alias`.
     pub fn parse_expr(&mut self) -> Result<ExprWithAlias<'a>, DataFusionError> {
         dispatch!(self.dialect, parse_expr_as(self.sql, false))
+            .map_err(|e| locate(e, self.sql))
     }
 
     /// Parses the entire SQL string into an expression.
@@ -670,11 +672,33 @@ impl<'a> DFParser<'a> {
     /// contains any trailing, unparsed tokens.
     pub fn parse_into_expr(&mut self) -> Result<ExprWithAlias<'a>, DataFusionError> {
         dispatch!(self.dialect, parse_expr_as(self.sql, true))
+            .map_err(|e| locate(e, self.sql))
     }
 
     /// The options this parser was built with.
     pub fn options(&self) -> &SqlParserOptions {
         &self.options
+    }
+}
+
+/// Adds the line and column of a parse error in `sql` to its message.
+fn locate(error: DataFusionError, sql: &str) -> DataFusionError {
+    match error {
+        DataFusionError::SQL(mut parse, backtrace) => {
+            if parse.span != sqlparser::ast::Span::default() {
+                let location = parse.span.start_location(sql);
+                parse.message = format!(
+                    "{} at Line: {}, Column: {}",
+                    parse.message, location.line, location.column
+                );
+                parse.span = sqlparser::ast::Span::default();
+            }
+            DataFusionError::SQL(parse, backtrace)
+        }
+        DataFusionError::Diagnostic(diagnostic, inner) => {
+            DataFusionError::Diagnostic(diagnostic, Box::new(locate(*inner, sql)))
+        }
+        other => other,
     }
 }
 

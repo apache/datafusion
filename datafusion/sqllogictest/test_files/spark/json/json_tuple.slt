@@ -58,7 +58,7 @@ NULL
 
 # Scalar: invalid JSON (backslash)
 query ?
-SELECT json_tuple('\'::STRING, 'f1'::STRING);
+SELECT json_tuple('\\'::STRING, 'f1'::STRING);
 ----
 NULL
 

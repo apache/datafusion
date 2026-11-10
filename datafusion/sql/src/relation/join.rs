@@ -74,11 +74,14 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             }
             JoinKind::AsOf => {
                 return match constraint {
-                    JoinConstraint::AsOf { condition, on } => self.parse_asof_join(
+                    JoinConstraint::AsOf {
+                        condition,
+                        constraint,
+                    } => self.parse_asof_join(
                         left,
                         right,
                         condition,
-                        on.map_or(JoinConstraint::None, JoinConstraint::On),
+                        *constraint,
                         planner_context,
                     ),
                     other => not_impl_err!(

@@ -7,9 +7,6 @@
 #############
 
 statement ok
-set datafusion.sql_parser.dialect = databricks;
-
-statement ok
 CREATE TABLE t (text varchar, list array<int>, number int)
 AS VALUES
 ('a', [1, 50], 10),
@@ -34,12 +31,12 @@ SELECT array_transform([1,2,3,4,5], v -> v*2);
 [2, 4, 6, 8, 10]
 
 query ?
-SELECT array_transform([1,2,3,4,5], v -> repeat("a", v));
+SELECT array_transform([1,2,3,4,5], v -> repeat('a', v));
 ----
 [a, aa, aaa, aaaa, aaaaa]
 
 query ?
-SELECT array_transform([1,2,3,4,5], v -> list_repeat("a", v));
+SELECT array_transform([1,2,3,4,5], v -> list_repeat('a', v));
 ----
 [[a], [a, a], [a, a, a], [a, a, a, a], [a, a, a, a, a]]
 
@@ -404,16 +401,16 @@ SELECT array_transform([1, 2], (e, i, j) -> i);
 query error DataFusion error: Error during planning: lambda parameters names must be unique, got \(v, v\)
 SELECT array_transform([1], (v, v) -> v*2);
 
-query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(LambdaFunctionParameter \{ name: Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,12\)\.\.Location\(1,13\)\) \}, data_type: None \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,17\)\.\.Location\(1,18\)\) \}\), syntax: Arrow \}\)
+query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda
 SELECT abs(v -> v);
 
-query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(LambdaFunctionParameter \{ name: Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,8\)\.\.Location\(1,9\)\) \}, data_type: None \}\), body: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,13\)\.\.Location\(1,14\)\) \}\), syntax: Arrow \}\)
+query error DataFusion error: Schema error: No field named v\.
 SELECT v -> v;
 
-query error DataFusion error: This feature is not implemented: Unsupported ast node in sqltorel: Lambda\(LambdaFunction \{ params: One\(LambdaFunctionParameter \{ name: Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,34\)\.\.Location\(1,35\)\) \}, data_type: None \}\), body: BinaryOp \{ left: Identifier\(Ident \{ value: "v", quote_style: None, span: Span\(Location\(1,39\)\.\.Location\(1,40\)\) \}\), op: Plus, right: Value\(ValueWithSpan \{ value: Number\("1", false\), span: Span\(Location\(1,41\)\.\.Location\(1,42\)\) \}\) \}, syntax: Arrow \}\)
+query error DataFusion error: This feature is not implemented: Operator \-> is not yet supported
 SELECT array_transform([1], v -> v -> v+1);
 
-query error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 30"\)
+query error DataFusion error: SQL error: expected expression, found \) at Line: 1, Column: 30
 SELECT array_transform([1], () -> 1);
 
 statement ok
@@ -425,5 +422,3 @@ drop table with_null_list;
 statement ok
 drop table fully_null_list;
 
-statement ok
-set datafusion.sql_parser.dialect = generic;

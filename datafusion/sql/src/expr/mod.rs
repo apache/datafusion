@@ -714,27 +714,6 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 self.sql_at_time_zone_to_expr(expr, zone, schema, planner_context)
             }
 
-            // `x -> body` outside the arguments of a higher-order function is
-            // PostgreSQL's `->` operator, which DuckDB and Spark also use for
-            // lambdas.
-            SpecialExpr::Lambda {
-                mut params,
-                parenthesized: false,
-                body,
-            } if params.len() == 1 => {
-                let param = params.pop().unwrap();
-                let left = SQLExpr::new(ExprKind::Ident(param), span);
-                let arrow = SQLExpr::new(
-                    ExprKind::Binary {
-                        left: Box::new(left),
-                        op: BinaryOp::Named("->".into()),
-                        right: Box::new(body),
-                    },
-                    span,
-                );
-                self.sql_expr_to_logical_expr(arrow, schema, planner_context)
-            }
-
             other => not_impl_err!("Unsupported ast node in sqltorel: {other:?}"),
         }
     }
@@ -1078,6 +1057,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         match values.first().map(|value| &value.kind) {
             Some(ExprKind::Ident(_))
             | Some(ExprKind::Literal(_))
+            | Some(ExprKind::Placeholder(_))
             | Some(ExprKind::Compound(_)) => self.parse_struct(
                 schema,
                 planner_context,

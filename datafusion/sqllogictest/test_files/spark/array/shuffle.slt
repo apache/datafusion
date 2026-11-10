@@ -4,25 +4,25 @@
 
 # Test shuffle function with simple arrays
 query ?
-SELECT shuffle([1, 2, 3, 4, 5, NULL], 1);
+SELECT shuffle(array(1, 2, 3, 4, 5, NULL), 1);
 ----
 [1, 4, NULL, 2, 5, 3]
 
 # Test shuffle function with string arrays
 query ?
-SELECT shuffle(['a', 'b', 'c', 'd', 'e', 'f'], 1);
+SELECT shuffle(array('a', 'b', 'c', 'd', 'e', 'f'), 1);
 ----
 [a, d, f, b, e, c]
 
 # Test shuffle function with empty array
 query ?
-SELECT shuffle([]);
+SELECT shuffle(array());
 ----
 []
 
 # Test shuffle function with single element
 query ?
-SELECT shuffle([42]);
+SELECT shuffle(array(42));
 ----
 [42]
 
@@ -40,18 +40,18 @@ NULL NULL
 
 # Test shuffle function with fixed size list arrays
 query ?
-SELECT shuffle(arrow_cast([1, 2, NULL, 3, 4, 5], 'FixedSizeList(6, Int64)'), 1);
+SELECT shuffle(arrow_cast(array(1, 2, NULL, 3, 4, 5), 'FixedSizeList(6, Int64)'), 1);
 ----
 [1, 3, 5, 2, 4, NULL]
 
 # Test shuffle on table data with different list types
 statement ok
 CREATE TABLE test_shuffle_list_types AS VALUES
-  ([1, 2, 3, 4]),
-  ([5, 6, 7, 8, 9]),
-  ([10]),
+  (array(1, 2, 3, 4)),
+  (array(5, 6, 7, 8, 9)),
+  (array(10)),
   (NULL),
-  ([]);
+  (array());
 
 # Test shuffle with large list from table
 query ?
@@ -66,9 +66,9 @@ NULL
 # Test fixed size list table
 statement ok
 CREATE TABLE test_shuffle_fixed_size AS VALUES
-  (arrow_cast([1, 2, 3], 'FixedSizeList(3, Int64)')),
-  (arrow_cast([4, 5, 6], 'FixedSizeList(3, Int64)')),
-  (arrow_cast([NULL, 8, 9], 'FixedSizeList(3, Int64)')),
+  (arrow_cast(array(1, 2, 3), 'FixedSizeList(3, Int64)')),
+  (arrow_cast(array(4, 5, 6), 'FixedSizeList(3, Int64)')),
+  (arrow_cast(array(NULL, 8, 9), 'FixedSizeList(3, Int64)')),
   (NULL);
 
 # Test shuffle with fixed size list from table
@@ -81,32 +81,32 @@ SELECT shuffle(column1, 1) FROM test_shuffle_fixed_size;
 NULL
 
 query ?
-SELECT shuffle(['2001-09-28T01:00:00'::timestamp, '2001-08-28T01:00:00'::timestamp, '2001-07-28T01:00:00'::timestamp, '2001-06-28T01:00:00'::timestamp, '2001-05-28T01:00:00'::timestamp], 1);
+SELECT shuffle(array('2001-09-28T01:00:00'::timestamp, '2001-08-28T01:00:00'::timestamp, '2001-07-28T01:00:00'::timestamp, '2001-06-28T01:00:00'::timestamp, '2001-05-28T01:00:00'::timestamp), 1);
 ----
 [2001-09-28T01:00:00, 2001-06-28T01:00:00, 2001-07-28T01:00:00, 2001-08-28T01:00:00, 2001-05-28T01:00:00]
 
 query ?
-SELECT shuffle(shuffle([1, 20, NULL, 3, 100, NULL, 98, 99], 1), 1);
+SELECT shuffle(shuffle(array(1, 20, NULL, 3, 100, NULL, 98, 99), 1), 1);
 ----
 [1, 99, NULL, 98, 100, NULL, 3, 20]
 
 query ?
-SELECT shuffle([' ', NULL, 'abc'], 1);
+SELECT shuffle(array(' ', NULL, 'abc'), 1);
 ----
 [ , NULL, abc]
 
 query ?
-SELECT shuffle([1, 2, 3, 4], CAST('2' AS INT));
+SELECT shuffle(array(1, 2, 3, 4), CAST('2' AS INT));
 ----
 [1, 4, 2, 3]
 
 query ?
-SELECT shuffle(['ab'], NULL);
+SELECT shuffle(array('ab'), NULL);
 ----
 [ab]
 
 query ?
-SELECT shuffle(shuffle([3, 3], NULL), NULL);
+SELECT shuffle(shuffle(array(3, 3), NULL), NULL);
 ----
 [3, 3]
 

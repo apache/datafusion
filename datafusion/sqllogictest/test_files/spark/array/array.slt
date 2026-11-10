@@ -38,7 +38,7 @@ SELECT array(1, NULL, 3);
 
 
 query ?
-SELECT array['hello', '', null, 'nULl', 'nULlx', 'aa"bb', 'mm\nn', 'uu,vv', 'yy zz'];
+SELECT array('hello', '', null, 'nULl', 'nULlx', 'aa"bb', r'mm\nn', 'uu,vv', 'yy zz');
 ----
 [hello, , NULL, nULl, nULlx, aa"bb, mm\nn, uu,vv, yy zz]
 

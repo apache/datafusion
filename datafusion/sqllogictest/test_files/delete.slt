@@ -104,10 +104,10 @@ physical_plan_error This feature is not implemented: Physical plan does not supp
 
 # Delete with limit
 
-statement error DataFusion error: Error during planning: Delete-limit clause is not supported
+statement error DataFusion error: SQL error: expected end of statement, found limit at Line: 1, Column: 16
 delete from t1 limit 10;
 
-statement error DataFusion error: Error during planning: Delete-limit clause is not supported
+statement error DataFusion error: SQL error: expected end of statement, found limit at Line: 1, Column: 40
 delete from t1 where a = 1 and b = '2' limit 10;
 
 # Config reset

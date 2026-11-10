@@ -2785,9 +2785,6 @@ SELECT s['value'] + 1 AS v FROM leaf_split ORDER BY v;
 # see `rewrite_outer_expr`. These are value queries because an index left behind
 # is only sometimes an error, see the third one.
 
-statement ok
-SET datafusion.sql_parser.dialect = databricks;
-
 query ?IT
 SELECT array_transform(arr, x -> x + 1) AS a, s['value'] AS v, s['label'] AS l
 FROM leaf_split ORDER BY v;
@@ -2836,9 +2833,6 @@ FROM leaf_split ORDER BY v;
 [5, 6] 200 beta
 [14] 250 epsilon
 [10, 11, 12] 300 delta
-
-statement ok
-SET datafusion.sql_parser.dialect = generic;
 
 # A source that does not absorb the projection keeps the plan unchanged: the
 # split must not add a projection nobody can use. A memory table refuses

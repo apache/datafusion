@@ -67,7 +67,7 @@ one 1 1 1 1 1 1 1 1
 zero 0 0 0 0 0 0 0 0
 
 # Empty IN lists are rejected by the SQL parser.
-statement error .*Expected: an expression, found: \).*
+statement error DataFusion error: SQL error: expected expression, found \) at Line: 1, Column: 14
 SELECT 1 IN ();
 
 # Min for each type

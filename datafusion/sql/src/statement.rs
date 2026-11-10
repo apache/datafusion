@@ -1695,6 +1695,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 let assignment = assignments.pop().unwrap();
                 (assignment.scope, assignment.name, vec![assignment.value])
             }
+            // `SET TIME ZONE value`, which sets the `timezone` variable
+            SetStatement::TimeZone { scope, value } => {
+                let name = ObjectName {
+                    parts: vec![Ident {
+                        text: "timezone".into(),
+                        quote: None,
+                        span: Default::default(),
+                    }],
+                };
+                (scope, name, vec![value])
+            }
             other => return not_impl_err!("SET variant not implemented yet: {other:?}"),
         };
         if scope.is_some() {

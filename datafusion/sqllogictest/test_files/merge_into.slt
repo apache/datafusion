@@ -87,7 +87,7 @@ physical_plan_error
 03)This feature is not implemented: MERGE INTO not supported for Base table
 
 # WHEN NOT MATCHED THEN DELETE is rejected by the parser (no target row exists);
-query error DELETE is not allowed in a NOT MATCHED merge clause at Line: 2, Column: 23
+query error DataFusion error: SQL error: expected INSERT, found delete at Line: 2, Column: 23
 merge into target using source on target.id = source.id
 when not matched then delete;
 
@@ -410,7 +410,7 @@ when matched then delete;
 # Planning errors: unsupported syntax
 ##########
 
-statement error DataFusion error: This feature is not implemented: MERGE target table modifiers are not supported
+statement error DataFusion error: SQL error: expected USING, found partition at Line: 1, Column: 19
 merge into target partition (p0) using source on target.id = source.id
 when matched then delete;
 
@@ -426,7 +426,7 @@ statement error DataFusion error: This feature is not implemented: MERGE INSERT 
 merge into target using source on target.id = source.id
 when not matched then insert (id) values (source.id) where source.is_active;
 
-statement error DataFusion error: This feature is not implemented: MERGE INSERT ROW is not supported
+statement error DataFusion error: SQL error: expected VALUES, found row at Line: 2, Column: 30
 merge into target using source on target.id = source.id
 when not matched then insert row;
 

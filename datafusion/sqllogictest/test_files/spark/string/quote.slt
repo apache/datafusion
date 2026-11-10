@@ -83,27 +83,27 @@ SELECT quote('special chars: !@#$%^&*()');
 'special chars: !@#$%^&*()'
 
 query T
-SELECT quote('tab\tseparated');
+SELECT quote(r'tab\tseparated');
 ----
 'tab\tseparated'
 
 query T
-SELECT quote('carriage\rreturn');
+SELECT quote(r'carriage\rreturn');
 ----
 'carriage\rreturn'
 
 query T
-SELECT quote('backslash\\test');
+SELECT quote(r'backslash\\test');
 ----
 'backslash\\test'
 
 query T
-SELECT quote('quote\"inside\"');
+SELECT quote(r'quote\"inside\"');
 ----
 'quote\"inside\"'
 
 query T
-SELECT quote('mixed\nescape\tchars\r\n');
+SELECT quote(r'mixed\nescape\tchars\r\n');
 ----
 'mixed\nescape\tchars\r\n'
 
@@ -128,7 +128,7 @@ SELECT quote(arrow_cast('2024-01-15T12:30:45', 'Timestamp(µs)'));
 '2024-01-15T12:30:45'
 
 query T
-SELECT quote('special\n\t\r');
+SELECT quote(r'special\n\t\r');
 ----
 'special\n\t\r'
 

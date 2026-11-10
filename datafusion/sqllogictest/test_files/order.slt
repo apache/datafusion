@@ -2092,8 +2092,8 @@ OPTIONS ('format.has_header' 'false');
 
 statement ok
 CREATE EXTERNAL TABLE ordered_u8 (
-  a TINYINT UNSIGNED NOT NULL,
-  b TINYINT UNSIGNED NOT NULL
+  a UTINYINT NOT NULL,
+  b UTINYINT NOT NULL
 )
 STORED AS CSV
 LOCATION 'test_files/scratch/order/uint8_overflow.csv'

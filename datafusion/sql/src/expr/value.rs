@@ -199,7 +199,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 /// DataFusion does not plan (such as a byte string or a national string).
 fn string_literal_value(s: &StringLiteral<'_>) -> Option<String> {
     match s.prefix {
-        StringPrefix::None | StringPrefix::Escape if !s.national => {
+        StringPrefix::None | StringPrefix::Escape | StringPrefix::Raw if !s.national => {
             Some(s.value().into_owned())
         }
         _ => None,
@@ -278,7 +278,7 @@ fn sql_interval_to_expr_impl(negative: bool, interval: Interval<'_>) -> Result<E
     // leading_field really means the unit if specified
     // For example, "month" in  `INTERVAL '5' month`
     let value = match leading_field.as_ref() {
-        Some(leading_field) => format!("{value} {leading_field}"),
+        Some(leading_field) => format!("{value} {}", leading_field.to_ascii_uppercase()),
         None => value,
     };
 

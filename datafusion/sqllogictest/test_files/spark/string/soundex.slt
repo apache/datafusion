@@ -68,7 +68,7 @@ SELECT soundex(' hello');
  hello
 
 query T
-SELECT soundex('\thello');
+SELECT soundex(r'\thello');
 ----
 \thello
 
@@ -178,7 +178,7 @@ SELECT soundex('#');
 #
 
 query T
-SELECT soundex('\nhello');
+SELECT soundex(r'\nhello');
 ----
 \nhello
 

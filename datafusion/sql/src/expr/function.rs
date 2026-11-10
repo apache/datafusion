@@ -261,10 +261,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         {
             return Ok(Err((args, options)));
         }
+        // `CEIL(x, scale)` and `FLOOR(x, scale)` were their own expressions
+        // too, and the scale is not supported.
+        for (function, name) in [("ceil", "CEIL"), ("floor", "FLOOR")] {
+            if part.text.eq_ignore_ascii_case(function) && args.len() == 2 {
+                return not_impl_err!("{name} with scale is not supported");
+            }
+        }
         let is_substring = part.text.eq_ignore_ascii_case("substring")
             || part.text.eq_ignore_ascii_case("substr");
         let is_trim = part.text.eq_ignore_ascii_case("trim");
-        let arity_ok = (is_substring && (args.len() == 2 || args.len() == 3))
+        let arity_ok = (is_substring && (1..=3).contains(&args.len()))
             || (is_trim && (args.len() == 1 || args.len() == 2));
         if !arity_ok {
             return Ok(Err((args, options)));
@@ -654,7 +661,9 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 .into_iter()
                 // Ignore window spec PARTITION BY for scalar values
                 // as they do not change and thus do not generate new partitions
-                .filter(|e| !matches!(e.kind, ExprKind::Literal(_)))
+                .filter(|e| {
+                    !matches!(e.kind, ExprKind::Literal(_) | ExprKind::Placeholder(_))
+                })
                 .map(|e| self.sql_expr_to_logical_expr(e, schema, planner_context))
                 .collect::<Result<Vec<_>>>()?;
             let mut order_by = self.order_by_to_sort_expr(

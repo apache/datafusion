@@ -102,7 +102,7 @@ SELECT size(make_array(1.5, 2.5, 3.5, 4.5));
 
 # Array column tests (with NULL values)
 query I
-SELECT size(column1) FROM VALUES ([1]), ([1,2]), ([]), (NULL);
+SELECT size(column1) FROM VALUES (array(1)), (array(1,2)), (array()), (NULL);
 ----
 1
 2
@@ -111,7 +111,7 @@ SELECT size(column1) FROM VALUES ([1]), ([1,2]), ([]), (NULL);
 
 # Map column tests (with NULL values)
 query I
-SELECT size(column1) FROM VALUES (map(['a'], [1])), (map(['a','b'], [1,2])), (NULL);
+SELECT size(column1) FROM VALUES (map(array('a'), array(1))), (map(array('a','b'), array(1,2))), (NULL);
 ----
 1
 2

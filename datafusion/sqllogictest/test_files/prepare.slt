@@ -193,7 +193,7 @@ select * from person;
 # Error due to syntax and semantic violation
 
 # Syntax error: no name specified after the keyword prepare
-statement error DataFusion error: SQL error: ParserError
+statement error DataFusion error: SQL error: expected identifier, found AS at Line: 1, Column: 9
 PREPARE AS SELECT id, age  FROM person WHERE age = $foo;
 
 # param following a non-number, $foo, not supported
@@ -213,26 +213,26 @@ statement error Prepare specifies 2 data types but query has 1 parameters
 PREPARE my_plan(INT, INT) AS SELECT 1 + $1;
 
 # cannot use IS param
-statement error SQL error: ParserError
+statement error DataFusion error: SQL error: expected NULL, TRUE, FALSE, UNKNOWN or DISTINCT FROM, found \$1 at Line: 1, Column: 66
 PREPARE my_plan(INT) AS SELECT id, age  FROM person WHERE age is $1;
 
 # EXEC/EXECUTE with parentheses but no statement name must error instead of panic
-statement error EXECUTE statement requires a name
+statement error DataFusion error: SQL error: expected a statement, found EXEC at Line: 1, Column: 1
 EXEC();
 
-statement error EXECUTE statement requires a name
+statement error DataFusion error: SQL error: expected a statement, found EXEC at Line: 1, Column: 1
 EXEC('');
 
-statement error EXECUTE statement requires a name
+statement error DataFusion error: SQL error: expected a statement, found EXEC at Line: 1, Column: 1
 EXEC('any-string');
 
-statement error EXECUTE statement requires a name
+statement error DataFusion error: SQL error: expected a statement, found EXEC at Line: 1, Column: 1
 EXEC(unknown_column);
 
-statement error EXECUTE statement requires a name
+statement error DataFusion error: SQL error: expected identifier, found \( at Line: 1, Column: 8
 EXECUTE();
 
-statement error EXECUTE statement requires a name
+statement error DataFusion error: SQL error: expected a statement, found EXEC at Line: 1, Column: 1
 EXEC ('a');
 
 # #######################

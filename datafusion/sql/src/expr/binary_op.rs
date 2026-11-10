@@ -6,8 +6,9 @@ use std::borrow::Cow;
 
 use crate::ast::BinaryOp;
 use crate::planner::{ContextProvider, SqlToRel};
-use datafusion_common::{Result, not_impl_err};
+use datafusion_common::{Result, internal_datafusion_err, not_impl_err};
 use datafusion_expr::Operator;
+use datafusion_expr::expr::ScalarFunction;
 use datafusion_expr::{BinaryExpr, Expr};
 
 /// Detaches a binary operator from the SQL text it was parsed from, so that
@@ -95,6 +96,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         left: Expr,
         right: Expr,
     ) -> Result<Expr> {
+        // PostgreSQL's exponentiation.
+        if matches!(op, BinaryOp::Named(name) if name == "^") {
+            let fun_name = "power";
+            let fun = self
+                .context_provider
+                .get_function_meta(fun_name)
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Unable to find expected '{fun_name}' function"
+                    )
+                })?;
+            return Ok(Expr::ScalarFunction(ScalarFunction::new_udf(
+                fun,
+                vec![left, right],
+            )));
+        }
         Ok(Expr::BinaryExpr(BinaryExpr::new(
             Box::new(left),
             self.parse_sql_binary_op(op)?,

@@ -606,7 +606,7 @@ physical_plan
 07)└───────────────────────────┘
 
 # number is not a valid format
-query error DataFusion error: SQL error: ParserError\("Expected: an explain format such as TREE, found: 123 at Line: 1, Column: 16"\)
+query error DataFusion error: SQL error: expected an explain format such as TREE, found 123 at Line: 1, Column: 16
 explain format 123 select * from values (1);
 
 # verbose tree mode not supported

@@ -714,6 +714,10 @@ select get_field(s, 'inner', 'val') from nested_test;
 ----
 100
 
+# Snowflake-style colon access is DataFusion's syntax, not DuckDB's.
+statement ok
+set datafusion.sql_parser.dialect = 'Generic';
+
 # Snowflake-style colon access uses the structured JSON path before it is serialized.
 query III
 select
@@ -729,6 +733,9 @@ query I
 select named_struct('inner.val', 200):"inner.val";
 ----
 200
+
+statement ok
+set datafusion.sql_parser.dialect = 'DuckDB';
 
 statement ok
 drop table nested_test;

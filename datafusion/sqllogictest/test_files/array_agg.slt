@@ -593,10 +593,10 @@ physical_plan
 # Unsupported syntax
 #######
 
-statement error This feature is not implemented: Calling array_agg: LIMIT not supported in function arguments: 1
+statement error DataFusion error: SQL error: expected \), found LIMIT at Line: 1, Column: 22
 SELECT array_agg(c13 LIMIT 1) FROM aggregate_test_100
 
-statement error This feature is not implemented: Calling array_agg: WHERE not supported in function arguments: c2 > 1
+statement error DataFusion error: SQL error: expected \), found WHERE at Line: 1, Column: 22
 SELECT array_agg(c13 WHERE c2 > 1) FROM aggregate_test_100
 
 query error Error during planning: WITHIN GROUP is only supported for ordered-set aggregate functions

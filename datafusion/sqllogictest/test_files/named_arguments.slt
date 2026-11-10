@@ -119,7 +119,7 @@ statement ok
 set datafusion.sql_parser.dialect = 'MsSQL';
 
 # Error: MsSQL dialect does not support => operator
-query error DataFusion error: SQL error: ParserError\("Expected: \), found: => at Line: 1, Column: 19"\)
+query error DataFusion error: SQL error: expected expression, found > at Line: 1, Column: 20
 SELECT substr(str => 'hello world', start_pos => 7, length => 5);
 
 # Reset to default dialect

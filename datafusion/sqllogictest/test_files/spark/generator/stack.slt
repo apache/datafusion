@@ -31,7 +31,7 @@ List(Struct("col0": Int64, "col1": Int64)) false
 
 # Various column types
 query ?
-SELECT stack(2, 1.5::DECIMAL(10, 2), '2024-01-01'::DATE, true, [1, 2], named_struct('a', 1), NULL, NULL, false, [3], named_struct('a', 2));
+SELECT stack(2, 1.5::DECIMAL(10, 2), '2024-01-01'::DATE, true, array(1, 2), named_struct('a', 1), NULL, NULL, false, array(3), named_struct('a', 2));
 ----
 [{col0: 1.50, col1: 2024-01-01, col2: true, col3: [1, 2], col4: {a: 1}}, {col0: NULL, col1: NULL, col2: false, col3: [3], col4: {a: 2}}]
 
@@ -63,7 +63,7 @@ SELECT stack(2, b, NOT b) FROM (VALUES (true), (NULL)) AS t(b);
 
 # NULL inside a list and struct, and NULL in their place
 query ??
-SELECT stack(2, [1, NULL], NULL), stack(2, named_struct('a', NULL::INT), NULL);
+SELECT stack(2, array(1, NULL), NULL), stack(2, named_struct('a', NULL::INT), NULL);
 ----
 [{col0: [1, NULL]}, {col0: NULL}] [{col0: {a: NULL}}, {col0: NULL}]
 
@@ -91,13 +91,13 @@ SELECT stack(2, 'a', v), stack(2, d, 'a'), arrow_typeof(stack(2, d, 'a')) FROM (
 # List elements and map entries match regardless of their field names, such as
 # `element` from Spark's array and `item` from DataFusion's
 query ???
-SELECT stack(2, array(1), [2]), stack(2, named_struct('a', array(1)), named_struct('a', [2])), stack(2, map_from_arrays(array('a'), array(1)), arrow_cast(map_from_arrays(array('b'), array(2)), 'Map("key_value": non-null Struct("key": non-null Utf8, "value": Int64), unsorted)'));
+SELECT stack(2, array(1), array(2)), stack(2, named_struct('a', array(1)), named_struct('a', array(2))), stack(2, map_from_arrays(array('a'), array(1)), arrow_cast(map_from_arrays(array('b'), array(2)), 'Map("key_value": non-null Struct("key": non-null Utf8, "value": Int64), unsorted)'));
 ----
 [{col0: [1]}, {col0: [2]}] [{col0: {a: [1]}}, {col0: {a: [2]}}] [{col0: {a: 1}}, {col0: {b: 2}}]
 
 # Nullability must match, as in Spark
 query error The data type of the column \(0\) do not have the same type
-SELECT stack(2, arrow_cast([1], 'List(non-null Int64)'), [2, NULL]);
+SELECT stack(2, arrow_cast(array(1), 'List(non-null Int64)'), array(2, NULL));
 
 # Integer literals are BIGINT here but INT in Spark, so one that fits can follow an
 # INT value

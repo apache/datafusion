@@ -619,7 +619,7 @@ impl DataFusionError {
             DataFusionError::SQL(ref desc, ref backtrace) => {
                 let backtrace: String =
                     backtrace.clone().unwrap_or_else(|| "".to_owned());
-                Cow::Owned(format!("{desc:?}{backtrace}"))
+                Cow::Owned(format!("{}{backtrace}", desc.message))
             }
             DataFusionError::Configuration(ref desc) => Cow::Owned(desc.to_string()),
             DataFusionError::NotImplemented(ref desc) => Cow::Owned(desc.to_string()),

@@ -385,6 +385,14 @@ fn convert_frame_bound_to_scalar_value<X: AstExt>(
             ExprKind::Literal(Literal::Number(value)) => Ok(
                 ScalarValue::try_from_string(value.into_owned(), &DataType::UInt64)?,
             ),
+            // A string is read as an interval with no unit, as if it were
+            // written `INTERVAL 'value'`.
+            ExprKind::Literal(Literal::String(value)) => {
+                Ok(ScalarValue::try_from_string(
+                    value.value().into_owned(),
+                    &DataType::UInt64,
+                )?)
+            }
             ExprKind::Interval(interval)
                 if interval.leading_field.is_none()
                     && interval.leading_precision.is_none()
@@ -402,6 +410,7 @@ fn convert_frame_bound_to_scalar_value<X: AstExt>(
         // so we use a ScalarValue::Utf8.
         ast::FrameUnits::Range => Ok(ScalarValue::Utf8(Some(match v.kind {
             ExprKind::Literal(Literal::Number(value)) => value.into_owned(),
+            ExprKind::Literal(Literal::String(value)) => value.value().into_owned(),
             ExprKind::Interval(interval) => {
                 let leading_field = interval.leading_field.clone();
                 let result = interval_text(interval.value)?;

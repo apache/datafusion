@@ -2042,10 +2042,14 @@ SELECT -1.79e309, -2.22e-309, 2.22E-309, 1.79E+309;
 -Infinity 0 0 Infinity
 
 # scientific notation (other edgecases)
-query IRRR
+# A letter directly after a number is an error, rather than an alias.
+query error DataFusion error: SQL error: invalid number at Line: 1, Column: 8
 SELECT 1ea, 1e-2a, 1E-2-2, 1E-1e2;
+
+query RR
+SELECT 1E-2-2, 1E-1 e2;
 ----
-1 0.01 -1.99 0.1
+-1.99 0.1
 
 # case with bool type result
 query B

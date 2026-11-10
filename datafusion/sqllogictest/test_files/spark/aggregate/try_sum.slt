@@ -40,31 +40,31 @@ Infinity
 # Decimal
 
 query R
-SELECT try_sum(x) AS sum_x FROM VALUES (DECIMAL(10,2) '1.23'), (DECIMAL(10,2) '4.77') AS tab(x);
+SELECT try_sum(x) AS sum_x FROM VALUES (CAST('1.23' AS DECIMAL(10,2))), (CAST('4.77' AS DECIMAL(10,2))) AS tab(x);
 ----
 6.00
 
 query R
-SELECT try_sum(x) AS sum_x FROM VALUES (DECIMAL(10,2) '1.00'), (NULL), (DECIMAL(10,2) '2.50') AS tab(x);
+SELECT try_sum(x) AS sum_x FROM VALUES (CAST('1.00' AS DECIMAL(10,2))), (NULL), (CAST('2.50' AS DECIMAL(10,2))) AS tab(x);
 ----
 3.50
 
 query R
-SELECT try_sum(x) AS sum_x FROM VALUES (DECIMAL(5,0) '90000'), (DECIMAL(5,0) '20000') AS tab(x);
+SELECT try_sum(x) AS sum_x FROM VALUES (CAST('90000' AS DECIMAL(5,0))), (CAST('20000' AS DECIMAL(5,0))) AS tab(x);
 ----
 110000
 
 query R
-SELECT try_sum(x) AS sum_x FROM VALUES (DECIMAL(38,0) '11111111111111111111111111111111111111'),
-                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
-                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
-                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
-                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
-                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
-                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
-                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
-                                      (DECIMAL(38,0) '11111111111111111111111111111111111111'),
-                                      (DECIMAL(38,0) '11111111111111111111111111111111111111') AS tab(x);
+SELECT try_sum(x) AS sum_x FROM VALUES (CAST('11111111111111111111111111111111111111' AS DECIMAL(38,0))),
+                                      (CAST('11111111111111111111111111111111111111' AS DECIMAL(38,0))),
+                                      (CAST('11111111111111111111111111111111111111' AS DECIMAL(38,0))),
+                                      (CAST('11111111111111111111111111111111111111' AS DECIMAL(38,0))),
+                                      (CAST('11111111111111111111111111111111111111' AS DECIMAL(38,0))),
+                                      (CAST('11111111111111111111111111111111111111' AS DECIMAL(38,0))),
+                                      (CAST('11111111111111111111111111111111111111' AS DECIMAL(38,0))),
+                                      (CAST('11111111111111111111111111111111111111' AS DECIMAL(38,0))),
+                                      (CAST('11111111111111111111111111111111111111' AS DECIMAL(38,0))),
+                                      (CAST('11111111111111111111111111111111111111' AS DECIMAL(38,0))) AS tab(x);
 ----
 NULL
 

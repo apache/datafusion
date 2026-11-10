@@ -322,13 +322,13 @@ three 1
 NULL 1
 
 # select_values_list
-statement error DataFusion error: SQL error: ParserError\("Expected: \(, found: EOF"\)
+statement error DataFusion error: SQL error: expected a statement, found VALUES at Line: 1, Column: 1
 VALUES
 
-statement error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 9"\)
+statement error DataFusion error: SQL error: expected expression, found \) at Line: 1, Column: 9
 VALUES ()
 
-statement error DataFusion error: SQL error: ParserError\("Expected: an expression, found: \) at Line: 1, Column: 13"\)
+statement error DataFusion error: SQL error: expected expression, found \) at Line: 1, Column: 13
 VALUES (1),()
 
 statement error DataFusion error: Error during planning: Inconsistent data length across values list: got 2 values in row 1 but expected 1
@@ -838,7 +838,7 @@ SELECT ALL * FROM aggregate_simple;
 
 
 # select distinct all (
-query error DataFusion error: SQL error: ParserError\("Cannot specify DISTINCT then ALL at Line: 1, Column: 8"\)
+query error DataFusion error: SQL error: expected identifier, found ALL at Line: 1, Column: 17
 SELECT DISTINCT ALL * FROM aggregate_simple
 
 # select distinct with projection and order by
