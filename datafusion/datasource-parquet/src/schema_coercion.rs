@@ -211,7 +211,12 @@ fn coerce_data_type(
         }
         // Promote a plain file column to the dictionary type the table expects.
         (Dictionary(_, _), _)
-            if enable_rle && can_promote_to_dictionary_type(file_type, table_type) =>
+            if enable_rle
+                && can_promote_to_dictionary_type(
+                    file_type,
+                    table_type,
+                    binary_to_string,
+                ) =>
         {
             Some(table_type.clone())
         }
@@ -330,13 +335,26 @@ fn common_dictionary_key_type(a: &DataType, b: &DataType) -> Option<DataType> {
 fn can_promote_to_dictionary_type(
     file_field_type: &DataType,
     table_dictionary_type: &DataType,
+    binary_to_string: bool,
 ) -> bool {
     let DataType::Dictionary(table_key, table_value) = table_dictionary_type else {
         return false;
     };
-    if common_dictionary_value_type(file_field_type, table_value)
-        .is_none_or(|common| &common != table_value.as_ref())
-    {
+    let file_value_type = match file_field_type {
+        DataType::Dictionary(_, value_type) => value_type.as_ref(),
+        value_type => value_type,
+    };
+    let same_type_family = common_dictionary_value_type(file_value_type, table_value)
+        .is_some_and(|common| &common == table_value.as_ref());
+    let can_convert_binary_to_string = binary_to_string
+        && matches!(
+            (file_value_type, table_value.as_ref()),
+            (
+                DataType::Binary | DataType::LargeBinary | DataType::BinaryView,
+                DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View
+            )
+        );
+    if !same_type_family && !can_convert_binary_to_string {
         return false;
     }
     if let DataType::Dictionary(file_key, _) = file_field_type {
@@ -415,7 +433,11 @@ pub(crate) fn uniform_dict_schemas(schemas: Vec<Schema>) -> Vec<Schema> {
                 .iter()
                 .map(|field| {
                     if let Some(dict_type) = dict_types.get(field.name())
-                        && can_promote_to_dictionary_type(field.data_type(), dict_type)
+                        && can_promote_to_dictionary_type(
+                            field.data_type(),
+                            dict_type,
+                            false,
+                        )
                     {
                         return field_with_new_type(field, dict_type.clone());
                     }
@@ -1950,10 +1972,10 @@ mod tests {
                 dict(DataType::LargeBinary),
             ),
             (
-                "binary_not_utf8",
+                "binary_to_utf8_dict",
                 dict(DataType::Utf8),
                 DataType::Binary,
-                DataType::Binary,
+                dict(DataType::Utf8),
             ),
             (
                 "utf8_not_binary",

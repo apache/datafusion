@@ -204,6 +204,26 @@ zstd = { version = "0.14", default-features = false }
 # Keep this list sorted alphabetically.
 # See https://github.com/apache/datafusion/issues/18467 for the ongoing effort of
 # picking useful non-default lints.
+[patch.crates-io]
+arrow = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-arith = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-array = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-avro = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-buffer = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-cast = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-cmp = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-csv = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-data = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-flight = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-ipc = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-json = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-ord = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-row = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-schema = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-select = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+arrow-string = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+parquet = { git = "https://github.com/Rich-T-kid/arrow-rs.git", rev = "a6f9e048d9424c611f99659b515c9dac4f2d413c" }
+
 [workspace.lints.clippy]
 all = { level = "warn", priority = -1 }
 pedantic = { level = "warn", priority = -1 }
