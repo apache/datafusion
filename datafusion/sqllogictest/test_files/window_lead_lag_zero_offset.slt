@@ -1,0 +1,65 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Zero-offset LEAD/LAG returns the current value, including NULL, with or without IGNORE NULLS
+query IIIIII
+SELECT id, v,
+       LEAD(v, 0, -7) IGNORE NULLS OVER (ORDER BY id),
+       LAG(v, 0, -7) IGNORE NULLS OVER (ORDER BY id),
+       LEAD(v, 0, -7) OVER (ORDER BY id),
+       LAG(v, 0, -7) OVER (ORDER BY id)
+FROM (VALUES (1, 10), (2, NULL), (3, 30)) AS t(id, v)
+ORDER BY id;
+----
+1 10 10 10 10 10
+2 NULL NULL NULL NULL NULL
+3 30 30 30 30 30
+
+# Zero-offset LEAD/LAG IGNORE NULLS ignores defaults in either sort direction
+query IIIIIIIIII
+SELECT id, v,
+       LEAD(v, 0, -7) IGNORE NULLS OVER (ORDER BY id),
+       LAG(v, 0, -7) IGNORE NULLS OVER (ORDER BY id),
+       LEAD(v, 0) IGNORE NULLS OVER (ORDER BY id),
+       LAG(v, 0) IGNORE NULLS OVER (ORDER BY id),
+       LEAD(v, 0, -7) IGNORE NULLS OVER (ORDER BY id DESC),
+       LAG(v, 0, -7) IGNORE NULLS OVER (ORDER BY id DESC),
+       LEAD(v, 0) IGNORE NULLS OVER (ORDER BY id DESC),
+       LAG(v, 0) IGNORE NULLS OVER (ORDER BY id DESC)
+FROM (VALUES (1, 10), (2, NULL), (3, 30)) AS t(id, v)
+ORDER BY id;
+----
+1 10 10 10 10 10 10 10 10 10
+2 NULL NULL NULL NULL NULL NULL NULL NULL NULL
+3 30 30 30 30 30 30 30 30 30
+
+# Nonzero offsets retain their existing IGNORE NULLS and default behavior
+query IIIIII
+SELECT id, v,
+       LEAD(v, 1, -7) IGNORE NULLS OVER w,
+       LAG(v, 1, -7) IGNORE NULLS OVER w,
+       LEAD(v, 2, -7) IGNORE NULLS OVER w,
+       LAG(v, 2, -7) IGNORE NULLS OVER w
+FROM (VALUES (1, 10), (2, NULL), (3, 30)) AS t(id, v)
+WINDOW w AS (ORDER BY id)
+ORDER BY id;
+----
+1 10 30 -7 -7 -7
+2 NULL 30 10 -7 -7
+3 30 -7 10 -7 -7
+
+# The batch evaluator has the same zero-offset behavior
+query IIIIIII
+SELECT id, v,
+       LEAD(v, 0, -7) IGNORE NULLS OVER (ORDER BY id),
+       LAG(v, 0, -7) IGNORE NULLS OVER (ORDER BY id),
+       LEAD(v, 0, -7) OVER (ORDER BY id),
+       LAG(v, 0, -7) OVER (ORDER BY id),
+       SUM(id) OVER (ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+FROM (VALUES (1, 10), (2, NULL), (3, 30)) AS t(id, v)
+ORDER BY id;
+----
+1 10 10 10 10 10 6
+2 NULL NULL NULL NULL NULL 6
+3 30 30 30 30 30 6
