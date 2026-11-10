@@ -5,7 +5,7 @@
 use arrow::error::ArrowError;
 use datafusion::error::DataFusionError;
 use sqllogictest::TestError;
-use sqlparser::parser::ParserError;
+use sqlparser::ParseError as ParserError;
 use thiserror::Error;
 
 pub type Result<T, E = DFSqlLogicTestError> = std::result::Result<T, E>;

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
+use crate::ast::{Ident, Query, SetExpr, SetOperator, TableAlias, With};
 use arrow::datatypes::{Schema, SchemaRef};
 use datafusion_common::{
     Result, TableReference, not_impl_err, plan_err,
@@ -15,7 +16,6 @@ use datafusion_expr::{
     LogicalPlan, LogicalPlanBuilder, MaterializedCte, MaterializedCteId,
     MaterializedCtePlan, MaterializedCteScan, TableSource,
 };
-use sqlparser::ast::{CteAsMaterialized, Ident, Query, SetExpr, SetOperator, With};
 
 /// A `WITH x AS MATERIALIZED (...)` CTE whose body must wrap the query that
 /// declared it. See [`MaterializedCte`].
@@ -41,15 +41,15 @@ impl PendingMaterializedCte {
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn plan_with_clause(
         &self,
-        with: With,
+        with: With<'_>,
         planner_context: &mut PlannerContext,
     ) -> Result<Vec<PendingMaterializedCte>> {
         let is_recursive = with.recursive;
         let mut materialized = vec![];
         // Process CTEs from top to bottom
-        for cte in with.cte_tables {
+        for cte in with.ctes {
             // A `WITH` block can't use the same name more than once
-            let cte_name = self.ident_normalizer.normalize(cte.alias.name.clone());
+            let cte_name = self.ident_normalizer.normalize(cte.name.clone());
             if planner_context.contains_cte(&cte_name) {
                 return plan_err!(
                     "WITH query name {cte_name:?} specified more than once"
@@ -58,10 +58,10 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
             // Create a logical plan for the CTE
             let cte_plan = if is_recursive {
-                let columns = cte.alias.columns.iter().map(|c| c.name.clone()).collect();
-                self.recursive_cte(&cte_name, columns, *cte.query, planner_context)?
+                let columns = cte.columns.clone();
+                self.recursive_cte(&cte_name, columns, cte.query, planner_context)?
             } else {
-                self.non_recursive_cte(*cte.query, planner_context)?
+                self.non_recursive_cte(cte.query, planner_context)?
             };
 
             // Each `WITH` block can change the column names in the last projection
@@ -70,17 +70,24 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             // A body that refers to an outer query would have to run once
             // per outer row, which is not supported. Such a CTE is inlined,
             // as if MATERIALIZED was not given.
-            let is_materialized = cte.materialized
-                == Some(CteAsMaterialized::Materialized)
-                && cte_plan.all_out_ref_exprs().is_empty();
+            let is_materialized =
+                cte.materialized == Some(true) && cte_plan.all_out_ref_exprs().is_empty();
             let final_plan = if is_recursive {
                 LogicalPlanBuilder::from(cte_plan)
                     .alias(TableReference::bare(
-                        self.ident_normalizer.normalize(cte.alias.name),
+                        self.ident_normalizer.normalize(cte.name),
                     ))?
                     .build()?
             } else {
-                self.apply_table_alias(cte_plan, cte.alias)?
+                self.apply_table_alias(
+                    cte_plan,
+                    TableAlias {
+                        name: cte.name,
+                        explicit: true,
+                        columns: cte.columns,
+                        column_types: vec![],
+                    },
+                )?
             };
             if is_materialized {
                 // Every reference reads the shared result instead of a copy
@@ -110,7 +117,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     fn non_recursive_cte(
         &self,
-        cte_query: Query,
+        cte_query: Query<'_>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         self.query_to_plan(cte_query, planner_context)
@@ -119,8 +126,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn recursive_cte(
         &self,
         cte_name: &str,
-        columns: Vec<Ident>,
-        mut cte_query: Query,
+        columns: Vec<Ident<'_>>,
+        mut cte_query: Query<'_>,
         planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
         if !self
@@ -132,17 +139,19 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             return not_impl_err!("Recursive CTEs are not enabled");
         }
 
-        let (left_expr, right_expr, set_quantifier) = match *cte_query.body {
+        let body = std::mem::replace(&mut cte_query.body, SetExpr::Values(vec![]));
+        let (left_expr, right_expr, set_quantifier, by_name) = match body {
             SetExpr::SetOperation {
                 op: SetOperator::Union,
                 left,
                 right,
-                set_quantifier,
-            } => (left, right, set_quantifier),
+                quantifier,
+                by_name,
+            } => (left, right, quantifier, by_name),
             other => {
                 // Not a UNION, so not actually a recursive CTE. The caller adds only
                 // the relation name for recursive CTEs, so apply the column aliases here.
-                *cte_query.body = other;
+                cte_query.body = other;
                 let plan = self.non_recursive_cte(cte_query, planner_context)?;
                 return self.apply_expr_alias(plan, columns);
             }
@@ -232,6 +241,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 static_plan,
                 recursive_plan,
                 set_quantifier,
+                by_name,
             );
         }
 

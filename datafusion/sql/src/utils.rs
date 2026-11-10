@@ -26,7 +26,7 @@ use datafusion_expr::{
 };
 
 use indexmap::IndexMap;
-use sqlparser::ast::{Ident, Value};
+use sqlparser::ast::{Ident, Literal, StringPrefix};
 
 /// Make a best-effort attempt at resolving all columns in the expression tree
 pub(crate) fn resolve_columns(expr: &Expr, plan: &LogicalPlan) -> Result<Expr> {
@@ -365,37 +365,35 @@ pub(crate) fn make_decimal_type(
 }
 
 /// Normalize an owned identifier to a lowercase string, unless the identifier is quoted.
-pub(crate) fn normalize_ident(id: Ident) -> String {
-    match id.quote_style {
-        Some(_) => id.value,
-        None => id.value.to_ascii_lowercase(),
+pub(crate) fn normalize_ident(id: Ident<'_>) -> String {
+    match id.quote {
+        Some(_) => id.value().into_owned(),
+        None => id.value().to_ascii_lowercase(),
     }
 }
 
-pub(crate) fn value_to_string(value: &Value) -> Option<String> {
+/// The text of a literal used as a setting's value, such as in `SET`.
+pub(crate) fn value_to_string(value: &Literal<'_>) -> Option<String> {
     match value {
-        Value::SingleQuotedString(s) => Some(s.to_string()),
-        Value::DollarQuotedString(s) => Some(s.to_string()),
-        Value::Number(_, _) | Value::Boolean(_) => Some(value.to_string()),
-        Value::UnicodeStringLiteral(s) => Some(s.to_string()),
-        Value::EscapedStringLiteral(s) => Some(s.to_string()),
-        Value::QuoteDelimitedStringLiteral(s)
-        | Value::NationalQuoteDelimitedStringLiteral(s) => Some(s.value.to_string()),
-        Value::DoubleQuotedString(_)
-        | Value::NationalStringLiteral(_)
-        | Value::SingleQuotedByteStringLiteral(_)
-        | Value::DoubleQuotedByteStringLiteral(_)
-        | Value::TripleSingleQuotedString(_)
-        | Value::TripleDoubleQuotedString(_)
-        | Value::TripleSingleQuotedByteStringLiteral(_)
-        | Value::TripleDoubleQuotedByteStringLiteral(_)
-        | Value::SingleQuotedRawStringLiteral(_)
-        | Value::DoubleQuotedRawStringLiteral(_)
-        | Value::TripleSingleQuotedRawStringLiteral(_)
-        | Value::TripleDoubleQuotedRawStringLiteral(_)
-        | Value::HexStringLiteral(_)
-        | Value::Null
-        | Value::Placeholder(_) => None,
+        Literal::String(s) => {
+            // Double-quoted, national, triple-quoted, byte, bit and raw
+            // strings have no text value.
+            if s.national || s.triple {
+                return None;
+            }
+            match (s.quote, s.prefix) {
+                ('$', _) => Some(format!("$${}$$", s.text)),
+                (
+                    '\'',
+                    StringPrefix::None | StringPrefix::Escape | StringPrefix::Unicode,
+                ) => Some(s.value().into_owned()),
+                _ => None,
+            }
+        }
+        Literal::DollarQuoted { tag, text } => Some(format!("${tag}${text}${tag}$")),
+        Literal::Number(n) => Some(n.to_string()),
+        Literal::Boolean(b) => Some(b.to_string()),
+        Literal::HexString(_) | Literal::Null => None,
     }
 }
 

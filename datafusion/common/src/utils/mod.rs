@@ -38,7 +38,7 @@ use arrow::datatypes::{
 use arrow::downcast_dictionary_array;
 use arrow_select::dictionary::garbage_collect_any_dictionary;
 #[cfg(feature = "sql")]
-use sqlparser::{ast::Ident, dialect::GenericDialect, parser::Parser};
+use sqlparser::{ast::Ident, dialect::DuckDb, parser::Parser};
 use std::borrow::{Borrow, Cow};
 use std::cmp::{Ordering, min};
 use std::collections::{HashMap, HashSet};
@@ -284,11 +284,11 @@ fn needs_quotes(s: &str) -> bool {
 }
 
 #[cfg(feature = "sql")]
-pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident>> {
-    let dialect = GenericDialect;
-    let mut parser = Parser::new(&dialect).try_with_sql(s)?;
-    let idents = parser.parse_multipart_identifier()?;
-    Ok(idents)
+pub(crate) fn parse_identifiers(s: &str) -> Result<Vec<Ident<'_>>> {
+    let mut parser = Parser::<DuckDb>::new(s)?;
+    let name = sqlparser::grammar::parse_object_name(&mut parser)?;
+    parser.expect_eof()?;
+    Ok(name.parts)
 }
 
 /// Parse a string into a vector of identifiers.
@@ -299,10 +299,10 @@ pub(crate) fn parse_identifiers_normalized(s: &str, ignore_case: bool) -> Vec<St
     parse_identifiers(s)
         .unwrap_or_default()
         .into_iter()
-        .map(|id| match id.quote_style {
-            Some(_) => id.value,
-            None if ignore_case => id.value,
-            _ => id.value.to_ascii_lowercase(),
+        .map(|id| match id.quote {
+            Some(_) => id.value().into_owned(),
+            None if ignore_case => id.value().into_owned(),
+            _ => id.value().to_ascii_lowercase(),
         })
         .collect::<Vec<_>>()
 }
@@ -1586,9 +1586,6 @@ mod tests {
         array::{Float64Array, Int32Array, NullArray, StringArray},
         datatypes::{Int8Type, Int32Type, UInt8Type},
     };
-    #[cfg(feature = "sql")]
-    use sqlparser::ast::Ident;
-
     #[test]
     fn test_list_scalar_cast_preserves_target_element_metadata() -> Result<()> {
         let input =
@@ -1902,16 +1899,10 @@ mod tests {
                 None
             };
 
-            let expected_parsed = vec![Ident {
-                value: identifier.to_string(),
-                quote_style,
-                span: sqlparser::tokenizer::Span::empty(),
-            }];
-
-            assert_eq!(
-                parse_identifiers(quoted_identifier).unwrap(),
-                expected_parsed
-            );
+            let parsed = parse_identifiers(quoted_identifier).unwrap();
+            assert_eq!(parsed.len(), 1);
+            assert_eq!(parsed[0].value(), identifier);
+            assert_eq!(parsed[0].quote, quote_style);
         }
 
         Ok(())

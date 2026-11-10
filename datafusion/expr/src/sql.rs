@@ -54,6 +54,12 @@ impl Display for ExcludeSelectItem {
 #[derive(Clone, PartialEq, Eq, PartialOrd, Hash, Debug)]
 pub struct ObjectName(pub Vec<ObjectNamePart>);
 
+impl From<Ident> for ObjectName {
+    fn from(ident: Ident) -> Self {
+        Self(vec![ObjectNamePart::Identifier(ident)])
+    }
+}
+
 impl Display for ObjectName {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         let parts: Vec<String> = self.0.iter().map(|p| format!("{p}")).collect();
@@ -137,9 +143,34 @@ pub struct Ident {
     pub span: String,
 }
 
+impl From<&str> for Ident {
+    fn from(value: &str) -> Self {
+        Self::new(value)
+    }
+}
+
+impl Ident {
+    /// An unquoted identifier.
+    pub fn new(value: impl Into<String>) -> Self {
+        Self {
+            value: value.into(),
+            quote_style: None,
+            span: String::new(),
+        }
+    }
+}
+
 impl Display for Ident {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
-        write!(f, "[{}]", self.value)
+        match self.quote_style {
+            Some(quote) => {
+                let close = if quote == '[' { ']' } else { quote };
+                let doubled: String = [close, close].iter().collect();
+                let escaped = self.value.replace(close, &doubled);
+                write!(f, "{quote}{escaped}{close}")
+            }
+            None => f.write_str(&self.value),
+        }
     }
 }
 

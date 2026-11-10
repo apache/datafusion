@@ -7,10 +7,11 @@ use std::ops::ControlFlow;
 
 use datafusion_common::{DataFusionError, Result};
 
+use crate::ast::{Builtin, ObjectName, Query, StatementKind};
 use crate::parser::{CopyToSource, CopyToStatement, Statement as DFStatement};
 use crate::planner::object_name_to_table_reference;
 use datafusion_common::TableReference;
-use sqlparser::ast::*;
+use sqlparser::ast::{Visit, Visitor};
 
 // Collect table/CTE references as `TableReference`s and normalize them during traversal.
 // This avoids a second normalization/conversion pass after visiting the AST.
@@ -23,7 +24,10 @@ struct RelationVisitor {
 
 impl RelationVisitor {
     /// Record the reference to `relation`, if it's not a CTE reference.
-    fn insert_relation(&mut self, relation: &ObjectName) -> ControlFlow<DataFusionError> {
+    fn insert_relation(
+        &mut self,
+        relation: &ObjectName<'_>,
+    ) -> ControlFlow<DataFusionError> {
         match object_name_to_table_reference(
             relation.clone(),
             self.enable_ident_normalization,
@@ -41,16 +45,21 @@ impl RelationVisitor {
     }
 }
 
-impl Visitor for RelationVisitor {
+// `SHOW CREATE TABLE name` and `SHOW COLUMNS FROM name` report `name` as a
+// relation themselves, so only queries need special handling.
+impl<'a> Visitor<'a, Builtin> for RelationVisitor {
     type Break = DataFusionError;
 
-    fn pre_visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<Self::Break> {
+    fn pre_visit_relation(
+        &mut self,
+        relation: &ObjectName<'a>,
+    ) -> ControlFlow<Self::Break> {
         self.insert_relation(relation)
     }
 
-    fn pre_visit_query(&mut self, q: &Query) -> ControlFlow<Self::Break> {
+    fn pre_visit_query(&mut self, q: &Query<'a>) -> ControlFlow<Self::Break> {
         if let Some(with) = &q.with {
-            for cte in &with.cte_tables {
+            for cte in &with.ctes {
                 // The non-recursive CTE name is not in scope when evaluating the CTE itself, so this is valid:
                 // `WITH t AS (SELECT * FROM t) SELECT * FROM t`
                 // Where the first `t` refers to a predefined table. So we are careful here
@@ -60,7 +69,9 @@ impl Visitor for RelationVisitor {
                     // but thankfully `insert_relation` is idempotent.
                     cte.visit(self)?;
                 }
-                let cte_name = ObjectName::from(vec![cte.alias.name.clone()]);
+                let cte_name = ObjectName {
+                    parts: vec![cte.name.clone()],
+                };
                 match object_name_to_table_reference(
                     cte_name,
                     self.enable_ident_normalization,
@@ -73,25 +84,13 @@ impl Visitor for RelationVisitor {
         ControlFlow::Continue(())
     }
 
-    fn post_visit_query(&mut self, q: &Query) -> ControlFlow<Self::Break> {
+    fn post_visit_query(&mut self, q: &Query<'a>) -> ControlFlow<Self::Break> {
         if let Some(with) = &q.with {
-            for _ in &with.cte_tables {
+            for _ in &with.ctes {
                 // Unwrap: We just pushed these in `pre_visit_query`
                 self.all_ctes.insert(self.ctes_in_scope.pop().unwrap());
             }
         }
-        ControlFlow::Continue(())
-    }
-
-    fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<Self::Break> {
-        if let Statement::ShowCreate {
-            obj_type: ShowCreateObject::Table | ShowCreateObject::View,
-            obj_name,
-        } = statement
-        {
-            self.insert_relation(obj_name)?;
-        }
-
         ControlFlow::Continue(())
     }
 }
@@ -103,10 +102,17 @@ fn control_flow_to_result(flow: ControlFlow<DataFusionError>) -> Result<()> {
     }
 }
 
-fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) -> Result<()> {
+fn visit_statement(
+    statement: &DFStatement<'_>,
+    visitor: &mut RelationVisitor,
+) -> Result<()> {
     match statement {
         DFStatement::Statement(s) => {
-            control_flow_to_result(s.as_ref().visit(visitor))?;
+            // The objects a `DROP` names need not exist, so they are not
+            // resolved.
+            if !matches!(s.kind, StatementKind::Drop(_)) {
+                control_flow_to_result(s.as_ref().visit(visitor))?;
+            }
         }
         DFStatement::CreateExternalTable(table) => {
             control_flow_to_result(visitor.insert_relation(&table.name))?;
@@ -164,7 +170,7 @@ fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) -> Re
 /// assert_eq!(ctes[0].to_string(), "my_cte");
 /// ```
 pub fn resolve_table_references(
-    statement: &crate::parser::Statement,
+    statement: &crate::parser::Statement<'_>,
     enable_ident_normalization: bool,
 ) -> Result<(Vec<TableReference>, Vec<TableReference>)> {
     let mut visitor = RelationVisitor {

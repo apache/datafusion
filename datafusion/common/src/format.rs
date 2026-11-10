@@ -11,7 +11,7 @@ use arrow::util::display::{DurationFormat, FormatOptions};
 use crate::config::{ConfigField, Visit};
 use crate::error::{DataFusionError, Result};
 #[cfg(feature = "sql")]
-use sqlparser::ast::{Expr, UtilityOption, Value, ValueWithSpan};
+use sqlparser::ast::ExplainOption;
 
 /// The default [`FormatOptions`] to use within DataFusion
 /// Also see [`crate::config::FormatOptions`]
@@ -457,8 +457,8 @@ pub struct ExplainStatementOptions {
 
 #[cfg(feature = "sql")]
 impl ExplainStatementOptions {
-    /// Parse a list of [`UtilityOption`] values (produced by sqlparser's
-    /// `parse_utility_options`) into a normalized [`ExplainStatementOptions`].
+    /// Parse a list of [`ExplainOption`] values, from `EXPLAIN (...)`, into a
+    /// normalized [`ExplainStatementOptions`].
     ///
     /// Argument grammar accepted:
     /// - `OPTION` — bare, implies `TRUE` for boolean options.
@@ -473,37 +473,38 @@ impl ExplainStatementOptions {
     /// Postgres-only options (`BUFFERS`, `WAL`, `SETTINGS`, `GENERIC_PLAN`,
     /// `MEMORY`) return a helpful "not supported" error. Any other option
     /// name produces an `unknown EXPLAIN option` error.
-    pub fn from_utility_options(opts: &[UtilityOption]) -> Result<Self> {
+    pub fn from_utility_options(opts: &[ExplainOption<'_>]) -> Result<Self> {
         let mut out = ExplainStatementOptions::default();
         // Track whether METRICS was explicitly set so TIMING can merge
         // into it rather than overwrite.
         let mut metrics_explicit = false;
 
         for opt in opts {
-            let name = opt.name.value.to_ascii_lowercase();
+            let name = opt.name.value().to_ascii_lowercase();
+            let arg = opt.value.as_deref();
             match name.as_str() {
                 "analyze" => {
-                    out.analyze = parse_bool_arg(opt.arg.as_ref(), &name)?;
+                    out.analyze = parse_bool_arg(arg, &name)?;
                 }
                 "verbose" => {
-                    out.verbose = parse_bool_arg(opt.arg.as_ref(), &name)?;
+                    out.verbose = parse_bool_arg(arg, &name)?;
                 }
                 "format" => {
-                    let s = parse_ident_or_string_arg(opt.arg.as_ref(), &name)?;
+                    let s = parse_ident_or_string_arg(arg, &name)?;
                     out.format = Some(ExplainFormat::from_str(&s)?);
                 }
                 "metrics" => {
-                    let s = parse_ident_or_string_arg(opt.arg.as_ref(), &name)?;
+                    let s = parse_ident_or_string_arg(arg, &name)?;
                     out.analyze_categories =
                         Some(ExplainAnalyzeCategories::from_str(&s)?);
                     metrics_explicit = true;
                 }
                 "level" => {
-                    let s = parse_ident_or_string_arg(opt.arg.as_ref(), &name)?;
+                    let s = parse_ident_or_string_arg(arg, &name)?;
                     out.analyze_level = Some(MetricType::from_str(&s)?);
                 }
                 "timing" => {
-                    let enable = parse_bool_arg(opt.arg.as_ref(), &name)?;
+                    let enable = parse_bool_arg(arg, &name)?;
                     out.analyze_categories = Some(adjust_timing(
                         out.analyze_categories.take(),
                         enable,
@@ -511,7 +512,7 @@ impl ExplainStatementOptions {
                     ));
                 }
                 "summary" => {
-                    let summary = parse_bool_arg(opt.arg.as_ref(), &name)?;
+                    let summary = parse_bool_arg(arg, &name)?;
                     out.analyze_level = Some(if summary {
                         MetricType::Summary
                     } else {
@@ -519,7 +520,7 @@ impl ExplainStatementOptions {
                     });
                 }
                 "costs" => {
-                    out.show_statistics = Some(parse_bool_arg(opt.arg.as_ref(), &name)?);
+                    out.show_statistics = Some(parse_bool_arg(arg, &name)?);
                 }
                 // Postgres options DataFusion does not model. Give a helpful
                 // pointer rather than silently accepting them.
@@ -533,7 +534,7 @@ impl ExplainStatementOptions {
                 _ => {
                     return Err(DataFusionError::Plan(format!(
                         "unknown EXPLAIN option: {}",
-                        opt.name.value
+                        opt.name.value()
                     )));
                 }
             }
@@ -543,48 +544,35 @@ impl ExplainStatementOptions {
     }
 }
 
+/// The text of an EXPLAIN option's argument, without the quotes of a string.
+#[cfg(feature = "sql")]
+fn unquote(text: &str) -> &str {
+    for quote in ['\'', '"'] {
+        if let Some(inner) = text
+            .strip_prefix(quote)
+            .and_then(|rest| rest.strip_suffix(quote))
+        {
+            return inner;
+        }
+    }
+    text
+}
+
 /// Parse a boolean argument for an EXPLAIN option.
 ///
 /// `None` (bare option, e.g. `ANALYZE`) is treated as `true`. Accepts
-/// identifiers `TRUE`/`FALSE`/`ON`/`OFF` (case-insensitive) and the numeric
-/// literals `0` / `1`.
+/// `TRUE`/`FALSE`/`ON`/`OFF` (case-insensitive, quoted or not) and the
+/// numeric literals `0` / `1`.
 #[cfg(feature = "sql")]
-fn parse_bool_arg(arg: Option<&Expr>, name: &str) -> Result<bool> {
-    let Some(expr) = arg else {
+fn parse_bool_arg(arg: Option<&str>, name: &str) -> Result<bool> {
+    let Some(text) = arg else {
         return Ok(true);
     };
-    match expr {
-        Expr::Identifier(ident) => match ident.value.to_ascii_lowercase().as_str() {
-            "true" | "on" => Ok(true),
-            "false" | "off" => Ok(false),
-            other => Err(DataFusionError::Plan(format!(
-                "expected boolean for EXPLAIN option {name}, got '{other}'"
-            ))),
-        },
-        Expr::Value(ValueWithSpan { value, .. }) => match value {
-            Value::Boolean(b) => Ok(*b),
-            Value::Number(n, _) => match n.as_str() {
-                "0" => Ok(false),
-                "1" => Ok(true),
-                other => Err(DataFusionError::Plan(format!(
-                    "expected boolean (0 or 1) for EXPLAIN option {name}, got '{other}'"
-                ))),
-            },
-            Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => {
-                match s.to_ascii_lowercase().as_str() {
-                    "true" | "on" | "1" => Ok(true),
-                    "false" | "off" | "0" => Ok(false),
-                    other => Err(DataFusionError::Plan(format!(
-                        "expected boolean for EXPLAIN option {name}, got '{other}'"
-                    ))),
-                }
-            }
-            other => Err(DataFusionError::Plan(format!(
-                "expected boolean for EXPLAIN option {name}, got '{other}'"
-            ))),
-        },
-        other => Err(DataFusionError::Plan(format!(
-            "expected boolean for EXPLAIN option {name}, got '{other}'"
+    match unquote(text).to_ascii_lowercase().as_str() {
+        "true" | "on" | "1" => Ok(true),
+        "false" | "off" | "0" => Ok(false),
+        _ => Err(DataFusionError::Plan(format!(
+            "expected boolean for EXPLAIN option {name}, got '{text}'"
         ))),
     }
 }
@@ -592,25 +580,14 @@ fn parse_bool_arg(arg: Option<&Expr>, name: &str) -> Result<bool> {
 /// Parse an identifier-or-string argument (used for `FORMAT`, `METRICS`,
 /// `LEVEL`).
 #[cfg(feature = "sql")]
-fn parse_ident_or_string_arg(arg: Option<&Expr>, name: &str) -> Result<String> {
-    let expr = arg.ok_or_else(|| {
+fn parse_ident_or_string_arg(arg: Option<&str>, name: &str) -> Result<String> {
+    let text = arg.ok_or_else(|| {
         DataFusionError::Plan(format!(
             "EXPLAIN option {} requires an argument",
             name.to_ascii_uppercase()
         ))
     })?;
-    match expr {
-        Expr::Identifier(ident) => Ok(ident.value.clone()),
-        Expr::Value(ValueWithSpan { value, .. }) => match value {
-            Value::SingleQuotedString(s) | Value::DoubleQuotedString(s) => Ok(s.clone()),
-            other => Err(DataFusionError::Plan(format!(
-                "expected identifier or string for EXPLAIN option {name}, got '{other}'"
-            ))),
-        },
-        other => Err(DataFusionError::Plan(format!(
-            "expected identifier or string for EXPLAIN option {name}, got '{other}'"
-        ))),
-    }
+    Ok(unquote(text).to_string())
 }
 
 /// Merge a `TIMING on/off` option into an existing `METRICS` selection.
@@ -667,75 +644,38 @@ fn adjust_timing(
 #[cfg(all(test, feature = "sql"))]
 mod explain_options_tests {
     use super::*;
-    use sqlparser::ast::Ident;
-    use sqlparser::tokenizer::Span;
+    use sqlparser::ast::{Ident, Span};
 
-    fn bare(name: &str) -> UtilityOption {
-        UtilityOption {
+    fn option(name: &'static str, value: Option<String>) -> ExplainOption<'static> {
+        ExplainOption {
             name: Ident {
-                value: name.to_string(),
-                quote_style: None,
-                span: Span::empty(),
+                text: name.into(),
+                quote: None,
+                span: Span::default(),
             },
-            arg: None,
+            sign: "".into(),
+            value: value.map(Into::into),
         }
     }
 
-    fn with_ident_arg(name: &str, arg: &str) -> UtilityOption {
-        UtilityOption {
-            name: Ident {
-                value: name.to_string(),
-                quote_style: None,
-                span: Span::empty(),
-            },
-            arg: Some(Expr::Identifier(Ident {
-                value: arg.to_string(),
-                quote_style: None,
-                span: Span::empty(),
-            })),
-        }
+    fn bare(name: &'static str) -> ExplainOption<'static> {
+        option(name, None)
     }
 
-    fn with_string_arg(name: &str, arg: &str) -> UtilityOption {
-        UtilityOption {
-            name: Ident {
-                value: name.to_string(),
-                quote_style: None,
-                span: Span::empty(),
-            },
-            arg: Some(Expr::Value(ValueWithSpan {
-                value: Value::SingleQuotedString(arg.to_string()),
-                span: Span::empty(),
-            })),
-        }
+    fn with_ident_arg(name: &'static str, arg: &str) -> ExplainOption<'static> {
+        option(name, Some(arg.to_string()))
     }
 
-    fn with_bool_arg(name: &str, b: bool) -> UtilityOption {
-        UtilityOption {
-            name: Ident {
-                value: name.to_string(),
-                quote_style: None,
-                span: Span::empty(),
-            },
-            arg: Some(Expr::Value(ValueWithSpan {
-                value: Value::Boolean(b),
-                span: Span::empty(),
-            })),
-        }
+    fn with_string_arg(name: &'static str, arg: &str) -> ExplainOption<'static> {
+        option(name, Some(format!("'{arg}'")))
     }
 
-    fn with_number_arg(name: &str, n: &str) -> UtilityOption {
-        UtilityOption {
-            name: Ident {
-                value: name.to_string(),
-                quote_style: None,
-                span: Span::empty(),
-            },
-            arg: Some(Expr::Value(ValueWithSpan {
-                value: Value::Number(n.to_string(), false),
-                span: Span::empty(),
-            })),
-        }
+    fn with_bool_arg(name: &'static str, b: bool) -> ExplainOption<'static> {
+        option(name, Some(if b { "TRUE" } else { "FALSE" }.to_string()))
+    }
+
+    fn with_number_arg(name: &'static str, n: &str) -> ExplainOption<'static> {
+        option(name, Some(n.to_string()))
     }
 
     #[test]

@@ -39,7 +39,7 @@ use arrow::error::ArrowError;
 #[cfg(feature = "parquet")]
 use parquet::errors::ParquetError;
 #[cfg(feature = "sql")]
-use sqlparser::parser::ParserError;
+use sqlparser::ParseError as ParserError;
 use tokio::task::JoinError;
 
 /// Result type for operations that could result in an [DataFusionError]

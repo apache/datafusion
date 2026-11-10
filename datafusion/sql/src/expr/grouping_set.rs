@@ -2,16 +2,16 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::ast::Expr as SQLExpr;
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::plan_err;
 use datafusion_common::{DFSchema, Result};
 use datafusion_expr::{Expr, GroupingSet};
-use sqlparser::ast::Expr as SQLExpr;
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(super) fn sql_grouping_sets_to_expr(
         &self,
-        exprs: Vec<Vec<SQLExpr>>,
+        exprs: Vec<Vec<SQLExpr<'_>>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -28,7 +28,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(super) fn sql_rollup_to_expr(
         &self,
-        exprs: Vec<Vec<SQLExpr>>,
+        exprs: Vec<Vec<SQLExpr<'_>>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
@@ -49,7 +49,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
     pub(super) fn sql_cube_to_expr(
         &self,
-        exprs: Vec<Vec<SQLExpr>>,
+        exprs: Vec<Vec<SQLExpr<'_>>>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {

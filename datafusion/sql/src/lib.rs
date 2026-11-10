@@ -29,7 +29,9 @@
 //! [`LogicalPlan`]: datafusion_expr::logical_plan::LogicalPlan
 //! [`Expr`]: datafusion_expr::expr::Expr
 
+pub mod ast;
 mod cte;
+pub mod dialect;
 mod expr;
 pub mod parser;
 pub mod planner;

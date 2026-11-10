@@ -4,6 +4,7 @@
 
 use arrow::datatypes::DataType;
 
+use crate::ast::{Expr as SQLExpr, ExprKind, Literal as SQLLiteral, UnaryOp};
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 use datafusion_common::{DFSchema, Diagnostic, Result, not_impl_err, plan_err};
 use datafusion_expr::{
@@ -11,18 +12,29 @@ use datafusion_expr::{
     binary::BinaryTypeCoercer,
     type_coercion::{is_interval, is_signed_numeric, is_timestamp},
 };
-use sqlparser::ast::{Expr as SQLExpr, UnaryOperator, Value, ValueWithSpan};
 
 impl<S: ContextProvider> SqlToRel<'_, S> {
     pub(crate) fn parse_sql_unary_op(
         &self,
-        op: UnaryOperator,
-        expr: SQLExpr,
+        op: UnaryOp,
+        expr: SQLExpr<'_>,
         schema: &DFSchema,
         planner_context: &mut PlannerContext,
     ) -> Result<Expr> {
         match op {
-            UnaryOperator::Not => {
+            UnaryOp::Not | UnaryOp::BangNot => {
+                // `NOT EXISTS (...)` is a negated `EXISTS`, not a `NOT` of it
+                let expr = match expr.kind {
+                    ExprKind::Exists(subquery) => {
+                        return self.parse_exists_subquery(
+                            *subquery,
+                            true,
+                            schema,
+                            planner_context,
+                        );
+                    }
+                    kind => SQLExpr::new(kind, expr.span),
+                };
                 let operand =
                     self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
                 let field = operand.to_field(schema)?.1;
@@ -53,7 +65,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     )
                 }
             }
-            UnaryOperator::Plus => {
+            UnaryOp::Plus => {
                 let operand =
                     self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
                 let field = operand.to_field(schema)?.1;
@@ -78,19 +90,20 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     plan_err!("Unary operator '+' only supports numeric, interval and timestamp types"; diagnostic=diagnostic)
                 }
             }
-            UnaryOperator::Minus => {
-                match expr {
+            UnaryOp::Neg => {
+                let span = expr.span;
+                match expr.kind {
                     // Optimization: if it's a number literal, we apply the negative operator
                     // here directly to calculate the new literal.
-                    SQLExpr::Value(ValueWithSpan {
-                        value: Value::Number(n, _),
-                        span: _,
-                    }) => self.parse_sql_number(&n, true),
-                    SQLExpr::Interval(interval) => {
-                        self.sql_interval_to_expr(true, interval)
+                    ExprKind::Literal(SQLLiteral::Number(n)) => {
+                        self.parse_sql_number(&n, true)
+                    }
+                    ExprKind::Interval(interval) => {
+                        self.sql_interval_to_expr(true, *interval)
                     }
                     // Not a literal, apply negative operator on expression
-                    _ => {
+                    kind => {
+                        let expr = SQLExpr::new(kind, span);
                         let operand =
                             self.sql_expr_to_logical_expr(expr, schema, planner_context)?;
                         let field = operand.to_field(schema)?.1;
