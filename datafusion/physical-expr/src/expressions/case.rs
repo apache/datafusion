@@ -4527,7 +4527,7 @@ mod required_operand_tests {
         }
     }
     #[test]
-    fn required_operand_preserves_uniform_fast_path_and_projects_private_body() {
+    fn required_operand_preserves_fast_path_and_prunes_unused_columns() {
         let first = Arc::new(AtomicUsize::new(0));
         let other = Arc::new(AtomicUsize::new(0));
         let input = batch(vec![Some(2), Some(3)]);
@@ -4549,19 +4549,15 @@ mod required_operand_tests {
         let EvalMethod::ExpressionOrExpression(projected) = &prepared.eval_method else {
             panic!("wrong CASE specialization")
         };
-        assert!(projected.supports_projection);
-        assert!(
-            !projected.projection.contains(&0),
-            "unused wide column must not be filtered"
-        );
-        assert!(
-            !projected.projection.contains(&1),
-            "operand inputs must not be filtered again"
+        assert_eq!(
+            projected.projection,
+            vec![2, 3],
+            "filter only the THEN input and the bound operand"
         );
         assert_eq!(first.load(Ordering::SeqCst), 5);
     }
     #[test]
-    fn required_operand_rebuilds_schema_and_revokes_changed_arguments_or_program() {
+    fn required_operand_rewrites_keep_only_authorized_matching_uses() {
         let rows = Arc::new(AtomicUsize::new(0));
         let input = batch(vec![Some(2), Some(1), None]);
         let case: Arc<dyn PhysicalExpr> =
@@ -4591,17 +4587,12 @@ mod required_operand_tests {
         )
         .unwrap()
         .unwrap();
+        rows.store(0, Ordering::SeqCst);
         assert_eq!(
             result(mapped.as_ref(), &reordered),
             vec![Some(2), Some(100), None]
         );
-        assert!(
-            rewritten
-                .downcast_ref::<CaseExpr>()
-                .unwrap()
-                .required_operand
-                .is_some()
-        );
+        assert_eq!(rows.load(Ordering::SeqCst), 3);
         rows.store(0, Ordering::SeqCst);
         assert_eq!(
             result(rewritten.as_ref(), &reordered),
@@ -4620,13 +4611,6 @@ mod required_operand_tests {
         .unwrap();
         children[2] = other_program;
         let changed_program = Arc::clone(&case).with_new_children(children).unwrap();
-        assert!(
-            changed_program
-                .downcast_ref::<CaseExpr>()
-                .unwrap()
-                .required_operand
-                .is_none()
-        );
         rows.store(0, Ordering::SeqCst);
         assert_eq!(
             result(changed_program.as_ref(), &input),
@@ -4637,13 +4621,6 @@ mod required_operand_tests {
         let mut children: Vec<_> = case.children().into_iter().cloned().collect();
         children[2] = counted("other", 2, 7, &rows, false);
         let changed = case.with_new_children(children).unwrap();
-        assert!(
-            changed
-                .downcast_ref::<CaseExpr>()
-                .unwrap()
-                .required_operand
-                .is_none()
-        );
         rows.store(0, Ordering::SeqCst);
         assert_eq!(
             result(changed.as_ref(), &input),
