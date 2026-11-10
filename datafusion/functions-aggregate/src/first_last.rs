@@ -964,10 +964,13 @@ struct FirstLastPrimitiveKeyGroupsAccumulator<K: ArrowPrimitiveType> {
     pick_first_in_group: bool,
     ignore_nulls: bool,
     is_input_pre_ordered: bool,
-    /// `(group_idx, row)` of the rows that became a winner in the current batch
+    /// `(group_idx, row)` of the latest winning row of each group the current
+    /// batch updated
     updates: Vec<(usize, usize)>,
-    /// Groups seen by `keep_last_update_of_each_group`, all-false between calls
+    /// Groups with an entry in `updates`, all-false between batches
     seen: BooleanBufferBuilder,
+    /// Position in `updates` of each group in `seen`
+    update_pos: Vec<usize>,
 }
 
 impl<K: ArrowPrimitiveType> FirstLastPrimitiveKeyGroupsAccumulator<K> {
@@ -995,6 +998,7 @@ impl<K: ArrowPrimitiveType> FirstLastPrimitiveKeyGroupsAccumulator<K> {
             is_input_pre_ordered,
             updates: Vec::new(),
             seen: BooleanBufferBuilder::new(0),
+            update_pos: Vec::new(),
         }
     }
 
@@ -1003,6 +1007,8 @@ impl<K: ArrowPrimitiveType> FirstLastPrimitiveKeyGroupsAccumulator<K> {
         self.orderings.resize(total_num_groups, K::default_value());
         self.ordering_nulls.resize(total_num_groups);
         self.is_sets.resize(total_num_groups);
+        self.seen.resize(total_num_groups);
+        self.update_pos.resize(total_num_groups, 0);
     }
 
     /// Rows that pass `filter` and, with IGNORE NULLS, have a non-null value;
@@ -1044,8 +1050,9 @@ impl<K: ArrowPrimitiveType> FirstLastPrimitiveKeyGroupsAccumulator<K> {
     }
 
     /// Makes each of `rows` the winner of its group if it beats the current
-    /// winner, and records it in `updates`. Without `compare`, FIRST_VALUE
-    /// keeps the first row of each group and LAST_VALUE takes every row.
+    /// winner, and records it in `updates`, once per group. Without `compare`,
+    /// FIRST_VALUE keeps the first row of each group and LAST_VALUE takes every
+    /// row.
     fn find_winners(
         &mut self,
         orderings: &PrimitiveArray<K>,
@@ -1067,23 +1074,14 @@ impl<K: ArrowPrimitiveType> FirstLastPrimitiveKeyGroupsAccumulator<K> {
                 self.is_sets.set_bit(group_idx, true);
                 self.orderings[group_idx] = ordering.unwrap_or_default();
                 self.ordering_nulls.set_bit(group_idx, ordering.is_some());
-                updates.push((group_idx, row));
+                if self.seen.get_bit(group_idx) {
+                    updates[self.update_pos[group_idx]].1 = row;
+                } else {
+                    self.seen.set_bit(group_idx, true);
+                    self.update_pos[group_idx] = updates.len();
+                    updates.push((group_idx, row));
+                }
             }
-        }
-    }
-
-    /// Drops the updates that a later update of the same group overwrites.
-    fn keep_last_update_of_each_group(&mut self, updates: &mut Vec<(usize, usize)>) {
-        self.seen.resize(self.is_sets.len());
-        let seen = &mut self.seen;
-        updates.reverse();
-        updates.retain(|&(group_idx, _)| {
-            let is_last = !seen.get_bit(group_idx);
-            seen.set_bit(group_idx, true);
-            is_last
-        });
-        for &(group_idx, _) in updates.iter() {
-            self.seen.set_bit(group_idx, false);
         }
     }
 
@@ -1099,8 +1097,9 @@ impl<K: ArrowPrimitiveType> FirstLastPrimitiveKeyGroupsAccumulator<K> {
         let orderings = as_primitive_array::<K>(orderings)?;
         // Push to a local: pushing through `self` makes the loop reload its fields.
         let mut updates = std::mem::take(&mut self.updates);
-        // Sized once per batch: at most one update per row
-        updates.try_reserve(group_indices.len()).map_err(|e| {
+        // Sized once per batch: at most one update per group the batch touches
+        let max_updates = group_indices.len().min(self.is_sets.len());
+        updates.try_reserve(max_updates).map_err(|e| {
             arrow_datafusion_err!(arrow::error::ArrowError::MemoryError(e.to_string()))
         })?;
         match rows {
@@ -1116,8 +1115,8 @@ impl<K: ArrowPrimitiveType> FirstLastPrimitiveKeyGroupsAccumulator<K> {
                 self.find_winners(orderings, group_indices, rows, compare, &mut updates)
             }
         }
-        if !self.state.overwrite_is_cheap() {
-            self.keep_last_update_of_each_group(&mut updates);
+        for &(group_idx, _) in updates.iter() {
+            self.seen.set_bit(group_idx, false);
         }
         let result = self.state.update_rows(vals, &updates);
         updates.clear();
@@ -1202,11 +1201,14 @@ impl<K: ArrowPrimitiveType> GroupsAccumulator
                 + self.seen.capacity())
                 / 8
             + self.updates.capacity() * size_of::<(usize, usize)>()
+            + self.update_pos.capacity() * size_of::<usize>()
     }
 
     fn shrink_to_fit(&mut self) {
+        // `resize` sizes `seen` and `update_pos` again before the next batch
         self.updates = Vec::new();
         self.seen = BooleanBufferBuilder::new(0);
+        self.update_pos = Vec::new();
     }
 }
 

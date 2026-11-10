@@ -45,10 +45,6 @@ pub(crate) trait ValueState: Send + Sync {
             .iter()
             .try_for_each(|&(group_idx, idx)| self.update(group_idx, array, idx))
     }
-    /// Whether [`Self::update`] is cheap enough to also apply updates that a later one overwrites.
-    fn overwrite_is_cheap(&self) -> bool {
-        false
-    }
     /// Takes the accumulated state and returns it as an [`ArrayRef`], respecting the `emit_to` strategy.
     fn take(&mut self, emit_to: EmitTo) -> Result<ArrayRef>;
     /// Returns the estimated memory size of the state in bytes.
@@ -96,10 +92,6 @@ impl<T: ArrowPrimitiveType + Send> ValueState for PrimitiveValueState<T> {
             self.nulls.set_bit(group_idx, array.is_valid(idx));
         }
         Ok(())
-    }
-
-    fn overwrite_is_cheap(&self) -> bool {
-        true
     }
 
     fn take(&mut self, emit_to: EmitTo) -> Result<ArrayRef> {
