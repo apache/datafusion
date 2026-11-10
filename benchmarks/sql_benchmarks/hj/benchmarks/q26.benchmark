@@ -1,0 +1,28 @@
+name Q26
+group hj
+
+init sql_benchmarks/hj/init/set_config.sql
+
+init
+-- Isolate static predicate inference from runtime join filtering.
+SET datafusion.optimizer.enable_dynamic_filter_pushdown = false;
+
+load sql_benchmarks/hj/init/load.sql
+
+load
+CREATE EXTERNAL TABLE orders STORED AS PARQUET LOCATION '${DATA_DIR:-data}/tpch_sf${BENCH_SIZE:-1}/orders/orders.1.parquet';
+
+assert I
+SELECT count(*) = 1 FROM orders WHERE o_orderkey = 123456
+----
+true
+
+expect_plan HashJoinExec
+
+run
+-- Q26: One selected order joined to the full lineitem table.
+-- Infer l_orderkey = 123456 from the predicate inside the orders input,
+-- reducing the rows scanned or passed to the join on the larger side.
+SELECT count(*)
+FROM (SELECT o_orderkey FROM orders WHERE o_orderkey = 123456) o
+JOIN lineitem l ON o.o_orderkey = l.l_orderkey;
