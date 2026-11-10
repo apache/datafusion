@@ -21,6 +21,7 @@ use crate::PhysicalExpr;
 use crate::expressions::SqlSimilarToPattern;
 use crate::expressions::translate_scalar;
 use crate::intervals::cp_solver::{propagate_arithmetic, propagate_comparison};
+use datafusion_physical_expr_common::physical_expr::is_volatile;
 use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::hash::Hash;
@@ -569,7 +570,7 @@ impl PhysicalExpr for BinaryExpr {
         let lhs = self.left.evaluate(batch)?;
 
         // Check if we can apply short-circuit evaluation.
-        match check_short_circuit(&lhs, &self.op) {
+        match check_short_circuit(&lhs, &self.op, &self.right) {
             ShortCircuitStrategy::None => {}
             ShortCircuitStrategy::ReturnLeft => return Ok(lhs),
             ShortCircuitStrategy::ReturnRight => {
@@ -577,61 +578,21 @@ impl PhysicalExpr for BinaryExpr {
                 return Ok(rhs);
             }
             ShortCircuitStrategy::PreSelection { mask, fill_value } => {
-                // `mask` selects the rows whose result depends on the RHS; the
-                // unselected rows are all `fill_value` (see `ShortCircuitStrategy`).
-                //
-                // Use `filter_record_batch` directly because `evaluate_selection`
-                // scatters the RHS back to the original batch length.
-                let selection_batch = filter_record_batch(batch, &mask)?;
-                let right_ret = self.right.evaluate(&selection_batch)?;
-
-                match &right_ret {
-                    ColumnarValue::Array(array) => {
-                        let boolean_array = array.as_boolean();
-                        // If the RHS is uniform on the selected rows, the whole
-                        // expression collapses and no scatter is needed.
-                        if boolean_array.null_count() == 0 {
-                            let rhs_value = if !boolean_array.has_false() {
-                                Some(true)
-                            } else if !boolean_array.has_true() {
-                                Some(false)
-                            } else {
-                                None
-                            };
-                            if let Some(rhs_value) = rhs_value {
-                                return Ok(uniform_pre_selection_result(
-                                    rhs_value, fill_value, lhs,
-                                ));
-                            }
-                        }
-
-                        return pre_selection_scatter(
-                            &mask,
-                            Some(boolean_array),
-                            fill_value,
-                        );
-                    }
-                    ColumnarValue::Scalar(scalar) => {
-                        if let ScalarValue::Boolean(v) = scalar {
-                            // A scalar RHS applies uniformly to all selected rows.
-                            if let Some(v) = v {
-                                return Ok(uniform_pre_selection_result(
-                                    *v, fill_value, lhs,
-                                ));
-                            } else {
-                                return pre_selection_scatter(&mask, None, fill_value);
-                            }
-                        } else {
-                            return internal_err!(
-                                "Expected boolean scalar value, found: {right_ret:?}"
-                            );
-                        }
-                    }
-                }
+                return self.evaluate_pre_selection(batch, lhs, &mask, fill_value);
             }
         }
 
-        let rhs = self.right.evaluate(batch)?;
+        let rhs = match self.right.evaluate(batch) {
+            Ok(rhs) => rhs,
+            // A deterministic RHS may fail on rows the LHS already decided
+            // (e.g. `x = 0 OR 1 / x > 1`), so retry on the undecided rows only.
+            Err(e) => match or_rows_to_retry(&lhs, &self.op) {
+                Some(mask) => {
+                    return self.evaluate_pre_selection(batch, lhs, &mask, true);
+                }
+                None => return Err(e),
+            },
+        };
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
 
@@ -1207,6 +1168,71 @@ impl BinaryExpr {
         }
     }
 
+    /// Evaluates the RHS of `OR` only on the rows selected by `mask` (the rows
+    /// whose result depends on the RHS); the other rows are `fill_value`.
+    fn evaluate_pre_selection(
+        &self,
+        batch: &RecordBatch,
+        lhs: ColumnarValue,
+        mask: &BooleanArray,
+        fill_value: bool,
+    ) -> Result<ColumnarValue> {
+        // Use `filter_record_batch` directly because `evaluate_selection`
+        // scatters the RHS back to the original batch length.
+        let selection_batch = filter_record_batch(batch, mask)?;
+        let right_ret = self.right.evaluate(&selection_batch)?;
+
+        match &right_ret {
+            ColumnarValue::Array(array) => {
+                let boolean_array = array.as_boolean();
+                // If the RHS is uniform on the selected rows, the whole
+                // expression collapses and no scatter is needed.
+                if boolean_array.null_count() == 0 {
+                    let rhs_value = if !boolean_array.has_false() {
+                        Some(true)
+                    } else if !boolean_array.has_true() {
+                        Some(false)
+                    } else {
+                        None
+                    };
+                    if let Some(rhs_value) = rhs_value {
+                        return Ok(uniform_pre_selection_result(
+                            rhs_value, fill_value, lhs,
+                        ));
+                    }
+                }
+
+                let scattered =
+                    pre_selection_scatter(mask, Some(boolean_array), fill_value)?;
+                // Selected rows may have a NULL LHS (`NULL OR x`), so combine
+                // with the LHS; unselected rows are `fill_value` on both sides.
+                if lhs.data_type() == DataType::Boolean
+                    && let ColumnarValue::Array(lhs) = &lhs
+                    && lhs.null_count() > 0
+                {
+                    let scattered = scattered.into_array(batch.num_rows())?;
+                    return Ok(ColumnarValue::Array(Arc::new(or_kleene(
+                        lhs.as_boolean(),
+                        scattered.as_boolean(),
+                    )?)));
+                }
+                Ok(scattered)
+            }
+            ColumnarValue::Scalar(scalar) => {
+                if let ScalarValue::Boolean(v) = scalar {
+                    // A scalar RHS applies uniformly to all selected rows.
+                    if let Some(v) = v {
+                        Ok(uniform_pre_selection_result(*v, fill_value, lhs))
+                    } else {
+                        pre_selection_scatter(mask, None, fill_value)
+                    }
+                } else {
+                    internal_err!("Expected boolean scalar value, found: {right_ret:?}")
+                }
+            }
+        }
+    }
+
     /// Evaluates nested `AND`s together to avoid repeated filtering (#25035).
     ///
     /// When at most [`PRE_SELECTION_THRESHOLD`] of original rows remain,
@@ -1226,18 +1252,22 @@ impl BinaryExpr {
                 batch.schema_ref(),
                 batch.num_rows(),
             ) {
-                let array = result.to_array(input.num_rows())?;
-                // Every kept row is true when there are no NULLs.
-                result = if array.null_count() == 0 {
-                    ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)))
-                } else {
-                    ColumnarValue::Array(filter(&array, &undecided)?)
-                };
-                input = Cow::Owned(filter_record_batch(&input, &undecided)?);
-                selections.push(undecided);
+                select_rows(undecided, &mut result, &mut input, &mut selections)?;
             }
 
-            let value = conjunct.evaluate(&input)?;
+            let value = match conjunct.evaluate(&input) {
+                Ok(value) => value,
+                // A deterministic conjunct may fail on rows an earlier conjunct
+                // already decided (e.g. `x != 0 AND 1 / x > 1`), so retry on the
+                // undecided rows only.
+                Err(e) => match undecided_rows(&result) {
+                    Some(undecided) => {
+                        select_rows(undecided, &mut result, &mut input, &mut selections)?;
+                        conjunct.evaluate(&input)?
+                    }
+                    None => return Err(e),
+                },
+            };
             let so_far =
                 std::mem::replace(&mut result, ColumnarValue::Scalar(ScalarValue::Null));
             result = and_kleene_columnar(so_far, value, input.num_rows())?;
@@ -1269,10 +1299,16 @@ enum ShortCircuitStrategy {
 const PRE_SELECTION_THRESHOLD: f32 = 0.2;
 
 /// Returns the short-circuit strategy for `OR` with a Boolean LHS.
-/// All true returns the LHS; all false returns the RHS. Sparse false rows
-/// trigger pre-selection at [`PRE_SELECTION_THRESHOLD`].
+/// All true returns the LHS; all false returns the RHS. Otherwise the RHS is
+/// evaluated only on the rows that are not `true` when at most
+/// [`PRE_SELECTION_THRESHOLD`] of the rows need it, or when `rhs` is volatile
+/// (it must never be evaluated on rows that don't need it).
 /// `AND` uses [`BinaryExpr::evaluate_conjunction`].
-fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrategy {
+fn check_short_circuit(
+    lhs: &ColumnarValue,
+    op: &Operator,
+    rhs: &Arc<dyn PhysicalExpr>,
+) -> ShortCircuitStrategy {
     if *op != Operator::Or {
         return ShortCircuitStrategy::None;
     }
@@ -1286,31 +1322,31 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
         ColumnarValue::Array(array) => {
             // Check Boolean arrays directly.
             if let Ok(bool_array) = as_boolean_array(array) {
-                // NULLs still need the RHS.
-                if bool_array.null_count() > 0 {
-                    return ShortCircuitStrategy::None;
-                }
-
                 let len = bool_array.len();
                 if len == 0 {
                     return ShortCircuitStrategy::None;
                 }
 
-                let true_count = bool_array.values().count_set_bits();
-                if true_count == len {
+                // `false` and `NULL` rows need the RHS.
+                let undecided = len - bool_array.true_count();
+                if undecided == 0 {
                     return ShortCircuitStrategy::ReturnLeft;
                 }
 
-                if true_count == 0 {
-                    return ShortCircuitStrategy::ReturnRight;
+                if undecided == len {
+                    // With NULLs the LHS still matters (`NULL OR false` is NULL).
+                    return if bool_array.null_count() == 0 {
+                        ShortCircuitStrategy::ReturnRight
+                    } else {
+                        ShortCircuitStrategy::None
+                    };
                 }
 
-                let false_count = len - true_count;
-                if false_count as f32 / len as f32 <= PRE_SELECTION_THRESHOLD {
-                    // Only false rows need the RHS; the LHS has no NULLs here.
-                    let mask = BooleanArray::new(!bool_array.values(), None);
+                if undecided as f32 / len as f32 <= PRE_SELECTION_THRESHOLD
+                    || is_volatile(rhs)
+                {
                     return ShortCircuitStrategy::PreSelection {
-                        mask,
+                        mask: not_true(bool_array),
                         fill_value: true,
                     };
                 }
@@ -1330,6 +1366,20 @@ fn check_short_circuit(lhs: &ColumnarValue, op: &Operator) -> ShortCircuitStrate
 
     // Evaluate both sides normally.
     ShortCircuitStrategy::None
+}
+
+/// The rows to retry the RHS of `OR` on after it failed on the whole batch:
+/// the rows the LHS did not decide, if it decided any.
+fn or_rows_to_retry(lhs: &ColumnarValue, op: &Operator) -> Option<BooleanArray> {
+    if *op != Operator::Or || lhs.data_type() != DataType::Boolean {
+        return None;
+    }
+    let ColumnarValue::Array(array) = lhs else {
+        return None;
+    };
+    let mask = not_true(array.as_boolean());
+    let undecided = mask.true_count();
+    (undecided > 0 && undecided < array.len()).then_some(mask)
 }
 
 /// Avoids scattering when the selected RHS rows are uniform.
@@ -1433,8 +1483,9 @@ fn pre_selection_scatter(
     Ok(ColumnarValue::Array(Arc::new(boolean_result)))
 }
 
-/// Selects undecided rows when some are false, at most
-/// [`PRE_SELECTION_THRESHOLD`] of the original batch remain, and evaluating
+/// Selects undecided rows when some are false and either `conjunct` is
+/// volatile (it must never be evaluated on rows that don't need it), or at
+/// most [`PRE_SELECTION_THRESHOLD`] of the original batch remain and evaluating
 /// `conjunct` on all rows is not cheap and infallible.
 fn rows_to_filter_before(
     conjunct: &Arc<dyn PhysicalExpr>,
@@ -1442,16 +1493,42 @@ fn rows_to_filter_before(
     schema: &Schema,
     num_rows: usize,
 ) -> Option<BooleanArray> {
+    let undecided = undecided_rows(result)?;
+    let undecided_count = undecided.true_count();
+    // Classify last: it walks the whole conjunct.
+    ((undecided_count as f32 / num_rows as f32 <= PRE_SELECTION_THRESHOLD
+        && !is_cheap_and_infallible(conjunct, schema))
+        || is_volatile(conjunct))
+    .then_some(undecided)
+}
+
+/// The rows of the `AND` result so far that are not `false`, if any are `false`.
+fn undecided_rows(result: &ColumnarValue) -> Option<BooleanArray> {
     let ColumnarValue::Array(array) = result else {
         return None;
     };
     let undecided = not_false(array.as_boolean());
-    let undecided_count = undecided.true_count();
-    // Classify last: it walks the whole conjunct.
-    (undecided_count < array.len()
-        && undecided_count as f32 / num_rows as f32 <= PRE_SELECTION_THRESHOLD
-        && !is_cheap_and_infallible(conjunct, schema))
-    .then_some(undecided)
+    (undecided.true_count() < array.len()).then_some(undecided)
+}
+
+/// Keeps only the `undecided` rows of `input` and `result`, and records the
+/// selection for the final scatter.
+fn select_rows(
+    undecided: BooleanArray,
+    result: &mut ColumnarValue,
+    input: &mut Cow<'_, RecordBatch>,
+    selections: &mut Vec<BooleanArray>,
+) -> Result<()> {
+    let array = result.to_array(input.num_rows())?;
+    // Every kept row is true when there are no NULLs.
+    *result = if array.null_count() == 0 {
+        ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)))
+    } else {
+        ColumnarValue::Array(filter(&array, &undecided)?)
+    };
+    *input = Cow::Owned(filter_record_batch(input, &undecided)?);
+    selections.push(undecided);
+    Ok(())
 }
 
 /// Whether evaluating `expr` on all rows is cheap and cannot fail.
@@ -1543,6 +1620,15 @@ fn not_false(array: &BooleanArray) -> BooleanArray {
     let values = match array.nulls() {
         Some(nulls) => array.values() | &!nulls.inner(),
         None => array.values().clone(),
+    };
+    BooleanArray::new(values, None)
+}
+
+/// A null-free mask of the rows of `array` that are `false` or `NULL`.
+fn not_true(array: &BooleanArray) -> BooleanArray {
+    let values = match array.nulls() {
+        Some(nulls) => &!array.values() | &!nulls.inner(),
+        None => !array.values(),
     };
     BooleanArray::new(values, None)
 }
@@ -6176,6 +6262,9 @@ mod tests {
 
     #[test]
     fn test_check_short_circuit() {
+        // A non-volatile RHS, so only the LHS decides the strategy
+        let rhs = lit(true);
+
         // Test with non-nullable arrays
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int32, false),
@@ -6193,7 +6282,7 @@ mod tests {
         let left_expr = logical2physical(&logical_col("a").eq(expr_lit(2)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
-            check_short_circuit(&left_value, &Operator::And),
+            check_short_circuit(&left_value, &Operator::And, &rhs),
             ShortCircuitStrategy::None
         ));
 
@@ -6201,7 +6290,7 @@ mod tests {
         let left_expr = logical2physical(&logical_col("a").gt(expr_lit(0)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
-            check_short_circuit(&left_value, &Operator::Or),
+            check_short_circuit(&left_value, &Operator::Or, &rhs),
             ShortCircuitStrategy::ReturnLeft
         ));
 
@@ -6213,7 +6302,7 @@ mod tests {
             panic!("Expected ColumnarValue::Array");
         };
         let ShortCircuitStrategy::PreSelection { mask, fill_value } =
-            check_short_circuit(&left_value, &Operator::Or)
+            check_short_circuit(&left_value, &Operator::Or, &rhs)
         else {
             panic!("Expected ShortCircuitStrategy::PreSelection");
         };
@@ -6233,7 +6322,7 @@ mod tests {
             logical2physical(&logical_col("a").gt(expr_lit(4)), &schema);
         let left_value = left_expr.evaluate(&batch).unwrap();
         assert!(matches!(
-            check_short_circuit(&left_value, &Operator::Or),
+            check_short_circuit(&left_value, &Operator::Or, &rhs),
             ShortCircuitStrategy::None
         ));
 
@@ -6265,11 +6354,11 @@ mod tests {
         )
         .unwrap();
 
-        // Case: Mixed values with nulls - shouldn't short-circuit for OR
+        // Case: Mixed values with nulls, 60% not true: OR falls back to normal evaluation
         let mixed_nulls = logical2physical(&logical_col("c"), &schema_nullable);
         let mixed_nulls_value = mixed_nulls.evaluate(&batch_nullable).unwrap();
         assert!(matches!(
-            check_short_circuit(&mixed_nulls_value, &Operator::Or),
+            check_short_circuit(&mixed_nulls_value, &Operator::Or, &rhs),
             ShortCircuitStrategy::None
         ));
 
@@ -6286,7 +6375,7 @@ mod tests {
 
         // All nulls shouldn't short-circuit for OR
         assert!(matches!(
-            check_short_circuit(&null_value, &Operator::Or),
+            check_short_circuit(&null_value, &Operator::Or, &rhs),
             ShortCircuitStrategy::None
         ));
 
@@ -6294,21 +6383,21 @@ mod tests {
         // Scalar true
         let scalar_true = ColumnarValue::Scalar(ScalarValue::Boolean(Some(true)));
         assert!(matches!(
-            check_short_circuit(&scalar_true, &Operator::Or),
+            check_short_circuit(&scalar_true, &Operator::Or, &rhs),
             ShortCircuitStrategy::ReturnLeft
         )); // Should short-circuit OR
 
         // Scalar false
         let scalar_false = ColumnarValue::Scalar(ScalarValue::Boolean(Some(false)));
         assert!(matches!(
-            check_short_circuit(&scalar_false, &Operator::Or),
+            check_short_circuit(&scalar_false, &Operator::Or, &rhs),
             ShortCircuitStrategy::ReturnRight
         )); // Should return the RHS for OR
 
         // Scalar null
         let scalar_null = ColumnarValue::Scalar(ScalarValue::Boolean(None));
         assert!(matches!(
-            check_short_circuit(&scalar_null, &Operator::Or),
+            check_short_circuit(&scalar_null, &Operator::Or, &rhs),
             ShortCircuitStrategy::None
         ));
     }
