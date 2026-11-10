@@ -22,6 +22,7 @@
 //!   names, as in MySQL
 //! - `SELECT ... INTO table` and `CREATE FUNCTION`, as in PostgreSQL
 //! - `DISTRIBUTE BY`, as in Spark
+//! - `INSERT OVERWRITE [TABLE] t` and `INSERT INTO TABLE t`, as in Spark
 //! - `EXTRACT("field" FROM ...)` with a quoted field
 //! - `SHOW name.name...` for a setting, optionally followed by `VERBOSE`
 //! - `^` as bitwise XOR, not exponentiation, and `<<` and `>>` ranked with `|`
@@ -112,14 +113,16 @@ impl Dialect for DataFusion {
         grammar::parse_insert_source_with_default(p)
     }
 
-    /// `INSERT OVERWRITE [TABLE] t ...`, as in Spark, and `INSERT OR REPLACE`,
-    /// as in SQLite. Other inserts keep the core rule and so this dialect's
-    /// hooks, such as `DEFAULT VALUES`.
+    /// `INSERT OVERWRITE [TABLE] t ...` and `INSERT INTO TABLE t ...`, as in
+    /// Spark and Hive, and `INSERT OR REPLACE`, as in SQLite. Other inserts
+    /// keep the core rule and so this dialect's hooks, such as `DEFAULT VALUES`.
     fn parse_insert_statement<'a>(
         p: &mut Parser<'a, Self>,
     ) -> PResult<Statement<'a, Builtin>> {
         let after_insert = p.peek_nth(1);
-        if after_insert.is_word("OVERWRITE") {
+        if after_insert.is_word("OVERWRITE")
+            || (after_insert.is_word("INTO") && p.peek_nth(2).is_word("TABLE"))
+        {
             return spark::parse_insert(p);
         }
         if after_insert.is_word("OR") {
@@ -869,6 +872,19 @@ mod tests {
         assert!(insert.overwrite);
         assert!(!insert.into);
         assert!(!insert.table_keyword);
+        assert_eq!(insert.table.parts[0].text, "t1");
+
+        let mut statements =
+            sqlparser::parse_sql::<DataFusion>("INSERT INTO TABLE t1 SELECT 1, null")
+                .unwrap();
+        let StatementKind::Ext(BuiltinStatement::Spark(SparkStatement::Insert(insert))) =
+            statements.remove(0).kind
+        else {
+            panic!("not a Spark insert");
+        };
+        assert!(!insert.overwrite);
+        assert!(insert.into);
+        assert!(insert.table_keyword);
         assert_eq!(insert.table.parts[0].text, "t1");
 
         for sql in [

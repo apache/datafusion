@@ -886,7 +886,7 @@ impl DropCatalogBuilder {
 /// # Notes
 ///
 /// This structure purposely mirrors the structure in sqlparser's
-/// [`sqlparser::ast::Statement::CreateFunction`], but does not use it directly
+/// [`sqlparser::dialect::postgres::CreateFunction`], but does not use it directly
 /// to avoid a dependency on sqlparser in the core crate.
 ///
 ///

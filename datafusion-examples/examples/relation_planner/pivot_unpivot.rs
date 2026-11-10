@@ -155,7 +155,7 @@ async fn run_examples(ctx: &SessionContext) -> Result<()> {
         ctx,
         "Example 4: Basic UNPIVOT",
         r#"SELECT * FROM wide_sales
-           UNPIVOT (sales FOR quarter IN (q1 AS 'Q1', q2 AS 'Q2')) AS u
+           UNPIVOT (sales FOR quarter IN (q1 AS "Q1", q2 AS "Q2")) AS u
            ORDER BY quarter, region"#,
     )
     .await?;
@@ -177,7 +177,7 @@ async fn run_examples(ctx: &SessionContext) -> Result<()> {
         ctx,
         "Example 5: UNPIVOT INCLUDE NULLS",
         r#"SELECT * FROM wide_sales
-           UNPIVOT INCLUDE NULLS (sales FOR quarter IN (q1 AS 'Q1', q2 AS 'Q2')) AS u
+           UNPIVOT INCLUDE NULLS (sales FOR quarter IN (q1 AS "Q1", q2 AS "Q2")) AS u
            ORDER BY quarter, region"#,
     )
     .await?;
