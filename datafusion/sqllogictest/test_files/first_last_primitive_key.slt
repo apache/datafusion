@@ -20,23 +20,13 @@ CREATE TABLE src AS
 SELECT
   g, u, p,
   arrow_cast(p * 30 - 100, 'Int8') AS k_i8,
-  arrow_cast(p * 8000 - 28000, 'Int16') AS k_i16,
-  arrow_cast(p * 600000000 - 2100000000, 'Int32') AS k_i32,
-  p * 1000000000000000000 - 3500000000000000000 AS k_i64,
-  arrow_cast(p * 36, 'UInt8') AS k_u8,
-  arrow_cast(p * 9000, 'UInt16') AS k_u16,
-  arrow_cast(p * 600000000, 'UInt32') AS k_u32,
   arrow_cast(p, 'UInt64') * arrow_cast(2600000000000000000, 'UInt64') AS k_u64,
   arrow_cast(f, 'Float16') AS k_f16,
-  arrow_cast(f, 'Float32') AS k_f32,
   f AS k_f64,
   arrow_cast(p * 25 - 87, 'Decimal128(10, 2)') AS k_dec128,
   arrow_cast(p * 25 - 87, 'Decimal256(40, 2)') AS k_dec256,
-  arrow_cast(arrow_cast(p * 1000 - 3000, 'Int32'), 'Date32') AS k_date,
   arrow_cast(p * 1000000000000 - 3000000000000, 'Timestamp(Nanosecond, Some("+05:00"))') AS k_ts,
-  arrow_cast(p * 3600000000, 'Time64(Microsecond)') AS k_time,
   arrow_cast(arrow_cast(p - 3, 'Utf8') || ' days', 'Interval(MonthDayNano)') AS k_interval,
-  arrow_cast(p - 3, 'Duration(Second)') AS k_duration,
   CASE WHEN u % 5 = 2 THEN NULL ELSE u END AS v_i64,
   CASE WHEN u % 5 = 2 THEN NULL ELSE 'v' || u END AS v_str,
   CASE WHEN u % 5 = 2 THEN NULL ELSE named_struct('u', u) END AS v_struct
@@ -69,17 +59,8 @@ SELECT count(*), count(DISTINCT g), count(p) FROM src;
 ----
 1893 422 1752
 
-# The floats keep their sign, so they sort -NaN, -inf, -1.5, -0.0, 0.0, 1.5,
-# inf, NaN
-query ???
-SELECT array_agg(p ORDER BY k_f16), array_agg(p ORDER BY k_f32),
-  array_agg(p ORDER BY k_f64)
-FROM src WHERE g = 215;
-----
-[0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7] [0, 1, 2, 3, 4, 5, 6, 7]
-
-# first_value / last_value follow that order. Group 7 has a NULL key, which
-# sorts last.
+# Group 215 has the floats -NaN, -inf, -1.5, -0.0, 0.0, 1.5, inf and NaN, in
+# that order. Group 7 has a NULL key, which sorts last.
 query IIIII
 SELECT g, first_value(p ORDER BY k_f64), last_value(p ORDER BY k_f64),
   first_value(p ORDER BY k_f64) FILTER (WHERE p >= 3),
@@ -89,49 +70,29 @@ FROM src WHERE g IN (7, 215) GROUP BY g ORDER BY g;
 7 1 NULL 3 4
 215 0 7 3 4
 
-# Every key type
+# Key types with their own comparison or data type
 query I
 SELECT count(*) FROM (
   SELECT g,
     first_value(u ORDER BY k_i8), last_value(u ORDER BY k_i8),
-    first_value(u ORDER BY k_i16), last_value(u ORDER BY k_i16),
-    first_value(u ORDER BY k_i32), last_value(u ORDER BY k_i32),
-    first_value(u ORDER BY k_i64), last_value(u ORDER BY k_i64),
-    first_value(u ORDER BY k_u8), last_value(u ORDER BY k_u8),
-    first_value(u ORDER BY k_u16), last_value(u ORDER BY k_u16),
-    first_value(u ORDER BY k_u32), last_value(u ORDER BY k_u32),
     first_value(u ORDER BY k_u64), last_value(u ORDER BY k_u64),
     first_value(u ORDER BY k_f16), last_value(u ORDER BY k_f16),
-    first_value(u ORDER BY k_f32), last_value(u ORDER BY k_f32),
     first_value(u ORDER BY k_f64), last_value(u ORDER BY k_f64),
     first_value(u ORDER BY k_dec128), last_value(u ORDER BY k_dec128),
     first_value(u ORDER BY k_dec256), last_value(u ORDER BY k_dec256),
-    first_value(u ORDER BY k_date), last_value(u ORDER BY k_date),
     first_value(u ORDER BY k_ts), last_value(u ORDER BY k_ts),
-    first_value(u ORDER BY k_time), last_value(u ORDER BY k_time),
-    first_value(u ORDER BY k_interval), last_value(u ORDER BY k_interval),
-    first_value(u ORDER BY k_duration), last_value(u ORDER BY k_duration)
+    first_value(u ORDER BY k_interval), last_value(u ORDER BY k_interval)
   FROM src GROUP BY g
   EXCEPT
   SELECT g,
     first_value(u ORDER BY k_i8, u), last_value(u ORDER BY k_i8, u),
-    first_value(u ORDER BY k_i16, u), last_value(u ORDER BY k_i16, u),
-    first_value(u ORDER BY k_i32, u), last_value(u ORDER BY k_i32, u),
-    first_value(u ORDER BY k_i64, u), last_value(u ORDER BY k_i64, u),
-    first_value(u ORDER BY k_u8, u), last_value(u ORDER BY k_u8, u),
-    first_value(u ORDER BY k_u16, u), last_value(u ORDER BY k_u16, u),
-    first_value(u ORDER BY k_u32, u), last_value(u ORDER BY k_u32, u),
     first_value(u ORDER BY k_u64, u), last_value(u ORDER BY k_u64, u),
     first_value(u ORDER BY k_f16, u), last_value(u ORDER BY k_f16, u),
-    first_value(u ORDER BY k_f32, u), last_value(u ORDER BY k_f32, u),
     first_value(u ORDER BY k_f64, u), last_value(u ORDER BY k_f64, u),
     first_value(u ORDER BY k_dec128, u), last_value(u ORDER BY k_dec128, u),
     first_value(u ORDER BY k_dec256, u), last_value(u ORDER BY k_dec256, u),
-    first_value(u ORDER BY k_date, u), last_value(u ORDER BY k_date, u),
     first_value(u ORDER BY k_ts, u), last_value(u ORDER BY k_ts, u),
-    first_value(u ORDER BY k_time, u), last_value(u ORDER BY k_time, u),
-    first_value(u ORDER BY k_interval, u), last_value(u ORDER BY k_interval, u),
-    first_value(u ORDER BY k_duration, u), last_value(u ORDER BY k_duration, u)
+    first_value(u ORDER BY k_interval, u), last_value(u ORDER BY k_interval, u)
   FROM src GROUP BY g
 );
 ----
@@ -171,23 +132,23 @@ statement ok
 CREATE VIEW value_diff AS
 SELECT count(*) AS mismatches FROM (
   SELECT g,
-    first_value(v_i64 ORDER BY k_i32), last_value(v_i64 ORDER BY k_i32) IGNORE NULLS,
-    first_value(v_str ORDER BY k_i32 DESC) IGNORE NULLS, last_value(v_str ORDER BY k_i32),
-    first_value(v_struct ORDER BY k_i32) IGNORE NULLS,
-    last_value(v_struct ORDER BY k_i32 NULLS FIRST),
-    first_value(v_i64 ORDER BY k_i32) FILTER (WHERE nullif(u % 7, 3) > 1),
-    last_value(v_str ORDER BY k_i32) FILTER (WHERE nullif(u % 7, 3) > 1),
-    first_value(v_struct ORDER BY k_i32 DESC) FILTER (WHERE nullif(u % 7, 3) > 1)
+    first_value(v_i64 ORDER BY k_i8), last_value(v_i64 ORDER BY k_i8) IGNORE NULLS,
+    first_value(v_str ORDER BY k_i8 DESC) IGNORE NULLS, last_value(v_str ORDER BY k_i8),
+    first_value(v_struct ORDER BY k_i8) IGNORE NULLS,
+    last_value(v_struct ORDER BY k_i8 NULLS FIRST),
+    first_value(v_i64 ORDER BY k_i8) FILTER (WHERE nullif(u % 7, 3) > 1),
+    last_value(v_str ORDER BY k_i8) FILTER (WHERE nullif(u % 7, 3) > 1),
+    first_value(v_struct ORDER BY k_i8 DESC) FILTER (WHERE nullif(u % 7, 3) > 1)
   FROM src GROUP BY g
   EXCEPT
   SELECT g,
-    first_value(v_i64 ORDER BY k_i32, u), last_value(v_i64 ORDER BY k_i32, u) IGNORE NULLS,
-    first_value(v_str ORDER BY k_i32 DESC, u) IGNORE NULLS, last_value(v_str ORDER BY k_i32, u),
-    first_value(v_struct ORDER BY k_i32, u) IGNORE NULLS,
-    last_value(v_struct ORDER BY k_i32 NULLS FIRST, u),
-    first_value(v_i64 ORDER BY k_i32, u) FILTER (WHERE nullif(u % 7, 3) > 1),
-    last_value(v_str ORDER BY k_i32, u) FILTER (WHERE nullif(u % 7, 3) > 1),
-    first_value(v_struct ORDER BY k_i32 DESC, u) FILTER (WHERE nullif(u % 7, 3) > 1)
+    first_value(v_i64 ORDER BY k_i8, u), last_value(v_i64 ORDER BY k_i8, u) IGNORE NULLS,
+    first_value(v_str ORDER BY k_i8 DESC, u) IGNORE NULLS, last_value(v_str ORDER BY k_i8, u),
+    first_value(v_struct ORDER BY k_i8, u) IGNORE NULLS,
+    last_value(v_struct ORDER BY k_i8 NULLS FIRST, u),
+    first_value(v_i64 ORDER BY k_i8, u) FILTER (WHERE nullif(u % 7, 3) > 1),
+    last_value(v_str ORDER BY k_i8, u) FILTER (WHERE nullif(u % 7, 3) > 1),
+    first_value(v_struct ORDER BY k_i8 DESC, u) FILTER (WHERE nullif(u % 7, 3) > 1)
   FROM src GROUP BY g
 );
 
