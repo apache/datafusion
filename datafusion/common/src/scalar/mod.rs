@@ -47,15 +47,18 @@ use crate::scalar::consts::{
 use crate::utils::SingleRowListArrayBuilder;
 use crate::{_internal_datafusion_err, arrow_datafusion_err};
 use arrow::array::timezone::Tz;
+use arrow::array::types::{
+    BinaryType, ByteArrayType, LargeBinaryType, LargeUtf8Type, Utf8Type,
+};
 use arrow::array::{
     Array, ArrayData, ArrayDataBuilder, ArrayRef, ArrowNativeTypeOp, ArrowPrimitiveType,
     AsArray, BinaryArray, BinaryViewArray, BinaryViewBuilder, BooleanArray, Date32Array,
     Date64Array, Decimal32Array, Decimal64Array, Decimal128Array, Decimal256Array,
     DictionaryArray, DurationMicrosecondArray, DurationMillisecondArray,
     DurationNanosecondArray, DurationSecondArray, FixedSizeBinaryArray,
-    FixedSizeListArray, Float16Array, Float32Array, Float64Array, GenericListArray,
-    GenericListViewArray, Int8Array, Int16Array, Int32Array, Int64Array,
-    IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
+    FixedSizeListArray, Float16Array, Float32Array, Float64Array, GenericByteArray,
+    GenericListArray, GenericListViewArray, Int8Array, Int16Array, Int32Array,
+    Int64Array, IntervalDayTimeArray, IntervalMonthDayNanoArray, IntervalYearMonthArray,
     LargeBinaryArray, LargeListArray, LargeListViewArray, LargeStringArray, ListArray,
     ListViewArray, MapArray, MutableArrayData, PrimitiveArray, RunArray, Scalar,
     StringArray, StringViewArray, StringViewBuilder, StructArray, Time32MillisecondArray,
@@ -83,6 +86,7 @@ use arrow::datatypes::{
     TimestampSecondType, UInt8Type, UInt16Type, UInt32Type, UInt64Type, UnionFields,
     UnionMode, i256, validate_decimal_precision_and_scale,
 };
+use arrow::error::ArrowError;
 use arrow::util::display::{ArrayFormatter, FormatOptions, array_value_to_string};
 use cache::{get_or_create_cached_key_array, get_or_create_cached_null_array};
 use chrono::{Duration, LocalResult, NaiveDate, NaiveDateTime, Offset, TimeZone};
@@ -1118,6 +1122,36 @@ pub fn get_dict_value<K: ArrowDictionaryKeyType>(
 ) -> Result<(&ArrayRef, Option<usize>)> {
     let dict_array = as_dictionary_array::<K>(array)?;
     Ok((dict_array.values(), dict_array.key(index)))
+}
+
+/// Repeats `value` `size` times into a `GenericByteArray<T>`, returning an
+/// error instead of panicking if the total byte length overflows `T::Offset`
+/// (or `usize` / `isize`).
+fn try_repeated_byte_array<T: ByteArrayType>(
+    value: &T::Native,
+    size: usize,
+) -> Result<ArrayRef> {
+    let bytes: &[u8] = value.as_ref();
+    let byte_len = bytes.len();
+    let total_bytes = byte_len.checked_mul(size).ok_or_else(|| {
+        DataFusionError::Execution(format!(
+            "Cannot construct {} array of size {size}: total byte length overflows usize",
+            T::DATA_TYPE
+        ))
+    })?;
+    if T::Offset::from_usize(total_bytes).is_none() {
+        return Err(arrow_datafusion_err!(ArrowError::OffsetOverflowError(
+            total_bytes
+        )));
+    }
+    // On 32-bit targets, i64 offsets allow lengths that `isize` cannot address.
+    if isize::try_from(total_bytes).is_err() {
+        return Err(DataFusionError::Execution(format!(
+            "Cannot construct {} array of size {size}: total byte length {total_bytes} exceeds isize::MAX",
+            T::DATA_TYPE
+        )));
+    }
+    Ok(Arc::new(GenericByteArray::<T>::new_repeated(value, size)))
 }
 
 /// Create a dictionary array representing `value` repeated `size`
@@ -3680,6 +3714,7 @@ impl ScalarValue {
     ///
     /// Errors if `self` is
     /// - a decimal that fails be converted to a decimal array of size
+    /// - a byte scalar (`Utf8`, `LargeUtf8`, `Binary`, `LargeBinary`) whose repeated byte length overflows
     /// - a `FixedSizeList` that fails to be concatenated into an array of size
     /// - a `List` that fails to be concatenated into an array of size
     /// - a `Dictionary` that fails be converted to a dictionary array of size
@@ -3786,7 +3821,7 @@ impl ScalarValue {
                 )
             }
             ScalarValue::Utf8(e) => match e {
-                Some(value) => Arc::new(StringArray::new_repeated(value, size)),
+                Some(value) => try_repeated_byte_array::<Utf8Type>(value, size)?,
                 None => new_null_array(&DataType::Utf8, size),
             },
             ScalarValue::Utf8View(e) => match e {
@@ -3799,12 +3834,12 @@ impl ScalarValue {
                 None => new_null_array(&DataType::Utf8View, size),
             },
             ScalarValue::LargeUtf8(e) => match e {
-                Some(value) => Arc::new(LargeStringArray::new_repeated(value, size)),
+                Some(value) => try_repeated_byte_array::<LargeUtf8Type>(value, size)?,
                 None => new_null_array(&DataType::LargeUtf8, size),
             },
             ScalarValue::Binary(e) => match e {
                 Some(value) => {
-                    Arc::new(BinaryArray::new_repeated(value.as_slice(), size))
+                    try_repeated_byte_array::<BinaryType>(value.as_slice(), size)?
                 }
                 None => new_null_array(&DataType::Binary, size),
             },
@@ -3829,7 +3864,7 @@ impl ScalarValue {
             },
             ScalarValue::LargeBinary(e) => match e {
                 Some(value) => {
-                    Arc::new(LargeBinaryArray::new_repeated(value.as_slice(), size))
+                    try_repeated_byte_array::<LargeBinaryType>(value.as_slice(), size)?
                 }
                 None => new_null_array(&DataType::LargeBinary, size),
             },
@@ -6257,7 +6292,6 @@ mod tests {
         ArrowNumericType, DECIMAL128_MAX_PRECISION, DECIMAL256_MAX_PRECISION, Fields,
         Float64Type, TimeUnit,
     };
-    use arrow::error::ArrowError;
     use arrow::util::pretty::pretty_format_columns;
     use insta::assert_snapshot;
     use rand::Rng;
@@ -6610,6 +6644,90 @@ mod tests {
         assert_eq!(result.len(), 2);
         assert_eq!(result.null_count(), 2);
         assert_eq!(result.as_fixed_size_binary().values().len(), 10);
+    }
+
+    #[test]
+    fn test_to_array_of_size_byte_offset_overflow() {
+        let one_mb_str = "a".repeat(1 << 20);
+        let one_mb_bytes = vec![b'a'; 1 << 20];
+
+        // 2^20 * 2^11 = 2^31 > i32::MAX
+        for sv in [
+            ScalarValue::Utf8(Some(one_mb_str.clone())),
+            ScalarValue::Binary(Some(one_mb_bytes.clone())),
+        ] {
+            let err = sv.to_array_of_size(1 << 11).unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    DataFusionError::ArrowError(ref inner, _)
+                        if matches!(
+                            inner.as_ref(),
+                            ArrowError::OffsetOverflowError(2_147_483_648)
+                        )
+                ),
+                "unexpected error: {err:?}"
+            );
+        }
+
+        // Multiplication overflowing usize returns an error instead of panicking
+        let overflow_size = (usize::MAX / 2) + 1;
+        for sv in [
+            ScalarValue::Utf8(Some("ab".to_string())),
+            ScalarValue::Binary(Some(vec![1, 2])),
+            ScalarValue::LargeUtf8(Some("ab".to_string())),
+            ScalarValue::LargeBinary(Some(vec![1, 2])),
+        ] {
+            assert!(sv.to_array_of_size(overflow_size).is_err());
+        }
+
+        // LargeUtf8 / LargeBinary overflowing i64::MAX on 64-bit platforms
+        #[cfg(target_pointer_width = "64")]
+        {
+            let expected_large_overflow = (i64::MAX as usize) + 1;
+            for sv in [
+                ScalarValue::LargeUtf8(Some(one_mb_str)),
+                ScalarValue::LargeBinary(Some(one_mb_bytes)),
+            ] {
+                let err = sv.to_array_of_size(1 << 43).unwrap_err();
+                assert!(
+                    matches!(
+                        err,
+                        DataFusionError::ArrowError(ref inner, _)
+                            if matches!(
+                                inner.as_ref(),
+                                ArrowError::OffsetOverflowError(n) if *n == expected_large_overflow
+                            )
+                    ),
+                    "unexpected error: {err:?}"
+                );
+            }
+        }
+
+        // Empty values and size = 0 continue to succeed
+        assert_eq!(
+            ScalarValue::Utf8(Some(String::new()))
+                .to_array_of_size(10)
+                .unwrap()
+                .len(),
+            10
+        );
+        assert_eq!(
+            ScalarValue::Utf8(Some("abc".to_string()))
+                .to_array_of_size(0)
+                .unwrap()
+                .len(),
+            0
+        );
+        assert_eq!(
+            ScalarValue::Binary(Some(vec![1, 2, 3]))
+                .to_array_of_size(3)
+                .unwrap()
+                .as_binary::<i32>()
+                .iter()
+                .collect::<Vec<_>>(),
+            vec![Some(&[1, 2, 3][..]); 3]
+        );
     }
 
     #[test]
