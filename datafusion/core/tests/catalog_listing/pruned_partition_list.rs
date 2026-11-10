@@ -22,7 +22,6 @@ use futures::{FutureExt, StreamExt as _, TryStreamExt as _};
 use object_store::{ObjectStoreExt, memory::InMemory, path::Path};
 
 use datafusion::execution::SessionStateBuilder;
-use datafusion::prelude::SessionConfig;
 use datafusion_catalog_listing::helpers::{
     describe_partition, list_partitions, pruned_partition_list,
 };
@@ -311,69 +310,36 @@ async fn test_pruned_partition_list_prunes_null_partition() {
 }
 
 #[tokio::test]
-async fn test_pruned_partition_list_null_partition_name_is_configurable() {
-    let files: &[(&str, u64)] = &[
+async fn test_pruned_partition_list_hive_null_partition_name() {
+    let (store, state) = make_test_store_and_state(&[
         ("tablepath/mypartition=MY_NULL/file.parquet", 100),
         (
             "tablepath/mypartition=__HIVE_DEFAULT_PARTITION__/file.parquet",
             100,
         ),
-    ];
+    ]);
+    let pruned = pruned_partition_list(
+        state.as_ref(),
+        store.as_ref(),
+        &ListingTableUrl::parse("file:///tablepath/").unwrap(),
+        &[],
+        ".parquet",
+        &[(String::from("mypartition"), DataType::Utf8)],
+    )
+    .await
+    .expect("partition pruning failed")
+    .try_collect::<Vec<_>>()
+    .await
+    .unwrap();
 
-    let pruned_with_name = |name: &str| {
-        let config = SessionConfig::new().set_str(
-            "datafusion.execution.listing_table_hive_default_partition_name",
-            name,
-        );
-        let (store, state) = make_test_store_and_state_with_config(files, config);
-        async move {
-            pruned_partition_list(
-                state.as_ref(),
-                store.as_ref(),
-                &ListingTableUrl::parse("file:///tablepath/").unwrap(),
-                &[],
-                ".parquet",
-                &[(String::from("mypartition"), DataType::Utf8)],
-            )
-            .await
-            .expect("partition pruning failed")
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap()
-        }
-    };
-
-    // A writer configured with a different placeholder, e.g. Hive's
-    // `hive.exec.default.partition.name`: only that name is read as NULL.
-    let pruned = pruned_with_name("MY_NULL").await;
-    assert_eq!(
-        &pruned[0].partition_values,
-        &[ScalarValue::Utf8(None)],
-        "MY_NULL should be read as NULL"
-    );
-    assert_eq!(
-        &pruned[1].partition_values,
-        &[ScalarValue::from("__HIVE_DEFAULT_PARTITION__")]
-    );
-
-    // The empty name turns the mapping off, leaving the directory name as the value.
-    let pruned = pruned_with_name("").await;
+    // Only the fixed Hive marker is read as NULL; other names remain literal values.
+    assert_eq!(pruned.len(), 2);
     assert_eq!(&pruned[0].partition_values, &[ScalarValue::from("MY_NULL")]);
-    assert_eq!(
-        &pruned[1].partition_values,
-        &[ScalarValue::from("__HIVE_DEFAULT_PARTITION__")]
-    );
+    assert_eq!(&pruned[1].partition_values, &[ScalarValue::Utf8(None)]);
 }
 
 pub fn make_test_store_and_state(
     files: &[(&str, u64)],
-) -> (Arc<InMemory>, Arc<dyn Session>) {
-    make_test_store_and_state_with_config(files, SessionConfig::new())
-}
-
-pub fn make_test_store_and_state_with_config(
-    files: &[(&str, u64)],
-    config: SessionConfig,
 ) -> (Arc<InMemory>, Arc<dyn Session>) {
     let memory = InMemory::new();
 
@@ -385,6 +351,6 @@ pub fn make_test_store_and_state_with_config(
             .unwrap();
     }
 
-    let state = SessionStateBuilder::new().with_config(config).build();
+    let state = SessionStateBuilder::new().build();
     (Arc::new(memory), Arc::new(state))
 }

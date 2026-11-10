@@ -212,8 +212,7 @@ impl ListingTable {
             .ok_or_else(|| internal_datafusion_err!("No ListingOptions provided"))?;
 
         // Add the partition columns to the file schema. They are nullable because a Hive
-        // compliant writer spells a null partition value with a placeholder directory name
-        // (see `ExecutionOptions::listing_table_hive_default_partition_name`).
+        // compliant writer uses `__HIVE_DEFAULT_PARTITION__` for a null partition value.
         let mut builder = SchemaBuilder::from(file_schema.as_ref().to_owned());
         for (part_col_name, part_col_type) in &options.table_partition_cols {
             builder.push(Field::new(part_col_name, part_col_type.clone(), true));

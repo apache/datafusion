@@ -214,7 +214,7 @@ query I
 select column1 from null_part_inferred where d <> '2024-01-01';
 ----
 
-# A null partition still lets files be ordered by their partition value.
+# branch-54 retains an explicit sort when a partition has only NULL values.
 statement ok
 set datafusion.execution.target_partitions = 1;
 
@@ -231,7 +231,9 @@ explain select column1, d from null_part_ordered order by d;
 logical_plan
 01)Sort: null_part_ordered.d ASC NULLS LAST
 02)--TableScan: null_part_ordered projection=[column1, d]
-physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/listing_table_partitions/null_part/d=2024-01-01/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/listing_table_partitions/null_part/d=__HIVE_DEFAULT_PARTITION__/data.parquet]]}, projection=[column1, d], output_ordering=[d@1 ASC NULLS LAST], file_type=parquet
+physical_plan
+01)SortExec: expr=[d@1 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/listing_table_partitions/null_part/d=2024-01-01/data.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/listing_table_partitions/null_part/d=__HIVE_DEFAULT_PARTITION__/data.parquet]]}, projection=[column1, d], file_type=parquet
 
 query ID
 select column1, d from null_part_ordered order by d;
@@ -253,12 +255,9 @@ location 'test_files/scratch/listing_table_partitions/null_part_write/';
 statement error Cannot write value '__HIVE_DEFAULT_PARTITION__' for partition column 'p': it is the null partition name and would be read back as NULL
 insert into null_part_write values (1, 'x'), (2, '__HIVE_DEFAULT_PARTITION__');
 
-# With the null partition name disabled, the value round trips.
-statement ok
-set datafusion.execution.listing_table_hive_default_partition_name = '';
-
+# Other partition names remain literal values and round trip normally.
 query I
-insert into null_part_write values (1, 'x'), (2, '__HIVE_DEFAULT_PARTITION__');
+insert into null_part_write values (1, 'x'), (2, 'MY_NULL');
 ----
 2
 
@@ -266,7 +265,4 @@ query IT
 select a, p from null_part_write order by a;
 ----
 1 x
-2 __HIVE_DEFAULT_PARTITION__
-
-statement ok
-set datafusion.execution.listing_table_hive_default_partition_name = '__HIVE_DEFAULT_PARTITION__';
+2 MY_NULL

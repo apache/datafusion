@@ -50,6 +50,8 @@ use object_store::path::Path;
 use rand::distr::SampleString;
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
 
+const HIVE_DEFAULT_PARTITION_NAME: &str = "__HIVE_DEFAULT_PARTITION__";
+
 type RecordBatchReceiver = Receiver<RecordBatch>;
 pub type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
 
@@ -314,11 +316,7 @@ async fn hive_style_partitions_demuxer(
 
     while let Some(rb) = input.next().await.transpose()? {
         // First compute partition key for each row of batch, e.g. (col1=val1, col2=val2, ...)
-        let all_partition_values = compute_partition_keys_by_row(
-            &rb,
-            &partition_by,
-            &exec_options.listing_table_hive_default_partition_name,
-        )?;
+        let all_partition_values = compute_partition_keys_by_row(&rb, &partition_by)?;
 
         // Next compute how the batch should be split up to take each distinct key to its own batch
         let take_map = compute_take_arrays(&rb, &all_partition_values);
@@ -378,7 +376,6 @@ async fn hive_style_partitions_demuxer(
 fn compute_partition_keys_by_row<'a>(
     rb: &'a RecordBatch,
     partition_by: &'a [(String, DataType)],
-    null_partition_name: &str,
 ) -> Result<Vec<Vec<Cow<'a, str>>>> {
     let mut all_partition_values = vec![];
 
@@ -540,11 +537,12 @@ fn compute_partition_keys_by_row<'a>(
             }
         }
 
-        if !null_partition_name.is_empty()
-            && partition_values.iter().any(|v| v == null_partition_name)
+        if partition_values
+            .iter()
+            .any(|v| v == HIVE_DEFAULT_PARTITION_NAME)
         {
             return exec_err!(
-                "Cannot write value '{null_partition_name}' for partition column '{col}': \
+                "Cannot write value '{HIVE_DEFAULT_PARTITION_NAME}' for partition column '{col}': \
                  it is the null partition name and would be read back as NULL"
             );
         }
@@ -616,7 +614,6 @@ mod tests {
     use super::*;
     use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
     use arrow::datatypes::Int32Type;
-    use datafusion_common::config::HIVE_DEFAULT_PARTITION_NAME;
 
     fn partition_batch(column: ArrayRef) -> RecordBatch {
         RecordBatch::try_from_iter_with_nullable([("p", column, true)]).unwrap()
@@ -634,12 +631,7 @@ mod tests {
         for column in columns {
             let partition_by = vec![("p".to_string(), column.data_type().clone())];
             let batch = partition_batch(column);
-            let err = compute_partition_keys_by_row(
-                &batch,
-                &partition_by,
-                HIVE_DEFAULT_PARTITION_NAME,
-            )
-            .unwrap_err();
+            let err = compute_partition_keys_by_row(&batch, &partition_by).unwrap_err();
             assert_eq!(
                 err.strip_backtrace(),
                 "Execution error: Cannot write value '__HIVE_DEFAULT_PARTITION__' for partition column 'p': it is the null partition name and would be read back as NULL"
@@ -648,11 +640,11 @@ mod tests {
     }
 
     #[test]
-    fn partition_keys_accept_null_partition_name_when_disabled() {
-        let column = StringArray::from(vec![HIVE_DEFAULT_PARTITION_NAME]);
+    fn partition_keys_accept_other_partition_names() {
+        let column = StringArray::from(vec!["MY_NULL"]);
         let batch = partition_batch(Arc::new(column));
         let partition_by = vec![("p".to_string(), DataType::Utf8)];
-        let keys = compute_partition_keys_by_row(&batch, &partition_by, "").unwrap();
-        assert_eq!(keys, vec![vec![Cow::Borrowed(HIVE_DEFAULT_PARTITION_NAME)]]);
+        let keys = compute_partition_keys_by_row(&batch, &partition_by).unwrap();
+        assert_eq!(keys, vec![vec![Cow::Borrowed("MY_NULL")]]);
     }
 }

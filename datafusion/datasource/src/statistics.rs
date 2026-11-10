@@ -927,7 +927,7 @@ mod tests {
     }
 
     #[test]
-    fn min_max_statistics_null_partition_value() -> Result<()> {
+    fn min_max_statistics_null_partition_value() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Int64, true),
             Field::new("d", DataType::Date32, true),
@@ -944,14 +944,16 @@ mod tests {
         };
         let files = [file("d=1/f.parquet", Some(1)), file("null/f.parquet", None)];
 
-        let stats =
-            MinMaxStatistics::new_from_files(&sort_order, &schema, None, files.iter())?;
-
-        let sorted = stats.min_values_sorted();
-        assert_eq!(sorted.iter().map(|(i, _)| *i).collect::<Vec<_>>(), [1, 0]);
-        assert!(!stats.is_sorted());
-
-        Ok(())
+        // branch-54 cannot derive ordering bounds from an all-NULL partition.
+        let Err(err) =
+            MinMaxStatistics::new_from_files(&sort_order, &schema, None, files.iter())
+        else {
+            panic!("expected missing statistics error")
+        };
+        assert!(
+            err.to_string().contains("statistics not found"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[test]
