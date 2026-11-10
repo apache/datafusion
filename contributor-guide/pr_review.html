@@ -562,9 +562,10 @@ history of how the change was developed (this is common in LLM-assisted
 code, e.g. “// changed to use a HashMap” or “// this handles the case
 mentioned above”). Such comments become irrelevant as soon as the PR merges.</p></li>
 <li><p>When comments refer to other structs, functions, or modules, they should use
-<a class="reference external" href="https://doc.rust-lang.org/rustdoc/write-documentation/linking-to-items-by-name.html">rustdoc intra-doc links</a> (e.g. <code class="docutils literal notranslate"><span class="pre">[`SessionContext`]</span></code>) rather than plain
+<a class="reference external" href="https://doc.rust-lang.org/rustdoc/write-documentation/linking-to-items-by-name.html">rustdoc intra-doc links</a> (e.g. <code class="docutils literal notranslate"><span class="pre">[`LogicalPlan`]</span></code>) rather than plain
 text names, so that <code class="docutils literal notranslate"><span class="pre">cargo</span> <span class="pre">doc</span></code> link checking ensures the references stay
-valid as the code evolves.</p></li>
+valid as the code evolves. For an item in a crate that depends on the
+current one, link to its docs.rs URL instead.</p></li>
 <li><p>New public APIs have doc comments, including examples where appropriate
 (doc examples are also tested by CI, so they double as test coverage).</p></li>
 <li><p>When documenting modules, functions, or fields, start with simple examples
@@ -647,6 +648,15 @@ dedicated machine and repeated runs.</p></li>
 <li><p>If the PR claims a performance improvement, check that the reported
 results are reproducible and that the benchmark exercises the changed
 code path.</p></li>
+<li><p>Check which part of the change produces the gain, for example by removing
+it and rerunning. A benchmark can improve for reasons other than the
+change’s core idea, such as inputs that happen to defeat the branch
+predictor or a shift in code layout, so check that the benchmark covers
+both well-predicted input (constant lengths, all valid) and poorly
+predicted input (random).</p></li>
+<li><p>Ask which inputs get slower and whether real workloads are likely to hit
+them, and whether the generated code holds up on another architecture
+and under the build settings downstream projects use.</p></li>
 </ol>
 </section>
 <section id="best-practices-for-reviewers">
@@ -672,6 +682,12 @@ without scope creep.</p>
 <p>Similarly, when a PR mixes refactoring with behavior changes or fixes a narrow
 problem with a broad mechanism, ask for it to be split or scoped down rather
 than reviewing it as-is.</p>
+</section>
+<section id="back-each-claim-with-evidence">
+<h3>Back Each Claim with Evidence<a class="headerlink" href="#back-each-claim-with-evidence" title="Link to this heading">#</a></h3>
+<p>Support a claim about how code behaves with what you checked: a permalink to
+the code, a test or command and its output, generated code, or benchmark
+results. A claim without evidence leaves the author to redo the investigation.</p>
 </section>
 <section id="narrate-what-you-verified-when-approving">
 <h3>Narrate What You Verified When Approving<a class="headerlink" href="#narrate-what-you-verified-when-approving" title="Link to this heading">#</a></h3>
@@ -751,6 +767,7 @@ approved.</p>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#review-tone-thank-contributors-and-praise-good-work-specifically">Review Tone: Thank Contributors and Praise Good Work Specifically</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#state-approval-conditions-explicitly">State Approval Conditions Explicitly</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#defer-non-blocking-work-to-follow-on-issues">Defer Non-Blocking Work to Follow-On Issues</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#back-each-claim-with-evidence">Back Each Claim with Evidence</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#narrate-what-you-verified-when-approving">Narrate What You Verified When Approving</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#use-ai-review-tools-thoughtfully">Use AI Review Tools Thoughtfully</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#invite-additional-committers-on-core-changes">Invite Additional Committers on Core Changes</a></li>
