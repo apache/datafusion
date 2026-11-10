@@ -780,20 +780,12 @@ impl Statistics {
                 // Skip min/max from all-null or empty inputs so their
                 // Absent bounds don't wipe out known bounds from other
                 // files. See https://github.com/apache/datafusion/issues/26748
-                let acc_all_null =
-                    is_all_null_or_empty(col_stats, &acc_num_rows);
-                let item_all_null =
-                    is_all_null_or_empty(item_cs, &stat.num_rows);
+                let acc_all_null = is_all_null_or_empty(col_stats, &acc_num_rows);
+                let item_all_null = is_all_null_or_empty(item_cs, &stat.num_rows);
                 match (acc_all_null, item_all_null) {
                     (false, false) => {
-                        precision_min(
-                            &mut col_stats.min_value,
-                            &item_cs.min_value,
-                        );
-                        precision_max(
-                            &mut col_stats.max_value,
-                            &item_cs.max_value,
-                        );
+                        precision_min(&mut col_stats.min_value, &item_cs.min_value);
+                        precision_max(&mut col_stats.max_value, &item_cs.max_value);
                     }
                     (true, false) => {
                         col_stats.min_value = item_cs.min_value.clone();
@@ -3440,7 +3432,10 @@ mod tests {
             ..ColumnStatistics::new_unknown()
         };
         // Exact(0) rows → empty, always skip
-        assert!(is_all_null_or_empty(&cs(Precision::Exact(0)), &Precision::Exact(0)));
+        assert!(is_all_null_or_empty(
+            &cs(Precision::Exact(0)),
+            &Precision::Exact(0)
+        ));
         // All rows are null
         assert!(is_all_null_or_empty(
             &cs(Precision::Exact(5)),
@@ -3496,9 +3491,11 @@ mod tests {
             );
 
         // real + null → preserves real bounds
-        let merged =
-            Statistics::try_merge_iter(&[stats_real.clone(), stats_null.clone()], &schema)
-                .unwrap();
+        let merged = Statistics::try_merge_iter(
+            &[stats_real.clone(), stats_null.clone()],
+            &schema,
+        )
+        .unwrap();
         assert_eq!(
             merged.column_statistics[0].min_value,
             Precision::Exact(ScalarValue::Date32(Some(19723)))
@@ -3510,9 +3507,11 @@ mod tests {
         assert_eq!(merged.num_rows, Precision::Exact(15));
 
         // null + real (reversed) → same result
-        let merged2 =
-            Statistics::try_merge_iter(&[stats_null.clone(), stats_real.clone()], &schema)
-                .unwrap();
+        let merged2 = Statistics::try_merge_iter(
+            &[stats_null.clone(), stats_real.clone()],
+            &schema,
+        )
+        .unwrap();
         assert_eq!(
             merged2.column_statistics[0].min_value,
             Precision::Exact(ScalarValue::Date32(Some(19723)))
@@ -3523,17 +3522,13 @@ mod tests {
         );
 
         // null + null → stays Absent
-        let merged3 =
-            Statistics::try_merge_iter(&[stats_null.clone(), stats_null.clone()], &schema)
-                .unwrap();
-        assert_eq!(
-            merged3.column_statistics[0].min_value,
-            Precision::Absent
-        );
-        assert_eq!(
-            merged3.column_statistics[0].max_value,
-            Precision::Absent
-        );
+        let merged3 = Statistics::try_merge_iter(
+            &[stats_null.clone(), stats_null.clone()],
+            &schema,
+        )
+        .unwrap();
+        assert_eq!(merged3.column_statistics[0].min_value, Precision::Absent);
+        assert_eq!(merged3.column_statistics[0].max_value, Precision::Absent);
     }
 
     #[test]
@@ -3562,10 +3557,7 @@ mod tests {
         let merged =
             Statistics::try_merge_iter(&[stats_real, stats_unknown], &schema).unwrap();
         // Conservative: Absent because we can't prove the second input is all-null
-        assert_eq!(
-            merged.column_statistics[0].min_value,
-            Precision::Absent
-        );
+        assert_eq!(merged.column_statistics[0].min_value, Precision::Absent);
     }
 
     #[test]
@@ -3637,8 +3629,7 @@ mod tests {
 
         // a + null + b → should merge a and b, skip null
         let merged =
-            Statistics::try_merge_iter(&[stats_a, stats_null, stats_b], &schema)
-                .unwrap();
+            Statistics::try_merge_iter(&[stats_a, stats_null, stats_b], &schema).unwrap();
         assert_eq!(
             merged.column_statistics[0].min_value,
             Precision::Exact(ScalarValue::from(1))
@@ -3648,9 +3639,6 @@ mod tests {
             Precision::Exact(ScalarValue::from(200))
         );
         assert_eq!(merged.num_rows, Precision::Exact(23));
-        assert_eq!(
-            merged.column_statistics[0].null_count,
-            Precision::Exact(5)
-        );
+        assert_eq!(merged.column_statistics[0].null_count, Precision::Exact(5));
     }
 }
