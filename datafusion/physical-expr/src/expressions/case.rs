@@ -299,7 +299,6 @@ pub struct CaseExpr {
 }
 
 /// Caller-supplied permission for reusing an operand at its first required evaluation.
-/// The authorized operand must evaluate to an array.
 /// This permission does not make the operand non-volatile or safe to hoist elsewhere.
 /// Decisions must be immutable. The permission object's identity is part of CASE
 /// equality so generic expression substitution cannot introduce a different grant.
@@ -420,17 +419,11 @@ impl RequiredOperandReuse {
     fn evaluate(&self, owner: &CaseExpr, batch: &RecordBatch) -> Result<ColumnarValue> {
         // Bind only the required operand. Let the prepared CASE retain its existing
         // uniform-predicate fast paths and avoid evaluating an unselected branch.
-        let operand = owner
-            .body
-            .else_expr
-            .as_ref()
-            .expect("authorized CASE has ELSE");
-        let value = match operand.evaluate(batch)? {
-            ColumnarValue::Array(value) => value,
-            ColumnarValue::Scalar(_) => {
-                return internal_err!("required CASE operand must evaluate to an array");
-            }
-        };
+        let mut operand = &owner.body.when_then_expr[0].0;
+        for &index in &self.first_path {
+            operand = operand.children()[index];
+        }
+        let value = operand.evaluate(batch)?.into_array(batch.num_rows())?;
         let prepared = self.prepared_case(owner, batch.num_columns())?;
         let mut fields = batch.schema().fields().to_vec();
         fields.push(Arc::new(Field::new(
@@ -872,8 +865,10 @@ impl CaseExpr {
     /// Reuses only the first required operand and the matching ELSE root.
     /// Invalidated permissions preserve the original body and independent evaluations.
     ///
-    /// The caller must authorize reuse of this array-valued operand. It is evaluated
-    /// at its existing position in the first WHEN, not hoisted above the CASE.
+    /// The caller must authorize reuse of this operand. The instance in the first
+    /// WHEN is evaluated at its existing position, not hoisted above the CASE.
+    /// Scalar results, including those produced after argument rewrites, are
+    /// expanded to the input batch length without evaluating the operand again.
     /// This does not change the volatility of the operand or authorize reuse elsewhere.
     /// The caller must also ensure that the remaining expressions, including custom
     /// intermediate nodes, observe input columns only through their declared children:
@@ -4420,6 +4415,80 @@ mod required_operand_tests {
                 assert_eq!(evaluate(&reused), expected);
                 assert_eq!(rows.load(Ordering::SeqCst), input.num_rows());
             }
+        }
+    }
+
+    #[test]
+    fn required_operand_evaluates_first_when_instance() {
+        let input = batch(vec![Some(1), Some(1)]);
+        let when_rows = Arc::new(AtomicUsize::new(0));
+        let else_rows = Arc::new(AtomicUsize::new(0));
+        // Equality deliberately excludes the instance's counter.
+        let when_operand = counted("value", 1, 7, &when_rows, false);
+        let else_operand = counted("value", 1, 7, &else_rows, false);
+        let condition: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&when_operand),
+            Operator::Eq,
+            lit(1i32),
+        ));
+        let make = || {
+            CaseExpr::try_new(
+                None,
+                vec![(Arc::clone(&condition), lit(100i32))],
+                Some(Arc::clone(&else_operand)),
+            )
+            .unwrap()
+        };
+        let plain = make();
+        let reused = make().with_required_operand_reuse(&when_operand, Arc::new(Policy));
+        assert_ne!(plain, reused, "the test must acquire permission");
+        for case in [plain, reused] {
+            when_rows.store(0, Ordering::SeqCst);
+            else_rows.store(0, Ordering::SeqCst);
+            assert_eq!(result(&case, &input), vec![Some(100), Some(100)]);
+            assert_eq!(when_rows.load(Ordering::SeqCst), input.num_rows());
+            assert_eq!(else_rows.load(Ordering::SeqCst), 0);
+        }
+    }
+
+    #[test]
+    fn required_operand_unprojects_literal_without_repeated_evaluation() {
+        let input = batch(vec![Some(2), Some(2)]).project(&[1]).unwrap();
+        let rows = Arc::new(AtomicUsize::new(0));
+        let operand = counted("value", 0, 7, &rows, false);
+        let condition: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            Arc::clone(&operand),
+            Operator::Eq,
+            lit(1i32),
+        ));
+        let make = || {
+            CaseExpr::try_new(
+                None,
+                vec![(Arc::clone(&condition), lit(100i32))],
+                Some(Arc::clone(&operand)),
+            )
+            .unwrap()
+        };
+        let plain: Arc<dyn PhysicalExpr> = Arc::new(make());
+        let reused: Arc<dyn PhysicalExpr> =
+            Arc::new(make().with_required_operand_reuse(&operand, Arc::new(Policy)));
+        let projected = [crate::projection::ProjectionExpr {
+            expr: lit(2i32),
+            alias: "value".into(),
+        }];
+        let plain = crate::projection::update_expr(&plain, &projected, true)
+            .unwrap()
+            .unwrap();
+        let reused = crate::projection::update_expr(&reused, &projected, true)
+            .unwrap()
+            .unwrap();
+        assert!(!plain.eq(&reused), "matching rewrites must keep permission");
+        for (case, expected_rows) in
+            [(plain, 2 * input.num_rows()), (reused, input.num_rows())]
+        {
+            rows.store(0, Ordering::SeqCst);
+            assert_eq!(result(case.as_ref(), &input), vec![Some(2), Some(2)]);
+            assert_eq!(rows.load(Ordering::SeqCst), expected_rows);
         }
     }
 
