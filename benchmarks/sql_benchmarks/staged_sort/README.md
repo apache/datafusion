@@ -11,16 +11,17 @@ keys only for tied rows. The sort automatically groups keys into stages; this
 suite does not set the staged-sort switch or prescribe stage sizes. The same SQL
 can run on `main`, which may not know that switch.
 
-| Query | Workload                                                                                          |
-| ----- | ------------------------------------------------------------------------------------------------- |
-| 01    | Unique `id` prefix; `lower` and `md5` can be skipped.                                             |
-| 02    | One sparse tie group (~10% of rows); only tied rows reach `md5`.                                 |
-| 03    | One prefix group; all rows reach `md5` (fallback).                                                |
-| 04    | Sparse ties reach `lower(payload)`, which resolves them and skips `md5`.                          |
-| 05    | Nullable prefix, descending with NULLS FIRST; NULLs tie.                                          |
-| 06    | Cheap keys only; control with no expensive stage.                                                 |
-| 07    | TopK (`LIMIT 100`); eager fetch-path control.                                                     |
-| 08    | Same keys as 02, but multiple sorted runs and merge.                                              |
+| Query | Workload                                                                                      |
+| ----- | --------------------------------------------------------------------------------------------- |
+| 01    | Unique `id` prefix; `lower` and `md5` can be skipped.                                         |
+| 02    | One sparse tie group (~10% of rows); only tied rows reach `md5`.                              |
+| 03    | One prefix group; all rows reach `md5` (fallback).                                            |
+| 04    | Sparse ties reach `lower(payload)`, which resolves them and skips `md5`.                      |
+| 05    | Nullable prefix, descending with NULLS FIRST; NULLs tie.                                      |
+| 06    | Cheap keys only; control with no expensive stage.                                             |
+| 07    | TopK (`LIMIT 100`); eager fetch-path control.                                                 |
+| 08    | Same keys as 02, but multiple sorted runs and merge.                                          |
+| 09    | Issue #25033 query: unique descending score, `md5(payload)`, `LIMIT 10`, selecting only `id`. |
 
 Each query builds a deterministic in-memory table during `load`, outside the
 timed region. Defaults: `STAGED_SORT_ROWS=200000` (minimum 100),
@@ -32,9 +33,14 @@ and a majority of nonzero keys equal to unique IDs: exactly one tied group, with
 all other rows resolved. The zero group contains roughly 10% of the rows. A final unique ID resolves
 any remaining ties. `SELECT *` keeps computed sort keys in `SortExec` rather
 than projecting them first; untimed `expect_plan` checks this placement.
+Query 09 reproduces the example in
+[#25033](https://github.com/apache/datafusion/issues/25033), using a CTE to map
+`id` to the unique `score` in `events`. Unlike the `SELECT *` cases, it selects
+only `id`, so computed keys may be projected before TopK; its plan assertion
+checks `TopK(fetch=10)` rather than expression placement.
 
 Each query sets `target_partitions=1`. Queries 01–07 set the in-place sort
-threshold to 1 GiB, intended to give one run at defaults without a memory limit;
+threshold to 1 GiB (as does 09), intended to give one run at defaults without a memory limit;
 08 sets it to zero to exercise multiple runs. Very large row/width overrides or
 memory limits can change this behavior. Check plans and execution metrics with
 `--debug` or `EXPLAIN ANALYZE`; debug output affects the first run's timing.
@@ -78,6 +84,6 @@ For a main baseline omit the environment variable on its persist command.
 location whenever fixture options change. The plan assertion checks the
 computed key on the `SortExec` line, not just the presence of a sort. Inspect
 `--debug`/`EXPLAIN` after planner changes: in particular verify that both
-expensive expressions in 01 and 04 remain in the sort, that 07 is TopK, and
+expensive expressions in 01 and 04 remain in the sort, that 07 and 09 are TopK, and
 that 08 exercises the intended run/merge path. Plan shape alone does not prove
 which stages execute; compare results and metrics as well.
