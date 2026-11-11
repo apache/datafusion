@@ -2,7 +2,7 @@
 # SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 # SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-# Spilled sorts over wide rows.
+# Spilled sorts and aggregates over wide rows.
 #
 # Each query below spills rows much wider than `batch_size` rows of narrow
 # data, under a memory limit that fits each row but not a whole batch of them.
@@ -60,6 +60,81 @@ RESET datafusion.execution.sort_spill_reservation_bytes
 
 statement ok
 RESET datafusion.execution.batch_size
+
+# --- Aggregate: a few groups with large states (#25851) ---
+
+statement ok
+SET datafusion.execution.target_partitions = 2
+
+statement ok
+SET datafusion.runtime.memory_limit = '12M'
+
+query II
+SELECT count(*) AS groups, sum(n) AS values_collected FROM (
+  SELECT k, cardinality(array_agg(v)) AS n
+  FROM (
+    SELECT value % 4 AS k, concat(CAST(value AS VARCHAR), repeat('x', 100)) AS v
+    FROM generate_series(1, 200000)
+  )
+  GROUP BY k
+)
+----
+4 200000
+
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+# --- Aggregate: many groups whose states are wide relative to the pool ---
+
+statement ok
+SET datafusion.runtime.memory_limit = '4M'
+
+query II
+SELECT count(*), sum(length(s)) FROM (
+  SELECT k, string_agg(v, ',') AS s
+  FROM (SELECT value % 40000 AS k, repeat('x', 600) AS v FROM generate_series(1, 160000))
+  GROUP BY k
+)
+----
+40000 96120000
+
+# The same groups under a 2 MB limit, where the smallest merge of two runs of
+# 1 MiB batches does not fit in what the aggregate held.
+statement ok
+SET datafusion.runtime.memory_limit = '2M'
+
+query error Resources exhausted
+SELECT count(*), sum(length(s)) FROM (
+  SELECT k, string_agg(v, ',') AS s
+  FROM (SELECT value % 40000 AS k, repeat('x', 200) AS v FROM generate_series(1, 160000))
+  GROUP BY k
+)
+
+query error Resources exhausted
+SELECT count(*), sum(length(s)) FROM (
+  SELECT k, string_agg(v, ',') AS s
+  FROM (SELECT value % 40000 AS k, repeat('x', 600) AS v FROM generate_series(1, 160000))
+  GROUP BY k
+)
+
+# The legacy aggregate stream.
+statement ok
+SET datafusion.execution.enable_migration_aggregate = false
+
+statement ok
+SET datafusion.runtime.memory_limit = '4M'
+
+query II
+SELECT count(*), sum(length(s)) FROM (
+  SELECT k, string_agg(v, ',') AS s
+  FROM (SELECT value % 40000 AS k, repeat('x', 200) AS v FROM generate_series(1, 160000))
+  GROUP BY k
+)
+----
+40000 32120000
+
+statement ok
+RESET datafusion.execution.enable_migration_aggregate
 
 # Restore settings to slt runner defaults
 statement ok
