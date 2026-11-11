@@ -572,11 +572,11 @@ mod tests {
         Ok(())
     }
 
-    /// `add_ordering` keeps the given ordering and leaves out an implied
-    /// ordering it cannot derive: here `c` is not in the schema, so its type
-    /// is unknown.
+    /// An implied ordering that cannot be derived is left out, and the given
+    /// ordering is kept, whether the ordering or the equality comes first:
+    /// here `c` is not in the schema, so its type is unknown.
     #[test]
-    fn add_ordering_skips_underivable_implied_ordering() -> Result<()> {
+    fn underivable_implied_ordering_is_skipped_in_either_order() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Date32, true)]));
         let a = col("a", &schema)?;
         let c = Arc::new(Column::new("c", 1)) as Arc<dyn PhysicalExpr>;
@@ -586,12 +586,20 @@ mod tests {
             None,
         )) as Arc<dyn PhysicalExpr>;
 
-        let mut properties = EquivalenceProperties::new(Arc::clone(&schema));
-        properties.add_equal_conditions(cast_c, Arc::clone(&a))?;
         let ordering =
             [&a, &c].map(|expr| PhysicalSortExpr::new_default(Arc::clone(expr)));
-        properties.add_ordering(ordering);
-        assert_eq!(properties.oeq_class().len(), 1);
+
+        let mut equality_first = EquivalenceProperties::new(Arc::clone(&schema));
+        equality_first.add_equal_conditions(Arc::clone(&cast_c), Arc::clone(&a))?;
+        equality_first.add_ordering(ordering.clone());
+
+        let mut ordering_first = EquivalenceProperties::new(Arc::clone(&schema));
+        ordering_first.add_ordering(ordering);
+        ordering_first.add_equal_conditions(cast_c, Arc::clone(&a))?;
+
+        for properties in [equality_first, ordering_first] {
+            assert_eq!(properties.oeq_class().len(), 1);
+        }
         Ok(())
     }
 

@@ -582,7 +582,9 @@ impl EquivalenceProperties {
         let mut new_orderings = vec![];
         for idx in ordering_idxs {
             let ordering = &self.oeq_cache.normal_cls[*idx];
-            new_orderings.extend(self.implied_by(ordering)?);
+            // As in `add_orderings`, an ordering that cannot be derived is
+            // not implied, so the result does not depend on the call order:
+            new_orderings.extend(self.implied_by(ordering).unwrap_or_default());
         }
         self.add_orderings(new_orderings);
         Ok(())
