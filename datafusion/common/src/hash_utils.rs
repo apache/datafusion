@@ -4,6 +4,8 @@
 
 //! Functionality used both on logical and physical plans
 
+#[cfg(not(feature = "force_hash_collisions"))]
+use crate::utils::compact_oversized_dictionary;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -561,33 +563,55 @@ fn hash_dictionary_scatter<
     hashes_buffer: &mut [u64],
 ) {
     let dict_values = array.values();
-    if HAS_NULL_KEYS {
-        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
-            if let Some(key) = key {
-                let idx = key.as_usize();
-                if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
-                    // SAFETY: `idx` is a valid Arrow dict key, in-bounds for `dict_hashes`.
-                    let dict_hash = unsafe { *dict_hashes.get_unchecked(idx) };
-                    *hash = if MULTI_COL {
-                        combine_hashes(dict_hash, *hash)
-                    } else {
-                        dict_hash
-                    };
+    let scatter_row = |hash: &mut u64, key: &K::Native| {
+        let idx = key.as_usize();
+        if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
+            // SAFETY: `idx` is a valid Arrow dict key, in-bounds for `dict_hashes`.
+            let dict_hash = unsafe { *dict_hashes.get_unchecked(idx) };
+            *hash = if MULTI_COL {
+                combine_hashes(dict_hash, *hash)
+            } else {
+                dict_hash
+            };
+        }
+    };
+    let keys = array.keys().values();
+    if HAS_NULL_KEYS && let Some(key_nulls) = array.keys().nulls() {
+        // Like the `zip` below, stop at the end of `hashes_buffer`. Null slots keep
+        // their hash, and their (possibly out-of-range) keys are never read.
+        let len = hashes_buffer.len().min(keys.len());
+        let (hashes, keys) = (&mut hashes_buffer[..len], &keys[..len]);
+        // Walk the validity bitmap 64 rows at a time: a word with no nulls takes
+        // the same dense loop as the no-null path, which is much cheaper than
+        // visiting each set bit when nulls are sparse
+        let chunks = key_nulls.inner().bit_chunks();
+        let words = chunks
+            .iter()
+            .chain(std::iter::once(chunks.remainder_bits()));
+        for (word_idx, mut word) in words.enumerate() {
+            let start = word_idx * 64;
+            if start >= len {
+                break;
+            }
+            if word == u64::MAX {
+                let end = (start + 64).min(len);
+                for (hash, key) in hashes[start..end].iter_mut().zip(&keys[start..end]) {
+                    scatter_row(hash, key);
+                }
+            } else {
+                while word != 0 {
+                    let i = start + word.trailing_zeros() as usize;
+                    if i >= len {
+                        break;
+                    }
+                    scatter_row(&mut hashes[i], &keys[i]);
+                    word &= word - 1;
                 }
             }
         }
     } else {
-        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().values()) {
-            let idx = key.as_usize();
-            if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
-                // SAFETY: `idx` is a valid Arrow dict key, in-bounds for `dict_hashes`.
-                let dict_hash = unsafe { *dict_hashes.get_unchecked(idx) };
-                *hash = if MULTI_COL {
-                    combine_hashes(dict_hash, *hash)
-                } else {
-                    dict_hash
-                };
-            }
+        for (hash, key) in hashes_buffer.iter_mut().zip(keys) {
+            scatter_row(hash, key);
         }
     }
 }
@@ -656,7 +680,11 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
 ) -> Result<()> {
     // Hash each dictionary value once, and then use that computed
     // hash for each key value to avoid a potentially expensive
-    // redundant hashing for large dictionary elements (e.g. strings)
+    // redundant hashing for large dictionary elements (e.g. strings).
+    // A dictionary with many more values than rows (e.g. a slice) is first
+    // reduced to the values its rows reference.
+    let compacted = compact_oversized_dictionary(array)?;
+    let array = compacted.as_ref().unwrap_or(array);
     let dict_values = array.values();
     let mut dict_hashes = vec![0; dict_values.len()];
     create_hashes([dict_values], random_state, &mut dict_hashes)?;
@@ -671,6 +699,8 @@ fn hash_dictionary_with_child_hashing<K: ArrowDictionaryKeyType>(
     hashes_buffer: &mut [u64],
     multi_col: bool,
 ) -> Result<()> {
+    let compacted = compact_oversized_dictionary(array)?;
+    let array = compacted.as_ref().unwrap_or(array);
     let dict_values = array.values();
     let mut dict_hashes = vec![0; dict_values.len()];
     child_hashing.create_hashes([dict_values], &mut dict_hashes)?;
@@ -1834,6 +1864,264 @@ mod tests {
         // different strings should map to different hash values
         assert_ne!(strings[0], strings[2]);
         assert_ne!(dict_hashes[0], dict_hashes[2]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_arrays_with_null_keys() {
+        check_dict_null_keys::<Int8Type>();
+        check_dict_null_keys::<Int32Type>();
+        check_dict_null_keys::<Int64Type>();
+    }
+
+    /// Compares hashes of sliced dictionaries with null keys against the
+    /// equivalent `StringArray`, for one and two columns
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn check_dict_null_keys<K: ArrowDictionaryKeyType>() {
+        let random_state = RandomState::with_seed(0);
+        let value_sets: [&[Option<&str>]; 2] = [
+            &[Some("alpha"), Some("beta"), Some("gamma")],
+            &[Some("alpha"), None, Some("gamma")],
+        ];
+        // Scattered nulls, then an all-valid word, an all-null word, alternating
+        let is_null = |row: usize| match row / 64 {
+            0 => row % 5 == 1,
+            1 => false,
+            2 => true,
+            _ => row.is_multiple_of(2),
+        };
+        for values in value_sets {
+            // Out-of-range keys hidden behind null slots must never be read
+            let invalid_keys = [usize::MAX, values.len(), 127];
+            for offset in [0, 3, 5, 64] {
+                for len in [0, 1, 7, 8, 9, 63, 64, 65, 127, 128, 129] {
+                    let rows = 0..offset + len;
+                    let keys = rows
+                        .clone()
+                        .map(|row| {
+                            let key = if is_null(row) {
+                                invalid_keys[row % invalid_keys.len()]
+                            } else {
+                                row % values.len()
+                            };
+                            K::Native::usize_as(key)
+                        })
+                        .collect::<Vec<_>>();
+                    let validity =
+                        rows.clone().map(|row| !is_null(row)).collect::<Vec<_>>();
+                    let dict = DictionaryArray::<K>::try_new(
+                        PrimitiveArray::new(
+                            ScalarBuffer::from(keys),
+                            Some(NullBuffer::from(validity)),
+                        ),
+                        Arc::new(values.iter().copied().collect::<StringArray>()),
+                    )
+                    .unwrap()
+                    .slice(offset, len);
+                    let strings = rows
+                        .skip(offset)
+                        .map(|row| {
+                            if is_null(row) {
+                                None
+                            } else {
+                                values[row % values.len()]
+                            }
+                        })
+                        .collect::<StringArray>();
+                    let prefix = Int32Array::from_iter_values(0..len as i32);
+
+                    let mut expected = vec![0; len];
+                    create_hashes([&strings as &dyn Array], &random_state, &mut expected)
+                        .unwrap();
+                    let mut actual = vec![0; len];
+                    create_hashes([&dict as &dyn Array], &random_state, &mut actual)
+                        .unwrap();
+                    assert_eq!(actual, expected, "single, offset {offset}, len {len}");
+
+                    // A shorter buffer hashes only its prefix
+                    let mut short = vec![0; len / 2];
+                    create_hashes([&dict as &dyn Array], &random_state, &mut short)
+                        .unwrap();
+                    assert_eq!(
+                        short,
+                        expected[..len / 2],
+                        "short, offset {offset}, len {len}"
+                    );
+
+                    let mut expected = vec![0; len];
+                    create_hashes(
+                        [&prefix as &dyn Array, &strings],
+                        &random_state,
+                        &mut expected,
+                    )
+                    .unwrap();
+                    let mut actual = vec![0; len];
+                    create_hashes(
+                        [&prefix as &dyn Array, &dict],
+                        &random_state,
+                        &mut actual,
+                    )
+                    .unwrap();
+                    assert_eq!(actual, expected, "multiple, offset {offset}, len {len}");
+                }
+            }
+        }
+
+        // An empty dictionary is valid when every key is null
+        let dict = DictionaryArray::<K>::try_new(
+            PrimitiveArray::new(
+                ScalarBuffer::from(vec![K::Native::usize_as(usize::MAX); 64]),
+                Some(NullBuffer::new_null(64)),
+            ),
+            Arc::new(StringArray::new_null(0)),
+        )
+        .unwrap();
+        let mut hashes = vec![0; 64];
+        create_hashes([&dict as &dyn Array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes, vec![0; 64]);
+        let prefix = Int32Array::from_iter_values(0..64);
+        let mut expected = vec![0; 64];
+        create_hashes([&prefix as &dyn Array], &random_state, &mut expected).unwrap();
+        let mut actual = vec![0; 64];
+        create_hashes([&prefix as &dyn Array, &dict], &random_state, &mut actual)
+            .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_short_buffer_before_all_valid_word() {
+        // The validity word at row 64 is all valid and starts past the end of
+        // the shorter buffers, and the last row is null
+        let rows = 200;
+        let keys = Int32Array::from_iter((0..rows).map(|row| (row != 199).then_some(0)));
+        let dict = DictionaryArray::try_new(
+            keys,
+            Arc::new(StringArray::from(vec!["alpha"])) as ArrayRef,
+        )
+        .unwrap();
+        let strings = (0..rows)
+            .map(|row| (row != 199).then_some("alpha"))
+            .collect::<StringArray>();
+        let prefix = Int32Array::from_iter_values(0..rows);
+        let random_state = RandomState::with_seed(0);
+
+        // The equivalent `StringArray` only hashes into a full-length buffer
+        let mut expected_single = vec![0; rows as usize];
+        create_hashes(
+            [&strings as &dyn Array],
+            &random_state,
+            &mut expected_single,
+        )
+        .unwrap();
+        let mut expected_multiple = vec![0; rows as usize];
+        create_hashes(
+            [&prefix as &dyn Array, &strings],
+            &random_state,
+            &mut expected_multiple,
+        )
+        .unwrap();
+
+        // A shorter buffer hashes only its prefix. Only a single column can have
+        // one: any other column must be as long as the buffer
+        for len in [0, 1, 10, 63, 64, 65, 100, 128, 129, 199, 200] {
+            let mut actual = vec![0; len];
+            create_hashes([&dict as &dyn Array], &random_state, &mut actual).unwrap();
+            assert_eq!(actual, expected_single[..len], "buffer len {len}");
+        }
+
+        // The same dictionary as a later column of a full-length buffer
+        let mut actual = vec![0; rows as usize];
+        create_hashes([&prefix as &dyn Array, &dict], &random_state, &mut actual)
+            .unwrap();
+        assert_eq!(actual, expected_multiple);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_with_more_rows_than_the_key_type_holds() {
+        fn check<K: ArrowDictionaryKeyType>(distinct_keys: usize) {
+            let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+                (0..20_000).map(|i| format!("v{i}")),
+            ));
+            let keys: ScalarBuffer<K::Native> = (0..300)
+                .map(|i| K::Native::usize_as(i % distinct_keys))
+                .collect();
+            let keys = PrimitiveArray::<K>::new(keys, None);
+            let dict: ArrayRef =
+                Arc::new(DictionaryArray::try_new(keys, values).unwrap());
+            let decoded = arrow::compute::cast(&dict, &DataType::Utf8).unwrap();
+            let random_state = RandomState::with_seed(0);
+
+            let mut dict_hashes = vec![0; dict.len()];
+            create_hashes([&dict], &random_state, &mut dict_hashes).unwrap();
+            let mut decoded_hashes = vec![0; dict.len()];
+            create_hashes([&decoded], &random_state, &mut decoded_hashes).unwrap();
+            assert_eq!(dict_hashes, decoded_hashes);
+        }
+        check::<UInt8Type>(250);
+        check::<Int8Type>(120);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_does_not_copy_a_value_per_row() {
+        // 64 copies of this value wouldn't fit in `i32` offsets
+        let long = "x".repeat(34 * 1024 * 1024);
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..5000).map(|i| if i == 0 { long.as_str() } else { "short" }),
+        ));
+        let dict: ArrayRef = Arc::new(
+            DictionaryArray::try_new(Int32Array::from(vec![0; 64]), values).unwrap(),
+        );
+        let single: ArrayRef = Arc::new(StringArray::from(vec![long.as_str()]));
+        let random_state = RandomState::with_seed(0);
+
+        let mut dict_hashes = vec![0; dict.len()];
+        create_hashes([&dict], &random_state, &mut dict_hashes).unwrap();
+        let mut single_hash = vec![0; 1];
+        create_hashes([&single], &random_state, &mut single_hash).unwrap();
+        assert_eq!(dict_hashes, vec![single_hash[0]; 64]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_slices_with_more_values_than_rows() {
+        use crate::utils::MAX_DICTIONARY_VALUES_PER_ROW;
+
+        let values: ArrayRef = Arc::new(StringArray::from_iter(
+            (0..200).map(|i| (i != 2).then(|| format!("v{i}"))),
+        ));
+        let keys = Int8Array::from_iter((0..48).map(|i| (i % 7 != 1).then_some(i)));
+        let dict: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values).unwrap());
+        let ints: ArrayRef = Arc::new(Int32Array::from_iter_values(0..48));
+        let random_state = RandomState::with_seed(0);
+
+        let mut single = vec![0; dict.len()];
+        create_hashes([&dict], &random_state, &mut single).unwrap();
+        let mut multi = vec![0; dict.len()];
+        create_hashes([&ints, &dict], &random_state, &mut multi).unwrap();
+
+        for (offset, len) in [(0, 2), (1, 2), (8, 1), (46, 2)] {
+            let slice = dict.slice(offset, len);
+            assert!(
+                slice.as_any_dictionary().values().len()
+                    > MAX_DICTIONARY_VALUES_PER_ROW * len
+            );
+            let mut hashes = vec![0; len];
+            create_hashes([&slice], &random_state, &mut hashes).unwrap();
+            assert_eq!(hashes, single[offset..offset + len]);
+
+            let ints = ints.slice(offset, len);
+            let mut hashes = vec![0; len];
+            create_hashes([&ints, &slice], &random_state, &mut hashes).unwrap();
+            assert_eq!(hashes, multi[offset..offset + len]);
+        }
     }
 
     #[test]

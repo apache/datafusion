@@ -64,6 +64,27 @@ physical_plan
 query error Execution error: input_file_name\(\) is source dependent and cannot be evaluated directly
 SELECT input_file_name() FROM (VALUES (1)) v(x);
 
+# CSV has its own scan implementation, so the leaf split has to reach it too.
+# Needs a `KeepInPlace` sibling and a repartition, hence `column1 + 1` and the
+# `batch_size` below the row count.
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+query BI
+SELECT length(input_file_name()) > 0, column1 + 1
+FROM csv_table
+ORDER BY 2
+----
+true 11
+true 21
+true 31
+true 41
+true 51
+true 61
+
+statement ok
+SET datafusion.execution.batch_size = 8192;
+
 statement ok
 DROP TABLE csv_table;
 
