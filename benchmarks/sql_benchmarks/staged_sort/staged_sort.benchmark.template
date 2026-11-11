@@ -10,6 +10,8 @@ group staged_sort
 
 init
 SET datafusion.execution.target_partitions = 1;
+
+init
 SET datafusion.execution.sort_in_place_threshold_bytes = ${THRESHOLD};
 
 assert I
