@@ -439,8 +439,8 @@ fn array_concat_with_return_type(
     } else {
         let field = list_inner_field("array_concat", return_type)?;
         match return_type {
-            DataType::List(_) => concat_internal::<i32>(args, Some(&field)),
-            DataType::LargeList(_) => concat_internal::<i64>(args, Some(&field)),
+            DataType::List(_) => concat_internal::<i32>(args, Some(&field), true),
+            DataType::LargeList(_) => concat_internal::<i64>(args, Some(&field), true),
             arg_type => exec_err!("array_concat does not support type {arg_type}"),
         }
     }
@@ -466,11 +466,16 @@ fn append_prepend_return_type(
 /// `field` is the list field the output must carry. `array_concat` passes the
 /// inner field of its planned return type, and `array_append` / `array_prepend`
 /// pass their input's field. `None` derives the field from the aligned inputs.
+///
+/// `keep_null_rows` is passed to [`align_array_dimensions`]: `array_concat`
+/// skips a null argument, while `array_append` / `array_prepend` add a null
+/// element for it.
 fn concat_internal<O: OffsetSizeTrait>(
     args: &[ArrayRef],
     field: Option<&FieldRef>,
+    keep_null_rows: bool,
 ) -> Result<ArrayRef> {
-    let args = align_array_dimensions::<O>(args.to_vec())?;
+    let args = align_array_dimensions::<O>(args.to_vec(), keep_null_rows)?;
 
     let list_arrays = args
         .iter()
@@ -598,7 +603,7 @@ where
 
     let res = match list_array.value_type() {
         DataType::List(_) | DataType::LargeList(_) => {
-            concat_internal::<O>(args, Some(&field))?
+            concat_internal::<O>(args, Some(&field), false)?
         }
         _ => {
             return generic_append_and_prepend::<O>(
