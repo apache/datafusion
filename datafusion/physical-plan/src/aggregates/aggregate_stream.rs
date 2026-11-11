@@ -391,9 +391,13 @@ impl AggregateStream {
                         // before merging it, then transfer that reservation to the
                         // accumulator's state below.
                         let previous_size = this.reservation.size();
-                        let batch_memory = incoming_state_batch_reservation_bytes(&batch);
-                        if this.mode.input_mode() == AggregateInputMode::Partial
-                            && batch_memory > 0
+                        let batch_memory =
+                            if this.mode.input_mode() == AggregateInputMode::Partial {
+                                incoming_state_batch_reservation_bytes(&batch)
+                            } else {
+                                0
+                            };
+                        if batch_memory > 0
                             && let Err(e) = this.reservation.try_grow(batch_memory)
                         {
                             this.finished = true;
@@ -608,7 +612,7 @@ mod tests {
     use crate::metrics::{MetricValue, MetricsSet};
     use crate::test::TestMemoryExec;
     use crate::{ExecutionPlan, collect};
-    use arrow::array::{Float64Array, Int32Array, Int64Array, UInt32Array};
+    use arrow::array::{ArrayRef, Float64Array, Int32Array, Int64Array, UInt32Array};
     use arrow::datatypes::{DataType, Field, Schema};
     use datafusion_common::DataFusionError;
     use datafusion_execution::memory_pool::GreedyMemoryPool;
@@ -1059,13 +1063,11 @@ mod tests {
             empty,
             Arc::clone(&schema),
         )?;
-        // One batch may combine many partial states. The final SUM retains
-        // only one number, so reserving its accumulator alone misses the batch.
+        // 64 rows that retain 1 MB, like the few rows of a `median` state.
         let state_schema = partial.schema();
-        let batch = RecordBatch::try_new(
-            Arc::clone(&state_schema),
-            vec![Arc::new(Int64Array::from(vec![1_i64; 16_384]))],
-        )?;
+        let values: ArrayRef =
+            Arc::new(Int64Array::from(vec![1_i64; 131_072]).slice(0, 64));
+        let batch = RecordBatch::try_new(Arc::clone(&state_schema), vec![values])?;
         let input = TestMemoryExec::try_new_exec(
             &[vec![batch]],
             Arc::clone(&state_schema),
@@ -1096,7 +1098,7 @@ mod tests {
         ));
 
         let runtime = RuntimeEnvBuilder::new()
-            .with_memory_pool(Arc::new(GreedyMemoryPool::new(1024 * 1024)))
+            .with_memory_pool(Arc::new(GreedyMemoryPool::new(2 * 1024 * 1024)))
             .build_arc()?;
         let context = Arc::new(TaskContext::default().with_runtime(runtime));
         let output = collect(final_aggregate as Arc<dyn ExecutionPlan>, context).await?;
@@ -1105,7 +1107,7 @@ mod tests {
             .as_any()
             .downcast_ref::<Int64Array>()
             .unwrap();
-        assert_eq!(result.value(0), 16_384);
+        assert_eq!(result.value(0), 64);
         Ok(())
     }
 }
