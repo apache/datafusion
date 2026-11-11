@@ -66,7 +66,7 @@ use arrow::record_batch::RecordBatch;
 use arrow::util::bit_util;
 use arrow_schema::{DataType, Schema};
 use datafusion_common::config::ConfigOptions;
-use datafusion_common::float_semantics::normalize_floats;
+use datafusion_common::float_semantics;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRecursion};
 use datafusion_common::utils::memory::{
@@ -3343,8 +3343,10 @@ fn build_in_memory(
     // Rewrite float `-0.0` to `+0.0` once here, so the per probe batch key
     // comparison does not rescan the build side. Arrays without `-0.0`, and
     // non-float keys, are shared rather than copied.
-    let normalized_values: Vec<ArrayRef> =
-        left_values.iter().map(normalize_floats).collect();
+    let normalized_values: Vec<ArrayRef> = left_values
+        .iter()
+        .map(|values| float_semantics::normalize(Arc::clone(values)))
+        .collect();
 
     // Join keys that are plain columns share the buffers of `batch`, any other
     // expression evaluates to new arrays that are kept for the whole join.
