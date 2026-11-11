@@ -1940,31 +1940,23 @@ config_namespace! {
         /// projections or aliases.
         pub enable_unions_to_filter: bool, default = false
 
-        /// When `true`, the `SingleDistinctToGroupBy` optimizer rule keeps a grouped
-        /// DISTINCT aggregate native, instead of rewriting it into a two-phase `GROUP BY`,
-        /// when every DISTINCT argument is a fixed-width, non-float type. This lowers peak
-        /// memory when no memory limit is set, because the intermediate
-        /// `(group, distinct value)` result is never built.
-        ///
-        /// Under a memory limit, the rewrite can spill those pairs, but the native
-        /// accumulator keeps each group's distinct values in memory. With this option
-        /// enabled, a query can need more memory, or fail where the rewrite finishes.
-        ///
-        /// Queries without `GROUP BY`, and other argument types, keep the rewrite.
-        ///
-        /// See <https://github.com/apache/datafusion/issues/25932>
-        pub single_distinct_aggregation_prefer_memory: bool, default = false
-
         /// Prefer native grouped DISTINCT aggregation when target_partitions is 1
-        /// and every aggregate explicitly supports a specialized GroupsAccumulator
-        /// for its DISTINCT argument types. Defaults to false, preserving the
-        /// two-phase GROUP BY rewrite.
+        /// and every DISTINCT argument is a fixed-width, non-float type (such as
+        /// integers, decimals, dates), instead of rewriting into a two-phase `GROUP BY`.
+        /// Defaults to false, preserving the two-phase GROUP BY rewrite.
         ///
-        /// The native plan can avoid materializing distinct (group, value) pairs,
-        /// but can be slower for many groups with duplicate values. It must fit
-        /// each group's distinct values in memory, so queries that succeed by
-        /// spilling with the rewrite may fail with this option enabled. One target
-        /// partition can still have multiple input partitions and merge native states.
+        /// The native plan avoids materializing intermediate `(group, distinct value)`
+        /// pairs, lowering peak memory when no memory limit is set. However,
+        /// native DISTINCT must fit each group's distinct values in memory: under
+        /// a memory limit, the rewrite can spill those pairs, but the native
+        /// accumulator cannot, so queries that succeed by spilling with the rewrite
+        /// may fail with this option enabled.
+        ///
+        /// Queries with multiple target partitions, non-distinct companion aggregates,
+        /// floating-point arguments, and aggregates with unsupported distinct handling
+        /// (such as `approx_median` or `stddev`) continue with the rewrite.
+        ///
+        /// See <https://github.com/apache/datafusion/issues/25932> and <https://github.com/apache/datafusion/pull/25988>
         pub single_distinct_prefer_native: bool, default = false
     }
 }

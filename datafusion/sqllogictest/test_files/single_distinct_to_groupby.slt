@@ -473,13 +473,13 @@ DROP TABLE t_decimal_distinct;
 
 
 ########
-# single_distinct_aggregation_prefer_memory config option
+# single_distinct_prefer_native config option
 ########
 
 statement ok
 CREATE TABLE t_prefer_mem AS SELECT * FROM (VALUES (1, 10), (1, 20), (2, 10)) AS v(g, x);
 
-# By default (prefer_memory = false), lone-distinct queries rewrite to two-phase GROUP BY
+# By default (single_distinct_prefer_native = false), lone-distinct queries rewrite to two-phase GROUP BY
 query TT
 EXPLAIN SELECT g, count(DISTINCT x) FROM t_prefer_mem GROUP BY g;
 ----
@@ -505,9 +505,12 @@ SELECT g, count(*), stddev(DISTINCT x) FROM t_prefer_mem GROUP BY g;
 1 2 7.071067811865
 2 1 NULL
 
-# When single_distinct_aggregation_prefer_memory = true, the rewrite is skipped to reduce peak memory
+# When single_distinct_prefer_native = true and target_partitions = 1, the rewrite is skipped to reduce peak memory
 statement ok
-set datafusion.optimizer.single_distinct_aggregation_prefer_memory = true;
+set datafusion.execution.target_partitions = 1;
+
+statement ok
+set datafusion.optimizer.single_distinct_prefer_native = true;
 
 query TT
 EXPLAIN SELECT g, count(DISTINCT x) FROM t_prefer_mem GROUP BY g;
@@ -516,10 +519,8 @@ logical_plan
 01)Aggregate: groupBy=[[t_prefer_mem.g]], aggr=[[count(DISTINCT t_prefer_mem.x)]]
 02)--TableScan: t_prefer_mem projection=[g, x]
 physical_plan
-01)AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(DISTINCT t_prefer_mem.x)]
-02)--RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=1
-03)----AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(DISTINCT t_prefer_mem.x)]
-04)------DataSourceExec: partitions=1, partition_sizes=[1]
+01)AggregateExec: mode=Single, gby=[g@0 as g], aggr=[count(DISTINCT t_prefer_mem.x)]
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
 
 # Query results are identical under both settings
 query II
@@ -540,8 +541,30 @@ SELECT g, count(DISTINCT f), avg(DISTINCT f) FROM t_prefer_mem_float GROUP BY g;
 statement ok
 DROP TABLE t_prefer_mem_float;
 
+# Multiple target partitions retain the rewrite even with single_distinct_prefer_native = true
 statement ok
-set datafusion.optimizer.single_distinct_aggregation_prefer_memory = false;
+set datafusion.execution.target_partitions = 4;
+
+query TT
+EXPLAIN SELECT g, count(DISTINCT x) FROM t_prefer_mem GROUP BY g;
+----
+logical_plan
+01)Projection: t_prefer_mem.g, count(alias1) AS count(DISTINCT t_prefer_mem.x)
+02)--Aggregate: groupBy=[[t_prefer_mem.g]], aggr=[[count(alias1)]]
+03)----Aggregate: groupBy=[[t_prefer_mem.g, t_prefer_mem.x AS alias1]], aggr=[[]]
+04)------TableScan: t_prefer_mem projection=[g, x]
+physical_plan
+01)ProjectionExec: expr=[g@0 as g, count(alias1)@1 as count(DISTINCT t_prefer_mem.x)]
+02)--AggregateExec: mode=FinalPartitioned, gby=[g@0 as g], aggr=[count(alias1)]
+03)----RepartitionExec: partitioning=Hash([g@0], 4), input_partitions=4
+04)------AggregateExec: mode=Partial, gby=[g@0 as g], aggr=[count(alias1)]
+05)--------AggregateExec: mode=FinalPartitioned, gby=[g@0 as g, alias1@1 as alias1], aggr=[]
+06)----------RepartitionExec: partitioning=Hash([g@0, alias1@1], 4), input_partitions=1
+07)------------AggregateExec: mode=Partial, gby=[g@0 as g, x@1 as alias1], aggr=[]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+set datafusion.optimizer.single_distinct_prefer_native = false;
 
 statement ok
 DROP TABLE t_prefer_mem;
