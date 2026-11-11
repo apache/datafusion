@@ -203,6 +203,21 @@ fn bench_smj(c: &mut Criterion) {
                 do_join(left, right, datafusion_common::JoinType::Inner, &rt)
             })
         });
+        // `left.data <= right.data` keeps every pair, and the indices of each
+        // freeze still form ranges, so the columns materialize as slices.
+        group.bench_function(BenchmarkId::new("inner_1to1_filtered", n), |b| {
+            b.iter(|| {
+                let left = make_exec(&left_batches, &s);
+                let right = make_exec(&right_batches, &s);
+                do_join_with_filter(
+                    left,
+                    right,
+                    datafusion_common::JoinType::Inner,
+                    Some(data_filter(Operator::LtEq)),
+                    &rt,
+                )
+            })
+        });
     }
 
     // 1:10 Inner Join — 100K left, 100K right, 10K distinct keys

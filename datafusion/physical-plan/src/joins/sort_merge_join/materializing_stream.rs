@@ -9,7 +9,6 @@
 //! *streamed* side and the *buffered* side), compares join keys, and
 //! produces joined `RecordBatch`es.
 
-use std::borrow::{Borrow, Cow};
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::fmt::Debug;
@@ -50,20 +49,8 @@ use datafusion_physical_expr_common::physical_expr::PhysicalExprRef;
 
 use futures::StreamExt;
 
-/// The shortest run of buffered rows that an Inner join with a filter filters as
-/// it pairs the run with a streamed row. Each such evaluation has a fixed cost
-/// that a long run amortizes. Shorter runs are paired unfiltered, and the
-/// freeze filters a whole batch of their pairs at once.
-const FILTERED_RUN_MIN_ROWS: usize = 256;
-
-/// The key that [`StreamedBatch::buffered_batch_idx`] holds while the current chunk
-/// holds filtered pairs. No buffered batch has this index, so the next unfiltered
-/// pair starts a chunk of its own.
-const FILTERED_CHUNK_KEY: Option<usize> = Some(usize::MAX);
-
 /// The matched pairs of one [`StreamedJoinedChunk`], with the indices finished
 /// into arrays.
-#[derive(Clone)]
 struct MatchedChunk {
     /// Index of the batch in `buffered_data` that the buffered rows come from
     buffered_batch_idx: usize,
@@ -71,32 +58,11 @@ struct MatchedChunk {
     streamed_indices: UInt64Array,
     /// The buffered row of each pair
     buffered_indices: UInt64Array,
-    /// Whether the pairs already passed the join filter
-    filtered: bool,
 }
 
 impl MatchedChunk {
     fn len(&self) -> usize {
         self.streamed_indices.len()
-    }
-
-    /// Keeps the pairs whose bit is set in `mask`.
-    fn filter(&self, mask: &BooleanBuffer) -> Result<Self> {
-        let predicate = FilterBuilder::new(&BooleanArray::new(mask.clone(), None))
-            .optimize()
-            .build();
-        Ok(Self {
-            buffered_batch_idx: self.buffered_batch_idx,
-            streamed_indices: as_uint64_array(
-                &predicate.filter(&self.streamed_indices)?,
-            )?
-            .clone(),
-            buffered_indices: as_uint64_array(
-                &predicate.filter(&self.buffered_indices)?,
-            )?
-            .clone(),
-            filtered: self.filtered,
-        })
     }
 }
 
@@ -104,9 +70,6 @@ impl MatchedChunk {
 pub(super) struct StreamedJoinedChunk {
     /// Index of batch in buffered_data
     buffered_batch_idx: Option<usize>,
-    /// Whether the join filter already ran on these pairs, so that the chunk
-    /// holds only the pairs that passed it
-    filtered: bool,
     /// Streamed indices, which are never null
     streamed_indices: Vec<u64>,
     /// Buffered indices. The slot of a null-joined pair holds 0.
@@ -130,8 +93,7 @@ pub(super) struct StreamedBatch {
     pub output_indices: Vec<StreamedJoinedChunk>,
     /// Total number of output rows across all chunks in `output_indices`
     pub num_output_rows: usize,
-    /// Index of currently scanned batch from buffered data, or
-    /// [`FILTERED_CHUNK_KEY`] while the current chunk holds filtered pairs
+    /// Index of currently scanned batch from buffered data
     pub buffered_batch_idx: Option<usize>,
 }
 
@@ -238,55 +200,6 @@ impl StreamedBatch {
         self.num_output_rows += len;
     }
 
-    /// Appends a pair of the current streamed index and each row
-    /// `buffered_start + i` of the buffered batch with `buffered_batch_idx` index
-    /// whose bit `i` is set in `passed`, the join filter's result for those pairs.
-    /// The pairs go to a chunk of filtered pairs, which the freeze does not filter
-    /// again. Returns the number of pairs appended.
-    fn append_filtered_pairs(
-        &mut self,
-        buffered_batch_idx: usize,
-        buffered_start: usize,
-        passed: &BooleanBuffer,
-        batch_size: usize,
-    ) -> usize {
-        let count = passed.count_set_bits();
-        if count == 0 {
-            return 0;
-        }
-        debug_assert!(
-            self.num_output_rows + count <= batch_size,
-            "appending {count} pairs to {} with batch_size {batch_size}",
-            self.num_output_rows
-        );
-        let streamed_idx = self.idx as u64;
-        let reuse = matches!(
-            self.output_indices.last(),
-            Some(chunk) if chunk.filtered
-                && chunk.buffered_batch_idx == Some(buffered_batch_idx)
-        );
-        if !reuse {
-            self.start_filtered_chunk(buffered_batch_idx, batch_size);
-        }
-        let current_chunk = self.output_indices.last_mut().unwrap();
-        current_chunk
-            .streamed_indices
-            .extend(repeat_n(streamed_idx, count));
-        let start = buffered_start as u64;
-        if count == passed.len() {
-            current_chunk
-                .buffered_indices
-                .extend(start..start + count as u64);
-        } else {
-            current_chunk
-                .buffered_indices
-                .extend(passed.set_indices().map(|i| start + i as u64));
-        }
-        current_chunk.buffered_nulls.append_n_non_nulls(count);
-        self.num_output_rows += count;
-        count
-    }
-
     /// Returns the chunk that pairs for `buffered_batch_idx` go to, starting a new one
     /// if there is no chunk yet or the current chunk is for another buffered batch.
     #[inline(always)]
@@ -317,27 +230,11 @@ impl StreamedBatch {
         let capacity = batch_size - self.num_output_rows;
         self.output_indices.push(StreamedJoinedChunk {
             buffered_batch_idx,
-            filtered: false,
             streamed_indices: Vec::with_capacity(capacity),
             buffered_indices: Vec::with_capacity(capacity),
             buffered_nulls: NullBufferBuilder::new(capacity),
         });
         self.buffered_batch_idx = buffered_batch_idx;
-    }
-
-    /// Starts a chunk of filtered pairs for `buffered_batch_idx`. It sets the key
-    /// that [`Self::chunk_for`] compares to [`FILTERED_CHUNK_KEY`], so that the next
-    /// unfiltered pair starts a chunk of its own.
-    fn start_filtered_chunk(&mut self, buffered_batch_idx: usize, batch_size: usize) {
-        let capacity = batch_size - self.num_output_rows;
-        self.output_indices.push(StreamedJoinedChunk {
-            buffered_batch_idx: Some(buffered_batch_idx),
-            filtered: true,
-            streamed_indices: Vec::with_capacity(capacity),
-            buffered_indices: Vec::with_capacity(capacity),
-            buffered_nulls: NullBufferBuilder::new(capacity),
-        });
-        self.buffered_batch_idx = FILTERED_CHUNK_KEY;
     }
 }
 
@@ -483,12 +380,11 @@ pub(super) struct MaterializingSortMergeJoinStream {
     /// `deferred_filtering`.
     pub filter_schema: Option<SchemaRef>,
     /// Whether this is an Inner join with a filter. Such a join drops every pair
-    /// the filter rejects, so the filter runs before any output column is
-    /// materialized: on a long run of buffered rows as it is paired with a
-    /// streamed row (see [`Self::pair_filtered_run`]), and at freeze for the
-    /// remaining pairs (see [`Self::freeze_inner_filtered`]). Outer joins keep
-    /// a rejected pair for the deferred pipeline, which may null-join its row.
-    /// Only an Inner join filters early, so its streamed side is the left input.
+    /// the filter rejects, so the freeze can run the filter before it
+    /// materializes the output columns (see [`Self::freeze_inner_filtered`]).
+    /// Outer joins keep a rejected pair for the deferred pipeline, which may
+    /// null-join its row. Only an Inner join filters early, so its streamed side
+    /// is the left input.
     pub early_filtering: bool,
     /// The indices of every buffered column, for materializing all of them
     pub buffered_columns: Vec<usize>,
@@ -497,9 +393,9 @@ pub(super) struct MaterializingSortMergeJoinStream {
     pub buffered_filter_columns: Vec<usize>,
     /// How many pairs the Inner join's filter has evaluated at freeze so far
     /// (see [`Self::filter_first_pays`])
-    pub freeze_filter_evaluated: usize,
+    pub freeze_filter_evaluated: u64,
     /// How many of the pairs in `freeze_filter_evaluated` passed the filter
-    pub freeze_filter_passed: usize,
+    pub freeze_filter_passed: u64,
     /// Target output batch size
     pub batch_size: usize,
 
@@ -905,14 +801,8 @@ impl MaterializingSortMergeJoinStream {
                 //     batch of pairs accumulates — then advance streamed.
                 //     The group stays for the next streamed row.
                 Ordering::Equal => {
-                    if self.early_filtering {
-                        while !self.pair_streamed_row_with_group_filtered()? {
-                            self.freeze_and_emit(emitter).await?;
-                        }
-                    } else {
-                        while !self.pair_streamed_row_with_group() {
-                            self.freeze_and_emit(emitter).await?;
-                        }
+                    while !self.pair_streamed_row_with_group() {
+                        self.freeze_and_emit(emitter).await?;
                     }
                     if !self.try_advance_streamed_row() {
                         self.load_next_streamed_batch().await?;
@@ -965,91 +855,6 @@ impl MaterializingSortMergeJoinStream {
         self.buffered_group_matched = true;
         self.buffered_data.scanning_reset();
         true
-    }
-
-    /// [`Self::pair_streamed_row_with_group`] for an Inner join with a filter,
-    /// which keeps only the pairs that pass it. For a run of at least
-    /// [`FILTERED_RUN_MIN_ROWS`] buffered rows, the filter runs as the run is
-    /// paired, and the pairs it rejects are never recorded.
-    fn pair_streamed_row_with_group_filtered(&mut self) -> Result<bool> {
-        let mut room = self.batch_size.saturating_sub(self.num_unfrozen_pairs());
-        while !self.buffered_data.scanning_finished() && room > 0 {
-            let rows = self.buffered_data.scanning_remaining();
-            let len = rows.len().min(room);
-            let filtered = if len >= FILTERED_RUN_MIN_ROWS {
-                self.pair_filtered_run(rows.start, len)?
-            } else {
-                None
-            };
-            match filtered {
-                Some(appended) => room -= appended,
-                None => {
-                    self.streamed_batch.append_output_pairs(
-                        self.buffered_data.scanning_batch_idx,
-                        rows.start,
-                        len,
-                        self.batch_size,
-                    );
-                    room -= len;
-                }
-            }
-            self.buffered_data.scanning_advance_by(len);
-        }
-        if room == 0 {
-            return Ok(false);
-        }
-
-        self.buffered_group_matched = true;
-        self.buffered_data.scanning_reset();
-        Ok(true)
-    }
-
-    /// Pairs the current streamed row with the `len` rows of the scanning
-    /// buffered batch from `buffered_start` on, keeping only the pairs that pass
-    /// the join filter. The filter reads the buffered rows as a slice of their
-    /// batch and the streamed row as a single value repeated, so no index is
-    /// recorded and no column is gathered for a pair it rejects.
-    ///
-    /// Returns the number of pairs appended, or `None` without pairing anything
-    /// when the scanning batch is spilled; the caller then pairs every row and
-    /// the freeze filters them once the batch is read back.
-    fn pair_filtered_run(
-        &mut self,
-        buffered_start: usize,
-        len: usize,
-    ) -> Result<Option<usize>> {
-        let Some(filter) = &self.filter else {
-            return internal_err!("early filtering requires a join filter");
-        };
-        let BufferedBatchState::InMemory(buffered) =
-            &self.buffered_data.scanning_batch().batch
-        else {
-            return Ok(None);
-        };
-        let streamed = &self.streamed_batch.batch;
-        let streamed_idx = UInt64Array::from_value(self.streamed_batch.idx as u64, len);
-        let columns = filter
-            .column_indices()
-            .iter()
-            .map(|column_index| match column_index.side {
-                JoinSide::Left => Ok(compute::take(
-                    streamed.column(column_index.index),
-                    &streamed_idx,
-                    None,
-                )?),
-                JoinSide::Right => Ok(buffered
-                    .column(column_index.index)
-                    .slice(buffered_start, len)),
-                JoinSide::None => internal_err!("Unexpected JoinSide::None in filter"),
-            })
-            .collect::<Result<Vec<_>>>()?;
-        let passed = evaluate_join_filter(filter, filter.schema(), columns, len)?;
-        Ok(Some(self.streamed_batch.append_filtered_pairs(
-            self.buffered_data.scanning_batch_idx,
-            buffered_start,
-            &passed,
-            self.batch_size,
-        )))
     }
 
     /// `Less` (outer joins): no buffered row matches the current streamed
@@ -1870,7 +1675,6 @@ impl MaterializingSortMergeJoinStream {
                 buffered_batch_idx: chunk.buffered_batch_idx.unwrap(),
                 streamed_indices: left_indices,
                 buffered_indices: right_indices,
-                filtered: chunk.filtered,
             });
         }
 
@@ -1913,10 +1717,6 @@ impl MaterializingSortMergeJoinStream {
         if self.early_filtering {
             return self.freeze_inner_filtered(matched_chunks, total_matched_rows);
         }
-        debug_assert!(
-            matched_chunks.iter().all(|chunk| !chunk.filtered),
-            "only early filtering pairs filtered chunks"
-        );
 
         let combined_left_indices =
             concat_indices(matched_chunks.iter().map(|c| &c.streamed_indices))?;
@@ -2009,14 +1809,14 @@ impl MaterializingSortMergeJoinStream {
     }
 
     /// Freezes the matched pairs of an Inner join with a filter. The filter runs
-    /// on just the columns it reads, for the pairs of the chunks that
-    /// [`Self::pair_filtered_run`] did not filter already, and only the pairs that
-    /// pass have their output columns materialized. A selective filter over a
-    /// many-to-many join rejects most pairs, so materializing every column of
-    /// every pair before filtering would spend most of the freeze on rows that
-    /// are then dropped. When no chunk was filtered already and earlier freezes
-    /// kept enough of their pairs, [`Self::filter_first_pays`] says the opposite,
-    /// and the batch is materialized whole and then filtered.
+    /// on just the columns it reads, and only the pairs that pass have their
+    /// output columns materialized. A selective filter over a many-to-many join
+    /// rejects most pairs, so materializing every column of every pair before
+    /// filtering would spend most of the freeze on rows that are then dropped.
+    /// When the pairs' indices form ranges on both sides, as in a 1:1 join, the
+    /// columns materialize as slices and filtering first cannot save anything.
+    /// Then, or when [`Self::filter_first_pays`] says earlier freezes kept too
+    /// many of their pairs, the batch is materialized whole and then filtered.
     fn freeze_inner_filtered(
         &mut self,
         matched_chunks: &[MatchedChunk],
@@ -2031,82 +1831,80 @@ impl MaterializingSortMergeJoinStream {
             "only an Inner join filters early, so the streamed side is the left one"
         );
 
-        // Evaluate the filter over the pairs of the chunks not filtered yet.
-        let unfiltered: Vec<&MatchedChunk> =
-            matched_chunks.iter().filter(|c| !c.filtered).collect();
-        if unfiltered.len() == matched_chunks.len() && !self.filter_first_pays(filter) {
-            return self.freeze_inner_filtered_whole(matched_chunks, total_matched_rows);
+        let streamed_indices =
+            concat_indices(matched_chunks.iter().map(|c| &c.streamed_indices))?;
+        let single_source = matched_chunks
+            .iter()
+            .all(|c| c.buffered_batch_idx == matched_chunks[0].buffered_batch_idx);
+        let buffered_indices =
+            concat_indices(matched_chunks.iter().map(|c| &c.buffered_indices))?;
+        let slices = single_source
+            && spans_range(&streamed_indices)
+            && spans_range(&buffered_indices);
+        if slices || !self.filter_first_pays(filter) {
+            return self.freeze_inner_filtered_whole(
+                matched_chunks,
+                total_matched_rows,
+                &streamed_indices,
+            );
         }
-        let passed = if unfiltered.is_empty() {
-            None
-        } else {
-            let num_rows = unfiltered.iter().map(|c| c.len()).sum();
-            let streamed_indices =
-                concat_indices(unfiltered.iter().map(|c| &c.streamed_indices))?;
-            let mut buffered_arrays = self
-                .materialize_right_columns(
-                    &unfiltered,
-                    num_rows,
-                    &self.buffered_filter_columns,
-                )?
-                .into_iter();
-            let columns = filter
-                .column_indices()
-                .iter()
-                .map(|column_index| match column_index.side {
-                    JoinSide::Left => take_column(
-                        self.streamed_batch.batch.column(column_index.index),
-                        &streamed_indices,
-                    ),
-                    JoinSide::Right => buffered_arrays.next().ok_or_else(|| {
-                        internal_datafusion_err!("missing buffered filter column")
-                    }),
-                    JoinSide::None => {
-                        internal_err!("Unexpected JoinSide::None in filter")
-                    }
-                })
-                .collect::<Result<Vec<_>>>()?;
-            self.freeze_filter_evaluated += num_rows;
-            Some(evaluate_join_filter(
-                filter,
-                filter.schema(),
-                columns,
-                num_rows,
-            )?)
-        };
 
-        // Keep the pairs that passed, in order.
-        let mut kept: Vec<Cow<MatchedChunk>> = Vec::with_capacity(matched_chunks.len());
-        let mut kept_rows = 0;
-        let mut offset = 0;
-        for chunk in matched_chunks {
-            let len = chunk.len();
-            match (&passed, chunk.filtered) {
-                (Some(passed), false) => {
-                    let mask = passed.slice(offset, len);
-                    offset += len;
-                    let count = mask.count_set_bits();
-                    if count == len {
-                        kept.push(Cow::Borrowed(chunk));
-                    } else if count > 0 {
-                        kept.push(Cow::Owned(chunk.filter(&mask)?));
-                    }
-                    self.freeze_filter_passed += count;
-                    kept_rows += count;
-                }
-                _ => {
-                    kept.push(Cow::Borrowed(chunk));
-                    kept_rows += len;
-                }
-            }
-        }
+        let mut buffered_arrays = self
+            .materialize_right_columns(
+                matched_chunks,
+                total_matched_rows,
+                &self.buffered_filter_columns,
+            )?
+            .into_iter();
+        let columns = filter
+            .column_indices()
+            .iter()
+            .map(|column_index| match column_index.side {
+                JoinSide::Left => take_column(
+                    self.streamed_batch.batch.column(column_index.index),
+                    &streamed_indices,
+                ),
+                JoinSide::Right => buffered_arrays.next().ok_or_else(|| {
+                    internal_datafusion_err!("missing buffered filter column")
+                }),
+                JoinSide::None => internal_err!("Unexpected JoinSide::None in filter"),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        let passed =
+            evaluate_join_filter(filter, filter.schema(), columns, total_matched_rows)?;
+        let kept_rows = passed.count_set_bits();
+        self.freeze_filter_evaluated += total_matched_rows as u64;
+        self.freeze_filter_passed += kept_rows as u64;
         if kept_rows == 0 {
             return Ok(());
         }
 
-        let streamed_indices = concat_indices(kept.iter().map(|c| &c.streamed_indices))?;
+        // Filter the index arrays of all chunks at once, and give each chunk
+        // with a pair that passed a slice of the result.
+        let predicate = FilterBuilder::new(&BooleanArray::new(passed.clone(), None))
+            .optimize()
+            .build();
+        let kept_streamed =
+            as_uint64_array(&predicate.filter(&streamed_indices)?)?.clone();
+        let kept_buffered =
+            as_uint64_array(&predicate.filter(&buffered_indices)?)?.clone();
+        let mut kept = Vec::with_capacity(matched_chunks.len());
+        let (mut offset, mut kept_offset) = (0, 0);
+        for chunk in matched_chunks {
+            let count = passed.slice(offset, chunk.len()).count_set_bits();
+            offset += chunk.len();
+            if count > 0 {
+                kept.push(MatchedChunk {
+                    buffered_batch_idx: chunk.buffered_batch_idx,
+                    streamed_indices: kept_streamed.slice(kept_offset, count),
+                    buffered_indices: kept_buffered.slice(kept_offset, count),
+                });
+                kept_offset += count;
+            }
+        }
+
         let streamed_columns =
-            materialize_left_columns(&self.streamed_batch.batch, &streamed_indices)?;
+            materialize_left_columns(&self.streamed_batch.batch, &kept_streamed)?;
         let buffered_columns =
             self.materialize_right_columns(&kept, kept_rows, &self.buffered_columns)?;
         let output_batch = RecordBatch::try_new(
@@ -2120,16 +1918,15 @@ impl MaterializingSortMergeJoinStream {
 
     /// Freezes the matched pairs of an Inner join with a filter by materializing
     /// every column of every pair, evaluating the filter on the columns it reads,
-    /// and filtering the batch. None of the pairs was filtered already.
+    /// and filtering the batch.
     fn freeze_inner_filtered_whole(
         &mut self,
         matched_chunks: &[MatchedChunk],
         total_matched_rows: usize,
+        streamed_indices: &UInt64Array,
     ) -> Result<()> {
-        let streamed_indices =
-            concat_indices(matched_chunks.iter().map(|c| &c.streamed_indices))?;
         let streamed_columns =
-            materialize_left_columns(&self.streamed_batch.batch, &streamed_indices)?;
+            materialize_left_columns(&self.streamed_batch.batch, streamed_indices)?;
         let buffered_columns = self.materialize_right_columns(
             matched_chunks,
             total_matched_rows,
@@ -2147,8 +1944,8 @@ impl MaterializingSortMergeJoinStream {
             total_matched_rows,
         )?;
         let kept_rows = passed.count_set_bits();
-        self.freeze_filter_evaluated += total_matched_rows;
-        self.freeze_filter_passed += kept_rows;
+        self.freeze_filter_evaluated += total_matched_rows as u64;
+        self.freeze_filter_passed += kept_rows as u64;
         if kept_rows == 0 {
             return Ok(());
         }
@@ -2177,6 +1974,10 @@ impl MaterializingSortMergeJoinStream {
     /// gathered value as 1 and a copied one as 1/2, filtering first is cheaper
     /// while `f + 1 + k·p < k + k·p/2`, that is while `p < 2·(k - f - 1)/k`. `p` is
     /// the share that passed in the earlier freezes, or 0 before the first.
+    ///
+    /// The model counts columns rather than bytes, so a string column weighs the
+    /// same as an integer one, and `p` averages over the life of the stream
+    /// rather than tracking recent freezes.
     fn filter_first_pays(&self, filter: &JoinFilter) -> bool {
         let k = self.schema.fields().len() as f64;
         let f = filter.column_indices().len() as f64;
@@ -2194,23 +1995,20 @@ impl MaterializingSortMergeJoinStream {
     /// for a single fetch. When multiple batches are involved, `interleave`
     /// gathers columns across sources. A null-row sentinel at source index 0
     /// handles null right indices (unmatched streamed rows).
-    fn materialize_right_columns<C: Borrow<MatchedChunk>>(
+    fn materialize_right_columns(
         &self,
-        matched_chunks: &[C],
+        matched_chunks: &[MatchedChunk],
         total_matched_rows: usize,
         columns: &[usize],
     ) -> Result<Vec<ArrayRef>> {
-        let chunks = || {
-            matched_chunks
-                .iter()
-                .map(|c| -> &MatchedChunk { c.borrow() })
-        };
-        let first_batch_idx = matched_chunks[0].borrow().buffered_batch_idx;
-        let single_source = chunks().all(|c| c.buffered_batch_idx == first_batch_idx);
+        let first_batch_idx = matched_chunks[0].buffered_batch_idx;
+        let single_source = matched_chunks
+            .iter()
+            .all(|c| c.buffered_batch_idx == first_batch_idx);
 
         if single_source {
             let combined_right_indices =
-                concat_indices(chunks().map(|c| &c.buffered_indices))?;
+                concat_indices(matched_chunks.iter().map(|c| &c.buffered_indices))?;
 
             return fetch_right_columns_by_idxs(
                 &self.buffered_data,
@@ -2227,7 +2025,9 @@ impl MaterializingSortMergeJoinStream {
         // `interleave` walks a null buffer for *every* output row as soon as
         // any input is nullable, so an always-present sentinel would tax the
         // common all-matched case.
-        let needs_null_sentinel = chunks().any(|c| c.buffered_indices.null_count() > 0);
+        let needs_null_sentinel = matched_chunks
+            .iter()
+            .any(|c| c.buffered_indices.null_count() > 0);
         let source_offset = usize::from(needs_null_sentinel);
 
         // Map each distinct `buffered_batch_idx` to a contiguous source
@@ -2282,7 +2082,8 @@ impl MaterializingSortMergeJoinStream {
         // (`source_data` is gathered from it), so the table is the only
         // added state, and it is transient: sized to the span this freeze
         // touches rather than held across freezes.
-        let (min_batch_idx, max_batch_idx) = chunks()
+        let (min_batch_idx, max_batch_idx) = matched_chunks
+            .iter()
             .fold((usize::MAX, 0usize), |(lo, hi), c| {
                 (lo.min(c.buffered_batch_idx), hi.max(c.buffered_batch_idx))
             });
@@ -2299,7 +2100,7 @@ impl MaterializingSortMergeJoinStream {
             Vec::with_capacity(matched_chunks.len().min(source_of_batch.len()));
         let mut interleave_indices: Vec<(usize, usize)> =
             Vec::with_capacity(total_matched_rows);
-        for chunk in chunks() {
+        for chunk in matched_chunks.iter() {
             let batch_idx = chunk.buffered_batch_idx;
             let right = &chunk.buffered_indices;
             let slot = &mut source_of_batch[batch_idx - min_batch_idx];
@@ -2530,6 +2331,16 @@ fn is_contiguous_range(indices: &UInt64Array) -> Option<Range<usize>> {
         }
     }
     Some(start as usize..(start + len) as usize)
+}
+
+/// Whether `indices` may form a range, judging by their ends only. A freeze uses
+/// it to choose its path, and the path checks the range before it slices.
+fn spans_range(indices: &UInt64Array) -> bool {
+    let values = indices.values();
+    !values.is_empty()
+        && indices.null_count() == 0
+        && values[values.len() - 1].checked_sub(values[0])
+            == Some(values.len() as u64 - 1)
 }
 
 /// Get `buffered_indices` rows of the `columns` of `buffered_data[buffered_batch_idx]`

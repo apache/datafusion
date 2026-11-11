@@ -8452,10 +8452,9 @@ fn early_filtering_batches(
 }
 
 /// Inputs for the early-filtering tests. Every third key has a group of 600
-/// buffered rows, long enough to be filtered as it is paired, and the 250-row
-/// buffered batches split each such group. The other keys have groups of one or
-/// two buffered rows, whose pairs are filtered at freeze. Keys repeat up to four
-/// times on the streamed side.
+/// buffered rows, which the 250-row buffered batches split, so that a freeze
+/// gathers its pairs from several buffered batches. The other keys have groups of
+/// one or two buffered rows. Keys repeat up to four times on the streamed side.
 fn early_filtering_inputs()
 -> ((Vec<RecordBatch>, SchemaRef), (Vec<RecordBatch>, SchemaRef)) {
     let left =
@@ -8520,22 +8519,23 @@ fn interleaved_early_filter(left_schema: &Schema, right_schema: &Schema) -> Join
     JoinFilter::new(expression, column_indices, Arc::new(schema))
 }
 
-/// The filter `b2 <> b1 OR c2 < c1`, which nearly every pair passes, with its
-/// intermediate columns in the order `b2, b1, c2, c1`. It reads four of the six
-/// output columns, so after the first freeze the join materializes whole batches
-/// and filters them (see `filter_first_pays`).
+/// The filter `c2 <> c1 OR b2 < b1`, with its intermediate columns in the order
+/// `b2, b1, c2, c1`. It rejects only the few pairs with a NULL or equal `c`, so
+/// it reads four of the six output columns and keeps most pairs. After the first
+/// freeze the join then materializes whole batches and filters them (see
+/// `filter_first_pays`).
 fn high_pass_early_filter(left_schema: &Schema, right_schema: &Schema) -> JoinFilter {
     let expression = Arc::new(BinaryExpr::new(
         Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("b2", 0)),
+            Arc::new(Column::new("c2", 2)),
             Operator::NotEq,
-            Arc::new(Column::new("b1", 1)),
+            Arc::new(Column::new("c1", 3)),
         )),
         Operator::Or,
         Arc::new(BinaryExpr::new(
-            Arc::new(Column::new("c2", 2)),
+            Arc::new(Column::new("b2", 0)),
             Operator::Lt,
-            Arc::new(Column::new("c1", 3)),
+            Arc::new(Column::new("b1", 1)),
         )),
     ));
     let column_indices = vec![
@@ -8581,33 +8581,36 @@ fn early_filtering_on(left_schema: &Schema, right_schema: &Schema) -> Result<Joi
     )])
 }
 
-/// Asserts that the key column of `batches` is ascending, the order of the
-/// streamed side that the join maintains.
+/// Asserts that the pairs of `batches` ascend on `(b1, b2)`, the row numbers of
+/// the two inputs: an Inner join keeps the streamed order, and the buffered order
+/// within each streamed row.
 fn assert_streamed_order(batches: &[RecordBatch]) {
-    let keys: Vec<i32> = batches
+    let column = |b: &RecordBatch, i: usize| {
+        b.column(i)
+            .as_any()
+            .downcast_ref::<Int32Array>()
+            .unwrap()
+            .values()
+            .to_vec()
+    };
+    let pairs: Vec<(i32, i32)> = batches
         .iter()
-        .flat_map(|b| {
-            b.column(0)
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .unwrap()
-                .values()
-                .to_vec()
-        })
+        .flat_map(|b| column(b, 1).into_iter().zip(column(b, 4)))
         .collect();
     assert!(
-        keys.is_sorted(),
-        "Inner join output must stay ordered on the streamed side"
+        pairs.is_sorted(),
+        "Inner join output must keep the order of both inputs"
     );
 }
 
-/// An Inner join with a filter filters long runs of buffered rows as it pairs them
-/// and the pairs of shorter runs at freeze. It must keep the same pairs as a hash
-/// join whatever the batch size, which decides where a batch of pairs cuts a run,
-/// and whatever the order of the filter's columns. The pseudo-random values pass
-/// `c1 < c2` for about half of the pairs, and their NULLs pass for none. The
-/// high-pass filter also covers freezes that materialize whole batches, and a
-/// filter that reads no columns must still run for every pair.
+/// An Inner join with a filter filters the pairs of each freeze before it
+/// materializes them. It must keep the same pairs as a hash join whatever the
+/// batch size, which decides where a freeze cuts a group, and whatever the order
+/// of the filter's columns. The pseudo-random values pass `c1 < c2` for about
+/// half of the pairs, and their NULLs pass for none. Freezes that materialize
+/// whole batches are covered by the high-pass filter and by the single pairs of
+/// `batch_size` 1, whose indices form ranges. A filter that reads no columns must
+/// still run for every pair.
 #[tokio::test]
 async fn join_inner_early_filtering_matches_hash_join() -> Result<()> {
     let ((left_batches, left_schema), (right_batches, right_schema)) =
@@ -8655,8 +8658,7 @@ async fn join_inner_early_filtering_matches_hash_join() -> Result<()> {
     Ok(())
 }
 
-/// A long run in a spilled buffered batch is paired unfiltered, and its pairs are
-/// filtered at freeze once the batch is read back.
+/// The freeze filters pairs from spilled buffered batches once they are read back.
 #[tokio::test]
 async fn join_inner_early_filtering_with_spilled_buffered_batches() -> Result<()> {
     let ((left_batches, left_schema), (right_batches, right_schema)) =
