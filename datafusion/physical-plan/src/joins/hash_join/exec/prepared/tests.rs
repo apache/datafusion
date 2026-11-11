@@ -784,8 +784,8 @@ async fn prepared_inlist_shares_accounted_build_buffers() -> Result<()> {
                     Arc::new(config),
                 )
                 .await?;
-            let PushdownStrategy::Map(_, bitmap) = &map.build.membership else {
-                panic!("expected hash-map membership");
+            let PushdownStrategy::Large(bitmap) = &map.build.membership else {
+                panic!("expected large membership");
             };
             let bitmap_bytes = bitmap.as_ref().map_or(0, |bitmap| bitmap.size());
             assert_eq!(map.reserved_bytes(), bytes + bitmap_bytes);
@@ -880,7 +880,7 @@ async fn prepared_byte_keys_use_hash_membership() -> Result<()> {
         assert!(prepared.build.bounds.is_none());
         assert!(matches!(
             &prepared.build.membership,
-            PushdownStrategy::Map(_, _)
+            PushdownStrategy::Large(_)
         ));
         let task = with_probe_filter(base)?
             .builder()
