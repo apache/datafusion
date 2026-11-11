@@ -10219,4 +10219,160 @@ mod tests {
         Ok(())
     }
 
+    #[tokio::test]
+    async fn restore_group_key_stream_splits_large_batches() -> Result<()> {
+        let output_schema = Arc::new(Schema::new(vec![
+            Field::new("s", DataType::Utf8, true),
+            Field::new("b", DataType::Binary, true),
+            Field::new("c", DataType::Int64, false),
+        ]));
+        let stored_schema = group_schema_with_large_offsets(&output_schema, 2);
+
+        let keys = (0..10)
+            .map(|i| (i % 4 != 0).then(|| format!("key-{i}")))
+            .collect::<Vec<_>>();
+        let expected = RecordBatch::try_new(
+            Arc::clone(&output_schema),
+            vec![
+                Arc::new(StringArray::from(keys.clone())),
+                Arc::new(arrow::array::BinaryArray::from_iter(
+                    keys.iter().map(|k| k.as_ref().map(|k| k.as_bytes())),
+                )),
+                Arc::new(Int64Array::from_iter_values(0..10)),
+            ],
+        )?;
+        let stored = RecordBatch::try_new(
+            Arc::clone(&stored_schema),
+            vec![
+                arrow::compute::cast(expected.column(0), &DataType::LargeUtf8)?,
+                arrow::compute::cast(expected.column(1), &DataType::LargeBinary)?,
+                Arc::clone(expected.column(2)),
+            ],
+        )?;
+
+        let input = Box::pin(crate::stream::RecordBatchStreamAdapter::new(
+            Arc::clone(&output_schema),
+            futures::stream::iter(vec![
+                Ok(RecordBatch::new_empty(stored_schema)),
+                Ok(stored),
+                Ok(expected.clone()),
+            ]),
+        ));
+        let output = collect(restore_group_key_stream(input, 4)).await?;
+
+        let rows = output.iter().map(|b| b.num_rows()).collect::<Vec<_>>();
+        assert_eq!(rows, vec![0, 4, 4, 2, 10]);
+        assert!(output.iter().all(|batch| batch.schema() == output_schema));
+        assert_eq!(concat_batches(&output_schema, &output[1..4])?, expected);
+        assert_eq!(output[4], expected);
+
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case::reserves_batch_memory(320 * 1024, true)]
+    #[case::cannot_reserve_batch_memory(64 * 1024, false)]
+    #[tokio::test]
+    async fn partial_hash_restores_key_types_with_limited_memory(
+        #[case] memory_limit: usize,
+        #[case] has_reserved_memory: bool,
+    ) -> Result<()> {
+        let batch_size = 1024;
+        let num_groups = 4 * batch_size;
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("s", DataType::Utf8, false),
+            Field::new("b", DataType::Binary, false),
+            Field::new("v", DataType::Int64, false),
+        ]));
+        let keys = (0..num_groups)
+            .map(|i| format!("key-{i:04}"))
+            .collect::<Vec<_>>();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(StringArray::from_iter_values(&keys)),
+                Arc::new(arrow::array::BinaryArray::from_iter_values(&keys)),
+                Arc::new(Int64Array::from(vec![1; num_groups])),
+            ],
+        )?;
+
+        let runtime = RuntimeEnvBuilder::default()
+            .with_memory_limit(memory_limit, 1.0)
+            .build_arc()?;
+        // The test must group the input rows to check the key conversion.
+        let session_config = SessionConfig::new().with_batch_size(batch_size).set(
+            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+            &ScalarValue::Float64(Some(1.0)),
+        );
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(session_config)
+                .with_runtime(Arc::clone(&runtime)),
+        );
+
+        // The input waits at the barrier.
+        // Only the memory limit can cause output before that point.
+        let input = Arc::new(
+            crate::test::exec::BarrierExec::new(vec![vec![batch]], Arc::clone(&schema))
+                .without_start_barrier()
+                .with_finish_barrier()
+                .with_log(false),
+        );
+        let aggregate = AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![
+                (col("s", &schema)?, "s".to_string()),
+                (col("b", &schema)?, "b".to_string()),
+            ]),
+            vec![Arc::new(
+                AggregateExprBuilder::new(count_udaf(), vec![col("v", &schema)?])
+                    .schema(Arc::clone(&schema))
+                    .alias("c")
+                    .build()?,
+            )],
+            vec![None],
+            Arc::clone(&input) as Arc<dyn ExecutionPlan>,
+            Arc::clone(&schema),
+        )?;
+        let mut stream =
+            PartialHashAggregateStream::new(&aggregate, &task_ctx, 0)?.into_stream();
+
+        let mut batches = vec![];
+        let mut num_rows = 0;
+        while num_rows < num_groups {
+            let batch =
+                tokio::time::timeout(std::time::Duration::from_secs(5), stream.next())
+                    .await
+                    .expect("the memory limit must cause output before the input ends")
+                    .expect("the stream ended before all groups were returned")?;
+            if batches.is_empty() {
+                assert_eq!(
+                    runtime.memory_pool.reserved() >= batch.get_array_memory_size(),
+                    has_reserved_memory
+                );
+            }
+            num_rows += batch.num_rows();
+            batches.push(batch);
+        }
+        input.wait_finish().await;
+        assert!(stream.next().await.is_none());
+
+        for batch in &batches {
+            assert_eq!(batch.schema(), aggregate.schema());
+            assert_eq!(batch.num_rows(), batch_size);
+        }
+        let output = concat_batches(&aggregate.schema(), &batches)?;
+        let strings = output.column(0).as_string::<i32>();
+        assert!(strings.iter().flatten().eq(keys.iter().map(String::as_str)));
+        let binaries = output.column(1).as_binary::<i32>();
+        assert!(
+            binaries
+                .iter()
+                .flatten()
+                .eq(keys.iter().map(String::as_bytes))
+        );
+
+        Ok(())
+    }
 }
