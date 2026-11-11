@@ -1849,11 +1849,15 @@ config_namespace! {
         pub enable_piecewise_merge_join: bool, default = false
 
         /// The maximum estimated size in bytes for one input side of a HashJoin
-        /// will be collected into a single partition
+        /// will be collected into a single partition. Partitioned joins also use
+        /// it: an input below it is not used as the co-partitioning reference for
+        /// an input above it.
         pub hash_join_single_partition_threshold: usize, default = 4 * 1024 * 1024
 
         /// The maximum estimated size in rows for one input side of a HashJoin
-        /// will be collected into a single partition
+        /// will be collected into a single partition. Partitioned joins also use
+        /// it: an input below it is not used as the co-partitioning reference for
+        /// an input above it.
         pub hash_join_single_partition_threshold_rows: usize, default = 1024 * 128
 
         /// Maximum size in bytes for the build side of a hash join to be pushed down as an InList expression for dynamic filtering.

@@ -1994,36 +1994,110 @@ fn range_hash_join_repartitions_unpartitioned_side_to_match_range() -> Result<()
 }
 
 #[test]
-fn range_hash_join_rejects_smaller_reference() -> Result<()> {
-    let left = parquet_exec_with_partitioning_and_size(
-        Partitioning::UnknownPartitioning(4),
-        Precision::Inexact(100_000),
-        Precision::Inexact(8_000_000),
-    );
-    let right = parquet_exec_with_partitioning_and_size(
-        range_partitioning("a", [10, 20, 30], SortOptions::default())?,
-        Precision::Inexact(100),
-        Precision::Inexact(8_000),
-    );
+fn range_join_reference_size_gate() -> Result<()> {
+    let optimizer = TestConfig::default().config.optimizer;
+    let bytes = optimizer.hash_join_single_partition_threshold;
+    let rows = optimizer.hash_join_single_partition_threshold_rows;
+    let known = |n: usize| Precision::Inexact(n);
+    let absent = Precision::Absent;
 
-    let join_on = vec![(
-        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
-        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
-    )];
-    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
+    // (name, other (rows, bytes), reference (rows, bytes), expect hash fallback)
+    let cases = [
+        (
+            "bytes: straddle",
+            (absent, known(bytes)),
+            (absent, known(bytes - 1)),
+            true,
+        ),
+        (
+            "bytes: both at or above",
+            (absent, known(bytes + 1)),
+            (absent, known(bytes)),
+            false,
+        ),
+        (
+            "bytes: both below",
+            (absent, known(100)),
+            (absent, known(100)),
+            false,
+        ),
+        (
+            "rows: straddle",
+            (known(rows), absent),
+            (known(rows - 1), absent),
+            true,
+        ),
+        (
+            "rows: both at or above",
+            (known(rows + 1), absent),
+            (known(rows), absent),
+            false,
+        ),
+        (
+            "bytes win over rows",
+            (known(rows * 10), known(100)),
+            (known(1), known(100)),
+            false,
+        ),
+        (
+            "other unknown",
+            (absent, absent),
+            (known(1), known(100)),
+            false,
+        ),
+        (
+            "reference unknown",
+            (known(rows * 10), known(bytes * 10)),
+            (absent, absent),
+            false,
+        ),
+    ];
 
-    let plan = TestConfig::default()
-        .with_query_execution_partitions(4)
-        .to_plan(join, &DISTRIB_DISTRIB_SORT);
+    type MakeJoin = fn(
+        Arc<dyn ExecutionPlan>,
+        Arc<dyn ExecutionPlan>,
+        &JoinOn,
+        &JoinType,
+    ) -> Arc<dyn ExecutionPlan>;
+    let joins: [(&str, MakeJoin); 2] = [
+        ("hash", hash_join_exec),
+        ("sort-merge", sort_merge_join_exec),
+    ];
 
-    let children = plan.children();
-    assert_eq!(children.len(), 2);
-    for child in children {
-        assert!(
-            matches!(child.output_partitioning(), Partitioning::Hash(_, 4)),
-            "expected hash fallback, got {:?}",
-            child.output_partitioning(),
-        );
+    for (join_name, make_join) in joins {
+        for (name, other, reference, expect_hash) in cases {
+            let left = parquet_exec_with_partitioning_and_size(
+                Partitioning::UnknownPartitioning(4),
+                other.0,
+                other.1,
+            );
+            let right = parquet_exec_with_partitioning_and_size(
+                range_partitioning("a", [10, 20, 30], SortOptions::default())?,
+                reference.0,
+                reference.1,
+            );
+            let join_on = vec![(
+                Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
+                Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
+            )];
+            let join = make_join(left, right, &join_on, &JoinType::Inner);
+
+            let plan = TestConfig::default()
+                .with_query_execution_partitions(4)
+                .to_plan(join, &DISTRIB_DISTRIB_SORT);
+
+            for child in plan.children() {
+                let is_hash =
+                    matches!(child.output_partitioning(), Partitioning::Hash(_, 4));
+                let is_range =
+                    matches!(child.output_partitioning(), Partitioning::Range(_));
+                assert!(
+                    if expect_hash { is_hash } else { is_range },
+                    "{join_name}, {name}: got {:?}",
+                    child.output_partitioning(),
+                );
+            }
+        }
     }
 
     Ok(())
@@ -2073,76 +2147,6 @@ fn range_requirement_scales_within_sample_resolution() -> Result<()> {
             usize::from(target > 3)
         );
     }
-    Ok(())
-}
-
-#[test]
-fn range_hash_join_preserves_equal_reference() -> Result<()> {
-    let left = parquet_exec_with_partitioning_and_size(
-        Partitioning::UnknownPartitioning(4),
-        Precision::Inexact(100),
-        Precision::Inexact(8_000),
-    );
-    let right = parquet_exec_with_partitioning_and_size(
-        range_partitioning("a", [10, 20, 30], SortOptions::default())?,
-        Precision::Inexact(100),
-        Precision::Inexact(8_000),
-    );
-
-    let join_on = vec![(
-        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
-        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
-    )];
-    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
-
-    let plan = TestConfig::default()
-        .with_query_execution_partitions(4)
-        .to_plan(join, &DISTRIB_DISTRIB_SORT);
-
-    let expected = range_partitioning("a", [10, 20, 30], SortOptions::default())?;
-
-    let children = plan.children();
-    assert_eq!(children.len(), 2);
-    for child in children {
-        assert_eq!(child.output_partitioning(), &expected);
-    }
-
-    Ok(())
-}
-
-#[test]
-fn range_hash_join_preserves_large_reference() -> Result<()> {
-    // Both inputs are above the `CollectLeft` thresholds, so the slightly
-    // larger one is adapted to the reference and only it is shuffled.
-    let left = parquet_exec_with_partitioning_and_size(
-        Partitioning::UnknownPartitioning(4),
-        Precision::Inexact(11_000_000),
-        Precision::Inexact(880_000_000),
-    );
-    let right = parquet_exec_with_partitioning_and_size(
-        range_partitioning("a", [10, 20, 30], SortOptions::default())?,
-        Precision::Inexact(10_000_000),
-        Precision::Inexact(800_000_000),
-    );
-
-    let join_on = vec![(
-        Arc::new(Column::new_with_schema("a", &left.schema())?) as _,
-        Arc::new(Column::new_with_schema("a", &right.schema())?) as _,
-    )];
-    let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
-
-    let plan = TestConfig::default()
-        .with_query_execution_partitions(4)
-        .to_plan(join, &DISTRIB_DISTRIB_SORT);
-
-    let expected = range_partitioning("a", [10, 20, 30], SortOptions::default())?;
-
-    let children = plan.children();
-    assert_eq!(children.len(), 2);
-    for child in children {
-        assert_eq!(child.output_partitioning(), &expected);
-    }
-
     Ok(())
 }
 

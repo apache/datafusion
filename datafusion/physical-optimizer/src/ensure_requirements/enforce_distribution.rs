@@ -19,6 +19,7 @@ use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use crate::join_selection::below_collect_thresholds;
 use crate::output_requirements::OutputRequirementExec;
 use crate::utils::{
     add_sort_above_with_check, is_coalesce_partitions, is_repartition,
@@ -1230,21 +1231,6 @@ impl PlanSize {
     fn is_known(&self) -> bool {
         self.byte_size.is_some() || self.num_rows.is_some()
     }
-
-    /// Whether the plan is below the `CollectLeft` thresholds of `JoinSelection`,
-    /// comparing bytes when known and rows otherwise. `None` when the size is unknown.
-    fn is_small(&self, config: &ConfigOptions) -> Option<bool> {
-        let optimizer = &config.optimizer;
-        match (self.byte_size, self.num_rows) {
-            (Some(bytes), _) => {
-                Some(bytes < optimizer.hash_join_single_partition_threshold)
-            }
-            (None, Some(rows)) => {
-                Some(rows < optimizer.hash_join_single_partition_threshold_rows)
-            }
-            (None, None) => None,
-        }
-    }
 }
 
 impl PartialOrd for PlanSize {
@@ -1382,18 +1368,20 @@ fn enforce_distribution_relationships(
         // below them; fall back to hash partitioning instead. Otherwise keep the
         // reference, so that it is not shuffled as well.
         let best_satisfied_child = best_satisfied_child.filter(|(ref_idx, _)| {
-            let reference_size =
-                PlanSize::from_plan(&children[*ref_idx].context.plan, stats_ctx);
-            if reference_size.is_small(config) != Some(true) {
-                return true;
-            }
-
-            !unsatisfied_children.iter().any(|&child_idx| {
-                child_idx != *ref_idx
-                    && PlanSize::from_plan(&children[child_idx].context.plan, stats_ctx)
-                        .is_small(config)
-                        == Some(false)
-            })
+            let is_small = |idx: usize| {
+                let stats = stats_ctx
+                    .compute_arc(&children[idx].context.plan, &StatisticsArgs::new())
+                    .ok()?;
+                below_collect_thresholds(
+                    &stats,
+                    config.optimizer.hash_join_single_partition_threshold,
+                    config.optimizer.hash_join_single_partition_threshold_rows,
+                )
+            };
+            is_small(*ref_idx) != Some(true)
+                || !unsatisfied_children
+                    .iter()
+                    .any(|&child_idx| is_small(child_idx) == Some(false))
         });
 
         // Validate that best_satisfied_child can be adapted across all unsatisfied children in the group

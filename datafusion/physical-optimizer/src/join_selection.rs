@@ -111,12 +111,24 @@ fn supports_collect_by_thresholds(
     // `Exact(0)` and `Inexact(0)` are both valid stats, and we should not treat
     // them as unknown, `Absent` will return None (this is in regards to why
     // `!=0` is not checked)
+    below_collect_thresholds(&stats, threshold_byte_size, threshold_num_rows)
+        .unwrap_or(false)
+}
+
+/// Whether `stats` is below the `CollectLeft` thresholds, comparing bytes when
+/// known and rows otherwise. `None` when the size is unknown.
+pub(crate) fn below_collect_thresholds(
+    stats: &Statistics,
+    threshold_byte_size: usize,
+    threshold_num_rows: usize,
+) -> Option<bool> {
     if let Some(byte_size) = stats.total_byte_size.get_value() {
-        *byte_size < threshold_byte_size
-    } else if let Some(num_rows) = stats.num_rows.get_value() {
-        *num_rows < threshold_num_rows
+        Some(*byte_size < threshold_byte_size)
     } else {
-        false
+        stats
+            .num_rows
+            .get_value()
+            .map(|num_rows| *num_rows < threshold_num_rows)
     }
 }
 
