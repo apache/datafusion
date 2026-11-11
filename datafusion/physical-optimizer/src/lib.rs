@@ -23,6 +23,7 @@ pub mod ensure_requirements;
 pub use ensure_requirements::{enforce_distribution, enforce_sorting};
 pub mod filter_pushdown;
 pub mod join_selection;
+pub mod late_dictionary_encoding;
 pub mod limit_pushdown;
 pub mod limit_pushdown_past_window;
 pub mod limited_distinct_aggregation;

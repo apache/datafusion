@@ -9,6 +9,7 @@ mod binary;
 mod case;
 mod cast;
 mod column;
+mod compact_dictionary;
 mod dynamic_filters;
 mod in_list;
 mod is_not_null;
@@ -32,6 +33,7 @@ pub use binary::{BinaryExpr, binary, similar_to};
 pub use case::{CaseExpr, case};
 pub use cast::{CastExpr, cast, is_order_preserving_cast};
 pub use column::{Column, col, with_new_schema};
+pub use compact_dictionary::CompactDictionaryExpr;
 pub use datafusion_expr::utils::format_state_name;
 pub use dynamic_filters::{
     DynamicFilterPhysicalExpr, DynamicFilterTracker, DynamicFilterTracking,
