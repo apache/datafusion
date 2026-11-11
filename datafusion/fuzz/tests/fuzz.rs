@@ -20,7 +20,7 @@ mod suites;
 #[tokio::test(flavor = "multi_thread")]
 async fn fuzz_tests() -> Result<()> {
     let spill_pool = suites::spill_pool::SpillPoolFuzzer;
-    let suites = [Suite::new(
+    let suites = std::iter::once(Suite::new(
         &spill_pool,
         RunConfig {
             run_seed: Some(0),
@@ -28,7 +28,12 @@ async fn fuzz_tests() -> Result<()> {
             time_limit: None,
             cases_per_dataset: 1000,
         },
-    )];
+    ))
+    .chain(
+        suites::limit::FUZZERS
+            .iter()
+            .map(|fuzzer| Suite::new(fuzzer, fuzzer.run_config())),
+    );
     run_suites(suites).await
 }
 

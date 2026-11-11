@@ -4,4 +4,5 @@
 
 //! Implementation for fuzz test cases.
 
+pub(crate) mod limit;
 pub(crate) mod spill_pool;
