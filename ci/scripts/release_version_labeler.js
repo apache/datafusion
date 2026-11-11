@@ -36,15 +36,21 @@ module.exports = async ({ github, context }) => {
         name: target_version
         });
     } catch (error) {
-        if (error.status === 404) {
+        if (error.status !== 404) {
+            throw error;
+        }
+        try {
             await github.rest.issues.createLabel({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
                 name: target_version,
                 color: '222222'
             });
-        } else {
-            throw error;
+        } catch (error) {
+            // A run for another push can create the label first.
+            if (error.status !== 422) {
+                throw error;
+            }
         }
     }
 

@@ -96,6 +96,9 @@ async function execute({
   slice = [pr],
   openPrs = [pr],
   triggeringRun = workflowRun,
+  // Created by another run, such as the sweep, while this run looks for the
+  // fork run.
+  checkCreatedMeanwhile,
   calls = [],
 }) {
   const writes = [];
@@ -114,6 +117,7 @@ async function execute({
       actions: {
         listWorkflowRuns: async (params) => {
           calls.push("actions.listWorkflowRuns");
+          check = checkCreatedMeanwhile ?? check;
           assert.equal(params.owner, "contributor");
           assert.equal(params.repo, "datafusion");
           assert.equal(params.workflow_id, "rust.yml");
@@ -199,6 +203,17 @@ test("notification updates the check a commit already has instead of adding one"
     event: "workflow_run",
     check: checkFor(run(1)),
     openPrs: [release, pr],
+    runs: [latest],
+  });
+  assert.equal(writes.length, 1);
+  assertRun(writes[0], "update", latest);
+});
+
+test("notification updates a check created while it looked for the fork run", async () => {
+  const latest = run(2);
+  const writes = await execute({
+    event: "workflow_run",
+    checkCreatedMeanwhile: checkFor(run(1)),
     runs: [latest],
   });
   assert.equal(writes.length, 1);

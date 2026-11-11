@@ -19,8 +19,10 @@ const pull = (
 
 // `lookups` maps a commit to the pull requests returned on each attempt (the
 // last response repeats once the attempts run out), or to an error to throw.
-// `failLabels` lists the pull requests that fail to get the label.
-async function run({ lookups, commits, failLabels = [] }) {
+// `failLabels` lists the pull requests that fail to get the label. `label` is
+// "missing" when the release label does not exist, or "raced" when another run
+// creates it between the lookup and the creation.
+async function run({ lookups, commits, failLabels = [], label = "exists" }) {
   const result = {
     listed: [],
     labeled: [],
@@ -28,12 +30,25 @@ async function run({ lookups, commits, failLabels = [] }) {
     logs: [],
     inFlight: 0,
     maxInFlight: 0,
+    createdLabels: 0,
   };
   const attempts = {};
   const github = {
     rest: {
       issues: {
-        getLabel: async () => {},
+        getLabel: async () => {
+          if (label !== "exists") {
+            throw Object.assign(new Error("Not Found"), { status: 404 });
+          }
+        },
+        createLabel: async () => {
+          if (label === "raced") {
+            throw Object.assign(new Error("Validation Failed"), {
+              status: 422,
+            });
+          }
+          result.createdLabels++;
+        },
         addLabels: async ({ issue_number, labels }) => {
           if (failLabels.includes(issue_number)) {
             throw new Error(`cannot label ${issue_number}`);
@@ -212,4 +227,29 @@ test("logs every failed request with its commit or pull request", async () => {
     "Labeling #2 failed: Error: cannot label 2",
     "2 request(s) failed, see above.",
   ]);
+});
+
+test("creates the release label when it is missing", async () => {
+  const result = await execute({
+    commits: ["a"],
+    lookups: { a: [[pull(1)]] },
+    label: "missing",
+  });
+  assert.equal(result.createdLabels, 1);
+  assert.deepEqual(
+    result.labeled.map(([number]) => number),
+    [1]
+  );
+});
+
+test("labels when another run creates the release label first", async () => {
+  const result = await execute({
+    commits: ["a"],
+    lookups: { a: [[pull(1)]] },
+    label: "raced",
+  });
+  assert.deepEqual(
+    result.labeled.map(([number]) => number),
+    [1]
+  );
 });

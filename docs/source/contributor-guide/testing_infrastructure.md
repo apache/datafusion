@@ -10,17 +10,19 @@ This page covers checks for CI workflows, documentation, repository maintenance,
 
 ## CI Workflow Tests
 
-The [Rust workflow validator tests], [fork status bridge tests] and [release version labeler tests] run in CI and in `./dev/rust_lint.sh`.
+The [Rust workflow validator tests], [fork status bridge tests], [merge queue cleanup tests] and [release version labeler tests] run in CI and in `./dev/rust_lint.sh`.
 Run them locally:
 
 ```shell
 python3 ci/scripts/test_rust_workflow_skips.py
 node --test ci/scripts/test_fork_ci_status.cjs
+node --test ci/scripts/test_cancel_merge_queue_runs.cjs
 node --test ci/scripts/test_release_version_labeler.cjs
 ```
 
 [rust workflow validator tests]: https://github.com/apache/datafusion/blob/main/ci/scripts/test_rust_workflow_skips.py
 [fork status bridge tests]: https://github.com/apache/datafusion/blob/main/ci/scripts/test_fork_ci_status.cjs
+[merge queue cleanup tests]: https://github.com/apache/datafusion/blob/main/ci/scripts/test_cancel_merge_queue_runs.cjs
 [release version labeler tests]: https://github.com/apache/datafusion/blob/main/ci/scripts/test_release_version_labeler.cjs
 
 ## Documentation Examples

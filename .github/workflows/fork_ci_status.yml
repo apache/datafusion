@@ -208,13 +208,30 @@ jobs:
               const payload = run
                 ? runPayload(fork, sha, run)
                 : missingPayload(fork, sha, await workflowState(fork));
-              await github.rest.checks.create({ ...upstream, name: CHECK, head_sha: sha, ...payload });
-              core.info(`Created ${CHECK} for ${sha}: ${payload.conclusion || payload.status}`);
+              // The commit can already have the check. A pull request of the
+              // same branch to a release branch, or a reopened pull request,
+              // signals it again, and the scheduled update can create the check
+              // while this run waits for the fork run. So look for it only now,
+              // and update it instead of adding a second one.
+              const { data } = await github.rest.checks.listForRef({
+                ...upstream,
+                ref: sha,
+                check_name: CHECK,
+                per_page: 1,
+              });
+              const [existing] = data.check_runs;
+              if (existing) {
+                await github.rest.checks.update({ ...upstream, check_run_id: existing.id, ...payload });
+              } else {
+                await github.rest.checks.create({ ...upstream, name: CHECK, head_sha: sha, ...payload });
+              }
+              core.info(`${existing ? 'Updated' : 'Created'} ${CHECK} for ${sha}: ${payload.conclusion || payload.status}`);
             }
 
             async function notify() {
-              // The same branch can also target a release branch, which gets no
-              // mirrored check, so look only at the pull request to `main`.
+              // Only fork PRs to main skip jobs upstream. The job runs only for
+              // a fork, and a release branch has no merge queue and keeps the
+              // full run, so look only at the pull request to `main`.
               const pulls = await require('./ci/scripts/pull_requests_of_run.js')({
                 github,
                 context,
@@ -227,25 +244,6 @@ jobs:
               );
               if (!pr) {
                 core.info('No open pull request to main at this commit; nothing to mirror.');
-                return;
-              }
-              // Only fork PRs to main skip jobs upstream; release branches have
-              // no merge queue and keep the full run.
-              if (!isForkPrToMain(pr)) {
-                core.info('Not a fork pull request to main; nothing to mirror.');
-                return;
-              }
-              // A pull request of the same branch to a release branch, or a
-              // reopened pull request, signals a commit that can already have
-              // the check. Update that check instead of adding a second one.
-              const { data } = await github.rest.checks.listForRef({
-                ...upstream,
-                ref: pr.head.sha,
-                check_name: CHECK,
-                per_page: 1,
-              });
-              if (data.check_runs.length > 0) {
-                await syncCheck(pr);
                 return;
               }
               await createCheck(pr, 12);

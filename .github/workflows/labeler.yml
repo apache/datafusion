@@ -30,10 +30,13 @@ jobs:
       contents: read
       pull-requests: write
     steps:
-      # This checks out the default branch, never the pull request.
+      # This checks out the default branch, never the pull request. The labeler
+      # config is checked out too, so the action reads it from the file.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
-          sparse-checkout: ci/scripts
+          sparse-checkout: |
+            ci/scripts
+            .github/workflows/labeler
           persist-credentials: false
 
       # The same branch can target `main` and a release branch, so label every
