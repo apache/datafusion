@@ -158,6 +158,12 @@ impl RuntimeEnv {
     /// Returns the [`ObjectStore`] previously registered for this
     /// scheme, if any.
     ///
+    /// Invalidates cached file listings, statistics and metadata for this URL.
+    /// Callers must coordinate registration changes with queries using that URL:
+    /// in-flight queries can otherwise repopulate the caches from the old store.
+    /// Changes made directly through [`Self::object_store_registry`] bypass this
+    /// invalidation.
+    ///
     /// See [`ObjectStoreRegistry`] for more details
     ///
     /// # Example: Register local file system object store
@@ -195,13 +201,18 @@ impl RuntimeEnv {
         url: &Url,
         object_store: Arc<dyn ObjectStore>,
     ) -> Option<Arc<dyn ObjectStore>> {
+        self.cache_manager.invalidate_object_store(url);
         self.object_store_registry.register_store(url, object_store)
     }
 
     /// Deregisters a custom `ObjectStore` previously registered for a specific url.
+    /// Invalidates the same caches as [`Self::register_object_store`] on success,
+    /// with the same requirement to coordinate with in-flight queries.
     /// See [`ObjectStoreRegistry::deregister_store`] for more details.
     pub fn deregister_object_store(&self, url: &Url) -> Result<Arc<dyn ObjectStore>> {
-        self.object_store_registry.deregister_store(url)
+        let store = self.object_store_registry.deregister_store(url)?;
+        self.cache_manager.invalidate_object_store(url);
+        Ok(store)
     }
 
     /// Retrieves a `ObjectStore` instance for a url by consulting the
