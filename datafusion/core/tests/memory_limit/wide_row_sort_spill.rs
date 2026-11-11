@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use arrow::array::{
     Array, ArrayRef, BinaryViewArray, DictionaryArray, Int32Array, Int64Array, ListArray,
-    ListBuilder, RecordBatch, StringArray, StringBuilder, StringViewArray, StructArray,
-    UInt32Array,
+    ListBuilder, RecordBatch, RunArray, StringArray, StringBuilder, StringViewArray,
+    StructArray, UInt32Array,
 };
 use arrow::buffer::OffsetBuffer;
 use arrow::compute::{concat_batches, take};
@@ -314,6 +314,84 @@ async fn sort_wide_nested_view_rows() {
         )
         .unwrap();
         vec![Arc::new(structs), Arc::new(lists)]
+    });
+    sort_spills_and_matches(schema, batches).await;
+}
+
+/// A slice of a run-end encoded column keeps all its values, so the sort copies each spill
+/// piece before it measures it.
+#[tokio::test]
+async fn sort_wide_run_end_encoded_rows() {
+    let values = Arc::new(Field::new("values", DataType::Utf8, true));
+    let run_ends = Arc::new(Field::new("run_ends", DataType::Int32, false));
+    let field = Field::new("r", DataType::RunEndEncoded(run_ends, values), false);
+    let (schema, batches) = input(vec![field], |rows| {
+        let ends = Int32Array::from_iter_values(1..=rows.len() as i32);
+        let values = StringArray::from_iter_values(rows.map(payload));
+        vec![Arc::new(RunArray::try_new(&ends, &values).unwrap())]
+    });
+    sort_spills_and_matches(schema, batches).await;
+}
+
+/// A slice of a dense union keeps whole children, so the sort copies each spill piece
+/// before it measures it.
+#[tokio::test]
+async fn sort_wide_dense_union_rows() {
+    use arrow::array::UnionArray;
+    use arrow::buffer::ScalarBuffer;
+    use arrow_schema::{UnionFields, UnionMode};
+
+    let union_fields = UnionFields::try_new(
+        vec![0, 1],
+        vec![
+            Field::new("a", DataType::Int32, true),
+            Field::new("b", DataType::Utf8, true),
+        ],
+    )
+    .unwrap();
+    let field = Field::new(
+        "u",
+        DataType::Union(union_fields.clone(), UnionMode::Dense),
+        false,
+    );
+    let (schema, batches) = input(vec![field], |rows| {
+        let len = rows.len();
+        let strings = StringArray::from_iter_values(rows.map(payload));
+        vec![Arc::new(
+            UnionArray::try_new(
+                union_fields.clone(),
+                ScalarBuffer::from(vec![1; len]),
+                Some(ScalarBuffer::from((0..len as i32).collect::<Vec<_>>())),
+                vec![
+                    Arc::new(Int32Array::from(Vec::<i32>::new())),
+                    Arc::new(strings),
+                ],
+            )
+            .unwrap(),
+        )]
+    });
+    sort_spills_and_matches(schema, batches).await;
+}
+
+/// A slice of a list view keeps its whole child, so the sort copies each spill piece
+/// before it measures it.
+#[tokio::test]
+async fn sort_wide_list_view_rows() {
+    use arrow::array::ListViewArray;
+    use arrow::buffer::ScalarBuffer;
+
+    let item = Arc::new(Field::new_list_field(DataType::Utf8, false));
+    let field = Field::new("l", DataType::ListView(Arc::clone(&item)), false);
+    let (schema, batches) = input(vec![field], |rows| {
+        let len = rows.len();
+        let strings = StringArray::from_iter_values(rows.map(payload));
+        vec![Arc::new(ListViewArray::new(
+            Arc::clone(&item),
+            ScalarBuffer::from((0..len as i32).collect::<Vec<_>>()),
+            ScalarBuffer::from(vec![1; len]),
+            Arc::new(strings),
+            None,
+        ))]
     });
     sort_spills_and_matches(schema, batches).await;
 }
