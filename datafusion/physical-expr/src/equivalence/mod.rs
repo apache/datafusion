@@ -9,7 +9,7 @@
 //! # See Also
 //!
 //! * [`EquivalenceProperties`], which explains the concepts and how the
-//! pieces below fit together.
+//!   pieces below fit together.
 
 use std::borrow::Borrow;
 use std::sync::Arc;
