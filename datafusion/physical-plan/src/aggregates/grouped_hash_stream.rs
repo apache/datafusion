@@ -34,7 +34,7 @@ use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
     aggregate_metric_label, create_schema, evaluate_group_by, evaluate_optional,
     group_id_array, group_keys_with_large_offsets, group_schema_with_large_offsets,
-    max_duplicate_ordinal, restore_group_key_types,
+    max_duplicate_ordinal, output_batch_rows, restore_group_key_types,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
@@ -799,7 +799,7 @@ impl Stream for GroupedHashAggregateStream {
                 ExecutionState::ProducingOutput(batch) => {
                     // slice off a part of the batch, if needed
                     let output_batch;
-                    let size = self.batch_size;
+                    let size = output_batch_rows(batch, &self.schema, 0, self.batch_size);
                     (self.exec_state, output_batch) = if batch.num_rows() <= size {
                         (
                             if self.input_done {
@@ -817,8 +817,6 @@ impl Stream for GroupedHashAggregateStream {
                             batch.clone(),
                         )
                     } else {
-                        // output first batch_size rows
-                        let size = self.batch_size;
                         let num_remaining = batch.num_rows() - size;
                         let remaining = batch.slice(size, num_remaining);
                         let output = batch.slice(0, size);

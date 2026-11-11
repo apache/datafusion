@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, new_null_array};
 use arrow::compute::prep_null_mask_filter;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::downcast_dictionary_array;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::compact_dictionary;
@@ -30,7 +30,7 @@ use crate::aggregates::order::GroupClustering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
     group_id_array, group_keys_with_large_offsets, group_schema_with_large_offsets,
-    max_duplicate_ordinal, restore_group_key_types,
+    max_duplicate_ordinal, output_batch_rows, restore_group_key_types,
 };
 
 use super::AggregateTableMetrics;
@@ -331,8 +331,9 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 }
             };
 
+        let rows = output.next_batch_rows(&output_schema, batch_size);
         let batch = output
-            .next_batch(batch_size)?
+            .next_batch(rows)?
             .map(|batch| restore_group_key_types(batch, &output_schema))
             .transpose()?;
         if output.is_exhausted() {
@@ -661,6 +662,15 @@ pub(super) struct MaterializedAggregateOutput {
 impl MaterializedAggregateOutput {
     pub(super) fn new(batch: RecordBatch) -> Self {
         Self { batch, offset: 0 }
+    }
+
+    /// Returns a row count for [`Self::next_batch`] within the row and key byte limits.
+    pub(super) fn next_batch_rows(
+        &self,
+        output_schema: &Schema,
+        batch_size: usize,
+    ) -> usize {
+        output_batch_rows(&self.batch, output_schema, self.offset, batch_size)
     }
 
     pub(super) fn next_batch(
@@ -992,6 +1002,7 @@ mod tests {
 
     use super::*;
     use crate::aggregates::group_values::aggregate_sub_metrics;
+    use crate::aggregates::tests::{GIB, zeroed_group_keys};
     use crate::metrics::ExecutionPlanMetricsSet;
 
     #[test]
@@ -1033,6 +1044,30 @@ mod tests {
         assert_eq!(int32_values(&output.next_batch(2)?.unwrap(), 0), vec![5]);
         assert!(output.next_batch(2)?.is_none());
         assert!(output.is_exhausted());
+
+        Ok(())
+    }
+
+    #[test]
+    fn next_batch_rows_limits_key_bytes() -> Result<()> {
+        let output_schema =
+            Schema::new(vec![Field::new("group_col", DataType::Binary, false)]);
+        let stored_schema = Arc::new(Schema::new(vec![Field::new(
+            "group_col",
+            DataType::LargeBinary,
+            false,
+        )]));
+        // The first two keys hold one byte more than `i32::MAX`.
+        let keys = zeroed_group_keys(&[(DataType::LargeBinary, &[GIB, GIB, 1, 1, 1])]);
+        let batch = RecordBatch::try_new(stored_schema, keys)?;
+        let mut output = MaterializedAggregateOutput::new(batch);
+
+        let mut rows = vec![];
+        while !output.is_exhausted() {
+            let next_rows = output.next_batch_rows(&output_schema, 8192);
+            rows.push(output.next_batch(next_rows)?.unwrap().num_rows());
+        }
+        assert_eq!(rows, vec![1, 4]);
 
         Ok(())
     }
