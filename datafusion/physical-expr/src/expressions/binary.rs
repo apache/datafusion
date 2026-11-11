@@ -622,9 +622,6 @@ impl PhysicalExpr for BinaryExpr {
         let left_data_type = lhs.data_type();
         let right_data_type = rhs.data_type();
 
-        let schema = batch.schema();
-        let input_schema = schema.as_ref();
-
         match self.op {
             // `time ± interval` returns a wrapped `time` (PostgreSQL/DuckDB
             // semantics); arrow's arithmetic kernels don't implement it.
@@ -669,7 +666,13 @@ impl PhysicalExpr for BinaryExpr {
             _ => {}
         }
 
-        let result_type = self.data_type(input_schema)?;
+        // Derive the result type from the types of the evaluated children, which
+        // also rejects invalid operand types. `self.data_type` would recompute the
+        // types of the entire subtree, which is quadratic in the depth of AND/OR
+        // chains (e.g., the pruning predicates of IN lists).
+        let result_type =
+            BinaryTypeCoercer::new(&left_data_type, &self.op, &right_data_type)
+                .get_result_type()?;
 
         // If the left-hand side is an array and the right-hand side is a non-null scalar, try the optimized kernel.
         if let (ColumnarValue::Array(array), ColumnarValue::Scalar(scalar)) = (&lhs, &rhs)

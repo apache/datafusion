@@ -553,10 +553,48 @@ fn benchmark_date64_subtract(c: &mut Criterion) {
     }
 }
 
+/// Benchmarks a left-deep disjunction `c0 = 0 OR c0 = 1 OR ...`, such as the
+/// pruning predicate of an IN list. Pruning evaluates such predicates once per
+/// container (e.g., row group), often with null statistics (e.g., when pruning
+/// with Bloom filters), which disables the short-circuit evaluation.
+fn benchmark_disjunction_chain(c: &mut Criterion) {
+    let schema = Arc::new(Schema::new(vec![Field::new("c0", DataType::Int64, true)]));
+    let inputs: [(&str, ArrayRef); 2] = [
+        ("null", Arc::new(Int64Array::from(vec![None::<i64>]))),
+        (
+            "8192_rows",
+            Arc::new(Int64Array::from_iter_values((0..8192).map(|i| i % 1000))),
+        ),
+    ];
+    for (input, array) in inputs {
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array]).unwrap();
+        for num_terms in [8, 32, 128] {
+            let expr = (0..num_terms)
+                .map(|i| {
+                    Arc::new(BinaryExpr::new(
+                        Arc::new(Column::new("c0", 0)),
+                        Operator::Eq,
+                        Arc::new(Literal::new(ScalarValue::Int64(Some(i)))),
+                    )) as Arc<dyn PhysicalExpr>
+                })
+                .reduce(|acc, term| {
+                    Arc::new(BinaryExpr::new(acc, Operator::Or, term))
+                        as Arc<dyn PhysicalExpr>
+                })
+                .unwrap();
+            c.bench_function(
+                &format!("disjunction_chain/terms={num_terms}/{input}"),
+                |b| b.iter(|| black_box(expr.evaluate(black_box(&batch)).unwrap())),
+            );
+        }
+    }
+}
+
 criterion_group!(
     benches,
     benchmark_binary_op_in_short_circuit,
     benchmark_conjunction,
+    benchmark_disjunction_chain,
     benchmark_date32_subtract,
     benchmark_date64_subtract
 );
