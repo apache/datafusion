@@ -362,6 +362,7 @@ impl TryFrom<&ParquetOptionsProto> for ParquetOptions {
             pushdown_filters: proto.pushdown_filters,
             reorder_filters: proto.reorder_filters,
             force_filter_selections: proto.force_filter_selections,
+            enable_exact_reverse_scan: proto.enable_exact_reverse_scan,
             data_pagesize_limit: to_usize(
                 proto.data_pagesize_limit,
                 "data_pagesize_limit",

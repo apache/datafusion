@@ -64,8 +64,17 @@ impl OptimizerRule for ExtractEquijoinPredicate {
             }) => {
                 let left_schema = left.schema();
                 let right_schema = right.schema();
+                let op = match null_equality {
+                    NullEquality::NullEqualsNull => Operator::IsNotDistinctFrom,
+                    NullEquality::NullEqualsNothing => Operator::Eq,
+                };
                 let (equijoin_predicates, non_equijoin_expr) =
-                    split_eq_and_noneq_join_predicate(expr, left_schema, right_schema)?;
+                    split_op_and_other_join_predicates(
+                        expr,
+                        left_schema,
+                        right_schema,
+                        op,
+                    )?;
 
                 // Equi-join operators like HashJoin support a special behavior
                 // that evaluates `NULL = NULL` as true instead of NULL. Therefore,
@@ -75,7 +84,10 @@ impl OptimizerRule for ExtractEquijoinPredicate {
                 // Nested Loop Join, resulting in better performance.
                 //
                 // Only convert when there are NO equijoin predicates, to be conservative.
-                if on.is_empty()
+                // A `NullEqualsNull` join already moved its `IS NOT DISTINCT FROM`
+                // predicates into `on` in the split above, so nothing is left to convert.
+                if null_equality == NullEquality::NullEqualsNothing
+                    && on.is_empty()
                     && equijoin_predicates.is_empty()
                     && non_equijoin_expr.is_some()
                 {
@@ -260,11 +272,13 @@ fn split_op_and_other_join_predicates(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::OptimizerContext;
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
     use crate::test::*;
     use arrow::datatypes::DataType;
     use datafusion_expr::{
-        JoinType, col, lit, logical_plan::builder::LogicalPlanBuilder,
+        JoinType, Operator, binary_expr, col, lit,
+        logical_plan::builder::LogicalPlanBuilder,
     };
     use std::sync::Arc;
 
@@ -516,5 +530,93 @@ mod tests {
           TableScan: t2 [a:UInt32, b:UInt32, c:UInt32]
         "
         )
+    }
+
+    #[test]
+    fn is_not_distinct_join_ignores_eq_filter() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // Initial pass: extract 't1.a IS NOT DISTINCT FROM t2.a'
+        let initial_filter =
+            binary_expr(col("t1.a"), Operator::IsNotDistinctFrom, col("t2.a"));
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_on(t2, JoinType::Inner, Some(initial_filter))?
+            .build()?;
+
+        let rule = ExtractEquijoinPredicate {};
+        let config = OptimizerContext::new();
+        let pass1 = rule.rewrite(plan, &config)?.data;
+        // on: [(t1.a, t2.a)], IsNotDistinctFrom
+        // filter: None
+        let LogicalPlan::Join(mut join) = pass1 else {
+            panic!("Expected Join");
+        };
+        assert_eq!(join.null_equality, NullEquality::NullEqualsNull);
+        assert_eq!(join.on.len(), 1);
+        assert!(join.filter.is_none());
+
+        // Second pass: 't1.b = t2.b' must NOT be extracted into on
+        join.filter = Some(col("t1.b").eq(col("t2.b")));
+        let plan_with_pushed_filter = LogicalPlan::Join(join);
+
+        let pass2 = rule.rewrite(plan_with_pushed_filter, &config)?;
+        // on: [(t1.a, t2.a)], IsNotDistinctFrom
+        // filter: (t1.b = t2.b)
+        assert!(!pass2.transformed);
+        let LogicalPlan::Join(join2) = pass2.data else {
+            panic!("Expected Join");
+        };
+        assert_eq!(join2.null_equality, NullEquality::NullEqualsNull);
+        assert_eq!(join2.on.len(), 1);
+        assert_eq!(join2.filter, Some(col("t1.b").eq(col("t2.b"))));
+
+        Ok(())
+    }
+
+    #[test]
+    fn is_not_distinct_join_extracts_same_filter() -> Result<()> {
+        let t1 = test_table_scan_with_name("t1")?;
+        let t2 = test_table_scan_with_name("t2")?;
+
+        // Initial pass: extract 't1.a IS NOT DISTINCT FROM t2.a'
+        let initial_filter =
+            binary_expr(col("t1.a"), Operator::IsNotDistinctFrom, col("t2.a"));
+        let plan = LogicalPlanBuilder::from(t1)
+            .join_on(t2, JoinType::Inner, Some(initial_filter))?
+            .build()?;
+
+        let rule = ExtractEquijoinPredicate {};
+        let config = OptimizerContext::new();
+        let pass1 = rule.rewrite(plan, &config)?.data;
+        // on: [(t1.a, t2.a)], IsNotDistinctFrom
+        // filter: None
+        let LogicalPlan::Join(mut join) = pass1 else {
+            panic!("Expected Join");
+        };
+        assert_eq!(join.null_equality, NullEquality::NullEqualsNull);
+        assert_eq!(join.on.len(), 1);
+        assert!(join.filter.is_none());
+
+        // Second pass: both keys merged into on
+        join.filter = Some(binary_expr(
+            col("t1.b"),
+            Operator::IsNotDistinctFrom,
+            col("t2.b"),
+        ));
+        let plan_with_pushed_filter = LogicalPlan::Join(join);
+
+        let pass2 = rule.rewrite(plan_with_pushed_filter, &config)?;
+        // on: [(t1.a, t2.a), (t1.b, t2.b)], IsNotDistinctFrom
+        // filter: None
+        assert!(pass2.transformed);
+        let LogicalPlan::Join(join2) = pass2.data else {
+            panic!("Expected Join");
+        };
+        assert_eq!(join2.null_equality, NullEquality::NullEqualsNull);
+        assert_eq!(join2.on.len(), 2);
+        assert!(join2.filter.is_none());
+
+        Ok(())
     }
 }
