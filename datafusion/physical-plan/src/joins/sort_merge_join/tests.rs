@@ -33,7 +33,7 @@ use crate::{
 };
 use arrow::array::{
     ArrayRef, BinaryArray, BooleanArray, Date32Array, Date64Array, DictionaryArray,
-    FixedSizeBinaryArray, Int32Array, RecordBatch, UInt64Array,
+    FixedSizeBinaryArray, Int32Array, RecordBatch, StringArray, UInt64Array,
 };
 use arrow::compute::{BatchCoalescer, SortOptions, filter_record_batch};
 use arrow::datatypes::{DataType, Field, Int32Type, Schema};
@@ -3890,7 +3890,6 @@ async fn spill_join_arrays_memory_accounting() -> Result<()> {
         ("c1", &vec![4, 5]),
     );
     let size_estimation = left_batch.get_array_memory_size()
-        + Int32Array::from(vec![1, 1]).get_array_memory_size()
         + 2usize.next_power_of_two() * size_of::<usize>()
         + size_of::<std::ops::Range<usize>>()
         + size_of::<usize>();
@@ -3987,6 +3986,45 @@ async fn spill_join_arrays_memory_accounting() -> Result<()> {
         "All memory should be released after join completes"
     );
 
+    Ok(())
+}
+
+/// The buffered side holds the same batches whichever column is the join key, so
+/// `peak_mem_used` must not depend on the key's width.
+#[tokio::test]
+async fn column_join_key_not_double_counted() -> Result<()> {
+    let build = |id: &str, s: &str| {
+        let ids: Vec<i32> = (0..8).collect();
+        let strings = StringArray::from_iter_values(
+            ids.iter().map(|i| format!("{i}{}", "x".repeat(1000))),
+        );
+        let batch = RecordBatch::try_from_iter([
+            (id, Arc::new(Int32Array::from(ids)) as ArrayRef),
+            (s, Arc::new(strings) as ArrayRef),
+        ])
+        .unwrap();
+        build_table_from_batches(vec![batch])
+    };
+
+    let mut peaks = vec![];
+    for (left_key, right_key) in [("id1", "id2"), ("s1", "s2")] {
+        let left = build("id1", "s1");
+        let right = build("id2", "s2");
+        let on = vec![(
+            Arc::new(Column::new_with_schema(left_key, &left.schema())?) as _,
+            Arc::new(Column::new_with_schema(right_key, &right.schema())?) as _,
+        )];
+        let join = join(left, right, on, Inner)?;
+        common::collect(join.execute(0, Arc::new(TaskContext::default()))?).await?;
+        let peak = join
+            .metrics()
+            .unwrap()
+            .sum_by_name("peak_mem_used")
+            .unwrap();
+        peaks.push(peak.as_usize());
+    }
+
+    assert_eq!(peaks[0], peaks[1]);
     Ok(())
 }
 
@@ -7548,15 +7586,12 @@ async fn spill_filtered_boundary_loses_outer_rows() -> Result<()> {
 /// exit path — normal return or early `?` error.
 #[tokio::test]
 async fn spill_read_back_memory_accounting() -> Result<()> {
-    use arrow::array::Array;
-
     let left_batch = build_table_i32(
         ("a1", &vec![0, 1]),
         ("b1", &vec![1, 1]),
         ("c1", &vec![4, 5]),
     );
     let size_estimation = left_batch.get_array_memory_size()
-        + Int32Array::from(vec![1, 1]).get_array_memory_size()
         + 2usize.next_power_of_two() * size_of::<usize>()
         + size_of::<std::ops::Range<usize>>()
         + size_of::<usize>();
@@ -7660,15 +7695,12 @@ async fn spill_read_back_memory_accounting() -> Result<()> {
 /// (via `new_empty()`) tracks the transient memory and releases it on drop.
 #[tokio::test]
 async fn spill_read_back_single_source() -> Result<()> {
-    use arrow::array::Array;
-
     let left_batch = build_table_i32(
         ("a1", &vec![0, 1]),
         ("b1", &vec![1, 1]),
         ("c1", &vec![4, 5]),
     );
     let size_estimation = left_batch.get_array_memory_size()
-        + Int32Array::from(vec![1, 1]).get_array_memory_size()
         + 2usize.next_power_of_two() * size_of::<usize>()
         + size_of::<std::ops::Range<usize>>()
         + size_of::<usize>();
