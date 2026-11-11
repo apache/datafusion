@@ -1155,6 +1155,24 @@ FROM (VALUES (3::INT)) AS x(a) CROSS JOIN (VALUES (4::INT)) AS y(a);
 1 2
 3 4
 
+# test for https://github.com/apache/datafusion/issues/26625
+statement ok
+CREATE TABLE t_26625(a INT) AS VALUES (2), (1);
+
+query II
+SELECT a AS x, a AS y FROM t_26625
+UNION ALL
+SELECT a AS x, a AS y FROM t_26625
+ORDER BY x, y;
+----
+1 1
+1 1
+2 2
+2 2
+
+statement ok
+DROP TABLE t_26625;
+
 # Config reset
 statement ok
 RESET datafusion.execution.batch_size;

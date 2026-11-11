@@ -6,8 +6,8 @@ use std::iter::Peekable;
 use std::sync::Arc;
 
 use super::EquivalenceProperties;
-use crate::equivalence::GroupingEquivalenceClass;
 use crate::equivalence::class::AcrossPartitions;
+use crate::equivalence::{EquivalenceGroup, GroupingEquivalenceClass};
 use crate::{ConstExpr, PhysicalSortExpr};
 
 use arrow::datatypes::SchemaRef;
@@ -75,8 +75,6 @@ pub fn calculate_union(
     eqps: Vec<EquivalenceProperties>,
     schema: SchemaRef,
 ) -> Result<EquivalenceProperties> {
-    // TODO: In some cases, we should be able to preserve some equivalence
-    //       classes. Add support for such cases.
     let eqps = eqps
         .into_iter()
         .map(move |props| {
@@ -104,6 +102,22 @@ pub fn calculate_union(
         groupings.add_groupings(std::iter::once(grouping.iter().cloned()));
     }
 
+    // An equality holds across the union only if it holds in every input partition.
+    let mut eq_group = EquivalenceGroup::default();
+    if !eqps.is_empty() && eqps.iter().all(|p| !p.eq_group().is_empty()) {
+        let (first, rest) = eqps.split_first().unwrap();
+        for cls in first.eq_group().iter() {
+            for (i, left) in cls.iter().enumerate() {
+                for right in cls.iter().skip(i + 1) {
+                    if rest.iter().all(|p| p.eq_group().exprs_equal(left, right)) {
+                        eq_group
+                            .add_equal_conditions(Arc::clone(left), Arc::clone(right));
+                    }
+                }
+            }
+        }
+    }
+
     let mut iter = eqps.into_iter();
     let Some(mut acc) = iter.next() else {
         return internal_err!(
@@ -115,6 +129,7 @@ pub fn calculate_union(
     for props in iter {
         acc = calculate_union_binary(acc, &props)?;
     }
+    acc.add_equivalence_group(eq_group)?;
     acc.add_groupings(groupings);
     Ok(acc)
 }
@@ -1139,6 +1154,56 @@ mod tests {
             union_const_2.across_partitions,
             AcrossPartitions::Heterogeneous,
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_union_preserves_common_equivalence_classes() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("x", DataType::Int32, false),
+            Field::new("y", DataType::Int32, false),
+            Field::new("z", DataType::Int32, false),
+            Field::new("w", DataType::Int32, false),
+        ]));
+
+        let col_x = col("x", &schema)?;
+        let col_y = col("y", &schema)?;
+        let col_z = col("z", &schema)?;
+        let col_w = col("w", &schema)?;
+
+        let sort_expr_x = PhysicalSortExpr::new_default(Arc::clone(&col_x));
+        let sort_expr_y = PhysicalSortExpr::new_default(Arc::clone(&col_y));
+
+        // Input 1: x = y = z, ordered by [x ASC]
+        let mut input1 = EquivalenceProperties::new(Arc::clone(&schema));
+        input1.add_equal_conditions(Arc::clone(&col_x), Arc::clone(&col_y))?;
+        input1.add_equal_conditions(Arc::clone(&col_y), Arc::clone(&col_z))?;
+        input1.add_orderings([vec![sort_expr_x.clone()]]);
+
+        // Input 2: x = y, z = w, ordered by [x ASC]
+        let mut input2 = EquivalenceProperties::new(Arc::clone(&schema));
+        input2.add_equal_conditions(Arc::clone(&col_x), Arc::clone(&col_y))?;
+        input2.add_equal_conditions(Arc::clone(&col_z), Arc::clone(&col_w))?;
+        input2.add_orderings([vec![sort_expr_x.clone()]]);
+
+        // Input 3: x = y = w, ordered by [x ASC]
+        let mut input3 = EquivalenceProperties::new(Arc::clone(&schema));
+        input3.add_equal_conditions(Arc::clone(&col_x), Arc::clone(&col_y))?;
+        input3.add_equal_conditions(Arc::clone(&col_y), Arc::clone(&col_w))?;
+        input3.add_orderings([vec![sort_expr_x.clone()]]);
+
+        let union_props = calculate_union(vec![input1, input2, input3], schema)?;
+
+        // Only x = y holds across all three inputs (common equivalence class)
+        assert!(union_props.eq_group().exprs_equal(&col_x, &col_y));
+        assert!(!union_props.eq_group().exprs_equal(&col_x, &col_z));
+        assert!(!union_props.eq_group().exprs_equal(&col_z, &col_w));
+        assert!(!union_props.eq_group().exprs_equal(&col_x, &col_w));
+
+        // Union output ordering is [x ASC], and since x = y holds,
+        // it must also satisfy the requirement [x ASC, y ASC] (issue #26625).
+        assert!(union_props.ordering_satisfy([sort_expr_x, sort_expr_y])?);
 
         Ok(())
     }
