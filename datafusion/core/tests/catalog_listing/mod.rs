@@ -3,3 +3,5 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod pruned_partition_list;
+
+mod file_statistics_pruning;
