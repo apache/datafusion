@@ -400,9 +400,14 @@ impl EquivalenceProperties {
         // them ran last. Deriving one fails only on an expression that does not
         // match the schema; that ordering is then not implied, which can cost a
         // sort but not a wrong result.
-        let mut implied = vec![];
+        let mut implied: Vec<LexOrdering> = vec![];
         for ordering in &normal_orderings {
-            implied.extend(self.implied_by(ordering).unwrap_or_default());
+            // Two orderings can imply the same one; expand it only once:
+            for ordering in self.implied_by(ordering).unwrap_or_default() {
+                if !implied.contains(&ordering) {
+                    implied.push(ordering);
+                }
+            }
         }
         self.oeq_class.extend(orderings);
         // Normalize given orderings to update the cache:
