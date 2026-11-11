@@ -8866,6 +8866,11 @@ SELECT count(*) FILTER (WHERE c > 0) AS n FROM (SELECT count(*) AS c FROM t);
 1
 
 query I
+SELECT count(1) FILTER (WHERE c > 0) FROM (SELECT count(1) AS c FROM t);
+----
+1
+
+query I
 SELECT count(*) AS n FROM (SELECT count(*) AS c FROM t);
 ----
 1
