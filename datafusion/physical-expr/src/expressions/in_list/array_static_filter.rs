@@ -8,7 +8,7 @@ use arrow::compute::SortOptions;
 use arrow::datatypes::DataType;
 use arrow::util::bit_iterator::BitIndexIterator;
 use datafusion_common::Result;
-use datafusion_common::float_semantics::{has_float_leaf, normalize_floats};
+use datafusion_common::float_semantics::{self, has_float_leaf};
 use datafusion_common::hash_utils::{RandomState, with_hashes};
 use hashbrown::HashTable;
 
@@ -42,7 +42,7 @@ impl ArrayStaticFilter {
         }
 
         // Hashing treats both signed zeros alike; the comparator must do so too.
-        let in_array = normalize_floats(&in_array);
+        let in_array = float_semantics::normalize(in_array);
         let state = RandomState::default();
         let table = Self::build_haystack_table(&in_array, &state)?;
 
@@ -129,7 +129,7 @@ impl StaticFilter for ArrayStaticFilter {
         }
 
         if has_float_leaf(v.data_type()) {
-            let normalized = normalize_floats(&make_array(v.to_data()));
+            let normalized = float_semantics::normalize(make_array(v.to_data()));
             self.find_needles_in_haystack(normalized.as_ref(), negated)
         } else {
             self.find_needles_in_haystack(v, negated)
