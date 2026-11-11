@@ -430,6 +430,113 @@ fn roundtrip_sort_merge_join_with_projection() -> Result<()> {
 }
 
 #[test]
+fn roundtrip_sort_merge_join_null_aware() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, true)]));
+    let on = vec![(
+        Arc::new(Column::new("key", 0)) as _,
+        Arc::new(Column::new("key", 0)) as _,
+    )];
+
+    for null_aware in [false, true] {
+        // Preserve the flag together with absent, empty, and nonempty projections.
+        for projection in [None, Some(vec![]), Some(vec![0])] {
+            let plan: Arc<dyn ExecutionPlan> = Arc::new(
+                SortMergeJoinExec::try_new(
+                    Arc::new(EmptyExec::new(Arc::clone(&schema))),
+                    Arc::new(EmptyExec::new(Arc::clone(&schema))),
+                    on.clone(),
+                    None,
+                    JoinType::LeftAnti,
+                    vec![SortOptions::new(false, true)],
+                    NullEquality::NullEqualsNothing,
+                )?
+                .with_null_aware(null_aware)?
+                .with_projection(projection.clone())?,
+            );
+            let decoded = roundtrip_test_and_return(
+                Arc::clone(&plan),
+                &ctx,
+                &codec,
+                &proto_converter,
+            )?;
+            let decoded = decoded.downcast_ref::<SortMergeJoinExec>().unwrap();
+            assert_eq!(decoded.null_aware(), null_aware);
+            assert_eq!(decoded.projection, projection);
+
+            #[cfg(feature = "json")]
+            {
+                let decoded = super::roundtrip_test_json_and_return(plan, &ctx)?;
+                let decoded = decoded.downcast_ref::<SortMergeJoinExec>().unwrap();
+                assert_eq!(decoded.null_aware(), null_aware);
+                assert_eq!(decoded.projection, projection);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Null-aware SortMergeJoinExec currently supports only LeftAnti joins.
+/// Checks that decoding rejects an unsupported Inner join whose protobuf flag
+/// enables null-aware semantics.
+/// The flag is changed after serialization to simulate invalid input from a
+/// producer. This guards against bypassing builder validation during decoding
+/// now that `try_new` no longer takes the `null_aware` argument.
+#[test]
+fn sort_merge_join_decode_validates_null_aware() -> Result<()> {
+    let ctx = SessionContext::new();
+    let codec = DefaultPhysicalExtensionCodec {};
+    let proto_converter = DefaultPhysicalProtoConverter {};
+    let schema = Arc::new(Schema::new(vec![Field::new("key", DataType::Int32, true)]));
+
+    // join with no null_aware
+    let plan = Arc::new(SortMergeJoinExec::try_new(
+        Arc::new(EmptyExec::new(Arc::clone(&schema))),
+        Arc::new(EmptyExec::new(schema)),
+        vec![(
+            Arc::new(Column::new("key", 0)) as _,
+            Arc::new(Column::new("key", 0)) as _,
+        )],
+        None,
+        JoinType::Inner,
+        vec![SortOptions::new(false, true)],
+        NullEquality::NullEqualsNothing,
+    )?);
+
+    // serialize
+    let bytes =
+        physical_plan_to_bytes_with_proto_converter(plan, &codec, &proto_converter)?;
+
+    // unserialize should be able to decode back to PhysicalPlanNode
+    let mut node = protobuf::PhysicalPlanNode::decode(bytes.as_ref())
+        .expect("encoded physical plan must decode");
+    let Some(PhysicalPlanType::SortMergeJoin(join)) = node.physical_plan_type.as_mut()
+    else {
+        panic!("expected a SortMergeJoin node");
+    };
+    // This makes the protobuf describe an JoinType::Inner join with null_aware = true,
+    // which is invalid because null-aware SortMergeJoinExec currently supports
+    // only JoinType::LeftAnti joins.
+    // With the other settings used here, LeftAnti + null_aware = true would be
+    // valid; keeping JoinType::Inner + null_aware = false would also be valid.
+    join.null_aware = true;
+    let err = physical_plan_from_bytes_with_proto_converter(
+        &node.encode_to_vec(),
+        ctx.task_ctx().as_ref(),
+        &codec,
+        &proto_converter,
+    )
+    .expect_err("decoding must validate null-aware join restrictions");
+    assert!(
+        err.to_string()
+            .contains("null-aware SortMergeJoin only supports LeftAnti")
+    );
+    Ok(())
+}
+
+#[test]
 fn roundtrip_sort_merge_join() -> Result<()> {
     let ctx = SessionContext::new();
     let codec = DefaultPhysicalExtensionCodec {};
@@ -502,6 +609,7 @@ fn roundtrip_sort_merge_join() -> Result<()> {
                 let result = result.downcast_ref::<SortMergeJoinExec>().unwrap();
                 assert_eq!(result.join_type(), join_type);
                 assert_eq!(result.null_equality(), null_equality);
+                assert!(!result.null_aware());
                 assert_eq!(result.sort_options(), sort_options);
                 assert_eq!(
                     result.filter().as_ref().map(|f| f.column_indices()),

@@ -20,7 +20,8 @@ use self::dependency::{
 };
 use self::walk::SortKeyWalk;
 use crate::equivalence::{
-    AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
+    AcrossPartitions, EquivalenceGroup, GroupingEquivalenceClass,
+    OrderingEquivalenceClass, ProjectionMapping,
 };
 use crate::expressions::{Column, Literal, with_new_schema};
 use crate::{
@@ -30,16 +31,19 @@ use crate::{
 
 use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
+use datafusion_common::{Constraint, Constraints, HashMap, HashSet, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
 
 use indexmap::IndexSet;
 use itertools::{Either, Itertools};
 
-/// `EquivalenceProperties` stores information about the output of a plan node
-/// that can be used to optimize the plan. Currently, it keeps track of:
+/// `EquivalenceProperties` stores information about how values are distributed
+/// across the output of a plan node that can be used to optimize the plan.
+///
+/// Currently, it tracks:
 /// - Sort expressions (orderings),
+/// - When all rows of equal values are contiguous for certain tuples (groupings),
 /// - Equivalent expressions; i.e. expressions known to have the same value.
 /// - Constants expressions; i.e. expressions known to contain a single constant
 ///   value.
@@ -48,7 +52,24 @@ use itertools::{Either, Itertools};
 ///
 /// [Using Ordering for Better Plans]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis/
 ///
-/// # Example equivalent sort expressions
+/// This document explains the concepts and how the pieces fit together.
+///
+/// # Overview
+///
+/// | Concept                | Example                                   | Stored in                                                           |
+/// |------------------------|-------------------------------------------|---------------------------------------------------------------------|
+/// | Equivalent expressions | `a` and `b` after the filter `a = b`      | An [`EquivalenceGroup`] of [`EquivalenceClass`]es                   |
+/// | Constants              | `a` after the filter `a = 5`              | The `constant` of an [`EquivalenceClass`], added as a [`ConstExpr`] |
+/// | Orderings              | `[a ASC, b DESC]` after a sort            | An [`OrderingEquivalenceClass`]                                     |
+/// | Groupings              | `[a, b]` declared by a custom data source | A [`GroupingEquivalenceClass`]                                      |
+/// | Constraints            | A primary key or unique constraint        | [`Constraints`]                                                     |
+///
+/// [`EquivalenceClass`]: crate::equivalence::EquivalenceClass
+/// [Required orderings]: #required-orderings
+/// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion-physical-plan/latest/datafusion_physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
+/// [Checking whether a requirement is satisfied]: #checking-whether-a-requirement-is-satisfied
+///
+/// # Equivalent sort expressions
 ///
 /// Consider table below:
 ///
@@ -65,11 +86,11 @@ use itertools::{Either, Itertools};
 ///
 /// In this case, both `a ASC` and `b DESC` can describe the table ordering.
 /// `EquivalenceProperties` tracks these different valid sort expressions and
-/// treat `a ASC` and `b DESC` on an equal footing. For example, if the query
+/// treats `a ASC` and `b DESC` on an equal footing. For example, if the query
 /// specifies the output sorted by EITHER `a ASC` or `b DESC`, the sort can be
 /// avoided.
 ///
-/// # Example equivalent expressions
+/// # Equivalent expressions
 ///
 /// Similarly, consider the table below:
 ///
@@ -84,11 +105,242 @@ use itertools::{Either, Itertools};
 /// └---┴---┘
 /// ```
 ///
-/// In this case,  columns `a` and `b` always have the same value. With this
-/// information, Datafusion can optimize various operations. For example, if
-/// the partition requirement is `Hash(a)` and output partitioning is
-/// `Hash(b)`, then DataFusion avoids repartitioning the data as the existing
-/// partitioning satisfies the requirement.
+/// In this case, columns `a` and `b` always have the same value. DataFusion
+/// uses this information to optimize various operations. For example, if the
+/// partition requirement is `Hash(a)` and output partitioning is `Hash(b)`,
+/// then DataFusion avoids repartitioning the data as the existing partitioning
+/// satisfies the requirement.
+///
+/// # Constants
+///
+/// A constant is an expression with a single value in the output of a plan
+/// node. A constant is *uniform* if it has the same value in every output
+/// partition, and *heterogeneous* if it has one value within each output
+/// partition but may differ between output partitions (see
+/// [`AcrossPartitions`]).
+///
+/// ## Example: Uniform Constant from a Filter
+///
+/// Consider an input sorted by `b ASC` and the filter `a = 5`, which produces
+/// the following table:
+///
+/// ```text
+/// ┌───┬───┐
+/// │ a │ b │
+/// ├───┼───┤
+/// │ 5 │ 1 │
+/// │ 5 │ 2 │
+/// │ 5 │ 4 │
+/// └───┴───┘
+/// ```
+///
+/// The filter adds `a` as a uniform [`ConstExpr`]. If the query requests
+/// sorting on `[a ASC, b ASC]` DataFusion knows it can skip sorting.
+///
+/// ## Example: Heterogeneous Constant from `UNION ALL`
+///
+/// Consider `SELECT 1 AS c, x FROM t1 UNION ALL SELECT 2 AS c, x FROM t2`,
+/// where each input is sorted by `x ASC` and has one output partition. The
+/// union has two output partitions, one from each input:
+///
+/// ```text
+/// Partition 0   Partition 1
+/// ┌───┬───┐     ┌───┬───┐
+/// │ c │ x │     │ c │ x │
+/// ├───┼───┤     ├───┼───┤
+/// │ 1 │ 1 │     │ 2 │ 2 │
+/// │ 1 │ 3 │     │ 2 │ 5 │
+/// └───┴───┘     └───┴───┘
+/// ```
+///
+/// Observations:
+/// - Within each output partition `c` has one value, but the values differ
+///   between output partitions, so `c` is an
+///   [`AcrossPartitions::Heterogeneous`] constant.
+/// - Each output partition is sorted by `[x ASC]`, and therefore also by
+///   `[c ASC, x ASC]`.
+/// - However, when the output partitions are merged by `[x ASC]` alone, the
+///   result is NOT sorted by `c`, unlike with an [`AcrossPartitions::Uniform`]
+///   constant, which would have the same value in every output partition and
+///   thus be sorted by `[c ASC, x ASC]` as well.
+///
+/// Given those observations, `c` must stay in the ordering `[c ASC, x ASC]`
+/// rather than being removed as a uniform constant would be.
+///
+/// # Window functions
+///
+/// NOTE: it is important to distinguish between *window partition*, the rows
+/// with equal `PARTITION BY` keys, and *output partition*, how the data is
+/// divided up across execution units during execution.
+///
+/// ## Example: Window Functions with `PARTITION BY`
+///
+/// Consider an input sorted by `k ASC` and the window expression
+/// `SUM(x) OVER (PARTITION BY k) AS w`, which produces the following rows:
+///
+/// ```text
+/// ┌───┬───┬────┐
+/// │ k │ x │ w  │
+/// ├───┼───┼────┤
+/// │ 1 │ 3 │  5 │
+/// │ 1 │ 2 │  5 │
+/// │ 2 │ 4 │ 10 │
+/// │ 2 │ 6 │ 10 │
+/// │ 3 │ 1 │  1 │
+/// └───┴───┴────┘
+/// ```
+///
+/// Observations:
+/// - `w` is not a constant because it differs between window partitions.
+/// - The output is sorted by `k` (the window partition key), because
+///   DataFusion's window implementation keeps the input order.
+/// - Within each run of equal `k`, `w` has one value.
+///
+/// Given those observations, the output is sorted by `[k, w]` in *every*
+/// direction of `w`: ascending or descending, nulls first or last:
+///
+/// - `[k ASC, w ASC NULLS FIRST]`
+/// - `[k ASC, w ASC NULLS LAST]`
+/// - `[k ASC, w DESC NULLS FIRST]`
+/// - `[k ASC, w DESC NULLS LAST]`
+///
+/// ## Example: Window Functions without `PARTITION BY`
+///
+/// Consider the same input and the window expression `SUM(x) OVER () AS w`,
+/// which produces the following rows:
+///
+/// ```text
+/// ┌───┬───┬────┐
+/// │ k │ x │ w  │
+/// ├───┼───┼────┤
+/// │ 1 │ 3 │ 16 │
+/// │ 1 │ 2 │ 16 │
+/// │ 2 │ 4 │ 16 │
+/// │ 2 │ 6 │ 16 │
+/// │ 3 │ 1 │ 16 │
+/// └───┴───┴────┘
+/// ```
+///
+/// Observations:
+/// - The frame of every row is the whole table, so `w` has one value.
+/// - The output is still sorted by `k`, as the input was.
+///
+/// Given those observations, `w` is added as a constant (a [`ConstExpr`])
+/// rather than as orderings.
+///
+/// ## Example: Set-Monotonic Window Functions
+///
+/// Consider an input sorted by `[ts ASC]` and the window function
+/// `MAX(x) OVER (ORDER BY ts) AS m`, which produces the following rows:
+///
+/// ```text
+/// ┌────┬───┬───┐
+/// │ ts │ x │ m │
+/// ├────┼───┼───┤
+/// │  1 │ 3 │ 3 │
+/// │  2 │ 1 │ 3 │
+/// │  3 │ 5 │ 5 │
+/// │  4 │ 2 │ 5 │
+/// └────┴───┴───┘
+/// ```
+///
+/// Observations:
+/// - When written with explicit defaults, this query is equivalent to
+///   `SELECT ts, x, MAX(x) OVER (ORDER BY ts RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS m`,
+///   so each row's frame contains every earlier row's frame.
+/// - `MAX` is set-monotonically increasing: adding rows to its input can only
+///   raise its value or leave it unchanged (see [`SetMonotonicity`]).
+///
+/// Given those observations, `m` never decreases as `ts` increases, so the
+/// output sorting is described by both `[ts ASC]` and `[m ASC]`.
+///
+/// If the query had a `PARTITION BY k`, with the input sorted by `k` first,
+/// the added ordering would be `[k, m ASC]`.
+///
+/// A decreasing aggregate such as `MIN` results in `DESC`.
+///
+/// A frame that shrinks as rows advance, such as `CURRENT ROW` to
+/// `UNBOUNDED FOLLOWING`, reverses the direction: `MAX` then results in
+/// `DESC`.
+///
+/// [`SetMonotonicity`]: datafusion_expr::SetMonotonicity
+///
+/// # Required orderings
+///
+/// Some operators only work on sorted input. A sort merge join needs
+/// inputs sorted on the join keys, and a streaming window needs its input
+/// sorted by its `PARTITION BY` and then its `ORDER BY` expressions.
+///
+/// Each operator describes its requirements via
+/// [`ExecutionPlan::required_input_ordering`].
+///
+/// **Orderings** describe how the data is actually distributed.
+/// **Requirements** describe what an operator *needs*. The physical optimizer
+/// (`EnforceSorting`) compares orderings to requirements with
+/// [`Self::ordering_satisfy_requirement`] and inserts or removes Sort
+/// operations so that they match (see [Checking whether a requirement is
+/// satisfied]).
+///
+/// # Normal form
+///
+/// Orderings and requirements (see [Required orderings]) are compared in
+/// *normal form*: every expression is replaced by the first member of its
+/// equivalence class, uniform constants and expressions that repeat an earlier
+/// one are removed.
+///
+/// For example, if `a` and `b` are equal and `d` is a uniform constant, the
+/// requirement `[b ASC, d DESC, c ASC, a ASC]` normalizes to `[a ASC, c ASC]`.
+///
+/// # Checking whether a requirement is satisfied
+///
+/// The requirement `[a, b]` holds if the rows are sorted by `a`, and the rows
+/// that tie on `a` are sorted by `b`.
+///
+/// [`Self::ordering_satisfy_requirement`] checks whether a requirement is
+/// satisfied by an ordering, and is quite complex.
+///
+/// # Discovering orderings
+///
+/// `EquivalenceProperties` discovers and accounts for additional orderings that
+/// may not be obvious from various additional information such as constants and
+/// equality.
+///
+/// ## Example: Ordering Implied by a `CAST`
+///
+/// Consider a table `t` sorted by `[c ASC, a ASC, b ASC]` and a query `SELECT
+/// a, b, c FROM t WHERE c = CAST(a AS BIGINT) ORDER BY a, b` that produces the
+/// following rows:
+///
+/// ```text
+/// ┌───┬───┬───┐
+/// │ a │ b │ c │
+/// ├───┼───┼───┤
+/// │ 1 │ 2 │ 1 │
+/// │ 1 │ 5 │ 1 │
+/// │ 2 │ 1 │ 2 │
+/// │ 3 │ 4 │ 3 │
+/// └───┴───┴───┘
+/// ```
+///
+/// Observations:
+/// - The filter keeps the input order, so the rows are still sorted by
+///   `[c ASC, a ASC, b ASC]`.
+/// - Casting an `INT` to a `BIGINT` preserves order and never maps two
+///   different values to the same one, so rows with different `a` are in the
+///   order of `c`, which is the order of `a`.
+/// - Rows with equal `c` are sorted by `[a, b]`.
+///
+/// Given those observations, the rows are also sorted by `[a ASC, b ASC]`,
+/// even though `a` is not the leading sort key. `EquivalenceProperties`
+/// derives this ordering when the equality is added, so the `ORDER BY a, b`
+/// needs no sort.
+///
+/// This holds in general for a function `f` whose output follows the
+/// lexicographical order of its arguments, which `f` declares by setting
+/// [`ExprProperties::preserves_lex_ordering`].
+///
+/// [`Self::add_equal_conditions`] and [`Self::add_constants`] look for such
+/// orderings whenever they learn something new.
 ///
 /// # Code Example
 /// ```
@@ -105,10 +357,10 @@ use itertools::{Either, Itertools};
 /// # let col_a = col("a", &schema).unwrap();
 /// # let col_b = col("b", &schema).unwrap();
 /// # let col_c = col("c", &schema).unwrap();
-/// // This object represents data that is sorted by a ASC, c DESC
-/// // with a single constant value of b
 /// let mut eq_properties = EquivalenceProperties::new(schema);
+/// // Single constant value of b
 /// eq_properties.add_constants(vec![ConstExpr::from(col_b)]);
+/// // ORDER BY a ASC, c DESC
 /// eq_properties.add_ordering([
 ///     PhysicalSortExpr::new_default(col_a).asc(),
 ///     PhysicalSortExpr::new_default(col_c).desc(),
@@ -125,10 +377,16 @@ pub struct EquivalenceProperties {
     eq_group: EquivalenceGroup,
     /// Equivalent sort expressions (i.e. those define the same ordering).
     oeq_class: OrderingEquivalenceClass,
+    /// Complete expression tuples whose values occupy one contiguous run
+    /// in each output partition.
+    geq_class: GroupingEquivalenceClass,
     /// Cache storing equivalent sort expressions in normal form (i.e. without
     /// constants/duplicates and in standard form) and a map associating leading
     /// terms with full sort expressions.
     oeq_cache: OrderingEquivalenceCache,
+    /// Grouping expressions in normal form (i.e. without constants,
+    /// duplicates, or non-canonical equivalent expressions).
+    geq_cache: GroupingEquivalenceClass,
     /// Table constraints that factor in equivalence calculations. Unlike
     /// constants, constraints have no per-partition form: each one must hold
     /// across all output partitions, since operators that merge partitions
@@ -245,7 +503,9 @@ impl EquivalenceProperties {
         Self {
             eq_group: EquivalenceGroup::default(),
             oeq_class: OrderingEquivalenceClass::default(),
+            geq_class: GroupingEquivalenceClass::default(),
             oeq_cache: OrderingEquivalenceCache::default(),
+            geq_cache: GroupingEquivalenceClass::default(),
             constraints: Constraints::default(),
             schema,
         }
@@ -278,6 +538,8 @@ impl EquivalenceProperties {
         Self {
             oeq_cache: OrderingEquivalenceCache::new(normal_orderings),
             oeq_class,
+            geq_class: GroupingEquivalenceClass::default(),
+            geq_cache: GroupingEquivalenceClass::default(),
             eq_group,
             constraints: Constraints::default(),
             schema,
@@ -292,6 +554,11 @@ impl EquivalenceProperties {
     /// Returns a reference to the ordering equivalence class within.
     pub fn oeq_class(&self) -> &OrderingEquivalenceClass {
         &self.oeq_class
+    }
+
+    /// Returns a reference to the grouping equivalence class within.
+    pub fn geq_class(&self) -> &GroupingEquivalenceClass {
+        &self.geq_class
     }
 
     /// Returns a reference to the equivalence group within.
@@ -329,6 +596,7 @@ impl EquivalenceProperties {
         self.constraints.extend(other.constraints);
         self.add_equivalence_group(other.eq_group)?;
         self.add_orderings(other.oeq_class);
+        self.add_groupings(other.geq_class);
         Ok(self)
     }
 
@@ -339,8 +607,16 @@ impl EquivalenceProperties {
         self.oeq_cache.clear();
     }
 
-    /// Removes constant expressions that may change across partitions.
-    /// This method should be used when merging data from different partitions.
+    /// Clears grouping information invalidated by an operation that changes
+    /// row sequence or combines input partitions.
+    pub fn clear_groupings(&mut self) {
+        self.geq_class.clear();
+        self.geq_cache.clear();
+    }
+
+    /// Removes constant expressions that may change across output partitions.
+    /// This method should be used when merging data from different output
+    /// partitions.
     pub fn clear_per_partition_constants(&mut self) {
         if self.eq_group.clear_per_partition_constants() {
             // Renormalize orderings if the equivalence group changes:
@@ -350,6 +626,7 @@ impl EquivalenceProperties {
                 .cloned()
                 .map(|o| self.eq_group.normalize_sort_exprs(o));
             self.oeq_cache = OrderingEquivalenceCache::new(normal_orderings);
+            self.update_geq_cache();
         }
     }
 
@@ -380,6 +657,61 @@ impl EquivalenceProperties {
         self.add_orderings(std::iter::once(ordering));
     }
 
+    /// Adds complete grouping tuples whose values are contiguous within
+    /// every output partition.
+    ///
+    /// This is a correctness assertion. DataFusion does not verify the row
+    /// layout, and consumers may act on a tuple as soon as its values change.
+    /// Callers must therefore only add tuples that hold for every output
+    /// partition.
+    ///
+    /// Expression order within a tuple is not significant. A tuple only
+    /// describes its complete set of expressions: grouping `[a, b]` does not
+    /// imply grouping `[a]` or `[b]`.
+    pub fn add_groupings(
+        &mut self,
+        groupings: impl IntoIterator<Item = impl IntoIterator<Item = Arc<dyn PhysicalExpr>>>,
+    ) {
+        for grouping in GroupingEquivalenceClass::new(groupings) {
+            let normal_grouping = self.normalize_grouping(grouping.iter().cloned());
+            self.geq_class.add_groupings(std::iter::once(grouping));
+            if !normal_grouping.is_empty() {
+                self.geq_cache
+                    .add_groupings(std::iter::once(normal_grouping));
+            }
+        }
+    }
+
+    /// Adds one complete grouping tuple.
+    pub fn add_grouping(
+        &mut self,
+        grouping: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+    ) {
+        self.add_groupings(std::iter::once(grouping));
+    }
+
+    fn normalize_grouping(
+        &self,
+        grouping: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+    ) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut seen = HashSet::new();
+        grouping
+            .into_iter()
+            .map(|expr| self.eq_group.normalize_expr(expr))
+            .filter(|expr| self.eq_group.is_expr_constant(expr).is_none())
+            .filter(|expr| seen.insert(Arc::clone(expr)))
+            .collect()
+    }
+
+    fn update_geq_cache(&mut self) {
+        let groupings = self
+            .geq_class
+            .iter()
+            .map(|grouping| self.normalize_grouping(grouping.iter().cloned()))
+            .collect::<Vec<_>>();
+        self.geq_cache = GroupingEquivalenceClass::new(groupings);
+    }
+
     fn update_oeq_cache(&mut self) -> Result<()> {
         // Renormalize orderings if the equivalence group changes:
         let normal_cls = mem::take(&mut self.oeq_cache.normal_cls);
@@ -405,6 +737,7 @@ impl EquivalenceProperties {
         if !other_eq_group.is_empty() {
             self.eq_group.extend(other_eq_group);
             self.update_oeq_cache()?;
+            self.update_geq_cache();
         }
         Ok(())
     }
@@ -421,6 +754,11 @@ impl EquivalenceProperties {
             .into()
     }
 
+    /// Returns the grouping equivalence class within in normal form.
+    pub fn normalized_geq_class(&self) -> GroupingEquivalenceClass {
+        self.geq_cache.clone()
+    }
+
     /// Adds a new equality condition into the existing equivalence group.
     /// If the given equality defines a new equivalence class, adds this new
     /// equivalence class to the equivalence group.
@@ -434,6 +772,7 @@ impl EquivalenceProperties {
             self.update_oeq_cache()?;
         }
         self.update_oeq_cache()?;
+        self.update_geq_cache();
         Ok(())
     }
 
@@ -456,6 +795,7 @@ impl EquivalenceProperties {
         });
         self.oeq_cache.normal_cls = OrderingEquivalenceClass::new(normal_orderings);
         self.oeq_cache.update_map();
+        self.update_geq_cache();
         // Discover any new orderings based on the constants:
         let leading_exprs: Vec<_> = self.oeq_cache.leading_map.keys().cloned().collect();
         for expr in leading_exprs {
@@ -549,15 +889,21 @@ impl EquivalenceProperties {
         Ok(None)
     }
 
-    /// Updates the ordering equivalence class within assuming that the table
-    /// is re-sorted according to the argument `ordering`, and returns whether
-    /// this operation resulted in any change. Note that equivalence classes
-    /// (and constants) do not change as they are unaffected by a re-sort. If
-    /// the given ordering is already satisfied, the function does nothing.
+    /// Updates the ordering equivalence class assuming that the table is
+    /// re-sorted according to `ordering`, and returns whether the ordering
+    /// class changed. Equivalence classes and constants are unaffected by a
+    /// re-sort. Explicit grouping assertions are cleared because a sort may
+    /// rearrange rows that compare equally, even when `ordering` was already
+    /// satisfied.
     pub fn reorder(
         &mut self,
         ordering: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> Result<bool> {
+        // A sort may reorder rows that compare equally under `ordering`, so
+        // explicit grouping assertions do not necessarily survive even when
+        // the requested ordering is already satisfied. Groupings implied by
+        // the output ordering remain discoverable through `oeq_class`.
+        self.clear_groupings();
         let (ordering, ordering_tee) = ordering.into_iter().tee();
         // First, standardize the given ordering:
         let Some(normal_ordering) = self.normalize_sort_exprs(ordering) else {
@@ -593,6 +939,27 @@ impl EquivalenceProperties {
         sort_reqs: impl IntoIterator<Item = PhysicalSortRequirement>,
     ) -> Option<LexRequirement> {
         LexRequirement::new(self.eq_group.normalize_sort_requirements(sort_reqs))
+    }
+
+    /// Returns whether the given complete expression tuple is known to be
+    /// grouped within every output partition.
+    ///
+    /// A tuple is grouped when all rows with the same values for the complete
+    /// tuple occur in one contiguous run. The order of expressions within a
+    /// grouping tuple does not matter: `[a, b]` and `[b, a]` describe the same
+    /// groups. A lexicographical ordering also satisfies grouping for each of
+    /// its prefixes, regardless of sort direction.
+    pub fn grouping_satisfy(
+        &self,
+        given: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+    ) -> Result<bool> {
+        let normal_grouping = self.normalize_grouping(given);
+        if normal_grouping.is_empty() || self.geq_cache.contains(&normal_grouping) {
+            return Ok(true);
+        }
+
+        let (_, indices) = self.find_longest_permutation(&normal_grouping)?;
+        Ok(indices.len() == normal_grouping.len())
     }
 
     /// Iteratively checks whether the given ordering is satisfied by any of
@@ -638,6 +1005,10 @@ impl EquivalenceProperties {
     ///    tie on `a`.
     /// 3. The orderings now start at `[b, c]` and `[d]`.
     /// 4. The function returns `true` as `[d]` satisfies `d`.
+    ///
+    /// See [Required orderings] for what a requirement is.
+    ///
+    /// [Required orderings]: EquivalenceProperties#required-orderings
     pub fn ordering_satisfy_requirement(
         &self,
         given: impl IntoIterator<Item = PhysicalSortRequirement>,
@@ -1095,6 +1466,21 @@ impl EquivalenceProperties {
         orderings.chain(projected_orderings).collect()
     }
 
+    /// Projects grouping tuples through `mapping`, dropping a tuple unless all
+    /// of its expressions can be represented by the projection.
+    fn projected_groupings(
+        &self,
+        mapping: &ProjectionMapping,
+    ) -> Vec<Vec<Arc<dyn PhysicalExpr>>> {
+        self.geq_cache
+            .iter()
+            .filter_map(|grouping| {
+                self.project_expressions(grouping.iter(), mapping)
+                    .collect::<Option<Vec<_>>>()
+            })
+            .collect()
+    }
+
     /// Projects constraints according to the given projection mapping.
     ///
     /// This function takes a projection mapping and extracts column indices of
@@ -1138,6 +1524,8 @@ impl EquivalenceProperties {
     ///   preserved through `c + 1` but dropped through `abs(c)`. Orderings
     ///   implied by the mapping are also derived, e.g. an ordering on `a + b`
     ///   yields one on the projected `a_new + b_new`.
+    /// - Groupings: a complete grouping tuple is carried only when every
+    ///   expression in the tuple can be represented in the output.
     /// - Equivalence group: each class is re-expressed on the output columns.
     /// - Constraints: projected onto the surviving column indices.
     ///
@@ -1189,17 +1577,22 @@ impl EquivalenceProperties {
     ) -> Self {
         let orderings =
             self.projected_orderings(mapping, self.oeq_cache.normal_cls.clone());
+        let groupings = self.projected_groupings(mapping);
         let normal_orderings = orderings
             .iter()
             .cloned()
             .map(|o| eq_group.normalize_sort_exprs(o));
-        Self {
+        let mut result = Self {
             oeq_cache: OrderingEquivalenceCache::new(normal_orderings),
             oeq_class: OrderingEquivalenceClass::new(orderings),
+            geq_class: GroupingEquivalenceClass::default(),
+            geq_cache: GroupingEquivalenceClass::default(),
             constraints: self.projected_constraints(mapping).unwrap_or_default(),
             schema: output_schema,
             eq_group,
-        }
+        };
+        result.add_groupings(groupings);
+        result
     }
 
     /// Returns the longest (potentially partial) permutation satisfying the
@@ -1287,7 +1680,7 @@ impl EquivalenceProperties {
     /// Returns a `Some` value if the expression is constant according to
     /// equivalence group, and `None` otherwise. The `Some` variant contains
     /// an `AcrossPartitions` value indicating whether the expression is
-    /// constant across partitions, and its actual value (if available).
+    /// constant across output partitions, and its actual value (if available).
     pub fn is_expr_constant(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
@@ -1404,6 +1797,11 @@ impl EquivalenceProperties {
         self.oeq_class = self.oeq_class.with_new_schema(&schema)?;
         self.oeq_cache.normal_cls = self.oeq_cache.normal_cls.with_new_schema(&schema)?;
 
+        // Rewrite grouping expressions according to new schema and rebuild
+        // their normalized form against the rewritten equivalence group.
+        self.geq_class = self.geq_class.with_new_schema(&schema)?;
+        self.update_geq_cache();
+
         // Update the schema:
         self.schema = schema;
 
@@ -1421,21 +1819,28 @@ impl From<EquivalenceProperties> for OrderingEquivalenceClass {
 ///
 /// Format:
 /// ```text
-/// order: [[b@1 ASC NULLS LAST]], eq: [{members: [a@0], constant: (heterogeneous)}]
+/// order: [[b@1 ASC NULLS LAST]], group: [[a@0, b@1]], eq: [{members: [a@0], constant: (heterogeneous)}]
 /// ```
 impl Display for EquivalenceProperties {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let empty_eq_group = self.eq_group.is_empty();
         let empty_oeq_class = self.oeq_class.is_empty();
-        if empty_oeq_class && empty_eq_group {
-            write!(f, "No properties")?;
-        } else if !empty_oeq_class {
+        let empty_geq_class = self.geq_class.is_empty();
+        if empty_oeq_class && empty_geq_class && empty_eq_group {
+            return write!(f, "No properties");
+        }
+
+        let mut separator = "";
+        if !empty_oeq_class {
             write!(f, "order: {}", self.oeq_class)?;
-            if !empty_eq_group {
-                write!(f, ", eq: {}", self.eq_group)?;
-            }
-        } else {
-            write!(f, "eq: {}", self.eq_group)?;
+            separator = ", ";
+        }
+        if !empty_geq_class {
+            write!(f, "{separator}group: {}", self.geq_class)?;
+            separator = ", ";
+        }
+        if !empty_eq_group {
+            write!(f, "{separator}eq: {}", self.eq_group)?;
         }
         Ok(())
     }

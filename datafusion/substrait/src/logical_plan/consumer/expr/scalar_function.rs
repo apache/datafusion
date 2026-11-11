@@ -2,8 +2,11 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use crate::logical_plan::consumer::SubstraitConsumerContext;
+
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
 use datafusion::common::Result;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{
     DFSchema, DataFusionError, ScalarValue, not_impl_err, plan_err, substrait_err,
 };
@@ -16,6 +19,7 @@ pub async fn from_scalar_function(
     consumer: &impl SubstraitConsumer,
     f: &ScalarFunction,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> Result<Expr> {
     let Some(fn_signature) = consumer
         .get_extensions()
@@ -29,7 +33,8 @@ pub async fn from_scalar_function(
     };
 
     let fn_name = substrait_fun_name(fn_signature);
-    let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
+    let args =
+        from_substrait_func_args(consumer, &f.arguments, input_schema, context).await?;
 
     let higher_order_func = consumer
         .get_function_registry()
@@ -56,10 +61,24 @@ pub async fn from_scalar_function(
     // try to first match the requested function into registered higher-order functions, then udfs, built-in ops
     // and finally built-in expressions
     if let Ok(func) = higher_order_func {
-        Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+        let expr = Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
             func.to_owned(),
             args,
-        )))
+        ));
+        // Substrait types carry no struct field names, so a lambda parameter over a list
+        // of structs is declared as `{c0, c1, ...}`, and a field access in the body such
+        // as `get_field(x, 'b')` would not find `b`. Give the parameters the fields the
+        // function derives from its arguments instead, which keep the list's field names.
+        //
+        // A function that uses a parameter of an outer lambda can't be resolved on its
+        // own, as only the outer function knows that parameter's type. In
+        // `array_transform(s, x -> array_transform([1, 2], i -> get_field(x, 'a') + i))`
+        // the inner call uses `x`, so it is resolved when the outer call is.
+        if uses_outer_lambda_parameters(&expr, &mut Vec::new())? {
+            Ok(expr)
+        } else {
+            Ok(expr.resolve_lambda_variables(input_schema)?.data)
+        }
     } else if let Ok(func) = udf_func {
         Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             func.to_owned(),
@@ -78,6 +97,47 @@ pub async fn from_scalar_function(
         builder.build(consumer, f, args)
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
+    }
+}
+
+/// Checks whether `expr` uses a lambda parameter that comes from outside of it.
+///
+/// In `array_transform(s, x -> array_transform([1, 2], i -> get_field(x, 'a') + i))`,
+/// the inner `array_transform([1, 2], i -> get_field(x, 'a') + i)` uses its own
+/// parameter `i`, but also `x`, which belongs to the outer lambda, so this returns true
+/// for it. For the whole expression it returns false: `x` and `i` both belong to
+/// lambdas inside it.
+///
+/// `own_params` collects the parameters of the lambdas we are inside of while walking
+/// `expr`.
+fn uses_outer_lambda_parameters(
+    expr: &Expr,
+    own_params: &mut Vec<String>,
+) -> Result<bool> {
+    match expr {
+        // a parameter that wasn't collected on the way down comes from outside `expr`
+        Expr::LambdaVariable(var) => Ok(!own_params.contains(&var.name)),
+        Expr::Lambda(lambda) => {
+            // a lambda's parameters can be used in its body, and only there
+            let before = own_params.len();
+            own_params.extend(lambda.params.iter().cloned());
+            let uses = uses_outer_lambda_parameters(&lambda.body, own_params);
+            own_params.truncate(before);
+            uses
+        }
+        // anything else: check its children, stopping at the first one that uses one
+        _ => {
+            let mut uses = false;
+            expr.apply_children(|child| {
+                uses = uses_outer_lambda_parameters(child, own_params)?;
+                Ok(if uses {
+                    TreeNodeRecursion::Stop
+                } else {
+                    TreeNodeRecursion::Continue
+                })
+            })?;
+            Ok(uses)
+        }
     }
 }
 
@@ -392,6 +452,7 @@ impl BuiltinExprBuilder {
 mod tests {
     use super::{arg_list_to_binary_op_tree, case_insensitive_option};
     use crate::extensions::Extensions;
+    use crate::logical_plan::consumer::SubstraitConsumerContext;
     use crate::logical_plan::consumer::tests::TEST_SESSION_STATE;
     use crate::logical_plan::consumer::{DefaultSubstraitConsumer, SubstraitConsumer};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -433,7 +494,13 @@ mod tests {
         let df_schema = DFSchema::try_from(schema).unwrap();
 
         // Consume the expression and ensure we don't crash
-        let _ = consumer.consume_scalar_function(&func, &df_schema).await?;
+        let _ = consumer
+            .consume_scalar_function(
+                &func,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
+            .await?;
         Ok(())
     }
 
@@ -504,7 +571,13 @@ mod tests {
         let df_schema = DFSchema::try_from(schema).unwrap();
 
         // Consume the expression and ensure we don't get an error
-        let _ = consumer.consume_scalar_function(&func, &df_schema).await?;
+        let _ = consumer
+            .consume_scalar_function(
+                &func,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
+            .await?;
         Ok(())
     }
 
@@ -568,7 +641,11 @@ mod tests {
         };
 
         let result = consumer
-            .consume_scalar_function(&func_like, &df_schema)
+            .consume_scalar_function(
+                &func_like,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
             .await?;
 
         if let Expr::Like(like) = result {
@@ -587,7 +664,11 @@ mod tests {
         };
 
         let result = consumer
-            .consume_scalar_function(&func_not_like, &df_schema)
+            .consume_scalar_function(
+                &func_not_like,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
             .await?;
 
         if let Expr::Like(like) = result {
