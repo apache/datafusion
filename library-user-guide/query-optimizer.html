@@ -500,6 +500,9 @@ see the documentation of <a class="reference external" href="https://docs.rs/dat
 <a class="reference external" href="https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-one">Optimizing SQL (and DataFrames) in DataFusion, Part 1</a>, <a class="reference external" href="https://datafusion.apache.org/blog/2025/06/15/optimizing-sql-dataframes-part-two">Part 2</a>,
 <a class="reference external" href="https://datafusion.apache.org/blog/2025/03/11/ordering-analysis">Using Ordering for Better Plans in Apache DataFusion</a>, and
 <a class="reference external" href="https://datafusion.apache.org/blog/2025/09/10/dynamic-filters">Dynamic Filters: Passing Information Between Operators During Execution for 25x Faster Queries</a>.</p>
+<p>The physical optimizer’s reasoning about sort orders, equivalent expressions,
+and constants is implemented by <a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_expr/struct.EquivalenceProperties.html"><code class="docutils literal notranslate"><span class="pre">EquivalenceProperties</span></code></a>, whose documentation
+explains the details.</p>
 <section id="running-the-optimizer">
 <h2>Running the Optimizer<a class="headerlink" href="#running-the-optimizer" title="Link to this heading">#</a></h2>
 <p>The following code demonstrates the basic flow of creating the optimizer with a default set of optimization rules

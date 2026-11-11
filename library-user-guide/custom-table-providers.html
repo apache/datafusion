@@ -753,7 +753,8 @@ which determines parallelism. If your source naturally partitions data (e.g.,
 by file or by shard), expose that here.</p>
 <p><strong>Output ordering</strong> declares whether your data is naturally sorted. This
 enables the optimizer to avoid inserting a <code class="docutils literal notranslate"><span class="pre">SortExec</span></code> when a query requires
-ordered data. Getting this right can be a significant performance win.</p>
+ordered data. Getting this right can be a significant performance win. See
+<a class="reference external" href="https://docs.rs/datafusion/latest/datafusion/physical_expr/struct.EquivalenceProperties.html">EquivalenceProperties</a> for more details.</p>
 <section id="partitioning-strategies">
 <h3>Partitioning Strategies<a class="headerlink" href="#partitioning-strategies" title="Link to this heading">#</a></h3>
 <p>Since <code class="docutils literal notranslate"><span class="pre">execute()</span></code> is called once per partition, partitioning directly controls
