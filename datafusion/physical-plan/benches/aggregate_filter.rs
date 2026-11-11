@@ -15,13 +15,15 @@ use arrow::array::{BooleanArray, Float64Array, UInt32Array};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::record_batch::RecordBatch;
 use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use datafusion_common::ScalarValue;
 use datafusion_execution::TaskContext;
-use datafusion_expr::{AggregateUDF, Operator};
+use datafusion_execution::config::SessionConfig;
+use datafusion_expr::{AggregateUDF, ColumnarValue, Operator, Volatility, create_udf};
 use datafusion_functions_aggregate::count::count_udaf;
 use datafusion_functions_aggregate::sum::sum_udaf;
-use datafusion_physical_expr::PhysicalExpr;
 use datafusion_physical_expr::aggregate::{AggregateExprBuilder, AggregateFunctionExpr};
 use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
+use datafusion_physical_expr::{PhysicalExpr, ScalarFunctionExpr};
 use datafusion_physical_plan::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy,
 };
@@ -260,8 +262,100 @@ fn benchmark_case(
     }
 }
 
+fn benchmark_scalar_filters(c: &mut Criterion, runtime: &Runtime) {
+    let schema = schema();
+    let batch_filter = Arc::new(create_udf(
+        "batch_filter",
+        vec![DataType::Boolean],
+        DataType::Boolean,
+        Volatility::Volatile,
+        Arc::new(|args| match &args[0] {
+            ColumnarValue::Array(array) => Ok(ColumnarValue::Scalar(
+                ScalarValue::try_from_array(array, 0)?,
+            )),
+            scalar => Ok(scalar.clone()),
+        }),
+    ));
+    let varying: Arc<dyn PhysicalExpr> = Arc::new(
+        ScalarFunctionExpr::try_new(
+            batch_filter,
+            vec![col("include_a", &schema).unwrap()],
+            &schema,
+            Arc::default(),
+        )
+        .unwrap(),
+    );
+    let filters = [
+        ("true", Some(lit(true))),
+        ("false", Some(lit(false))),
+        ("null", Some(lit(ScalarValue::Boolean(None)))),
+        ("varying", Some(varying)),
+        ("array_50_percent", Some(col("include_a", &schema).unwrap())),
+        ("unfiltered", None),
+    ];
+    let config = SessionConfig::new()
+        .set_usize(
+            "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+            0,
+        )
+        .set(
+            "datafusion.execution.skip_partial_aggregation_probe_ratio_threshold",
+            &ScalarValue::Float64(Some(0.0)),
+        );
+    let task_ctx = Arc::new(TaskContext::default().with_session_config(config));
+    for (name, mode, grouped) in [
+        ("ungrouped", AggregateMode::Single, false),
+        ("grouped", AggregateMode::Single, true),
+        ("skip_partial", AggregateMode::Partial, true),
+    ] {
+        let batches = make_batches(
+            Some(50),
+            if mode == AggregateMode::Partial {
+                NUM_ROWS
+            } else {
+                16
+            },
+        );
+        let input: Arc<dyn ExecutionPlan> =
+            TestMemoryExec::try_new_exec(&[batches], Arc::clone(&schema), None).unwrap();
+        let mut group = c.benchmark_group(format!("scalar_aggregate_filter/{name}"));
+        for (filter_name, filter) in &filters {
+            let group_by = if grouped {
+                PhysicalGroupBy::new_single(vec![(
+                    col("group_key", &schema).unwrap(),
+                    "group_key".to_string(),
+                )])
+            } else {
+                PhysicalGroupBy::default()
+            };
+            let plan: Arc<dyn ExecutionPlan> = Arc::new(
+                AggregateExec::try_new(
+                    mode,
+                    group_by,
+                    vec![aggregate_expr(&schema, 0, ArgumentKind::Column)],
+                    vec![filter.clone()],
+                    Arc::clone(&input),
+                    Arc::clone(&schema),
+                )
+                .unwrap(),
+            );
+            group.bench_function(*filter_name, |b| {
+                b.iter(|| {
+                    black_box(
+                        runtime
+                            .block_on(collect(Arc::clone(&plan), Arc::clone(&task_ctx)))
+                            .unwrap(),
+                    );
+                });
+            });
+        }
+        group.finish();
+    }
+}
+
 fn aggregate_filter_benchmark(c: &mut Criterion) {
     let runtime = Runtime::new().unwrap();
+    benchmark_scalar_filters(c, &runtime);
 
     benchmark_case(
         c,
