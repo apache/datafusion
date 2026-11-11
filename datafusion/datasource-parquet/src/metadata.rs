@@ -140,7 +140,7 @@ pub struct DFParquetMetadata<'a> {
     pub coerce_int96: Option<TimeUnit>,
     /// Optional timezone applied to INT96-coerced timestamps.
     pub coerce_int96_tz: Option<Arc<str>>,
-    /// If true, promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
+    /// If true, promote string/binary columns with dictionary pages to `Dictionary`.
     enable_rle_to_dictionary: bool,
 }
 
@@ -163,7 +163,7 @@ impl<'a> DFParquetMetadata<'a> {
         }
     }
 
-    /// Promote string/binary columns with dictionary pages to `Dictionary(Int32, ...)`.
+    /// Promote string/binary columns with dictionary pages to `Dictionary`.
     pub fn with_enable_rle_to_dictionary(mut self, enable: bool) -> Self {
         self.enable_rle_to_dictionary = enable;
         self
@@ -450,7 +450,10 @@ impl<'a> DFParquetMetadata<'a> {
         let schema = if self.enable_rle_to_dictionary {
             let schema_descr = file_metadata.schema_descr();
             // Top-level columns that have a dictionary page in at least one row group.
-            let dict_cols: HashSet<String> = metadata
+            // A dictionary is scoped to one row group, so its number of values cannot
+            // exceed that row group's row count. Use that bound to select the narrowest
+            // key type that is safe for every row group in the file.
+            let dict_col_indices: HashSet<usize> = metadata
                 .row_groups()
                 .iter()
                 .flat_map(|rg| {
@@ -459,12 +462,23 @@ impl<'a> DFParquetMetadata<'a> {
                         .enumerate()
                         .filter_map(|(col_idx, col)| {
                             col.dictionary_page_offset()?;
-                            let col_desc = schema_descr.column(col_idx);
-                            let parts = col_desc.path().parts();
-                            // Skip nested columns: their leaf name doesn't match the
-                            // Arrow top-level field name.
-                            (parts.len() == 1).then(|| parts[0].clone())
+                            let column = schema_descr.column(col_idx);
+                            let parts = column.path().parts();
+                            (parts.len() == 1).then_some(col_idx)
                         })
+                })
+                .collect();
+            let max_row_group_rows = metadata
+                .row_groups()
+                .iter()
+                .map(|rg| rg.num_rows() as usize)
+                .max()
+                .unwrap_or_default();
+            let dict_cols: HashMap<String, DataType> = dict_col_indices
+                .into_iter()
+                .map(|col_idx| {
+                    let name = schema_descr.column(col_idx).path().parts()[0].clone();
+                    (name, dictionary_key_type(max_row_group_rows))
                 })
                 .collect();
             if dict_cols.is_empty() {
@@ -474,9 +488,9 @@ impl<'a> DFParquetMetadata<'a> {
                     .fields()
                     .iter()
                     .map(|field| {
-                        if !dict_cols.contains(field.name()) {
+                        let Some(key_type) = dict_cols.get(field.name()) else {
                             return Arc::clone(field);
-                        }
+                        };
                         let dict_value_type = match field.data_type() {
                             DataType::Utf8 => Some(DataType::Utf8),
                             DataType::LargeUtf8 => Some(DataType::LargeUtf8),
@@ -491,7 +505,7 @@ impl<'a> DFParquetMetadata<'a> {
                                     Field::new(
                                         field.name(),
                                         DataType::Dictionary(
-                                            Box::new(DataType::Int32),
+                                            Box::new(key_type.clone()),
                                             Box::new(value_type),
                                         ),
                                         field.is_nullable(),
@@ -710,6 +724,16 @@ impl<'a> DFParquetMetadata<'a> {
         }
 
         Ok(statistics)
+    }
+}
+
+fn dictionary_key_type(max_dictionary_values: usize) -> DataType {
+    if max_dictionary_values <= (i8::MAX as usize) + 1 {
+        DataType::Int8
+    } else if max_dictionary_values <= (i16::MAX as usize) + 1 {
+        DataType::Int16
+    } else {
+        DataType::Int32
     }
 }
 
@@ -1254,6 +1278,15 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::compute::SortOptions;
     use arrow::datatypes::Field;
+
+    #[test]
+    fn dictionary_key_type_uses_row_group_cardinality_bound() {
+        assert_eq!(dictionary_key_type(0), DataType::Int8);
+        assert_eq!(dictionary_key_type(128), DataType::Int8);
+        assert_eq!(dictionary_key_type(129), DataType::Int16);
+        assert_eq!(dictionary_key_type(32_768), DataType::Int16);
+        assert_eq!(dictionary_key_type(32_769), DataType::Int32);
+    }
 
     #[test]
     fn test_lex_ordering_to_sorting_columns_uses_writer_schema() -> Result<()> {

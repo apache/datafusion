@@ -6102,7 +6102,7 @@ mod test {
         .await;
         let dict_bin_schema = Arc::new(Schema::new(vec![Field::new(
             "payload",
-            DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary)),
+            DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Binary)),
             true,
         )]));
         let morselizer = ParquetMorselizerBuilder::new()
@@ -6117,7 +6117,7 @@ mod test {
         .await;
         assert_eq!(
             batches[0].schema().field(0).data_type(),
-            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Binary))
+            &DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Binary))
         );
     }
 }
