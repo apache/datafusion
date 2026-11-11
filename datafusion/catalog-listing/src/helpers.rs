@@ -467,6 +467,15 @@ fn object_meta_to_partitioned_file(
 ///
 /// Partition values are percent-decoded to match Hive-style object-store paths
 /// that encode special characters in path segments.
+///
+/// The final path component is always treated as a filename, even if it contains
+/// `=`. Each requested partition column must match a `name=value` directory in
+/// order; this returns `None` if any of those directories is missing or mismatched,
+/// or if `file_path` is outside `table_path`.
+///
+/// For example, columns `year` and `month` match `year=2024/month=01/data.parquet`,
+/// but not `year=2024/month=01.parquet`: the latter is missing the month directory.
+/// A `key=value` filename inside a complete partition path remains valid.
 pub fn parse_partitions_for_path<'a, I>(
     table_path: &ListingTableUrl,
     file_path: &'a Path,
@@ -599,6 +608,30 @@ mod tests {
             parse_partitions_for_path(
                 &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
                 &Path::from("bucket/mytable/mypartition=v1/file.csv"),
+                vec!["mypartition"]
+            )
+        );
+        assert_eq!(
+            None,
+            parse_partitions_for_path(
+                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
+                &Path::from("bucket/mytable/mypartition=v1.csv"),
+                vec!["mypartition"]
+            )
+        );
+        assert_eq!(
+            None,
+            parse_partitions_for_path(
+                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
+                &Path::from("bucket/mytable/mypartition=v1/otherpartition=v2.csv"),
+                vec!["mypartition", "otherpartition"]
+            )
+        );
+        assert_eq!(
+            Some(vec![Cow::Borrowed("v1")]),
+            parse_partitions_for_path(
+                &ListingTableUrl::parse("file:///bucket/mytable").unwrap(),
+                &Path::from("bucket/mytable/mypartition=v1/mypartition=ignored.csv"),
                 vec!["mypartition"]
             )
         );
