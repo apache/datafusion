@@ -446,16 +446,16 @@ fn hide_byte_counts() -> Settings {
 
 /// Runs `case` as Final and as Single and returns the Final run.
 ///
-/// Final reserves each incoming partial-state batch before merging it, while
-/// Single consumes raw rows. Their pool calls differ, but their results must
-/// still match. The test snapshots the Final run.
+/// The Final and Single streams account in the same way, so this asserts that
+/// both make the same pool calls, with the same byte counts, once the stream
+/// name is replaced, and the test snapshots only the Final run.
 async fn run_final_and_single(case: impl Fn(AggregateMode) -> Case) -> Result<Run> {
     let final_run = case(AggregateMode::Final).run().await?;
     let single_run = case(AggregateMode::Single).run().await?;
     assert_eq!(
-        datafusion_common::test_util::batches_to_sort_string(&single_run.output),
-        datafusion_common::test_util::batches_to_sort_string(&final_run.output),
-        "Final and Single return different results"
+        single_run.snapshot.replace("Single", "Final"),
+        final_run.snapshot,
+        "Final and Single make different pool calls"
     );
     Ok(final_run)
 }
@@ -506,7 +506,7 @@ async fn spills_twice_then_replays() -> Result<()> {
     .await?;
     assert_eq!(run.clustering, GroupClusteringMode::None);
     assert_eq!(run.spill_count(), 2);
-    assert_snapshot!(run.snapshot, @"
+    assert_snapshot!(run.snapshot, @r"
     FinalHashAggregateStream[0] register can_spill=true
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
@@ -600,7 +600,7 @@ async fn output_materialization_refused() -> Result<()> {
     let run = padded(AggregateMode::Final).run().await?;
     assert_eq!(run.spill_count(), 1);
     assert_eq!(run.output_batch_rows, vec![64; 4]);
-    assert_snapshot!(run.snapshot, @"
+    assert_snapshot!(run.snapshot, @r"
     FinalHashAggregateStream[0] register can_spill=true
     FinalHashAggregateStream[0] try_grow [bytes]
     FinalHashAggregateStream[0] try_grow [bytes]
@@ -718,7 +718,7 @@ async fn clustered_completed_groups() -> Result<()> {
     assert_eq!(run.clustering, GroupClusteringMode::Partial(vec![0]));
     assert_eq!(run.spill_count(), 0);
     assert_eq!(run.max_output_rows(), 64);
-    assert_snapshot!(run.snapshot, @"
+    assert_snapshot!(run.snapshot, @r"
     ClusteredFinalAggregateStream[0] register can_spill=true
     ClusteredFinalAggregateStream[0] try_grow [bytes]
     ClusteredFinalAggregateStream[0] try_grow [bytes]
@@ -737,10 +737,10 @@ async fn clustered_completed_groups() -> Result<()> {
     => Ok(1024 rows in 16 batches)
     ");
 
-    let run = run_final_and_single(|mode| clustered(mode, 38_500)).await?;
+    let run = run_final_and_single(|mode| clustered(mode, 34_000)).await?;
     assert_eq!(run.spill_count(), 0);
     assert_eq!(run.max_output_rows(), 256);
-    assert_snapshot!(run.snapshot, @"
+    assert_snapshot!(run.snapshot, @r"
     ClusteredFinalAggregateStream[0] register can_spill=true
     ClusteredFinalAggregateStream[0] try_grow [bytes]
     ClusteredFinalAggregateStream[0] try_grow [bytes]
@@ -768,13 +768,13 @@ async fn clustered_spills_then_replays() -> Result<()> {
     let _bound = hide_byte_counts().bind_to_scope();
     let run = run_final_and_single(|mode| Case {
         batch_size: 256,
-        memory_limit: 40_000,
+        memory_limit: 34_000,
         ..case(mode, &["a", "b"], true, clustered_partial_input_long_run())
     })
     .await?;
     assert_eq!(run.clustering, GroupClusteringMode::Partial(vec![0]));
     assert_eq!(run.spill_count(), 2);
-    assert_snapshot!(run.snapshot, @"
+    assert_snapshot!(run.snapshot, @r"
     ClusteredFinalAggregateStream[0] register can_spill=true
     ClusteredFinalAggregateStream[0] try_grow [bytes]
     ClusteredFinalAggregateStream[0] try_grow [bytes]
