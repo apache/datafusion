@@ -169,11 +169,14 @@ use parking_lot::Mutex;
 use std::collections::HashMap;
 
 use arrow::array::{
-    ArrayRef, AsArray, MutableArrayData, UInt8Array, UInt16Array, UInt32Array,
-    UInt64Array, make_array,
+    Array, ArrayRef, AsArray, GenericByteArray, UInt8Array, UInt16Array, UInt32Array,
+    UInt64Array,
 };
+use arrow::buffer::{OffsetBuffer, ScalarBuffer};
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
+use arrow::datatypes::{
+    BinaryType, ByteArrayType, DataType, Field, Schema, SchemaRef, Utf8Type,
+};
 use arrow::record_batch::RecordBatch;
 use arrow_schema::FieldRef;
 use datafusion_common::stats::Precision;
@@ -2940,6 +2943,39 @@ fn output_batch_rows(
     rows.max(1).min(max_rows)
 }
 
+// The result shares the value buffer, so it keeps that buffer in memory.
+fn with_32_bit_offsets<T, U>(array: &GenericByteArray<T>) -> Result<GenericByteArray<U>>
+where
+    T: ByteArrayType<Offset = i64>,
+    U: ByteArrayType<Offset = i32, Native = T::Native>,
+{
+    let offsets = array.value_offsets();
+    let start = offsets[0];
+    let num_bytes = offsets[offsets.len() - 1] - start;
+    if num_bytes > i64::from(i32::MAX) {
+        return internal_err!(
+            "Group keys of {num_bytes} bytes do not fit 32-bit offsets"
+        );
+    }
+    // A slice can start beyond the 32-bit limit. Its new offsets must start at zero.
+    let offsets = offsets
+        .iter()
+        .map(|offset| (offset - start) as i32)
+        .collect::<ScalarBuffer<_>>();
+    let values = array
+        .values()
+        .slice_with_length(start as usize, num_bytes as usize);
+    // SAFETY: the checked length fits i32. Subtraction preserves the offset order
+    // and value boundaries. The value bytes and null flags do not change.
+    Ok(unsafe {
+        GenericByteArray::new_unchecked(
+            OffsetBuffer::new_unchecked(offsets),
+            values,
+            array.nulls().cloned(),
+        )
+    })
+}
+
 // `batch` must fit the 32-bit offsets of `schema`: see `output_batch_rows`.
 fn restore_group_key_types(
     batch: RecordBatch,
@@ -2957,15 +2993,19 @@ fn restore_group_key_types(
             if array.data_type() == field.data_type() {
                 Ok(Arc::clone(array))
             } else {
-                // A slice can start beyond the 32-bit offset limit.
-                // Copy its values so that the first offset is zero.
-                let data = array.to_data();
-                let mut mutable = MutableArrayData::new(vec![&data], false, data.len());
-                mutable.try_extend(0, 0, data.len())?;
-                Ok(arrow::compute::cast(
-                    &make_array(mutable.freeze()),
-                    field.data_type(),
-                )?)
+                match (array.data_type(), field.data_type()) {
+                    (DataType::LargeUtf8, DataType::Utf8) => {
+                        let keys = array.as_string::<i64>();
+                        Ok(Arc::new(with_32_bit_offsets::<_, Utf8Type>(keys)?) as _)
+                    }
+                    (DataType::LargeBinary, DataType::Binary) => {
+                        let keys = array.as_binary::<i64>();
+                        Ok(Arc::new(with_32_bit_offsets::<_, BinaryType>(keys)?) as _)
+                    }
+                    (stored_type, output_type) => internal_err!(
+                        "Group keys of type {stored_type} cannot have the output type {output_type}"
+                    ),
+                }
             }
         })
         .collect::<Result<Vec<_>>>()?;
@@ -10228,6 +10268,11 @@ mod tests {
             k.iter().collect::<Vec<_>>(),
             vec![None, Some("cccc"), Some("dd")]
         );
+        let stored_keys = batch.column(0).as_string::<i64>();
+        assert!(std::ptr::eq(
+            k.value_data().as_ptr(),
+            stored_keys.value_data()[2..].as_ptr()
+        ));
         let c = output.column(1).as_primitive::<Int64Type>();
         assert_eq!(c.values(), &[2, 3, 4]);
 
@@ -10304,9 +10349,7 @@ mod tests {
         columns
             .iter()
             .map(|(data_type, lengths)| {
-                let offsets = arrow::buffer::OffsetBuffer::<i64>::from_lengths(
-                    lengths.iter().copied(),
-                );
+                let offsets = OffsetBuffer::<i64>::from_lengths(lengths.iter().copied());
                 let values = values.clone();
                 match data_type {
                     DataType::LargeBinary => Arc::new(
@@ -10385,28 +10428,33 @@ mod tests {
             Field::new("c", DataType::Int64, false),
         ]));
         let stored_schema = group_schema_with_large_offsets(&output_schema, 1);
-        // The two keys hold one byte more than `i32::MAX`.
-        let mut columns = zeroed_group_keys(&[(DataType::LargeUtf8, &[GIB, GIB])]);
-        columns.push(Arc::new(Int64Array::from(vec![1, 2])));
+        // Two keys hold one byte more than `i32::MAX`, and the last key starts
+        // beyond the 32-bit offset limit.
+        let mut columns = zeroed_group_keys(&[(DataType::LargeUtf8, &[GIB, GIB, GIB])]);
+        columns.push(Arc::new(Int64Array::from(vec![1, 2, 3])));
         let stored = RecordBatch::try_new(stored_schema, columns)?;
+        let error = restore_group_key_types(stored.clone(), &output_schema).unwrap_err();
+        assert_contains!(error.to_string(), "do not fit 32-bit offsets");
 
         let input = Box::pin(crate::stream::RecordBatchStreamAdapter::new(
             Arc::clone(&output_schema),
-            futures::stream::iter(vec![Ok(stored)]),
+            futures::stream::iter(vec![Ok(stored.clone())]),
         ));
-        let mut output = restore_group_key_stream(input, 8192);
+        let output = collect(restore_group_key_stream(input, 8192)).await?;
 
-        // An output batch owns a copy of its keys, so the test holds one
-        // batch at a time.
-        let mut counts = vec![];
-        while let Some(batch) = output.next().await.transpose()? {
+        assert_eq!(output.len(), 3);
+        let stored_keys = stored.column(0).as_string::<i64>();
+        for (index, batch) in output.iter().enumerate() {
             assert_eq!(batch.schema(), output_schema);
             let keys = batch.column(0).as_string::<i32>();
             assert_eq!(keys.value_offsets(), &[0, GIB as i32]);
-            counts
-                .extend_from_slice(batch.column(1).as_primitive::<Int64Type>().values());
+            assert!(std::ptr::eq(
+                keys.value_data().as_ptr(),
+                stored_keys.value_data()[index * GIB..].as_ptr()
+            ));
+            let counts = batch.column(1).as_primitive::<Int64Type>();
+            assert_eq!(counts.values(), &[index as i64 + 1]);
         }
-        assert_eq!(counts, vec![1, 2]);
 
         Ok(())
     }
