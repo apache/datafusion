@@ -32,7 +32,7 @@ use arrow::datatypes::{
     BinaryViewType, DataType, Field, Int8Type, Int16Type, Int32Type, Int64Type, Schema,
     SchemaRef, StringViewType, UInt8Type, UInt16Type, UInt32Type, UInt64Type,
 };
-use datafusion_common::float_semantics::{has_float_leaf, normalize_floats};
+use datafusion_common::float_semantics::{self, has_float_leaf};
 use datafusion_common::hash_utils::RandomState;
 use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::{Result, not_impl_err};
@@ -1057,7 +1057,11 @@ impl<const STREAMING: bool> GroupValues for GroupValuesColumn<STREAMING> {
         let normalized: Option<Vec<ArrayRef>> = cols
             .iter()
             .any(|col| col.data_type().is_nested() && has_float_leaf(col.data_type()))
-            .then(|| cols.iter().map(normalize_floats).collect());
+            .then(|| {
+                cols.iter()
+                    .map(|col| float_semantics::normalize(Arc::clone(col)))
+                    .collect()
+            });
         let cols = normalized.as_deref().unwrap_or(cols);
 
         // `try_new` and the reset points in `emit` / `clear_shrink` keep
