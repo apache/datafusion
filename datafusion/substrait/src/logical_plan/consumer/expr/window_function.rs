@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::aggregate_function::validate_aggregation_phase;
+use super::literal::name_struct_literals_like_siblings;
 use crate::logical_plan::consumer::{
     SubstraitConsumer, from_substrait_func_args, from_substrait_rex_vec,
     from_substrait_sorts, substrait_fun_name,
@@ -98,6 +99,14 @@ pub async fn from_window_function(
             AggregationInvocation::Unspecified | AggregationInvocation::All => false,
             AggregationInvocation::Distinct => true,
         };
+
+    // a struct literal argument has generated field names; it takes those of a
+    // same-shaped argument, whose type it must share (e.g. a default value)
+    let mut args = args;
+    name_struct_literals_like_siblings(
+        &mut args.iter_mut().collect::<Vec<_>>(),
+        input_schema,
+    );
 
     Ok(Expr::from(expr::WindowFunction {
         fun,

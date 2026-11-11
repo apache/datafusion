@@ -3067,6 +3067,52 @@ async fn roundtrip_struct_literal_in_nested_list() -> Result<()> {
     .await
 }
 
+#[tokio::test]
+async fn roundtrip_struct_literal_window_function_argument() -> Result<()> {
+    let ctx = struct_rows_ctx().await?;
+    let plan = ctx
+        .sql("SELECT lag(st, 1, named_struct('a', 0, 'b', 'z')) OVER () AS r FROM struct_rows")
+        .await?
+        .into_optimized_plan()?;
+    assert_struct_literal_roundtrip_rows(&ctx, plan, |_| {}).await
+}
+
+#[tokio::test]
+async fn roundtrip_struct_literal_list_next_to_large_list_column() -> Result<()> {
+    use serde_json::Value;
+
+    /// Removes the type variation of every list literal, which makes a `LargeList`
+    /// literal a plain `List`, as a producer without large lists would send it.
+    fn as_plain_lists(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                if let Some(Value::Object(literal)) = map.get_mut("literal")
+                    && literal.contains_key("list")
+                {
+                    literal.remove("typeVariationReference");
+                }
+                map.values_mut().for_each(as_plain_lists);
+            }
+            Value::Array(items) => items.iter_mut().for_each(as_plain_lists),
+            _ => {}
+        }
+    }
+
+    let ctx = struct_rows_ctx().await?;
+    ctx.sql(
+        "CREATE TABLE large_structs AS SELECT arrow_cast(make_array(st), \
+         'LargeList(Struct(\"a\": Int64, \"b\": Utf8))') AS s FROM struct_rows",
+    )
+    .await?
+    .collect()
+    .await?;
+    let plan = ctx
+        .sql("SELECT coalesce(s, [named_struct('a', 0, 'b', 'z')]) AS r FROM large_structs")
+        .await?
+        .into_optimized_plan()?;
+    assert_struct_literal_roundtrip_rows(&ctx, plan, as_plain_lists).await
+}
+
 pub(crate) async fn higher_order_function_ctx() -> Result<SessionContext> {
     let ctx = create_context_with_dialect(Some(Dialect::Databricks)).await?;
 

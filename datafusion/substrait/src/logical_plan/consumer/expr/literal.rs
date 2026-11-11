@@ -682,21 +682,6 @@ fn with_field_names_of(data_type: &DataType, named: &DataType) -> Option<DataTyp
                 .collect::<Option<Fields>>()?;
             Some(DataType::Struct(fields))
         }
-        (DataType::List(field), DataType::List(named)) => {
-            Some(DataType::List(renamed_field(field, named)?))
-        }
-        (DataType::LargeList(field), DataType::LargeList(named)) => {
-            Some(DataType::LargeList(renamed_field(field, named)?))
-        }
-        (
-            DataType::FixedSizeList(field, size),
-            DataType::FixedSizeList(named, named_size),
-        ) if size == named_size => {
-            Some(DataType::FixedSizeList(renamed_field(field, named)?, *size))
-        }
-        (DataType::Map(field, sorted), DataType::Map(named, _)) => {
-            Some(DataType::Map(renamed_field(field, named)?, *sorted))
-        }
         // a dictionary literal keeps its keys, which are plain integers; its values take
         // the names, from the values of a dictionary column or from a plain column
         (DataType::Dictionary(key, value), named) => {
@@ -718,10 +703,42 @@ fn with_field_names_of(data_type: &DataType, named: &DataType) -> Option<DataTyp
         (data_type, DataType::RunEndEncoded(_, named_values)) => {
             with_field_names_of(data_type, named_values.data_type())
         }
+        // a list literal takes the element names of a list column even if the two use
+        // different list types, as a `List` literal next to a `LargeList` column: the
+        // literal keeps its own list type, and coercion converts between them
+        (DataType::List(field), named) => {
+            Some(DataType::List(renamed_field(field, list_element(named)?)?))
+        }
+        (DataType::LargeList(field), named) => Some(DataType::LargeList(renamed_field(
+            field,
+            list_element(named)?,
+        )?)),
+        (DataType::FixedSizeList(field, size), named) => {
+            if let DataType::FixedSizeList(_, named_size) = named
+                && named_size != size
+            {
+                return None;
+            }
+            let field = renamed_field(field, list_element(named)?)?;
+            Some(DataType::FixedSizeList(field, *size))
+        }
+        (DataType::Map(field, sorted), DataType::Map(named, _)) => {
+            Some(DataType::Map(renamed_field(field, named)?, *sorted))
+        }
         // types without fields keep their own type; coercion reconciles any difference
         (data_type, named) if !data_type.is_nested() && !named.is_nested() => {
             Some(data_type.clone())
         }
+        _ => None,
+    }
+}
+
+/// Returns the element field of any list type (`List`, `LargeList`, `FixedSizeList`).
+fn list_element(data_type: &DataType) -> Option<&FieldRef> {
+    match data_type {
+        DataType::List(field)
+        | DataType::LargeList(field)
+        | DataType::FixedSizeList(field, _) => Some(field),
         _ => None,
     }
 }
