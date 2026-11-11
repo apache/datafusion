@@ -22,11 +22,16 @@ can run on `main`, which may not know that switch.
 | 07    | TopK (`LIMIT 100`); eager fetch-path control.                                                 |
 | 08    | Same keys as 02, but multiple sorted runs and merge.                                          |
 | 09    | Issue #25033 query: unique descending score, `md5(payload)`, `LIMIT 10`, selecting only `id`. |
+| 10    | Same as 09 without `LIMIT`; full sort with a unique descending score and expensive suffix.    |
+
+Query 10 matches 09 without `LIMIT 10`, exercising full sort rather than TopK.
+Its plan assertion requires the `md5(payload)` expression on `SortExec`.
 
 Each query builds a deterministic in-memory table during `load`, outside the
 timed region. Defaults: `STAGED_SORT_ROWS=200000` (minimum 100),
 `STAGED_SORT_PAYLOAD_WIDTH=32` filler characters appended to the decimal ID.
-IDs arrive in descending order rather than already sorted. Fixture assertions
+IDs arrive in descending order: unsorted for ascending-ID queries, but already
+in the requested score order for 09–10 (without declared ordering metadata). Fixture assertions
 check row count, unique IDs, 100 prefix values, the all-tied key, NULL/non-NULL
 rows and minimum payload width. They also verify more than one zero sparse key
 and a majority of nonzero keys equal to unique IDs: exactly one tied group, with
@@ -40,7 +45,7 @@ only `id`, so computed keys may be projected before TopK; its plan assertion
 checks `TopK(fetch=10)` rather than expression placement.
 
 Each query sets `target_partitions=1`. Queries 01–07 set the in-place sort
-threshold to 1 GiB (as does 09), intended to give one run at defaults without a memory limit;
+threshold to 1 GiB (as do 09–10), intended to give one run at defaults without a memory limit;
 08 sets it to zero to exercise multiple runs. Very large row/width overrides or
 memory limits can change this behavior. Check plans and execution metrics with
 `--debug` or `EXPLAIN ANALYZE`; debug output affects the first run's timing.
