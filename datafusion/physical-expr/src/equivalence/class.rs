@@ -699,6 +699,27 @@ impl EquivalenceGroup {
             .collect()
     }
 
+    /// Projects `expr` through the mapping, or else projects another member of
+    /// its equivalence class.
+    ///
+    /// The members of a class are equal on every row, so a projected member
+    /// describes the same partitioning or ordering as `expr`. For example, if
+    /// `x` is in a class with `get_field(s, 'k')`, a projection that keeps `s`
+    /// but drops `x` projects `x` to `get_field(s, 'k')`. Literal members are
+    /// skipped, because a literal does not describe how rows are distributed.
+    fn project_expr_or_equivalent(
+        &self,
+        aug_mapping: &AugmentedMapping,
+        expr: &Arc<dyn PhysicalExpr>,
+    ) -> Option<Arc<dyn PhysicalExpr>> {
+        Self::project_expr_indirect(aug_mapping, expr).or_else(|| {
+            self.get_equivalence_class(expr)?
+                .iter()
+                .filter(|member| *member != expr && !member.is::<Literal>())
+                .find_map(|member| Self::project_expr_indirect(aug_mapping, member))
+        })
+    }
+
     /// Projects `expr` according to the given projection mapping.
     /// If the resulting expression is invalid after projection, returns `None`.
     pub fn project_expr(
@@ -712,7 +733,7 @@ impl EquivalenceGroup {
             Some(Arc::clone(target))
         } else {
             let aug_mapping = self.augment_projection_mapping(mapping);
-            Self::project_expr_indirect(&aug_mapping, expr)
+            self.project_expr_or_equivalent(&aug_mapping, expr)
         }
     }
 
@@ -734,7 +755,7 @@ impl EquivalenceGroup {
             } else {
                 let aug_mapping = aug_mapping
                     .get_or_insert_with(|| self.augment_projection_mapping(mapping));
-                Self::project_expr_indirect(aug_mapping, expr)
+                self.project_expr_or_equivalent(aug_mapping, expr)
             }
         })
     }
@@ -1478,6 +1499,50 @@ mod tests {
             &projected_schema,
         )?);
         assert!(first_normalized.eq(&second_normalized));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_dropped_column_through_equivalent_expression() -> Result<()> {
+        // - columns: [a, b, c, d], with a = b + c.
+        // - a projection that keeps b and c but drops a projects a to b + c,
+        //   as a join that drops its hashed key column needs for its partitioning.
+        let schema = abc_schema();
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(
+            col("a", &schema)?,
+            binary(
+                col("b", &schema)?,
+                Operator::Plus,
+                col("c", &schema)?,
+                &schema,
+            )?,
+        );
+        let mapping = ProjectionMapping::from_indices(&[1, 2], &schema)?;
+        let projected_schema = Arc::new(Schema::new(vec![
+            Field::new("b", DataType::Int32, false),
+            Field::new("c", DataType::Int32, false),
+        ]));
+        let expected = binary(
+            col("b", &projected_schema)?,
+            Operator::Plus,
+            col("c", &projected_schema)?,
+            &projected_schema,
+        )?;
+
+        let projected = group.project_expr(&mapping, &col("a", &schema)?);
+        assert!(projected.is_some_and(|expr| expr.eq(&expected)));
+        let projected = group
+            .project_expressions(&mapping, [&col("a", &schema)?])
+            .next()
+            .flatten();
+        assert!(projected.is_some_and(|expr| expr.eq(&expected)));
+
+        // Without the equivalence, a dropped column has no projection.
+        let projected =
+            EquivalenceGroup::default().project_expr(&mapping, &col("a", &schema)?);
+        assert!(projected.is_none());
 
         Ok(())
     }
