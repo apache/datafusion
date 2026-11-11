@@ -24,6 +24,9 @@ use std::vec;
 use super::aggregate_hash_table::{accumulator_phases, create_group_accumulator};
 use super::order::GroupClustering;
 use super::skip_partial::SkipAggregationProbe;
+use super::spill::{
+    bound_spill_batches_by_first_spill, configured_spill_max_batch_bytes,
+};
 use super::{AggregateExec, format_human_display};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
@@ -560,7 +563,8 @@ impl GroupedHashAggregateStream {
             metrics::SpillMetrics::new(&agg.metrics, partition),
             Arc::clone(&spill_schema),
         )
-        .with_compression_type(context.session_config().spill_compression());
+        .with_compression_type(context.session_config().spill_compression())
+        .with_max_batch_bytes(Some(configured_spill_max_batch_bytes(context)));
 
         let spill_state = SpillState {
             spills: vec![],
@@ -1250,6 +1254,12 @@ impl GroupedHashAggregateStream {
             )
         })?;
 
+        if self.spill_state.spills.is_empty() {
+            self.spill_state.spill_manager = bound_spill_batches_by_first_spill(
+                &self.spill_state.spill_manager,
+                &emit,
+            )?;
+        }
         let sorted_iter = IncrementalSortIterator::new(
             emit,
             self.spill_state.spill_expr.clone(),
@@ -1347,6 +1357,7 @@ impl GroupedHashAggregateStream {
                 .with_expressions(&self.spill_state.spill_expr)
                 .with_metrics(self.baseline_metrics.clone())
                 .with_batch_size(self.batch_size)
+                .with_max_batch_bytes(self.spill_state.spill_manager.max_batch_bytes())
                 .with_reservation(self.reservation.new_empty())
                 .with_merge_pool(Arc::clone(&self.merge_pool))
                 .with_replay_headroom()

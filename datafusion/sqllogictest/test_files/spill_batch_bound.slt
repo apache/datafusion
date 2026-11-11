@@ -98,24 +98,28 @@ SELECT count(*), sum(length(s)) FROM (
 ----
 40000 96120000
 
-# The same groups under a 2 MB limit, where the smallest merge of two runs of
-# 1 MiB batches does not fit in what the aggregate held.
+# The same groups under a 2 MB limit. The aggregate bounds its spill batches
+# by what it held at the first spill, so the smallest merge fits.
 statement ok
 SET datafusion.runtime.memory_limit = '2M'
 
-query error Resources exhausted
+query II
 SELECT count(*), sum(length(s)) FROM (
   SELECT k, string_agg(v, ',') AS s
   FROM (SELECT value % 40000 AS k, repeat('x', 200) AS v FROM generate_series(1, 160000))
   GROUP BY k
 )
+----
+40000 32120000
 
-query error Resources exhausted
+query II
 SELECT count(*), sum(length(s)) FROM (
   SELECT k, string_agg(v, ',') AS s
   FROM (SELECT value % 40000 AS k, repeat('x', 600) AS v FROM generate_series(1, 160000))
   GROUP BY k
 )
+----
+40000 96120000
 
 # The legacy aggregate stream.
 statement ok

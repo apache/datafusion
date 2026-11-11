@@ -1154,21 +1154,22 @@ impl ExternalSorter {
     }
 }
 
-/// The bound on the in-memory size of each batch that [`ExternalSorter`] spills.
+/// The bound on the in-memory size of each batch of a sorted spill run, such that the
+/// smallest merge of the runs fits in `merge_memory`.
 ///
-/// The merge of the spill files starts with `sort_spill_reservation_bytes` of headroom.
-/// It reads at least [`MIN_SPILL_MERGE_FAN_IN`] files, and reserves
+/// The merge reads at least [`MIN_SPILL_MERGE_FAN_IN`] files, and reserves
 /// [`get_reserved_bytes_for_record_batch_size`] of the largest batch for each, with
 /// read-ahead reduced to one batch under pressure. The bound is the largest batch size for
-/// which that minimum merge fits in the headroom, found from the same formula.
+/// which that minimum merge fits in `merge_memory`, found from the same formula.
+/// [`ExternalSorter`] passes `sort_spill_reservation_bytes`, the headroom its merge starts
+/// with. An aggregate passes part of the memory it held when it first spilled.
 ///
 /// The bound is at least [`MIN_SPILL_MAX_BATCH_BYTES`], so that a small or zero headroom
 /// does not write, read and merge tiny batches. Below that headroom the merge cannot fit
 /// in it anyway, and takes the rest from the memory pool, as it does without a bound.
-fn spill_max_batch_bytes(sort_spill_reservation_bytes: usize) -> usize {
+pub(crate) fn spill_max_batch_bytes(merge_memory: usize) -> usize {
     // Each batch reserves `get_reserved_bytes_for_record_batch_size(b, b)`, which is `2 * b`.
-    (sort_spill_reservation_bytes / (2 * MIN_SPILL_MERGE_FAN_IN))
-        .max(MIN_SPILL_MAX_BATCH_BYTES)
+    (merge_memory / (2 * MIN_SPILL_MERGE_FAN_IN)).max(MIN_SPILL_MAX_BATCH_BYTES)
 }
 
 /// The smallest bound [`spill_max_batch_bytes`] returns.
