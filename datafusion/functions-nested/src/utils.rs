@@ -246,8 +246,12 @@ where
     }
 }
 
+/// Wraps each argument in extra list levels until all have the same number of
+/// dimensions. With `keep_null_rows`, a null row stays null; otherwise it is
+/// wrapped into a list holding one null element.
 pub(crate) fn align_array_dimensions<O: OffsetSizeTrait>(
     args: Vec<ArrayRef>,
+    keep_null_rows: bool,
 ) -> Result<Vec<ArrayRef>> {
     let args_ndim = args
         .iter()
@@ -266,12 +270,17 @@ pub(crate) fn align_array_dimensions<O: OffsetSizeTrait>(
                     let data_type = aligned_array.data_type().to_owned();
                     let array_lengths = std::iter::repeat_n(1, aligned_array.len());
                     let offsets = OffsetBuffer::<O>::from_lengths(array_lengths);
+                    let nulls = if keep_null_rows {
+                        aligned_array.nulls().cloned()
+                    } else {
+                        None
+                    };
 
                     aligned_array = Arc::new(GenericListArray::<O>::try_new(
                         Arc::new(Field::new_list_field(data_type, true)),
                         offsets,
                         aligned_array,
-                        None,
+                        nulls,
                     )?)
                 }
                 Ok(aligned_array)
@@ -780,10 +789,10 @@ pub(crate) mod tests {
             SingleRowListArrayBuilder::new(Arc::clone(&array1d_2)).build_list_array(),
         );
 
-        let res = align_array_dimensions::<i32>(vec![
-            array1d_1.to_owned(),
-            array2d_2.to_owned(),
-        ])
+        let res = align_array_dimensions::<i32>(
+            vec![array1d_1.to_owned(), array2d_2.to_owned()],
+            false,
+        )
         .unwrap();
 
         let expected = as_list_array(&array2d_1).unwrap();
@@ -798,7 +807,8 @@ pub(crate) mod tests {
             Arc::new(SingleRowListArrayBuilder::new(array2d_1).build_list_array());
         let array3d_2: ArrayRef =
             Arc::new(SingleRowListArrayBuilder::new(array2d_2).build_list_array());
-        let res = align_array_dimensions::<i32>(vec![array1d_1, array3d_2]).unwrap();
+        let res =
+            align_array_dimensions::<i32>(vec![array1d_1, array3d_2], false).unwrap();
 
         let expected = as_list_array(&array3d_1).unwrap();
         let expected_dim = datafusion_common::utils::list_ndims(array3d_1.data_type());
@@ -807,6 +817,45 @@ pub(crate) mod tests {
             datafusion_common::utils::list_ndims(res[0].data_type()),
             expected_dim
         );
+    }
+
+    #[test]
+    fn test_align_array_dimensions_null_rows() {
+        // Rows: NULL, [1], and a sliced input so the null buffer has an offset
+        let array1d: ArrayRef = Arc::new(
+            ListArray::from_iter_primitive::<Int64Type, _, _>(vec![
+                Some(vec![Some(9)]),
+                None,
+                Some(vec![Some(1)]),
+            ])
+            .slice(1, 2),
+        );
+        let array3d: ArrayRef = Arc::new(
+            SingleRowListArrayBuilder::new(Arc::new(
+                SingleRowListArrayBuilder::new(Arc::clone(&array1d)).build_list_array(),
+            ))
+            .build_list_array(),
+        );
+
+        let res = align_array_dimensions::<i32>(
+            vec![Arc::clone(&array1d), Arc::clone(&array3d)],
+            true,
+        )
+        .unwrap();
+        let outer = as_list_array(&res[0]).unwrap();
+        assert_eq!(datafusion_common::utils::list_ndims(outer.data_type()), 3);
+        assert!(outer.is_null(0));
+        assert!(outer.is_valid(1));
+
+        let res = align_array_dimensions::<i32>(vec![array1d, array3d], false).unwrap();
+        let outer = as_list_array(&res[0]).unwrap();
+        assert!(outer.is_valid(0));
+        let middle = outer.value(0);
+        let middle = as_list_array(&middle).unwrap();
+        assert_eq!(middle.len(), 1);
+        assert!(middle.is_valid(0));
+        assert_eq!(middle.value(0).len(), 1);
+        assert!(middle.value(0).is_null(0));
     }
 
     #[test]
