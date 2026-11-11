@@ -1497,6 +1497,63 @@ async fn roundtrip_union2() -> Result<()> {
 }
 
 #[tokio::test]
+async fn roundtrip_union_join_duplicate_column_names() -> Result<()> {
+    use datafusion::arrow::array::{Int64Array, ListBuilder, MapBuilder, StringBuilder};
+    use datafusion::arrow::record_batch::RecordBatch;
+
+    // Non-nullable list items expose type coercion after consumption widens the
+    // typed NULL's list items to nullable. Both joined columns need that cast.
+    let mut tags = MapBuilder::new(
+        None,
+        StringBuilder::new(),
+        ListBuilder::new(StringBuilder::new()).with_field(Field::new(
+            "item",
+            DataType::Utf8,
+            false,
+        )),
+    );
+    tags.keys().append_value("env");
+    tags.values().values().append_value("test");
+    tags.values().append(true);
+    tags.append(true)?;
+    let batch = RecordBatch::try_from_iter(vec![
+        ("id", Arc::new(Int64Array::from(vec![1])) as ArrayRef),
+        ("_tags", Arc::new(tags.finish()) as ArrayRef),
+    ])?;
+    let ctx = SessionContext::new();
+    for table in ["t1", "t2", "t3"] {
+        ctx.register_batch(table, batch.clone())?;
+    }
+
+    // List-item nullability changes during the round trip, so the schemas differ.
+    let plan = generate_plan_from_sql_with_ctx(
+        "SELECT NULL AS a, NULL AS b FROM t1 \
+         UNION ALL \
+         SELECT x._tags AS a, y._tags AS b \
+         FROM t2 AS x INNER JOIN t3 AS y ON x.id = y.id",
+        false,
+        true,
+        &ctx,
+    )
+    .await?;
+
+    assert_snapshot!(
+        plan,
+        @r#"
+    Projection: Map([NULL]) AS a, Map([NULL])__temp__0 AS b
+      Union
+        Projection: Map([NULL]), Map([NULL]) AS Map([NULL])__temp__0
+          TableScan: t1 projection=[]
+        Projection: CAST(t2._tags AS Map("entries": non-null Struct("key": non-null Utf8, "value": List(Utf8)), unsorted)) AS Map([NULL]), CAST(t3._tags AS Map("entries": non-null Struct("key": non-null Utf8, "value": List(Utf8)), unsorted)) AS Map([NULL])__temp__0
+          Inner Join: t2.id = t3.id
+            TableScan: t2 projection=[id, _tags]
+            TableScan: t3 projection=[id, _tags]
+    "#
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn roundtrip_union_all() -> Result<()> {
     roundtrip("SELECT a, e FROM data UNION ALL SELECT a, e FROM data").await
 }
@@ -2678,7 +2735,7 @@ async fn roundtrip_array_transform_higher_order_function() -> Result<()> {
     assert_snapshot!(
     plan,
     @"
-    Projection: array_transform2(make_array(make_array(data3.p1)), (p0) -> array_concat(array_transform2(p0, (p2) -> p2 * Int64(2)), array_transform2(p0, (p3) -> p3 * Int64(2)))) AS array_transform2(make_array(make_array(data3.p1)),(v) -> array_concat(array_transform2(v,(v) -> v * Int64(2)),array_transform2(v,(v) -> v * Int64(2))))
+    Projection: array_transform2(make_array(make_array(data3.p1)), (p0) -> array_concat(array_transform2(p0, (p2) -> p2 * Int64(2)), array_transform2(p0, (p2) -> p2 * Int64(2)))) AS array_transform2(make_array(make_array(data3.p1)),(v) -> array_concat(array_transform2(v,(v) -> v * Int64(2)),array_transform2(v,(v) -> v * Int64(2))))
       TableScan: data3 projection=[p1]
     "
     );
@@ -2728,6 +2785,29 @@ async fn roundtrip_lambda_parameter_struct_field_names() -> Result<()> {
     )
     .await?;
 
+    Ok(())
+}
+
+// Sibling lambda parameter names may repeat, but nested captures must still
+// resolve against their own enclosing scopes during optimization and execution.
+#[tokio::test]
+async fn roundtrip_executes_sibling_and_nested_lambda_scopes() -> Result<()> {
+    let ctx = create_context_with_dialect(Some(Dialect::Databricks)).await?;
+    let df = ctx.sql(
+        "SELECT array_transform([1, 2], x -> x + 10) AS ints,
+                array_transform(['a', 'b'], s -> upper(s)) AS strings,
+                array_transform([1, 2], x -> array_transform([10, 20], y -> x + y)) AS nested",
+    ).await?;
+    let plan = df.logical_plan().clone();
+    let expected = df.collect().await?;
+    assert_eq!(
+        expected.iter().map(|batch| batch.num_rows()).sum::<usize>(),
+        1
+    );
+    let proto = to_substrait_plan(&plan, &ctx.state())?;
+    let consumed = from_substrait_plan(&ctx.state(), &proto).await?;
+    let actual = DataFrame::new(ctx.state(), consumed).collect().await?;
+    assert_eq!(actual, expected);
     Ok(())
 }
 
