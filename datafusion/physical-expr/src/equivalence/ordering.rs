@@ -230,7 +230,7 @@ impl OrderingEquivalenceClass {
     /// is constant within each window partition. See
     /// [Per-partition constants from window functions].
     ///
-    /// [Per-partition constants from window functions]: crate::equivalence::EquivalenceProperties#per-partition-constants-from-window-functions
+    /// [Per-partition constants from window functions]: crate::equivalence::EquivalenceProperties#example-window-functions-with-partition-by
     pub fn is_expr_partial_const(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         is_partial_const(self.iter().map(|ordering| ordering.first()), expr)
     }
