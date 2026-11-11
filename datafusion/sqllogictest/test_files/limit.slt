@@ -1299,3 +1299,74 @@ SET datafusion.optimizer.max_passes = 3;
 
 statement ok
 DROP TABLE t23534;
+
+# Test for #26162: ORDER BY b, a over a subquery with ORDER BY b LIMIT n
+# Ensure SortPreservingMergeExec with fetch does not push down finer sort requirements
+statement ok
+CREATE TABLE t_26162 AS
+  SELECT 4 AS a, 1 AS b UNION ALL SELECT 8, 2 UNION ALL SELECT 12, 3
+  UNION ALL SELECT 3, 1 UNION ALL SELECT 7, 2 UNION ALL SELECT 11, 3
+  UNION ALL SELECT 2, 1 UNION ALL SELECT 6, 2 UNION ALL SELECT 10, 3
+  UNION ALL SELECT 1, 1 UNION ALL SELECT 5, 2 UNION ALL SELECT 9, 3;
+
+query II
+SELECT * FROM (SELECT a, b FROM t_26162 ORDER BY b LIMIT 8) ORDER BY b, a;
+----
+1 1
+2 1
+3 1
+4 1
+5 2
+6 2
+7 2
+8 2
+
+query TT
+EXPLAIN SELECT * FROM (SELECT a, b FROM t_26162 ORDER BY b LIMIT 8) ORDER BY b, a;
+----
+logical_plan
+01)Sort: t_26162.b ASC NULLS LAST, t_26162.a ASC NULLS LAST
+02)--Sort: t_26162.b ASC NULLS LAST, fetch=8
+03)----TableScan: t_26162 projection=[a, b]
+physical_plan
+01)SortExec: expr=[b@1 ASC NULLS LAST, a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--SortPreservingMergeExec: [b@1 ASC NULLS LAST], fetch=8
+03)----SortExec: TopK(fetch=8), expr=[b@1 ASC NULLS LAST], preserve_partitioning=[true]
+04)------DataSourceExec: partitions=12, partition_sizes=[1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+
+# Requirements from a window, an ordered aggregate and a UNION also reach the merge.
+query III
+SELECT a, b, row_number() OVER (ORDER BY b, a) FROM (SELECT a, b FROM t_26162 ORDER BY b LIMIT 8) ORDER BY b, a;
+----
+1 1 1
+2 1 2
+3 1 3
+4 1 4
+5 2 5
+6 2 6
+7 2 7
+8 2 8
+
+query ?
+SELECT array_agg(a ORDER BY b, a) FROM (SELECT a, b FROM t_26162 ORDER BY b LIMIT 8);
+----
+[1, 2, 3, 4, 5, 6, 7, 8]
+
+query II
+SELECT * FROM (
+  SELECT * FROM (SELECT a, b FROM t_26162 ORDER BY b LIMIT 4)
+  UNION ALL
+  SELECT * FROM (SELECT a, b FROM t_26162 ORDER BY b LIMIT 4)
+) ORDER BY b, a;
+----
+1 1
+1 1
+2 1
+2 1
+3 1
+3 1
+4 1
+4 1
+
+statement ok
+DROP TABLE t_26162;
