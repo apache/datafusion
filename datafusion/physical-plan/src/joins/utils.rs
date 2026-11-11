@@ -5,7 +5,7 @@
 //! Join related functionality used both on logical and physical plans
 
 use std::cmp::{Ordering, min};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Debug};
 use std::future::Future;
 use std::iter::once;
@@ -36,9 +36,9 @@ pub use super::join_hash_map::ProbeOffset;
 pub use crate::joins::{JoinOn, JoinOnRef};
 
 use arrow::array::{
-    Array, ArrowPrimitiveType, BooleanBufferBuilder, NativeAdapter, PrimitiveArray,
-    RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder, UInt64Array,
-    builder::UInt64Builder, downcast_array, new_null_array,
+    Array, ArrowPrimitiveType, BooleanBufferBuilder, DictionaryArray, NativeAdapter,
+    PrimitiveArray, RecordBatch, RecordBatchOptions, UInt32Array, UInt32Builder,
+    UInt64Array, builder::UInt64Builder, downcast_array, new_null_array,
 };
 use arrow::array::{
     ArrayRef, BinaryArray, BinaryViewArray, BooleanArray, Date32Array, Date64Array,
@@ -50,8 +50,11 @@ use arrow::array::{
 use arrow::buffer::{BooleanBuffer, NullBuffer};
 use arrow::compute::{self, take};
 use arrow::datatypes::{
-    ArrowNativeType, Field, Schema, SchemaBuilder, SchemaRef, UInt32Type, UInt64Type,
+    ArrowDictionaryKeyType, ArrowNativeType, Field, Schema, SchemaBuilder, SchemaRef,
+    UInt32Type, UInt64Type,
 };
+use arrow::downcast_dictionary_array;
+use arrow::row::{RowConverter, SortField};
 use arrow_ord::ord::{DynComparator, make_comparator};
 use arrow_schema::{DataType, SortOptions, TimeUnit};
 use datafusion_common::cast::as_boolean_array;
@@ -2531,17 +2534,40 @@ fn equal_rows_arr_impl(
         Some(comparator) => comparator,
         None => {
             let sort_options = vec![SortOptions::default(); left_arrays.len()];
-            let new_comparator = if normalize_left {
-                JoinKeyComparator::new
+            let mut new_comparator = if normalize_left {
+                JoinKeyComparator::new(
+                    left_arrays,
+                    right_arrays,
+                    &sort_options,
+                    null_equality,
+                )?
             } else {
-                JoinKeyComparator::new_with_normalized_left
+                JoinKeyComparator::new_with_normalized_left(
+                    left_arrays,
+                    right_arrays,
+                    &sort_options,
+                    null_equality,
+                )?
             };
-            comparator.insert(new_comparator(
-                left_arrays,
-                right_arrays,
-                &sort_options,
-                null_equality,
-            )?)
+            if left_arrays.len() == 1
+                && let DataType::Dictionary(_, _) = left_arrays[0].data_type()
+            {
+                let left = left_arrays[0].as_ref();
+                let right = right_arrays[0].as_ref();
+                let translation_work = downcast_dictionary_array! {
+                    left => dictionary_translation_work(left, right),
+                    _ => None,
+                };
+                if translation_work
+                    .is_some_and(|work| indices_left.len() >= work.saturating_mul(2))
+                {
+                    new_comparator.first_equality = downcast_dictionary_array! {
+                        left => dictionary_equality(left, right, null_equality)?,
+                        _ => None,
+                    };
+                }
+            }
+            comparator.insert(new_comparator)
         }
     };
 
@@ -2644,6 +2670,122 @@ fn equal_rows_single_col(
     }
 }
 
+struct DictionaryEquality {
+    compare: Box<dyn Fn(usize, usize) -> bool + Send + Sync>,
+}
+
+impl DictionaryEquality {
+    #[inline]
+    fn is_equal(&self, left: usize, right: usize) -> bool {
+        (self.compare)(left, right)
+    }
+}
+
+fn dictionary_translation_work<K: ArrowDictionaryKeyType>(
+    left: &DictionaryArray<K>,
+    right: &dyn Array,
+) -> Option<usize> {
+    let right = right.as_any().downcast_ref::<DictionaryArray<K>>()?;
+    Some(left.values().len().saturating_add(right.values().len()))
+}
+
+fn dictionary_equality<K: ArrowDictionaryKeyType>(
+    left: &DictionaryArray<K>,
+    right: &dyn Array,
+    null_equality: NullEquality,
+) -> Result<Option<DictionaryEquality>> {
+    let Some(right) = right.as_any().downcast_ref::<DictionaryArray<K>>() else {
+        return Ok(None);
+    };
+    if left.values().data_type() != right.values().data_type() {
+        return Ok(None);
+    }
+    if !matches!(
+        left.values().data_type(),
+        DataType::Utf8
+            | DataType::LargeUtf8
+            | DataType::Utf8View
+            | DataType::Binary
+            | DataType::LargeBinary
+            | DataType::BinaryView
+            | DataType::FixedSizeBinary(_)
+    ) {
+        return Ok(None);
+    }
+    if left.values().len() > (u32::MAX as usize) - 2 {
+        return Ok(None);
+    }
+    let sort_field = SortField::new(left.values().data_type().clone());
+    if !RowConverter::supports_fields(std::slice::from_ref(&sort_field)) {
+        return Ok(None);
+    }
+
+    let converter = RowConverter::new(vec![sort_field])?;
+    let left_rows = converter.convert_columns(&[Arc::clone(left.values())])?;
+    let right_rows = converter.convert_columns(&[Arc::clone(right.values())])?;
+
+    const NULL_ID: u32 = u32::MAX;
+    const UNMATCHED_ID: u32 = u32::MAX - 1;
+
+    let mut ids = HashMap::<&[u8], u32>::with_capacity(left.values().len());
+    let mut next_id = 0_u32;
+    let mut left_value_ids = Vec::with_capacity(left.values().len());
+    for (index, row) in left_rows.iter().enumerate() {
+        let id = if left.values().is_null(index) {
+            NULL_ID
+        } else {
+            *ids.entry(row.data()).or_insert_with(|| {
+                let id = next_id;
+                next_id += 1;
+                id
+            })
+        };
+        left_value_ids.push(id);
+    }
+
+    let right_value_ids = right_rows
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            if right.values().is_null(index) {
+                NULL_ID
+            } else {
+                ids.get(row.data()).copied().unwrap_or(UNMATCHED_ID)
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let left = left.clone();
+    let right = right.clone();
+    let no_nulls = left.null_count() == 0
+        && right.null_count() == 0
+        && left.values().null_count() == 0
+        && right.values().null_count() == 0;
+    let compare: Box<dyn Fn(usize, usize) -> bool + Send + Sync> = if no_nulls {
+        Box::new(move |left_row, right_row| {
+            let left_key = left.keys().value(left_row).as_usize();
+            let right_key = right.keys().value(right_row).as_usize();
+            left_value_ids[left_key] == right_value_ids[right_key]
+        })
+    } else {
+        let null_equals_null = null_equality == NullEquality::NullEqualsNull;
+        Box::new(move |left_row, right_row| {
+            let left_id = if left.is_null(left_row) {
+                NULL_ID
+            } else {
+                left_value_ids[left.keys().value(left_row).as_usize()]
+            };
+            let right_id = if right.is_null(right_row) {
+                NULL_ID
+            } else {
+                right_value_ids[right.keys().value(right_row).as_usize()]
+            };
+            left_id == right_id && (left_id != NULL_ID || null_equals_null)
+        })
+    };
+    Ok(Some(DictionaryEquality { compare }))
+}
+
 /// Pre-built comparator for join key columns that eliminates per-row type
 /// dispatch. Wraps `arrow_ord::ord::DynComparator` closures built once per
 /// batch pair, used for all row comparisons within those batches.
@@ -2667,6 +2809,7 @@ fn equal_rows_single_col(
 /// `NullEqualsNull`.
 pub struct JoinKeyComparator {
     first: DynComparator,
+    first_equality: Option<DictionaryEquality>,
     rest: Vec<DynComparator>,
 }
 
@@ -2755,7 +2898,11 @@ impl JoinKeyComparator {
 
         let first = iter.next().expect("join must have at least one key")?;
         let rest = iter.collect::<Result<Vec<_>>>()?;
-        Ok(Self { first, rest })
+        Ok(Self {
+            first,
+            first_equality: None,
+            rest,
+        })
     }
 
     /// Compare row `left` (in the left arrays) with row `right` (in the right
@@ -2781,7 +2928,11 @@ impl JoinKeyComparator {
     /// `false` because the override is baked into the comparators.
     #[inline]
     pub fn is_equal(&self, left: usize, right: usize) -> bool {
-        if (self.first)(left, right) != Ordering::Equal {
+        let first_equal = self.first_equality.as_ref().map_or_else(
+            || (self.first)(left, right) == Ordering::Equal,
+            |eq| eq.is_equal(left, right),
+        );
+        if !first_equal {
             return false;
         }
         for cmp_fn in &self.rest {
@@ -2895,7 +3046,7 @@ mod tests {
     use super::*;
     use crate::metrics::MetricValue;
 
-    use arrow::datatypes::{DataType, Fields};
+    use arrow::datatypes::{DataType, Fields, Int32Type};
     use arrow::error::{ArrowError, Result as ArrowResult};
     use datafusion_common::stats::Precision::{Absent, Exact, Inexact};
     use datafusion_common::{ScalarValue, SplitPoint, arrow_datafusion_err, arrow_err};
@@ -5523,6 +5674,120 @@ mod tests {
 
         assert_eq!(left_filtered, UInt64Array::from(vec![1, 3]));
         assert_eq!(right_filtered, UInt32Array::from(vec![0, 2]));
+    }
+
+    #[test]
+    fn dictionary_candidates_use_value_translation() -> Result<()> {
+        let left = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![0, 1, 2]),
+            Arc::new(StringArray::from(vec![
+                Some("alpha"),
+                Some("beta"),
+                Some("alpha"),
+            ])),
+        )?;
+        let right = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![1, 0, 2]),
+            Arc::new(StringArray::from(vec![
+                Some("beta"),
+                Some("alpha"),
+                Some("gamma"),
+            ])),
+        )?;
+
+        // Repeat the candidates so this exercises the translated path instead of
+        // the direct-comparison fallback for small candidate sets.
+        let left_indices = UInt64Array::from(
+            [0_u64, 1, 2]
+                .into_iter()
+                .cycle()
+                .take(24)
+                .collect::<Vec<_>>(),
+        );
+        let right_indices = UInt32Array::from(
+            [0_u32, 0, 1]
+                .into_iter()
+                .cycle()
+                .take(24)
+                .collect::<Vec<_>>(),
+        );
+
+        let left: ArrayRef = Arc::new(left);
+        let right: ArrayRef = Arc::new(right);
+        let mut comparator = None;
+        let (left_filtered, right_filtered) = equal_rows_arr(
+            &left_indices,
+            &right_indices,
+            &[Arc::clone(&left)],
+            &[Arc::clone(&right)],
+            NullEquality::NullEqualsNothing,
+            &mut comparator,
+        )?;
+        assert!(comparator.unwrap().first_equality.is_some());
+        assert_eq!(left_filtered.values(), &[0, 0, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(right_filtered.values(), &[0, 0, 0, 0, 0, 0, 0, 0]);
+        Ok(())
+    }
+
+    #[test]
+    fn dictionary_value_translation_preserves_null_equality() -> Result<()> {
+        let left = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![Some(0), None, Some(1)]),
+            Arc::new(StringArray::from(vec![Some("alpha"), None])),
+        )?;
+        let right = DictionaryArray::<Int32Type>::try_new(
+            Int32Array::from(vec![Some(0), None, Some(1)]),
+            Arc::new(StringArray::from(vec![Some("alpha"), None])),
+        )?;
+        let left_indices = UInt64Array::from(
+            [0_u64, 1, 2, 1, 2]
+                .into_iter()
+                .cycle()
+                .take(20)
+                .collect::<Vec<_>>(),
+        );
+        let right_indices = UInt32Array::from(
+            [0_u32, 1, 2, 2, 1]
+                .into_iter()
+                .cycle()
+                .take(20)
+                .collect::<Vec<_>>(),
+        );
+
+        let left: ArrayRef = Arc::new(left);
+        let right: ArrayRef = Arc::new(right);
+        let mut comparator = None;
+        let (left_filtered, right_filtered) = equal_rows_arr(
+            &left_indices,
+            &right_indices,
+            &[Arc::clone(&left)],
+            &[Arc::clone(&right)],
+            NullEquality::NullEqualsNothing,
+            &mut comparator,
+        )?;
+        assert!(comparator.unwrap().first_equality.is_some());
+        assert_eq!(left_filtered.values(), &[0, 0, 0, 0]);
+        assert_eq!(right_filtered.values(), &[0, 0, 0, 0]);
+
+        let mut comparator = None;
+        let (left_filtered, right_filtered) = equal_rows_arr(
+            &left_indices,
+            &right_indices,
+            &[left],
+            &[right],
+            NullEquality::NullEqualsNull,
+            &mut comparator,
+        )?;
+        assert!(comparator.unwrap().first_equality.is_some());
+        assert_eq!(
+            left_filtered.values(),
+            &[0, 1, 2, 1, 2, 0, 1, 2, 1, 2, 0, 1, 2, 1, 2, 0, 1, 2, 1, 2]
+        );
+        assert_eq!(
+            right_filtered.values(),
+            &[0, 1, 2, 2, 1, 0, 1, 2, 2, 1, 0, 1, 2, 2, 1, 0, 1, 2, 2, 1]
+        );
+        Ok(())
     }
 
     #[test]
