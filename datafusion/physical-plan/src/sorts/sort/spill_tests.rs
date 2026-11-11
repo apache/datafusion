@@ -22,8 +22,8 @@ use datafusion_execution::memory_pool::{
     GreedyMemoryPool, MemoryConsumer, MemoryLimit, MemoryPool, MemoryReservation,
 };
 use datafusion_execution::runtime_env::{RuntimeEnv, RuntimeEnvBuilder};
-use datafusion_physical_expr::expressions::Column;
-use datafusion_physical_expr::{LexOrdering, PhysicalSortExpr};
+use datafusion_physical_expr::expressions::{CastExpr, Column};
+use datafusion_physical_expr::{LexOrdering, PhysicalExpr, PhysicalSortExpr};
 use futures::TryStreamExt;
 use std::fmt::{Display, Formatter};
 use std::sync::{Arc, Mutex};
@@ -721,10 +721,17 @@ async fn check_merge_keys_larger_than_batches() -> Result<()> {
         .await?;
     }
     // Views into 1024 dictionary values share their bytes, as a
-    // dictionary-encoded Parquet column produces. Sorting the buffered batches
-    // before a spill grows past the pool, on `main` too.
+    // dictionary-encoded Parquet column produces. A computed key counts as
+    // larger than the run, so only the shared views keep these runs at
+    // `batch_size`. Sorting the buffered batches before a spill grows past the
+    // pool, on `main` too.
     let fields = [&int_fields[..], &[("c", DataType::Utf8View)]].concat();
-    check_merge_keys(&fields, 2, 16, false, |batch| {
+    let a: Arc<dyn PhysicalExpr> = Arc::new(Column::new("a", 0));
+    let keys = vec![
+        Arc::new(CastExpr::new(a, DataType::Int64, None)) as Arc<dyn PhysicalExpr>,
+        Arc::new(Column::new("b", 1)),
+    ];
+    check_merge_exprs(&fields, keys, 16, false, |batch| {
         let values: StringArray = (0..1024)
             .map(|v| Some(format!("{batch:>4}-{v:0>59}")))
             .collect();
@@ -776,6 +783,20 @@ async fn check_merge_keys(
     within_pool: bool,
     columns: impl Fn(i32) -> Result<Vec<ArrayRef>>,
 ) -> Result<()> {
+    let keys = (0..keys)
+        .map(|i| Arc::new(Column::new(fields[i].0, i)) as Arc<dyn PhysicalExpr>)
+        .collect();
+    check_merge_exprs(fields, keys, buffered, within_pool, columns).await
+}
+
+/// Like [`check_merge_keys`], sorting by `keys`.
+async fn check_merge_exprs(
+    fields: &[(&str, DataType)],
+    keys: Vec<Arc<dyn PhysicalExpr>>,
+    buffered: usize,
+    within_pool: bool,
+    columns: impl Fn(i32) -> Result<Vec<ArrayRef>>,
+) -> Result<()> {
     let schema = Arc::new(Schema::new(
         fields
             .iter()
@@ -785,10 +806,7 @@ async fn check_merge_keys(
     let batches = (0..64)
         .map(|batch| Ok(RecordBatch::try_new(Arc::clone(&schema), columns(batch)?)?))
         .collect::<Result<Vec<_>>>()?;
-    let ordering =
-        LexOrdering::new((0..keys).map(|i| {
-            PhysicalSortExpr::new_default(Arc::new(Column::new(fields[i].0, i)))
-        }))
+    let ordering = LexOrdering::new(keys.into_iter().map(PhysicalSortExpr::new_default))
         .expect("at least one sort key");
     let capacity =
         MERGE_BYTES + buffered * get_reserved_bytes_for_record_batch(&batches[0])?;
