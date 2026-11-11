@@ -103,7 +103,7 @@
 //!     input
 //! ```
 //!
-//! [`GroupedTopKAggregateStream`] keeps a bounded priority map for a single group
+//! `GroupedTopKAggregateStream` keeps a bounded priority map for a single group
 //! key. It supports group-by-only queries and compatible `MIN` or `MAX`
 //! aggregates. An unordered group-by-only soft limit instead stays on the normal
 //! hash aggregation path.

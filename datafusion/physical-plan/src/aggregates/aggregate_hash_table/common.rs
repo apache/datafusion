@@ -10,7 +10,9 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, BooleanArray, new_null_array};
 use arrow::compute::prep_null_mask_filter;
 use arrow::datatypes::SchemaRef;
+use arrow::downcast_dictionary_array;
 use arrow::record_batch::RecordBatch;
+use datafusion_common::utils::compact_dictionary;
 use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
 use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
@@ -320,7 +322,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 }
             };
 
-        let batch = output.next_batch(batch_size);
+        let batch = output.next_batch(batch_size)?;
         if output.is_exhausted() {
             self.state = AggregateHashTableState::Done;
         } else {
@@ -641,16 +643,19 @@ impl MaterializedAggregateOutput {
         Self { batch, offset: 0 }
     }
 
-    pub(super) fn next_batch(&mut self, batch_size: usize) -> Option<RecordBatch> {
+    pub(super) fn next_batch(
+        &mut self,
+        batch_size: usize,
+    ) -> Result<Option<RecordBatch>> {
         debug_assert!(batch_size > 0);
         if self.is_exhausted() {
-            return None;
+            return Ok(None);
         }
 
         let length = batch_size.min(self.batch.num_rows() - self.offset);
         let batch = self.batch.slice(self.offset, length);
         self.offset += length;
-        Some(batch)
+        compact_dictionaries(batch).map(Some)
     }
 
     pub(super) fn is_exhausted(&self) -> bool {
@@ -660,6 +665,36 @@ impl MaterializedAggregateOutput {
     pub(super) fn memory_size(&self) -> usize {
         self.batch.get_array_memory_size()
     }
+}
+
+/// Gives each dictionary column of an emitted slice only the values its rows
+/// reference, when it has more values than rows. A slice otherwise keeps the
+/// values of every group, so work after this operator would grow with the group
+/// count. Each group is emitted once, so this costs O(rows) overall.
+fn compact_dictionaries(batch: RecordBatch) -> Result<RecordBatch> {
+    let rows = batch.num_rows();
+    let oversized = |column: &ArrayRef| {
+        column
+            .as_any_dictionary_opt()
+            .is_some_and(|dictionary| dictionary.values().len() > rows)
+    };
+    if !batch.columns().iter().any(oversized) {
+        return Ok(batch);
+    }
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| {
+            if !oversized(column) {
+                return Ok(Arc::clone(column));
+            }
+            downcast_dictionary_array! {
+                column => Ok(Arc::new(compact_dictionary(column)?) as ArrayRef),
+                dt => internal_err!("expected a dictionary array, got {dt}"),
+            }
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(RecordBatch::try_new(batch.schema(), columns)?)
 }
 
 /// Compacts row-aligned group indices using an aggregate filter.
@@ -921,8 +956,16 @@ impl AggregateHashTableState {
 mod tests {
     use std::sync::Arc;
 
-    use arrow::array::{Array, BooleanArray, Int32Array, Int64Array};
-    use arrow::datatypes::{DataType, Field, Schema};
+    use arrow::array::{
+        Array, BooleanArray, DictionaryArray, Int32Array, Int64Array, PrimitiveArray,
+        StringArray,
+    };
+    use arrow::buffer::ScalarBuffer;
+    use arrow::compute::cast;
+    use arrow::datatypes::{
+        ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Int8Type, Schema,
+        UInt8Type,
+    };
     use datafusion_functions_aggregate::sum::sum_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::Column;
@@ -965,13 +1008,86 @@ mod tests {
         )?;
         let mut output = MaterializedAggregateOutput::new(batch);
 
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![1, 2]);
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![3, 4]);
-        assert_eq!(int32_values(&output.next_batch(2).unwrap(), 0), vec![5]);
-        assert!(output.next_batch(2).is_none());
+        assert_eq!(int32_values(&output.next_batch(2)?.unwrap(), 0), vec![1, 2]);
+        assert_eq!(int32_values(&output.next_batch(2)?.unwrap(), 0), vec![3, 4]);
+        assert_eq!(int32_values(&output.next_batch(2)?.unwrap(), 0), vec![5]);
+        assert!(output.next_batch(2)?.is_none());
         assert!(output.is_exhausted());
 
         Ok(())
+    }
+
+    fn dictionary_batch<K: ArrowDictionaryKeyType>(
+        keys: PrimitiveArray<K>,
+        num_values: usize,
+    ) -> Result<RecordBatch> {
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..num_values).map(|i| format!("v{i}")),
+        ));
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values)?);
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group_col",
+            dictionary.data_type().clone(),
+            true,
+        )]));
+        Ok(RecordBatch::try_new(schema, vec![dictionary])?)
+    }
+
+    fn num_dictionary_values(batch: &RecordBatch) -> usize {
+        batch.column(0).as_any_dictionary().values().len()
+    }
+
+    fn decoded(batch: &RecordBatch) -> Result<ArrayRef> {
+        Ok(cast(batch.column(0), &DataType::Utf8)?)
+    }
+
+    #[test]
+    fn next_batch_gives_a_slice_only_the_dictionary_values_it_references() -> Result<()> {
+        // Multi-column group keys repeat dictionary keys, and a group can be NULL
+        let keys =
+            Int32Array::from(vec![Some(5), Some(5), None, Some(7), Some(1), Some(9)]);
+        let batch = dictionary_batch(keys, 20)?;
+        let mut output = MaterializedAggregateOutput::new(batch.clone());
+
+        let first = output.next_batch(4)?.unwrap();
+        assert_eq!(num_dictionary_values(&first), 2);
+        assert_eq!(&decoded(&first)?, &decoded(&batch.slice(0, 4))?);
+
+        let second = output.next_batch(4)?.unwrap();
+        assert_eq!(num_dictionary_values(&second), 2);
+        assert_eq!(&decoded(&second)?, &decoded(&batch.slice(4, 2))?);
+        Ok(())
+    }
+
+    #[test]
+    fn next_batch_keeps_a_dictionary_with_no_more_values_than_rows() -> Result<()> {
+        let batch = dictionary_batch(Int32Array::from(vec![0, 1, 2, 3]), 4)?;
+        let mut output = MaterializedAggregateOutput::new(batch.clone());
+        let slice = output.next_batch(4)?.unwrap();
+        assert!(Arc::ptr_eq(
+            slice.column(0).as_any_dictionary().values(),
+            batch.column(0).as_any_dictionary().values(),
+        ));
+        Ok(())
+    }
+
+    // Arrow doesn't require the key type to be able to index every value, so
+    // a slice can have more rows than the key type holds.
+    #[test]
+    fn next_batch_with_more_rows_than_the_key_type_holds() -> Result<()> {
+        fn check<K: ArrowDictionaryKeyType>(distinct_keys: usize) -> Result<()> {
+            let keys: ScalarBuffer<K::Native> = (0..300)
+                .map(|i| K::Native::usize_as(i % distinct_keys))
+                .collect();
+            let batch = dictionary_batch(PrimitiveArray::<K>::new(keys, None), 1000)?;
+            let mut output = MaterializedAggregateOutput::new(batch.clone());
+            let slice = output.next_batch(300)?.unwrap();
+            assert_eq!(num_dictionary_values(&slice), distinct_keys);
+            assert_eq!(&decoded(&slice)?, &decoded(&batch)?);
+            Ok(())
+        }
+        check::<UInt8Type>(250)?;
+        check::<Int8Type>(120)
     }
 
     #[test]
