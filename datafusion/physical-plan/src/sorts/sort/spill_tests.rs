@@ -1295,22 +1295,85 @@ async fn test_final_spilled_merge_leaves_headroom(#[case] siblings: bool) -> Res
     Ok(())
 }
 
+/// What partition 1 does before partition 0 runs.
+#[derive(Debug, Clone, Copy)]
+enum Sibling {
+    /// Never executed, so it still counts as reading its input.
+    Idle,
+    /// Read all its (empty) input.
+    Finished,
+    /// Executed, then its stream dropped without being polled.
+    Dropped,
+}
+
 /// Whether a `SortExec` keeps fan-in headroom follows its partitions still
 /// reading input. The pool fits every run's buffers but not the headroom on
 /// top, so with headroom the final merge seats fewer runs and rewrites rows in
 /// an extra pass. Partition 0 runs alone, so nothing else ever holds pool
-/// memory and the outcome is deterministic. In the last case its sibling has
-/// already read all its input, so there is nobody to keep headroom for.
+/// memory and the outcome is deterministic. In the last two cases its sibling
+/// has read all its input or has been dropped before it could, so there is
+/// nobody to keep headroom for.
 #[rstest::rstest]
-#[case::lone_partition(1, false, false)]
-#[case::idle_sibling(2, false, true)]
-#[case::finished_sibling(2, true, false)]
+#[case::lone_partition(1, Sibling::Idle, false)]
+#[case::idle_sibling(2, Sibling::Idle, true)]
+#[case::finished_sibling(2, Sibling::Finished, false)]
+#[case::dropped_sibling(2, Sibling::Dropped, false)]
 #[tokio::test]
 async fn test_sort_exec_keeps_headroom_only_while_siblings_read_input(
     #[case] input_partitions: usize,
-    #[case] finish_sibling_first: bool,
+    #[case] sibling: Sibling,
     #[case] rewrites_rows: bool,
 ) -> Result<()> {
+    let (sort, context, total_rows) = headroom_sort_exec(input_partitions)?;
+    match sibling {
+        Sibling::Idle => {}
+        Sibling::Finished => {
+            let output: Vec<RecordBatch> =
+                sort.execute(1, Arc::clone(&context))?.try_collect().await?;
+            assert!(output.is_empty());
+        }
+        Sibling::Dropped => drop(sort.execute(1, Arc::clone(&context))?),
+    }
+    let output: Vec<RecordBatch> = sort.execute(0, context)?.try_collect().await?;
+
+    assert_eq!(
+        output.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        total_rows
+    );
+    let spilled_rows = sort.metrics().unwrap().spilled_rows().unwrap();
+    if rewrites_rows {
+        assert!(spilled_rows > total_rows, "{spilled_rows} <= {total_rows}");
+    } else {
+        assert_eq!(spilled_rows, total_rows);
+    }
+    Ok(())
+}
+
+/// Executing a lone partition again without `reset_state` finds the count of
+/// partitions reading input at zero. The count must stay there instead of
+/// wrapping, or the third run would keep headroom for nobody.
+#[tokio::test]
+async fn test_sort_exec_rerun_without_reset_state_keeps_no_headroom() -> Result<()> {
+    let (sort, context, total_rows) = headroom_sort_exec(1)?;
+    for run in 1..=3 {
+        let output: Vec<RecordBatch> =
+            sort.execute(0, Arc::clone(&context))?.try_collect().await?;
+        assert_eq!(
+            output.iter().map(RecordBatch::num_rows).sum::<usize>(),
+            total_rows
+        );
+        let spilled_rows = sort.metrics().unwrap().spilled_rows().unwrap();
+        assert_eq!(spilled_rows, run * total_rows, "run {run}");
+    }
+    Ok(())
+}
+
+/// A `SortExec` over `input_partitions` partitions with all rows in partition
+/// 0, and a context whose pool fits every run's buffers but not the headroom
+/// on top. Returns the sort, the context, and the number of rows.
+fn headroom_sort_exec(
+    input_partitions: usize,
+) -> Result<(SortExec, Arc<TaskContext>, usize)> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("key", DataType::Int64, false),
         Field::new("payload", DataType::Utf8, false),
@@ -1348,23 +1411,5 @@ async fn test_sort_exec_keeps_headroom_only_while_siblings_read_input(
             )
             .with_runtime(runtime),
     );
-
-    if finish_sibling_first {
-        let sibling: Vec<RecordBatch> =
-            sort.execute(1, Arc::clone(&context))?.try_collect().await?;
-        assert!(sibling.is_empty());
-    }
-    let output: Vec<RecordBatch> = sort.execute(0, context)?.try_collect().await?;
-
-    assert_eq!(
-        output.iter().map(RecordBatch::num_rows).sum::<usize>(),
-        total_rows
-    );
-    let spilled_rows = sort.metrics().unwrap().spilled_rows().unwrap();
-    if rewrites_rows {
-        assert!(spilled_rows > total_rows, "{spilled_rows} <= {total_rows}");
-    } else {
-        assert_eq!(spilled_rows, total_rows);
-    }
-    Ok(())
+    Ok((sort, context, total_rows))
 }

@@ -313,6 +313,10 @@ struct ExternalSorter {
     /// Partitions of the owning `SortExec`, this one included, still reading
     /// their input. Each one will need memory from the pool this sort shares.
     partitions_reading_input: Arc<AtomicUsize>,
+    /// Whether this partition is still counted in `partitions_reading_input`.
+    /// It leaves the count when it starts its final sort, or when it is
+    /// dropped before that (its stream dropped early, or its input failed).
+    reading_input: bool,
     /// Shared by the owning SortExec's partitions. Initialized on the runtime
     /// that polls the sort, which may differ from the one calling `execute`.
     sort_concurrency: Arc<OnceLock<SortConcurrency>>,
@@ -377,6 +381,7 @@ impl ExternalSorter {
             sort_spill_reservation_bytes,
             sort_in_place_threshold_bytes,
             partitions_reading_input: Arc::new(AtomicUsize::new(1)),
+            reading_input: true,
             sort_concurrency: Arc::new(OnceLock::new()),
         })
     }
@@ -390,10 +395,20 @@ impl ExternalSorter {
 
     /// Records that this partition has read all its input, and returns whether
     /// another partition still reads its own. Executing partitions again
-    /// without `reset_state` leaves the count wrong, which changes how much
-    /// headroom a merge keeps but never its output.
-    fn finish_reading_input(&self) -> bool {
-        self.partitions_reading_input.fetch_sub(1, Ordering::AcqRel) > 1
+    /// without `reset_state` finds the count already at zero and keeps it
+    /// there, so those partitions keep headroom only for other consumers of
+    /// the pool; their output is the same.
+    fn finish_reading_input(&mut self) -> bool {
+        if !std::mem::replace(&mut self.reading_input, false) {
+            return false;
+        }
+        let before = self
+            .partitions_reading_input
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |reading| {
+                Some(reading.saturating_sub(1))
+            })
+            .unwrap_or_else(|reading| reading);
+        before > 1
     }
 
     /// Appends an unsorted [`RecordBatch`] to `in_mem_batches`
@@ -1279,6 +1294,14 @@ fn sorted_copy_keeps_buffers(data_type: &DataType) -> bool {
             sorted_copy_keeps_buffers(values.data_type())
         }
         _ => false,
+    }
+}
+
+impl Drop for ExternalSorter {
+    /// A partition dropped before its final sort no longer reads its input,
+    /// so it must not keep its siblings' merges holding headroom for it.
+    fn drop(&mut self) {
+        self.finish_reading_input();
     }
 }
 
