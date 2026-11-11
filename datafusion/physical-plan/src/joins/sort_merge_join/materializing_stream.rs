@@ -388,8 +388,9 @@ pub(super) struct MaterializingSortMergeJoinStream {
     pub early_filtering: bool,
     /// The indices of every buffered column, for materializing all of them
     pub buffered_columns: Vec<usize>,
-    /// The buffered columns that the join filter reads, in the filter's order.
-    /// Empty unless `early_filtering`.
+    /// The streamed and buffered columns that the join filter reads, each in the
+    /// filter's order. Empty unless `early_filtering`.
+    pub streamed_filter_columns: Vec<usize>,
     pub buffered_filter_columns: Vec<usize>,
     /// How many pairs the Inner join's filter has evaluated at freeze so far
     /// (see [`Self::filter_first_pays`])
@@ -660,15 +661,17 @@ impl MaterializingSortMergeJoinStream {
         let deferred_filtering = needs_deferred_filtering(filter.as_ref(), join_type);
         let early_filtering = join_type == JoinType::Inner && filter.is_some();
         let buffered_columns = (0..buffered_schema.fields().len()).collect();
-        let buffered_filter_columns = match &filter {
+        let filter_columns = |side| match &filter {
             Some(f) if early_filtering => f
                 .column_indices()
                 .iter()
-                .filter(|c| c.side == JoinSide::Right)
+                .filter(|c| c.side == side)
                 .map(|c| c.index)
                 .collect(),
             _ => vec![],
         };
+        let streamed_filter_columns = filter_columns(JoinSide::Left);
+        let buffered_filter_columns = filter_columns(JoinSide::Right);
         let filter_schema = if deferred_filtering && let Some(f) = &filter {
             let mut fields = Vec::with_capacity(f.schema().fields().len());
             for (column_index, field) in
@@ -706,6 +709,7 @@ impl MaterializingSortMergeJoinStream {
             filter_schema,
             early_filtering,
             buffered_columns,
+            streamed_filter_columns,
             buffered_filter_columns,
             freeze_filter_evaluated: 0,
             freeze_filter_passed: 0,
@@ -1809,14 +1813,12 @@ impl MaterializingSortMergeJoinStream {
     }
 
     /// Freezes the matched pairs of an Inner join with a filter. The filter runs
-    /// on just the columns it reads, and only the pairs that pass have their
-    /// output columns materialized. A selective filter over a many-to-many join
-    /// rejects most pairs, so materializing every column of every pair before
-    /// filtering would spend most of the freeze on rows that are then dropped.
-    /// When the pairs' indices form ranges on both sides, as in a 1:1 join, the
-    /// columns materialize as slices and filtering first cannot save anything.
-    /// Then, or when [`Self::filter_first_pays`] says earlier freezes kept too
-    /// many of their pairs, the batch is materialized whole and then filtered.
+    /// on just the columns it reads, and only the pairs that pass are
+    /// materialized, which saves most of the freeze when the filter rejects most
+    /// pairs of a many-to-many join. When both sides' indices span ranges, as in
+    /// a 1:1 join, the columns materialize as slices and filtering first saves
+    /// nothing. Then, or when [`Self::filter_first_pays`] says so, the batch is
+    /// materialized whole and then filtered.
     fn freeze_inner_filtered(
         &mut self,
         matched_chunks: &[MatchedChunk],
@@ -1849,6 +1851,14 @@ impl MaterializingSortMergeJoinStream {
             );
         }
 
+        let mut streamed_arrays = materialize_left_columns(
+            &self
+                .streamed_batch
+                .batch
+                .project(&self.streamed_filter_columns)?,
+            &streamed_indices,
+        )?
+        .into_iter();
         let mut buffered_arrays = self
             .materialize_right_columns(
                 matched_chunks,
@@ -1860,10 +1870,9 @@ impl MaterializingSortMergeJoinStream {
             .column_indices()
             .iter()
             .map(|column_index| match column_index.side {
-                JoinSide::Left => take_column(
-                    self.streamed_batch.batch.column(column_index.index),
-                    &streamed_indices,
-                ),
+                JoinSide::Left => streamed_arrays.next().ok_or_else(|| {
+                    internal_datafusion_err!("missing streamed filter column")
+                }),
                 JoinSide::Right => buffered_arrays.next().ok_or_else(|| {
                     internal_datafusion_err!("missing buffered filter column")
                 }),
@@ -2391,15 +2400,6 @@ fn concat_indices<'a>(
     match arrays.as_slice() {
         [single] => Ok(as_uint64_array(*single)?.clone()),
         _ => Ok(as_uint64_array(&compute::concat(&arrays)?)?.clone()),
-    }
-}
-
-/// The rows of `array` at `indices`, sliced when the indices form a range.
-fn take_column(array: &ArrayRef, indices: &UInt64Array) -> Result<ArrayRef> {
-    if let Some(range) = is_contiguous_range(indices) {
-        Ok(array.slice(range.start, range.len()))
-    } else {
-        Ok(compute::take(array.as_ref(), indices, None)?)
     }
 }
 

@@ -4249,7 +4249,7 @@ async fn spill_with_filter_multi_batch() -> Result<()> {
 
     let filter = build_c1_lt_c2_filter(&left.schema(), &right.schema());
 
-    let join_types = [Left, Right, Full];
+    let join_types = [Inner, Left, Right, Full];
 
     let runtime = RuntimeEnvBuilder::new()
         .with_memory_limit(500, 1.0)
@@ -8606,7 +8606,7 @@ fn assert_streamed_order(batches: &[RecordBatch]) {
 /// An Inner join with a filter filters the pairs of each freeze before it
 /// materializes them. It must keep the same pairs as a hash join whatever the
 /// batch size, which decides where a freeze cuts a group, and whatever the order
-/// of the filter's columns. The pseudo-random values pass `c1 < c2` for about
+/// of the filter's columns. The pseudo-random values pass `c2 > c1` for about
 /// half of the pairs, and their NULLs pass for none. Freezes that materialize
 /// whole batches are covered by the high-pass filter and by the single pairs of
 /// `batch_size` 1, whose indices form ranges. A filter that reads no columns must
@@ -8618,7 +8618,6 @@ async fn join_inner_early_filtering_matches_hash_join() -> Result<()> {
     let on = early_filtering_on(&left_schema, &right_schema)?;
     // Each filter with whether it keeps any pair of these inputs.
     let filters = [
-        (build_c1_lt_c2_filter(&left_schema, &right_schema), true),
         (interleaved_early_filter(&left_schema, &right_schema), true),
         (high_pass_early_filter(&left_schema, &right_schema), true),
         (column_free_early_filter(true), true),
@@ -8655,68 +8654,5 @@ async fn join_inner_early_filtering_matches_hash_join() -> Result<()> {
             );
         }
     }
-    Ok(())
-}
-
-/// The freeze filters pairs from spilled buffered batches once they are read back.
-#[tokio::test]
-async fn join_inner_early_filtering_with_spilled_buffered_batches() -> Result<()> {
-    let ((left_batches, left_schema), (right_batches, right_schema)) =
-        early_filtering_inputs();
-    let on = early_filtering_on(&left_schema, &right_schema)?;
-    let filter = build_c1_lt_c2_filter(&left_schema, &right_schema);
-    let memory_exec = |batches: &Vec<RecordBatch>, schema: &SchemaRef| {
-        TestMemoryExec::try_new_exec(
-            std::slice::from_ref(batches),
-            Arc::clone(schema),
-            None,
-        )
-    };
-    let runtime = RuntimeEnvBuilder::new()
-        .with_memory_limit(100, 1.0)
-        .with_disk_manager_builder(
-            DiskManagerBuilder::default().with_mode(DiskManagerMode::OsTmpDirectory),
-        )
-        .build_arc()?;
-    let session_config = SessionConfig::default().with_batch_size(8192);
-    let sort_options = vec![SortOptions::default(); on.len()];
-
-    let join = join_with_filter(
-        memory_exec(&left_batches, &left_schema)?,
-        memory_exec(&right_batches, &right_schema)?,
-        on.clone(),
-        filter.clone(),
-        Inner,
-        sort_options.clone(),
-        NullEquality::NullEqualsNothing,
-    )?;
-    let task_ctx = Arc::new(
-        TaskContext::default()
-            .with_session_config(session_config.clone())
-            .with_runtime(runtime),
-    );
-    let spilled = common::collect(join.execute(0, task_ctx)?).await?;
-    assert!(
-        join.metrics().unwrap().spill_count().unwrap() > 0,
-        "expected the buffered batches to spill"
-    );
-
-    let join_no_spill = join_with_filter(
-        memory_exec(&left_batches, &left_schema)?,
-        memory_exec(&right_batches, &right_schema)?,
-        on,
-        filter,
-        Inner,
-        sort_options,
-        NullEquality::NullEqualsNothing,
-    )?;
-    let task_ctx = Arc::new(TaskContext::default().with_session_config(session_config));
-    let no_spill = common::collect(join_no_spill.execute(0, task_ctx)?).await?;
-
-    assert_streamed_order(&spilled);
-    assert_eq!(
-        batches_to_sort_string(&spilled),
-        batches_to_sort_string(&no_spill)
-    );
     Ok(())
 }
