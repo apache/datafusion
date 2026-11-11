@@ -434,7 +434,10 @@ impl HashTableLookupExpr {
         // probe reads the hashes, so the lookup skips hashing the keys.
         let needs_hashes = maps.iter().flatten().any(|map| {
             let map: &Map = map;
-            matches!(map, Map::HashMap(_))
+            match map {
+                Map::HashMap(_) => true,
+                Map::ArrayMap(_) => false,
+            }
         });
         let probe = |hashes: Option<&[u64]>| -> Result<BooleanArray> {
             // Counting sort of the rows by partition, so each table is probed
@@ -453,10 +456,8 @@ impl HashTableLookupExpr {
                 rows[*slot] = row as u32;
                 *slot += 1;
             }
-            let sorted_hashes: Vec<u64> = match hashes {
-                Some(hashes) => rows.iter().map(|&row| hashes[row as usize]).collect(),
-                None => Vec::new(),
-            };
+            let sorted_hashes: Option<Vec<u64>> = hashes
+                .map(|hashes| rows.iter().map(|&row| hashes[row as usize]).collect());
 
             let mut matched = BooleanBufferBuilder::new(num_rows);
             matched.append_n(num_rows, false);
@@ -469,9 +470,15 @@ impl HashTableLookupExpr {
                 }
                 let map: &Map = map;
                 let hits = match map {
-                    // `needs_hashes` is true whenever a hash map exists, so
-                    // `sorted_hashes` holds every row here.
-                    Map::HashMap(map) => map.contain_hashes(&sorted_hashes[run.clone()]),
+                    Map::HashMap(map) => {
+                        // `needs_hashes` is true whenever a hash map exists.
+                        let Some(sorted_hashes) = &sorted_hashes else {
+                            return internal_err!(
+                                "routed lookup probes a hash map without probe hashes"
+                            );
+                        };
+                        map.contain_hashes(&sorted_hashes[run.clone()])
+                    }
                     // An array map is keyed by value, not hash, so it probes
                     // the run's own key values.
                     Map::ArrayMap(map) => {
