@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, BooleanArray, new_null_array};
+use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, new_null_array};
 use arrow::compute::prep_null_mask_filter;
 use arrow::datatypes::SchemaRef;
 use arrow::downcast_dictionary_array;
