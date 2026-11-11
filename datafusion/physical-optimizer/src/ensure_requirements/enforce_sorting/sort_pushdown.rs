@@ -1329,19 +1329,19 @@ fn handle_projection_pushdown(
     // such as a leading per-partition constant. Keep the sort above the
     // projection in that case. Alternatives that cannot be remapped are not
     // pushed down, so compare against the first one that can.
-    let pushed = parent_required.iter().find(|required| {
+    let pushed = parent_required.iter().find_map(|required| {
         remap_lex_requirement_through_projection(projection_exec.expr(), required)
-            .is_some()
+            .map(|remapped| (required, remapped))
     });
-    if let Some(pushed) = pushed
+    if let Some((required, remapped)) = pushed
         && projection_exec
             .input()
             .equivalence_properties()
-            .ordering_satisfy_requirement(requirements.first().clone())?
+            .ordering_satisfy_requirement(remapped)?
         && !projection_exec
             .properties()
             .equivalence_properties()
-            .ordering_satisfy_requirement(pushed.clone())?
+            .ordering_satisfy_requirement(required.clone())?
     {
         return Ok(None);
     }
