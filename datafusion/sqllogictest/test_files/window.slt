@@ -7893,6 +7893,28 @@ FROM (
 3 2 2 1
 
 statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT k, c, total, DENSE_RANK() OVER (ORDER BY total DESC, k) AS r
+FROM (
+  SELECT k, c, SUM(c) OVER (PARTITION BY k) AS total
+  FROM (SELECT SUM(v) AS k, COUNT(*) AS c FROM per_partition_constant)
+);
+----
+physical_plan
+01)ProjectionExec: expr=[k@0 as k, c@1 as c, total@2 as total, dense_rank() ORDER BY [total DESC NULLS FIRST, k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as r]
+02)--BoundedWindowAggExec: wdw=[dense_rank() ORDER BY [total DESC NULLS FIRST, k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "dense_rank() ORDER BY [total DESC NULLS FIRST, k ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": UInt64 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+03)----ProjectionExec: expr=[k@0 as k, c@1 as c, sum(c) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING@2 as total]
+04)------WindowAggExec: wdw=[sum(c) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING: Ok(Field { name: "sum(c) PARTITION BY [k] ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING", data_type: Int64, nullable: true }), frame: WindowFrame { units: Rows, start_bound: Preceding(UInt64(NULL)), end_bound: Following(UInt64(NULL)), is_causal: false }]
+05)--------ProjectionExec: expr=[sum(per_partition_constant.v)@0 as k, count(Int64(1))@1 as c]
+06)----------AggregateExec: mode=Single, gby=[], aggr=[sum(per_partition_constant.v), count(Int64(1))]
+07)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+statement ok
 set datafusion.execution.target_partitions = 1;
 
 # When a projection drops the leading constant, it can no longer prove the
