@@ -22,7 +22,7 @@ use crate::aggregates::group_values::{
 use crate::aggregates::order::{GroupClustering, GroupClusteringMode};
 use crate::aggregates::{
     AggregateExec, AggregateMode, PhysicalGroupBy, aggregate_expressions,
-    evaluate_group_by, group_keys_with_large_offsets, group_schema_with_large_offsets,
+    evaluate_group_by, group_schema_with_large_offsets,
 };
 
 use super::AggregateTableMetrics;
@@ -234,10 +234,7 @@ impl<AggrMode> ClusteredAggregateTable<AggrMode> {
     ) -> Result<EvaluatedAggregateBatch> {
         let grouping_set_args =
             self.group_by_metrics.time_group_key_preparation(|| {
-                evaluate_group_by(&self.buffer.group_by, batch)?
-                    .into_iter()
-                    .map(group_keys_with_large_offsets)
-                    .collect::<Result<Vec<_>>>()
+                evaluate_group_by(&self.buffer.group_by, batch)
             })?;
 
         let accumulator_args = self.group_by_metrics.time_aggregate_arguments(|| {

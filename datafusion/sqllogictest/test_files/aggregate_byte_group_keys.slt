@@ -119,6 +119,30 @@ FROM (SELECT b, count(*) AS c, sum(v) AS total FROM byte_keys GROUP BY b)
 ----
 5000 b0 b999 20000 200010000
 
+# A key column of the Null type uses the row format for the group values.
+query TT
+EXPLAIN SELECT s, n, count(*) FROM (SELECT s, NULL AS n FROM byte_keys) GROUP BY s, n
+----
+<slt:ignore>AggregateExec: mode=Single, gby=[s@0 as s, n@1 as n], aggr=[count(Int64(1))]
+<slt:ignore>
+
+query TT
+SELECT arrow_typeof(s), arrow_typeof(n)
+FROM (SELECT s, n, count(*) FROM (SELECT s, NULL AS n FROM byte_keys) GROUP BY s, n)
+LIMIT 1
+----
+Utf8 Null
+
+query IIIII
+SELECT count(*), count(s), count(n), sum(length(s)), sum(c)
+FROM (
+  SELECT s, n, count(*) AS c
+  FROM (SELECT s, NULL AS n FROM byte_keys)
+  GROUP BY s, n
+)
+----
+4501 4500 0 21501 20000
+
 # The stream writes groups to disk because of the memory limit.
 statement ok
 SET datafusion.runtime.memory_limit = '300K'

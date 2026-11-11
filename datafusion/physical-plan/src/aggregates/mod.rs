@@ -2899,18 +2899,6 @@ fn group_schema_with_large_offsets(
     Arc::new(Schema::new_with_metadata(fields, schema.metadata().clone()))
 }
 
-fn group_keys_with_large_offsets(arrays: Vec<ArrayRef>) -> Result<Vec<ArrayRef>> {
-    arrays
-        .into_iter()
-        .map(
-            |array| match group_key_type_with_large_offsets(array.data_type()) {
-                Some(data_type) => Ok(arrow::compute::cast(&array, &data_type)?),
-                None => Ok(array),
-            },
-        )
-        .collect()
-}
-
 fn group_key_types_differ(batch: &RecordBatch, schema: &Schema) -> bool {
     batch
         .columns()

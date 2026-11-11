@@ -33,8 +33,8 @@ use crate::aggregates::order::GroupClusteringFull;
 use crate::aggregates::{
     AggregateInputMode, AggregateMode, AggregateOutputMode, PhysicalGroupBy,
     aggregate_metric_label, create_schema, evaluate_group_by, evaluate_optional,
-    group_id_array, group_keys_with_large_offsets, group_schema_with_large_offsets,
-    max_duplicate_ordinal, output_batch_rows, restore_group_key_types,
+    group_id_array, group_schema_with_large_offsets, max_duplicate_ordinal,
+    output_batch_rows, restore_group_key_types,
 };
 use crate::metrics::{BaselineMetrics, MetricBuilder, MetricCategory, RecordOutput};
 use crate::sorts::streaming_merge::{SortedSpillFile, StreamingMergeBuilder};
@@ -881,11 +881,6 @@ impl GroupedHashAggregateStream {
                 evaluate_group_by(&self.group_by, batch)
             }
         })?;
-
-        let group_by_values = group_by_values
-            .into_iter()
-            .map(group_keys_with_large_offsets)
-            .collect::<Result<Vec<_>>>()?;
 
         // Evaluate aggregate arguments and filters together. Per-aggregate
         // argument timers remain limited to their argument expressions because
