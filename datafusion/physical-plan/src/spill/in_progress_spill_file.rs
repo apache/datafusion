@@ -21,6 +21,15 @@ enum InProgressWriter {
     Async(AsyncIPCStreamWriter),
 }
 
+/// What one append wrote, for the reader to size its reservation.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WrittenBatchStats {
+    /// The memory size of the largest batch written.
+    pub(crate) memory_size: usize,
+    /// The most rows in a batch written.
+    pub(crate) rows: usize,
+}
+
 /// Represents an in-progress spill file used for writing `RecordBatch`es to disk, created by `SpillManager`.
 /// Caller is able to use this struct to incrementally append in-memory batches to
 /// the file, and then finalize the file by calling the `finish` method.
@@ -57,6 +66,15 @@ impl InProgressSpillFile {
     /// - Returns an error if appending would exceed the disk usage limit configured
     ///   by `max_temp_directory_size` in `DiskManager`
     pub fn append_batch(&mut self, batch: &RecordBatch) -> Result<usize> {
+        Ok(self.append_batch_with_stats(batch)?.memory_size)
+    }
+
+    /// Like [`Self::append_batch`], but returns both the memory size and the row count
+    /// of the batch written.
+    pub(crate) fn append_batch_with_stats(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<WrittenBatchStats> {
         if self.in_progress_file.is_none() {
             return Err(exec_datafusion_err!(
                 "Append operation failed: No active in-progress file. The file may have already been finalized."
@@ -96,11 +114,23 @@ impl InProgressSpillFile {
                 "Cannot use synchronous append after asynchronous spill writing has started"
             ));
         }
-        gc_batch.get_sliced_size()
+        Ok(WrittenBatchStats {
+            memory_size: gc_batch.get_sliced_size()?,
+            rows: gc_batch.num_rows(),
+        })
     }
 
     /// Appends a `RecordBatch` using the asynchronous spill writer.
     pub async fn append_batch_async(&mut self, batch: &RecordBatch) -> Result<usize> {
+        Ok(self.append_batch_async_with_stats(batch).await?.memory_size)
+    }
+
+    /// Like [`Self::append_batch_async`], but returns both the memory size and the row
+    /// count of the batch written.
+    pub(crate) async fn append_batch_async_with_stats(
+        &mut self,
+        batch: &RecordBatch,
+    ) -> Result<WrittenBatchStats> {
         if self.in_progress_file.is_none() {
             return Err(exec_datafusion_err!(
                 "Append operation failed: No active in-progress file. The file may have already been finalized."
@@ -148,7 +178,10 @@ impl InProgressSpillFile {
                 ));
             }
         }
-        gc_batch.get_sliced_size()
+        Ok(WrittenBatchStats {
+            memory_size: gc_batch.get_sliced_size()?,
+            rows: gc_batch.num_rows(),
+        })
     }
 
     pub fn flush(&mut self) -> Result<()> {
