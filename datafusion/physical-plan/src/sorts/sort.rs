@@ -1123,19 +1123,30 @@ impl ExternalSorter {
     }
 
     /// Returns whether the row-format keys of `run` may be larger than `run`. A
-    /// computed key counts as larger, since sizing it would evaluate it again.
+    /// computed key is sized from its type if that has a fixed width, and
+    /// otherwise counts as larger, since sizing it would evaluate it again.
     fn encoded_keys_may_exceed(&self, run: &RecordBatch) -> Result<bool> {
         // An 8-byte offset per row, then a null byte and the bytes of each key
         let mut encoded = run.num_rows() * size_of::<usize>();
         for sort_expr in self.expr.iter() {
-            let Some(column) = sort_expr.expr.downcast_ref::<Column>() else {
-                return Ok(true);
-            };
-            encoded += run.num_rows()
-                + run
+            let key_bytes = match sort_expr.expr.downcast_ref::<Column>() {
+                Some(column) => run
                     .column(column.index())
                     .to_data()
-                    .get_slice_memory_size()?;
+                    .get_slice_memory_size()?,
+                None => {
+                    let width = sort_expr
+                        .expr
+                        .data_type(self.schema.as_ref())
+                        .ok()
+                        .and_then(|data_type| data_type.primitive_width());
+                    let Some(width) = width else {
+                        return Ok(true);
+                    };
+                    run.num_rows() * width
+                }
+            };
+            encoded += run.num_rows() + key_bytes;
         }
         Ok(encoded > run.get_sliced_size()?)
     }
