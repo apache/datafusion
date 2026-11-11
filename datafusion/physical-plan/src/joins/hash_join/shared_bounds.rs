@@ -718,9 +718,8 @@ impl SharedBuildAccumulator {
 
         for (partition_id, partition) in partitions.into_iter().enumerate() {
             match partition {
-                // A canceled partition's stream emits no row: it is dropped
-                // before its report is delivered, and a stream probes only
-                // after delivery. So no key of its build side can matter.
+                // A canceled partition's stream never probes, so no key of its
+                // build side can matter.
                 PartitionStatus::CanceledUnknown
                 | PartitionStatus::Reported(PartitionData {
                     pushdown: PushdownStrategy::Empty,
