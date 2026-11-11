@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Spilled sorts over wide rows.
+#
+# Each query below spills rows much wider than `batch_size` rows of narrow
+# data, under a memory limit that fits each row but not a whole batch of them.
+
+statement ok
+SET datafusion.execution.target_partitions = 1
+
+# --- Sort: 512 rows of 64 KiB, built in small batches so each input batch fits ---
+
+statement ok
+SET datafusion.execution.sort_spill_reservation_bytes = 1048576
+
+statement ok
+SET datafusion.execution.batch_size = 4
+
+statement ok
+CREATE TABLE wide AS
+SELECT value AS id, concat(CAST(value AS VARCHAR), repeat('x', 65536)) AS payload
+FROM generate_series(0, 511)
+
+statement ok
+CREATE TABLE wide_ree AS
+SELECT id, arrow_cast(payload, 'RunEndEncoded("run_ends": non-null Int32, "values": Utf8)') AS payload
+FROM wide
+
+statement ok
+SET datafusion.execution.batch_size = 512
+
+statement ok
+SET datafusion.runtime.memory_limit = '16M'
+
+# The last column counts rows out of order, so 0 means sorted.
+query error Resources exhausted
+SELECT count(*), sum(length(payload)), sum(CASE WHEN prev <= id THEN 1 ELSE 0 END)
+FROM (SELECT id, payload, lag(id) OVER (ORDER BY id DESC) AS prev FROM wide)
+
+# Run-end encoded payloads cannot be split by rows yet. Their spill batches are
+# written whole, and the merge re-spills runs with halved batches instead.
+statement ok
+SET datafusion.runtime.memory_limit = '32M'
+
+query III
+SELECT count(*), sum(length(CAST(payload AS VARCHAR))), sum(CASE WHEN prev <= id THEN 1 ELSE 0 END)
+FROM (SELECT id, payload, lag(id) OVER (ORDER BY id DESC) AS prev FROM wide_ree)
+----
+512 33555858 0
+
+statement ok
+DROP TABLE wide
+
+statement ok
+DROP TABLE wide_ree
+
+statement ok
+RESET datafusion.execution.sort_spill_reservation_bytes
+
+statement ok
+RESET datafusion.execution.batch_size
+
+# Restore settings to slt runner defaults
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema
