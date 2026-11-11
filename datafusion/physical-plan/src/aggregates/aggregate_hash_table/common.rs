@@ -29,8 +29,8 @@ use crate::aggregates::group_values::{
 use crate::aggregates::order::GroupClustering;
 use crate::aggregates::{
     AggregateExec, PhysicalGroupBy, aggregate_expressions, evaluate_group_by,
-    group_id_array, group_keys_with_large_offsets, group_schema_with_large_offsets,
-    max_duplicate_ordinal, output_batch_rows, restore_group_key_types,
+    group_id_array, group_schema_with_large_offsets, max_duplicate_ordinal,
+    output_batch_rows, restore_group_key_types,
 };
 
 use super::AggregateTableMetrics;
@@ -201,13 +201,9 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
     ) -> Result<EvaluatedAggregateBatch> {
         let state = self.state.building_mut();
         // Outer vec: one per grouping set; inner vec: group-by expressions.
-        let grouping_set_args =
-            self.group_by_metrics.time_group_key_preparation(|| {
-                evaluate_group_by(&state.group_by, batch)?
-                    .into_iter()
-                    .map(group_keys_with_large_offsets)
-                    .collect::<Result<Vec<_>>>()
-            })?;
+        let grouping_set_args = self
+            .group_by_metrics
+            .time_group_key_preparation(|| evaluate_group_by(&state.group_by, batch))?;
 
         // The evaluated args for each accumulator.
         let accumulator_args = self.group_by_metrics.time_aggregate_arguments(|| {
