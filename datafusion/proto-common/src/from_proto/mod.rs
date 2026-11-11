@@ -1190,6 +1190,7 @@ impl TryFrom<&protobuf::ParquetOptions> for ParquetOptions {
             pushdown_filters: value.pushdown_filters,
             reorder_filters: value.reorder_filters,
             force_filter_selections: value.force_filter_selections,
+            enable_exact_reverse_scan: value.enable_exact_reverse_scan,
             data_pagesize_limit: to_usize(
                 value.data_pagesize_limit,
                 "data_pagesize_limit",

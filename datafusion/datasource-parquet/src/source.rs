@@ -57,6 +57,7 @@ use datafusion_physical_plan::metrics::Count;
 use datafusion_physical_plan::metrics::ExecutionPlanMetricsSet;
 use log::warn;
 
+use datafusion_execution::memory_pool::MemoryPool;
 #[cfg(feature = "parquet_encryption")]
 use datafusion_execution::parquet_encryption::EncryptionFactory;
 use datafusion_physical_expr_common::sort_expr::{LexOrdering, PhysicalSortExpr};
@@ -302,10 +303,21 @@ pub struct ParquetSource {
     pub(crate) projection: ProjectionExprs,
     #[cfg(feature = "parquet_encryption")]
     pub(crate) encryption_factory: Option<Arc<dyn EncryptionFactory>>,
-    /// If true, the opener flips row-group iteration order. Within-
-    /// row-group order is on-disk order, so the scan is `Inexact` and
-    /// a `SortExec` is kept in the plan.
+    /// If true, the opener flips row-group iteration order. Unless
+    /// `reverse_rows` is also set, within-row-group order is on-disk
+    /// order, so the scan is `Inexact` and a `SortExec` is kept in the
+    /// plan.
     reverse_row_groups: bool,
+    /// If true, the opener also reverses the rows of each row group, so a
+    /// scan with `reverse_row_groups` reads every file exactly back to
+    /// front. Set only by an `Exact` reverse sort pushdown (see
+    /// [`ParquetOptions::enable_exact_reverse_scan`]).
+    ///
+    /// [`ParquetOptions::enable_exact_reverse_scan`]: datafusion_common::config::ParquetOptions::enable_exact_reverse_scan
+    reverse_rows: bool,
+    /// Pool charged for the row group a `reverse_rows` scan buffers. Set by
+    /// [`FileSource::with_memory_pool`] when the scan is opened.
+    memory_pool: Option<Arc<dyn MemoryPool>>,
     /// Sort order driving `PreparedAccessPlan::reorder_by_statistics`
     /// in the opener.
     sort_order_for_reorder: Option<LexOrdering>,
@@ -335,6 +347,8 @@ impl ParquetSource {
             #[cfg(feature = "parquet_encryption")]
             encryption_factory: None,
             reverse_row_groups: false,
+            reverse_rows: false,
+            memory_pool: None,
             sort_order_for_reorder: None,
         }
     }
@@ -520,6 +534,10 @@ impl ParquetSource {
     pub(crate) fn reverse_row_groups(&self) -> bool {
         self.reverse_row_groups
     }
+    #[cfg(test)]
+    pub(crate) fn reverse_rows(&self) -> bool {
+        self.reverse_rows
+    }
 }
 
 /// Allows easy conversion from ParquetSource to Arc&lt;dyn FileSource&gt;
@@ -638,6 +656,8 @@ impl FileSource for ParquetSource {
                 .global
                 .row_group_range_assignment,
             reverse_row_groups: self.reverse_row_groups,
+            reverse_rows: self.reverse_rows,
+            memory_pool: self.memory_pool.clone(),
             sort_order_for_reorder: self.sort_order_for_reorder.clone(),
             virtual_state,
         }))
@@ -684,6 +704,20 @@ impl FileSource for ParquetSource {
         let mut conf = self.clone();
         conf.batch_size = Some(batch_size);
         Arc::new(conf)
+    }
+
+    /// Only a `reverse_rows` scan buffers between batches: it holds one row
+    /// group, which is charged to the pool.
+    fn with_memory_pool(
+        &self,
+        memory_pool: &Arc<dyn MemoryPool>,
+    ) -> Option<Arc<dyn FileSource>> {
+        if !self.reverse_rows {
+            return None;
+        }
+        let mut conf = self.clone();
+        conf.memory_pool = Some(Arc::clone(memory_pool));
+        Some(Arc::new(conf))
     }
 
     fn try_pushdown_projection(
@@ -745,6 +779,9 @@ impl FileSource for ParquetSource {
                 }
                 if self.reverse_row_groups {
                     write!(f, ", reverse_row_groups=true")?;
+                }
+                if self.reverse_rows {
+                    write!(f, ", reverse_rows=true")?;
                 }
 
                 // Plan-time marker for dynamic RG-level pruning: if the
@@ -1029,6 +1066,29 @@ impl FileSource for ParquetSource {
             })
         });
 
+        // Exact reverse: when the reversed declared ordering satisfies the
+        // request and `enable_exact_reverse_scan` is set, read every file
+        // exactly back to front, row groups and the rows inside them, so
+        // the scan itself produces the requested order. Row groups keep
+        // their on-disk order before the flip: reordering them by
+        // statistics is not order-preserving when two row groups share a
+        // `min`. `FileScanConfig` reverses the files of each group and
+        // re-validates the ordering, falling back to `Inexact` if it does
+        // not hold.
+        if reversed_satisfies
+            && self.table_parquet_options.global.enable_exact_reverse_scan
+        {
+            // Toggled, not set: pushing a reverse onto a scan that already
+            // reads back to front turns it forward again.
+            let mut new_source = self.clone();
+            new_source.sort_order_for_reorder = None;
+            new_source.reverse_row_groups = !self.reverse_rows;
+            new_source.reverse_rows = !self.reverse_rows;
+            return Ok(SortOrderPushdownResult::Exact {
+                inner: Arc::new(new_source) as Arc<dyn FileSource>,
+            });
+        }
+
         if !column_in_file_schema && !reversed_satisfies {
             return Ok(SortOrderPushdownResult::Unsupported);
         }
@@ -1101,6 +1161,9 @@ impl FileSource for ParquetSource {
             #[cfg(feature = "parquet_encryption")]
                 encryption_factory: _,
             reverse_row_groups,
+            reverse_rows,
+            // Runtime only: set when the scan is opened.
+            memory_pool: _,
             sort_order_for_reorder,
         } = self;
 
@@ -1133,6 +1196,7 @@ impl FileSource for ParquetSource {
             parquet_options: Some(table_parquet_options.try_into()?),
             sort_order_for_reorder,
             reverse_row_groups: *reverse_row_groups,
+            reverse_rows: *reverse_rows,
             metadata_size_hint,
         };
         Ok(Some(protobuf::PhysicalPlanNode {
@@ -1174,6 +1238,7 @@ impl ParquetSource {
             parquet_options,
             sort_order_for_reorder,
             reverse_row_groups,
+            reverse_rows,
             metadata_size_hint,
         } = scan;
 
@@ -1254,6 +1319,7 @@ impl ParquetSource {
             .with_table_parquet_options(options);
         source.sort_order_for_reorder = sort_order_for_reorder;
         source.reverse_row_groups = *reverse_row_groups;
+        source.reverse_rows = *reverse_rows;
         source.metadata_size_hint = metadata_size_hint;
 
         if let Some(predicate) = predicate {
@@ -1694,6 +1760,106 @@ mod tests {
             matches!(result, SortOrderPushdownResult::Unsupported),
             "column not in file schema must yield Unsupported",
         );
+    }
+
+    /// Source declares `[a ASC NULLS LAST]`, request is its exact reverse
+    /// `[a DESC NULLS FIRST]`, used by the exact reverse scan tests below.
+    fn exact_reverse_case() -> (Arc<Schema>, EquivalenceProperties, Vec<PhysicalSortExpr>)
+    {
+        use arrow::compute::SortOptions;
+        use pushdown_sort_helpers::*;
+
+        let schema = schema_with_a_int();
+        let column = Arc::new(Column::new("a", 0)) as Arc<dyn PhysicalExpr>;
+        let mut eq = EquivalenceProperties::new(Arc::clone(&schema));
+        eq.add_ordering(vec![PhysicalSortExpr::new(
+            Arc::clone(&column),
+            SortOptions::new(false, false),
+        )]);
+        let order = vec![PhysicalSortExpr::new(column, SortOptions::new(true, true))];
+        (schema, eq, order)
+    }
+
+    /// With `enable_exact_reverse_scan`, a request that is the reverse of
+    /// the declared ordering is `Exact`: the source reverses both the row
+    /// groups and the rows inside them, and does not reorder row groups by
+    /// statistics, which is not order-preserving for row groups that share
+    /// a `min`.
+    #[test]
+    fn try_pushdown_sort_returns_exact_for_reverse_when_enabled() {
+        let (schema, eq, order) = exact_reverse_case();
+        let mut options = TableParquetOptions::default();
+        options.global.enable_exact_reverse_scan = true;
+        let source = ParquetSource::new(schema).with_table_parquet_options(options);
+
+        let result = source.try_pushdown_sort(&order, &eq).unwrap();
+
+        let SortOrderPushdownResult::Exact { inner } = result else {
+            panic!("expected Exact, got a different variant");
+        };
+        let inner_parquet = inner
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(inner_parquet.reverse_row_groups());
+        assert!(inner_parquet.reverse_rows());
+        assert!(inner_parquet.sort_order_for_reorder.is_none());
+    }
+
+    /// Pushing a reverse onto a scan that already reads back to front turns
+    /// it forward again, rather than leaving it reversed under an ordering
+    /// that has been flipped back.
+    #[test]
+    fn try_pushdown_sort_exact_reverse_twice_reads_forward() {
+        let (schema, eq, order) = exact_reverse_case();
+        let mut options = TableParquetOptions::default();
+        options.global.enable_exact_reverse_scan = true;
+        let source = ParquetSource::new(schema).with_table_parquet_options(options);
+        let SortOrderPushdownResult::Exact { inner: reversed } =
+            source.try_pushdown_sort(&order, &eq).unwrap()
+        else {
+            panic!("expected Exact for the first pushdown");
+        };
+        let reversed = reversed
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(reversed.reverse_rows());
+
+        // The reversed scan declares the reversed ordering; ask for the
+        // original one.
+        let mut reversed_eq = eq.clone();
+        reversed_eq.clear_orderings();
+        reversed_eq.add_ordering(order.clone());
+        let forward_order: Vec<_> = order.iter().map(|expr| expr.reverse()).collect();
+        let SortOrderPushdownResult::Exact { inner } = reversed
+            .try_pushdown_sort(&forward_order, &reversed_eq)
+            .unwrap()
+        else {
+            panic!("expected Exact for the second pushdown");
+        };
+        let forward = inner
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(!forward.reverse_row_groups());
+        assert!(!forward.reverse_rows());
+    }
+
+    /// Without the option, the same request stays `Inexact` and rows keep
+    /// their on-disk order within each row group.
+    #[test]
+    fn try_pushdown_sort_returns_inexact_for_reverse_by_default() {
+        let (schema, eq, order) = exact_reverse_case();
+        let source = ParquetSource::new(schema);
+
+        let result = source.try_pushdown_sort(&order, &eq).unwrap();
+
+        let SortOrderPushdownResult::Inexact { inner } = result else {
+            panic!("expected Inexact, got a different variant");
+        };
+        let inner_parquet = inner
+            .downcast_ref::<ParquetSource>()
+            .expect("inner is ParquetSource");
+        assert!(inner_parquet.reverse_row_groups());
+        assert!(!inner_parquet.reverse_rows());
     }
 
     /// Regression: when the source declares `[a DESC]` and the request is
