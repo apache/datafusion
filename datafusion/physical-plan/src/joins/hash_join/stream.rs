@@ -252,23 +252,36 @@ enum BuildReportState {
     NotReported,
     Scheduled,
     Delivered,
-    /// Dropped before delivery. See [`BuildReportHandle`].
+    /// The stream was dropped before it started to probe. See
+    /// [`BuildReportHandle`].
     Canceled,
     Finalized,
 }
 
-/// Owns the stream-side lifecycle for one partition's build-data report.
+/// Tracks whether this stream has reported its build side to the shared
+/// dynamic filter. If the stream is dropped first, the handle cancels the
+/// partition.
 ///
-/// In `Partitioned` mode, dropping the stream before its report is delivered
-/// cancels its partition. A canceled partition is one partition of this join,
-/// not the query. For example, a parent join partition whose build side is
-/// empty drops this join's stream for the same partition unpolled
-/// (<https://github.com/apache/datafusion/issues/21625>).
+/// # Canceled partitions
 ///
-/// The sibling partitions keep running, and so does the probe input they
-/// share. A `RepartitionExec` in that input discards the rows it routes to the
-/// canceled partition. The canceled stream has emitted no row and never will,
-/// because a stream starts to probe only after its report is delivered.
+/// In `Partitioned` mode, each partition of the join runs as its own stream.
+/// A parent operator can drop one of these streams early, because it needs no
+/// output from that partition. For example, a parent join whose own build
+/// side is empty for a partition drops this join's stream for that partition
+/// without polling it (<https://github.com/apache/datafusion/issues/21625>).
+///
+/// A partition is canceled when its stream is dropped before the stream
+/// starts to read its probe side. Cancellation affects that one partition:
+///
+/// - The other partitions of this join keep running. The query is not
+///   canceled.
+/// - The probe input keeps running, because the other partitions read from
+///   it. A `RepartitionExec` in that input discards the rows that it routes
+///   to the canceled partition.
+/// - The canceled stream has produced no output and never will.
+///
+/// The other partitions wait for the build side of every partition before
+/// they probe. The handle tells them not to wait for the canceled partition.
 struct BuildReportHandle {
     partition: usize,
     mode: PartitionMode,

@@ -370,14 +370,17 @@ struct AccumulatorState {
 enum PartitionStatus {
     Pending,
     Reported(PartitionData),
-    /// The partition's stream was dropped before it delivered its build report.
+    /// A parent operator dropped this partition's stream before the stream
+    /// reported its build side. The build keys of this partition are unknown.
     ///
-    /// The partition counts as complete, so sibling partitions do not wait for
-    /// its report. Its build keys are unknown, but no probe row routed to it
-    /// reaches a consumer: the stream probes only after delivery, and delivery
-    /// waits for this filter to be final. So the filter may keep or reject those
-    /// rows. See `BuildReportHandle` for what a canceled partition means for the
-    /// join.
+    /// The filter does not wait for this partition. Without this status, the
+    /// other partitions wait forever for a report that never comes.
+    ///
+    /// The filter may keep or reject the probe rows routed to this partition.
+    /// Both choices are correct, because the dropped stream never joins those
+    /// rows and never produces output.
+    ///
+    /// `BuildReportHandle` explains when a parent operator drops a stream.
     CanceledUnknown,
 }
 
@@ -512,8 +515,11 @@ impl SharedBuildAccumulator {
         self.wait_for_completion().await
     }
 
-    /// Marks a `Pending` partition as [`PartitionStatus::CanceledUnknown`], so
-    /// the filter can finalize without a report that never comes.
+    /// Tells the filter that `partition_id` never reports its build side, so the
+    /// other partitions stop waiting for it. See
+    /// [`PartitionStatus::CanceledUnknown`].
+    ///
+    /// The call does nothing if the partition has already reported.
     pub(crate) fn report_canceled_partition(&self, partition_id: usize) {
         let finalize_input = {
             let mut guard = self.inner.lock();
