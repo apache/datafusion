@@ -39,6 +39,8 @@ use datafusion_physical_expr_common::physical_expr::format_physical_expr_list;
 /// * Is grouped by `[a, b]`, as rows with the same `(a, b)` are contiguous,
 ///   even though the table is not sorted by `a`, `b` nor `(a, b)`.
 /// * Is grouped by `[b]`, since each value of `b` is in one run.
+/// * Is grouped by `[c]`, and by any tuple that contains `c` such as `[a, c]`,
+///   because each value of `c` is distinct, so every row is its own run.
 /// * Is NOT grouped by `[a]`, because `a = 2` appears in two separate runs.
 ///
 /// Expression order within an entry is not significant: `[a, b]` and `[b, a]`
