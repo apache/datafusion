@@ -59,7 +59,9 @@ use crate::{
     metrics::{ExecutionPlanMetricsSet, MetricsSet},
 };
 
-use arrow::array::{Array, ArrayData, ArrayRef, BooleanBufferBuilder};
+use arrow::array::{
+    Array, ArrayData, ArrayRef, BinaryViewArray, BooleanBufferBuilder, StringViewArray,
+};
 use arrow::compute::concat_batches;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
@@ -3057,6 +3059,11 @@ fn concat_build_batches(
     metrics.build_mem_used.add(copy_size);
 
     let batch = concat_batches(schema, batches.iter())?;
+    // #26606: a concatenated build batch can carry one data buffer per input batch for
+    // Utf8View/BinaryView columns; a downstream join then retains and re-counts every one,
+    // blowing up build memory. Compact over-fragmented view columns so the retained size is
+    // both smaller and accurately accounted below.
+    let batch = gc_oversized_view_columns(batch);
     batches.clear();
     batches.push(batch.clone());
 
@@ -3073,6 +3080,62 @@ fn concat_build_batches(
     }
 
     Ok(batch)
+}
+
+/// Minimum average rows-per-data-buffer below which a view column is compacted by
+/// [`gc_oversized_view_columns`]. Concatenating the build side can leave a `Utf8View`/
+/// `BinaryView` column with roughly one data buffer per input batch; a downstream join then
+/// retains and re-counts every one (DataFusion #26606: build `output_bytes` reaching hundreds
+/// of GB and the memory metric over-counting). Compacting once the average drops below this
+/// many rows per buffer keeps the fully-inlined / already-compact cases on the zero-copy path.
+const VIEW_GC_MIN_ROWS_PER_BUFFER: usize = 4;
+
+/// Returns `batch` with any over-fragmented `Utf8View`/`BinaryView` columns rewritten into a
+/// single compact buffer via [`GenericByteViewArray::gc`]. The schema and row count are
+/// unchanged; only such columns' backing buffers differ (dropping the shared input buffers, so
+/// the retained size shrinks and is counted accurately). A batch with no over-fragmented view
+/// column is returned untouched (no allocation).
+fn gc_oversized_view_columns(batch: RecordBatch) -> RecordBatch {
+    let num_rows = batch.num_rows();
+    let mut compacted = false;
+    let columns = batch
+        .columns()
+        .iter()
+        .map(|column| match gc_view_column(column, num_rows) {
+            Some(gc) => {
+                compacted = true;
+                gc
+            }
+            None => Arc::clone(column),
+        })
+        .collect::<Vec<_>>();
+    if !compacted {
+        return batch;
+    }
+    // Same schema and row count; only some view columns' buffers changed.
+    RecordBatch::try_new(batch.schema(), columns)
+        .expect("gc_oversized_view_columns preserves schema and row count")
+}
+
+/// Compacts `column` if it is an over-fragmented view array (more than one data buffer and
+/// fewer than [`VIEW_GC_MIN_ROWS_PER_BUFFER`] rows per buffer on average); otherwise `None`.
+fn gc_view_column(column: &ArrayRef, num_rows: usize) -> Option<ArrayRef> {
+    let oversized = |buffers: usize| {
+        buffers > 1 && buffers.saturating_mul(VIEW_GC_MIN_ROWS_PER_BUFFER) > num_rows
+    };
+    match column.data_type() {
+        DataType::Utf8View => {
+            let array = column.as_any().downcast_ref::<StringViewArray>()?;
+            oversized(array.data_buffers().len())
+                .then(|| Arc::new(array.gc()) as ArrayRef)
+        }
+        DataType::BinaryView => {
+            let array = column.as_any().downcast_ref::<BinaryViewArray>()?;
+            oversized(array.data_buffers().len())
+                .then(|| Arc::new(array.gc()) as ArrayRef)
+        }
+        _ => None,
+    }
 }
 
 /// Collects all batches from the left (build) side stream and creates a hash map for joining.
@@ -3484,6 +3547,53 @@ fn build_in_memory(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gc_oversized_view_columns_compacts_fragmented_views() {
+        use arrow::array::{Array, StringViewArray};
+        use arrow::compute::concat;
+        use arrow::datatypes::{DataType, Field, Schema};
+        use std::sync::Arc;
+
+        // Each 1-row view array over a >12-byte string owns its own data buffer; concatenating
+        // 32 of them yields roughly one buffer per row - the #26606 build-side shape.
+        let values: Vec<String> = (0..32)
+            .map(|i| format!("a-long-enough-value-{i}"))
+            .collect();
+        let singles: Vec<ArrayRef> = values
+            .iter()
+            .map(|s| Arc::new(StringViewArray::from(vec![s.as_str()])) as ArrayRef)
+            .collect();
+        let refs: Vec<&dyn Array> = singles.iter().map(|a| a.as_ref()).collect();
+        let fragmented = concat(&refs).unwrap();
+        assert!(
+            fragmented
+                .as_any()
+                .downcast_ref::<StringViewArray>()
+                .unwrap()
+                .data_buffers()
+                .len()
+                > 1,
+            "precondition: concatenated view array has many data buffers"
+        );
+
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "c",
+            DataType::Utf8View,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![fragmented]).unwrap();
+
+        let gced = gc_oversized_view_columns(batch);
+        let col = gced
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        assert_eq!(col.data_buffers().len(), 1, "compacted to a single buffer");
+        assert_eq!(col.value(0), "a-long-enough-value-0");
+        assert_eq!(col.value(31), "a-long-enough-value-31");
+    }
     use crate::joins::hash_join::not_in::{NotInOutput, NotInScope};
 
     fn assert_phj_used(metrics: &MetricsSet, use_phj: bool) {
