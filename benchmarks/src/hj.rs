@@ -531,6 +531,33 @@ const HASH_QUERIES: &[HashJoinQuery] = &[
         probe_size: "15M",
         isolate_partitioned_join: true,
     },
+    // Q28: Q23 with independently encoded dictionaries on both sides. The join
+    // must match logical string values rather than dictionary keys, while the
+    // repeated build keys make value translation cheaper than per-pair comparison.
+    HashJoinQuery {
+        sql: r###"SELECT count(*)
+        FROM (
+          SELECT arrow_cast(
+                   'high_fanout_dictionary_join_key_' || CAST((s_suppkey % 415) + 1 AS VARCHAR),
+                   'Dictionary(Int32, Utf8)'
+                 ) as k
+          FROM supplier
+          WHERE s_suppkey <= 32340
+        ) s
+        JOIN (
+          SELECT arrow_cast(
+                   'high_fanout_dictionary_join_key_1',
+                   'Dictionary(Int32, Utf8)'
+                 ) as k
+          FROM lineitem
+          WHERE l_orderkey % 265 = 0
+        ) l ON s.k = l.k"###,
+        density: 1.0,
+        prob_hit: 1.0,
+        build_size: "32K_(dictionary_fanout~78)",
+        probe_size: "2.3M_dictionary_keys_count",
+        isolate_partitioned_join: true,
+    },
 ];
 
 impl RunOpt {
