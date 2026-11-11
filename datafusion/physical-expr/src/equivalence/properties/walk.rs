@@ -67,12 +67,7 @@ impl<'a> SortKeyWalk<'a> {
         {
             walk.head_idxs = normal
                 .iter()
-                .map(|ordering| {
-                    ordering
-                        .iter()
-                        .position(|sort_expr| !walk.is_fixed(&sort_expr.expr))
-                        .unwrap_or(ordering.len())
-                })
+                .map(|ordering| walk.skip_fixed(ordering, 0))
                 .collect();
         }
         walk
@@ -173,11 +168,7 @@ impl<'a> SortKeyWalk<'a> {
             let mut found = vec![];
             for idx in first..count {
                 let ordering = self.ordering(idx);
-                let mut head_idx = self.head_idxs[idx];
-                while head_idx < ordering.len() && self.is_fixed(&ordering[head_idx].expr)
-                {
-                    head_idx += 1;
-                }
+                let head_idx = self.skip_fixed(ordering, self.head_idxs[idx]);
                 if let Some(head) = ordering.get(head_idx) {
                     let rest = ordering[head_idx + 1..]
                         .iter()
@@ -282,6 +273,16 @@ impl<'a> SortKeyWalk<'a> {
             node.data.sort_properties = SortProperties::Ordered(head.options);
         }
         Ok(Transformed::yes(node))
+    }
+
+    /// Returns the index of the head of `ordering` (see [`SortKeyWalk`]),
+    /// searching from `start`, or `ordering.len()` if it has no head there.
+    fn skip_fixed(&self, ordering: &LexOrdering, start: usize) -> usize {
+        let mut idx = start;
+        while idx < ordering.len() && self.is_fixed(&ordering[idx].expr) {
+            idx += 1;
+        }
+        idx
     }
 
     /// Whether `expr` is fixed (see [`SortKeyWalk`]). Callers pass `expr` in
