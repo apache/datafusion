@@ -344,6 +344,11 @@ pub fn options_compatible(
 /// * `ORDER BY A DESC NULLS FIRST` matches
 /// * `ORDER BY A ASC  NULLS FIRST` matches (`ASC` and `NULL` options ignored)
 /// * `ORDER BY B DESC NULLS FIRST` does not match  (different expr)
+///
+/// See [Required orderings] for where requirements come from and how they
+/// are checked against the orderings an input provides.
+///
+/// [Required orderings]: https://docs.rs/datafusion-physical-expr/latest/datafusion_physical_expr/equivalence/struct.EquivalenceProperties.html#required-orderings
 #[derive(Clone, Debug)]
 pub struct PhysicalSortRequirement {
     /// Physical expression representing the column to sort
@@ -697,6 +702,11 @@ impl From<LexOrdering> for Vec<PhysicalSortExpr> {
 /// expressions after construction like a `LexOrdering` does, because it provides
 /// no mutation methods. If such methods become necessary, we will need to
 /// enforce uniqueness like the latter object.
+///
+/// See [Required orderings] for where requirements come from and how they
+/// are checked against the orderings an input provides.
+///
+/// [Required orderings]: https://docs.rs/datafusion-physical-expr/latest/datafusion_physical_expr/equivalence/struct.EquivalenceProperties.html#required-orderings
 #[derive(Debug, Clone, PartialEq)]
 pub struct LexRequirement {
     reqs: Vec<PhysicalSortRequirement>,
@@ -807,6 +817,11 @@ impl From<LexRequirement> for LexOrdering {
 /// 1. It is non-degenerate, meaning it contains at least one ordering. The
 ///    absence of an input ordering requirement is represented by a `None` value
 ///    in `ExecutionPlan` APIs, which return an `Option<OrderingRequirements>`.
+///
+/// See [Required orderings] for where requirements come from and how they
+/// are checked against the orderings an input provides.
+///
+/// [Required orderings]: https://docs.rs/datafusion-physical-expr/latest/datafusion_physical_expr/equivalence/struct.EquivalenceProperties.html#required-orderings
 #[derive(Debug, Clone, PartialEq)]
 pub enum OrderingRequirements {
     /// The operator is not able to work without one of these requirements.
