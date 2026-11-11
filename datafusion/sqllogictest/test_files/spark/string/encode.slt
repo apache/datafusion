@@ -234,7 +234,7 @@ SELECT encode('naïve'::string, 'LATIN1'::string);
 6e61ef7665
 
 query ?
-SELECT encode('naïve'::string, 'ISO88591'::string);
+SELECT encode('naïve'::string, 'ISO_8859_1'::string);
 ----
 6e61ef7665
 
@@ -270,6 +270,13 @@ SELECT encode(a, b) FROM VALUES ('A', 'utf-32be'), ('A', 'latin1') AS t(a, b);
 ----
 00000041
 41
+
+# Names that Java rejects are still errors, as they are in Spark with the same option
+statement error Unsupported charset for encode: 'ISO88591'
+SELECT encode('A'::string, 'ISO88591'::string);
+
+statement error Unsupported charset for encode: 'UTF16BE'
+SELECT encode('A'::string, 'UTF16BE'::string);
 
 # A charset that is not supported at all is still an error, without the Spark 4 error class
 statement error Unsupported charset for encode: 'EBCDIC'

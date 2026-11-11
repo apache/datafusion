@@ -85,6 +85,33 @@ const SPARK_4_CHARSETS: &str =
 const LEGACY_CHARSETS: &str =
     "US-ASCII, ISO-8859-1, UTF-8, UTF-16, UTF-16BE, UTF-16LE, UTF-32, UTF-32BE, UTF-32LE";
 
+/// The names Java accepts for the charsets `encode` supports, lowercased. Spark
+/// looks charsets up with `Charset.forName`, which is case-insensitive and also
+/// accepts a charset's aliases, so with `legacy_java_charsets` they work here too.
+/// This is the output of `Charset.aliases()` on Java 21 plus each canonical name
+/// that Spark 4 does not accept by default (`utf-32be`, `utf-32le`). A name Java
+/// would resolve to another charset, such as `UnicodeLittle` or `Shift_JIS`, is not
+/// recognized, nor is one that Java rejects, such as `iso88591` or `utf16be`.
+fn java_charset_alias(lower: &str) -> Option<Charset> {
+    Some(match lower {
+        "819" | "8859_1" | "cp819" | "csisolatin1" | "ibm-819" | "ibm819"
+        | "iso-ir-100" | "iso8859-1" | "iso8859_1" | "iso_8859-1" | "iso_8859-1:1987"
+        | "iso_8859_1" | "l1" | "latin1" => Charset::Iso88591,
+        "646" | "ansi_x3.4-1968" | "ansi_x3.4-1986" | "ascii" | "ascii7" | "cp367"
+        | "csascii" | "ibm367" | "iso-ir-6" | "iso646-us" | "iso_646.irv:1983"
+        | "iso_646.irv:1991" | "us" => Charset::UsAscii,
+        "unicode-1-1-utf-8" | "utf8" => Charset::Utf8,
+        "unicode" | "unicodebig" | "utf16" | "utf_16" => Charset::Utf16,
+        "iso-10646-ucs-2" | "unicodebigunmarked" | "utf_16be" | "x-utf-16be" => {
+            Charset::Utf16Be
+        }
+        "unicodelittleunmarked" | "utf_16le" | "x-utf-16le" => Charset::Utf16Le,
+        "utf32" | "utf_32" | "utf-32be" | "utf_32be" | "x-utf-32be" => Charset::Utf32Be,
+        "utf-32le" | "utf_32le" | "x-utf-32le" => Charset::Utf32Le,
+        _ => return None,
+    })
+}
+
 /// Resolves a charset name, case-insensitively. With `legacy_java_charsets` it also
 /// accepts the aliases Spark 3.x took from Java, such as `UTF8` and `LATIN1`.
 fn resolve_charset(name: &str, legacy_java_charsets: bool) -> Result<Charset> {
@@ -97,17 +124,7 @@ fn resolve_charset(name: &str, legacy_java_charsets: bool) -> Result<Charset> {
         "utf-16le" => Some(Charset::Utf16Le),
         "utf-16" => Some(Charset::Utf16),
         "utf-32" => Some(Charset::Utf32Be),
-        _ if legacy_java_charsets => match lower.as_str() {
-            "utf8" => Some(Charset::Utf8),
-            "ascii" => Some(Charset::UsAscii),
-            "iso88591" | "latin1" => Some(Charset::Iso88591),
-            "utf16be" => Some(Charset::Utf16Be),
-            "utf16le" => Some(Charset::Utf16Le),
-            "utf16" => Some(Charset::Utf16),
-            "utf32" | "utf-32be" | "utf32be" => Some(Charset::Utf32Be),
-            "utf-32le" | "utf32le" => Some(Charset::Utf32Le),
-            _ => None,
-        },
+        _ if legacy_java_charsets => java_charset_alias(&lower),
         _ => None,
     };
     match charset {
@@ -635,17 +652,23 @@ mod tests {
     #[test]
     fn test_legacy_java_charsets() {
         for (name, expected) in [
+            // Java aliases, in any case
             ("UTF8", vec![0x41]),
+            ("unicode-1-1-utf-8", vec![0x41]),
             ("ascii", vec![0x41]),
+            ("ASCII7", vec![0x41]),
+            ("iso-ir-6", vec![0x41]),
             ("LATIN1", vec![0x41]),
-            ("ISO88591", vec![0x41]),
+            ("ISO_8859_1", vec![0x41]),
+            ("cp819", vec![0x41]),
             ("utf-32be", vec![0x00, 0x00, 0x00, 0x41]),
-            ("UTF32BE", vec![0x00, 0x00, 0x00, 0x41]),
+            ("UTF_32BE", vec![0x00, 0x00, 0x00, 0x41]),
             ("utf-32le", vec![0x41, 0x00, 0x00, 0x00]),
-            ("UTF32LE", vec![0x41, 0x00, 0x00, 0x00]),
+            ("UTF_32LE", vec![0x41, 0x00, 0x00, 0x00]),
             ("UTF16", vec![0xFE, 0xFF, 0x00, 0x41]),
-            ("UTF16BE", vec![0x00, 0x41]),
-            ("UTF16LE", vec![0x41, 0x00]),
+            ("unicode", vec![0xFE, 0xFF, 0x00, 0x41]),
+            ("UTF_16BE", vec![0x00, 0x41]),
+            ("UTF_16LE", vec![0x41, 0x00]),
             ("UTF32", vec![0x00, 0x00, 0x00, 0x41]),
             // the seven Spark 4 names still work
             ("utf-8", vec![0x41]),
@@ -658,15 +681,19 @@ mod tests {
             );
         }
 
-        // a name outside the supported set still fails, without the Spark 4 code
-        let err = encode_one("A", "EBCDIC", true, false)
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("Unsupported charset for encode: 'EBCDIC'"),
-            "{err}"
-        );
-        assert!(!err.contains("INVALID_PARAMETER_VALUE"), "{err}");
+        // Names Java itself rejects, and names of charsets not implemented here,
+        // fail with a message that does not claim Spark 4's list
+        for name in [
+            "EBCDIC", "ISO88591", "UTF16BE", "UTF16LE", "UTF32BE", "UTF32LE", "US_ASCII",
+            "UTF_8",
+        ] {
+            let err = encode_one("A", name, true, false).unwrap_err().to_string();
+            assert!(
+                err.contains(&format!("Unsupported charset for encode: '{name}'")),
+                "{name}: {err}"
+            );
+            assert!(!err.contains("INVALID_PARAMETER_VALUE"), "{name}: {err}");
+        }
     }
 
     #[test]
