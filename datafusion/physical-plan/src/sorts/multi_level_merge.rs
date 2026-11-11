@@ -905,11 +905,14 @@ fn split_batch_in_half(batch: RecordBatch) -> Vec<RecordBatch> {
     vec![batch.slice(0, mid), batch.slice(mid, num_rows - mid)]
 }
 
+/// The fewest spill files a merge reads at once.
+pub(super) const MIN_SPILL_MERGE_FAN_IN: usize = 2;
+
 fn effective_spill_merge_fan_in(configured_fan_in: usize) -> usize {
     if configured_fan_in == 0 {
         usize::MAX
     } else {
-        configured_fan_in.max(2)
+        configured_fan_in.max(MIN_SPILL_MERGE_FAN_IN)
     }
 }
 

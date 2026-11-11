@@ -35,15 +35,14 @@ statement ok
 SET datafusion.runtime.memory_limit = '16M'
 
 # The last column counts rows out of order, so 0 means sorted.
-query error Resources exhausted
+query III
 SELECT count(*), sum(length(payload)), sum(CASE WHEN prev <= id THEN 1 ELSE 0 END)
 FROM (SELECT id, payload, lag(id) OVER (ORDER BY id DESC) AS prev FROM wide)
+----
+512 33555858 0
 
-# Run-end encoded payloads cannot be split by rows yet. Their spill batches are
-# written whole, and the merge re-spills runs with halved batches instead.
-statement ok
-SET datafusion.runtime.memory_limit = '32M'
-
+# A slice of a run-end encoded array keeps all its values. The sort copies each
+# spill piece, so these payloads split within the same limit.
 query III
 SELECT count(*), sum(length(CAST(payload AS VARCHAR))), sum(CASE WHEN prev <= id THEN 1 ELSE 0 END)
 FROM (SELECT id, payload, lag(id) OVER (ORDER BY id DESC) AS prev FROM wide_ree)

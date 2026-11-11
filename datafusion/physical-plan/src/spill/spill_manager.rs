@@ -73,7 +73,6 @@ impl SpillManager {
     /// Row order is kept, but one appended batch can come back as several batches, so a
     /// reader that expects one batch per append (such as [`crate::spill::spill_pool`])
     /// must not use a bounded manager.
-    #[cfg_attr(not(test), expect(dead_code, reason = "no operator sets a bound yet"))]
     pub(crate) fn with_max_batch_bytes(mut self, max_batch_bytes: Option<usize>) -> Self {
         self.max_batch_bytes = max_batch_bytes;
         self

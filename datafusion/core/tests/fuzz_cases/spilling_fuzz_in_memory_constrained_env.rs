@@ -978,7 +978,7 @@ async fn consume_stream_and_simulate_other_running_memory_consumers(
 /// Assert baseline metrics are as expected or around that
 ///
 /// `output_batch_size` should be `None` when you expect to not get batched at the same size
-/// `Some(session conf batch size)` for the rest
+/// `Some(session conf batch size)` for the rest, where no batch has more rows than that
 fn assert_baseline_metrics_for_non_empty_output(
     metrics: &MetricsSet,
     expected_output_rows: usize,
@@ -1009,9 +1009,11 @@ fn assert_baseline_metrics_for_non_empty_output(
     let output_batches = get_output_batches_from_metrics(metrics);
 
     if let Some(output_batch_size) = output_batch_size {
-        assert_eq!(
-            output_batches,
-            expected_output_rows.div_ceil(output_batch_size)
+        // A spilled sort merge also ends a batch once it reaches the spill batch byte
+        // bound, so wide rows can come in more, smaller batches.
+        assert!(
+            output_batches >= expected_output_rows.div_ceil(output_batch_size),
+            "{output_batches} output batches for {expected_output_rows} rows"
         );
     } else {
         assert_ne!(output_batches, 0,);
