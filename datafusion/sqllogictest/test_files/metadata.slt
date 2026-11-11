@@ -346,6 +346,20 @@ from table_with_metadata;
 ----
 3 the id field
 
+# Regression test: nth_value aggregate should preserve metadata
+query IT
+select nth_value(id, 2 order by id asc nulls last), arrow_metadata(nth_value(id, 2 order by id asc nulls last), 'metadata_key')
+from table_with_metadata;
+----
+3 the id field
+
+# Regression test: any_value should preserve metadata
+query T
+select arrow_metadata(any_value(id), 'metadata_key')
+from table_with_metadata;
+----
+the id field
+
 # Regression test: max and min should preserve metadata
 query ITIT
 select
