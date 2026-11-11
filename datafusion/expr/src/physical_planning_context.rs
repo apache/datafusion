@@ -110,45 +110,51 @@ impl SubqueryIndex {
     }
 }
 
-/// Shared results container for uncorrelated scalar subqueries.
+/// Where a [`ScalarSubqueryResults`] container keeps its slots.
 ///
-/// Each entry corresponds to one scalar subquery, identified by its index.
-/// Each slot is populated at execution time by `ScalarSubqueryExec`, read by
-/// `ScalarSubqueryExpr` instances that share this container, and cleared when
-/// the plan is reset for re-execution.
-#[derive(Clone, Default)]
-pub struct ScalarSubqueryResults {
-    slots: Arc<Vec<Mutex<Option<ScalarValue>>>>,
-}
-
-impl ScalarSubqueryResults {
-    /// Creates a new shared results container with `n` empty slots.
-    pub fn new(n: usize) -> Self {
-        Self {
-            slots: Arc::new((0..n).map(|_| Mutex::new(None)).collect()),
-        }
-    }
-
+/// The slots are normally held in memory next to the plan. `datafusion-ffi`
+/// implements this to forward each operation back over an FFI boundary, so a
+/// plan decoded on the far side reads the values populated on the near side.
+pub trait ScalarSubqueryResultsBackend:
+    fmt::Debug + Send + Sync + std::panic::RefUnwindSafe
+{
     /// Returns the scalar value stored at `index`, if it has been populated.
-    pub fn get(&self, index: SubqueryIndex) -> Option<ScalarValue> {
-        let slot = self.slots.get(index.as_usize())?;
-        slot.lock().unwrap().clone()
-    }
+    fn get(&self, index: usize) -> Option<ScalarValue>;
 
     /// Stores `value` in the slot at `index`.
-    pub fn set(&self, index: SubqueryIndex, value: ScalarValue) -> Result<()> {
-        let Some(slot) = self.slots.get(index.as_usize()) else {
+    fn set(&self, index: usize, value: ScalarValue) -> Result<()>;
+
+    /// Clears all populated results so the container can be reused.
+    fn clear(&self);
+}
+
+/// The in-memory backend behind [`ScalarSubqueryResults::new`].
+struct LocalResults(Vec<Mutex<Option<ScalarValue>>>);
+
+impl fmt::Debug for LocalResults {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|slot| slot.lock().unwrap().clone()))
+            .finish()
+    }
+}
+
+impl ScalarSubqueryResultsBackend for LocalResults {
+    fn get(&self, index: usize) -> Option<ScalarValue> {
+        self.0.get(index)?.lock().unwrap().clone()
+    }
+
+    fn set(&self, index: usize, value: ScalarValue) -> Result<()> {
+        let Some(slot) = self.0.get(index) else {
             return internal_err!(
-                "ScalarSubqueryResults: result index {} is out of bounds",
-                index.as_usize()
+                "ScalarSubqueryResults: result index {index} is out of bounds"
             );
         };
 
         let mut slot = slot.lock().unwrap();
         if slot.is_some() {
             return internal_err!(
-                "ScalarSubqueryResults: result for index {} was already populated",
-                index.as_usize()
+                "ScalarSubqueryResults: result for index {index} was already populated"
             );
         }
         *slot = Some(value);
@@ -156,24 +162,67 @@ impl ScalarSubqueryResults {
         Ok(())
     }
 
-    /// Clears all populated results so the container can be reused.
-    pub fn clear(&self) {
-        for slot in self.slots.iter() {
+    fn clear(&self) {
+        for slot in &self.0 {
             *slot.lock().unwrap() = None;
         }
+    }
+}
+
+/// Shared results container for uncorrelated scalar subqueries.
+///
+/// Each entry corresponds to one scalar subquery, identified by its index.
+/// Each slot is populated at execution time by `ScalarSubqueryExec`, read by
+/// `ScalarSubqueryExpr` instances that share this container, and cleared when
+/// the plan is reset for re-execution.
+#[derive(Clone)]
+pub struct ScalarSubqueryResults {
+    backend: Arc<dyn ScalarSubqueryResultsBackend>,
+}
+
+impl Default for ScalarSubqueryResults {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl ScalarSubqueryResults {
+    /// Creates a new shared results container with `n` empty slots.
+    pub fn new(n: usize) -> Self {
+        Self::from_backend(Arc::new(LocalResults(
+            (0..n).map(|_| Mutex::new(None)).collect(),
+        )))
+    }
+
+    /// Creates a results container whose slots live in `backend`.
+    pub fn from_backend(backend: Arc<dyn ScalarSubqueryResultsBackend>) -> Self {
+        Self { backend }
+    }
+
+    /// Returns the scalar value stored at `index`, if it has been populated.
+    pub fn get(&self, index: SubqueryIndex) -> Option<ScalarValue> {
+        self.backend.get(index.as_usize())
+    }
+
+    /// Stores `value` in the slot at `index`.
+    pub fn set(&self, index: SubqueryIndex, value: ScalarValue) -> Result<()> {
+        self.backend.set(index.as_usize(), value)
+    }
+
+    /// Clears all populated results so the container can be reused.
+    pub fn clear(&self) {
+        self.backend.clear()
     }
 
     /// Returns true if `this` and `other` point to the same shared container.
     pub fn ptr_eq(this: &Self, other: &Self) -> bool {
-        Arc::ptr_eq(&this.slots, &other.slots)
+        Arc::ptr_eq(&this.backend, &other.backend)
     }
 }
 
 impl fmt::Debug for ScalarSubqueryResults {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_list()
-            .entries(self.slots.iter().map(|slot| slot.lock().unwrap().clone()))
-            .finish()
+        self.backend.fmt(f)
     }
 }
 
@@ -187,13 +236,22 @@ impl Eq for ScalarSubqueryResults {}
 
 impl Hash for ScalarSubqueryResults {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        Arc::as_ptr(&self.slots).hash(state);
+        Arc::as_ptr(&self.backend).cast::<()>().hash(state);
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ScalarSubqueryResults` must stay `UnwindSafe`/`RefUnwindSafe` so a
+    /// `ScalarSubqueryResultsBackend` implementation (e.g. `datafusion-ffi`'s
+    /// FFI proxy) doesn't regress these auto traits for callers.
+    #[test]
+    fn scalar_subquery_results_is_unwind_safe() {
+        fn assert_bounds<T: std::panic::UnwindSafe + std::panic::RefUnwindSafe>() {}
+        assert_bounds::<ScalarSubqueryResults>();
+    }
 
     #[test]
     fn scalar_subquery_results_set_and_get() -> Result<()> {

@@ -281,6 +281,26 @@ pub extern "C" fn datafusion_ffi_test_create_exec_with_byte_metrics() -> FFI_Exe
     FFI_ExecutionPlan::new(plan, None)
 }
 
+/// Builds an [`FFI_PhysicalExtensionCodec`] inside this library, so the
+/// cross-library test gets a codec that is genuinely foreign to the caller.
+///
+/// Exported as its own symbol rather than a [`ForeignLibraryModule`] field,
+/// for the same reason as [`datafusion_ffi_test_create_exec_with_byte_metrics`]:
+/// that struct is `#[repr(C)]` with no gated constructor, so adding a field
+/// changes its ABI.
+#[unsafe(no_mangle)]
+pub extern "C" fn datafusion_ffi_test_create_scalar_subquery_expr_exec_codec(
+    task_ctx_provider: crate::execution::FFI_TaskContextProvider,
+) -> FFI_PhysicalExtensionCodec {
+    use crate::proto::physical_extension_codec::fixtures::ScalarSubqueryExprExecCodec;
+
+    FFI_PhysicalExtensionCodec::new(
+        Arc::new(ScalarSubqueryExprExecCodec),
+        None,
+        task_ctx_provider,
+    )
+}
+
 /// Thin wrapper that attaches a fixed [`Statistics`] snapshot to any inner
 /// [`TableProvider`] without changing its scan behaviour.
 #[derive(Debug)]
