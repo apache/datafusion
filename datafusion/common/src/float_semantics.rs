@@ -268,10 +268,10 @@ mod tests {
 
     #[test]
     fn normalize_floats_rewrites_negative_zero() {
-        let floats = &[Some(5.0), Some(0.0), None, Some(2.0)];
+        let floats = &[Some(5.0), Some(-0.0), None, Some(2.0)];
         let (array, _) = float64_array_fixture(floats);
         let result = normalize(Arc::clone(&array));
-        assert_float64_values(&result, floats);
+        assert_float64_values(&result, &[Some(5.0), Some(0.0), None, Some(2.0)]);
 
         let array: ArrayRef = Arc::new(Float32Array::from(vec![-0.0_f32]));
         let result = normalize(Arc::clone(&array));
@@ -300,16 +300,17 @@ mod tests {
     #[test]
     fn normalize_floats_rewrites_in_place_when_unique() {
         let floats = &[Some(5.0), Some(-0.0), None, Some(2.0)];
+        let expected = &[Some(5.0), Some(0.0), None, Some(2.0)];
         let (array, values_ptr) = float64_array_fixture(floats);
         let (result, result_values_ptr) = normalize_fixture(array);
         assert_eq!(result_values_ptr, values_ptr);
-        assert_float64_values(&result, floats);
+        assert_float64_values(&result, expected);
 
         // A shared buffer is copied and the original is left as it is
         let (array, values_ptr) = float64_array_fixture(floats);
         let (result, result_values_ptr) = normalize_fixture(Arc::clone(&array));
         assert_ne!(result_values_ptr, values_ptr);
-        assert_float64_values(&result, floats);
+        assert_float64_values(&result, expected);
         assert_float64_values(&array, floats);
     }
 
@@ -320,7 +321,7 @@ mod tests {
         let slice = parent.slice(1, 3);
         let (result, result_values_ptr) = normalize_fixture(slice);
         assert_ne!(result_values_ptr, values_ptr.wrapping_add(1));
-        assert_float64_values(&result, &floats[1..4]);
+        assert_float64_values(&result, &[Some(0.0), None, Some(2.0)]);
         assert_float64_values(&parent, floats);
     }
 
