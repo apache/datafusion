@@ -2462,6 +2462,8 @@ For example, if you "bin" or "window" data into 15 minute intervals, an input ti
 
 For timestamp inputs, binning beyond the supported numeric or calendar range returns an error. A NULL source or interval still produces NULL.
 
+An explicit origin fixes an instant, not a recurring local time, so bins aligned to local midnight with an origin silently shift by an hour across a daylight saving time transition. Use `date_trunc` to bin on calendar units, or `date_bin(<stride>, to_local_time(t AT TIME ZONE '<zone>'))` for strides that are not calendar units.
+
 ```sql
 date_bin(interval, expression[, origin_timestamp])
 ```

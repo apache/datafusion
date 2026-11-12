@@ -42,6 +42,8 @@ Calculates time intervals and returns the start of the interval nearest to the s
 For example, if you "bin" or "window" data into 15 minute intervals, an input timestamp of `2023-01-01T18:18:18Z` will be updated to the start time of the 15 minute bin it is in: `2023-01-01T18:15:00Z`.
 
 For timestamp inputs, binning beyond the supported numeric or calendar range returns an error. A NULL source or interval still produces NULL.
+
+An explicit origin fixes an instant, not a recurring local time, so bins aligned to local midnight with an origin silently shift by an hour across a daylight saving time transition. Use `date_trunc` to bin on calendar units, or `date_bin(<stride>, to_local_time(t AT TIME ZONE '<zone>'))` for strides that are not calendar units.
 "#,
     syntax_example = "date_bin(interval, expression[, origin_timestamp])",
     sql_example = r#"```sql
