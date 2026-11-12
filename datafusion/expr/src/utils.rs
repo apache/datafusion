@@ -424,7 +424,7 @@ fn exclude_using_columns(plan: &LogicalPlan) -> Result<HashSet<Column>> {
     Ok(excluded)
 }
 
-/// Resolves a [`SelectExpr::Wildcard`] to a collection of `Expr::Column`'s.
+/// Resolves a [`SelectExpr::Wildcard`](crate::select_expr::SelectExpr::Wildcard) to a collection of `Expr::Column`'s.
 pub fn expand_wildcard(
     schema: &DFSchema,
     plan: &LogicalPlan,
@@ -446,7 +446,7 @@ pub fn expand_wildcard(
     Ok(get_exprs_except_skipped(schema, &columns_to_skip))
 }
 
-/// Resolves an [`SelectExpr::QualifiedWildcard`] to a collection of qualified `Expr::Column`'s.
+/// Resolves an [`SelectExpr::QualifiedWildcard`](crate::select_expr::SelectExpr::QualifiedWildcard) to a collection of qualified `Expr::Column`'s.
 pub fn expand_qualified_wildcard(
     qualifier: &TableReference,
     schema: &DFSchema,
