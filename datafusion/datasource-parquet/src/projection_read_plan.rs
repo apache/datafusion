@@ -218,8 +218,8 @@ impl<'schema> PushdownChecker<'schema> {
     ///
     /// # Example
     ///
-    /// Given file schema `{a: Int32, s: Struct(foo: Utf8, bar: Int64)}` and the
-    /// expression `get_field(s, 'foo') = 'hello'`:
+    /// Given file schema `{a: Int32, s: Struct(foo: Map(Utf8, Utf8), bar: Int64)}`
+    /// and the expression `get_field(get_field(s, 'foo'), 'en') = 'hello'`:
     ///
     /// - `column_name` = `"s"` (the root struct column)
     /// - `file_schema.index_of("s")` returns `1`
@@ -252,7 +252,7 @@ impl<'schema> PushdownChecker<'schema> {
             .count();
 
         // Drop runtime lookup keys.
-        // For example, ["common", "en"] becomes ["common"],
+        // For example, ["foo", "en"] becomes ["foo"],
         // selecting the Map's entire subtree
         // so the key lookup can be evaluated at runtime.
         field_path.truncate(struct_prefix_len);
