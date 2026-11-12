@@ -61,11 +61,11 @@ use sqlparser::ast::{
 };
 use sqlparser::parser::ParserError::ParserError;
 
-fn ident_to_string(ident: &Ident) -> String {
+fn legacy_ident_to_string(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())
 }
 
-fn object_name_to_string(object_name: &ObjectName) -> String {
+fn legacy_object_name_to_string(object_name: &ObjectName) -> String {
     object_name
         .0
         .iter()
@@ -74,7 +74,7 @@ fn object_name_to_string(object_name: &ObjectName) -> String {
                 .as_ident()
                 // TODO: It might be better to return an error
                 // than to silently use a default value.
-                .map_or_else(String::new, ident_to_string)
+                .map_or_else(String::new, legacy_ident_to_string)
         })
         .collect::<Vec<String>>()
         .join(".")
@@ -1646,7 +1646,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .to_dfschema_ref()?;
                 let using: Option<String> =
                     using.as_ref().map(|index_type| match index_type {
-                        IndexType::Custom(ident) => ident_to_string(ident),
+                        IndexType::Custom(ident) => legacy_ident_to_string(ident),
                         _ => index_type.to_string().to_ascii_lowercase(),
                     });
                 let order_by_exprs: Vec<OrderByExpr> =
@@ -2230,7 +2230,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
         let verbose = variable
             .last()
-            .map(|s| ident_to_string(s) == "verbose")
+            .map(|s| legacy_ident_to_string(s) == "verbose")
             .unwrap_or(false);
         let mut variable_vec = variable.to_vec();
 
@@ -2238,7 +2238,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             variable_vec = variable_vec.split_at(variable_vec.len() - 1).0.to_vec();
         }
 
-        let variable = object_name_to_string(&ObjectName::from(variable_vec));
+        let variable = legacy_object_name_to_string(&ObjectName::from(variable_vec));
         let name = if variable == "all" {
             None
         } else {
@@ -2265,7 +2265,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return not_impl_err!("SET HIVEVAR is not supported");
                 }
 
-                let variable = object_name_to_string(&variable);
+                let variable = legacy_object_name_to_string(&variable);
                 let mut variable_lower = variable.to_lowercase();
 
                 // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
@@ -2278,7 +2278,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 let value_string = match &values[0] {
-                    SQLExpr::Identifier(i) => ident_to_string(i),
+                    SQLExpr::Identifier(i) => legacy_ident_to_string(i),
                     SQLExpr::Value(v) => match crate::utils::value_to_string(&v.value) {
                         None => {
                             return plan_err!("Unsupported value {:?}", v.value);
@@ -2307,7 +2307,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn reset_statement_to_plan(&self, statement: ResetStatement) -> Result<LogicalPlan> {
         match statement {
             ResetStatement::Variable(variable) => {
-                let variable = object_name_to_string(&variable);
+                let variable = legacy_object_name_to_string(&variable);
                 let mut variable_lower = variable.to_lowercase();
 
                 // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name

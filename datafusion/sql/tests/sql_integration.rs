@@ -404,20 +404,26 @@ fn parse_ident_normalization_uppercase() {
 }
 
 #[rstest]
-#[case::copy("COPY foo TO 'out.csv' STORED AS CSV")]
-#[case::copy_partition("COPY foo TO 'out.csv' STORED AS CSV PARTITIONED BY (x)")]
+#[case::copy("COPY foo TO 'out.csv' STORED AS CSV", false)]
+#[case::copy_partition("COPY foo TO 'out.csv' STORED AS CSV PARTITIONED BY (x)", true)]
 #[case::copy_backtick_partition(
-    "COPY foo TO 'out.csv' STORED AS CSV PARTITIONED BY (`X`)"
+    "COPY foo TO 'out.csv' STORED AS CSV PARTITIONED BY (`X`)",
+    true
 )]
 #[case::typed_external_partition(
-    "CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED BY (x INT) LOCATION 'in.csv'"
+    "CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED BY (x INT) LOCATION 'in.csv'",
+    false
 )]
 #[case::external_partition(
-    "CREATE EXTERNAL TABLE t(x INT) STORED AS CSV PARTITIONED BY (x) LOCATION 'in.csv'"
+    "CREATE EXTERNAL TABLE t(x INT) STORED AS CSV PARTITIONED BY (x) LOCATION 'in.csv'",
+    false
 )]
-#[case::quoted_external_partition(r#"CREATE EXTERNAL TABLE t("x" INT) STORED AS CSV PARTITIONED BY ("x") LOCATION 'in.csv'"#)]
-#[case::pipe_alias("SELECT 1 AS x |> AGGREGATE SUM(x) AS total |> SELECT total")]
-fn ident_normalization_binding_paths(#[case] sql: &str) {
+#[case::quoted_external_partition(r#"CREATE EXTERNAL TABLE t("x" INT) STORED AS CSV PARTITIONED BY ("x") LOCATION 'in.csv'"#, false)]
+#[case::pipe_alias("SELECT 1 AS x |> AGGREGATE SUM(x) AS total |> SELECT total", false)]
+fn ident_normalization_binding_paths(
+    #[case] sql: &str,
+    #[case] expect_copy_partition: bool,
+) {
     let options =
         ParserOptions::new().with_ident_normalization(IdentNormalization::Upper);
     let plan = logical_plan_with_options(sql, options).unwrap();
@@ -427,7 +433,7 @@ fn ident_normalization_binding_paths(#[case] sql: &str) {
                 copy.input.schema().qualified_field(0).0.unwrap(),
                 &TableReference::bare("FOO")
             );
-            if sql.contains("PARTITIONED") {
+            if expect_copy_partition {
                 assert_eq!(copy.partition_by, vec!["X"]);
             }
         }
