@@ -236,7 +236,9 @@ impl<'a> SortKeyWalk<'a> {
     ///
     /// This method pins `expr` (and thus, by extension, all members of its
     /// equivalence class), but not its children. See [`Self::pin_key`] for
-    /// more details.
+    /// more details. It then moves the head of each ordering past the
+    /// expressions that are now fixed, and adds the orderings that the heads
+    /// imply, until no new ordering is found.
     ///
     /// [normal form]: EquivalenceProperties#normal-form
     pub(super) fn pin(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
