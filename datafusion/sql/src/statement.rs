@@ -61,11 +61,14 @@ use sqlparser::ast::{
 };
 use sqlparser::parser::ParserError::ParserError;
 
-fn legacy_ident_to_string(ident: &Ident) -> String {
+/// Settings tokens and index methods use lowercase unquoted spelling independently
+/// of the identifier policy for SQL object names. Quoted spelling is preserved.
+fn lowercase_unquoted_ident(ident: &Ident) -> String {
     normalize_ident(ident.to_owned())
 }
 
-fn legacy_object_name_to_string(object_name: &ObjectName) -> String {
+/// Normalize each component of a setting name without applying SQL object-name policy.
+fn lowercase_unquoted_object_name(object_name: &ObjectName) -> String {
     object_name
         .0
         .iter()
@@ -74,7 +77,7 @@ fn legacy_object_name_to_string(object_name: &ObjectName) -> String {
                 .as_ident()
                 // TODO: It might be better to return an error
                 // than to silently use a default value.
-                .map_or_else(String::new, legacy_ident_to_string)
+                .map_or_else(String::new, lowercase_unquoted_ident)
         })
         .collect::<Vec<String>>()
         .join(".")
@@ -1646,7 +1649,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .to_dfschema_ref()?;
                 let using: Option<String> =
                     using.as_ref().map(|index_type| match index_type {
-                        IndexType::Custom(ident) => legacy_ident_to_string(ident),
+                        IndexType::Custom(ident) => lowercase_unquoted_ident(ident),
                         _ => index_type.to_string().to_ascii_lowercase(),
                     });
                 let order_by_exprs: Vec<OrderByExpr> =
@@ -2230,7 +2233,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn show_variable_to_plan(&self, variable: &[Ident]) -> Result<LogicalPlan> {
         let verbose = variable
             .last()
-            .map(|s| legacy_ident_to_string(s) == "verbose")
+            .map(|s| lowercase_unquoted_ident(s) == "verbose")
             .unwrap_or(false);
         let mut variable_vec = variable.to_vec();
 
@@ -2238,7 +2241,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             variable_vec = variable_vec.split_at(variable_vec.len() - 1).0.to_vec();
         }
 
-        let variable = legacy_object_name_to_string(&ObjectName::from(variable_vec));
+        let variable = lowercase_unquoted_object_name(&ObjectName::from(variable_vec));
         let name = if variable == "all" {
             None
         } else {
@@ -2265,7 +2268,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     return not_impl_err!("SET HIVEVAR is not supported");
                 }
 
-                let variable = legacy_object_name_to_string(&variable);
+                let variable = lowercase_unquoted_object_name(&variable);
                 let mut variable_lower = variable.to_lowercase();
 
                 // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
@@ -2278,7 +2281,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 }
 
                 let value_string = match &values[0] {
-                    SQLExpr::Identifier(i) => legacy_ident_to_string(i),
+                    SQLExpr::Identifier(i) => lowercase_unquoted_ident(i),
                     SQLExpr::Value(v) => match crate::utils::value_to_string(&v.value) {
                         None => {
                             return plan_err!("Unsupported value {:?}", v.value);
@@ -2307,7 +2310,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
     fn reset_statement_to_plan(&self, statement: ResetStatement) -> Result<LogicalPlan> {
         match statement {
             ResetStatement::Variable(variable) => {
-                let variable = legacy_object_name_to_string(&variable);
+                let variable = lowercase_unquoted_object_name(&variable);
                 let mut variable_lower = variable.to_lowercase();
 
                 // Map PostgreSQL "timezone" and MySQL "time.zone" aliases to DataFusion's canonical name
