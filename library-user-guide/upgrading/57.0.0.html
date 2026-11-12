@@ -529,6 +529,17 @@ equivalence properties declare the complete <code class="docutils literal notran
 output should use <code class="docutils literal notranslate"><span class="pre">properties().output_ordering()</span></code> on the input or aggregate
 plan, respectively.</p>
 </section>
+<section id="datafusion-spark-moved-to-its-own-repository">
+<h3><code class="docutils literal notranslate"><span class="pre">datafusion-spark</span></code> moved to its own repository<a class="headerlink" href="#datafusion-spark-moved-to-its-own-repository" title="Link to this heading">#</a></h3>
+<p>The <code class="docutils literal notranslate"><span class="pre">datafusion-spark</span></code> crate is now developed and released in
+<a class="reference external" href="https://github.com/apache/datafusion-spark">apache/datafusion-spark</a>, starting
+with <code class="docutils literal notranslate"><span class="pre">57.0.0</span></code>. The crate name is unchanged.</p>
+<p><code class="docutils literal notranslate"><span class="pre">datafusion-cli</span></code> no longer has a <code class="docutils literal notranslate"><span class="pre">--spark</span></code> flag. The Spark SQL dialect is still
+available without the Spark function library:</p>
+<div class="highlight-sql notranslate"><div class="highlight"><pre><span></span><span class="k">SET</span><span class="w"> </span><span class="n">datafusion</span><span class="p">.</span><span class="n">sql_parser</span><span class="p">.</span><span class="n">dialect</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="s1">&#39;spark&#39;</span><span class="p">;</span>
+</pre></div>
+</div>
+</section>
 </section>
 </section>
 
@@ -582,6 +593,7 @@ plan, respectively.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-57-0-0">DataFusion 57.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#substrait-consumers-use-explicit-scope-context">Substrait consumers use explicit scope context</a></li>
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupclusteringmode-full-no-longer-implies-sorted-input"><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> no longer implies sorted input</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-spark-moved-to-its-own-repository"><code class="docutils literal notranslate"><span class="pre">datafusion-spark</span></code> moved to its own repository</a></li>
 </ul>
 </li>
 </ul>

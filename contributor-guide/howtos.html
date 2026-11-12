@@ -552,8 +552,7 @@ functions keep its intermediate state interchangeable with the state of the func
 able to merge state produced by the other. This is checked for all built-in aggregate functions by a test in
 <a class="reference external" href="https://github.com/apache/datafusion/blob/main/datafusion/functions-aggregate/tests/state_compat.rs"><code class="docutils literal notranslate"><span class="pre">state_compat.rs</span></code></a>; if a new function cannot be exercised by that test, add it to <code class="docutils literal notranslate"><span class="pre">NOT_EXERCISED</span></code> with the reason</p></li>
 </ul>
-<p>Spark compatible functions are <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/spark">located in separate crate</a> but otherwise follow the same steps, though all
-function types (e.g. scalar, nested, aggregate) are grouped together in the single location.</p>
+<p>Spark compatible functions are developed in the separate <a class="reference external" href="https://github.com/apache/datafusion-spark">apache/datafusion-spark</a> repository.</p>
 <p><strong>Testing</strong></p>
 <p>Prefer adding <code class="docutils literal notranslate"><span class="pre">sqllogictest</span></code> integration tests where the function is called via SQL against
 well known data and returns an expected result. See the existing <a class="reference external" href="https://github.com/apache/datafusion/tree/main/datafusion/sqllogictest/test_files">test files</a> if
