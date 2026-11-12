@@ -38,17 +38,17 @@ use itertools::Itertools;
 /// constant across the remaining ordering requirement.
 ///
 /// An expression is *fixed* if it has one value for all rows that tie on the
-/// currently pinned expressions. Fixed expressions include the pinned
-/// expressions themselves, as well as literals, constants, and singleton leaf
-/// expressions (e.g. an uncorrelated scalar subquery).
+/// currently pinned expressions: it is a literal, a constant, pinned, a leaf
+/// that reports itself as a singleton (e.g. an uncorrelated scalar subquery),
+/// or not volatile and computed only from fixed expressions (e.g. `a + 1`
+/// once `a` is pinned).
 ///
 /// ## Heads
 ///
-/// For each equivalent ordering, the walk tracks its current *head* expression,
-/// which is the current claim that is valid given the currently pinned
-/// expressions. When an expression is pinned, it advances the head of any
-/// existing claim about that key. An ordering with nothing left to promise is
-/// used up.
+/// The *head* of an ordering is its first expression that is not fixed: the
+/// claim that still holds among the rows that tie on the pinned expressions.
+/// Each pin moves every head past the expressions that are now fixed. An
+/// ordering whose expressions are all fixed has no head and is used up.
 ///
 /// For example, if we have data ordered by `[a, b]` as well as `[c]`, and we
 /// walk the requirement `[a, c]`, pinning `a` after the first step results in:
@@ -140,7 +140,7 @@ pub(super) struct SortKeyWalk<'a> {
     ///  * `self.implied[i - self.props.oeq_cache.normal_cls.len()]` otherwise.
     ///
     /// The value is either an index into that ordering's sort expressions, or
-    /// its length when the ordering has been exhausted.
+    /// its length when the ordering is used up.
     head_idxs: Vec<usize>,
 }
 
@@ -587,8 +587,8 @@ mod tests {
     /// * `a + b`
     /// * `a + c`
     ///
-    /// pins the head of the ordering (whichever of `b` or `c` the ordering
-    /// normalizes to), so `d` is found next.
+    /// pins the head of the ordering (whichever of `b` or `c` the equivalence
+    /// class normalizes to), so `d` is found next.
     ///
     /// [normal form]: EquivalenceProperties#normal-form
     #[test]
