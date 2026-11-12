@@ -13,7 +13,7 @@ use datafusion_catalog::{ScanArgs, ScanResult, Session, TableProvider};
 use datafusion_common::pruning::PrunableStatistics;
 use datafusion_common::stats::{Precision, is_known_empty};
 use datafusion_common::{
-    Constraints, DFSchema, SchemaExt, SplitPoint, Statistics, TableVersion,
+    Constraints, DFSchema, SchemaExt, SplitPoint, Statistics, TableReadSelector,
     internal_datafusion_err, plan_err, project_schema,
 };
 use datafusion_datasource::file::FileSource;
@@ -199,8 +199,7 @@ pub struct ListingTable {
     /// validation. Constant for the table, so computed once here instead of per
     /// file.
     file_schema_fingerprint: Arc<SchemaFingerprint>,
-    /// The version of the table this provider reads, if versioned
-    version: Option<TableVersion>,
+    read_selector: Option<TableReadSelector>,
 }
 
 impl ListingTable {
@@ -274,7 +273,7 @@ impl ListingTable {
             column_defaults: HashMap::new(),
             expr_adapter_factory: config.expr_adapter_factory,
             file_schema_fingerprint,
-            version: None,
+            read_selector: None,
         };
 
         Ok(table)
@@ -316,10 +315,17 @@ impl ListingTable {
         self
     }
 
-    /// Set the version of the table this provider reads, for time travel
-    /// queries. See [`TableProvider::version`].
-    pub fn with_version(mut self, version: Option<TableVersion>) -> Self {
-        self.version = version;
+    /// Sets the [`TableReadSelector`] reported by
+    /// [`TableProvider::read_selector`], which identifies which read of the
+    /// table this provider performs, such as a version of the table.
+    ///
+    /// This only labels the provider, it does not change the data it reads:
+    /// the provider must already be set up for that read.
+    pub fn with_read_selector(
+        mut self,
+        read_selector: Option<TableReadSelector>,
+    ) -> Self {
+        self.read_selector = read_selector;
         self
     }
 
@@ -544,8 +550,8 @@ impl TableProvider for ListingTable {
         Some(&self.constraints)
     }
 
-    fn version(&self) -> Option<&TableVersion> {
-        self.version.as_ref()
+    fn read_selector(&self) -> Option<&TableReadSelector> {
+        self.read_selector.as_ref()
     }
 
     fn table_type(&self) -> TableType {

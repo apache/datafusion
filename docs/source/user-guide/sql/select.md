@@ -306,7 +306,9 @@ time_travel:
 The expression is evaluated once during planning and must be a constant. It can
 use functions such as `now()`, but cannot reference columns or parameters such as
 `$1`. A version can be any value that the catalog understands, such as a snapshot
-id or a tag. A timestamp is converted to a `TIMESTAMP` in the UTC time zone.
+id or a tag. A timestamp is converted to a `TIMESTAMP` in the UTC time zone, and
+selects the latest version committed at or before that time, so a commit made
+exactly at that time is included.
 
 In a prepared statement, the expression is evaluated when the statement is
 prepared rather than when it is executed. It therefore cannot use functions that
@@ -329,12 +331,12 @@ WHERE cur.status <> prev.status;
 ```
 
 Time travel requires a catalog that supports it (see
-[`SchemaProvider::table_at`]); the built-in in-memory and listing tables do not.
+[`SchemaProvider::table_with_read_selector`]); the built-in in-memory and listing tables do not.
 Time travel clauses are currently only parsed by the `Snowflake`, `Databricks`,
 `BigQuery` and `MsSQL` dialects (see `datafusion.sql_parser.dialect`), and not
 every dialect supports every syntax.
 
-[`schemaprovider::table_at`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.SchemaProvider.html#method.table_at
+[`schemaprovider::table_with_read_selector`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.SchemaProvider.html#method.table_with_read_selector
 
 ## WHERE clause
 

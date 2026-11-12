@@ -383,8 +383,8 @@ pub enum CharacterLengthStyle {
     CharacterLength,
 }
 
-/// `TableVersionStyle` to use for unparsing the time travel clause of a table
-/// scan, such as `VERSION AS OF 3`
+/// Syntax to use for unparsing the time travel clause of a table scan, such as
+/// `VERSION AS OF 3`
 #[derive(Clone, Copy, PartialEq)]
 pub enum TableVersionStyle {
     /// `AT (VERSION => v)` and `AT (TIMESTAMP => t)`, as used by DuckDB
@@ -1367,7 +1367,7 @@ impl CustomDialectBuilder {
         self
     }
 
-    /// Customize the dialect with a specific time travel syntax listed in `TableVersionStyle`
+    /// Customize the dialect with a specific time travel syntax listed in [`TableVersionStyle`]
     pub fn with_table_version_style(
         mut self,
         table_version_style: TableVersionStyle,

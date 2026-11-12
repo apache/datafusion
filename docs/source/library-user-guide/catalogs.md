@@ -203,59 +203,70 @@ impl SchemaProvider for Schema {
 }
 ```
 
-### Time travel
+### Table read selectors and time travel
 
-Time travel queries, such as `SELECT * FROM t VERSION AS OF 3` or
-`SELECT * FROM t TIMESTAMP AS OF '2024-01-01'`, read a table as it existed at an
-earlier version or point in time. DataFusion evaluates the version expression
-during planning and passes the resulting [`TableVersion`] to
-`SchemaProvider::table_at`. A `TableVersion` is either a `Version`, holding any
-`ScalarValue` such as a snapshot id or a tag, or a `Timestamp` in nanoseconds
-since the Unix epoch (UTC).
+A [`TableReadSelector`] specifies which read of a table to perform. For example, time
+travel queries such as `SELECT * FROM t VERSION AS OF 3` or
+`SELECT * FROM t TIMESTAMP AS OF '2024-01-01'` read a table as it existed at an
+earlier version or point in time. DataFusion evaluates the expression of the
+time travel clause during planning and passes the resulting `TableReadSelector` to
+`SchemaProvider::table_with_read_selector`. A `TableReadSelector` is one of:
 
-The default implementation of `table_at` returns a "not implemented" error.
-Schema providers that support time travel return a table provider that reads the
-requested version of the table.
+- an `AsOfVersion`, holding any `ScalarValue` such as a snapshot id, a tag, a branch
+  name or a commit hash, or
+- an `AsOfTimestamp` in nanoseconds since the Unix epoch (UTC).
 
-The returned provider must report the version it reads from
-`TableProvider::version`. This may differ from the requested version: a tag or a
-timestamp typically resolves to a snapshot id. The built-in providers, such as
-`ListingTable` and `MemTable`, report the version set with `with_version`:
+An `AsOfTimestamp` selects the latest state committed at or before that time, so
+a commit made exactly at that time is included.
+
+A selector determines which data is read, not how it is read: hints about how
+to scan a table do not belong in a selector. The schema of the table may differ
+between selectors, for example after the schema of the table evolved.
+
+The default implementation of `table_with_read_selector` returns a "not implemented" error.
+Schema providers that support table read selectors return a table provider that
+performs the requested read.
+
+The returned provider must report the selector it reads from
+`TableProvider::read_selector`. This may differ from the requested selector: a tag
+or a timestamp typically resolves to a snapshot id. The built-in providers, such
+as `ListingTable` and `MemTable`, report the selector set with `with_read_selector`:
 
 ```rust
 # use async_trait::async_trait;
 # use std::sync::Arc;
 # use arrow::datatypes::DataType;
 # use datafusion::catalog::{MemTable, TableProvider, SchemaProvider};
-# use datafusion::common::{Result, ScalarValue, TableVersion};
+# use datafusion::common::{Result, ScalarValue, TableReadSelector};
 #
 # #[derive(Debug)]
 # struct Schema {}
 #
 # impl Schema {
 #     fn snapshot(&self, _name: &str, _id: i64) -> Result<Option<MemTable>> { todo!() }
-#     fn latest_snapshot_before(&self, _nanos: i64) -> Result<i64> { todo!() }
+#     fn latest_snapshot_at(&self, _nanos: i64) -> Result<i64> { todo!() }
 # }
 #
 #[async_trait]
 impl SchemaProvider for Schema {
-    async fn table_at(
+    async fn table_with_read_selector(
         &self,
         name: &str,
-        version: &TableVersion,
+        selector: &TableReadSelector,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        // Resolve the requested version to a snapshot id
-        let id = match version {
-            TableVersion::Version(value) => {
+        // Resolve the requested selector to a snapshot id
+        let id = match selector {
+            TableReadSelector::AsOfVersion(value) => {
                 i64::try_from(value.cast_to(&DataType::Int64)?)?
             }
-            TableVersion::Timestamp(nanos) => self.latest_snapshot_before(*nanos)?,
+            TableReadSelector::AsOfTimestamp(nanos) => self.latest_snapshot_at(*nanos)?,
         };
         let Some(table) = self.snapshot(name, id)? else {
             return Ok(None);
         };
         // Report the snapshot that is read
-        let table = table.with_version(Some(TableVersion::Version(ScalarValue::from(id))));
+        let table =
+            table.with_read_selector(Some(TableReadSelector::AsOfVersion(ScalarValue::from(id))));
         Ok(Some(Arc::new(table)))
     }
 
@@ -265,14 +276,23 @@ impl SchemaProvider for Schema {
 }
 ```
 
-EXPLAIN shows the version that each table scan reads. Scans of the same version
-compare equal, however that version was requested:
+EXPLAIN shows the selector that each table scan reads. Scans of the same table
+with equal selectors are assumed to read the same data, and compare equal
+however the selector was requested:
 
 ```text
 TableScan: t@3 projection=[id, name]
 ```
 
-[`tableversion`]: https://docs.rs/datafusion/latest/datafusion/common/enum.TableVersion.html
+Providers returned by `SchemaProvider::table` may also report a selector, such
+as the id of the current snapshot, to identify the state of the table they
+read.
+
+SQL syntax other than time travel clauses can be mapped to a `TableReadSelector` by
+implementing a `TableReadSelectorPlanner`, registered with
+`SessionContext::register_table_read_selector_planner`.
+
+[`tablereadselector`]: https://docs.rs/datafusion/latest/datafusion/common/enum.TableReadSelector.html
 
 ## Implementing `MemoryCatalogProvider`
 

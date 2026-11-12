@@ -129,9 +129,9 @@ pub struct ListingTableScanNode {
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "18")]
     pub skip: ::core::option::Option<u64>,
-    /// The version of the table to read, for time travel queries.
+    /// The selector of the table to read, such as a specific version.
     #[prost(message, optional, tag = "19")]
-    pub version: ::core::option::Option<TableVersion>,
+    pub read_selector: ::core::option::Option<TableReadSelector>,
     #[prost(
         oneof = "listing_table_scan_node::FileFormatType",
         tags = "10, 11, 12, 15, 16"
@@ -174,9 +174,9 @@ pub struct ViewTableScanNode {
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "8")]
     pub skip: ::core::option::Option<u64>,
-    /// The version of the table to read, for time travel queries.
+    /// The selector of the table to read, such as a specific version.
     #[prost(message, optional, tag = "9")]
-    pub version: ::core::option::Option<TableVersion>,
+    pub read_selector: ::core::option::Option<TableReadSelector>,
 }
 /// Logical Plan to Scan a CustomTableProvider registered at runtime
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -197,9 +197,9 @@ pub struct CustomTableScanNode {
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "8")]
     pub skip: ::core::option::Option<u64>,
-    /// The version of the table to read, for time travel queries.
+    /// The selector of the table to read, such as a specific version.
     #[prost(message, optional, tag = "9")]
-    pub version: ::core::option::Option<TableVersion>,
+    pub read_selector: ::core::option::Option<TableReadSelector>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionNode {
@@ -1397,22 +1397,26 @@ pub mod table_reference {
         Full(super::FullTableReference),
     }
 }
-/// A version of a table, for time travel queries
+/// Selects which read of a table to perform, such as reading the table as of a
+/// version or point in time for time travel queries
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct TableVersion {
-    #[prost(oneof = "table_version::TableVersionEnum", tags = "1, 2")]
-    pub table_version_enum: ::core::option::Option<table_version::TableVersionEnum>,
+pub struct TableReadSelector {
+    #[prost(oneof = "table_read_selector::TableReadSelectorEnum", tags = "1, 2")]
+    pub table_read_selector_enum: ::core::option::Option<
+        table_read_selector::TableReadSelectorEnum,
+    >,
 }
-/// Nested message and enum types in `TableVersion`.
-pub mod table_version {
+/// Nested message and enum types in `TableReadSelector`.
+pub mod table_read_selector {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum TableVersionEnum {
-        /// A catalog specific version identifier, such as a snapshot id or a tag
+    pub enum TableReadSelectorEnum {
+        /// A catalog specific version identifier, such as a snapshot id, a tag or
+        /// a commit hash
         #[prost(message, tag = "1")]
-        Version(super::super::datafusion_common::ScalarValue),
+        AsOfVersion(super::super::datafusion_common::ScalarValue),
         /// A point in time, in nanoseconds since the Unix epoch (UTC)
         #[prost(int64, tag = "2")]
-        Timestamp(i64),
+        AsOfTimestamp(i64),
     }
 }
 /// PhysicalPlanNode is a nested type
@@ -2701,9 +2705,9 @@ pub struct EmptyTableScanNode {
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(message, repeated, tag = "4")]
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
-    /// The version of the table to read, for time travel queries.
+    /// The selector of the table to read, such as a specific version.
     #[prost(message, optional, tag = "5")]
-    pub version: ::core::option::Option<TableVersion>,
+    pub read_selector: ::core::option::Option<TableReadSelector>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GenerateSeriesArgsContainsNull {

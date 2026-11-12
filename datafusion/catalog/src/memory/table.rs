@@ -19,7 +19,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraints, DFSchema, SchemaExt, TableVersion, internal_datafusion_err,
+    Constraints, DFSchema, SchemaExt, TableReadSelector, internal_datafusion_err,
     internal_err, not_impl_err, plan_err,
 };
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
@@ -70,8 +70,7 @@ pub struct MemTable {
     /// Optional pre-known sort order(s). Must be `SortExpr`s.
     /// inserting data into this table removes the order
     pub sort_order: Arc<Mutex<Vec<Vec<SortExpr>>>>,
-    /// The version of the table this provider reads, if versioned
-    version: Option<TableVersion>,
+    read_selector: Option<TableReadSelector>,
 }
 
 impl MemTable {
@@ -105,14 +104,21 @@ impl MemTable {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             sort_order: Arc::new(Mutex::new(vec![])),
-            version: None,
+            read_selector: None,
         })
     }
 
-    /// Set the version of the table this provider reads, for time travel
-    /// queries. See [`TableProvider::version`].
-    pub fn with_version(mut self, version: Option<TableVersion>) -> Self {
-        self.version = version;
+    /// Sets the [`TableReadSelector`] reported by
+    /// [`TableProvider::read_selector`], which identifies which read of the
+    /// table this provider performs, such as a version of the table.
+    ///
+    /// This only labels the provider, it does not change the data it reads:
+    /// the provider must already be set up for that read.
+    pub fn with_read_selector(
+        mut self,
+        read_selector: Option<TableReadSelector>,
+    ) -> Self {
+        self.read_selector = read_selector;
         self
     }
 
@@ -188,8 +194,8 @@ impl TableProvider for MemTable {
         Some(&self.constraints)
     }
 
-    fn version(&self) -> Option<&TableVersion> {
-        self.version.as_ref()
+    fn read_selector(&self) -> Option<&TableReadSelector> {
+        self.read_selector.as_ref()
     }
 
     fn table_type(&self) -> TableType {

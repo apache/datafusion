@@ -19,8 +19,8 @@ mod join_type;
 mod param_value;
 mod partitioning;
 mod schema_reference;
+mod table_read_selector;
 mod table_reference;
-mod table_version;
 mod unnest;
 
 pub mod alias;
@@ -90,8 +90,8 @@ pub use scalar::{ScalarType, ScalarValue};
 pub use schema_reference::SchemaReference;
 pub use spans::{Location, Span, Spans};
 pub use stats::{ColumnStatistics, Statistics};
+pub use table_read_selector::TableReadSelector;
 pub use table_reference::{ResolvedTableReference, TableReference};
-pub use table_version::TableVersion;
 pub use unnest::{NullHandling, RecursionUnnestOption, UnnestOptions};
 pub use utils::project_schema;
 
