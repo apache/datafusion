@@ -42,7 +42,6 @@ POST_MERGE_SKIPPED_JOBS = frozenset(
         "depcheck",
         "examples-docs-check",
         "linux-cargo-check-datafusion",
-        "linux-cargo-check-datafusion-spark",
         "linux-datafusion-common-features",
         "linux-datafusion-proto-features",
         "linux-datafusion-substrait-features",

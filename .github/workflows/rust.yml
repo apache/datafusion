@@ -393,7 +393,7 @@ jobs:
   linux-cargo-check-datafusion-spark:
     name: cargo check datafusion-spark features
     needs: linux-build-lib
-    if: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'apache/datafusion') && !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
+    if: ${{ !(github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork && github.base_ref == 'main') }}
     runs-on: ubuntu-latest
     container:
       image: amd64/rust
