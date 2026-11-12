@@ -38,3 +38,14 @@ parents and siblings unchanged. The values themselves are shared through `Arc`.
 
 Update logical-plan snapshots if needed: generated lambda parameter names are
 local to lexical scopes, so sibling lambdas may reuse names.
+
+### `GroupClusteringMode::Full` no longer implies sorted input
+
+`AggregateExec` can now select `GroupClusteringMode::Full` when the input's
+equivalence properties declare the complete `GROUP BY` tuple as grouped
+(contiguous within each partition), even if the input is not sorted.
+
+`Full` describes group contiguity only. Code that previously used
+`group_clustering_mode() == GroupClusteringMode::Full` to infer sorted input or
+output should use `properties().output_ordering()` on the input or aggregate
+plan, respectively.

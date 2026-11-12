@@ -628,19 +628,28 @@ an error when the length is passed, set <code class="docutils literal notranslat
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DATE</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Date32</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TIME</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TIME</span></code>, <code class="docutils literal notranslate"><span class="pre">TIME(9)</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Time64(Nanosecond)</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span> <span class="pre">WITHOUT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TIME(0)</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Time32(Second)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TIME(3)</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Time32(Millisecond)</span></code></p></td>
+</tr>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TIME(6)</span></code></p></td>
+<td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Time64(Microsecond)</span></code></p></td>
+</tr>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMP</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span> <span class="pre">WITHOUT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">None)</span></code></p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">DATETIME</span></code>, <code class="docutils literal notranslate"><span class="pre">DATETIME(p)</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">DATETIME</span></code>, <code class="docutils literal notranslate"><span class="pre">DATETIME(p)</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">None)</span></code></p></td>
 </tr>
-<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMPTZ(p)</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></p></td>
+<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">TIMESTAMPTZ(p)</span></code>, <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(p)</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Timestamp(unit,</span> <span class="pre">None)</span></code> by default — see the warning below</p></td>
 </tr>
-<tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">INTERVAL</span></code></p></td>
+<tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">INTERVAL</span></code></p></td>
 <td class="text-left"><p><code class="docutils literal notranslate"><span class="pre">Interval(MonthDayNano)</span></code></p></td>
 </tr>
 </tbody>
@@ -668,7 +677,9 @@ rows. Use
 DataFusion rejects each other value of <code class="docutils literal notranslate"><span class="pre">p</span></code>. If you omit <code class="docutils literal notranslate"><span class="pre">p</span></code>, the unit is
 <code class="docutils literal notranslate"><span class="pre">Nanosecond</span></code>. The precision goes after <code class="docutils literal notranslate"><span class="pre">TIMESTAMPTZ</span></code>, but before
 <code class="docutils literal notranslate"><span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code>: use <code class="docutils literal notranslate"><span class="pre">TIMESTAMPTZ(3)</span></code> or <code class="docutils literal notranslate"><span class="pre">TIMESTAMP(3)</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code>.
-<code class="docutils literal notranslate"><span class="pre">DATE</span></code>, <code class="docutils literal notranslate"><span class="pre">TIME</span></code> and <code class="docutils literal notranslate"><span class="pre">INTERVAL</span></code> do not accept a precision.</p>
+<code class="docutils literal notranslate"><span class="pre">TIME</span></code> accepts the same precisions and an optional <code class="docutils literal notranslate"><span class="pre">WITHOUT</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> clause.
+<code class="docutils literal notranslate"><span class="pre">TIME</span> <span class="pre">WITH</span> <span class="pre">TIME</span> <span class="pre">ZONE</span></code> and <code class="docutils literal notranslate"><span class="pre">TIMETZ</span></code> are unsupported.
+<code class="docutils literal notranslate"><span class="pre">DATE</span></code> and <code class="docutils literal notranslate"><span class="pre">INTERVAL</span></code> do not accept a precision.</p>
 </section>
 <section id="boolean-types">
 <h2>Boolean Types<a class="headerlink" href="#boolean-types" title="Link to this heading">#</a></h2>

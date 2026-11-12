@@ -519,6 +519,16 @@ parents and siblings unchanged. The values themselves are shared through <code c
 <p>Update logical-plan snapshots if needed: generated lambda parameter names are
 local to lexical scopes, so sibling lambdas may reuse names.</p>
 </section>
+<section id="groupclusteringmode-full-no-longer-implies-sorted-input">
+<h3><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> no longer implies sorted input<a class="headerlink" href="#groupclusteringmode-full-no-longer-implies-sorted-input" title="Link to this heading">#</a></h3>
+<p><code class="docutils literal notranslate"><span class="pre">AggregateExec</span></code> can now select <code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> when the input’s
+equivalence properties declare the complete <code class="docutils literal notranslate"><span class="pre">GROUP</span> <span class="pre">BY</span></code> tuple as grouped
+(contiguous within each partition), even if the input is not sorted.</p>
+<p><code class="docutils literal notranslate"><span class="pre">Full</span></code> describes group contiguity only. Code that previously used
+<code class="docutils literal notranslate"><span class="pre">group_clustering_mode()</span> <span class="pre">==</span> <span class="pre">GroupClusteringMode::Full</span></code> to infer sorted input or
+output should use <code class="docutils literal notranslate"><span class="pre">properties().output_ordering()</span></code> on the input or aggregate
+plan, respectively.</p>
+</section>
 </section>
 </section>
 
@@ -571,6 +581,7 @@ local to lexical scopes, so sibling lambdas may reuse names.</p>
     <ul class="pst-show_toc_level nav section-nav flex-column">
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#datafusion-57-0-0">DataFusion 57.0.0</a><ul class="nav section-nav flex-column">
 <li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#substrait-consumers-use-explicit-scope-context">Substrait consumers use explicit scope context</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#groupclusteringmode-full-no-longer-implies-sorted-input"><code class="docutils literal notranslate"><span class="pre">GroupClusteringMode::Full</span></code> no longer implies sorted input</a></li>
 </ul>
 </li>
 </ul>
