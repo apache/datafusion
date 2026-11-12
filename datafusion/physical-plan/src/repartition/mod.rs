@@ -2206,10 +2206,12 @@ impl RepartitionExec {
         // and per-partition constants no longer hold.
         if input.output_partitioning().partition_count() > 1 {
             eq_properties.clear_orderings();
+            // Clear the constants first: an ordering added while they hold
+            // implies orderings that hold only within each input partition.
+            eq_properties.clear_per_partition_constants();
             if preserve_order && let Some(ordering) = input.output_ordering() {
                 eq_properties.add_ordering(ordering.clone());
             }
-            eq_properties.clear_per_partition_constants();
         }
         eq_properties
     }
@@ -4906,6 +4908,105 @@ mod test {
             DataSourceExec: partitions=1, partition_sizes=[0]
             DataSourceExec: partitions=1, partition_sizes=[0]
         ");
+        Ok(())
+    }
+
+    /// Merging partitions keeps only the merge key ordering. Here each input
+    /// partition has its own constant `k`, `a = CAST(c AS DATE)`, and is sorted
+    /// by `[k, a, c]`, so within a partition the rows are also sorted by `[c]`.
+    /// Partition `k = 0` has later dates than partition `k = 1`, so the merged
+    /// rows are not sorted by `[c]`.
+    #[tokio::test]
+    async fn test_preserve_order_drops_per_partition_implied_ordering() -> Result<()> {
+        use crate::filter::FilterExec;
+        use crate::sorts::sort::SortExec;
+        use arrow::array::{Date32Array, TimestampSecondArray};
+        use arrow::datatypes::TimeUnit;
+        use datafusion_expr::Operator;
+        use datafusion_physical_expr::expressions::{BinaryExpr, CastExpr, lit};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Date32, true),
+            Field::new("c", DataType::Timestamp(TimeUnit::Second, None), true),
+        ]));
+        let partition = |k: i32, days: [i32; 2]| -> Result<Arc<dyn ExecutionPlan>> {
+            // One o'clock on each day:
+            let times = days.map(|day| i64::from(day) * 86_400 + 3_600);
+            let batch = RecordBatch::try_new(
+                Arc::clone(&schema),
+                vec![
+                    Arc::new(Date32Array::from(days.to_vec())),
+                    Arc::new(TimestampSecondArray::from(times.to_vec())),
+                ],
+            )?;
+            let source =
+                TestMemoryExec::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
+            Ok(Arc::new(ProjectionExec::try_new(
+                vec![
+                    (lit(ScalarValue::Int32(Some(k))), "k".to_string()),
+                    (col("a", &schema)?, "a".to_string()),
+                    (col("c", &schema)?, "c".to_string()),
+                ],
+                source,
+            )?))
+        };
+        let union =
+            UnionExec::try_new(vec![partition(0, [10, 11])?, partition(1, [1, 2])?])?;
+        let union_schema = union.schema();
+        let cast_c = Arc::new(CastExpr::new_with_target_field(
+            col("c", &union_schema)?,
+            Arc::new(Field::new("c", DataType::Date32, true)),
+            None,
+        ));
+        let filter = Arc::new(FilterExec::try_new(
+            Arc::new(BinaryExpr::new(
+                col("a", &union_schema)?,
+                Operator::Eq,
+                cast_c,
+            )),
+            union,
+        )?);
+        let ordering = |names: &[&str]| {
+            names
+                .iter()
+                .map(|name| Ok(PhysicalSortExpr::new_default(col(name, &union_schema)?)))
+                .collect::<Result<Vec<_>>>()
+        };
+        let sort = Arc::new(
+            SortExec::new(
+                LexOrdering::new(ordering(&["k", "a", "c"])?).unwrap(),
+                filter,
+            )
+            .with_preserve_partitioning(true),
+        );
+        assert!(
+            sort.properties()
+                .equivalence_properties()
+                .ordering_satisfy(ordering(&["c"])?)?
+        );
+
+        let exec = Arc::new(
+            RepartitionExec::try_new(sort, Partitioning::RoundRobinBatch(1))?
+                .with_preserve_order(),
+        );
+        let properties = exec.properties().equivalence_properties();
+        assert!(properties.ordering_satisfy(ordering(&["k", "a", "c"])?)?);
+        assert!(!properties.ordering_satisfy(ordering(&["c"])?)?);
+
+        let batches = crate::collect(exec, Arc::new(TaskContext::default())).await?;
+        assert_batches_eq!(
+            [
+                "+---+------------+---------------------+",
+                "| k | a          | c                   |",
+                "+---+------------+---------------------+",
+                "| 0 | 1970-01-11 | 1970-01-11T01:00:00 |",
+                "| 0 | 1970-01-12 | 1970-01-12T01:00:00 |",
+                "| 1 | 1970-01-02 | 1970-01-02T01:00:00 |",
+                "| 1 | 1970-01-03 | 1970-01-03T01:00:00 |",
+                "+---+------------+---------------------+",
+            ],
+            &batches
+        );
         Ok(())
     }
 
