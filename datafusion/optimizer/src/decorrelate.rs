@@ -1225,6 +1225,28 @@ pub(crate) fn find_join_exprs(exprs: Vec<&Expr>) -> (Vec<Expr>, Vec<Expr>) {
     (joins, others)
 }
 
+/// Returns an error if `col` is not the first field of `schema` with its name.
+///
+/// Wrapping `schema` in a `SubqueryAlias` keeps the first field with a given
+/// name and renames later ones (`k:1`, ...), so qualifying `col` as
+/// `<alias>.<name>` refers to `col` only when it is that first field.
+/// See <https://github.com/apache/datafusion/issues/26234>.
+pub(crate) fn check_alias_keeps_column_name(
+    schema: &DFSchema,
+    col: &Column,
+) -> Result<()> {
+    let Some(index) = schema.maybe_index_of_column(col) else {
+        return Ok(());
+    };
+    let first = schema.fields().iter().position(|f| f.name() == &col.name);
+    if first != Some(index) {
+        return plan_err!(
+            "Unsupported correlated subquery: correlated column {col} has the same name as an earlier column of the subquery output"
+        );
+    }
+    Ok(())
+}
+
 /// Combines join filters and qualifies their inner columns with the subquery alias.
 ///
 /// Aliasing must precede stripping outer references so inner and outer columns
@@ -1241,18 +1263,7 @@ pub(crate) fn build_join_filter<'a>(
         .collect::<BTreeSet<_>>();
 
     for col in &correlated_cols {
-        let duplicate_count = subquery_schema
-            .fields()
-            .iter()
-            .filter(|f| f.name() == &col.name)
-            .count();
-        if duplicate_count > 1 {
-            return plan_err!(
-                "Unsupported correlated subquery: inner relation column '{}' has ambiguous duplicate references across relations under alias '{}'",
-                col.name,
-                subquery_alias
-            );
-        }
+        check_alias_keeps_column_name(subquery_schema, col)?;
     }
 
     conjunction(join_filters)
@@ -1483,20 +1494,20 @@ mod tests {
             Some(col("sq.a").eq(col("t.a")).and(col("t.a").gt(lit(1))))
         );
 
+        // Under the alias, `one.a` keeps the name `a` and `two.a` becomes `a:1`,
+        // so only `one.a` can be qualified as `sq.a`.
+        let field_a = Arc::new(arrow::datatypes::Field::new("a", DataType::Int32, true));
         let dup_schema = DFSchema::new_with_metadata(
             vec![
-                (
-                    Some(datafusion_common::TableReference::bare("one")),
-                    Arc::new(arrow::datatypes::Field::new("a", DataType::Int32, true)),
-                ),
-                (
-                    Some(datafusion_common::TableReference::bare("two")),
-                    Arc::new(arrow::datatypes::Field::new("a", DataType::Int32, true)),
-                ),
+                (Some("one".into()), Arc::clone(&field_a)),
+                (Some("two".into()), field_a),
             ],
             std::collections::HashMap::new(),
         )?;
-        assert!(build_join_filter(filters, [&column], &dup_schema, "sq").is_err());
+        let one_a = Column::from("one.a");
+        let two_a = Column::from("two.a");
+        assert!(build_join_filter(vec![], [&one_a], &dup_schema, "sq").is_ok());
+        assert!(build_join_filter(vec![], [&two_a], &dup_schema, "sq").is_err());
         Ok(())
     }
 }

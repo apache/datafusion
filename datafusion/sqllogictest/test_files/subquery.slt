@@ -4749,34 +4749,57 @@ statement ok
 CREATE TABLE t26234(k INT) AS VALUES (1), (2);
 
 # Query 1: EXISTS
-statement error .*Unsupported correlated subquery: inner relation column 'k' has ambiguous duplicate references across relations
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
 SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
     SELECT 1 FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
 );
 
 # Query 2: NOT EXISTS
-statement error .*Unsupported correlated subquery: inner relation column 'k' has ambiguous duplicate references across relations
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
 SELECT t_outer.k FROM t26234 t_outer WHERE NOT EXISTS (
     SELECT 1 FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
 );
 
 # Query 3: IN
-statement error .*Unsupported correlated subquery: inner relation column 'k' has ambiguous duplicate references across relations
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
 SELECT t_outer.k FROM t26234 t_outer WHERE t_outer.k IN (
     SELECT one.k FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
 );
 
 # Query 4: Scalar subquery
-statement error .*Unsupported correlated subquery: inner relation column 'k' has ambiguous duplicate references across relations
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
 SELECT t_outer.k, (
     SELECT count(*) FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
 ) FROM t26234 t_outer ORDER BY t_outer.k;
 
 # Query 5: IN with projection from one relation and correlation from another
-statement error .*Unsupported correlated subquery: inner relation column 'k' has ambiguous duplicate references across relations
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
 SELECT t_outer.k FROM t26234 t_outer WHERE t_outer.k IN (
     SELECT one.k FROM t26234 one, t26234 two WHERE two.k = t_outer.k + 1
 );
+
+# Query 6: LATERAL join
+statement error Unsupported correlated subquery: correlated column two.k has the same name as an earlier column of the subquery output
+SELECT t_outer.k, s.c FROM t26234 t_outer, LATERAL (
+    SELECT count(*) AS c FROM t26234 one, t26234 two WHERE one.k = t_outer.k AND two.k = t_outer.k + 1
+) s;
+
+# Same-named columns are fine when only the first one is correlated
+query I
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT * FROM t26234 one, t26234 two WHERE one.k = t_outer.k
+) ORDER BY t_outer.k;
+----
+1
+2
+
+query I
+SELECT t_outer.k FROM t26234 t_outer WHERE EXISTS (
+    SELECT one.k, two.k FROM t26234 one, t26234 two WHERE one.k = t_outer.k
+) ORDER BY t_outer.k;
+----
+1
+2
 
 # Single relation correlated column works without ambiguity
 query I
