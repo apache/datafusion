@@ -6,9 +6,7 @@ use std::marker::PhantomData;
 use std::mem::size_of;
 use std::sync::{Arc, Weak};
 
-use arrow::array::{
-    Array, ArrayRef, AsArray, DictionaryArray, Int64Array, PrimitiveArray,
-};
+use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
 use arrow::compute::take;
 use arrow::datatypes::{
     ArrowDictionaryKeyType, ArrowNativeType, DataType, Field, Int8Type, Int16Type,
@@ -18,6 +16,9 @@ use datafusion_common::{Result, exec_err};
 use datafusion_expr::{EmitTo, GroupSelection};
 use hashbrown::HashMap;
 
+use crate::aggregates::group_values::dictionary::{
+    into_dictionary, is_cached, key_type_fits,
+};
 use crate::aggregates::group_values::{
     GroupValues, new_group_values as new_inner_group_values,
 };
@@ -98,6 +99,33 @@ impl ValueToGroup {
             Self::Sparse(values) => values.allocation_size(),
         }
     }
+
+    fn remove_groups(&mut self, n: usize) {
+        match self {
+            Self::Dense(values) => {
+                for group in values {
+                    if *group == UNRESOLVED || *group == PENDING {
+                        continue;
+                    }
+                    if *group < n {
+                        *group = UNRESOLVED;
+                    } else {
+                        *group -= n;
+                    }
+                }
+            }
+            Self::Sparse(values) => {
+                values.retain(|_, group| {
+                    if *group < n {
+                        false
+                    } else {
+                        *group -= n;
+                        true
+                    }
+                });
+            }
+        }
+    }
 }
 
 impl Default for ValueToGroup {
@@ -126,9 +154,9 @@ struct GroupValuesDictionary<K: ArrowDictionaryKeyType + Send + Sync> {
 }
 
 impl<K: ArrowDictionaryKeyType + Send + Sync> GroupValuesDictionary<K> {
-    fn try_new(value_field: Field) -> Result<Self> {
+    fn try_new(value_field: Field, group_clustering: &GroupClustering) -> Result<Self> {
         let schema = Arc::new(Schema::new(vec![value_field]));
-        let values = new_inner_group_values(schema, &GroupClustering::None)?;
+        let values = new_inner_group_values(schema, group_clustering)?;
         Ok(Self {
             values,
             value_to_group: ValueToGroup::default(),
@@ -139,11 +167,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupValuesDictionary<K> {
     }
 
     fn sync_cache(&mut self, values: &ArrayRef, num_keys: usize) {
-        if self
-            .cached_values
-            .as_ref()
-            .is_some_and(|cached| std::ptr::addr_eq(cached.as_ptr(), Arc::as_ptr(values)))
-        {
+        if is_cached(self.cached_values.as_ref(), values) {
             return;
         }
 
@@ -184,18 +208,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupValuesDictionary<K> {
 
     fn check_key_overflow(&self) -> Result<()> {
         let non_null_count = self.values.len() - self.null_group.is_some() as usize;
-        let max = match K::DATA_TYPE {
-            DataType::Int8 => i8::MAX as usize,
-            DataType::Int16 => i16::MAX as usize,
-            DataType::Int32 => i32::MAX as usize,
-            DataType::Int64 => i64::MAX as usize,
-            DataType::UInt8 => u8::MAX as usize,
-            DataType::UInt16 => u16::MAX as usize,
-            DataType::UInt32 => u32::MAX as usize,
-            DataType::UInt64 => usize::MAX,
-            _ => unreachable!("validated dictionary key type"),
-        };
-        if non_null_count != 0 && non_null_count - 1 > max {
+        if !key_type_fits::<K>(non_null_count) {
             return exec_err!(
                 "Dictionary key type {:?} cannot represent {} distinct values",
                 K::DATA_TYPE,
@@ -205,27 +218,14 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupValuesDictionary<K> {
         Ok(())
     }
 
-    fn build_dictionary(values: ArrayRef, groups: &[usize]) -> ArrayRef {
-        let mut value_keys = Vec::with_capacity(values.len());
-        let mut non_null_indices = Vec::with_capacity(values.len());
-        for value_index in 0..values.len() {
-            if values.is_null(value_index) {
-                value_keys.push(None);
-            } else {
-                value_keys.push(Some(K::Native::usize_as(non_null_indices.len())));
-                non_null_indices.push(value_index as i64);
+    fn remove_groups(&mut self, emit_to: EmitTo) {
+        match emit_to {
+            EmitTo::All => self.clear_cache(),
+            EmitTo::First(n) => {
+                self.value_to_group.remove_groups(n);
+                self.null_group = self.null_group.and_then(|group| group.checked_sub(n));
             }
         }
-
-        let values = if non_null_indices.len() == values.len() {
-            values
-        } else {
-            let indices = Int64Array::from(non_null_indices);
-            take(values.as_ref(), &indices, None).expect("compact dictionary values")
-        };
-        let keys: PrimitiveArray<K> =
-            groups.iter().map(|&group| value_keys[group]).collect();
-        Arc::new(DictionaryArray::<K>::new(keys, values))
     }
 }
 
@@ -329,12 +329,15 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupValues for GroupValuesDiction
     }
 
     fn emit(&mut self, emit_to: EmitTo) -> Result<Vec<ArrayRef>> {
+        let emitted_null = match emit_to {
+            EmitTo::All => self.null_group,
+            EmitTo::First(n) => self.null_group.filter(|&group| group < n),
+        };
         let mut output = self.values.emit(emit_to)?;
         debug_assert_eq!(output.len(), 1);
         let values = output.pop().expect("one dictionary value column");
-        self.clear_cache();
-        let groups = (0..values.len()).collect::<Vec<_>>();
-        Ok(vec![Self::build_dictionary(values, &groups)])
+        self.remove_groups(emit_to);
+        Ok(vec![into_dictionary::<K>(values, None, emitted_null)])
     }
 
     fn values_preserving(
@@ -343,18 +346,22 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupValues for GroupValuesDiction
     ) -> Result<Vec<ArrayRef>> {
         selection.validate_num_groups(self.len())?;
 
-        let mut group_to_unique = vec![UNRESOLVED; self.len()];
-        let mut unique_groups = vec![];
+        if selection.iter().eq(0..self.len()) {
+            let mut output = self.values.values_preserving(selection)?;
+            debug_assert_eq!(output.len(), 1);
+            let values = output.pop().expect("one dictionary value column");
+            return Ok(vec![into_dictionary::<K>(values, None, self.null_group)]);
+        }
+
+        let mut group_to_unique = HashMap::with_capacity(selection.len());
+        let mut unique_groups = Vec::with_capacity(selection.len());
         let mut selected_groups = Vec::with_capacity(selection.len());
         for group_index in selection.iter() {
-            let unique_index = if group_to_unique[group_index] == UNRESOLVED {
+            let unique_index = *group_to_unique.entry(group_index).or_insert_with(|| {
                 let unique_index = unique_groups.len();
-                group_to_unique[group_index] = unique_index;
                 unique_groups.push(group_index);
                 unique_index
-            } else {
-                group_to_unique[group_index]
-            };
+            });
             selected_groups.push(unique_index);
         }
 
@@ -363,7 +370,14 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupValues for GroupValuesDiction
         let mut output = self.values.values_preserving(unique_selection)?;
         debug_assert_eq!(output.len(), 1);
         let values = output.pop().expect("one dictionary value column");
-        Ok(vec![Self::build_dictionary(values, &selected_groups)])
+        let null_slot = self
+            .null_group
+            .and_then(|group| group_to_unique.get(&group).copied());
+        Ok(vec![into_dictionary::<K>(
+            values,
+            Some(&selected_groups),
+            null_slot,
+        )])
     }
 
     fn supports_values_preserving(&self) -> bool {
@@ -386,6 +400,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupValues for GroupValuesDiction
 
 pub(in crate::aggregates::group_values) fn new_group_values(
     field: &Field,
+    group_clustering: &GroupClustering,
 ) -> Result<Box<dyn GroupValues>> {
     let DataType::Dictionary(key_type, value_type) = field.data_type() else {
         unreachable!("single dictionary group values require a dictionary field")
@@ -394,8 +409,10 @@ pub(in crate::aggregates::group_values) fn new_group_values(
 
     macro_rules! single_dict {
         ($K:ty) => {
-            Ok(Box::new(GroupValuesDictionary::<$K>::try_new(value_field)?)
-                as Box<dyn GroupValues>)
+            Ok(Box::new(GroupValuesDictionary::<$K>::try_new(
+                value_field,
+                group_clustering,
+            )?) as Box<dyn GroupValues>)
         };
     }
 
@@ -454,7 +471,7 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             true,
         );
-        let mut group_values = new_group_values(&field).unwrap();
+        let mut group_values = new_group_values(&field, &GroupClustering::None).unwrap();
         assert!(group_values.supports_values_preserving());
 
         let mut groups = vec![];
@@ -517,7 +534,7 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int8), Box::new(DataType::Utf8)),
             true,
         );
-        let mut group_values = new_group_values(&field).unwrap();
+        let mut group_values = new_group_values(&field, &GroupClustering::None).unwrap();
         let mut keys = (0..=i8::MAX).map(Some).collect::<Vec<_>>();
         keys.push(None);
         let values = (0..=i8::MAX).map(|value| format!("v{value}")).collect();
@@ -535,6 +552,15 @@ mod tests {
             )
             .unwrap();
         assert_eq!(selected[0].len(), selection.len());
+
+        group_values.emit(EmitTo::First(1)).unwrap();
+        group_values
+            .intern(
+                &[i8_dict(vec![Some(0)], vec!["replacement".to_string()])],
+                &mut groups,
+            )
+            .unwrap();
+        assert_eq!(group_values.len(), i8::MAX as usize + 2);
 
         let error = group_values
             .intern(
@@ -556,7 +582,7 @@ mod tests {
             DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
             true,
         );
-        let mut group_values = new_group_values(&field).unwrap();
+        let mut group_values = new_group_values(&field, &GroupClustering::None).unwrap();
         let input = i32_dict(&[Some(0)], &[Some("value")]);
         let values = Arc::clone(input.as_dictionary::<Int32Type>().values());
         let weak_values = Arc::downgrade(&values);
@@ -568,10 +594,44 @@ mod tests {
     }
 
     #[test]
+    fn partial_emit_reuses_shifted_cache() {
+        let value_field = Field::new("", DataType::Utf8, true);
+        let mut group_values = GroupValuesDictionary::<Int32Type>::try_new(
+            value_field,
+            &GroupClustering::None,
+        )
+        .unwrap();
+        let values: ArrayRef = Arc::new(StringArray::from(vec!["a", "b", "c"]));
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![0, 1, 2]),
+            Arc::clone(&values),
+        ));
+        let mut groups = vec![];
+        group_values.intern(&[dictionary], &mut groups).unwrap();
+
+        let emitted = group_values.emit(EmitTo::First(1)).unwrap();
+        assert_eq!(str_values(&emitted[0]), vec![Some("a".into())]);
+        let ValueToGroup::Dense(cache) = &group_values.value_to_group else {
+            panic!("small dictionaries use the dense cache");
+        };
+        assert_eq!(cache, &[UNRESOLVED, 0, 1]);
+
+        let dictionary: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
+            Int32Array::from(vec![1, 2]),
+            values,
+        ));
+        group_values.intern(&[dictionary], &mut groups).unwrap();
+        assert_eq!(groups, vec![0, 1]);
+    }
+
+    #[test]
     fn oversized_dictionary_uses_sparse_cache() {
         let value_field = Field::new("", DataType::Utf8, true);
-        let mut group_values =
-            GroupValuesDictionary::<Int32Type>::try_new(value_field).unwrap();
+        let mut group_values = GroupValuesDictionary::<Int32Type>::try_new(
+            value_field,
+            &GroupClustering::None,
+        )
+        .unwrap();
         let values: ArrayRef = Arc::new(StringArray::from_iter_values(
             (0..1_000).map(|value| format!("value_{value}")),
         ));
