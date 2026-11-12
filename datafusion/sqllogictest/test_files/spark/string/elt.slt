@@ -155,20 +155,32 @@ SELECT elt(1::int, NULL, 'b');
 NULL
 
 # Out-of-range positive index errors
-statement error DataFusion error: Execution error: The index 3 is out of bounds\. The array has 2 elements\.
+statement error
 SELECT elt(3::int, 'scala', 'java');
+----
+DataFusion error: Execution error: The index 3 is out of bounds. The array has 2 elements.
+
 
 # Zero index errors
-statement error DataFusion error: Execution error: The index 0 is out of bounds\. The array has 2 elements\.
+statement error
 SELECT elt(0::int, 'scala', 'java');
+----
+DataFusion error: Execution error: The index 0 is out of bounds. The array has 2 elements.
+
 
 # Negative index errors
-statement error DataFusion error: Execution error: The index -1 is out of bounds\. The array has 2 elements\.
+statement error
 SELECT elt(-1::int, 'scala', 'java');
+----
+DataFusion error: Execution error: The index -1 is out of bounds. The array has 2 elements.
+
 
 # Large positive index errors
-statement error DataFusion error: Execution error: The index 100 is out of bounds\. The array has 3 elements\.
+statement error
 SELECT elt(100::int, 'a', 'b', 'c');
+----
+DataFusion error: Execution error: The index 100 is out of bounds. The array has 3 elements.
+
 
 # Vectorized: a batch that contains any invalid index errors in ANSI mode
 statement ok
@@ -177,8 +189,11 @@ CREATE TABLE elt_ansi(idx INT, a STRING, b STRING) AS VALUES
     (2, 'a2', 'b2'),
     (3, 'a3', 'b3');
 
-statement error DataFusion error: Execution error: The index 3 is out of bounds\. The array has 2 elements\.
+statement error
 SELECT elt(idx, a, b) FROM elt_ansi;
+----
+DataFusion error: Execution error: The index 3 is out of bounds. The array has 2 elements.
+
 
 statement ok
 DROP TABLE elt_ansi;

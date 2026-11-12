@@ -18,8 +18,11 @@ SELECT add_months('2016-07-30'::date, 10000::int);
 2849-11-30
 
 # Test integer overflow
-query error DataFusion error: Arrow error: Compute error: Date arithmetic overflow: 17012 \+ 2147483647 months
+query error
 SELECT add_months('2016-07-30'::date, 2147483647::int);
+----
+DataFusion error: Arrow error: Compute error: Date arithmetic overflow: 17012 + 2147483647 months
+
 
 query D
 SELECT add_months('2016-07-30'::date, -5::int);

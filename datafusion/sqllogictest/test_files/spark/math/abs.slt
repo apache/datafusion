@@ -29,17 +29,29 @@ select abs((-128)::TINYINT), abs((-32768)::SMALLINT), abs((-2147483648)::INT), a
 statement ok
 set datafusion.execution.enable_ansi_mode = true;
 
-query error DataFusion error: Arrow error: Compute error: \[ARITHMETIC_OVERFLOW\] overflow\. If necessary set "spark\.sql\.ansi\.enabled" to "false" to bypass this error\. SQLSTATE: 22003
+query error
 select abs((-128)::TINYINT);
+----
+DataFusion error: Arrow error: Compute error: [ARITHMETIC_OVERFLOW] overflow. If necessary set "spark.sql.ansi.enabled" to "false" to bypass this error. SQLSTATE: 22003
 
-query error DataFusion error: Arrow error: Compute error: \[ARITHMETIC_OVERFLOW\] overflow\. If necessary set "spark\.sql\.ansi\.enabled" to "false" to bypass this error\. SQLSTATE: 22003
+
+query error
 select abs((-32768)::SMALLINT);
+----
+DataFusion error: Arrow error: Compute error: [ARITHMETIC_OVERFLOW] overflow. If necessary set "spark.sql.ansi.enabled" to "false" to bypass this error. SQLSTATE: 22003
 
-query error DataFusion error: Arrow error: Compute error: \[ARITHMETIC_OVERFLOW\] overflow\. If necessary set "spark\.sql\.ansi\.enabled" to "false" to bypass this error\. SQLSTATE: 22003
+
+query error
 select abs((-2147483648)::INT);
+----
+DataFusion error: Arrow error: Compute error: [ARITHMETIC_OVERFLOW] overflow. If necessary set "spark.sql.ansi.enabled" to "false" to bypass this error. SQLSTATE: 22003
 
-query error DataFusion error: Arrow error: Compute error: \[ARITHMETIC_OVERFLOW\] overflow\. If necessary set "spark\.sql\.ansi\.enabled" to "false" to bypass this error\. SQLSTATE: 22003
+
+query error
 select abs((-9223372036854775808)::BIGINT);
+----
+DataFusion error: Arrow error: Compute error: [ARITHMETIC_OVERFLOW] overflow. If necessary set "spark.sql.ansi.enabled" to "false" to bypass this error. SQLSTATE: 22003
+
 
 statement ok
 set datafusion.execution.enable_ansi_mode = false;
@@ -113,17 +125,29 @@ NULL
 statement ok
 set datafusion.execution.enable_ansi_mode = true;
 
-query error DataFusion error: Arrow error: Compute error: \[ARITHMETIC_OVERFLOW\] overflow\. If necessary set "spark\.sql\.ansi\.enabled" to "false" to bypass this error\. SQLSTATE: 22003
+query error
 SELECT abs(a) FROM (VALUES (-127::TINYINT), ((-128)::TINYINT)) AS t(a);
+----
+DataFusion error: Arrow error: Compute error: [ARITHMETIC_OVERFLOW] overflow. If necessary set "spark.sql.ansi.enabled" to "false" to bypass this error. SQLSTATE: 22003
 
-query error DataFusion error: Arrow error: Compute error: \[ARITHMETIC_OVERFLOW\] overflow\. If necessary set "spark\.sql\.ansi\.enabled" to "false" to bypass this error\. SQLSTATE: 22003
+
+query error
 select abs(a) FROM (VALUES (-32767::SMALLINT), ((-32768)::SMALLINT)) AS t(a);
+----
+DataFusion error: Arrow error: Compute error: [ARITHMETIC_OVERFLOW] overflow. If necessary set "spark.sql.ansi.enabled" to "false" to bypass this error. SQLSTATE: 22003
 
-query error DataFusion error: Arrow error: Compute error: \[ARITHMETIC_OVERFLOW\] overflow\. If necessary set "spark\.sql\.ansi\.enabled" to "false" to bypass this error\. SQLSTATE: 22003
+
+query error
 select abs(a) FROM (VALUES (-2147483647::INT), ((-2147483648)::INT)) AS t(a);
+----
+DataFusion error: Arrow error: Compute error: [ARITHMETIC_OVERFLOW] overflow. If necessary set "spark.sql.ansi.enabled" to "false" to bypass this error. SQLSTATE: 22003
 
-query error DataFusion error: Arrow error: Compute error: \[ARITHMETIC_OVERFLOW\] overflow\. If necessary set "spark\.sql\.ansi\.enabled" to "false" to bypass this error\. SQLSTATE: 22003
+
+query error
 select abs(a) FROM (VALUES (-9223372036854775807::BIGINT), ((-9223372036854775808)::BIGINT)) AS t(a);
+----
+DataFusion error: Arrow error: Compute error: [ARITHMETIC_OVERFLOW] overflow. If necessary set "spark.sql.ansi.enabled" to "false" to bypass this error. SQLSTATE: 22003
+
 
 statement ok
 set datafusion.execution.enable_ansi_mode = false;
