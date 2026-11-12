@@ -196,8 +196,7 @@ dependencies = [
 [[package]]
 name = "arrow-array"
 version = "60.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f3d22a41d3df78b71df0b685af219ae3a94188ab98d6fb29c958eb55c3247f4"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=b2b7d4705191a200ac7e395596c0946786d6f69c#b2b7d4705191a200ac7e395596c0946786d6f69c"
 dependencies = [
  "ahash",
  "arrow-buffer",
@@ -240,8 +239,7 @@ dependencies = [
 [[package]]
 name = "arrow-buffer"
 version = "60.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7bd46a530bc1a8e763102fc36c1dc0f51f3ffa150c78e7f5658ccb54b1458ade"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=b2b7d4705191a200ac7e395596c0946786d6f69c#b2b7d4705191a200ac7e395596c0946786d6f69c"
 dependencies = [
  "bytes",
  "half",
@@ -274,8 +272,7 @@ dependencies = [
 [[package]]
 name = "arrow-cmp"
 version = "60.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1913e57a64fbf2c4502fa6d54b547d6a1ae59e3146cbc15321d47468c937abd1"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=b2b7d4705191a200ac7e395596c0946786d6f69c#b2b7d4705191a200ac7e395596c0946786d6f69c"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -300,8 +297,7 @@ dependencies = [
 [[package]]
 name = "arrow-data"
 version = "60.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "415b7fbc4cf56b080bb5677a4ae74211b5c79e571ed37a1d547633ec07f3b43b"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=b2b7d4705191a200ac7e395596c0946786d6f69c#b2b7d4705191a200ac7e395596c0946786d6f69c"
 dependencies = [
  "arrow-buffer",
  "arrow-schema",
@@ -339,8 +335,7 @@ dependencies = [
 [[package]]
 name = "arrow-ipc"
 version = "60.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "45f3e766bccf5a0cb57a5de52a4cba450dea5171547c2cb5939b486d08887cba"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=b2b7d4705191a200ac7e395596c0946786d6f69c#b2b7d4705191a200ac7e395596c0946786d6f69c"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -380,8 +375,7 @@ dependencies = [
 [[package]]
 name = "arrow-ord"
 version = "60.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4c58f2ae6dd1480fc413f7320a547e39dcc499c23d4f36ca19572b685811e6e4"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=b2b7d4705191a200ac7e395596c0946786d6f69c#b2b7d4705191a200ac7e395596c0946786d6f69c"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -407,8 +401,7 @@ dependencies = [
 [[package]]
 name = "arrow-schema"
 version = "60.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de2c8e714b466404cdc1189e89f892426efea614d938e16c15518c340cd43ba3"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=b2b7d4705191a200ac7e395596c0946786d6f69c#b2b7d4705191a200ac7e395596c0946786d6f69c"
 dependencies = [
  "bitflags",
  "serde",
@@ -419,8 +412,7 @@ dependencies = [
 [[package]]
 name = "arrow-select"
 version = "60.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a5af3f6656c5f2c6944f93d9a357a7f204c93d5f349385a44cf46c4a26fbcf30"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=b2b7d4705191a200ac7e395596c0946786d6f69c#b2b7d4705191a200ac7e395596c0946786d6f69c"
 dependencies = [
  "ahash",
  "arrow-array",
@@ -434,8 +426,7 @@ dependencies = [
 [[package]]
 name = "arrow-string"
 version = "60.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ab1be9306b9a413b5b004e2a5a19caac728870d76e8891b351f040d554c93862"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=b2b7d4705191a200ac7e395596c0946786d6f69c#b2b7d4705191a200ac7e395596c0946786d6f69c"
 dependencies = [
  "arrow-array",
  "arrow-buffer",
@@ -4685,8 +4676,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "60.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "806eaa0f1c0436dcb43bee8e6a82bf2efff90521a60172f8281cb9ef577b43a4"
+source = "git+https://github.com/Rich-T-kid/arrow-rs.git?rev=b2b7d4705191a200ac7e395596c0946786d6f69c#b2b7d4705191a200ac7e395596c0946786d6f69c"
 dependencies = [
  "ahash",
  "arrow-array",
