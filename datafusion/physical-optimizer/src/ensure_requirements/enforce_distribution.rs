@@ -1435,9 +1435,7 @@ fn enforce_distribution_relationships(
                         .map(|s| s.is_satisfied())
                         .unwrap_or(false)
                 }
-                (Partitioning::Range(r1), Partitioning::Range(r2)) => {
-                    r1.has_same_layout(r2)
-                }
+                (Partitioning::Range(r1), Partitioning::Range(r2)) => r1 == r2,
                 _ => false,
             };
 
@@ -1770,7 +1768,12 @@ pub fn ensure_distribution_with_stats(
                     if should_add_repartition {
                         let partitioning = match child.plan.output_partitioning() {
                             Partitioning::Range(range) if partitioning_satisfied => {
-                                match range.scale(target_partitions) {
+                                let child_stats = stats_ctx
+                                    .compute_arc(&child.plan, &StatisticsArgs::new())?;
+                                match range.scale_with_statistics(
+                                    target_partitions,
+                                    &child_stats,
+                                ) {
                                     Some(range) => {
                                         let scaled = Partitioning::Range(range);
                                         // A single partition satisfies any key requirement,
@@ -1790,14 +1793,18 @@ pub fn ensure_distribution_with_stats(
                                                 .create_partitioning(target_partitions)
                                         }
                                     }
-                                    // Insufficient samples are expected. Preserve
-                                    // main's policy by falling back to key
-                                    // repartitioning at the requested parallelism.
+                                    // Insufficient quantile samples are expected; fall back to
+                                    // key repartitioning at the requested parallelism.
                                     None => requirement
                                         .clone()
                                         .create_partitioning(target_partitions),
                                 }
                             }
+                            // TODO: Also derive `Partitioning::Range` from `child`
+                            // `Statistics::distribution_statistics` when `child` is not
+                            // already `Range`-partitioned (e.g. `UnknownPartitioning`) and
+                            // an ordering requirement or existing child ordering aligns with
+                            // a `DistributionStatistics` synopsis.
                             _ => {
                                 requirement.clone().create_partitioning(target_partitions)
                             }

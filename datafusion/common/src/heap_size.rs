@@ -26,8 +26,11 @@
 //! assert_eq!(total, shared.heap_size(&mut DFHeapSizeCtx::default()));
 //! ```
 
-use crate::stats::Precision;
-use crate::{ColumnStatistics, ScalarValue, Statistics, TableReference};
+use crate::stats::{
+    ColumnSortKey, DistributionStatistics, DistributionStatisticsInner,
+    KeyDistributionEntry, KeyQuantiles, Precision,
+};
+use crate::{ColumnStatistics, ScalarValue, SplitPoint, Statistics, TableReference};
 use arrow::array::{
     Array, FixedSizeListArray, LargeListArray, LargeListViewArray, ListArray,
     ListViewArray, MapArray, StructArray,
@@ -74,6 +77,37 @@ impl DFHeapSize for Statistics {
         self.num_rows.heap_size(ctx)
             + self.total_byte_size.heap_size(ctx)
             + self.column_statistics.heap_size(ctx)
+            + self.distribution_statistics.heap_size(ctx)
+    }
+}
+
+impl DFHeapSize for SplitPoint {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.values.heap_size(ctx)
+    }
+}
+
+impl DFHeapSize for KeyQuantiles {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.samples.heap_size(ctx)
+    }
+}
+
+impl DFHeapSize for KeyDistributionEntry {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.key.heap_size(ctx) + self.quantiles.heap_size(ctx)
+    }
+}
+
+impl DFHeapSize for DistributionStatisticsInner {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.key_entries.heap_size(ctx)
+    }
+}
+
+impl DFHeapSize for DistributionStatistics {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        self.inner.heap_size(ctx)
     }
 }
 
@@ -310,6 +344,21 @@ impl DFHeapSize for Arc<str> {
     }
 }
 
+impl<T: DFHeapSize> DFHeapSize for Arc<[T]> {
+    fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
+        let ptr = arc_unsized_ptr(self);
+
+        if !ctx.count_allocation_once(ptr) {
+            return 0;
+        }
+
+        // Arc stores weak and strong counts on the heap alongside the slice elements
+        2 * size_of::<usize>()
+            + size_of_val(self.as_ref())
+            + self.iter().map(|t| t.heap_size(ctx)).sum::<usize>()
+    }
+}
+
 impl DFHeapSize for Arc<dyn DFHeapSize> {
     fn heap_size(&self, ctx: &mut DFHeapSizeCtx) -> usize {
         let ptr = arc_unsized_ptr(self);
@@ -458,6 +507,7 @@ impl_zero_heap_size!(
     TimeUnit,
     IntervalUnit,
     DateTime<Utc>,
+    ColumnSortKey,
 );
 
 /// Implement [`DFHeapSize`] for Arrow arrays types.
@@ -701,6 +751,7 @@ mod tests {
             num_rows: Precision::Exact(10),
             total_byte_size: Precision::Absent,
             column_statistics: vec![col],
+            distribution_statistics: DistributionStatistics::default(),
         };
         assert!(size(&stats) > 0);
     }

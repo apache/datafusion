@@ -26,7 +26,7 @@ use crate::projection::{ProjectionExec, all_columns, make_with_child, update_exp
 use crate::sorts::streaming_merge::StreamingMergeBuilder;
 use crate::spill::spill_manager::SpillManager;
 use crate::spill::spill_pool::{self, SpillPoolSink, SpillPoolWriter};
-use crate::statistics::{ChildStats, StatisticsArgs};
+use crate::statistics::{ChildStats, StatisticsArgs, StatisticsContext};
 use crate::stream::{EmptyRecordBatchStream, RecordBatchStreamAdapter};
 use crate::{
     ChildrenPropertiesMode, DisplayFormatType, ExecutionPlan, Partitioning,
@@ -416,6 +416,12 @@ impl RepartitionExecState {
         let num_input_partitions = input.output_partitioning().partition_count();
         let mut streams_and_metrics = Vec::with_capacity(num_input_partitions);
 
+        // TODO(https://github.com/apache/datafusion/issues/26509): Skip calling
+        // `input.execute(i, ...)` when per-partition `Statistics` prove input
+        // partition `i` is known-empty (`num_rows == Exact(0)`), and
+        // TODO(https://github.com/apache/datafusion/issues/25483): Prune disjoint
+        // `(input, output)` channels when per-partition `ColumnStatistics` extrema
+        // fall outside a `Partitioning::Range` slice.
         for i in 0..num_input_partitions {
             let metrics = RepartitionMetrics::new(i, output_partitions, metrics);
 
@@ -1931,11 +1937,16 @@ impl ExecutionPlan for RepartitionExec {
                 .unwrap_or(Precision::Absent);
 
             // Make all column stats unknown
+            // TODO(https://github.com/apache/datafusion/issues/23089): For
+            // `Partitioning::Range`, derive tighter per-partition `ColumnStatistics`
+            // bounds (and `Precision::Exact(0)` when input bounds do not intersect
+            // the partition's half-open interval) from `split_points`.
             stats.column_statistics = stats
                 .column_statistics
                 .iter()
                 .map(|_| ColumnStatistics::new_unknown())
                 .collect();
+            stats.distribution_statistics.clear();
 
             Ok(Arc::new(stats))
         } else {
@@ -1997,10 +2008,9 @@ impl ExecutionPlan for RepartitionExec {
                     );
                 };
 
-                Partitioning::Range(RangePartitioning::try_new_with_samples(
+                Partitioning::Range(RangePartitioning::try_new(
                     ordering,
-                    range_partitioning.samples().to_vec(),
-                    range_partitioning.partition_count(),
+                    range_partitioning.split_points().to_vec(),
                 )?)
             }
             others => others.clone(),
@@ -2062,7 +2072,11 @@ impl ExecutionPlan for RepartitionExec {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
             Range(range) => {
-                let Some(range) = range.scale(target_partitions) else {
+                let input_stats = StatisticsContext::new()
+                    .compute_arc(&self.input, &StatisticsArgs::new())?;
+                let Some(range) =
+                    range.scale_with_statistics(target_partitions, &input_stats)
+                else {
                     return Ok(None);
                 };
                 // A different layout needs its own channels, router, and metrics.
@@ -3157,16 +3171,40 @@ mod tests {
             .collect::<Result<Vec<_>>>()?;
 
         for preserve_order in [false, true] {
-            let source = TestMemoryExec::try_new(&partitions, Arc::clone(&schema), None)?
-                .try_with_sort_information(vec![ordering.clone()])?;
-            let source = Arc::new(TestMemoryExec::update_cache(&Arc::new(source)));
+            let streams = partitions
+                .iter()
+                .cloned()
+                .map(|batches| {
+                    Arc::new(crate::test::TestPartitionStream::new_with_batches(batches))
+                        as Arc<dyn PartitionStream>
+                })
+                .collect();
+            let stats = Statistics::new_unknown(&schema).try_with_key_quantiles(
+                vec![datafusion_common::stats::ColumnSortKey::new(
+                    0,
+                    SortOptions::default(),
+                )],
+                Precision::Exact(samples.clone()),
+            )?;
+            let source: Arc<dyn ExecutionPlan> = Arc::new(
+                StreamingTableExec::try_new(
+                    Arc::clone(&schema),
+                    streams,
+                    None,
+                    [ordering.clone()],
+                    false,
+                    None,
+                )?
+                .with_statistics(stats),
+            );
+            let initial_splits =
+                datafusion_common::downsample_split_points(&samples, 2).unwrap();
             let mut exec = Arc::new(
                 RepartitionExec::try_new(
                     source,
-                    Partitioning::Range(RangePartitioning::try_new_with_samples(
+                    Partitioning::Range(RangePartitioning::try_new(
                         ordering.clone(),
-                        samples.clone(),
-                        2,
+                        initial_splits,
                     )?),
                 )?
                 .with_batch_size(2)?,
@@ -3194,11 +3232,16 @@ mod tests {
             for target in [4, 1, 4] {
                 let scaled = exec
                     .repartitioned(target, &ConfigOptions::default())?
-                    .expect("retained samples support the requested partition count");
+                    .expect(
+                        "input DistributionStatistics support the requested partition count",
+                    );
                 let repartition = scaled.downcast_ref::<RepartitionExec>().unwrap();
                 let range = expect_range_partitioning(repartition.partitioning());
                 assert_eq!(range.partition_count(), target);
-                assert_eq!(range.samples(), samples);
+                assert_eq!(
+                    range.split_points(),
+                    datafusion_common::downsample_split_points(&samples, target).unwrap()
+                );
                 assert_eq!(range.ordering(), &ordering);
                 assert_eq!(repartition.preserve_order, preserve_order);
                 assert_eq!(repartition.batch_size, Some(2));
@@ -3610,15 +3653,10 @@ mod tests {
         let ordering =
             LexOrdering::new([PhysicalSortExpr::new_default(col("id", &schema)?)])
                 .expect("non-empty ordering");
-        let samples = [10, 20, 30, 40, 50]
-            .into_iter()
-            .map(|value| SplitPoint::new(vec![ScalarValue::UInt32(Some(value))]))
-            .collect();
+        let split_points = vec![SplitPoint::new(vec![ScalarValue::UInt32(Some(30))])];
         let repartition = Arc::new(RepartitionExec::try_new(
             Arc::new(EmptyExec::new(Arc::clone(&schema))),
-            Partitioning::Range(RangePartitioning::try_new_with_samples(
-                ordering, samples, 2,
-            )?),
+            Partitioning::Range(RangePartitioning::try_new(ordering, split_points)?),
         )?);
 
         let projection =
@@ -3634,7 +3672,7 @@ mod tests {
         assert!(swapped_repartition.input().is::<ProjectionExec>());
         let range = expect_range_partitioning(swapped_repartition.partitioning());
         assert_eq!(range.ordering()[0].to_string(), "id@1 ASC");
-        assert_eq!(range.max_partition_count(), 6);
+        assert_eq!(range.partition_count(), 2);
         assert_eq!(
             range.split_points(),
             &[SplitPoint::new(vec![ScalarValue::UInt32(Some(30))])]

@@ -578,10 +578,10 @@ JOIN sampled_range_partitioned r ON l.range_key = r.range_key;
 ----
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
-02)--RepartitionExec: partitioning=Range([range_key@0 ASC], [(20), (30), (40), (50)], 5, max 6), input_partitions=3
-03)----StreamingTableExec: partition_sizes=3, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(20), (40)], 3, max 6)
-04)--RepartitionExec: partitioning=Range([range_key@0 ASC], [(20), (30), (40), (50)], 5, max 6), input_partitions=3
-05)----StreamingTableExec: partition_sizes=3, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(20), (40)], 3, max 6)
+02)--RepartitionExec: partitioning=Range([range_key@0 ASC], [(20), (30), (40), (50)], 5), input_partitions=3
+03)----StreamingTableExec: partition_sizes=3, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(20), (40)], 3)
+04)--RepartitionExec: partitioning=Range([range_key@0 ASC], [(20), (30), (40), (50)], 5), input_partitions=3
+05)----StreamingTableExec: partition_sizes=3, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(20), (40)], 3)
 
 query III
 SELECT l.range_key, l.value, r.value
@@ -613,9 +613,9 @@ JOIN sampled_range_partitioned r ON l.range_key = r.range_key;
 physical_plan
 01)HashJoinExec: mode=Partitioned, join_type=Inner, on=[(range_key@0, range_key@0)], projection=[range_key@0, value@1, value@3]
 02)--RepartitionExec: partitioning=Hash([range_key@0], 7), input_partitions=3
-03)----StreamingTableExec: partition_sizes=3, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(20), (40)], 3, max 6)
+03)----StreamingTableExec: partition_sizes=3, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(20), (40)], 3)
 04)--RepartitionExec: partitioning=Hash([range_key@0], 7), input_partitions=3
-05)----StreamingTableExec: partition_sizes=3, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(20), (40)], 3, max 6)
+05)----StreamingTableExec: partition_sizes=3, projection=[range_key, value], output_partitioning=Range([range_key@0 ASC], [(20), (40)], 3)
 
 query III
 SELECT l.range_key, l.value, r.value

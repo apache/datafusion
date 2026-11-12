@@ -265,6 +265,7 @@ pub fn compute_record_batch_statistics(
         num_rows: Precision::Exact(nb_rows),
         total_byte_size: Precision::Exact(total_byte_size),
         column_statistics,
+        ..Default::default()
     }
 }
 
@@ -371,6 +372,7 @@ mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            ..Default::default()
         };
 
         assert_eq!(actual, expected);
@@ -404,6 +406,7 @@ mod tests {
                 null_count: Precision::Exact(3),
                 byte_size: Precision::Absent,
             }],
+            ..Default::default()
         };
 
         assert_eq!(actual, expected);

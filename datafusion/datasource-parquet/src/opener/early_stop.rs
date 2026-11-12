@@ -172,6 +172,7 @@ mod tests {
                     .with_max_value(Precision::Exact(ScalarValue::Int32(Some(9))))
                     .with_null_count(Precision::Exact(0)),
             ],
+            ..Default::default()
         };
         PartitionedFile::new("test.parquet".to_string(), 1_000)
             .with_statistics(Arc::new(statistics))

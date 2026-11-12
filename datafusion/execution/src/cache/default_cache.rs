@@ -1131,7 +1131,7 @@ mod tests {
                     CacheEntryInfo {
                         value: cached_value_1,
                         hits: 0,
-                        size_bytes: 373,
+                        size_bytes: 381,
                         expires: None,
                     }
                 ),
@@ -1140,7 +1140,7 @@ mod tests {
                     CacheEntryInfo {
                         value: cached_value_2,
                         hits: 0,
-                        size_bytes: 373,
+                        size_bytes: 381,
                         expires: None,
                     }
                 ),
@@ -1250,7 +1250,7 @@ mod tests {
         cache.put(&path_1, value_fits.clone());
 
         assert_eq!(cache.len(), 1);
-        assert_eq!(cache.memory_used(), 1514);
+        assert_eq!(cache.memory_used(), 1522);
 
         // now add an entry which is over the limit and make sure the old stale entry is removed
         let stale_entry = cache.put(&path_1, value_too_large.clone());
@@ -1283,6 +1283,7 @@ mod tests {
             num_rows: Precision::Exact(100),
             total_byte_size: Precision::Exact(100),
             column_statistics: vec![column_statistics.clone()],
+            ..Default::default()
         };
         let mut ctx = DFHeapSizeCtx::default();
         let object_meta = create_test_meta(file_name, stats.heap_size(&mut ctx) as u64);

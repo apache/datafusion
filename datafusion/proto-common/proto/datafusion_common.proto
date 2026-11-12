@@ -675,6 +675,33 @@ message Statistics {
   repeated ColumnStats column_stats = 3;
   // total_rows was removed - field 4 is reserved
   reserved 4;
+  DistributionStats distribution_stats = 5;
+}
+
+message SplitPoint {
+  repeated ScalarValue value = 1;
+}
+
+message ColumnSortKey {
+  uint64 index = 1;
+  bool descending = 2;
+  bool nulls_first = 3;
+}
+
+message QuantileSamples {
+  PrecisionInfo precision_info = 1;
+  repeated SplitPoint sample_point = 2;
+}
+
+message KeyDistributionStats {
+  repeated ColumnSortKey key = 1;
+  oneof synopsis {
+    QuantileSamples quantiles = 2;
+  }
+}
+
+message DistributionStats {
+  repeated KeyDistributionStats key_distributions = 1;
 }
 
 message ColumnStats {

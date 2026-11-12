@@ -22,10 +22,11 @@ use arrow::ipc::{
     writer::{DictionaryTracker, IpcDataGenerator, IpcWriteOptions},
 };
 
+use arrow::compute::SortOptions;
 use datafusion_common::{
     Column, ColumnStatistics, Constraint, Constraints, DFSchema, DFSchemaRef,
-    DataFusionError, JoinSide, ScalarValue, Statistics, TableReference,
-    arrow_datafusion_err,
+    DataFusionError, DistributionStatistics, JoinSide, ScalarValue, SplitPoint,
+    Statistics, TableReference, arrow_datafusion_err,
     config::{
         CsvOptions, JsonOptions, MaxRowGroupBytes, ParquetCdcOptions,
         ParquetColumnOptions, ParquetOptions, TableParquetOptions,
@@ -34,7 +35,7 @@ use datafusion_common::{
     parquet_config::RowGroupRangeAssignment,
     parsers::CompressionTypeVariant,
     plan_datafusion_err,
-    stats::Precision,
+    stats::{ColumnSortKey, Precision},
     utils::usize_from_wire,
 };
 
@@ -921,6 +922,84 @@ impl TryFrom<&protobuf::Constraints> for Constraints {
     }
 }
 
+impl TryFrom<&protobuf::SplitPoint> for SplitPoint {
+    type Error = DataFusionError;
+
+    fn try_from(sp: &protobuf::SplitPoint) -> datafusion_common::Result<Self> {
+        let values = sp
+            .value
+            .iter()
+            .map(|v| ScalarValue::try_from(v).map_err(DataFusionError::from))
+            .collect::<datafusion_common::Result<Vec<_>>>()?;
+        Ok(SplitPoint::new(values))
+    }
+}
+
+impl TryFrom<&protobuf::ColumnSortKey> for ColumnSortKey {
+    type Error = DataFusionError;
+
+    fn try_from(k: &protobuf::ColumnSortKey) -> datafusion_common::Result<Self> {
+        let index = usize_from_wire(k.index, "ColumnSortKey", "index")?;
+        Ok(ColumnSortKey::new(
+            index,
+            SortOptions {
+                descending: k.descending,
+                nulls_first: k.nulls_first,
+            },
+        ))
+    }
+}
+
+impl TryFrom<&protobuf::DistributionStats> for DistributionStatistics {
+    type Error = DataFusionError;
+
+    fn try_from(
+        ds: &protobuf::DistributionStats,
+    ) -> datafusion_common::Result<Self, Self::Error> {
+        let mut dist = DistributionStatistics::new();
+        for entry in &ds.key_distributions {
+            let key = entry
+                .key
+                .iter()
+                .map(ColumnSortKey::try_from)
+                .collect::<datafusion_common::Result<Vec<_>>>()?;
+            let quantiles = match &entry.synopsis {
+                Some(protobuf::key_distribution_stats::Synopsis::Quantiles(q)) => {
+                    let precision_type: protobuf::PrecisionInfo =
+                        q.precision_info.try_into().map_err(|_| {
+                            plan_datafusion_err!(
+                                "KeyDistributionStats: invalid QuantileSamples precision_info {}",
+                                q.precision_info
+                            )
+                        })?;
+                    match precision_type {
+                        protobuf::PrecisionInfo::Exact => {
+                            let pts = q
+                                .sample_point
+                                .iter()
+                                .map(SplitPoint::try_from)
+                                .collect::<datafusion_common::Result<Vec<_>>>()?;
+                            Precision::Exact(pts)
+                        }
+                        protobuf::PrecisionInfo::Inexact => {
+                            let pts = q
+                                .sample_point
+                                .iter()
+                                .map(SplitPoint::try_from)
+                                .collect::<datafusion_common::Result<Vec<_>>>()?;
+                            Precision::Inexact(pts)
+                        }
+                        protobuf::PrecisionInfo::Absent => Precision::Absent,
+                    }
+                }
+                None => Precision::Absent,
+            };
+            dist = dist.try_with_key_quantiles(key, quantiles)?;
+        }
+        Ok(dist)
+    }
+}
+
 impl TryFrom<&protobuf::Statistics> for Statistics {
     type Error = DataFusionError;
 
@@ -928,6 +1007,10 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
         s: &protobuf::Statistics,
     ) -> datafusion_common::Result<Self, Self::Error> {
         // Keep it sync with Statistics::to_proto
+        let distribution_statistics = match &s.distribution_stats {
+            Some(ds) => DistributionStatistics::try_from(ds)?,
+            None => DistributionStatistics::default(),
+        };
         Ok(Statistics {
             num_rows: if let Some(nr) = &s.num_rows {
                 nr.clone().into()
@@ -941,6 +1024,7 @@ impl TryFrom<&protobuf::Statistics> for Statistics {
             },
             // No column statistic (None) is encoded with empty array
             column_statistics: s.column_stats.iter().map(|s| s.into()).collect(),
+            distribution_statistics,
         })
     }
 }
@@ -1921,5 +2005,53 @@ mod tests {
         assert!(!opts.global.content_defined_chunking.enabled);
         let recovered = table_parquet_options_proto_round_trip(opts.clone());
         assert!(!recovered.global.content_defined_chunking.enabled);
+    }
+
+    #[test]
+    fn test_statistics_distribution_statistics_round_trip() {
+        use super::*;
+
+        let stats = Statistics::default()
+            .with_num_rows(Precision::Exact(100))
+            .try_with_key_quantiles(
+                vec![
+                    ColumnSortKey::new(
+                        0,
+                        SortOptions {
+                            descending: false,
+                            nulls_first: false,
+                        },
+                    ),
+                    ColumnSortKey::new(
+                        2,
+                        SortOptions {
+                            descending: true,
+                            nulls_first: true,
+                        },
+                    ),
+                ],
+                Precision::Exact(vec![
+                    SplitPoint::new(vec![
+                        ScalarValue::Int32(Some(10)),
+                        ScalarValue::Utf8(Some("z".to_string())),
+                    ]),
+                    SplitPoint::new(vec![
+                        ScalarValue::Int32(Some(10)),
+                        ScalarValue::Utf8(Some("a".to_string())),
+                    ]),
+                ]),
+            )
+            .unwrap()
+            .try_with_key_quantiles(
+                vec![ColumnSortKey::new(1, SortOptions::default())],
+                Precision::Inexact(vec![SplitPoint::new(vec![ScalarValue::Int64(
+                    Some(42),
+                )])]),
+            )
+            .unwrap();
+
+        let proto = protobuf::Statistics::from(&stats);
+        let recovered = Statistics::try_from(&proto).unwrap();
+        assert_eq!(recovered, stats);
     }
 }

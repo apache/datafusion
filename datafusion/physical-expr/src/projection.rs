@@ -650,6 +650,7 @@ impl ProjectionExprs {
     ///                 .with_max_value(Precision::Exact(ScalarValue::Int32(Some(200))))
     ///                 .with_distinct_count(Precision::Exact(25)),
     ///         ],
+    ///         ..Default::default()
     ///     };
     ///
     ///     // Create a projection that selects columns c and a (indices 2 and 0)
@@ -795,6 +796,15 @@ impl ProjectionExprs {
         }
         stats.calculate_total_byte_size(output_schema);
         stats.column_statistics = column_statistics;
+        stats.distribution_statistics =
+            stats.distribution_statistics.remap_columns(|in_col| {
+                self.exprs.iter().position(|proj_expr| {
+                    proj_expr
+                        .expr
+                        .downcast_ref::<Column>()
+                        .is_some_and(|col| col.index() == in_col)
+                })
+            });
         Ok(stats)
     }
 
@@ -2643,6 +2653,7 @@ pub(crate) mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            ..Default::default()
         }
     }
 
@@ -2733,6 +2744,7 @@ pub(crate) mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            ..Default::default()
         };
 
         assert_eq!(result, expected);
@@ -2779,6 +2791,7 @@ pub(crate) mod tests {
                     byte_size: Precision::Absent,
                 },
             ],
+            ..Default::default()
         };
 
         assert_eq!(result, expected);
@@ -3740,6 +3753,7 @@ pub(crate) mod tests {
                 num_rows,
                 total_byte_size: Precision::Absent,
                 column_statistics: Statistics::unknown_column(&input_schema),
+                ..Default::default()
             };
             let output_stats =
                 projection.project_statistics(input_stats, &output_schema)?;
@@ -3829,6 +3843,71 @@ pub(crate) mod tests {
             Precision::Exact(ScalarValue::Int64(Some(21)))
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_project_statistics_remaps_distribution_statistics() -> Result<()> {
+        use arrow::compute::SortOptions;
+        use datafusion_common::SplitPoint;
+        use datafusion_common::stats::ColumnSortKey;
+
+        let schema = get_schema();
+        let source = get_stats()
+            .try_with_key_quantiles(
+                vec![ColumnSortKey::new(0, SortOptions::default())],
+                Precision::Exact(vec![SplitPoint::new(vec![ScalarValue::Int64(Some(
+                    10,
+                ))])]),
+            )?
+            .try_with_key_quantiles(
+                vec![
+                    ColumnSortKey::new(1, SortOptions::new(true, false)),
+                    ColumnSortKey::new(0, SortOptions::default()),
+                ],
+                Precision::Inexact(vec![SplitPoint::new(vec![
+                    ScalarValue::from("m"),
+                    ScalarValue::Int64(Some(5)),
+                ])]),
+            )?
+            .try_with_key_quantiles(
+                vec![ColumnSortKey::new(2, SortOptions::default())],
+                Precision::Exact(vec![SplitPoint::new(vec![ScalarValue::Float32(
+                    Some(0.5),
+                )])]),
+            )?;
+
+        // Project (literal, col0, col1): col0 -> 1, col1 -> 2, col2 dropped.
+        let projection = ProjectionExprs::new(vec![
+            ProjectionExpr::new(
+                Arc::new(Literal::new(ScalarValue::Int64(Some(1)))),
+                "lit",
+            ),
+            ProjectionExpr::new(Arc::new(Column::new("col0", 0)), "col0"),
+            ProjectionExpr::new(Arc::new(Column::new("col1", 1)), "col1"),
+        ]);
+        let output_schema = projection.project_schema(&schema)?;
+        let projected = projection.project_statistics(source, &output_schema)?;
+
+        assert_eq!(
+            projected
+                .distribution_statistics
+                .max_partition_count(&[ColumnSortKey::new(1, SortOptions::default())]),
+            Some(2)
+        );
+        assert_eq!(
+            projected.distribution_statistics.max_partition_count(&[
+                ColumnSortKey::new(2, SortOptions::new(true, false)),
+                ColumnSortKey::new(1, SortOptions::default()),
+            ]),
+            Some(2)
+        );
+        assert_eq!(
+            projected
+                .distribution_statistics
+                .max_partition_count(&[ColumnSortKey::new(0, SortOptions::default())]),
+            None
+        );
         Ok(())
     }
 }

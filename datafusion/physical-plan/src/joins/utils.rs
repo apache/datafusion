@@ -147,10 +147,9 @@ pub fn adjust_right_output_partitioning(
                     "Offsetting range partitioning produced an empty ordering"
                 )
             })?;
-            Partitioning::Range(RangePartitioning::try_new_with_samples(
+            Partitioning::Range(RangePartitioning::try_new(
                 ordering,
-                range.samples().to_vec(),
-                range.partition_count(),
+                range.split_points().to_vec(),
             )?)
         }
         result => result.clone(),
@@ -481,6 +480,7 @@ pub(crate) fn estimate_join_statistics(
         num_rows,
         total_byte_size,
         column_statistics,
+        ..Default::default()
     })
 }
 
@@ -517,11 +517,13 @@ fn estimate_join_cardinality(
                 num_rows: left_stats.num_rows,
                 total_byte_size: Precision::Absent,
                 column_statistics: left_key_stats,
+                ..Default::default()
             };
             let right_keys_stats = Statistics {
                 num_rows: right_stats.num_rows,
                 total_byte_size: Precision::Absent,
                 column_statistics: right_key_stats,
+                ..Default::default()
             };
             // For a single null-safe key, every left NULL matches every right
             // NULL. With more keys their correlation is unknown.
@@ -638,11 +640,13 @@ fn estimate_join_cardinality(
                 num_rows: outer_stats.num_rows,
                 total_byte_size: Precision::Absent,
                 column_statistics: outer_key_stats.clone(),
+                ..Default::default()
             };
             let inner_join_key_stats = Statistics {
                 num_rows: inner_stats.num_rows,
                 total_byte_size: Precision::Absent,
                 column_statistics: inner_key_stats.clone(),
+                ..Default::default()
             };
 
             let semi_cardinality =
@@ -3345,6 +3349,7 @@ mod tests {
             .unwrap_or(Absent),
             column_statistics: column_stats,
             total_byte_size: Absent,
+            ..Default::default()
         }
     }
 
@@ -3563,11 +3568,13 @@ mod tests {
                         num_rows: Inexact(left_num_rows),
                         total_byte_size: Absent,
                         column_statistics: left_col_stats.clone(),
+                        ..Default::default()
                     },
                     &Statistics {
                         num_rows: Inexact(right_num_rows),
                         total_byte_size: Absent,
                         column_statistics: right_col_stats.clone(),
+                        ..Default::default()
                     },
                 ),
                 expected_cardinality.clone()
@@ -3617,6 +3624,7 @@ mod tests {
                 distinct_count,
                 ..Default::default()
             }],
+            ..Default::default()
         };
         let large_row_count = usize::MAX / 2 + 1;
 
@@ -3668,11 +3676,13 @@ mod tests {
                     num_rows: Inexact(400),
                     total_byte_size: Absent,
                     column_statistics: left_col_stats,
+                    ..Default::default()
                 },
                 &Statistics {
                     num_rows: Inexact(400),
                     total_byte_size: Absent,
                     column_statistics: right_col_stats,
+                    ..Default::default()
                 },
             ),
             Some(Inexact((400 * 400) / 200))
@@ -3702,11 +3712,13 @@ mod tests {
                     num_rows: Inexact(100),
                     total_byte_size: Absent,
                     column_statistics: left_col_stats,
+                    ..Default::default()
                 },
                 &Statistics {
                     num_rows: Inexact(100),
                     total_byte_size: Absent,
                     column_statistics: right_col_stats,
+                    ..Default::default()
                 },
             ),
             Some(Inexact(100))
@@ -4482,11 +4494,13 @@ mod tests {
                     num_rows: Inexact(outer_num_rows),
                     total_byte_size: Absent,
                     column_statistics: outer_col_stats,
+                    ..Default::default()
                 },
                 Statistics {
                     num_rows: Inexact(inner_num_rows),
                     total_byte_size: Absent,
                     column_statistics: inner_col_stats,
+                    ..Default::default()
                 },
                 &join_on,
                 NullEquality::NullEqualsNothing,
@@ -4517,11 +4531,13 @@ mod tests {
                 num_rows: Absent,
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
+                ..Default::default()
             },
             Statistics {
                 num_rows: Exact(10),
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNothing,
@@ -4537,11 +4553,13 @@ mod tests {
                 num_rows: Inexact(500),
                     total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
+                ..Default::default()
             },
             Statistics {
                 num_rows: Absent,
                     total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNothing,
@@ -4558,11 +4576,13 @@ mod tests {
                 num_rows: Absent,
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats.clone(),
+                ..Default::default()
             },
             Statistics {
                 num_rows: Absent,
                 total_byte_size: Absent,
                 column_statistics: dummy_column_stats,
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNothing,
@@ -4602,6 +4622,7 @@ mod tests {
                     create_column_stats(Absent, Absent, Inexact(20), Absent),
                     create_column_stats(Absent, Absent, Inexact(40), Absent),
                 ],
+                ..Default::default()
             },
             Statistics {
                 num_rows: Inexact(200),
@@ -4610,6 +4631,7 @@ mod tests {
                     create_column_stats(Absent, Absent, Inexact(10), Absent),
                     create_column_stats(Absent, Absent, Inexact(10), Absent),
                 ],
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNothing,
@@ -4627,6 +4649,7 @@ mod tests {
                     create_column_stats(Absent, Absent, Inexact(20), Absent),
                     create_column_stats(Absent, Absent, Inexact(40), Absent),
                 ],
+                ..Default::default()
             },
             Statistics {
                 num_rows: Inexact(200),
@@ -4635,6 +4658,7 @@ mod tests {
                     create_column_stats(Absent, Absent, Inexact(10), Absent),
                     create_column_stats(Absent, Absent, Inexact(10), Absent),
                 ],
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNothing,
@@ -4655,6 +4679,7 @@ mod tests {
                     create_column_stats(Absent, Absent, Inexact(20), Absent),
                     create_column_stats(Absent, Absent, Inexact(40), Absent),
                 ],
+                ..Default::default()
             },
             Statistics {
                 num_rows: Inexact(200),
@@ -4663,6 +4688,7 @@ mod tests {
                     create_column_stats(Absent, Absent, Inexact(10), Absent),
                     create_column_stats(Absent, Absent, Absent, Absent),
                 ],
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNothing,
@@ -4680,6 +4706,7 @@ mod tests {
                     create_column_stats(Absent, Absent, Inexact(20), Absent),
                     create_column_stats(Absent, Absent, Absent, Absent),
                 ],
+                ..Default::default()
             },
             Statistics {
                 num_rows: Inexact(200),
@@ -4688,6 +4715,7 @@ mod tests {
                     create_column_stats(Absent, Absent, Absent, Absent),
                     create_column_stats(Absent, Absent, Inexact(10), Absent),
                 ],
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNothing,
@@ -4709,6 +4737,7 @@ mod tests {
                     create_column_stats(Absent, Absent, Inexact(20), Absent),
                     create_column_stats(Absent, Absent, Inexact(40), Inexact(20)),
                 ],
+                ..Default::default()
             },
             Statistics {
                 num_rows: Inexact(200),
@@ -4717,6 +4746,7 @@ mod tests {
                     create_column_stats(Absent, Absent, Inexact(10), Absent),
                     create_column_stats(Absent, Absent, Inexact(10), Absent),
                 ],
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNothing,
@@ -4746,6 +4776,7 @@ mod tests {
                 create_column_stats(Inexact(1), Inexact(10), Absent, Absent),
                 create_column_stats(Inexact(100), Inexact(200), Absent, Absent),
             ],
+            ..Default::default()
         };
         let right_stats = Statistics {
             num_rows: Inexact(10),
@@ -4754,6 +4785,7 @@ mod tests {
                 create_column_stats(Inexact(1), Inexact(10), Absent, Absent),
                 create_column_stats(Inexact(1000), Inexact(2000), Absent, Absent),
             ],
+            ..Default::default()
         };
 
         let left_semi = estimate_join_cardinality(
@@ -4807,6 +4839,7 @@ mod tests {
                         byte_size: Exact(3_457_496),
                     },
                 ],
+                ..Default::default()
             },
             Statistics {
                 num_rows: Inexact(32),
@@ -4817,6 +4850,7 @@ mod tests {
                     Absent,
                     Absent,
                 )],
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNothing,
@@ -4861,6 +4895,7 @@ mod tests {
                     Inexact(100),
                     Exact(20),
                 )],
+                ..Default::default()
             },
             Statistics {
                 num_rows: Inexact(10),
@@ -4871,6 +4906,7 @@ mod tests {
                     Inexact(10),
                     Absent,
                 )],
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNull,
@@ -4912,6 +4948,7 @@ mod tests {
                         byte_size: Absent,
                     },
                 ],
+                ..Default::default()
             },
             Statistics {
                 num_rows: Inexact(10),
@@ -4922,6 +4959,7 @@ mod tests {
                     Absent,
                     Absent,
                 )],
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNothing,
@@ -4950,6 +4988,7 @@ mod tests {
                     Inexact(900_000),
                     Exact(100_000),
                 )],
+                ..Default::default()
             },
             Statistics {
                 num_rows: Inexact(900_000),
@@ -4960,6 +4999,7 @@ mod tests {
                     Inexact(900_000),
                     Absent,
                 )],
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNothing,
@@ -4989,6 +5029,7 @@ mod tests {
                     Inexact(100),
                     Exact(20),
                 )],
+                ..Default::default()
             },
             Statistics {
                 num_rows: Inexact(10),
@@ -4999,6 +5040,7 @@ mod tests {
                     Inexact(10),
                     Absent,
                 )],
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNull,
@@ -5030,6 +5072,7 @@ mod tests {
                     Absent,
                     Absent,
                 )],
+                ..Default::default()
             },
             Statistics {
                 num_rows: Inexact(432_187),
@@ -5052,6 +5095,7 @@ mod tests {
                         byte_size: Exact(3_457_496),
                     },
                 ],
+                ..Default::default()
             },
             &join_on,
             NullEquality::NullEqualsNothing,
@@ -5075,18 +5119,6 @@ mod tests {
         let split_points = vec![
             SplitPoint::new(vec![
                 ScalarValue::Int32(Some(10)),
-                ScalarValue::Int32(Some(100)),
-            ]),
-            SplitPoint::new(vec![
-                ScalarValue::Int32(Some(20)),
-                ScalarValue::Int32(Some(50)),
-            ]),
-            SplitPoint::new(vec![
-                ScalarValue::Int32(Some(30)),
-                ScalarValue::Int32(Some(40)),
-            ]),
-            SplitPoint::new(vec![
-                ScalarValue::Int32(Some(40)),
                 ScalarValue::Int32(Some(30)),
             ]),
             SplitPoint::new(vec![
@@ -5094,7 +5126,7 @@ mod tests {
                 ScalarValue::Int32(Some(20)),
             ]),
         ];
-        let range = RangePartitioning::try_new_with_samples(
+        let range = RangePartitioning::try_new(
             LexOrdering::new([
                 PhysicalSortExpr::new(
                     Arc::new(Column::new("a", 0)),
@@ -5107,16 +5139,15 @@ mod tests {
             ])
             .unwrap(),
             split_points.clone(),
-            3,
         )?;
 
         let adjusted = adjust_right_output_partitioning(&Partitioning::Range(range), 3)?;
         let Partitioning::Range(adjusted_range) = &adjusted else {
             panic!("expected range partitioning");
         };
-        assert_eq!(adjusted_range.max_partition_count(), 6);
-        assert_eq!(adjusted_range.samples(), split_points);
-        let expected = Partitioning::Range(RangePartitioning::try_new_with_samples(
+        assert_eq!(adjusted_range.partition_count(), 3);
+        assert_eq!(adjusted_range.split_points(), split_points);
+        let expected = Partitioning::Range(RangePartitioning::try_new(
             LexOrdering::new([
                 PhysicalSortExpr::new(
                     Arc::new(Column::new("a", 3)),
@@ -5129,7 +5160,6 @@ mod tests {
             ])
             .unwrap(),
             split_points,
-            3,
         )?);
 
         assert_eq!(adjusted, expected);

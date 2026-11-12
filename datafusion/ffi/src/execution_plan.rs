@@ -934,6 +934,7 @@ pub mod tests {
                 distinct_count: Precision::Inexact(6),
                 byte_size: Precision::Exact(28),
             }],
+            ..Default::default()
         };
         (schema, statistics)
     }

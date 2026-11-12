@@ -29,12 +29,14 @@ use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::physical_plan::{CsvSource, ParquetSource};
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::prelude::{SessionConfig, SessionContext};
+use datafusion_common::DistributionStatistics;
 use datafusion_common::NullEquality;
 use datafusion_common::ScalarValue;
 use datafusion_common::Statistics;
 use datafusion_common::config::CsvOptions;
+use datafusion_common::downsample_split_points;
 use datafusion_common::error::Result;
-use datafusion_common::stats::Precision;
+use datafusion_common::stats::{ColumnSortKey, Precision};
 use datafusion_common::tree_node::{
     Transformed, TransformedResult, TreeNode, TreeNodeRecursion,
 };
@@ -68,6 +70,7 @@ use datafusion_physical_expr::{
     ScalarFunctionExpr, SplitPoint,
 };
 use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion_physical_plan::common::compute_record_batch_statistics;
 use datafusion_physical_plan::execution_plan::ExecutionPlan;
 use datafusion_physical_plan::expressions::col;
 use datafusion_physical_plan::filter::FilterExec;
@@ -78,7 +81,8 @@ use datafusion_physical_plan::projection::{ProjectionExec, ProjectionExpr};
 use datafusion_physical_plan::repartition::RepartitionExec;
 use datafusion_physical_plan::sorts::sort::SortExec;
 use datafusion_physical_plan::sorts::sort_preserving_merge::SortPreservingMergeExec;
-use datafusion_physical_plan::streaming::StreamingTableExec;
+use datafusion_physical_plan::streaming::{PartitionStream, StreamingTableExec};
+use datafusion_physical_plan::test::TestPartitionStream;
 use datafusion_physical_plan::union::{InterleaveExec, UnionExec};
 use datafusion_physical_plan::{
     ChildrenPropertiesMode, DisplayAs, DisplayFormatType, ExecutionPlanProperties,
@@ -380,6 +384,16 @@ fn parquet_exec_multiple_sorted(
 fn parquet_exec_with_output_partitioning(
     output_partitioning: Partitioning,
 ) -> Arc<DataSourceExec> {
+    parquet_exec_with_output_partitioning_and_statistics(
+        output_partitioning,
+        Statistics::new_unknown(&schema()),
+    )
+}
+
+fn parquet_exec_with_output_partitioning_and_statistics(
+    output_partitioning: Partitioning,
+    statistics: Statistics,
+) -> Arc<DataSourceExec> {
     let file_groups = (0..output_partitioning.partition_count())
         .map(|partition| {
             FileGroup::new(vec![PartitionedFile::new(format!("p{partition}"), 100)])
@@ -392,9 +406,38 @@ fn parquet_exec_with_output_partitioning(
     )
     .with_file_groups(file_groups)
     .with_output_partitioning(Some(output_partitioning))
+    .with_statistics(statistics)
     .build();
 
     DataSourceExec::from_data_source(config)
+}
+
+fn streaming_exec_with_partitioning_and_stats(
+    schema: SchemaRef,
+    partitions: &[Vec<RecordBatch>],
+    partitioning: Partitioning,
+    dist_stats: DistributionStatistics,
+) -> Result<Arc<dyn ExecutionPlan>> {
+    let stats = compute_record_batch_statistics(partitions, &schema, None)
+        .with_distribution_statistics(dist_stats);
+    let streams: Vec<Arc<dyn PartitionStream>> = partitions
+        .iter()
+        .map(|batches| {
+            if batches.is_empty() {
+                Arc::new(TestPartitionStream {
+                    schema: Arc::clone(&schema),
+                    batches: vec![],
+                }) as _
+            } else {
+                Arc::new(TestPartitionStream::new_with_batches(batches.clone())) as _
+            }
+        })
+        .collect();
+    Ok(Arc::new(
+        StreamingTableExec::try_new(schema, streams, None, None, false, None)?
+            .with_output_partitioning(partitioning)?
+            .with_statistics(stats),
+    ))
 }
 
 fn range_partitioning(
@@ -1979,14 +2022,24 @@ fn range_hash_join_repartitions_unpartitioned_side_to_match_range() -> Result<()
 #[test]
 fn range_requirement_scales_within_sample_resolution() -> Result<()> {
     let ordering = [PhysicalSortExpr::new_default(col("a", &schema())?)].into();
-    let samples = (10..=50)
+    let samples: Vec<SplitPoint> = (10..=50)
         .step_by(10)
         .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
         .collect();
-    let range = RangePartitioning::try_new_with_samples(ordering, samples, 3)?;
+    let max_partitions = samples.len() + 1;
+    let range = RangePartitioning::try_new(
+        ordering,
+        downsample_split_points(&samples, 3).unwrap(),
+    )?;
+    let stats = Statistics::new_unknown(&schema()).try_with_key_quantiles(
+        vec![ColumnSortKey::new(0, SortOptions::default())],
+        Precision::Exact(samples),
+    )?;
     for target in [2, 3, 5, 6, 7] {
-        let input =
-            parquet_exec_with_output_partitioning(Partitioning::Range(range.clone()));
+        let input = parquet_exec_with_output_partitioning_and_statistics(
+            Partitioning::Range(range.clone()),
+            stats.clone(),
+        );
         let requirement = RequirementsTestExec::new(input)
             .with_required_input_distribution(Distribution::KeyPartitioned(vec![col(
                 "a",
@@ -1998,16 +2051,18 @@ fn range_requirement_scales_within_sample_resolution() -> Result<()> {
             .to_plan(requirement, &DISTRIB_DISTRIB_SORT);
         let rendered = displayable(plan.as_ref()).indent(true).to_string();
         let child = Arc::clone(plan.children()[0]);
-        if target <= range.max_partition_count() {
+        if target <= max_partitions {
             let Partitioning::Range(actual) = child.output_partitioning() else {
                 panic!("range partitioning lost for target {target}: {rendered}");
             };
             let expected_count = if (4..=6).contains(&target) { target } else { 3 };
             assert_eq!(actual.partition_count(), expected_count, "{rendered}");
-            assert_eq!(actual.samples(), range.samples());
             assert_eq!(
                 actual.split_points(),
-                range.scale(expected_count).unwrap().split_points()
+                range
+                    .scale_with_statistics(expected_count, &stats)
+                    .unwrap()
+                    .split_points()
             );
         } else {
             let Partitioning::Hash(_, actual_count) = child.output_partitioning() else {
@@ -2030,10 +2085,16 @@ fn range_singleton_scaling_respects_required_keys() -> Result<()> {
         .step_by(10)
         .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
         .collect();
-    let range = RangePartitioning::try_new_with_samples(ordering, samples, 1)?;
+    let range = RangePartitioning::try_new(ordering, vec![])?;
+    let stats = Statistics::new_unknown(&schema()).try_with_key_quantiles(
+        vec![ColumnSortKey::new(0, SortOptions::default())],
+        Precision::Exact(samples),
+    )?;
     for key in ["a", "b"] {
-        let input =
-            parquet_exec_with_output_partitioning(Partitioning::Range(range.clone()));
+        let input = parquet_exec_with_output_partitioning_and_statistics(
+            Partitioning::Range(range.clone()),
+            stats.clone(),
+        );
         let required = Distribution::KeyPartitioned(vec![col(key, &schema())?]);
         let requirement = RequirementsTestExec::new(input)
             .with_required_input_distribution(required.clone())
@@ -2060,29 +2121,36 @@ fn range_singleton_scaling_respects_required_keys() -> Result<()> {
 #[test]
 fn range_join_accepts_matching_layouts_with_different_sample_capacity() -> Result<()> {
     let ordering = [PhysicalSortExpr::new_default(col("a", &schema())?)].into();
-    let sampled = RangePartitioning::try_new_with_samples(
+    let samples: Vec<SplitPoint> = (10..=50)
+        .step_by(10)
+        .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+        .collect();
+    let layout = RangePartitioning::try_new(
         ordering,
-        (10..=50)
-            .step_by(10)
-            .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
-            .collect(),
-        3,
+        downsample_split_points(&samples, 3).unwrap(),
     )?;
-    let exact = RangePartitioning::try_new_with_samples(
-        sampled.ordering().clone(),
-        sampled.split_points().to_vec(),
-        3,
+    let key = vec![ColumnSortKey::new(0, SortOptions::default())];
+    let sampled_stats = Statistics::new_unknown(&schema())
+        .try_with_key_quantiles(key.clone(), Precision::Exact(samples))?;
+    let exact_stats = Statistics::new_unknown(&schema()).try_with_key_quantiles(
+        key.clone(),
+        Precision::Exact(layout.split_points().to_vec()),
     )?;
 
     for swap in [false, true] {
-        let (left_range, right_range) = if swap {
-            (exact.clone(), sampled.clone())
+        let (left_stats, right_stats) = if swap {
+            (exact_stats.clone(), sampled_stats.clone())
         } else {
-            (sampled.clone(), exact.clone())
+            (sampled_stats.clone(), exact_stats.clone())
         };
-        let left = parquet_exec_with_output_partitioning(Partitioning::Range(left_range));
-        let right =
-            parquet_exec_with_output_partitioning(Partitioning::Range(right_range));
+        let left = parquet_exec_with_output_partitioning_and_statistics(
+            Partitioning::Range(layout.clone()),
+            left_stats,
+        );
+        let right = parquet_exec_with_output_partitioning_and_statistics(
+            Partitioning::Range(layout.clone()),
+            right_stats,
+        );
         let join_on = vec![(col("a", &schema())?, col("a", &schema())?)];
         let join = hash_join_exec(left, right, &join_on, &JoinType::Inner);
         let plan = TestConfig::default()
@@ -2094,14 +2162,21 @@ fn range_join_accepts_matching_layouts_with_different_sample_capacity() -> Resul
             0,
             "{rendered}"
         );
+        let stats_ctx = datafusion_physical_plan::statistics::StatisticsContext::new();
         let capacities = plan
             .children()
             .into_iter()
             .map(|child| {
-                let Partitioning::Range(range) = child.output_partitioning() else {
-                    panic!("expected range partitioning: {rendered}");
-                };
-                range.max_partition_count()
+                let stats = stats_ctx
+                    .compute_arc(
+                        child,
+                        &datafusion_physical_plan::statistics::StatisticsArgs::new(),
+                    )
+                    .unwrap();
+                stats
+                    .distribution_statistics
+                    .max_partition_count(&key)
+                    .unwrap()
             })
             .collect::<Vec<_>>();
         assert_eq!(capacities, if swap { vec![3, 6] } else { vec![6, 3] });
@@ -2159,17 +2234,23 @@ fn range_preservation_keeps_existing_native_reference() -> Result<()> {
 fn scaled_range_does_not_replace_native_hash_reference() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int64, false)]));
     let ordering = [PhysicalSortExpr::new_default(col("a", &schema)?)].into();
-    let samples = (10..=50)
+    let samples: Vec<SplitPoint> = (10..=50)
         .step_by(10)
         .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
         .collect();
-    let range = Partitioning::Range(RangePartitioning::try_new_with_samples(
-        ordering, samples, 3,
+    let range = Partitioning::Range(RangePartitioning::try_new(
+        ordering,
+        downsample_split_points(&samples, 3).unwrap(),
     )?);
+    let dist_stats = DistributionStatistics::new().try_with_key_quantiles(
+        vec![ColumnSortKey::new(0, SortOptions::default())],
+        Precision::Exact(samples),
+    )?;
     let hash = Partitioning::Hash(vec![col("a", &schema)?], 4);
 
     let source = |partitioning: Partitioning,
-                  rows_per_partition: usize|
+                  rows_per_partition: usize,
+                  extra_dist_stats: DistributionStatistics|
      -> Result<Arc<dyn ExecutionPlan>> {
         let partitions = (0..partitioning.partition_count())
             .map(|index| {
@@ -2182,18 +2263,19 @@ fn scaled_range_does_not_replace_native_hash_reference() -> Result<()> {
                 )?])
             })
             .collect::<Result<Vec<_>>>()?;
-        let source =
-            MemorySourceConfig::try_new_exec(&partitions, Arc::clone(&schema), None)?;
-        Ok(Arc::new(
-            source.as_ref().clone().with_partitioning(partitioning),
-        ))
+        streaming_exec_with_partitioning_and_stats(
+            Arc::clone(&schema),
+            &partitions,
+            partitioning,
+            extra_dist_stats,
+        )
     };
 
     for swap in [false, true] {
         // The larger input must not make a newly scaled range exchange look
         // more native than a source that already provides the required hash layout.
-        let range_source = source(range.clone(), 100)?;
-        let hash_source = source(hash.clone(), 1)?;
+        let range_source = source(range.clone(), 100, dist_stats.clone())?;
+        let hash_source = source(hash.clone(), 1, DistributionStatistics::default())?;
         let (left, right) = if swap {
             (hash_source, range_source)
         } else {
@@ -2213,7 +2295,10 @@ fn scaled_range_does_not_replace_native_hash_reference() -> Result<()> {
             );
         }
         let native_hash = usize::from(!swap);
-        assert!(children[native_hash].is::<DataSourceExec>(), "{rendered}");
+        assert!(
+            children[native_hash].is::<StreamingTableExec>(),
+            "{rendered}"
+        );
         assert!(
             children[1 - native_hash].is::<RepartitionExec>(),
             "{rendered}"
@@ -2312,22 +2397,25 @@ async fn range_singleton_scaling_preserves_aggregate_groups() -> Result<()> {
             Arc::new(Int64Array::from(vec![1, 2, 1, 2, 1, 2])),
         ],
     )?;
-    let range = RangePartitioning::try_new_with_samples(
+    let range = RangePartitioning::try_new(
         [PhysicalSortExpr::new_default(col("a", &schema)?)].into(),
-        (10..=50)
-            .step_by(10)
-            .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
-            .collect(),
-        1,
+        vec![],
     )?;
-    let source =
-        MemorySourceConfig::try_new_exec(&[vec![batch]], Arc::clone(&schema), None)?;
-    let source = Arc::new(
-        source
-            .as_ref()
-            .clone()
-            .with_partitioning(Partitioning::Range(range)),
-    );
+    let dist_stats = DistributionStatistics::new().try_with_key_quantiles(
+        vec![ColumnSortKey::new(0, SortOptions::default())],
+        Precision::Exact(
+            (10..=50)
+                .step_by(10)
+                .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
+                .collect(),
+        ),
+    )?;
+    let source = streaming_exec_with_partitioning_and_stats(
+        Arc::clone(&schema),
+        &[vec![batch]],
+        Partitioning::Range(range),
+        dist_stats,
+    )?;
     // The input represents partial groups. Repeated b values must be combined,
     // even though they lie on opposite sides of the retained a boundaries.
     let aggregate = Arc::new(AggregateExec::try_new(
@@ -2389,12 +2477,9 @@ async fn range_hash_join_scaling_preserves_rows() -> Result<()> {
                 vec![batch(vec![Some(40), Some(50), Some(99)])?],
             ]
         };
-        let ordering = [PhysicalSortExpr::new(
-            col("a", &schema)?,
-            SortOptions::new(descending, !descending),
-        )]
-        .into();
-        let samples = (1..=5)
+        let options = SortOptions::new(descending, !descending);
+        let ordering = [PhysicalSortExpr::new(col("a", &schema)?, options)].into();
+        let samples: Vec<SplitPoint> = (1..=5)
             .map(|index| {
                 if descending {
                     60 - index * 10
@@ -2404,16 +2489,23 @@ async fn range_hash_join_scaling_preserves_rows() -> Result<()> {
             })
             .map(|value| SplitPoint::new(vec![ScalarValue::Int64(Some(value))]))
             .collect();
-        let range = RangePartitioning::try_new_with_samples(ordering, samples, 3)?;
+        let range = RangePartitioning::try_new(
+            ordering,
+            downsample_split_points(&samples, 3).unwrap(),
+        )?;
+        let dist_stats = DistributionStatistics::new().try_with_key_quantiles(
+            vec![ColumnSortKey::new(0, options)],
+            Precision::Exact(samples),
+        )?;
+        let expected_stats = Statistics::new_unknown(&schema)
+            .with_distribution_statistics(dist_stats.clone());
         for target in [3, 5, 6, 8] {
-            let source =
-                MemorySourceConfig::try_new_exec(&partitions, Arc::clone(&schema), None)?;
-            let right: Arc<dyn ExecutionPlan> = Arc::new(
-                source
-                    .as_ref()
-                    .clone()
-                    .with_partitioning(Partitioning::Range(range.clone())),
-            );
+            let right = streaming_exec_with_partitioning_and_stats(
+                Arc::clone(&schema),
+                &partitions,
+                Partitioning::Range(range.clone()),
+                dist_stats.clone(),
+            )?;
             let left = MemorySourceConfig::try_new_exec(
                 &[partitions.iter().flatten().cloned().collect()],
                 Arc::clone(&schema),
@@ -2434,7 +2526,10 @@ async fn range_hash_join_scaling_preserves_rows() -> Result<()> {
                     assert_eq!(actual.partition_count(), expected_count, "{rendered}");
                     assert_eq!(
                         actual.split_points(),
-                        range.scale(expected_count).unwrap().split_points()
+                        range
+                            .scale_with_statistics(expected_count, &expected_stats)
+                            .unwrap()
+                            .split_points()
                     );
                 } else {
                     // No native reference exists at this count. Both sides use

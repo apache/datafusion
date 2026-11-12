@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::{DFSchema, Result, plan_err};
+use datafusion_common::{DFSchema, Result, Statistics, plan_err};
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{Expr, SortExpr, TableType};
 use datafusion_physical_expr::equivalence::project_ordering;
@@ -32,6 +32,7 @@ pub struct StreamingTable {
     infinite: bool,
     sort_order: Vec<SortExpr>,
     output_partitioning: Option<Partitioning>,
+    statistics: Option<Statistics>,
 }
 
 impl StreamingTable {
@@ -57,6 +58,7 @@ impl StreamingTable {
             infinite: false,
             sort_order: vec![],
             output_partitioning: None,
+            statistics: None,
         })
     }
 
@@ -79,6 +81,35 @@ impl StreamingTable {
     /// physical plan reports unknown partitioning.
     pub fn with_output_partitioning(mut self, output_partitioning: Partitioning) -> Self {
         self.output_partitioning = Some(output_partitioning);
+        self
+    }
+
+    /// Declares overall [`Statistics`] for this streaming table.
+    ///
+    /// Column indices in `statistics` refer to the unprojected table schema;
+    /// scans forward them to [`StreamingTableExec::with_statistics`], which
+    /// projects and bounds them according to scan `projection` and `limit`.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use arrow::datatypes::{DataType, Field, Schema};
+    /// # use datafusion_catalog::TableProvider;
+    /// # use datafusion_catalog::streaming::StreamingTable;
+    /// # use datafusion_common::Statistics;
+    /// # use datafusion_common::stats::Precision;
+    /// let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Int32, false)]));
+    /// let stats = Statistics::new_unknown(&schema).with_num_rows(Precision::Exact(10));
+    /// let table = StreamingTable::try_new(schema, vec![])?.with_statistics(stats);
+    /// assert_eq!(
+    ///     table.statistics().unwrap().num_rows,
+    ///     Precision::Exact(10),
+    /// );
+    /// # Ok::<(), datafusion_common::DataFusionError>(())
+    /// ```
+    pub fn with_statistics(mut self, statistics: Statistics) -> Self {
+        self.statistics = Some(statistics);
         self
     }
 
@@ -105,6 +136,10 @@ impl TableProvider for StreamingTable {
 
     fn table_type(&self) -> TableType {
         TableType::View
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        self.statistics.clone()
     }
 
     // Hand-written `#[async_trait]` expansion to reduce compile time. See
@@ -173,7 +208,7 @@ impl StreamingTable {
             vec![]
         };
 
-        let exec = StreamingTableExec::try_new(
+        let mut exec = StreamingTableExec::try_new(
             Arc::clone(&self.schema),
             self.partitions.clone(),
             projection,
@@ -182,6 +217,9 @@ impl StreamingTable {
             limit,
         )?
         .with_output_partitioning(self.output_partitioning(projection)?)?;
+        if let Some(stats) = &self.statistics {
+            exec = exec.with_statistics(stats.clone());
+        }
 
         Ok(Arc::new(exec))
     }
