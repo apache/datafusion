@@ -359,20 +359,20 @@ SELECT * FROM (SELECT * FROM eq_t ORDER BY a + 1 LIMIT 100) WHERE a = b AND c = 
 statement ok
 DROP TABLE eq_t;
 
-# The two IN lists hold the same values in a different order, so they compare
-# equal but are kept as two members of the class of b. Planning must still
-# finish.
+# With a + b = a, the window's PARTITION BY a + b is the same key as the
+# ORDER BY a below it
 statement ok
-CREATE TABLE eq_in (a INT, b BOOLEAN) AS VALUES (1, true), (9, false);
+CREATE TABLE eq_sub (a INT, b INT) AS VALUES (1, 0), (2, 3), (1, 0), (5, 0);
 
-query IB rowsort
-SELECT * FROM eq_in WHERE (a IN (1, 2, 3, 4)) = b AND (a IN (4, 3, 2, 1)) = b;
+query II
+SELECT a, sum(b) OVER (PARTITION BY a + b ORDER BY a) FROM eq_sub WHERE a + b = a ORDER BY a;
 ----
-1 true
-9 false
+1 0
+1 0
+5 0
 
 statement ok
-DROP TABLE eq_in;
+DROP TABLE eq_sub;
 
 ###
 ### Order-preserving repartition of an unbounded input

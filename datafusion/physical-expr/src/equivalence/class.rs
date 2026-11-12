@@ -213,6 +213,7 @@ impl EquivalenceClass {
             }
         }
         self.exprs.insert(expr);
+        self.promote_sub_expressions();
     }
 
     /// Makes sure the canonical expression does not contain another expression
@@ -256,6 +257,7 @@ impl EquivalenceClass {
             (None, Some(_)) => self.constant = other.constant,
             (_, None) => {}
         }
+        self.promote_sub_expressions();
     }
 
     /// Returns whether this equivalence class has any entries in common with
@@ -469,25 +471,21 @@ impl EquivalenceGroup {
                 // Update the lookup table for the second class:
                 Self::update_lookup_table(&mut self.map, &other_class, first_idx);
                 self.classes[first_idx].extend(other_class);
-                self.classes[first_idx].promote_sub_expressions();
             }
             (Some(group_idx), None) => {
                 // Right side is new, extend left side's class:
                 self.map.insert(Arc::clone(&right), group_idx);
                 self.classes[group_idx].push(right);
-                self.classes[group_idx].promote_sub_expressions();
             }
             (None, Some(group_idx)) => {
                 // Left side is new, extend right side's class:
                 self.map.insert(Arc::clone(&left), group_idx);
                 self.classes[group_idx].push(left);
-                self.classes[group_idx].promote_sub_expressions();
             }
             (None, None) => {
                 // None of the expressions is among existing classes.
                 // Create a new equivalence class and extend the group.
-                let mut class = EquivalenceClass::new([left, right]);
-                class.promote_sub_expressions();
+                let class = EquivalenceClass::new([left, right]);
                 Self::update_lookup_table(&mut self.map, &class, self.classes.len());
                 self.classes.push(class);
                 return true;
@@ -1767,6 +1765,29 @@ mod tests {
         assert_eq!(bridged.len(), 1, "expected a single bridged class");
         assert!(bridged.has_same_classes(&direct));
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_sub_expression_is_canonical_on_every_path() -> Result<()> {
+        let schema = abc_schema();
+        let (a, b, c) = (col("a", &schema)?, col("b", &schema)?, col("c", &schema)?);
+        let a_plus_b = binary(Arc::clone(&a), Operator::Plus, b, &schema)?;
+
+        // A class built directly, with the larger expression first
+        let group = EquivalenceGroup::new([EquivalenceClass::new([
+            Arc::clone(&a_plus_b),
+            Arc::clone(&a),
+        ])]);
+        assert!(group.normalize_expr(Arc::clone(&a_plus_b)).eq(&a));
+
+        // Two classes bridged by `extend` through the shared `c`
+        let mut group = EquivalenceGroup::default();
+        group.add_equal_conditions(Arc::clone(&a_plus_b), Arc::clone(&c));
+        let mut other = EquivalenceGroup::default();
+        other.add_equal_conditions(c, Arc::clone(&a));
+        group.extend(other);
+        assert!(group.normalize_expr(a_plus_b).eq(&a));
         Ok(())
     }
 }
