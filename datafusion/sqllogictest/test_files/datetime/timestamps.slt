@@ -2369,9 +2369,12 @@ SELECT ts1 + i FROM foo;
 2003-07-12T01:31:15.000123463
 
 # Timestamp + Timestamp => error
-query error DataFusion error: Error during planning: Cannot get result type for temporal operation Timestamp\(ns\) \+ Timestamp\(ns\): Invalid argument error: Invalid timestamp arithmetic operation: Timestamp\(ns\) \+ Timestamp\(ns\)
+query error
 SELECT ts1 + ts2
 FROM foo;
+----
+DataFusion error: Error during planning: Cannot get result type for temporal operation Timestamp(ns) + Timestamp(ns): Invalid argument error: Invalid timestamp arithmetic operation: Timestamp(ns) + Timestamp(ns)
+
 
 # Timestamp - Timestamp
 query ?
@@ -3245,24 +3248,39 @@ query error input contains invalid characters
 SELECT to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%c', '%+')
 
 # to_timestamp with broken formatting
-query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
+query error
 SELECT to_timestamp('2020-09-08 12/00/00+00:00', '%q')
+----
+DataFusion error: Execution error: Error parsing timestamp from '2020-09-08 12/00/00+00:00' using format '%q': trailing input
+
 
 # to_timestamp_nanos with broken formatting
-query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
+query error
 SELECT to_timestamp_nanos('2020-09-08 12/00/00+00:00', '%q')
+----
+DataFusion error: Execution error: Error parsing timestamp from '2020-09-08 12/00/00+00:00' using format '%q': trailing input
+
 
 # to_timestamp_millis with broken formatting
-query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
+query error
 SELECT to_timestamp_millis('2020-09-08 12/00/00+00:00', '%q')
+----
+DataFusion error: Execution error: Error parsing timestamp from '2020-09-08 12/00/00+00:00' using format '%q': trailing input
+
 
 # to_timestamp_micros with broken formatting
-query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
+query error
 SELECT to_timestamp_micros('2020-09-08 12/00/00+00:00', '%q')
+----
+DataFusion error: Execution error: Error parsing timestamp from '2020-09-08 12/00/00+00:00' using format '%q': trailing input
+
 
 # to_timestamp_seconds with broken formatting
-query error DataFusion error: Execution error: Error parsing timestamp from '2020\-09\-08 12/00/00\+00:00' using format '%q': trailing input
+query error
 SELECT to_timestamp_seconds('2020-09-08 12/00/00+00:00', '%q')
+----
+DataFusion error: Execution error: Error parsing timestamp from '2020-09-08 12/00/00+00:00' using format '%q': trailing input
+
 
 # Create string timestamp table with different formats
 # including a few very non-standard formats
@@ -3488,9 +3506,14 @@ logical_plan
 
 # Literal of a different type: type coercion rejects the comparison before
 # the preimage is consulted, so the preimage only ever sees timestamp literals.
-query error DataFusion error: type_coercion\ncaused by\nError during planning: Cannot infer common argument type for comparison operation Timestamp\(ns\) = Int32
+query error
 SELECT * FROM ts_data_nanos
 WHERE date_trunc('day', ts) = arrow_cast(1714521600, 'Int32');
+----
+DataFusion error: type_coercion
+caused by
+Error during planning: Cannot infer common argument type for comparison operation Timestamp(ns) = Int32
+
 
 # Date column: preimage peels the signature-inserted Cast(date, Timestamp(ns))
 # and emits bounds in the Date type against the raw column, enabling pruning
