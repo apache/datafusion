@@ -61,7 +61,21 @@ fn calculate_union_binary(
     orderings.add_satisfied_orderings(rhs, &lhs)?;
     let orderings = orderings.build();
 
+    // An equality holds at the output only if it holds in both inputs. Keep
+    // it in the result so the next fold step can still use it.
+    let mut eq_group = EquivalenceGroup::default();
+    for class in lhs.eq_group().iter() {
+        for (i, left) in class.iter().enumerate() {
+            for right in class.iter().skip(i + 1) {
+                if rhs.eq_group().exprs_equal(left, right) {
+                    eq_group.add_equal_conditions(Arc::clone(left), Arc::clone(right));
+                }
+            }
+        }
+    }
+
     let mut eq_properties = EquivalenceProperties::new(lhs.schema);
+    eq_properties.add_equivalence_group(eq_group)?;
     eq_properties.add_constants(constants)?;
     eq_properties.add_orderings(orderings);
     Ok(eq_properties)
@@ -102,22 +116,6 @@ pub fn calculate_union(
         groupings.add_groupings(std::iter::once(grouping.iter().cloned()));
     }
 
-    // An equality holds across the union only if it holds in every input partition.
-    let mut eq_group = EquivalenceGroup::default();
-    if !eqps.is_empty() && eqps.iter().all(|p| !p.eq_group().is_empty()) {
-        let (first, rest) = eqps.split_first().unwrap();
-        for cls in first.eq_group().iter() {
-            for (i, left) in cls.iter().enumerate() {
-                for right in cls.iter().skip(i + 1) {
-                    if rest.iter().all(|p| p.eq_group().exprs_equal(left, right)) {
-                        eq_group
-                            .add_equal_conditions(Arc::clone(left), Arc::clone(right));
-                    }
-                }
-            }
-        }
-    }
-
     let mut iter = eqps.into_iter();
     let Some(mut acc) = iter.next() else {
         return internal_err!(
@@ -129,7 +127,6 @@ pub fn calculate_union(
     for props in iter {
         acc = calculate_union_binary(acc, &props)?;
     }
-    acc.add_equivalence_group(eq_group)?;
     acc.add_groupings(groupings);
     Ok(acc)
 }

@@ -1170,6 +1170,34 @@ ORDER BY x, y;
 2 2
 2 2
 
+# The arm without x = y is folded last, after the arms that have it.
+query II
+SELECT a AS x, a AS y FROM t_26625
+UNION ALL
+SELECT a AS x, a AS y FROM t_26625
+UNION ALL
+SELECT a AS x, (a % 2)::INT AS y FROM t_26625
+ORDER BY x, y;
+----
+1 1
+1 1
+1 1
+2 0
+2 2
+2 2
+
+# Arms with different aliases and casts still preserve equivalence
+query II
+SELECT a AS x, a AS y FROM t_26625
+UNION ALL
+SELECT a::BIGINT AS p, a::BIGINT AS q FROM t_26625
+ORDER BY x, y;
+----
+1 1
+1 1
+2 2
+2 2
+
 statement ok
 DROP TABLE t_26625;
 
