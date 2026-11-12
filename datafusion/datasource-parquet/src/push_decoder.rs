@@ -43,6 +43,7 @@ use parquet::arrow::push_decoder::{
 };
 use parquet::file::metadata::ParquetMetaData;
 
+use datafusion_common::utils::memory::RecordBatchMemoryTracker;
 use datafusion_common::{DataFusionError, Result, internal_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::expressions::DynamicFilterTracking;
@@ -753,6 +754,9 @@ pub(crate) struct RowGroupReverser {
     /// in decode order, so popping from the end yields the row group back to
     /// front.
     reversed: Vec<RecordBatch>,
+    /// Tracks the distinct buffers held by [`Self::pending`] and
+    /// [`Self::reversed`], so buffers shared across batches are charged once.
+    memory: RecordBatchMemoryTracker,
     /// Charges the memory pool for the batches held. `None` when the scan was
     /// opened without a pool.
     reservation: Option<MemoryReservation>,
@@ -768,6 +772,7 @@ impl RowGroupReverser {
             pending: VecDeque::new(),
             pending_rows: 0,
             reversed: Vec::new(),
+            memory: RecordBatchMemoryTracker::new(),
             reservation,
         }
     }
@@ -775,8 +780,9 @@ impl RowGroupReverser {
     /// Returns the next batch of the finished row group, last rows first.
     fn pop(&mut self) -> Option<RecordBatch> {
         let batch = self.reversed.pop()?;
+        let freed = self.memory.uncount_batch_with_array_overhead(&batch);
         if let Some(reservation) = &self.reservation {
-            reservation.shrink(batch.get_array_memory_size());
+            reservation.shrink(freed);
         }
         Some(batch)
     }
@@ -789,8 +795,12 @@ impl RowGroupReverser {
         if batch.num_rows() == 0 {
             return Ok(());
         }
-        if let Some(reservation) = &self.reservation {
-            reservation.try_grow(batch.get_array_memory_size())?;
+        let charged = self.memory.count_batch_with_array_overhead(&batch);
+        if let Some(reservation) = &self.reservation
+            && let Err(e) = reservation.try_grow(charged)
+        {
+            self.memory.uncount_batch_with_array_overhead(&batch);
+            return Err(e);
         }
         self.pending_rows += batch.num_rows();
         self.pending.push_back(batch);
@@ -799,10 +809,11 @@ impl RowGroupReverser {
                 && self.pending_rows - front.num_rows() >= limit
             {
                 self.pending_rows -= front.num_rows();
-                if let Some(dropped) = self.pending.pop_front()
-                    && let Some(reservation) = &self.reservation
-                {
-                    reservation.shrink(dropped.get_array_memory_size());
+                if let Some(dropped) = self.pending.pop_front() {
+                    let freed = self.memory.uncount_batch_with_array_overhead(&dropped);
+                    if let Some(reservation) = &self.reservation {
+                        reservation.shrink(freed);
+                    }
                 }
             }
         }
@@ -817,22 +828,24 @@ impl RowGroupReverser {
             && let Some(front) = self.pending.front_mut()
         {
             let excess = self.pending_rows - limit;
-            *front = front.slice(excess, front.num_rows() - excess);
+            let original = front.clone();
+            let sliced = original.slice(excess, original.num_rows() - excess);
+            self.memory.count_batch_with_array_overhead(&sliced);
+            self.memory.uncount_batch_with_array_overhead(&original);
+            *front = sliced;
         }
         self.pending_rows = 0;
-        // The reversed copies replace the decoded batches, so the
-        // reservation is resized to exactly what is stored, which `pop`
-        // releases batch by batch.
+        // The reversed copies replace the decoded batches, so count each
+        // reversed batch before releasing the decoded one. Shared buffers stay
+        // charged until the last batch that holds them is released.
         for batch in self.pending.drain(..) {
-            self.reversed.push(reverse_batch_rows(&batch)?);
+            let reversed = reverse_batch_rows(&batch)?;
+            self.memory.count_batch_with_array_overhead(&reversed);
+            self.memory.uncount_batch_with_array_overhead(&batch);
+            self.reversed.push(reversed);
         }
         if let Some(reservation) = &self.reservation {
-            let stored = self
-                .reversed
-                .iter()
-                .map(RecordBatch::get_array_memory_size)
-                .sum();
-            reservation.try_resize(stored)?;
+            reservation.try_resize(self.memory.memory_usage())?;
         }
         Ok(())
     }
@@ -858,6 +871,9 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use bytes::Bytes;
     use datafusion_common::ScalarValue;
+    use datafusion_execution::memory_pool::{
+        GreedyMemoryPool, MemoryConsumer, MemoryPool,
+    };
     use datafusion_expr::Operator;
     use datafusion_physical_expr::expressions::{
         BinaryExpr, Column, DynamicFilterPhysicalExpr, lit,
@@ -1073,5 +1089,54 @@ mod tests {
             err.to_string().contains("diverged"),
             "expected a divergence internal error, got: {err}",
         );
+    }
+
+    /// A batch whose clone shares every buffer with the original.
+    fn shared_buffer_batch() -> RecordBatch {
+        let schema = Arc::new(Schema::new(vec![Field::new("v", DataType::Int64, false)]));
+        RecordBatch::try_new(
+            schema,
+            vec![Arc::new(Int64Array::from_iter_values(0..1024))],
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn row_group_reverser_counts_shared_buffers_once() {
+        let batch = shared_buffer_batch();
+        let size = batch.get_array_memory_size();
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(size + size / 2));
+        let reservation = MemoryConsumer::new("reverse-test").register(&pool);
+        let mut reverser = RowGroupReverser::new(None, Some(reservation));
+
+        // A clone shares every buffer with the original, so the second push
+        // must not charge the same buffers again.
+        reverser.push(batch.clone()).unwrap();
+        reverser.push(batch).unwrap();
+
+        assert!(
+            pool.reserved() <= size,
+            "shared buffers charged more than once: {} > {size}",
+            pool.reserved()
+        );
+    }
+
+    #[test]
+    fn row_group_reverser_releases_shared_buffers() {
+        let batch = shared_buffer_batch();
+        let size = batch.get_array_memory_size();
+        let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(size * 8));
+        let reservation = MemoryConsumer::new("reverse-test").register(&pool);
+        let mut reverser = RowGroupReverser::new(None, Some(reservation));
+
+        reverser.push(batch.clone()).unwrap();
+        reverser.push(batch).unwrap();
+        reverser.finish().unwrap();
+        assert!(pool.reserved() > 0);
+
+        assert!(reverser.pop().is_some());
+        assert!(reverser.pop().is_some());
+        assert!(reverser.pop().is_none());
+        assert_eq!(pool.reserved(), 0, "all held batches must be released");
     }
 }
