@@ -796,6 +796,46 @@ FROM times LIMIT 1;
 ----
 Time64(ns) Time32(s) Time32(ms) Time64(µs) Time64(ns)
 
+# Times with different units coerce to the finer unit, so extra digits are
+# compared rather than truncated.
+query BBBBBB
+SELECT s = TIME '12:34:56', ms = TIME '12:34:56.123', us = TIME '12:34:56.123456',
+       us = t, us < t, s < ms
+FROM times WHERE t IS NOT NULL;
+----
+true true true false true true
+
+query D
+SELECT us FROM times WHERE us IN (TIME '12:34:56.123456', TIME '00:00:00');
+----
+12:34:56.123456
+
+statement ok
+CREATE TABLE time_keys (k TIME) AS VALUES (TIME '12:34:56.123'), (TIME '12:34:56.123456');
+
+query DD
+SELECT us, k FROM times JOIN time_keys ON us = k;
+----
+12:34:56.123456 12:34:56.123456
+
+statement ok
+DROP TABLE time_keys;
+
+query TD rowsort
+SELECT arrow_typeof(x), x FROM (SELECT s AS x FROM times UNION ALL SELECT us FROM times)
+WHERE x IS NOT NULL;
+----
+Time64(µs) 12:34:56
+Time64(µs) 12:34:56.123456
+
+query TTTD rowsort
+SELECT arrow_typeof(coalesce(s, ms)), arrow_typeof(coalesce(ms, us)),
+       arrow_typeof(coalesce(us, t)), coalesce(us, TIME '00:00:00')
+FROM times;
+----
+Time32(ms) Time64(µs) Time64(ns) 00:00:00
+Time32(ms) Time64(µs) Time64(ns) 12:34:56.123456
+
 statement ok
 DROP TABLE times;
 
