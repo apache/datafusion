@@ -731,14 +731,19 @@ impl Stream for MaterializingSortMergeJoinStream {
                         .filter_metadata
                         .debug_assert_metadata_aligned();
 
-                    // For filtered joins, must concat and filter ALL data at once
+                    // For filtered joins, must concat and filter ALL data at once.
+                    // The result is staged in `self.output` rather than returned
+                    // directly: `output` may still hold rows from earlier flushes,
+                    // and those precede these on the streamed side. Emitting this
+                    // batch around it would break the streamed-side ordering the
+                    // operator advertises via `maintains_input_order`.
                     if needs_deferred_filtering(&self.filter, self.join_type)
                         && !self.joined_record_batches.joined_batches.is_empty()
                     {
                         let record_batch = self.filter_joined_batch()?;
-                        (&record_batch)
-                            .record_output(&self.join_metrics.baseline_metrics());
-                        return Poll::Ready(Some(Ok(record_batch)));
+                        self.output
+                            .push_batch(record_batch)
+                            .expect("Failed to push output batch");
                     }
 
                     // For non-filtered joins, finish buffered data first
