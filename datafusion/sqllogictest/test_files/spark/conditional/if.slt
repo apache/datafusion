@@ -116,7 +116,7 @@ NULL
 query R
 SELECT if(true, 10, 20.5);
 ----
-10
+10.0
 
 query R
 SELECT if(false, 10, 20.5);
@@ -132,9 +132,9 @@ SELECT if(true, 10.5, 20);
 query R
 SELECT if(false, 10.5, 20);
 ----
-20
+20.0
 
-statement error Int64 is not a boolean or null
+statement error Int32 is not a boolean or null
 SELECT if(1, 10.5, 20);
 
 

@@ -8,17 +8,17 @@
 
 # Float64 tests - returns Int64
 query IT
-SELECT floor(1.1), arrow_typeof(floor(1.1));
+SELECT floor(1.1::DOUBLE), arrow_typeof(floor(1.1::DOUBLE));
 ----
 1 Int64
 
 query IT
-SELECT floor(-1.1), arrow_typeof(floor(-1.1));
+SELECT floor(-1.1::DOUBLE), arrow_typeof(floor(-1.1::DOUBLE));
 ----
 -2 Int64
 
 query IT
-SELECT floor(0.0), arrow_typeof(floor(0.0));
+SELECT floor(0.0::DOUBLE), arrow_typeof(floor(0.0::DOUBLE));
 ----
 0 Int64
 

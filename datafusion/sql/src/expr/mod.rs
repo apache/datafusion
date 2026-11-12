@@ -1800,6 +1800,40 @@ mod tests {
     }
 
     #[test]
+    fn numeric_literal_dialect_respects_parser_options_override() {
+        use crate::planner::ParserOptions;
+        use datafusion_common::ScalarValue;
+        use datafusion_common::config::Dialect;
+
+        let mut context = TestContextProvider::new();
+        context.options.sql_parser.dialect = Dialect::Spark;
+        let from_context = SqlToRel::new(&context);
+        assert_eq!(
+            from_context.parse_sql_number("1", false, false).unwrap(),
+            lit(ScalarValue::Int32(Some(1)))
+        );
+
+        let generic = SqlToRel::new_with_options(&context, ParserOptions::default());
+        assert_eq!(
+            generic.parse_sql_number("1", false, false).unwrap(),
+            lit(ScalarValue::Int64(Some(1)))
+        );
+
+        context.options.sql_parser.dialect = Dialect::Generic;
+        let spark = SqlToRel::new_with_options(
+            &context,
+            ParserOptions {
+                dialect: Dialect::Spark,
+                ..Default::default()
+            },
+        );
+        assert_eq!(
+            spark.parse_sql_number("1", false, false).unwrap(),
+            lit(ScalarValue::Int32(Some(1)))
+        );
+    }
+
+    #[test]
     fn test_parse_numbers_with_underscores() {
         use datafusion_common::ScalarValue::*;
 
@@ -1817,11 +1851,11 @@ mod tests {
 
         for (literal, out_positive, out_negative) in test_cases {
             assert_eq!(
-                sql_to_rel.parse_sql_number(literal, false).unwrap(),
+                sql_to_rel.parse_sql_number(literal, false, false).unwrap(),
                 Expr::Literal(out_positive, None)
             );
             assert_eq!(
-                sql_to_rel.parse_sql_number(literal, true).unwrap(),
+                sql_to_rel.parse_sql_number(literal, true, false).unwrap(),
                 Expr::Literal(out_negative, None)
             );
         }

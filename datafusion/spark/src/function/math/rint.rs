@@ -7,7 +7,8 @@ use std::sync::Arc;
 use arrow::array::{Array, ArrayRef, AsArray};
 use arrow::compute::cast;
 use arrow::datatypes::DataType::{
-    Float32, Float64, Int8, Int16, Int32, Int64, UInt8, UInt16, UInt32, UInt64,
+    Decimal128, Decimal256, Float32, Float64, Int8, Int16, Int32, Int64, UInt8, UInt16,
+    UInt32, UInt64,
 };
 use arrow::datatypes::{DataType, Float32Type, Float64Type};
 use datafusion_common::{Result, assert_eq_or_internal_err, exec_err};
@@ -72,6 +73,7 @@ pub fn spark_rint(args: &[ArrayRef]) -> Result<ArrayRef> {
         Int8 | Int16 | Int32 | Int64 | UInt8 | UInt16 | UInt32 | UInt64 => {
             Ok(cast(array, &Float64)?)
         }
+        Decimal128(..) | Decimal256(..) => spark_rint(&[cast(array, &Float64)?]),
         Float64 => {
             let array = array
                 .as_primitive::<Float64Type>()

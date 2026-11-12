@@ -144,4 +144,4 @@ SELECT slice(make_array(1), 3, 4)
 query ?T
 SELECT slice(array(1, 2, 3, 4), 2, 2), arrow_typeof(slice(array(1, 2, 3, 4), 2, 2));
 ----
-[2, 3] List(Int64, field: 'element')
+[2, 3] List(Int32, field: 'element')

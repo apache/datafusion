@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use std::fmt::Write;
+use std::fmt::{Display, Write};
 use std::sync::Arc;
 
 use core::num::FpCategory;
@@ -11,10 +11,7 @@ use arrow::{
     array::{Array, ArrayRef, LargeStringArray, StringArray, StringViewArray},
     datatypes::{DataType, Field, FieldRef},
 };
-use bigdecimal::{
-    BigDecimal, ToPrimitive,
-    num_bigint::{BigInt, Sign},
-};
+use bigdecimal::ToPrimitive;
 use chrono::{DateTime, Datelike, Timelike, Utc};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, exec_datafusion_err, exec_err, plan_err,
@@ -23,6 +20,34 @@ use datafusion_expr::{
     ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDFImpl, Signature,
     TypeSignature, Volatility,
 };
+
+/// Spark Decimal.toString uses Java BigDecimal's scale-preserving representation.
+fn decimal_string(unscaled: &str, scale: i8) -> String {
+    let (sign, digits) = match unscaled.strip_prefix('-') {
+        Some(digits) => ("-", digits),
+        None => ("", unscaled),
+    };
+    let exponent = digits.len() as i32 - i32::from(scale) - 1;
+    if scale >= 0 && exponent >= -6 {
+        let scale = scale as usize;
+        if scale == 0 {
+            unscaled.to_owned()
+        } else if scale >= digits.len() {
+            format!("{sign}0.{}{digits}", "0".repeat(scale - digits.len()))
+        } else {
+            let (integer, fractional) = digits.split_at(digits.len() - scale);
+            format!("{sign}{integer}.{fractional}")
+        }
+    } else {
+        let (first, rest) = digits.split_at(1);
+        let fraction = if rest.is_empty() {
+            String::new()
+        } else {
+            format!(".{rest}")
+        };
+        format!("{sign}{first}{fraction}E{exponent:+}")
+    }
+}
 
 /// Spark-compatible `format_string` expression
 /// <https://spark.apache.org/docs/latest/api/sql/index.html#format_string>
@@ -580,6 +605,11 @@ impl TryFrom<char> for TimeFormat {
 
 impl ConversionType {
     pub fn validate(&self, arg_type: &DataType) -> Result<()> {
+        // Spark passes Decimal as an object. A typed NULL is valid even for
+        // conversions that reject a non-null Decimal, so defer to runtime.
+        if arg_type.is_decimal() {
+            return Ok(());
+        }
         match self {
             ConversionType::BooleanLower | ConversionType::BooleanUpper
                 if *arg_type != DataType::Boolean =>
@@ -671,19 +701,6 @@ impl ConversionType {
                 | ConversionType::StringUpper
                 | ConversionType::HexFloatLower
                 | ConversionType::HexFloatUpper
-        )
-    }
-
-    fn supports_decimal(&self) -> bool {
-        matches!(
-            self,
-            ConversionType::DecFloatLower
-                | ConversionType::SciFloatLower
-                | ConversionType::SciFloatUpper
-                | ConversionType::CompactFloatLower
-                | ConversionType::CompactFloatUpper
-                | ConversionType::StringLower
-                | ConversionType::StringUpper
         )
     }
 
@@ -1131,57 +1148,17 @@ impl ConversionSpecifier {
                 };
                 self.format_string(string, value)
             }
+            ScalarValue::Decimal32(value, _, scale) => {
+                self.format_decimal(string, value.as_ref(), *scale)
+            }
+            ScalarValue::Decimal64(value, _, scale) => {
+                self.format_decimal(string, value.as_ref(), *scale)
+            }
             ScalarValue::Decimal128(value, _, scale) => {
-                match (self.conversion_type, value) {
-                    (
-                        ConversionType::DecFloatLower
-                        | ConversionType::SciFloatLower
-                        | ConversionType::SciFloatUpper
-                        | ConversionType::CompactFloatLower
-                        | ConversionType::CompactFloatUpper,
-                        Some(value),
-                    ) => self.format_decimal(string, &value.to_string(), *scale as i64),
-                    (
-                        ConversionType::StringLower | ConversionType::StringUpper,
-                        Some(value),
-                    ) => self.format_string(string, &value.to_string()),
-                    (t, None) if t.supports_decimal() => {
-                        self.format_string(string, "null")
-                    }
-
-                    _ => {
-                        exec_err!(
-                            "Invalid conversion type: {:?} for Decimal128",
-                            self.conversion_type
-                        )
-                    }
-                }
+                self.format_decimal(string, value.as_ref(), *scale)
             }
             ScalarValue::Decimal256(value, _, scale) => {
-                match (self.conversion_type, value) {
-                    (
-                        ConversionType::DecFloatLower
-                        | ConversionType::SciFloatLower
-                        | ConversionType::SciFloatUpper
-                        | ConversionType::CompactFloatLower
-                        | ConversionType::CompactFloatUpper,
-                        Some(value),
-                    ) => self.format_decimal(string, &value.to_string(), *scale as i64),
-                    (
-                        ConversionType::StringLower | ConversionType::StringUpper,
-                        Some(value),
-                    ) => self.format_string(string, &value.to_string()),
-                    (t, None) if t.supports_decimal() => {
-                        self.format_string(string, "null")
-                    }
-
-                    _ => {
-                        exec_err!(
-                            "Invalid conversion type: {:?} for Decimal256",
-                            self.conversion_type
-                        )
-                    }
-                }
+                self.format_decimal(string, value.as_ref(), *scale)
             }
 
             ScalarValue::Time32Second(value) => match (self.conversion_type, value) {
@@ -1944,155 +1921,31 @@ impl ConversionSpecifier {
         }
     }
 
-    fn format_decimal(&self, writer: &mut String, value: &str, scale: i64) -> Result<()> {
+    fn format_decimal<T: Display>(
+        &self,
+        writer: &mut String,
+        value: Option<&T>,
+        scale: i8,
+    ) -> Result<()> {
         self.validate_grouping_separator()?;
-
-        let mut prefix = String::new();
-        let mut suffix = String::new();
-        let upper = self.conversion_type.is_upper();
-
-        // Parse as BigDecimal
-        let decimal = value
-            .parse::<BigInt>()
-            .map_err(|e| exec_datafusion_err!("Failed to parse decimal: {}", e))?;
-        let decimal = BigDecimal::from_bigint(decimal, scale);
-
-        // Handle sign
-        let is_negative = decimal.sign() == Sign::Minus;
-        let abs_decimal = decimal.abs();
-
-        if is_negative {
-            if self.negative_in_parentheses {
-                prefix.push('(');
-                suffix.push(')');
-            } else {
-                prefix.push('-');
-            }
-        } else if self.space_sign {
-            prefix.push(' ');
-        } else if self.force_sign {
-            prefix.push('+');
+        if matches!(
+            self.conversion_type,
+            ConversionType::BooleanLower | ConversionType::BooleanUpper
+        ) {
+            return self.format_boolean(writer, Some(&value.is_some()));
         }
-
-        let exp_symb = if upper { 'E' } else { 'e' };
-        let mut strip_trailing_0s = false;
-
-        // Get precision setting
-        let mut precision = match self.precision {
-            NumericParam::Literal(p) => p,
-            _ => 6,
+        let Some(value) = value else {
+            return self.format_string(writer, "null");
         };
-
-        let number = match self.conversion_type {
-            ConversionType::DecFloatLower => {
-                // Format as fixed-point decimal
-                let mut n = self.format_decimal_fixed(
-                    &abs_decimal,
-                    precision,
-                    strip_trailing_0s,
-                )?;
-                if self.grouping_separator {
-                    n = insert_thousands_separator(&n);
-                }
-                n
+        match self.conversion_type {
+            ConversionType::StringLower | ConversionType::StringUpper => {
+                self.format_string(writer, &decimal_string(&value.to_string(), scale))
             }
-            ConversionType::SciFloatLower => self.format_decimal_scientific(
-                &abs_decimal,
-                precision,
-                'e',
-                strip_trailing_0s,
-            )?,
-            ConversionType::SciFloatUpper => self.format_decimal_scientific(
-                &abs_decimal,
-                precision,
-                'E',
-                strip_trailing_0s,
-            )?,
-            ConversionType::CompactFloatLower | ConversionType::CompactFloatUpper => {
-                strip_trailing_0s = true;
-                if precision == 0 {
-                    precision = 1;
-                }
-                // Determine if we should use scientific notation
-                let log10_val = abs_decimal.to_f64().map(|f| f.log10()).unwrap_or(0.0);
-                if log10_val < -4.0 || log10_val >= precision as f64 {
-                    self.format_decimal_scientific(
-                        &abs_decimal,
-                        precision - 1,
-                        exp_symb,
-                        strip_trailing_0s,
-                    )?
-                } else {
-                    let mut n = self.format_decimal_fixed(
-                        &abs_decimal,
-                        precision - 1 - log10_val.floor() as i32,
-                        strip_trailing_0s,
-                    )?;
-                    if self.grouping_separator {
-                        n = insert_thousands_separator(&n);
-                    }
-                    n
-                }
-            }
-            _ => {
-                return exec_err!(
-                    "Invalid conversion type: {:?} for decimal",
-                    self.conversion_type
-                );
-            }
-        };
-
-        self.write_numeric_parts(writer, prefix, &number, &suffix, true);
-        Ok(())
-    }
-
-    fn format_decimal_fixed(
-        &self,
-        decimal: &BigDecimal,
-        precision: i32,
-        strip_trailing_0s: bool,
-    ) -> Result<String> {
-        if precision <= 0 {
-            Ok(decimal.round(0).to_string())
-        } else {
-            // Use BigDecimal's with_scale method for precise decimal formatting
-            let scaled = decimal.round(precision as i64);
-            let mut number = scaled.to_string();
-            if strip_trailing_0s {
-                number = trim_trailing_0s(&number).to_owned();
-            }
-            Ok(number)
+            _ => exec_err!(
+                "Invalid conversion type: {:?} for Decimal",
+                self.conversion_type
+            ),
         }
-    }
-
-    fn format_decimal_scientific(
-        &self,
-        decimal: &BigDecimal,
-        precision: i32,
-        exp_char: char,
-        strip_trailing_0s: bool,
-    ) -> Result<String> {
-        // Convert to f64 for scientific notation (may lose precision for very large numbers)
-        let float_val = decimal.to_f64().unwrap_or(0.0);
-        if float_val == 0.0 {
-            return Ok(format!("0{exp_char}+00"));
-        }
-
-        let abs_val = float_val.abs();
-        let exponent = abs_val.log10().floor() as i32;
-        let mantissa = abs_val / 10.0_f64.powf(exponent as f64);
-
-        let mut number = if precision <= 0 {
-            format!("{mantissa:.0}")
-        } else {
-            format!("{mantissa:.prec$}", prec = precision as usize)
-        };
-
-        if strip_trailing_0s {
-            number = trim_trailing_0s(&number).to_owned();
-        }
-
-        Ok(format!("{number}{exp_char}{exponent:+03}"))
     }
 
     fn format_time(
@@ -2246,7 +2099,7 @@ impl ConversionSpecifier {
     }
 }
 
-trait FloatFormattable: std::fmt::Display {
+trait FloatFormattable: Display {
     fn category(&self) -> FpCategory;
 
     fn spark_string(&self) -> String {
@@ -2353,6 +2206,77 @@ mod tests {
     use crate::function::utils::test::test_scalar_function;
     use arrow::array::StringArray;
     use arrow::datatypes::{DataType::Utf8, i256};
+
+    #[test]
+    fn decimal_numeric_conversions_reject_non_null_values() -> Result<()> {
+        let values = [
+            ScalarValue::Decimal32(Some(120), 4, 2),
+            ScalarValue::Decimal64(Some(120), 4, 2),
+            ScalarValue::Decimal128(Some(120), 4, 2),
+            ScalarValue::Decimal256(Some(i256::from(120)), 4, 2),
+        ];
+        for value in values {
+            for fmt in [
+                "%f",
+                "%e",
+                "%E",
+                "%g",
+                "%G",
+                "%a",
+                "%A",
+                "%d",
+                "%o",
+                "%x",
+                "%X",
+                "%c",
+                "%tY",
+                "%+,15.2f",
+                "%(0,15.2f",
+                "%,g",
+            ] {
+                let formatter = Formatter::parse(fmt, &[value.data_type()])?;
+                let error = formatter.format(std::slice::from_ref(&value)).unwrap_err();
+                assert!(
+                    error.to_string().contains("Invalid conversion type"),
+                    "{fmt}: {error}"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn decimal_null_conversions_and_string_scales() -> Result<()> {
+        for value in [
+            ScalarValue::Decimal32(None, 4, 2),
+            ScalarValue::Decimal64(None, 4, 2),
+            ScalarValue::Decimal128(None, 4, 2),
+            ScalarValue::Decimal256(None, 4, 2),
+        ] {
+            let fmt = "%1$f|%1$E|%1$A|%1$X|%1$c|%1$TY|%1$b|%1$B|%1$s";
+            let formatter = Formatter::parse(fmt, &[value.data_type()])?;
+            assert_eq!(
+                formatter.format(&[value])?,
+                "null|NULL|NULL|NULL|null|NULL|false|FALSE|null"
+            );
+        }
+        for (unscaled, scale, expected) in [
+            (120, 2, "1.20"),
+            (-120, 4, "-0.0120"),
+            (1, 6, "0.000001"),
+            (1, 7, "1E-7"),
+            (-1, 7, "-1E-7"),
+            (0, 8, "0E-8"),
+            (120, -2, "1.20E+4"),
+            (1, i8::MIN, "1E+128"),
+            (1, i8::MAX, "1E-127"),
+        ] {
+            let value = ScalarValue::Decimal128(Some(unscaled), 38, scale);
+            let formatter = Formatter::parse("%s", &[value.data_type()])?;
+            assert_eq!(formatter.format(&[value])?, expected);
+        }
+        Ok(())
+    }
 
     #[test]
     fn test_format_string_nullability() -> Result<()> {
@@ -2584,12 +2508,7 @@ mod tests {
             ),
             (
                 "%(012.2f",
-                ScalarValue::Decimal128(Some(-123450), 10, 2),
-                "(0001234.50)",
-            ),
-            (
-                "%(012.2f",
-                ScalarValue::Decimal256(Some(i256::from(-123450)), 10, 2),
+                ScalarValue::Float64(Some(-1234.5)),
                 "(0001234.50)",
             ),
             (
@@ -2661,22 +2580,6 @@ mod tests {
             vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.2f".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::Float64(Some(1234567.89))),
-            ],
-            Ok(Some("1,234,567.89")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_grouping_separator_decimal() -> Result<()> {
-        test_scalar_function!(
-            FormatStringFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.2f".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
             ],
             Ok(Some("1,234,567.89")),
             &str,
@@ -2820,47 +2723,6 @@ mod tests {
     }
 
     #[test]
-    fn test_grouping_separator_compact_decimal() -> Result<()> {
-        // %,g on decimal — large number triggers scientific, no commas
-        test_scalar_function!(
-            FormatStringFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,g".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
-            ],
-            Ok(Some("1.23457e+06")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        // %,g on decimal — small number triggers fixed-point, commas expected
-        test_scalar_function!(
-            FormatStringFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,g".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(1234560), 10, 2)),
-            ],
-            Ok(Some("12,345.6")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        // %,.0g on decimal — precision 0 compact with grouping (scientific)
-        test_scalar_function!(
-            FormatStringFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%,.0g".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
-            ],
-            Ok(Some("1e+06")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        Ok(())
-    }
-
-    #[test]
     fn test_grouping_separator_width_sign_float() -> Result<()> {
         // %0,15.2f — zero-pad + grouping + width
         test_scalar_function!(
@@ -2902,35 +2764,6 @@ mod tests {
     }
 
     #[test]
-    fn test_grouping_separator_width_sign_decimal() -> Result<()> {
-        // %0,15.2f — zero-pad + grouping + width on decimal
-        test_scalar_function!(
-            FormatStringFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%0,15.2f".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
-            ],
-            Ok(Some("0001,234,567.89")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        // %+,15.2f — force-sign + grouping + width on decimal
-        test_scalar_function!(
-            FormatStringFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%+,15.2f".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(123456789), 10, 2)),
-            ],
-            Ok(Some("  +1,234,567.89")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        Ok(())
-    }
-
-    #[test]
     fn test_grouping_separator_parentheses_float() -> Result<()> {
         // %(,15.2f with negative — parentheses + grouping + width
         // Java: String.format("%(,15.2f", -1234.5) → "     (1,234.50)"
@@ -2939,51 +2772,6 @@ mod tests {
             vec![
                 ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,15.2f".to_string()))),
                 ColumnarValue::Scalar(ScalarValue::Float64(Some(-1234.5))),
-            ],
-            Ok(Some("     (1,234.50)")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_grouping_separator_parentheses_decimal() -> Result<()> {
-        test_scalar_function!(
-            FormatStringFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,.2f".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 10, 2)),
-            ],
-            Ok(Some("(1,234.50)")),
-            &str,
-            Utf8,
-            StringArray
-        );
-
-        test_scalar_function!(
-            FormatStringFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,.2f".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Decimal256(
-                    Some(i256::from(-123450)),
-                    10,
-                    2,
-                )),
-            ],
-            Ok(Some("(1,234.50)")),
-            &str,
-            Utf8,
-            StringArray
-        );
-
-        // Java: String.format("%(,15.2f", -1234.5) → "     (1,234.50)"
-        test_scalar_function!(
-            FormatStringFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(,15.2f".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 10, 2)),
             ],
             Ok(Some("     (1,234.50)")),
             &str,
@@ -3018,22 +2806,6 @@ mod tests {
                 ColumnarValue::Scalar(ScalarValue::Float64(Some(f64::INFINITY))),
             ],
             Ok(Some("  Infinity")),
-            &str,
-            Utf8,
-            StringArray
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn test_grouping_separator_parentheses_zero_padding_decimal() -> Result<()> {
-        test_scalar_function!(
-            FormatStringFunc::new(),
-            vec![
-                ColumnarValue::Scalar(ScalarValue::Utf8(Some("%(0,15.2f".to_string()))),
-                ColumnarValue::Scalar(ScalarValue::Decimal128(Some(-123450), 2, 2)),
-            ],
-            Ok(Some("(000001,234.50)")),
             &str,
             Utf8,
             StringArray

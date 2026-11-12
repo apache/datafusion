@@ -9,17 +9,17 @@
 query I
 SELECT xxhash64(1);
 ----
--7001672635703045582
+-6698625589789238999
 
 query I
 SELECT xxhash64(0);
 ----
--5252525462095825812
+3614696996920510707
 
 query I
 SELECT xxhash64(-1);
 ----
-3858142552250413010
+2017008487422258757
 
 # Boundary values
 query I
@@ -79,7 +79,7 @@ SELECT xxhash64(NULL);
 query I
 SELECT xxhash64(1, 2);
 ----
--8198029865082835910
+-8133857028838179022
 
 query I
 SELECT xxhash64('a', 'b', 'c');
@@ -89,7 +89,7 @@ SELECT xxhash64('a', 'b', 'c');
 query I
 SELECT xxhash64(1, 'hello');
 ----
--7340167327466467369
+-2644647410986480234
 
 # Int64 tests
 query I
@@ -102,11 +102,11 @@ SELECT xxhash64(arrow_cast(0, 'Int64'));
 ----
 -5252525462095825812
 
-# Float tests - note: -0.0 and 0.0 hash to the same value in Spark
+# Decimal literals - note: -0.0 and 0.0 hash to the same value in Spark
 query I
 SELECT xxhash64(1.0);
 ----
--2162451265447482029
+1833446804176943981
 
 query I
 SELECT xxhash64(0.0);
@@ -118,11 +118,11 @@ SELECT xxhash64(-0.0);
 ----
 -5252525462095825812
 
-# Float edge cases
+# Additional numeric cases
 query I
 SELECT xxhash64(-1.0);
 ----
--8296228499959607521
+-6824401983566286287
 
 query I
 SELECT xxhash64(arrow_cast(1.0E20, 'Float64'));
@@ -156,7 +156,7 @@ SELECT xxhash64(arrow_cast('2023-01-15', 'Date32'));
 query I
 SELECT xxhash64(named_struct('a', 1, 'b', 2));
 ----
--8198029865082835910
+-8133857028838179022
 
 # Array/List hashing - Spark chains hashes across list elements:
 # hash(elem_n, hash(elem_n-1, ... hash(elem_0, seed) ...))
@@ -176,9 +176,9 @@ CREATE TABLE xxhash_test AS SELECT * FROM (VALUES
 query II
 SELECT id, xxhash64(id, name) FROM xxhash_test ORDER BY id;
 ----
-1 -8527884376001292090
-2 -7687314219880041104
-3 -7773406846575579340
+1 8205864924878002737
+2 -3432328709108056095
+3 -2074123124991349289
 
 statement ok
 DROP TABLE xxhash_test;
@@ -197,4 +197,4 @@ query II
 SELECT xxhash64(7, nullif(s, s)), xxhash64(7)
 FROM (SELECT named_struct('a', 1, 'b', 'x') AS s);
 ----
--2864211556195259663 -2864211556195259663
+2786828215451145335 2786828215451145335

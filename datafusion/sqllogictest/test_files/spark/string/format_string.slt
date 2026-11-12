@@ -110,124 +110,124 @@ Negative: -42
 
 ## Basic float formatting
 query T
-SELECT format_string('Float: %f', 3.14159);
+SELECT format_string('Float: %f', 3.14159e0);
 ----
 Float: 3.141590
 
 query T
-SELECT format_string('Float: %f', 30.0);
+SELECT format_string('Float: %f', 30.0e0);
 ----
 Float: 30.000000
 
 ## Float with precision
 query T
-SELECT format_string('Precision: %.2f', 3.14159);
+SELECT format_string('Precision: %.2f', 3.14159e0);
 ----
 Precision: 3.14
 
 ## Scientific notation (lowercase)
 query T
-SELECT format_string('Scientific: %e', 1234.5);
+SELECT format_string('Scientific: %e', 1234.5e0);
 ----
 Scientific: 1.234500e+03
 
 ## Scientific notation (uppercase)
 query T
-SELECT format_string('Scientific: %E', 1234.5);
+SELECT format_string('Scientific: %E', 1234.5e0);
 ----
 Scientific: 1.234500E+03
 
 ## Compact float (lowercase)
 query T
-SELECT format_string('Compact: %g', 1234.5);
+SELECT format_string('Compact: %g', 1234.5e0);
 ----
 Compact: 1234.5
 
 query T
-SELECT format_string('Compact: %g', CAST(123456789.1 AS DOUBLE));
+SELECT format_string('Compact: %g', CAST(123456789.1e0 AS DOUBLE));
 ----
 Compact: 1.23457e+08
 
 ## Compact float (uppercase)
 query T
-SELECT format_string('Compact: %G', 1234.5);
+SELECT format_string('Compact: %G', 1234.5e0);
 ----
 Compact: 1234.5
 
 query T
-SELECT format_string('Compact: %G', CAST(123456789.1 AS DOUBLE));
+SELECT format_string('Compact: %G', CAST(123456789.1e0 AS DOUBLE));
 ----
 Compact: 1.23457E+08
 
 ## Float with width and precision
 query T
-SELECT format_string('Formatted: %10.2f', 3.14159);
+SELECT format_string('Formatted: %10.2f', 3.14159e0);
 ----
 Formatted:       3.14
 
 ## Float zero padding
 query T
-SELECT format_string('Zero: %08.2f', 3.14);
+SELECT format_string('Zero: %08.2f', 3.14e0);
 ----
 Zero: 00003.14
 
 ## Float with left alignment
 query T
-SELECT format_string('Left: %-10.2f|', 3.14);
+SELECT format_string('Left: %-10.2f|', 3.14e0);
 ----
 Left: 3.14      |
 
 ## Float with space sign (positive)
 query T
-SELECT format_string('Space: % .2f', 3.14);
+SELECT format_string('Space: % .2f', 3.14e0);
 ----
 Space:  3.14
 
 ## Float with space sign (negative)
 query T
-SELECT format_string('Space: % .2f', -3.14);
+SELECT format_string('Space: % .2f', -3.14e0);
 ----
 Space: -3.14
 
 ## Float with force sign (positive)
 query T
-SELECT format_string('Force: %+.2f', 3.14);
+SELECT format_string('Force: %+.2f', 3.14e0);
 ----
 Force: +3.14
 
 ## Float with force sign (negative)
 query T
-SELECT format_string('Force: %+.2f', -3.14);
+SELECT format_string('Force: %+.2f', -3.14e0);
 ----
 Force: -3.14
 
 ## Float with precision 0
 query T
-SELECT format_string('Precision 0: %.0f', 3.14);
+SELECT format_string('Precision 0: %.0f', 3.14e0);
 ----
 Precision 0: 3
 
 ## Float with precision 0 (rounds up)
 query T
-SELECT format_string('Precision 0: %.0f', 3.6);
+SELECT format_string('Precision 0: %.0f', 3.6e0);
 ----
 Precision 0: 4
 
 ## Float with precision 0 and alternate form
 query T
-SELECT format_string('Alt form: %#.0f', 3.14);
+SELECT format_string('Alt form: %#.0f', 3.14e0);
 ----
 Alt form: 3.
 
 ## Scientific notation with precision 0
 query T
-SELECT format_string('Sci: %.0e', 1234.5);
+SELECT format_string('Sci: %.0e', 1234.5e0);
 ----
 Sci: 1e+03
 
 ## Compact format with precision 0
 query T
-SELECT format_string('Compact: %.0g', 1234.5);
+SELECT format_string('Compact: %.0g', 1234.5e0);
 ----
 Compact: 1e+03
 
@@ -588,116 +588,80 @@ SELECT format_string('Time: %Tx', TIMESTAMP '2023-12-25 14:30:45');
 
 
 # ================================
-# Decimal formatting tests
+# Decimal numeric conversions reject non-null Spark Decimal objects
 # ================================
 
 ## Decimal formatting
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Decimal: %f', CAST(123.456 AS DECIMAL(10,3)));
-----
-Decimal: 123.456000
 
 ## Decimal with precision
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Decimal: %.2f', CAST(123.456 AS DECIMAL(10,3)));
-----
-Decimal: 123.46
 
 ## Decimal scientific notation
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Scientific: %e', CAST(1234.5 AS DECIMAL(10,2)));
-----
-Scientific: 1.234500e+03
 
 ## Decimal with width padding
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Padded: %10.2f', CAST(123.456 AS DECIMAL(10,3)));
-----
-Padded:     123.46
 
 ## Decimal with zero padding
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Zero padded: %010.2f', CAST(123.456 AS DECIMAL(10,3)));
-----
-Zero padded: 0000123.46
 
 ## Decimal with left adjustment
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Left: %-10.2f', CAST(123.456 AS DECIMAL(10,3)));
-----
-Left: 123.46
 
 ## Decimal with plus sign
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Plus: %+.2f', CAST(123.456 AS DECIMAL(10,3)));
-----
-Plus: +123.46
 
 ## Decimal with space sign
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Space: % .2f', CAST(123.456 AS DECIMAL(10,3)));
-----
-Space:  123.46
 
 ## Negative decimal with plus sign
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Negative: %+.2f', CAST(-123.456 AS DECIMAL(10,3)));
-----
-Negative: -123.46
 
 ## Negative decimal with space sign
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Negative: % .2f', CAST(-123.456 AS DECIMAL(10,3)));
-----
-Negative: -123.46
 
 ## Decimal with width and plus sign
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Width+Plus: %+10.2f', CAST(123.456 AS DECIMAL(10,3)));
-----
-Width+Plus:    +123.46
 
 ## Decimal with zero padding and plus sign
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Zero+Plus: %+010.2f', CAST(123.456 AS DECIMAL(10,3)));
-----
-Zero+Plus: +000123.46
 
 ## Decimal with left adjustment and plus sign
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Left+Plus: %-+10.2f', CAST(123.456 AS DECIMAL(10,3)));
-----
-Left+Plus: +123.46
 
 ## Decimal scientific notation with width
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Sci Width: %15.2e', CAST(1234.5 AS DECIMAL(10,2)));
-----
-Sci Width:        1.23e+03
 
 ## Decimal scientific notation with zero padding
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Sci Zero: %015.2e', CAST(1234.5 AS DECIMAL(10,2)));
-----
-Sci Zero: 00000001.23e+03
 
 ## Decimal scientific notation with plus sign
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Sci Plus: %+.2e', CAST(1234.5 AS DECIMAL(10,2)));
-----
-Sci Plus: +1.23e+03
 
 ## Decimal compact format with width
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Compact: %10.2g', CAST(123.456 AS DECIMAL(10,3)));
-----
-Compact:    1.2e+02
 
 ## Decimal compact format with plus sign
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Compact+: %+.2g', CAST(123.456 AS DECIMAL(10,3)));
-----
-Compact+: +1.2e+02
 
 statement error
 SELECT format_string('Compact+: %+.2g', 1);
@@ -722,13 +686,13 @@ SELECT format_string('Line1%nLine2');
 
 ## Multiple format specifiers
 query T
-SELECT format_string('String: %s, Integer: %d, Float: %.2f', 'test', 42, 3.14159);
+SELECT format_string('String: %s, Integer: %d, Float: %.2f', 'test', 42, 3.14159e0);
 ----
 String: test, Integer: 42, Float: 3.14
 
 ## Mixed width and precision
 query T
-SELECT format_string('Mixed: %10s %5d %.2f', 'hello', 123, 45.678);
+SELECT format_string('Mixed: %10s %5d %.2f', 'hello', 123, 45.678e0);
 ----
 Mixed:      hello   123 45.68
 
@@ -1493,149 +1457,133 @@ Hex: FFFFFFFFFFFFFFFF
 
 ## Float16 with various formats
 query T
-SELECT format_string('Float: %f', arrow_cast(3.14, 'Float16'));
+SELECT format_string('Float: %f', arrow_cast(3.14e0, 'Float16'));
 ----
 Float: 3.140625
 
 query T
-SELECT format_string('Scientific: %e', arrow_cast(3.14, 'Float16'));
+SELECT format_string('Scientific: %e', arrow_cast(3.14e0, 'Float16'));
 ----
 Scientific: 3.140625e+00
 
 query T
-SELECT format_string('Scientific: %E', arrow_cast(3.14, 'Float16'));
+SELECT format_string('Scientific: %E', arrow_cast(3.14e0, 'Float16'));
 ----
 Scientific: 3.140625E+00
 
 query T
-SELECT format_string('Compact: %g', arrow_cast(3.14, 'Float16'));
+SELECT format_string('Compact: %g', arrow_cast(3.14e0, 'Float16'));
 ----
 Compact: 3.14063
 
 query T
-SELECT format_string('Compact: %G', arrow_cast(3.14, 'Float16'));
+SELECT format_string('Compact: %G', arrow_cast(3.14e0, 'Float16'));
 ----
 Compact: 3.14063
 
 query T
-SELECT format_string('String: %s', arrow_cast(3.14, 'Float16'));
+SELECT format_string('String: %s', arrow_cast(3.14e0, 'Float16'));
 ----
 String: 3.140625
 
 query T
-SELECT format_string('String: %S', arrow_cast(3.14, 'Float16'));
+SELECT format_string('String: %S', arrow_cast(3.14e0, 'Float16'));
 ----
 String: 3.140625
 
 query T
-SELECT format_string('Hex float: %a', arrow_cast(3.14, 'Float16'));
+SELECT format_string('Hex float: %a', arrow_cast(3.14e0, 'Float16'));
 ----
 Hex float: 0x1.92p1
 
 query T
-SELECT format_string('Hex float: %A', arrow_cast(3.14, 'Float16'));
+SELECT format_string('Hex float: %A', arrow_cast(3.14e0, 'Float16'));
 ----
 Hex float: 0X1.92P1
 
 ## Float32 with various formats
 query T
-SELECT format_string('Float: %f', arrow_cast(3.14159, 'Float32'));
+SELECT format_string('Float: %f', arrow_cast(3.14159e0, 'Float32'));
 ----
 Float: 3.141590
 
 query T
-SELECT format_string('Scientific: %e', arrow_cast(1234.5, 'Float32'));
+SELECT format_string('Scientific: %e', arrow_cast(1234.5e0, 'Float32'));
 ----
 Scientific: 1.234500e+03
 
 query T
-SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Float32'));
+SELECT format_string('Compact: %g', arrow_cast(1234.5e0, 'Float32'));
 ----
 Compact: 1234.5
 
 query T
-SELECT format_string('String: %s', arrow_cast(3.14159, 'Float32'));
+SELECT format_string('String: %s', arrow_cast(3.14159e0, 'Float32'));
 ----
 String: 3.14159
 
 query T
-SELECT format_string('Hex float: %a', arrow_cast(3.14, 'Float32'));
+SELECT format_string('Hex float: %a', arrow_cast(3.14e0, 'Float32'));
 ----
 Hex float: 0x1.91eb86p1
 
 query T
-SELECT format_string('Hex float: %A', arrow_cast(3.14, 'Float32'));
+SELECT format_string('Hex float: %A', arrow_cast(3.14e0, 'Float32'));
 ----
 Hex float: 0X1.91EB86P1
 
 ## Float64 with various formats
 
 query T
-SELECT format_string('String: %s', arrow_cast(3.14159, 'Float64'));
+SELECT format_string('String: %s', arrow_cast(3.14159e0, 'Float64'));
 ----
 String: 3.14159
 
 query T
-SELECT format_string('String: %S', arrow_cast(3.14159, 'Float64'));
+SELECT format_string('String: %S', arrow_cast(3.14159e0, 'Float64'));
 ----
 String: 3.14159
 
 ## Decimal128 with various formats
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Float: %f', arrow_cast(123.456, 'Decimal128(10, 3)'));
-----
-Float: 123.456000
 
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Scientific: %e', arrow_cast(1234.5, 'Decimal128(10, 2)'));
-----
-Scientific: 1.234500e+03
 
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Scientific: %E', arrow_cast(1234.5, 'Decimal128(10, 2)'));
-----
-Scientific: 1.234500E+03
 
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Decimal128(10, 2)'));
-----
-Compact: 1234.5
 
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Compact: %G', arrow_cast(1234.5, 'Decimal128(10, 2)'));
-----
-Compact: 1234.5
 
 query T
 SELECT format_string('String: %s', arrow_cast(123.456, 'Decimal128(10, 3)'));
 ----
-String: 123456
+String: 123.456
 
 query T
 SELECT format_string('String: %S', arrow_cast(123.456, 'Decimal128(10, 3)'));
 ----
-String: 123456
+String: 123.456
 
 ## Decimal256 with various formats
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Float: %f', arrow_cast(123.456, 'Decimal256(20, 3)'));
-----
-Float: 123.456000
 
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Scientific: %e', arrow_cast(1234.5, 'Decimal256(20, 2)'));
-----
-Scientific: 1.234500e+03
 
-query T
+statement error Invalid conversion type.*Decimal
 SELECT format_string('Compact: %g', arrow_cast(1234.5, 'Decimal256(20, 2)'));
-----
-Compact: 1234.5
 
 query T
 SELECT format_string('String: %s', arrow_cast(123.456, 'Decimal256(20, 3)'));
 ----
-String: 123456
+String: 123.456
 
 ## Time32Second with time formats
 query T
@@ -1777,22 +1725,22 @@ String: 19716
 
 ## Date64 with time formats
 query T
-SELECT format_string('Year: %tY', arrow_cast(19716, 'Date64'));
+SELECT format_string('Year: %tY', arrow_cast(19716L, 'Date64'));
 ----
 Year: 2023
 
 query T
-SELECT format_string('Month: %tB', arrow_cast(19716, 'Date64'));
+SELECT format_string('Month: %tB', arrow_cast(19716L, 'Date64'));
 ----
 Month: December
 
 query T
-SELECT format_string('String: %s', arrow_cast(19716, 'Date64'));
+SELECT format_string('String: %s', arrow_cast(19716L, 'Date64'));
 ----
 String: 19716
 
 query T
-SELECT format_string('String: %S', arrow_cast(19716, 'Date64'));
+SELECT format_string('String: %S', arrow_cast(19716L, 'Date64'));
 ----
 String: 19716
 
@@ -1829,96 +1777,96 @@ SELECT format_string('Hash: %10h', 'test');
 
 ## Hexadecimal float (lowercase)
 query T
-SELECT format_string('Hex float: %a', 15.9375);
+SELECT format_string('Hex float: %a', 15.9375e0);
 ----
 Hex float: 0x1.fep3
 
 ## Hexadecimal float (uppercase)
 query T
-SELECT format_string('Hex float: %A', 15.9375);
+SELECT format_string('Hex float: %A', 15.9375e0);
 ----
 Hex float: 0X1.FEP3
 
 ## Hexadecimal float with precision
 query T
-SELECT format_string('Hex float: %.10a', 15.9375);
+SELECT format_string('Hex float: %.10a', 15.9375e0);
 ----
 Hex float: 0x1.fe00000000p3
 
 query T
-SELECT format_string('%a', 12.3456);
+SELECT format_string('%a', 12.3456e0);
 ----
 0x1.8b0f27bb2fec5p3
 
 ## Hexadecimal float with zero
 query T
-SELECT format_string('Hex float: %a', 0.0);
+SELECT format_string('Hex float: %a', 0.0e0);
 ----
 Hex float: 0x0.0p0
 
 ## Hexadecimal float with negative value
 query T
-SELECT format_string('Hex float: %a', -15.9375);
+SELECT format_string('Hex float: %a', -15.9375e0);
 ----
 Hex float: -0x1.fep3
 
 ## Hexadecimal float with very small value
 query T
-SELECT format_string('Hex float: %a', 0.0000152587890625);
+SELECT format_string('Hex float: %a', 0.0000152587890625e0);
 ----
 Hex float: 0x1.0p-16
 
 ## Hexadecimal float with force sign
 query T
-SELECT format_string('Hex float: %+a', 15.9375);
+SELECT format_string('Hex float: %+a', 15.9375e0);
 ----
 Hex float: +0x1.fep3
 
 ## Hexadecimal float with space sign (positive)
 query T
-SELECT format_string('Hex float: % a', 15.9375);
+SELECT format_string('Hex float: % a', 15.9375e0);
 ----
 Hex float:  0x1.fep3
 
 ## Hexadecimal float with space sign (negative)
 query T
-SELECT format_string('Hex float: % a', -15.9375);
+SELECT format_string('Hex float: % a', -15.9375e0);
 ----
 Hex float: -0x1.fep3
 
 ## Hexadecimal float uppercase with space sign
 query T
-SELECT format_string('Hex float: % A', 15.9375);
+SELECT format_string('Hex float: % A', 15.9375e0);
 ----
 Hex float:  0X1.FEP3
 
 ## Hexadecimal float with width
 query T
-SELECT format_string('Hex float: %20a', 15.9375);
+SELECT format_string('Hex float: %20a', 15.9375e0);
 ----
 Hex float:             0x1.fep3
 
 ## Hexadecimal float with zero padding
 query T
-SELECT format_string('Hex float: %020a', 15.9375);
+SELECT format_string('Hex float: %020a', 15.9375e0);
 ----
 Hex float: 0x0000000000001.fep3
 
 ## Hexadecimal float with alternate form and precision
 query T
-SELECT format_string('Hex float: %#.5a', 1.0);
+SELECT format_string('Hex float: %#.5a', 1.0e0);
 ----
 Hex float: 0x1.00000p0
 
 ## Hexadecimal float uppercase with force sign
 query T
-SELECT format_string('Hex float: %+A', -15.9375);
+SELECT format_string('Hex float: %+A', -15.9375e0);
 ----
 Hex float: -0X1.FEP3
 
 ## Hexadecimal float with left alignment
 query T
-SELECT format_string('Hex float: %-20a', 15.9375);
+SELECT format_string('Hex float: %-20a', 15.9375e0);
 ----
 Hex float: 0x1.fep3
 
@@ -2035,13 +1983,13 @@ Space padded:       42
 
 ## Combine # flag with float
 query T
-SELECT format_string('Always decimal: %#.0f', 42.0);
+SELECT format_string('Always decimal: %#.0f', 42.0e0);
 ----
 Always decimal: 42.
 
 ## Combine # flag with float
 query T
-SELECT format_string('Always decimal: %#.0f', 40.0);
+SELECT format_string('Always decimal: %#.0f', 40.0e0);
 ----
 Always decimal: 40.
 
@@ -2121,11 +2069,9 @@ SELECT format_string('[%-,12d]', arrow_cast(1234567::BIGINT, 'UInt64'));
 ----
 [1,234,567   ]
 
-## Negative decimal zero padding keeps the closing parenthesis last
-query T
+## Numeric flags do not make non-null decimal conversion valid
+statement error Invalid conversion type.*Decimal
 SELECT format_string('[%(012.2f]', -1234.50::DECIMAL(10, 2));
-----
-[(0001234.50)]
 
 ## Zero padding is ignored for non-finite floating-point values
 query TTT
@@ -2304,21 +2250,21 @@ Grouped large: 9,223,372,036,854,775,807
 # Precision edge cases
 # ================================
 
-## Zero precision with decimal
+## Zero precision with float
 query T
-SELECT format_string('Zero precision: %.0f', 3.14159);
+SELECT format_string('Zero precision: %.0f', 3.14159e0);
 ----
 Zero precision: 3
 
 ## High precision float
 query T
-SELECT format_string('High precision: %.10f', 3.14159);
+SELECT format_string('High precision: %.10f', 3.14159e0);
 ----
 High precision: 3.1415900000
 
 ## Scientific notation with precision
 query T
-SELECT format_string('Scientific: %.3e', 1234.56789);
+SELECT format_string('Scientific: %.3e', 1234.56789e0);
 ----
 Scientific: 1.235e+03
 
