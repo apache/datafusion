@@ -305,6 +305,17 @@ impl CsvSource {
             }
         }
 
+        // csv-core reads an unterminated comment at the end of the input as a
+        // record with one empty field, which is indistinguishable from a
+        // quoted empty header by its fields alone
+        let start = self.first_record_start(buf);
+        if start == buf.len() {
+            return Ok(Some(HeaderRow {
+                names: vec![],
+                start,
+            }));
+        }
+
         let mut field_start = 0;
         let names = ends[..ends_len]
             .iter()
@@ -316,10 +327,7 @@ impl CsvSource {
                 Ok(name.to_string())
             })
             .collect::<Result<_>>()?;
-        Ok(Some(HeaderRow {
-            names,
-            start: self.first_record_start(buf),
-        }))
+        Ok(Some(HeaderRow { names, start }))
     }
 
     /// Byte offset of the first record in `buf`, after a leading UTF-8 BOM,
@@ -369,9 +377,7 @@ impl CsvSource {
         header: &[String],
         expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
     ) -> Result<Option<Arc<HeaderMapping>>> {
-        // csv-core reads an unterminated comment at the end of the input as a
-        // record with one empty field
-        if header.is_empty() || header == [""] {
+        if header.is_empty() {
             return Ok(None);
         }
         HeaderMapping::try_new(
@@ -1330,6 +1336,15 @@ mod tests {
             find_header(b"\"#a\",b\n", newline, Some(b'#'), false),
             row(&["#a", "b"], 0)
         );
+        // A quoted empty header is a real column, not an empty file
+        assert_eq!(
+            find_header(b"\"\"\n42\n", newline, Some(b'#'), false),
+            row(&[""], 0)
+        );
+        assert_eq!(
+            find_header(b"\"\"", newline, Some(b'#'), true),
+            row(&[""], 0)
+        );
     }
 
     #[test]
@@ -1386,7 +1401,7 @@ mod tests {
         );
         assert_eq!(
             find_header(b"# c1\n# c2", newline, comment, true),
-            row(&[""], 9)
+            row(&[], 9)
         );
         // `\r` does not end a comment
         assert_eq!(
@@ -1448,7 +1463,7 @@ mod tests {
         assert_eq!(find_header(buf, Some(b';'), Some(b'#'), false), None);
         assert_eq!(
             find_header(buf, Some(b';'), Some(b'#'), true),
-            row(&[""], buf.len())
+            row(&[], buf.len())
         );
         assert_eq!(
             find_header(b"# c1\na,b\n", Some(b'\n'), Some(b'#'), false),

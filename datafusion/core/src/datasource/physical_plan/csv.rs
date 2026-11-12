@@ -827,6 +827,24 @@ mod tests {
         Ok(())
     }
 
+    fn header_layout_ctx(read: HeaderLayoutRead) -> SessionContext {
+        let ctx = match read {
+            HeaderLayoutRead::Local | HeaderLayoutRead::Chunked => SessionContext::new(),
+            HeaderLayoutRead::Repartitioned => SessionContext::new_with_config(
+                SessionConfig::new()
+                    .with_target_partitions(4)
+                    .with_repartition_file_min_size(1),
+            ),
+        };
+        if matches!(read, HeaderLayoutRead::Chunked) {
+            ctx.register_object_store(
+                &Url::parse("file://").unwrap(),
+                Arc::new(ChunkedStore::new(Arc::new(LocalFileSystem::new()), 3)),
+            );
+        }
+        ctx
+    }
+
     async fn header_layout_table(
         ctx: &SessionContext,
         location: &str,
@@ -852,20 +870,7 @@ mod tests {
         let tmp_dir = TempDir::new()?;
         write_header_layout_files(tmp_dir.path())?;
 
-        let ctx = match read {
-            HeaderLayoutRead::Local | HeaderLayoutRead::Chunked => SessionContext::new(),
-            HeaderLayoutRead::Repartitioned => SessionContext::new_with_config(
-                SessionConfig::new()
-                    .with_target_partitions(4)
-                    .with_repartition_file_min_size(1),
-            ),
-        };
-        if matches!(read, HeaderLayoutRead::Chunked) {
-            ctx.register_object_store(
-                &Url::parse("file://").unwrap(),
-                Arc::new(ChunkedStore::new(Arc::new(LocalFileSystem::new()), 3)),
-            );
-        }
+        let ctx = header_layout_ctx(read);
         header_layout_table(
             &ctx,
             &format!("{}/", tmp_dir.path().display()),
@@ -950,20 +955,7 @@ mod tests {
             "# generated\n# by test\nd,c,a\nr,30,3\n# trailing\ns,40,4\n",
         )?;
 
-        let ctx = match read {
-            HeaderLayoutRead::Local | HeaderLayoutRead::Chunked => SessionContext::new(),
-            HeaderLayoutRead::Repartitioned => SessionContext::new_with_config(
-                SessionConfig::new()
-                    .with_target_partitions(4)
-                    .with_repartition_file_min_size(1),
-            ),
-        };
-        if matches!(read, HeaderLayoutRead::Chunked) {
-            ctx.register_object_store(
-                &Url::parse("file://").unwrap(),
-                Arc::new(ChunkedStore::new(Arc::new(LocalFileSystem::new()), 3)),
-            );
-        }
+        let ctx = header_layout_ctx(read);
         header_layout_table(
             &ctx,
             &format!("{}/", tmp_dir.path().display()),
@@ -1005,20 +997,7 @@ mod tests {
             "\u{feff}# generated\n\n\r\nd,c,a\nr,30,3\n\ns,40,4\n",
         )?;
 
-        let ctx = match read {
-            HeaderLayoutRead::Local | HeaderLayoutRead::Chunked => SessionContext::new(),
-            HeaderLayoutRead::Repartitioned => SessionContext::new_with_config(
-                SessionConfig::new()
-                    .with_target_partitions(4)
-                    .with_repartition_file_min_size(1),
-            ),
-        };
-        if matches!(read, HeaderLayoutRead::Chunked) {
-            ctx.register_object_store(
-                &Url::parse("file://").unwrap(),
-                Arc::new(ChunkedStore::new(Arc::new(LocalFileSystem::new()), 3)),
-            );
-        }
+        let ctx = header_layout_ctx(read);
         header_layout_table(
             &ctx,
             &format!("{}/", tmp_dir.path().display()),
@@ -1123,13 +1102,7 @@ mod tests {
             "\"x;y\",c,a;\"p;q\",30,3;s,40,4;",
         )?;
 
-        let ctx = SessionContext::new();
-        if matches!(read, HeaderLayoutRead::Chunked) {
-            ctx.register_object_store(
-                &Url::parse("file://").unwrap(),
-                Arc::new(ChunkedStore::new(Arc::new(LocalFileSystem::new()), 3)),
-            );
-        }
+        let ctx = header_layout_ctx(read);
         header_layout_table(
             &ctx,
             &format!("{}/", tmp_dir.path().display()),
@@ -1181,6 +1154,95 @@ mod tests {
         | 2 |   |    | s |
         +---+---+----+---+
         ");
+        Ok(())
+    }
+
+    /// A quoted empty header names a column that is not in the table, so it is
+    /// not read positionally into `a`
+    #[rstest]
+    #[case::local(HeaderLayoutRead::Local)]
+    #[case::chunked(HeaderLayoutRead::Chunked)]
+    #[tokio::test]
+    async fn csv_match_columns_by_header_quoted_empty_header(
+        #[case] read: HeaderLayoutRead,
+    ) -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        fs::write(tmp_dir.path().join("a.csv"), "\"\"\n42\n")?;
+
+        let ctx = header_layout_ctx(read);
+        header_layout_table(
+            &ctx,
+            &format!("{}/", tmp_dir.path().display()),
+            ", 'format.match_columns_by_header' 'true'",
+        )
+        .await?;
+
+        let batches = ctx.sql("SELECT * FROM t").await?.collect().await?;
+        insta::allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +---+---+---+---+
+            | a | b | c | d |
+            +---+---+---+---+
+            |   |   |   |   |
+            +---+---+---+---+
+            ");
+        }
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::local(HeaderLayoutRead::Local)]
+    #[case::chunked(HeaderLayoutRead::Chunked)]
+    #[tokio::test]
+    async fn csv_match_columns_by_header_comment_only_file(
+        #[case] read: HeaderLayoutRead,
+    ) -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        fs::write(tmp_dir.path().join("a.csv"), "# only\n# comments\n")?;
+
+        let ctx = header_layout_ctx(read);
+        header_layout_table(
+            &ctx,
+            &format!("{}/", tmp_dir.path().display()),
+            ", 'format.match_columns_by_header' 'true', 'format.comment' '#'",
+        )
+        .await?;
+
+        let batches = ctx.sql("SELECT * FROM t").await?.collect().await?;
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 0);
+        Ok(())
+    }
+
+    /// The first occurrence of a duplicated header name is read and the
+    /// second is never parsed
+    #[rstest]
+    #[case::local(HeaderLayoutRead::Local)]
+    #[case::chunked(HeaderLayoutRead::Chunked)]
+    #[tokio::test]
+    async fn csv_match_columns_by_header_duplicate_header(
+        #[case] read: HeaderLayoutRead,
+    ) -> Result<()> {
+        let tmp_dir = TempDir::new()?;
+        fs::write(tmp_dir.path().join("a.csv"), "a,a\n1,not_an_int\n")?;
+
+        let ctx = header_layout_ctx(read);
+        header_layout_table(
+            &ctx,
+            &format!("{}/", tmp_dir.path().display()),
+            ", 'format.match_columns_by_header' 'true'",
+        )
+        .await?;
+
+        let batches = ctx.sql("SELECT * FROM t").await?.collect().await?;
+        insta::allow_duplicates! {
+            assert_snapshot!(batches_to_string(&batches), @r"
+            +---+---+---+---+
+            | a | b | c | d |
+            +---+---+---+---+
+            | 1 |   |   |   |
+            +---+---+---+---+
+            ");
+        }
         Ok(())
     }
 
