@@ -1,0 +1,295 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Many aggregates with FILTER over a wide input. For the rows its FILTER
+# selects, each aggregate copies only the input columns its arguments read.
+# Covers ungrouped, grouped and skip-partial aggregation, one and several
+# partitions, multiple batches per partition, NULL and all-false FILTERs, and
+# arguments that fail for rows the FILTER rejects.
+
+statement ok
+CREATE TABLE agg_filter_wide AS
+SELECT
+  CAST(v % 5 AS INT) AS g,
+  CASE WHEN v % 7 = 0 THEN NULL ELSE CAST(v % 11 AS INT) END AS a,
+  v * 3 AS b,
+  v / 4.0 AS c,
+  CASE WHEN v % 17 = 0 THEN NULL ELSE 'str' || CAST(v % 13 AS VARCHAR) END AS s,
+  CAST(v AS DECIMAL(10, 2)) / 100 AS d,
+  CASE WHEN v % 3 = 0 THEN NULL ELSE v % 2 = 0 END AS flag
+FROM generate_series(1, 2000) AS t(v);
+
+statement ok
+SET datafusion.execution.batch_size = 100;
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+# Single aggregation without GROUP BY. `10 / a` fails for a = 0, which the
+# FILTER rejects.
+query IIIIIRTRIIIIIIRT
+SELECT
+  count(*) FILTER (WHERE a < 3),
+  count(a) FILTER (WHERE b > 3000),
+  count(s) FILTER (WHERE flag),
+  sum(b) FILTER (WHERE a BETWEEN 3 AND 6),
+  sum(10 / a) FILTER (WHERE a <> 0),
+  avg(c) FILTER (WHERE s LIKE 'str1%'),
+  min(s) FILTER (WHERE a = 5),
+  max(d) FILTER (WHERE flag IS NOT TRUE),
+  count(DISTINCT a) FILTER (WHERE b % 2 = 0),
+  sum(DISTINCT a) FILTER (WHERE c > 100),
+  count(*) FILTER (WHERE a IS NULL),
+  count(*) FILTER (WHERE a > 100),
+  sum(b) FILTER (WHERE a > 100),
+  sum(a) FILTER (WHERE flag),
+  sum(c) FILTER (WHERE b > 0),
+  first_value(s ORDER BY c DESC) FILTER (WHERE a = 2)
+FROM agg_filter_wide;
+----
+468 857 628 1871142 4211 250.31908462867 str0 19.990000 11 55 285 0 NULL 2867 500250 str4
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+# Partial and final aggregation without GROUP BY
+query IIIIIRTRIIIIIIRT
+SELECT
+  count(*) FILTER (WHERE a < 3),
+  count(a) FILTER (WHERE b > 3000),
+  count(s) FILTER (WHERE flag),
+  sum(b) FILTER (WHERE a BETWEEN 3 AND 6),
+  sum(10 / a) FILTER (WHERE a <> 0),
+  avg(c) FILTER (WHERE s LIKE 'str1%'),
+  min(s) FILTER (WHERE a = 5),
+  max(d) FILTER (WHERE flag IS NOT TRUE),
+  count(DISTINCT a) FILTER (WHERE b % 2 = 0),
+  sum(DISTINCT a) FILTER (WHERE c > 100),
+  count(*) FILTER (WHERE a IS NULL),
+  count(*) FILTER (WHERE a > 100),
+  sum(b) FILTER (WHERE a > 100),
+  sum(a) FILTER (WHERE flag),
+  sum(c) FILTER (WHERE b > 0),
+  first_value(s ORDER BY c DESC) FILTER (WHERE a = 2)
+FROM agg_filter_wide;
+----
+468 857 628 1871142 4211 250.31908462867 str0 19.990000 11 55 285 0 NULL 2867 500250 str4
+
+# Grouped aggregation
+query IIIIIIRTRIIIIIIRT
+SELECT g,
+  count(*) FILTER (WHERE a < 3),
+  count(a) FILTER (WHERE b > 3000),
+  count(s) FILTER (WHERE flag),
+  sum(b) FILTER (WHERE a BETWEEN 3 AND 6),
+  sum(10 / a) FILTER (WHERE a <> 0),
+  avg(c) FILTER (WHERE s LIKE 'str1%'),
+  min(s) FILTER (WHERE a = 5),
+  max(d) FILTER (WHERE flag IS NOT TRUE),
+  count(DISTINCT a) FILTER (WHERE b % 2 = 0),
+  sum(DISTINCT a) FILTER (WHERE c > 100),
+  count(*) FILTER (WHERE a IS NULL),
+  count(*) FILTER (WHERE a > 100),
+  sum(b) FILTER (WHERE a > 100),
+  sum(a) FILTER (WHERE flag),
+  sum(c) FILTER (WHERE b > 0),
+  first_value(s ORDER BY c DESC) FILTER (WHERE a = 2)
+FROM agg_filter_wide
+GROUP BY g
+ORDER BY g;
+----
+0 92 171 126 375315 836 250.99358974359 str0 19.950000 11 55 57 0 NULL 585 100250 str7
+1 94 171 126 377808 839 248.17025862069 str0 19.910000 11 55 57 0 NULL 570 99850 str8
+2 95 172 125 374295 852 251.814655172414 str0 19.970000 11 55 57 0 NULL 562 99950 str6
+3 94 171 125 370671 845 250.760964912281 str0 19.980000 11 55 57 0 NULL 572 100050 str4
+4 93 172 126 373053 839 249.85775862069 str0 19.990000 11 55 57 0 NULL 578 100150 str12
+
+# Ordered aggregates read their ORDER BY columns, which no argument reads
+query T?I
+SELECT
+  string_agg(s, ',' ORDER BY d DESC) FILTER (WHERE b < 30),
+  array_agg(a ORDER BY c) FILTER (WHERE b BETWEEN 30 AND 60),
+  last_value(a ORDER BY b) FILTER (WHERE s = 'str3')
+FROM agg_filter_wide;
+----
+str9,str8,str7,str6,str5,str4,str3,str2,str1 [10, 0, 1, 2, NULL, 4, 5, 6, 7, 8, 9] 1
+
+query IT?
+SELECT g,
+  string_agg(s, ',' ORDER BY d DESC) FILTER (WHERE b < 60),
+  array_agg(a ORDER BY c DESC) FILTER (WHERE b BETWEEN 60 AND 120)
+FROM agg_filter_wide
+GROUP BY g
+ORDER BY g;
+----
+0 str2,str10,str5 [7, NULL, 8, 3, 9]
+1 str3,str11,str6,str1 [3, 9, 4, NULL]
+2 str12,str7,str2 [4, 10, 5, 0]
+3 str5,str0,str8,str3 [5, 0, NULL, 1]
+4 str6,str1,str9,str4 [6, 1, 7, 2]
+
+# Arguments that read every input column of the aggregate
+query IIR
+SELECT
+  sum(a + b) FILTER (WHERE a > 5),
+  count(*) FILTER (WHERE b < 100),
+  avg(b - a) FILTER (WHERE a <> 0 AND b % 2 = 0)
+FROM (SELECT a, b FROM agg_filter_wide);
+----
+2351849 33 2997.5
+
+# Skip partial aggregation: arguments are converted to state row by row
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+
+query IIIIRIRI
+SELECT count(*), sum(c1), sum(c2), sum(s1), sum(s2), sum(s3), sum(s4), sum(c3)
+FROM (
+  SELECT b,
+    count(*) FILTER (WHERE a < 3) AS c1,
+    count(s) FILTER (WHERE flag) AS c2,
+    sum(10 / a) FILTER (WHERE a <> 0) AS s1,
+    sum(c) FILTER (WHERE s LIKE 'str1%') AS s2,
+    sum(a) FILTER (WHERE a > 100) AS s3,
+    sum(d) FILTER (WHERE flag IS NOT TRUE) AS s4,
+    count(DISTINCT a) FILTER (WHERE g = 1) AS c3
+  FROM agg_filter_wide
+  GROUP BY b
+);
+----
+2000 468 628 4211 144934.75 NULL 13336.660000 343
+
+# Multi-argument aggregates share the selected batch during skip-partial
+# conversion. Both arguments read columns distinct from the filter and key.
+query IRR
+SELECT g,
+  corr(b, c) FILTER (WHERE flag),
+  corr(b, c) FILTER (WHERE a > 100)
+FROM agg_filter_wide
+GROUP BY g
+ORDER BY g;
+----
+0 1 NULL
+1 1 NULL
+2 1 NULL
+3 1 NULL
+4 1 NULL
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold;
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_rows_threshold;
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+DROP TABLE agg_filter_wide;
+
+# Boolean input columns keep these FILTERs observable at execution time.
+# In particular, keep_nullable has no false values, but its NULLs must reject
+# rows before division. Repeated batches exercise cached argument types.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+SET datafusion.execution.batch_size = 4;
+
+statement ok
+CREATE TABLE agg_filter_masks AS
+SELECT
+  value AS g,
+  CASE WHEN value % 2 = 0 THEN 0 ELSE 5 END AS v,
+  value > 0 AS keep_all,
+  value < 0 AS keep_none,
+  CASE WHEN value > 0 THEN NULL ELSE false END AS keep_null,
+  CASE WHEN value % 2 = 0 THEN NULL ELSE true END AS keep_nullable
+FROM generate_series(1, 32);
+
+query IIRIIIIIII
+SELECT
+  count(*) FILTER (WHERE keep_all),
+  sum(v) FILTER (WHERE keep_all),
+  avg(CAST(v AS DECIMAL(10, 2))) FILTER (WHERE keep_all),
+  count(*) FILTER (WHERE keep_none),
+  sum(10 / v) FILTER (WHERE keep_none),
+  sum(10 / v) FILTER (WHERE keep_null),
+  count(*) FILTER (WHERE keep_nullable),
+  sum(10 / v) FILTER (WHERE keep_nullable),
+  sum(7) FILTER (WHERE keep_nullable),
+  count(v) FILTER (WHERE keep_nullable)
+FROM agg_filter_masks;
+----
+32 80 2.500000 0 NULL NULL 16 32 112 16
+
+# Ordinary grouped aggregation handles empty and complete selections.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 100000;
+
+query IIIRIIIIIII
+SELECT count(*), sum(c1), sum(s1), avg(a1), sum(c0), sum(s0), sum(sn), sum(cn), sum(ss), sum(sl), sum(cv)
+FROM (
+  SELECT g,
+    count(*) FILTER (WHERE keep_all) AS c1,
+    sum(v) FILTER (WHERE keep_all) AS s1,
+    avg(CAST(v AS DECIMAL(10, 2))) FILTER (WHERE keep_all) AS a1,
+    count(*) FILTER (WHERE keep_none) AS c0,
+    sum(10 / v) FILTER (WHERE keep_none) AS s0,
+    sum(10 / v) FILTER (WHERE keep_null) AS sn,
+    count(*) FILTER (WHERE keep_nullable) AS cn,
+    sum(10 / v) FILTER (WHERE keep_nullable) AS ss,
+    sum(7) FILTER (WHERE keep_nullable) AS sl,
+    count(v) FILTER (WHERE keep_nullable) AS cv
+  FROM agg_filter_masks
+  GROUP BY g
+);
+----
+32 32 80 2.5000000000 0 NULL NULL 16 32 112 16
+
+# Skip-partial must preserve row positions for the same selections. Decimal
+# AVG also exercises an argument type different from the aggregate output.
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_rows_threshold = 0;
+
+statement ok
+SET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold = 0.0;
+
+query IIIRIIIIIII
+SELECT count(*), sum(c1), sum(s1), avg(a1), sum(c0), sum(s0), sum(sn), sum(cn), sum(ss), sum(sl), sum(cv)
+FROM (
+  SELECT g,
+    count(*) FILTER (WHERE keep_all) AS c1,
+    sum(v) FILTER (WHERE keep_all) AS s1,
+    avg(CAST(v AS DECIMAL(10, 2))) FILTER (WHERE keep_all) AS a1,
+    count(*) FILTER (WHERE keep_none) AS c0,
+    sum(10 / v) FILTER (WHERE keep_none) AS s0,
+    sum(10 / v) FILTER (WHERE keep_null) AS sn,
+    count(*) FILTER (WHERE keep_nullable) AS cn,
+    sum(10 / v) FILTER (WHERE keep_nullable) AS ss,
+    sum(7) FILTER (WHERE keep_nullable) AS sl,
+    count(v) FILTER (WHERE keep_nullable) AS cv
+  FROM agg_filter_masks
+  GROUP BY g
+);
+----
+32 32 80 2.5000000000 0 NULL NULL 16 32 112 16
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_ratio_threshold;
+
+statement ok
+RESET datafusion.execution.skip_partial_aggregation_probe_rows_threshold;
+
+statement ok
+RESET datafusion.execution.batch_size;
+
+statement ok
+DROP TABLE agg_filter_masks;
