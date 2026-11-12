@@ -22,8 +22,10 @@ use datafusion_expr::ExpressionPlacement;
 use datafusion_physical_expr::expressions::{Column, LambdaExpr, LambdaVariable};
 use datafusion_physical_expr::projection::ProjectionExpr;
 use datafusion_physical_expr_common::physical_expr::{PhysicalExpr, is_volatile};
+use datafusion_physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion_physical_plan::joins::NestedLoopJoinExec;
 use datafusion_physical_plan::joins::utils::{ColumnIndex, JoinFilter};
+use datafusion_physical_plan::limit::GlobalLimitExec;
 use datafusion_physical_plan::projection::{
     ProjectionExec, remove_unnecessary_projections,
 };
@@ -67,11 +69,16 @@ impl PhysicalOptimizerRule for ProjectionPushdown {
             .map(|t| t.data)?;
 
         // Push what can already descend, then split the projections that are
-        // stuck above a `RepartitionExec`. The split needs no cleanup pass of
-        // its own: the outer projection it leaves either keeps every expression
-        // a plain column, and is then no narrower than the widened child, or it
-        // narrows and holds a computed one. `RepartitionExec` declines both, it
-        // is not removable because it renames, and nothing else moved.
+        // stuck above a chain of the nodes `split_host_child` accepts. The
+        // split needs no cleanup pass of its own: the outer projection it
+        // leaves renames the columns it took from the split, so it is not
+        // removable, and no host lets that projection swap past it.
+        // `RepartitionExec` and `CoalescePartitionsExec` decline a projection
+        // that does not narrow; `GlobalLimitExec` declines every projection,
+        // through the default at `ExecutionPlan::try_swapping_with_projection`.
+        // A chain bottom that only holds the lower projection instead of
+        // absorbing it is tidied by this rule's second scheduled run, not by a
+        // pass added here. Nothing else moved.
         let plan = plan.transform_down(remove_unnecessary_projections).data()?;
         plan.transform_down(|plan| {
             Ok(match try_split_leaf_projection(&plan)? {
@@ -490,29 +497,113 @@ fn leaf_column_name(index: usize) -> String {
     format!("{LEAF_COLUMN_PREFIX}_{index}")
 }
 
+/// Returns the child of `node` if a projection may be split beneath it.
+///
+/// Every arm evaluates no expression of its own and has exactly one child, so
+/// widening that child with the leaf columns cannot change what it does. Each
+/// also hands its child's schema straight through, which is what lets the
+/// outer expressions keep their column indices when the split descends past
+/// several of these in a row.
+///
+/// That last property holds by construction rather than by luck: none of the
+/// three `compute_properties` takes a schema, and each clones its input's
+/// equivalence properties, so a host's schema *is* its child's. There is no
+/// guard here for it. A fourth arm that projects would need one, because
+/// `rewrite_outer_expr` remaps the outer column indices and rebases lambda
+/// parameters against the width of the chain's bottom schema, and a host that
+/// changed the width would leave both against the wrong one.
+fn split_host_child(node: &Arc<dyn ExecutionPlan>) -> Option<&Arc<dyn ExecutionPlan>> {
+    if let Some(repartition) = node.downcast_ref::<RepartitionExec>() {
+        // Hash and Range partitioning reference columns by index, which would
+        // have to be remapped against the rewritten child schema. Round robin
+        // carries no column references, and is what `EnsureRequirements`
+        // inserts here.
+        if !matches!(repartition.partitioning(), Partitioning::RoundRobinBatch(_)) {
+            return None;
+        }
+        Some(repartition.input())
+    } else if let Some(limit) = node.downcast_ref::<GlobalLimitExec>() {
+        // `LocalLimitExec` qualifies structurally — no expressions of its own,
+        // one child, and `replace_children` keeps its fetch — and the planner
+        // builds one under a `GlobalLimitExec` when the input has more than one
+        // partition (`physical_planner.rs`, the `Limit` branch).
+        // The corpus does enter this function at a `LocalLimitExec`, but only
+        // with no leaf to move, never with one stranded above it, so it is left
+        // out. `CooperativeExec` and `BufferExec` meet the same three
+        // conditions, and so did `CoalesceBatchesExec` before it was deprecated
+        // in 52.0.0: these arms are an allowlist, not whatever those conditions
+        // admit. `split_declines_local_limit` pins it.
+        Some(limit.input())
+    } else {
+        // A scan with more than one file group puts this between the limit and
+        // the source. Its own `try_swapping_with_projection` takes a projection
+        // only if it narrows, which a leaf projection need not do; the split is
+        // still worth it here, because what descends is exactly what the source
+        // prunes to.
+        Some(node.downcast_ref::<CoalescePartitionsExec>()?.input())
+    }
+}
+
+/// The hosts a split descends past, and the node that has to absorb the leaf
+/// projection.
+struct SplitHostChain<'a> {
+    /// Outermost first, so the rebuild walks this in reverse.
+    hosts: Vec<&'a Arc<dyn ExecutionPlan>>,
+    /// The first node that is not a host.
+    child: &'a Arc<dyn ExecutionPlan>,
+}
+
+/// Walks the chain of hosts beneath a projection.
+///
+/// `None` when the projection sits on no host at all. A single `OFFSET` on a
+/// multi-file table already stacks two of them, a `GlobalLimitExec` over a
+/// `CoalescePartitionsExec`, so stopping at the first one would leave the leaf
+/// expression stranded exactly where it is today.
+fn split_host_chain(node: &Arc<dyn ExecutionPlan>) -> Option<SplitHostChain<'_>> {
+    let mut hosts = vec![];
+    let mut current = node;
+    while let Some(child) = split_host_child(current) {
+        hosts.push(current);
+        current = child;
+    }
+    // A termination guard, not an optimization. With it removed this rule is
+    // handed the same plan over and over: a projection holding a leaf whose
+    // child is another projection, so the chain is empty. The `counted_volatile`
+    // queries in `projection_pushdown.slt` are that shape, a volatile inner
+    // projection being what stops `remove_unnecessary_projections` from merging
+    // the pair first; that file then runs until the harness gives up while every
+    // Rust test stays green. Why the rewrite fails to converge is not pinned
+    // down further.
+    (!hosts.is_empty()).then_some(SplitHostChain {
+        hosts,
+        child: current,
+    })
+}
+
 /// Splits a `ProjectionExec` that mixes leaf expressions with ones that must
 /// stay in place, moving the leaves into a projection the source absorbs.
 ///
-/// `benefits_from_input_partitioning` is true as soon as any expression is
-/// `KeepInPlace`, which both inserts a `RepartitionExec` below the projection
-/// and stops that projection descending past it, so a `MoveTowardsLeafNodes`
-/// expression sharing it never reaches the source. Splitting leaves the
-/// computation above the repartition, still parallelised.
+/// Two nodes strand a `MoveTowardsLeafNodes` expression above the source this
+/// way, and neither lets the whole projection past:
+///
+/// * `benefits_from_input_partitioning` is true as soon as any expression is
+///   `KeepInPlace`, which inserts a `RepartitionExec` below the projection.
+///   Splitting leaves the computation above it, still parallelised.
+/// * a table source that pushes `OFFSET` down wraps its scan in a
+///   `GlobalLimitExec`, which lands between the scan and the projection the
+///   logical leaf rules placed on it. Splitting sends only the leaves below
+///   the limit, so the rows it skips pay for a field access the source was
+///   going to make anyway and not for the outer expressions.
 fn try_split_leaf_projection(
     plan: &Arc<dyn ExecutionPlan>,
 ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
     let Some(projection) = plan.downcast_ref::<ProjectionExec>() else {
         return Ok(None);
     };
-    let Some(repartition) = projection.input().downcast_ref::<RepartitionExec>() else {
+    let Some(SplitHostChain { hosts, child }) = split_host_chain(projection.input())
+    else {
         return Ok(None);
     };
-    // Hash and Range partitioning reference columns by index, which would have
-    // to be remapped against the rewritten child schema. Round robin carries no
-    // column references, and is what `EnsureRequirements` inserts here.
-    if !matches!(repartition.partitioning(), Partitioning::RoundRobinBatch(_)) {
-        return Ok(None);
-    }
 
     let leaves = collect_leaf_exprs(projection.expr())?;
     if leaves.is_empty() {
@@ -523,7 +614,6 @@ fn try_split_leaf_projection(
     // column used *only* inside an extracted leaf must be dropped, otherwise the
     // source keeps reading it: for `s['a'] + 1` that would read the whole struct
     // alongside the extracted field, which is worse than not splitting at all.
-    let child = repartition.input();
     let child_schema = child.schema();
     let passthrough_indices = collect_outer_columns(projection.expr(), &leaves)?;
     let mut lower_exprs = passthrough_indices
@@ -544,8 +634,11 @@ fn try_split_leaf_projection(
     }
     let lower_projection = ProjectionExec::try_new(lower_exprs, Arc::clone(child))?;
 
-    // Only commit the split if the child really absorbs the leaf projection.
-    // Otherwise this would just add a projection that helps nobody.
+    // Commit only if the child takes the lower projection. A `Some` here does
+    // not always mean the source absorbed it: `FilterExec` and
+    // `SortPreservingMergeExec` take it by holding it over their own input, so
+    // the scan narrows on this rule's second scheduled run rather than now.
+    // `DataSourceExec` and `CoalesceBatchesExec` narrow it immediately.
     let Some(new_child) = child.try_swapping_with_projection(&lower_projection)? else {
         return Ok(None);
     };
@@ -566,18 +659,21 @@ fn try_split_leaf_projection(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    // The child gained the leaf columns, so the repartition's properties have to
-    // be recomputed rather than carried over.
-    let new_repartition = Arc::clone(projection.input()).replace_children(
-        vec![new_child],
-        ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-    )?;
+    // The child gained the leaf columns, so every host's properties have to be
+    // recomputed rather than carried over. Innermost host first.
+    let mut new_host = new_child;
+    for host in hosts.iter().rev() {
+        new_host = Arc::clone(host).replace_children(
+            vec![new_host],
+            ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
+        )?;
+    }
     // `try_new` would derive the output schema from the expressions alone and
     // drop the metadata the planner set, which `schema_check` then rejects.
     Ok(Some(Arc::new(
         ProjectionExec::try_new_with_schema_metadata(
             new_exprs,
-            new_repartition,
+            new_host,
             projection.schema().as_ref(),
         )?,
     )))
