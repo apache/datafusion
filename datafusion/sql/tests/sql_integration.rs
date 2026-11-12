@@ -490,6 +490,41 @@ fn ident_normalization_struct_fields(#[case] sql: &str, #[case] expected: &str) 
     assert_eq!(fields[0].name(), expected);
 }
 
+#[rstest]
+#[case::unquoted("SELECT s.x FROM (SELECT STRUCT(1 AS x) AS s)", "X")]
+#[case::quoted(r#"SELECT s."x" FROM (SELECT STRUCT(1 AS "x") AS s)"#, "x")]
+fn ident_normalization_struct_field_references(#[case] sql: &str, #[case] field: &str) {
+    use datafusion_functions::core::expr_ext::FieldAccessor;
+
+    let options =
+        ParserOptions::new().with_ident_normalization(IdentNormalization::Upper);
+    let plan = logical_plan_with_options(sql, options).unwrap();
+    let LogicalPlan::Projection(projection) = plan else {
+        panic!("expected projection");
+    };
+    assert_eq!(projection.schema.field(0).data_type(), &DataType::Int64);
+    assert_eq!(
+        projection.expr,
+        vec![datafusion_expr::ident("S").field(field)]
+    );
+}
+
+#[test]
+fn ident_normalization_escaped_partition_delimiter() {
+    let options =
+        ParserOptions::new().with_ident_normalization(IdentNormalization::Upper);
+    let plan = logical_plan_with_options(
+        r#"CREATE EXTERNAL TABLE t("a""b" INT) STORED AS CSV PARTITIONED BY ("a""b") LOCATION 'in.csv'"#,
+        options,
+    )
+    .unwrap();
+    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(table)) = plan else {
+        panic!("expected CREATE EXTERNAL TABLE");
+    };
+    assert_eq!(table.table_partition_cols, vec!["a\"b"]);
+    assert_eq!(table.schema.field(0).name(), "a\"b");
+}
+
 #[test]
 fn ident_normalization_quoted_partition_dialects() {
     let options =
