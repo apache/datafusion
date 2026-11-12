@@ -242,6 +242,111 @@ mod tests {
         assert_eq!(hashes[0], spark_compatible_xxhash64(0i64.to_le_bytes(), 42));
     }
 
+    /// Spark hashes a double through `doubleToLongBits`, which returns the
+    /// canonical NaN for every NaN, so NaNs with the sign bit or a payload
+    /// must hash like `f64::NAN`. The expected values are the ones in #25913:
+    /// `-3127944061524951246` (Float64) and `2692338816207849720` (Float32).
+    #[test]
+    fn test_xxhash64_nan_is_canonical_f64() {
+        use arrow::array::Float64Array;
+        let array: ArrayRef = Arc::new(Float64Array::from(vec![
+            f64::NAN,
+            f64::from_bits(0xfff8_0000_0000_0000), // sign bit set
+            f64::from_bits(0x7ff8_0000_0000_0001), // payload
+            f64::from_bits(0x7ff0_0000_0000_0001), // signalling NaN
+        ]));
+        let mut hashes = vec![DEFAULT_SEED; 4];
+        create_xxhash64_hashes(&[array], &mut hashes).unwrap();
+        assert_eq!(hashes, vec![-3127944061524951246_i64 as u64; 4]);
+    }
+
+    #[test]
+    fn test_xxhash64_nan_is_canonical_f32() {
+        use arrow::array::Float32Array;
+        let array: ArrayRef = Arc::new(Float32Array::from(vec![
+            f32::NAN,
+            f32::from_bits(0xffc0_0000), // sign bit set
+            f32::from_bits(0x7fc0_0001), // payload
+        ]));
+        let mut hashes = vec![DEFAULT_SEED; 3];
+        create_xxhash64_hashes(&[array], &mut hashes).unwrap();
+        assert_eq!(hashes, vec![2692338816207849720_u64; 3]);
+    }
+
+    /// Floats inside `List`, `LargeList` and `FixedSizeList` are hashed by
+    /// separate element paths; each must canonicalize NaN too.
+    #[test]
+    fn test_xxhash64_nan_is_canonical_in_lists() {
+        use arrow::array::{
+            FixedSizeListArray, Float32Array, Float64Array, LargeListArray, ListArray,
+        };
+        use arrow::datatypes::{Float32Type, Float64Type};
+
+        let f64_bits = [f64::NAN, f64::from_bits(0xfff8_0000_0000_0000)];
+        let f32_bits = [f32::NAN, f32::from_bits(0xffc0_0000)];
+        let hash = |arr: ArrayRef| {
+            let mut h = vec![DEFAULT_SEED; arr.len()];
+            create_xxhash64_hashes(&[arr], &mut h).unwrap();
+            h
+        };
+
+        // Expected: the hash of a one-element list is the hash of its element.
+        let f64_flat = hash(Arc::new(Float64Array::from(vec![f64::NAN])))[0];
+        let f32_flat = hash(Arc::new(Float32Array::from(vec![f32::NAN])))[0];
+
+        let rows64 = || f64_bits.iter().map(|v| Some(vec![Some(*v)]));
+        let rows32 = || f32_bits.iter().map(|v| Some(vec![Some(*v)]));
+        let lists: Vec<(&str, ArrayRef, u64)> = vec![
+            (
+                "List<Float64>",
+                Arc::new(ListArray::from_iter_primitive::<Float64Type, _, _>(rows64())),
+                f64_flat,
+            ),
+            (
+                "LargeList<Float64>",
+                Arc::new(LargeListArray::from_iter_primitive::<Float64Type, _, _>(
+                    rows64(),
+                )),
+                f64_flat,
+            ),
+            (
+                "FixedSizeList<Float64>",
+                Arc::new(
+                    FixedSizeListArray::from_iter_primitive::<Float64Type, _, _>(
+                        rows64(),
+                        1,
+                    ),
+                ),
+                f64_flat,
+            ),
+            (
+                "List<Float32>",
+                Arc::new(ListArray::from_iter_primitive::<Float32Type, _, _>(rows32())),
+                f32_flat,
+            ),
+            (
+                "LargeList<Float32>",
+                Arc::new(LargeListArray::from_iter_primitive::<Float32Type, _, _>(
+                    rows32(),
+                )),
+                f32_flat,
+            ),
+            (
+                "FixedSizeList<Float32>",
+                Arc::new(
+                    FixedSizeListArray::from_iter_primitive::<Float32Type, _, _>(
+                        rows32(),
+                        1,
+                    ),
+                ),
+                f32_flat,
+            ),
+        ];
+        for (name, arr, expected) in lists {
+            assert_eq!(hash(arr), vec![expected; 2], "{name}");
+        }
+    }
+
     #[test]
     fn test_xxhash64_string() {
         let seed = 42u64;

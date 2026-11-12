@@ -129,6 +129,27 @@ SELECT xxhash64(arrow_cast(1.0E20, 'Float64'));
 ----
 -1089066926670605926
 
+# NaN: Spark hashes every NaN like the canonical NaN, regardless of sign bit
+query I
+SELECT xxhash64(arrow_cast('NaN', 'Float64'));
+----
+-3127944061524951246
+
+query I
+SELECT xxhash64(-arrow_cast('NaN', 'Float64'));
+----
+-3127944061524951246
+
+query I
+SELECT xxhash64(arrow_cast('NaN', 'Float32'));
+----
+2692338816207849720
+
+query I
+SELECT xxhash64(-arrow_cast('NaN', 'Float32'));
+----
+2692338816207849720
+
 # Boolean tests
 query I
 SELECT xxhash64(true);
