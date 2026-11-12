@@ -21,8 +21,8 @@ use datafusion_common::parquet_config::RowGroupRangeAssignment;
 use datafusion_common::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use datafusion_common::utils::usize_from_wire;
 use datafusion_common::{
-    JoinConstraint, JoinType, NullEquality, RecursionUnnestOption, TableReference,
-    TableVersion, UnnestOptions,
+    JoinConstraint, JoinType, NullEquality, RecursionUnnestOption, TableReadSelector,
+    TableReference, UnnestOptions,
 };
 use datafusion_proto_common::FromProtoError as Error;
 
@@ -99,20 +99,22 @@ impl TryFrom<protobuf::TableReference> for TableReference {
     }
 }
 
-impl TryFrom<&protobuf::TableVersion> for TableVersion {
+impl TryFrom<&protobuf::TableReadSelector> for TableReadSelector {
     type Error = Error;
 
-    fn try_from(value: &protobuf::TableVersion) -> Result<Self, Self::Error> {
-        use protobuf::table_version::TableVersionEnum;
+    fn try_from(value: &protobuf::TableReadSelector) -> Result<Self, Self::Error> {
+        use protobuf::table_read_selector::TableReadSelectorEnum;
         match value
-            .table_version_enum
+            .table_read_selector_enum
             .as_ref()
-            .ok_or_else(|| Error::required("table_version_enum"))?
+            .ok_or_else(|| Error::required("table_read_selector_enum"))?
         {
-            TableVersionEnum::Version(value) => {
-                Ok(TableVersion::Version(value.try_into()?))
+            TableReadSelectorEnum::AsOfVersion(value) => {
+                Ok(TableReadSelector::AsOfVersion(value.try_into()?))
             }
-            TableVersionEnum::Timestamp(ns) => Ok(TableVersion::Timestamp(*ns)),
+            TableReadSelectorEnum::AsOfTimestamp(ns) => {
+                Ok(TableReadSelector::AsOfTimestamp(*ns))
+            }
         }
     }
 }

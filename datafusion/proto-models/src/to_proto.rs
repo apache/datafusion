@@ -11,7 +11,8 @@
 use datafusion_common::DataFusionError;
 use datafusion_common::display::{PlanType, StringifiedPlan};
 use datafusion_common::{
-    JoinConstraint, JoinType, NullEquality, TableReference, TableVersion, UnnestOptions,
+    JoinConstraint, JoinType, NullEquality, TableReadSelector, TableReference,
+    UnnestOptions,
 };
 
 use crate::generated::datafusion_common::EmptyMessage;
@@ -114,17 +115,21 @@ impl From<&StringifiedPlan> for protobuf::StringifiedPlan {
     }
 }
 
-impl TryFrom<&TableVersion> for protobuf::TableVersion {
+impl TryFrom<&TableReadSelector> for protobuf::TableReadSelector {
     type Error = datafusion_proto_common::ToProtoError;
 
-    fn try_from(version: &TableVersion) -> Result<Self, Self::Error> {
-        use protobuf::table_version::TableVersionEnum;
-        let table_version_enum = match version {
-            TableVersion::Version(value) => TableVersionEnum::Version(value.try_into()?),
-            TableVersion::Timestamp(ns) => TableVersionEnum::Timestamp(*ns),
+    fn try_from(selector: &TableReadSelector) -> Result<Self, Self::Error> {
+        use protobuf::table_read_selector::TableReadSelectorEnum;
+        let table_read_selector_enum = match selector {
+            TableReadSelector::AsOfVersion(value) => {
+                TableReadSelectorEnum::AsOfVersion(value.try_into()?)
+            }
+            TableReadSelector::AsOfTimestamp(ns) => {
+                TableReadSelectorEnum::AsOfTimestamp(*ns)
+            }
         };
-        Ok(protobuf::TableVersion {
-            table_version_enum: Some(table_version_enum),
+        Ok(protobuf::TableReadSelector {
+            table_read_selector_enum: Some(table_read_selector_enum),
         })
     }
 }

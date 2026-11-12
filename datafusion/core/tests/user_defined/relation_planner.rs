@@ -5,25 +5,23 @@
 //! Tests for the RelationPlanner extension point
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::Ordering;
 
 use arrow::array::{Int64Array, RecordBatch, StringArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use async_trait::async_trait;
 use datafusion::catalog::memory::MemTable;
-use datafusion::catalog::{SchemaProvider, TableProvider};
 use datafusion::common::test_util::batches_to_string;
 use datafusion::prelude::*;
-use datafusion_common::{DFSchema, Result, ScalarValue, TableVersion, not_impl_err};
+use datafusion_common::{DFSchema, Result, ScalarValue};
 use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::planner::{
     PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
 };
-use datafusion_sql::sqlparser::ast::{
-    TableAlias, TableFactor, TableVersion as SQLTableVersion,
-};
+use datafusion_sql::sqlparser::ast::{TableAlias, TableFactor, TableVersion};
 use insta::assert_snapshot;
+
+use super::table_read_selector_planner::register_counting_schema;
 
 // ============================================================================
 // Test Planners - Example Implementations
@@ -342,51 +340,6 @@ fn create_context_with_catalog_table(
     ctx
 }
 
-/// A schema with a single table `t`, which counts how often the current and
-/// a specific version of `t` are looked up.
-#[derive(Debug)]
-struct CountingSchema {
-    table: Arc<dyn TableProvider>,
-    /// Whether `table_at` is implemented, or returns "not implemented" like
-    /// catalogs that predate it
-    supports_time_travel: bool,
-    table_calls: AtomicUsize,
-    table_at_calls: AtomicUsize,
-}
-
-#[async_trait]
-impl SchemaProvider for CountingSchema {
-    fn table_names(&self) -> Vec<String> {
-        vec!["t".to_string()]
-    }
-
-    async fn table(&self, name: &str) -> Result<Option<Arc<dyn TableProvider>>> {
-        self.table_calls.fetch_add(1, Ordering::SeqCst);
-        Ok((name == "t").then(|| Arc::clone(&self.table)))
-    }
-
-    async fn table_at(
-        &self,
-        name: &str,
-        version: &TableVersion,
-    ) -> Result<Option<Arc<dyn TableProvider>>> {
-        self.table_at_calls.fetch_add(1, Ordering::SeqCst);
-        if !self.supports_time_travel {
-            return not_impl_err!("Time travel is not supported");
-        }
-        if name != "t" {
-            return Ok(None);
-        }
-        let table = MemTable::try_new(self.table.schema(), vec![vec![]])?
-            .with_version(Some(version.clone()));
-        Ok(Some(Arc::new(table)))
-    }
-
-    fn table_exist(&self, name: &str) -> bool {
-        name == "t"
-    }
-}
-
 /// Create a SessionContext with a simple single-column Int64 table.
 ///
 /// Useful for basic tests that need a real catalog table.
@@ -417,10 +370,11 @@ fn create_context_with_simple_table(
 // ============================================================================
 
 /// Example planner that implements time travel itself, for tables whose
-/// catalog does not support [`SchemaProvider::table_at`]. It emulates version
-/// `n` of a table by only returning the rows with an `id` of at most `n`.
+/// catalog does not support [`SchemaProvider::table_with_read_selector`]. It
+/// emulates version `n` of a table by only returning the rows with an `id` of
+/// at most `n`.
 ///
-/// [`SchemaProvider::table_at`]: datafusion::catalog::SchemaProvider::table_at
+/// [`SchemaProvider::table_with_read_selector`]: datafusion::catalog::SchemaProvider::table_with_read_selector
 #[derive(Debug)]
 struct EmulatedVersionPlanner;
 
@@ -434,7 +388,7 @@ impl RelationPlanner for EmulatedVersionPlanner {
             name,
             alias,
             args: None,
-            version: Some(SQLTableVersion::VersionAsOf(version)),
+            version: Some(TableVersion::VersionAsOf(version)),
             ..
         } = relation
         else {
@@ -825,14 +779,14 @@ mod tests {
         let error = execute_sql(&ctx, "SELECT * FROM t VERSION AS OF 2")
             .await
             .expect_err("time travel should not be supported");
-        assert_snapshot!(error.strip_backtrace(), @"This feature is not implemented: Time travel is not supported for table 't@2'");
+        assert_snapshot!(error.strip_backtrace(), @"This feature is not implemented: Table read selectors are not supported for table 't@2'");
     }
 
     // The current version of a table referenced with a time travel clause is
     // only fetched when a RelationPlanner may handle the time travel clause
-    // itself, whether or not the catalog implements `table_at`.
+    // itself, whether or not the catalog implements `table_with_read_selector`.
     #[tokio::test]
-    async fn time_travel_fetches_current_version_only_for_planners() {
+    async fn time_travel_fetches_current_version_only_for_relation_planners() {
         for (supports_time_travel, with_planner) in
             [(true, false), (true, true), (false, false), (false, true)]
         {
@@ -847,17 +801,7 @@ mod tests {
             ctx.sql("SET datafusion.sql_parser.dialect = 'Databricks'")
                 .await
                 .unwrap();
-            let table = ctx.table_provider("unused").await.unwrap();
-            let schema = Arc::new(CountingSchema {
-                table,
-                supports_time_travel,
-                table_calls: AtomicUsize::new(0),
-                table_at_calls: AtomicUsize::new(0),
-            });
-            ctx.catalog("datafusion")
-                .unwrap()
-                .register_schema("counting", Arc::clone(&schema) as _)
-                .unwrap();
+            let schema = register_counting_schema(&ctx, supports_time_travel).await;
 
             let result =
                 execute_sql(&ctx, "SELECT * FROM counting.t VERSION AS OF 1").await;
@@ -873,7 +817,11 @@ mod tests {
                 usize::from(with_planner),
                 "{case}"
             );
-            assert_eq!(schema.table_at_calls.load(Ordering::SeqCst), 1, "{case}");
+            assert_eq!(
+                schema.table_with_read_selector_calls.load(Ordering::SeqCst),
+                1,
+                "{case}"
+            );
         }
     }
 

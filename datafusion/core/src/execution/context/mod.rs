@@ -75,7 +75,7 @@ use datafusion_execution::registry::SerializerRegistry;
 use datafusion_expr::HigherOrderUDF;
 pub use datafusion_expr::execution_props::ExecutionProps;
 #[cfg(feature = "sql")]
-use datafusion_expr::planner::RelationPlanner;
+use datafusion_expr::planner::{RelationPlanner, TableReadSelectorPlanner};
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
     Expr, UserDefinedLogicalNode, WindowUDF,
@@ -1747,6 +1747,21 @@ impl SessionContext {
         planner: Arc<dyn RelationPlanner>,
     ) -> Result<()> {
         self.state.write().register_relation_planner(planner)
+    }
+
+    #[cfg(feature = "sql")]
+    /// Registers a [`TableReadSelectorPlanner`] to customize which read of a
+    /// table a SQL table factor performs.
+    ///
+    /// Planners are invoked in reverse registration order, allowing newer
+    /// planners to take precedence over existing ones.
+    pub fn register_table_read_selector_planner(
+        &self,
+        planner: Arc<dyn TableReadSelectorPlanner>,
+    ) -> Result<()> {
+        self.state
+            .write()
+            .register_table_read_selector_planner(planner)
     }
 
     /// Deregisters a UDF within this context.

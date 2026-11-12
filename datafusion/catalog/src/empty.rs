@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::*;
 use async_trait::async_trait;
-use datafusion_common::{Result, TableVersion, project_schema};
+use datafusion_common::{Result, TableReadSelector, project_schema};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
@@ -22,8 +22,7 @@ use crate::TableProvider;
 pub struct EmptyTable {
     schema: SchemaRef,
     partitions: usize,
-    /// The version of the table this provider reads, if versioned
-    version: Option<TableVersion>,
+    read_selector: Option<TableReadSelector>,
 }
 
 impl EmptyTable {
@@ -32,14 +31,21 @@ impl EmptyTable {
         Self {
             schema,
             partitions: 1,
-            version: None,
+            read_selector: None,
         }
     }
 
-    /// Set the version of the table this provider reads, for time travel
-    /// queries. See [`TableProvider::version`].
-    pub fn with_version(mut self, version: Option<TableVersion>) -> Self {
-        self.version = version;
+    /// Sets the [`TableReadSelector`] reported by
+    /// [`TableProvider::read_selector`], which identifies which read of the
+    /// table this provider performs, such as a version of the table.
+    ///
+    /// This only labels the provider, it does not change the data it reads:
+    /// the provider must already be set up for that read.
+    pub fn with_read_selector(
+        mut self,
+        read_selector: Option<TableReadSelector>,
+    ) -> Self {
+        self.read_selector = read_selector;
         self
     }
 
@@ -60,8 +66,8 @@ impl TableProvider for EmptyTable {
         TableType::Base
     }
 
-    fn version(&self) -> Option<&TableVersion> {
-        self.version.as_ref()
+    fn read_selector(&self) -> Option<&TableReadSelector> {
+        self.read_selector.as_ref()
     }
 
     async fn scan(
