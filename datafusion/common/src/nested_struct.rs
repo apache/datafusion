@@ -4,8 +4,7 @@
 
 use crate::{
     datatype::DataTypeExt,
-    error::{_internal_err, _plan_err, Result},
-    metadata::format_type_and_metadata,
+    error::{_plan_err, Result},
 };
 use arrow::{
     array::{
@@ -1393,70 +1392,10 @@ pub trait CastExtension: std::fmt::Debug + Send + Sync {
     ) -> Result<ArrayRef>;
 }
 
-/// A [`CastExtension`] that delegates to the first matching extension.
-#[derive(Debug)]
-pub struct VecCastExtension {
-    extensions: Vec<Arc<dyn CastExtension>>,
-}
-
-impl VecCastExtension {
-    /// Creates a cast extension from an ordered list of delegates.
-    pub fn new(extensions: Vec<Arc<dyn CastExtension>>) -> Self {
-        Self { extensions }
-    }
-}
-
-impl CastExtension for VecCastExtension {
-    fn can_cast_fields(
-        &self,
-        source_field: &Field,
-        target_field: &Field,
-    ) -> Result<bool> {
-        for extension in &self.extensions {
-            if extension.can_cast_fields(source_field, target_field)? {
-                return Ok(true);
-            }
-        }
-
-        Ok(false)
-    }
-
-    fn cast_array_fields(
-        &self,
-        array: &ArrayRef,
-        source_field: &Field,
-        target_field: &Field,
-        cast_options: &CastOptions,
-    ) -> Result<ArrayRef> {
-        for extension in &self.extensions {
-            if extension.can_cast_fields(source_field, target_field)? {
-                return extension.cast_array_fields(
-                    array,
-                    source_field,
-                    target_field,
-                    cast_options,
-                );
-            }
-        }
-
-        let source_display = format_type_and_metadata(
-            source_field.data_type(),
-            Some(source_field.metadata()),
-        );
-        let target_display = format_type_and_metadata(
-            target_field.data_type(),
-            Some(target_field.metadata()),
-        );
-        _internal_err!(
-            "Can't resolve extension to cast from {source_display} to {target_display}"
-        )
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{assert_contains, format::DEFAULT_CAST_OPTIONS};
+    use crate::{assert_contains, error::_internal_err, format::DEFAULT_CAST_OPTIONS};
     use arrow::{
         array::{
             BinaryArray, FixedSizeListArray, Int32Array, Int32Builder, Int64Array,
@@ -1596,13 +1535,11 @@ mod tests {
         let target_item =
             Arc::new(Field::new("item", Struct(target_struct_fields), true));
         let target_field = Field::new("root", DataType::List(target_item), true);
-        let cast_extension = VecCastExtension::new(vec![Arc::new(BinaryLengthCast)]);
-
         let result = cast_column_fields(
             &source,
             &source_field,
             &target_field,
-            Some(&cast_extension),
+            Some(&BinaryLengthCast),
             &DEFAULT_CAST_OPTIONS,
         )
         .unwrap();
