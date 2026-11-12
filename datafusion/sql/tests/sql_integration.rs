@@ -5826,6 +5826,55 @@ fn test_variable_identifier() {
     );
 }
 
+#[rstest]
+#[case::lower(true)]
+#[case::preserve(false)]
+fn ident_normalization_scalar_variables(#[case] enabled: bool) {
+    for policy in [
+        None,
+        Some(IdentNormalization::Lower),
+        Some(IdentNormalization::Upper),
+        Some(IdentNormalization::Preserve),
+    ] {
+        let mut options = ParserOptions::new().with_enable_ident_normalization(enabled);
+        options.ident_normalization = policy;
+        for (sql, names, data_type) in [
+            ("SELECT @variable", vec!["@variable"], DataType::Date32),
+            (
+                "SELECT @Variable.Member",
+                if enabled {
+                    vec!["@variable", "member"]
+                } else {
+                    vec!["@Variable", "Member"]
+                },
+                if enabled {
+                    DataType::Date32
+                } else {
+                    DataType::Int64
+                },
+            ),
+            (
+                r#"SELECT @Variable."Member""#,
+                vec![if enabled { "@variable" } else { "@Variable" }, "Member"],
+                if enabled {
+                    DataType::Utf8
+                } else {
+                    DataType::Int64
+                },
+            ),
+        ] {
+            let plan = logical_plan_with_options(sql, options).unwrap();
+            let Expr::ScalarVariable(field, variable_names) =
+                plan.head_output_expr().unwrap().unwrap()
+            else {
+                panic!("expected scalar variable: {sql}");
+            };
+            assert_eq!(variable_names, names, "{sql}, policy {policy:?}");
+            assert_eq!(field.data_type(), &data_type, "{sql}, policy {policy:?}");
+        }
+    }
+}
+
 #[test]
 fn plan_create_index() {
     let sql =

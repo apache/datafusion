@@ -338,6 +338,12 @@ impl ContextProvider for MockContextProvider {
     fn get_variable_type(&self, variable_names: &[String]) -> Option<DataType> {
         match variable_names {
             [var] if var == "@variable" => Some(DataType::Date32),
+            [var, member] => match (var.as_str(), member.as_str()) {
+                ("@variable", "member") => Some(DataType::Date32),
+                ("@Variable", "Member") => Some(DataType::Int64),
+                ("@variable", "Member") => Some(DataType::Utf8),
+                _ => None,
+            },
             _ => unimplemented!(),
         }
     }
