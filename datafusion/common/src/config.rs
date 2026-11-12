@@ -257,6 +257,32 @@ config_namespace! {
     }
 }
 
+/// Case folding for unquoted SQL identifiers.
+///
+/// Folding is ASCII-only: for example, `föö` becomes `Föö` under
+/// [`Self::Upper`]. Quoted identifiers are preserved by the SQL planner.
+/// This policy does not change function-name or configuration-key handling.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IdentNormalization {
+    /// Fold unquoted ASCII letters to lowercase.
+    Lower,
+    /// Fold unquoted ASCII letters to uppercase.
+    Upper,
+    /// Preserve the spelling of unquoted identifiers.
+    Preserve,
+}
+
+impl From<bool> for IdentNormalization {
+    /// Map the legacy normalization switch to lowercase folding or preservation.
+    fn from(enable_normalization: bool) -> Self {
+        if enable_normalization {
+            Self::Lower
+        } else {
+            Self::Preserve
+        }
+    }
+}
+
 config_namespace! {
     /// Options related to SQL parser
     ///

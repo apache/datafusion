@@ -5,10 +5,11 @@
 use std::collections::BTreeSet;
 use std::ops::ControlFlow;
 
+use datafusion_common::config::IdentNormalization;
 use datafusion_common::{DataFusionError, Result};
 
 use crate::parser::{CopyToSource, CopyToStatement, Statement as DFStatement};
-use crate::planner::object_name_to_table_reference;
+use crate::planner::object_name_to_table_reference_with_policy;
 use datafusion_common::TableReference;
 use sqlparser::ast::*;
 
@@ -18,15 +19,15 @@ struct RelationVisitor {
     relations: BTreeSet<TableReference>,
     all_ctes: BTreeSet<TableReference>,
     ctes_in_scope: Vec<TableReference>,
-    enable_ident_normalization: bool,
+    ident_normalization: IdentNormalization,
 }
 
 impl RelationVisitor {
     /// Record the reference to `relation`, if it's not a CTE reference.
     fn insert_relation(&mut self, relation: &ObjectName) -> ControlFlow<DataFusionError> {
-        match object_name_to_table_reference(
+        match object_name_to_table_reference_with_policy(
             relation.clone(),
-            self.enable_ident_normalization,
+            self.ident_normalization,
         ) {
             Ok(relation) => {
                 if !self.relations.contains(&relation)
@@ -61,9 +62,9 @@ impl Visitor for RelationVisitor {
                     cte.visit(self)?;
                 }
                 let cte_name = ObjectName::from(vec![cte.alias.name.clone()]);
-                match object_name_to_table_reference(
+                match object_name_to_table_reference_with_policy(
                     cte_name,
-                    self.enable_ident_normalization,
+                    self.ident_normalization,
                 ) {
                     Ok(cte_ref) => self.ctes_in_scope.push(cte_ref),
                     Err(e) => return ControlFlow::Break(e),
@@ -167,11 +168,36 @@ pub fn resolve_table_references(
     statement: &crate::parser::Statement,
     enable_ident_normalization: bool,
 ) -> Result<(Vec<TableReference>, Vec<TableReference>)> {
+    resolve_table_references_with_policy(statement, enable_ident_normalization.into())
+}
+
+/// Collects physical relations and CTE names using an explicit identifier policy.
+///
+/// Use the same policy as the SQL planner to request the exact catalog keys
+/// required during planning. Quoted names retain their spelling.
+///
+/// ```
+/// use datafusion_common::{config::IdentNormalization, TableReference};
+/// use datafusion_sql::{parser::DFParser, resolve::resolve_table_references_with_policy};
+///
+/// let statement = DFParser::parse_sql("WITH foo AS (SELECT * FROM bar) SELECT * FROM Foo")?
+///     .pop_front().unwrap();
+/// let (tables, ctes) = resolve_table_references_with_policy(
+///     &statement, IdentNormalization::Upper,
+/// )?;
+/// assert_eq!(tables, vec![TableReference::bare("BAR")]);
+/// assert_eq!(ctes, vec![TableReference::bare("FOO")]);
+/// # Ok::<(), datafusion_common::DataFusionError>(())
+/// ```
+pub fn resolve_table_references_with_policy(
+    statement: &crate::parser::Statement,
+    policy: IdentNormalization,
+) -> Result<(Vec<TableReference>, Vec<TableReference>)> {
     let mut visitor = RelationVisitor {
         relations: BTreeSet::new(),
         all_ctes: BTreeSet::new(),
         ctes_in_scope: vec![],
-        enable_ident_normalization,
+        ident_normalization: policy,
     };
 
     visit_statement(statement, &mut visitor)?;
@@ -185,6 +211,68 @@ pub fn resolve_table_references(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resolve_table_references_uppercase_policy() {
+        use crate::parser::DFParser;
+
+        let cases = [
+            (
+                r#"SELECT * FROM foo, Foo, FOO, "foo", cat."sch"."a.b""#,
+                vec![
+                    TableReference::bare("FOO"),
+                    TableReference::bare("foo"),
+                    TableReference::full("CAT", "sch", "a.b"),
+                ],
+                vec![],
+            ),
+            (
+                "WITH foo AS (SELECT * FROM foo) SELECT * FROM Foo",
+                vec![TableReference::bare("FOO")],
+                vec![TableReference::bare("FOO")],
+            ),
+            (
+                r#"WITH foo AS (SELECT 1) SELECT * FROM Foo, "foo""#,
+                vec![TableReference::bare("foo")],
+                vec![TableReference::bare("FOO")],
+            ),
+            (
+                r#"WITH "foo" AS (SELECT 1) SELECT * FROM "foo", Foo"#,
+                vec![TableReference::bare("FOO")],
+                vec![TableReference::bare("foo")],
+            ),
+            (
+                "(WITH foo AS (SELECT 1) SELECT * FROM Foo) UNION ALL SELECT * FROM foo",
+                vec![TableReference::bare("FOO")],
+                vec![TableReference::bare("FOO")],
+            ),
+            (
+                "WITH RECURSIVE foo AS (SELECT 1 UNION ALL SELECT * FROM Foo) SELECT * FROM FOO",
+                vec![],
+                vec![TableReference::bare("FOO")],
+            ),
+        ];
+        for (sql, mut expected_tables, mut expected_ctes) in cases {
+            let statement = DFParser::parse_sql(sql).unwrap().pop_front().unwrap();
+            let (tables, ctes) = resolve_table_references_with_policy(
+                &statement,
+                IdentNormalization::Upper,
+            )
+            .unwrap();
+            expected_tables.sort();
+            expected_ctes.sort();
+            assert_eq!(tables, expected_tables, "{sql}");
+            assert_eq!(ctes, expected_ctes, "{sql}");
+            for enabled in [false, true] {
+                assert_eq!(
+                    resolve_table_references(&statement, enabled).unwrap(),
+                    resolve_table_references_with_policy(&statement, enabled.into())
+                        .unwrap(),
+                    "{sql}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn resolve_table_references_shadowed_cte() {
