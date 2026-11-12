@@ -340,6 +340,20 @@ impl ListingTable {
         self
     }
 
+    /// Returns the [`PhysicalExprAdapterFactory`] used by this [`ListingTable`], if set.
+    pub fn expr_adapter_factory(&self) -> Option<&Arc<dyn PhysicalExprAdapterFactory>> {
+        self.expr_adapter_factory.as_ref()
+    }
+
+    /// Set the [`PhysicalExprAdapterFactory`] for this [`ListingTable`].
+    pub fn with_expr_adapter_factory(
+        mut self,
+        expr_adapter_factory: Arc<dyn PhysicalExprAdapterFactory>,
+    ) -> Self {
+        self.expr_adapter_factory = Some(expr_adapter_factory);
+        self
+    }
+
     /// Deprecated: Returns the [`SchemaAdapterFactory`] used by this [`ListingTable`].
     ///
     /// `SchemaAdapterFactory` has been removed. Use `PhysicalExprAdapterFactory` instead.
@@ -1264,8 +1278,24 @@ async fn get_files_with_limit(
 mod tests {
     use super::*;
     use arrow::compute::SortOptions;
+    use arrow::datatypes::Schema;
+    use datafusion_datasource_parquet::ParquetFormat;
     use datafusion_physical_expr::expressions::Column;
+    use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
     use datafusion_physical_expr_common::sort_expr::PhysicalSortExpr;
+
+    fn create_test_listing_table() -> ListingTable {
+        let table_path = ListingTableUrl::parse("file:///test").unwrap();
+        let file_format = Arc::new(ParquetFormat::default());
+        let listing_options = ListingOptions::new(file_format);
+        let schema = Arc::new(Schema::empty());
+
+        let config = ListingTableConfig::new(table_path)
+            .with_listing_options(listing_options)
+            .with_schema(schema);
+
+        ListingTable::try_new(config).unwrap()
+    }
 
     /// Helper to create a PhysicalSortExpr
     fn sort_expr(
@@ -1420,5 +1450,35 @@ mod tests {
 
         let result = derive_common_ordering_from_files(&file_groups);
         assert_eq!(result, Some(ordering));
+    }
+
+    #[test]
+    fn test_with_expr_adapter_factory() {
+        let factory1: Arc<dyn PhysicalExprAdapterFactory> =
+            Arc::new(DefaultPhysicalExprAdapterFactory);
+        let factory2: Arc<dyn PhysicalExprAdapterFactory> =
+            Arc::new(DefaultPhysicalExprAdapterFactory);
+
+        let table =
+            create_test_listing_table().with_expr_adapter_factory(Arc::clone(&factory1));
+
+        assert!(Arc::ptr_eq(
+            table.expr_adapter_factory().unwrap(),
+            &factory1
+        ));
+
+        let updated_table = table
+            .clone()
+            .with_expr_adapter_factory(Arc::clone(&factory2));
+
+        assert!(Arc::ptr_eq(
+            updated_table.expr_adapter_factory().unwrap(),
+            &factory2
+        ));
+
+        assert!(Arc::ptr_eq(
+            table.expr_adapter_factory().unwrap(),
+            &factory1
+        ));
     }
 }
