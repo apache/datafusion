@@ -64,7 +64,7 @@ use datafusion_common::format::{
 use datafusion_common::scalar::ScalarStructBuilder;
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    SplitPoint, TableReference, TableVersion, internal_datafusion_err, internal_err,
+    SplitPoint, TableReference, TableSelector, internal_datafusion_err, internal_err,
     not_impl_err, plan_err,
 };
 use datafusion_execution::TaskContext;
@@ -3815,20 +3815,20 @@ async fn roundtrip_empty_table_scan() -> Result<()> {
 }
 
 #[tokio::test]
-async fn roundtrip_table_scan_with_version() -> Result<()> {
+async fn roundtrip_table_scan_with_selector() -> Result<()> {
     let schema = Arc::new(Schema::new(vec![
         Field::new("id", DataType::Int32, false),
         Field::new("name", DataType::Utf8, true),
     ]));
     let ctx = SessionContext::new();
 
-    for version in [
-        TableVersion::Version(ScalarValue::Int64(Some(3))),
-        TableVersion::Version(ScalarValue::from("v1")),
-        TableVersion::Timestamp(1_704_067_200_000_000_000),
+    for selector in [
+        TableSelector::Version(ScalarValue::Int64(Some(3))),
+        TableSelector::Version(ScalarValue::from("v1")),
+        TableSelector::Timestamp(1_704_067_200_000_000_000),
     ] {
         let table = Arc::new(
-            EmptyTable::new(Arc::clone(&schema)).with_version(Some(version.clone())),
+            EmptyTable::new(Arc::clone(&schema)).with_selector(Some(selector.clone())),
         );
         let plan = LogicalPlanBuilder::scan(
             "empty",
@@ -3838,12 +3838,12 @@ async fn roundtrip_table_scan_with_version() -> Result<()> {
         .build()?;
         let bytes = logical_plan_to_bytes(&plan)?;
         let restored = logical_plan_from_bytes(&bytes, &ctx.task_ctx())?;
-        // `TableScan` equality includes the version of its source
+        // `TableScan` equality includes the selector of its source
         assert_eq!(plan, restored);
         let LogicalPlan::TableScan(scan) = restored else {
             panic!("expected a TableScan");
         };
-        assert_eq!(scan.source.version(), Some(&version));
+        assert_eq!(scan.source.selector(), Some(&selector));
     }
     Ok(())
 }

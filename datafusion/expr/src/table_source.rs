@@ -7,7 +7,7 @@
 use crate::{Expr, LogicalPlan};
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraints, Result, TableVersion};
+use datafusion_common::{Constraints, Result, TableSelector};
 
 use std::{any::Any, borrow::Cow};
 
@@ -122,17 +122,18 @@ pub trait TableSource: Any + Sync + Send {
         None
     }
 
-    /// The version of the table this source reads, for time travel queries
-    /// such as `SELECT * FROM t VERSION AS OF 3`. `None` means the version is
-    /// unknown or the table is not versioned.
+    /// The [`TableSelector`] this source reads, such as a specific version of
+    /// the table. `None` means the source does not identify the state of the
+    /// table it reads.
     ///
-    /// Sources returned by [`ContextProvider::get_table_source_at`] must
-    /// report the version they read, which may differ from the requested
-    /// version. See [`TableProvider::version`].
+    /// Sources returned by [`ContextProvider::get_table_source_with_selector`] must
+    /// report the selector they read, which may differ from the requested
+    /// selector. Scans of the same table with equal selectors are assumed to
+    /// read the same data. See [`TableProvider::selector`].
     ///
-    /// [`TableProvider::version`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.version
-    /// [`ContextProvider::get_table_source_at`]: crate::planner::ContextProvider::get_table_source_at
-    fn version(&self) -> Option<&TableVersion> {
+    /// [`TableProvider::selector`]: https://docs.rs/datafusion/latest/datafusion/datasource/trait.TableProvider.html#method.selector
+    /// [`ContextProvider::get_table_source_with_selector`]: crate::planner::ContextProvider::get_table_source_with_selector
+    fn selector(&self) -> Option<&TableSelector> {
         None
     }
 }

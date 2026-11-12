@@ -17,7 +17,7 @@ use crate::{
 use arrow::datatypes::{DataType, Field, FieldRef, SchemaRef};
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::{
-    DFSchema, Result, TableReference, TableVersion, config::ConfigOptions,
+    DFSchema, Result, ScalarValue, TableReference, TableSelector, config::ConfigOptions,
     file_options::file_type::FileType, not_impl_err,
 };
 #[cfg(feature = "sql")]
@@ -32,27 +32,17 @@ pub trait ContextProvider {
     /// Returns a table by reference, if it exists
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>>;
 
-    /// Evaluates the expression of a time travel clause, such as
-    /// `VERSION AS OF <expr>`, to a constant [`TableVersion`].
+    /// Returns a table by reference and [`TableSelector`], if it exists.
     ///
-    /// The expression must not reference any columns, but may call functions
-    /// such as `now()`.
-    fn evaluate_table_version(&self, _version: TableVersionExpr) -> Result<TableVersion> {
-        not_impl_err!("Time travel queries are not supported")
-    }
-
-    /// Returns a specific version of a table by reference, if it exists.
-    ///
-    /// The returned source must report the version it reads from
-    /// [`TableSource::version`], otherwise planning fails. This may differ
-    /// from the requested `version`. See [`TableVersion`] for the time travel
-    /// syntaxes that resolve to this.
-    fn get_table_source_at(
+    /// The returned source must report the selector it reads from
+    /// [`TableSource::selector`], otherwise planning fails. This may differ
+    /// from the requested `selector`.
+    fn get_table_source_with_selector(
         &self,
         name: TableReference,
-        version: &TableVersion,
+        selector: &TableSelector,
     ) -> Result<Arc<dyn TableSource>> {
-        not_impl_err!("Time travel is not supported for table '{name}@{version}'")
+        not_impl_err!("Table selectors are not supported for table '{name}@{selector}'")
     }
 
     /// Return the type of a file based on its extension (e.g. `.parquet`)
@@ -95,6 +85,24 @@ pub trait ContextProvider {
         _schema: SchemaRef,
     ) -> Result<Arc<dyn TableSource>> {
         not_impl_err!("Recursive CTE is not implemented")
+    }
+
+    /// Evaluates a constant expression to a [`ScalarValue`].
+    ///
+    /// An expression is constant if it has the same value for every row of a
+    /// query: it does not reference any columns or parameters, and does not
+    /// call volatile functions such as `random()`. Deterministic functions
+    /// and functions whose value is fixed for the duration of a query, such
+    /// as `now()`, are allowed.
+    ///
+    /// The result may be a null value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the expression is not constant, such as when it
+    /// references a column, or if evaluating it fails, such as for `1 / 0`.
+    fn evaluate_const_expr(&self, expr: Expr) -> Result<ScalarValue> {
+        not_impl_err!("Evaluating constant expressions is not supported: {expr}")
     }
 
     /// Return [`ExprPlanner`] extensions for planning expressions
@@ -156,18 +164,6 @@ pub trait ContextProvider {
 
     /// Return all window function names
     fn udwf_names(&self) -> Vec<String>;
-}
-
-/// The unevaluated form of a [`TableVersion`], as written in a time travel
-/// clause such as `VERSION AS OF <expr>` or `TIMESTAMP AS OF <expr>`.
-///
-/// See [`ContextProvider::evaluate_table_version`].
-#[derive(Debug, Clone, PartialEq)]
-pub enum TableVersionExpr {
-    /// Evaluates to a [`TableVersion::Version`]
-    Version(Expr),
-    /// Evaluates to a [`TableVersion::Timestamp`]
-    Timestamp(Expr),
 }
 
 /// Customize planning of SQL AST expressions to [`Expr`]s
@@ -438,20 +434,108 @@ pub enum RelationPlanning {
 
 /// Customize planning SQL table factors to [`LogicalPlan`]s.
 #[cfg(feature = "sql")]
+///
+/// A relation planner can customize planning at two levels:
+///
+/// * [`Self::plan_table_selector`] only determines which state of a table to
+///   read, such as a specific version, and leaves planning the table factor
+///   to DataFusion.
+/// * [`Self::plan_relation`] plans a whole table factor, such as a `PIVOT`,
+///   `MATCH_RECOGNIZE` or `TABLESAMPLE` clause, into a [`LogicalPlan`].
+///
+/// Both methods default to not handling anything, so a planner only
+/// implements the ones it needs. To read a different state of a table,
+/// implement [`Self::plan_table_selector`]: the tables of a query are
+/// retrieved from the catalog before it is planned, so
+/// [`Self::plan_relation`] can only use a table as it was retrieved.
+///
 /// For more background, please also see the [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]
 ///
 /// [Extending SQL in DataFusion: from ->> to TABLESAMPLE blog]: https://datafusion.apache.org/blog/2026/01/12/extending-sql
 pub trait RelationPlanner: Debug + Send + Sync {
+    /// Determine the [`TableSelector`] of a table factor, which specifies
+    /// which state of the table to read, such as a specific version.
+    ///
+    /// `table` is the table or view the table factor references, normalized
+    /// but not resolved against the default catalog and schema, so `t` and
+    /// `public.t` are different references.
+    ///
+    /// This is called for table factors that name a table or view, such as
+    /// `t VERSION AS OF 3`: before planning, to fetch the table from the
+    /// catalog, when the table factor is planned by DataFusion's default
+    /// logic, and when a statement is prepared, to check its selectors. As it
+    /// may be called more than once for the same table factor, it must
+    /// return the same result each time. It is not called for references to
+    /// CTEs, which are read without a selector.
+    ///
+    /// Returning [`TableSelectorPlanning::Planned`] short-circuits further
+    /// planning and uses the provided selector. `Planned(None)` reads the table
+    /// as returned by the catalog, without a selector. Returning
+    /// [`TableSelectorPlanning::Original`] allows the next registered planner,
+    /// or DataFusion's default logic, to determine the selector. The default
+    /// logic maps time travel clauses, such as `VERSION AS OF <expr>` and
+    /// `TIMESTAMP AS OF <expr>`, to [`TableSelector::Version`] and
+    /// [`TableSelector::Timestamp`].
+    ///
+    /// The table is then retrieved with
+    /// [`ContextProvider::get_table_source_with_selector`].
+    fn plan_table_selector(
+        &self,
+        _table: &TableReference,
+        _relation: &TableFactor,
+        _context: &dyn TableSelectorContext,
+    ) -> Result<TableSelectorPlanning> {
+        Ok(TableSelectorPlanning::Original)
+    }
+
     /// Plan a table factor into a [`LogicalPlan`].
     ///
     /// Returning [`RelationPlanning::Planned`] short-circuits further planning and uses the
     /// provided plan. Returning [`RelationPlanning::Original`] allows the next registered planner,
-    /// or DataFusion's default logic, to handle the relation.
+    /// or DataFusion's default logic, to handle the relation. The default implementation returns
+    /// [`RelationPlanning::Original`].
     fn plan_relation(
         &self,
         relation: TableFactor,
-        context: &mut dyn RelationPlannerContext,
-    ) -> Result<RelationPlanning>;
+        _context: &mut dyn RelationPlannerContext,
+    ) -> Result<RelationPlanning> {
+        Ok(RelationPlanning::Original(Box::new(relation)))
+    }
+}
+
+/// Result of determining the [`TableSelector`] of a table factor with
+/// [`RelationPlanner::plan_table_selector`]
+#[cfg(feature = "sql")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TableSelectorPlanning {
+    /// The selector was determined by an extension planner. `None` reads the
+    /// table as returned by the catalog, without a selector.
+    Planned(Option<TableSelector>),
+    /// The extension planner did not handle the table factor, so the next
+    /// registered planner, or DataFusion's default logic, determines the
+    /// selector.
+    Original,
+}
+
+/// Provides utilities for [`RelationPlanner::plan_table_selector`] to
+/// interact with DataFusion's SQL planner.
+///
+/// Selectors are determined before the tables of a query are retrieved from
+/// the catalog, so unlike [`RelationPlannerContext`], this context cannot
+/// plan relations or look up tables.
+#[cfg(feature = "sql")]
+pub trait TableSelectorContext {
+    /// Evaluates a constant SQL expression, such as the `1 + 1` of
+    /// `VERSION AS OF 1 + 1`, to a [`ScalarValue`]. See
+    /// [`ContextProvider::evaluate_const_expr`] for which expressions are
+    /// constant. The result may be null.
+    ///
+    /// Returns an error if the expression is not constant, or if evaluating
+    /// it fails. Parameters, such as `$1`, are not supported. In a prepared
+    /// statement, the expression must also not depend on the time of
+    /// execution, such as with `now()`: the selector is determined when the
+    /// statement is prepared, not when it is executed.
+    fn evaluate_const_expr(&self, expr: SQLExpr) -> Result<ScalarValue>;
 }
 
 /// Provides utilities for relation planners to interact with DataFusion's SQL

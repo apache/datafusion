@@ -10,7 +10,7 @@ use std::sync::Arc;
 use crate::TableProvider;
 
 use arrow::datatypes::SchemaRef;
-use datafusion_common::{Constraints, TableVersion, internal_err};
+use datafusion_common::{Constraints, TableSelector, internal_err};
 use datafusion_expr::{Expr, TableProviderFilterPushDown, TableSource, TableType};
 
 /// Implements [`TableSource`] for a [`TableProvider`]
@@ -69,8 +69,8 @@ impl TableSource for DefaultTableSource {
         self.table_provider.get_column_default(column)
     }
 
-    fn version(&self) -> Option<&TableVersion> {
-        self.table_provider.version()
+    fn selector(&self) -> Option<&TableSelector> {
+        self.table_provider.selector()
     }
 }
 

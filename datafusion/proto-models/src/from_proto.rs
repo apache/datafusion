@@ -22,7 +22,7 @@ use datafusion_common::parsers::{CompressionTypeVariant, CsvQuoteStyle};
 use datafusion_common::utils::usize_from_wire;
 use datafusion_common::{
     JoinConstraint, JoinType, NullEquality, RecursionUnnestOption, TableReference,
-    TableVersion, UnnestOptions,
+    TableSelector, UnnestOptions,
 };
 use datafusion_proto_common::FromProtoError as Error;
 
@@ -99,20 +99,20 @@ impl TryFrom<protobuf::TableReference> for TableReference {
     }
 }
 
-impl TryFrom<&protobuf::TableVersion> for TableVersion {
+impl TryFrom<&protobuf::TableSelector> for TableSelector {
     type Error = Error;
 
-    fn try_from(value: &protobuf::TableVersion) -> Result<Self, Self::Error> {
-        use protobuf::table_version::TableVersionEnum;
+    fn try_from(value: &protobuf::TableSelector) -> Result<Self, Self::Error> {
+        use protobuf::table_selector::TableSelectorEnum;
         match value
-            .table_version_enum
+            .table_selector_enum
             .as_ref()
-            .ok_or_else(|| Error::required("table_version_enum"))?
+            .ok_or_else(|| Error::required("table_selector_enum"))?
         {
-            TableVersionEnum::Version(value) => {
-                Ok(TableVersion::Version(value.try_into()?))
+            TableSelectorEnum::Version(value) => {
+                Ok(TableSelector::Version(value.try_into()?))
             }
-            TableVersionEnum::Timestamp(ns) => Ok(TableVersion::Timestamp(*ns)),
+            TableSelectorEnum::Timestamp(ns) => Ok(TableSelector::Timestamp(*ns)),
         }
     }
 }

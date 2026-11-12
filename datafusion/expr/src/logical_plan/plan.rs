@@ -58,7 +58,7 @@ use datafusion_common::tree_node::{
 use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
-    ScalarValue, Spans, SplitPoint, TableReference, TableVersion, UnnestOptions,
+    ScalarValue, Spans, SplitPoint, TableReference, TableSelector, UnnestOptions,
     aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
     internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
 };
@@ -2229,8 +2229,8 @@ impl LogicalPlan {
                         };
 
                         write!(f, "TableScan: {table_name}")?;
-                        if let Some(version) = source.version() {
-                            write!(f, "@{version}")?;
+                        if let Some(selector) = source.selector() {
+                            write!(f, "@{selector}")?;
                         }
                         write!(f, "{projected_fields}")?;
 
@@ -3294,7 +3294,7 @@ impl Debug for TableScan {
     fn fmt(&self, f: &mut Formatter) -> fmt::Result {
         f.debug_struct("TableScan")
             .field("table_name", &self.table_name)
-            .field("version", &self.source.version())
+            .field("selector", &self.source.selector())
             .field("source", &"...")
             .field("projection", &self.projection)
             .field("projected_schema", &self.projected_schema)
@@ -3312,14 +3312,14 @@ impl PartialEq for TableScan {
             && self.projected_schema == other.projected_schema
             && self.filters == other.filters
             && self.fetch == other.fetch
-            && self.source.version() == other.source.version()
+            && self.source.selector() == other.source.selector()
     }
 }
 
 impl Eq for TableScan {}
 
 // Manual implementation needed because of `source` and `projected_schema` fields.
-// Comparison excludes these fields, except for the version of the `source`.
+// Comparison excludes these fields, except for the selector of the `source`.
 impl PartialOrd for TableScan {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         #[derive(PartialEq, PartialOrd)]
@@ -3332,22 +3332,22 @@ impl PartialOrd for TableScan {
             pub filters: &'a Vec<Expr>,
             /// Optional number of rows to read
             pub fetch: &'a Option<usize>,
-            /// The version of the table to read
-            pub version: Option<&'a TableVersion>,
+            /// The selector of the table to read
+            pub selector: Option<&'a TableSelector>,
         }
         let comparable_self = ComparableTableScan {
             table_name: &self.table_name,
             projection: &self.projection,
             filters: &self.filters,
             fetch: &self.fetch,
-            version: self.source.version(),
+            selector: self.source.selector(),
         };
         let comparable_other = ComparableTableScan {
             table_name: &other.table_name,
             projection: &other.projection,
             filters: &other.filters,
             fetch: &other.fetch,
-            version: other.source.version(),
+            selector: other.source.selector(),
         };
         comparable_self
             .partial_cmp(&comparable_other)
@@ -3363,7 +3363,7 @@ impl Hash for TableScan {
         self.projected_schema.hash(state);
         self.filters.hash(state);
         self.fetch.hash(state);
-        self.source.version().hash(state);
+        self.source.selector().hash(state);
     }
 }
 

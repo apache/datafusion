@@ -20,7 +20,7 @@ mod param_value;
 mod partitioning;
 mod schema_reference;
 mod table_reference;
-mod table_version;
+mod table_selector;
 mod unnest;
 
 pub mod alias;
@@ -88,7 +88,7 @@ pub use schema_reference::SchemaReference;
 pub use spans::{Location, Span, Spans};
 pub use stats::{ColumnStatistics, Statistics};
 pub use table_reference::{ResolvedTableReference, TableReference};
-pub use table_version::TableVersion;
+pub use table_selector::TableSelector;
 pub use unnest::{NullHandling, RecursionUnnestOption, UnnestOptions};
 pub use utils::project_schema;
 

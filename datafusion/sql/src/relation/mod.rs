@@ -2,24 +2,28 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use std::ops::ControlFlow;
+use std::cell::Cell;
 use std::sync::Arc;
 
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
+use crate::resolve::ResolvedReference;
 
+use arrow::datatypes::{DataType, TimeUnit};
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::{
-    DFSchema, Diagnostic, Result, Span, Spans, TableReference, not_impl_err, plan_err,
+    DFSchema, Diagnostic, Result, ScalarValue, Span, Spans, TableReference,
+    TableSelector, internal_err, not_impl_err, plan_err,
 };
 use datafusion_expr::builder::subquery_alias;
 use datafusion_expr::planner::{
-    PlannedRelation, RelationPlannerContext, RelationPlanning, TableVersionExpr,
+    PlannedRelation, RelationPlannerContext, RelationPlanning, TableSelectorContext,
+    TableSelectorPlanning,
 };
 use datafusion_expr::{Expr, LogicalPlan, LogicalPlanBuilder, Volatility, expr::Unnest};
 use datafusion_expr::{Subquery, SubqueryAlias};
 use sqlparser::ast::{
     Expr as SQLExpr, FunctionArg, FunctionArgExpr, FunctionArguments, Spanned, Statement,
-    TableFactor, TableVersion as SQLTableVersion, Visit, Visitor,
+    TableFactor, TableVersion,
 };
 
 mod join;
@@ -36,13 +40,6 @@ fn get_cte_for_table_reference<'a>(
     name: &TableReference,
 ) -> Option<&'a LogicalPlan> {
     planner_context.get_cte(&name.to_string())
-}
-
-/// Returns the expression of a time travel clause
-fn version_expr(version: &TableVersionExpr) -> &Expr {
-    match version {
-        TableVersionExpr::Version(expr) | TableVersionExpr::Timestamp(expr) => expr,
-    }
 }
 
 /// Returns the argument name and value of an `AT (<name> => <expr>)` time
@@ -119,6 +116,123 @@ impl<S: ContextProvider> RelationPlannerContext for SqlToRelRelationContext<'_, 
     }
 }
 
+struct SqlToRelTableSelectorContext<'a, 'b, S: ContextProvider> {
+    planner: &'a SqlToRel<'b, S>,
+    /// The table factor whose selector is determined
+    relation: &'a TableFactor,
+    /// Whether the statement is being prepared, in which case expressions
+    /// must not depend on the time of execution
+    prepared: bool,
+    /// The error message for an expression that depends on the time of
+    /// execution, in a prepared statement
+    execution_dependent: Cell<Option<String>>,
+}
+
+impl<'a, 'b, S: ContextProvider> SqlToRelTableSelectorContext<'a, 'b, S> {
+    fn new(
+        planner: &'a SqlToRel<'b, S>,
+        relation: &'a TableFactor,
+        prepared: bool,
+    ) -> Self {
+        Self {
+            planner,
+            relation,
+            prepared,
+            execution_dependent: Cell::new(None),
+        }
+    }
+}
+
+impl<S: ContextProvider> TableSelectorContext
+    for SqlToRelTableSelectorContext<'_, '_, S>
+{
+    fn evaluate_const_expr(&self, expr: SQLExpr) -> Result<ScalarValue> {
+        // A fresh planner context, so planning the expression can neither
+        // depend on nor affect the planning of the query that references the
+        // table, and the selector is the same before and during planning
+        let expr = self.planner.sql_to_expr(
+            expr,
+            &DFSchema::empty(),
+            &mut PlannerContext::new(),
+        )?;
+        if expr.exists(|e| Ok(matches!(e, Expr::Placeholder(_))))? {
+            return not_impl_err!(
+                "Parameters are not supported in table selectors: {}",
+                self.relation
+            );
+        }
+        // The selector is determined when the statement is prepared, so
+        // functions such as `now()` would return the time of preparation
+        // rather than of execution
+        if self.prepared
+            && expr.exists(|e| {
+                Ok(matches!(
+                    e,
+                    Expr::ScalarFunction(f)
+                        if f.func.signature().volatility != Volatility::Immutable
+                ))
+            })?
+        {
+            let message = format!(
+                "Table selectors in prepared statements must not depend on the \
+                 time of execution, such as with now(): {}",
+                self.relation
+            );
+            self.execution_dependent.set(Some(message.clone()));
+            return not_impl_err!("{message}");
+        }
+        self.planner.context_provider.evaluate_const_expr(expr)
+    }
+}
+
+/// Determines the [`TableSelector`] of a table factor with a time travel
+/// clause, as DataFusion does by default. See [`SqlToRel::table_selector`]
+/// for the mapping.
+fn default_table_selector(
+    relation: &TableFactor,
+    context: &dyn TableSelectorContext,
+) -> Result<Option<TableSelector>> {
+    let TableFactor::Table {
+        version: Some(version),
+        ..
+    } = relation
+    else {
+        return Ok(None);
+    };
+    let (is_timestamp, expr) = match version {
+        TableVersion::VersionAsOf(expr) => (false, expr),
+        TableVersion::TimestampAsOf(expr) | TableVersion::ForSystemTimeAsOf(expr) => {
+            (true, expr)
+        }
+        TableVersion::Function(func) => match at_clause_argument(func) {
+            Some((name, expr)) if name.eq_ignore_ascii_case("VERSION") => (false, expr),
+            Some((name, expr)) if name.eq_ignore_ascii_case("TIMESTAMP") => (true, expr),
+            _ => return not_impl_err!("Unsupported time travel clause: {func}"),
+        },
+        TableVersion::Changes { .. } => {
+            return not_impl_err!("CHANGES clauses are not supported");
+        }
+    };
+    let value = context.evaluate_const_expr(expr.clone())?;
+    if value.is_null() {
+        let kind = if is_timestamp { "timestamp" } else { "version" };
+        return plan_err!(
+            "The {kind} of a time travel clause must not be NULL: {relation}"
+        );
+    }
+    if !is_timestamp {
+        return Ok(Some(TableSelector::Version(value)));
+    }
+
+    let timestamp_type = DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into()));
+    match value.cast_to(&timestamp_type)? {
+        ScalarValue::TimestampNanosecond(Some(ns), _) => {
+            Ok(Some(TableSelector::Timestamp(ns)))
+        }
+        value => internal_err!("Expected a timestamp, got: {value:?}"),
+    }
+}
+
 impl<S: ContextProvider> SqlToRel<'_, S> {
     /// Create a `LogicalPlan` that scans the named relation.
     ///
@@ -188,6 +302,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         planner_context: &mut PlannerContext,
     ) -> Result<PlannedRelation> {
         let relation_span = relation.span();
+        // Normalize the name of a referenced table or view, and determine its
+        // selector. References to CTEs are read without a selector.
+        let (table_ref, selector) = match &relation {
+            TableFactor::Table {
+                name, args: None, ..
+            } => {
+                let table_ref = self.object_name_to_table_reference(name.clone())?;
+                let selector =
+                    match get_cte_for_table_reference(planner_context, &table_ref) {
+                        Some(_) => None,
+                        None => self.table_selector(&table_ref, &relation)?,
+                    };
+                (Some(table_ref), selector)
+            }
+            _ => (None, None),
+        };
         let (plan, alias) = match relation {
             TableFactor::Table {
                 name,
@@ -233,20 +363,22 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .build()?;
                     (plan, alias)
                 } else {
-                    // Normalize name and alias
-                    let table_ref = self.object_name_to_table_reference(name)?;
+                    let Some(table_ref) = table_ref else {
+                        return internal_err!(
+                            "The name of table '{name}' was not normalized"
+                        );
+                    };
                     let cte = get_cte_for_table_reference(planner_context, &table_ref);
-                    if let Some(version) = version {
-                        if cte.is_some() {
-                            return plan_err!(
-                                "Time travel is not supported for CTE '{table_ref}'"
-                            );
-                        }
-                        let plan = self.versioned_table_scan(
+                    if cte.is_some() && version.is_some() {
+                        return plan_err!(
+                            "Time travel is not supported for CTE '{table_ref}'"
+                        );
+                    }
+                    if let Some(selector) = selector {
+                        let plan = self.selected_table_scan(
                             table_ref,
-                            version,
+                            &selector,
                             relation_span,
-                            planner_context,
                         )?;
                         return Ok(PlannedRelation::new(plan, alias));
                     }
@@ -366,141 +498,123 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
         Ok(PlannedRelation::new(plan, alias))
     }
 
-    /// Plans a scan of a specific version of a table, as requested by a time
-    /// travel clause such as `VERSION AS OF 3`.
-    fn versioned_table_scan(
+    /// Derives a [`TableSelector`] from a table factor that references
+    /// `table`. The returned [`TableSelector`], if present, describes
+    /// which state of the table is being requested by the table factor.
+    ///
+    /// The registered [`RelationPlanner`]s are asked first, in order. If none
+    /// of them handles the table factor, its time travel clause, if any, is
+    /// mapped to a selector. The different syntaxes used by SQL dialects are
+    /// normalized to either a version or a timestamp:
+    ///
+    /// | SQL                                          | `TableSelector` |
+    /// |----------------------------------------------|-----------------|
+    /// | `t VERSION AS OF 3`                          | `Version`       |
+    /// | `t AT (VERSION => 'v1')`                     | `Version`       |
+    /// | `t TIMESTAMP AS OF '2024-01-01'`             | `Timestamp`     |
+    /// | `t FOR SYSTEM_TIME AS OF now()`              | `Timestamp`     |
+    /// | `t AT (TIMESTAMP => now() - INTERVAL '1 h')` | `Timestamp`     |
+    ///
+    /// The expressions in these clauses are evaluated during planning and are
+    /// required to be constant expressions. Other clauses,
+    /// such as Snowflake's `BEFORE (...)`, `AT (OFFSET => ...)` or
+    /// `CHANGES (...)`, are not supported.
+    ///
+    /// Returns `None` if the table is to be read without a selector.
+    ///
+    /// [`RelationPlanner`]: datafusion_expr::planner::RelationPlanner
+    pub fn table_selector(
+        &self,
+        table: &TableReference,
+        relation: &TableFactor,
+    ) -> Result<Option<TableSelector>> {
+        let context = SqlToRelTableSelectorContext::new(self, relation, false);
+        self.plan_table_selector(table, relation, &context)
+    }
+
+    fn plan_table_selector(
+        &self,
+        table: &TableReference,
+        relation: &TableFactor,
+        context: &SqlToRelTableSelectorContext<'_, '_, S>,
+    ) -> Result<Option<TableSelector>> {
+        for planner in self.context_provider.get_relation_planners() {
+            match planner.plan_table_selector(table, relation, context)? {
+                TableSelectorPlanning::Planned(selector) => return Ok(selector),
+                TableSelectorPlanning::Original => {}
+            }
+        }
+        default_table_selector(relation, context)
+    }
+
+    /// Plans a scan of a table with a [`TableSelector`].
+    fn selected_table_scan(
         &self,
         table_ref: TableReference,
-        version: SQLTableVersion,
+        selector: &TableSelector,
         relation_span: sqlparser::tokenizer::Span,
-        planner_context: &mut PlannerContext,
     ) -> Result<LogicalPlan> {
-        let version = self.sql_table_version_to_expr(version, planner_context)?;
-        if version_expr(&version).exists(|e| Ok(matches!(e, Expr::Placeholder(_))))? {
-            return not_impl_err!(
-                "Parameters are not supported in time travel clauses: {table_ref}"
-            );
-        }
-        let version = self.context_provider.evaluate_table_version(version)?;
         let provider = self
             .context_provider
-            .get_table_source_at(table_ref.clone(), &version)
+            .get_table_source_with_selector(table_ref.clone(), selector)
             .map_err(|e| {
                 e.with_diagnostic(Diagnostic::new_error(
-                    format!("cannot read table '{table_ref}@{version}'"),
+                    format!("cannot read table '{table_ref}@{selector}'"),
                     Span::try_from_sqlparser_span(relation_span),
                 ))
             })?;
-        // The source reports the version it reads, which may differ from the
-        // requested version, e.g. a snapshot id for a timestamp
-        if provider.version().is_none() {
+        // The source reports the selector it reads, which may differ from the
+        // requested selector, e.g. a snapshot id for a timestamp
+        if provider.selector().is_none() {
             return plan_err!(
-                "The source of table '{table_ref}@{version}' must report the version \
-                 it reads"
+                "The source of table '{table_ref}@{selector}' must report the \
+                 selector it reads"
             );
         }
         LogicalPlanBuilder::scan(table_ref, provider, None)?.build()
     }
 
-    /// Converts a time travel clause to a [`TableVersionExpr`].
-    ///
-    /// The different syntaxes used by SQL dialects are normalized to either a
-    /// version or a timestamp:
-    ///
-    /// * `VERSION AS OF <expr>` and `AT (VERSION => <expr>)` become
-    ///   [`TableVersionExpr::Version`]
-    /// * `TIMESTAMP AS OF <expr>`, `FOR SYSTEM_TIME AS OF <expr>` and
-    ///   `AT (TIMESTAMP => <expr>)` become [`TableVersionExpr::Timestamp`]
-    ///
-    /// Other clauses, such as Snowflake's `BEFORE (...)`, `AT (OFFSET => ...)`
-    /// or `CHANGES (...)`, are not supported.
-    pub fn sql_table_version_to_expr(
-        &self,
-        version: SQLTableVersion,
-        planner_context: &mut PlannerContext,
-    ) -> Result<TableVersionExpr> {
-        let (is_timestamp, expr) = match version {
-            SQLTableVersion::VersionAsOf(expr) => (false, expr),
-            SQLTableVersion::TimestampAsOf(expr)
-            | SQLTableVersion::ForSystemTimeAsOf(expr) => (true, expr),
-            SQLTableVersion::Function(func) => match at_clause_argument(&func) {
-                Some((name, expr)) if name.eq_ignore_ascii_case("VERSION") => {
-                    (false, expr.clone())
-                }
-                Some((name, expr)) if name.eq_ignore_ascii_case("TIMESTAMP") => {
-                    (true, expr.clone())
-                }
-                _ => return not_impl_err!("Unsupported time travel clause: {func}"),
-            },
-            SQLTableVersion::Changes { .. } => {
-                return not_impl_err!("CHANGES clauses are not supported");
-            }
-        };
-        let expr = self.sql_to_expr(expr, &DFSchema::empty(), planner_context)?;
-        Ok(if is_timestamp {
-            TableVersionExpr::Timestamp(expr)
-        } else {
-            TableVersionExpr::Version(expr)
-        })
-    }
-
-    /// Rejects time travel clauses in a prepared statement that depend on the
+    /// Rejects table selectors in a prepared statement that depend on the
     /// time of execution, such as `AT (TIMESTAMP => now())`.
     ///
-    /// Time travel clauses are evaluated, and the table version is resolved,
-    /// when the statement is prepared. Functions such as `now()` would
-    /// therefore return the time of preparation rather than of execution.
-    pub(crate) fn check_prepared_table_versions(
+    /// Table selectors are determined, and the table is retrieved from the
+    /// catalog, when the statement is prepared. Functions such as `now()`
+    /// would therefore return the time of preparation rather than of
+    /// execution.
+    pub(crate) fn check_prepared_table_selectors(
         &self,
         statement: &Statement,
     ) -> Result<()> {
-        #[derive(Default)]
-        struct TableVersions(Vec<SQLTableVersion>);
-
-        impl Visitor for TableVersions {
-            type Break = ();
-
-            fn pre_visit_table_factor(
-                &mut self,
-                table_factor: &TableFactor,
-            ) -> ControlFlow<Self::Break> {
-                if let TableFactor::Table {
-                    version: Some(version),
-                    ..
-                } = table_factor
-                {
-                    self.0.push(version.clone());
+        // Visit the same table factors as are retrieved from the catalog
+        // before planning, which excludes references to CTEs
+        let mut execution_dependent = false;
+        let result = crate::resolve::resolve_sql_references(
+            statement,
+            self.options.enable_ident_normalization,
+            |reference| {
+                let ResolvedReference::TableFactor(table, table_factor) = reference
+                else {
+                    return Ok(());
+                };
+                let context = SqlToRelTableSelectorContext::new(self, table_factor, true);
+                // Other errors are reported when the statement is planned
+                let _ = self.plan_table_selector(&table, table_factor, &context);
+                match context.execution_dependent.into_inner() {
+                    Some(message) => {
+                        execution_dependent = true;
+                        not_impl_err!("{message}")
+                    }
+                    None => Ok(()),
                 }
-                ControlFlow::Continue(())
-            }
+            },
+        );
+        // Other errors, such as for invalid table names, are reported when the
+        // statement is planned
+        if execution_dependent {
+            result.map(|_| ())
+        } else {
+            Ok(())
         }
-
-        let mut versions = TableVersions::default();
-        let _ = statement.visit(&mut versions);
-        for version in versions.0 {
-            let display = version.to_string();
-            // Errors are reported when the statement is planned
-            let Ok(expr) =
-                self.sql_table_version_to_expr(version, &mut PlannerContext::new())
-            else {
-                continue;
-            };
-            let depends_on_execution = version_expr(&expr).exists(|e| {
-                Ok(matches!(
-                    e,
-                    Expr::ScalarFunction(f)
-                        if f.func.signature().volatility != Volatility::Immutable
-                ))
-            })?;
-            if depends_on_execution {
-                return not_impl_err!(
-                    "Time travel clauses in prepared statements must not depend on \
-                     the time of execution, such as with now(): {}",
-                    display.trim()
-                );
-            }
-        }
-        Ok(())
     }
 
     pub(crate) fn create_relation_subquery(

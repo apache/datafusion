@@ -6175,25 +6175,15 @@ fn test_reserved_column_name_explain_copy() {
     );
 }
 
+// A source that does not report the selector it reads is rejected. With a
+// `SessionState`, the catalog's table provider is checked before planning
+// instead, see `time_travel.slt`.
 #[test]
-fn test_time_travel() {
-    let dialect = &DatabricksDialect {};
-
-    // The version is reported by the source and shown with the scan. It does
-    // not change how columns are qualified.
-    let plan = logical_plan_with_dialect(
-        "SELECT person.id FROM person VERSION AS OF 3 WHERE person.age > 21",
-        dialect,
+fn test_time_travel_source_must_report_selector() {
+    let err = logical_plan_with_dialect(
+        "SELECT * FROM person VERSION AS OF 3",
+        &DatabricksDialect {},
     )
-    .unwrap();
-    assert_snapshot!(plan, @r"
-    Projection: person.id
-      Filter: person.age > Int64(21)
-        TableScan: person@3
-    ");
-
-    // A source that does not report the version it reads is rejected
-    let err = logical_plan_with_dialect("SELECT * FROM j1 VERSION AS OF 3", dialect)
-        .unwrap_err();
-    assert_snapshot!(err.strip_backtrace(), @"Error during planning: The source of table 'j1@3' must report the version it reads");
+    .unwrap_err();
+    assert_snapshot!(err.strip_backtrace(), @"Error during planning: The source of table 'person@3' must report the selector it reads");
 }

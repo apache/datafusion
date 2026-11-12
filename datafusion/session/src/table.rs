@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::session::Session;
 use arrow_schema::SchemaRef;
 use async_trait::async_trait;
-use datafusion_common::{Constraints, Statistics, TableVersion, not_impl_err};
+use datafusion_common::{Constraints, Statistics, TableSelector, not_impl_err};
 use datafusion_common::{DFSchemaRef, Result, internal_err};
 use datafusion_expr::Expr;
 use datafusion_expr::statistics::StatisticsRequest;
@@ -71,21 +71,32 @@ pub trait TableProvider: Any + Debug + Sync + Send {
         None
     }
 
-    /// The version of the table this provider reads, for time travel
-    /// queries such as `SELECT * FROM t VERSION AS OF 3`.
+    /// The [`TableSelector`] this provider reads, such as a specific version
+    /// of the table.
     ///
-    /// Providers returned by [`SchemaProvider::table_at`] must report the
-    /// version they read. This may differ from the requested version: for
-    /// example, `TIMESTAMP AS OF '2024-01-15'` may resolve to the snapshot
-    /// with id `3`, committed before that time. Reporting the resolved
-    /// version shows it in `EXPLAIN`, and lets scans of the same snapshot
-    /// compare equal regardless of how it was requested.
+    /// Providers returned by [`SchemaProvider::table_with_selector`] must
+    /// report the selector they read. This may differ from the requested
+    /// selector: for example, a [`TableSelector::Timestamp`] may resolve to
+    /// the [`TableSelector::Version`] of the latest snapshot committed before
+    /// it. Reporting the resolved selector shows it in `EXPLAIN`, and lets
+    /// scans of the same snapshot compare equal regardless of how it was
+    /// requested.
     ///
-    /// Defaults to `None`, meaning the version is unknown or the table is not
-    /// versioned.
+    /// Providers returned by [`SchemaProvider::table`] may also report a
+    /// selector, such as the id of the current snapshot, to identify the
+    /// state of the table they read.
     ///
-    /// [`SchemaProvider::table_at`]: crate::SchemaProvider::table_at
-    fn version(&self) -> Option<&TableVersion> {
+    /// Scans of the same table with equal selectors are assumed to read the
+    /// same data, and may be merged by the optimizer. Report a selector that
+    /// identifies the data exactly: two scans with equal selectors that read
+    /// different data can produce wrong results.
+    ///
+    /// Defaults to `None`, meaning the provider does not identify the state
+    /// of the table it reads.
+    ///
+    /// [`SchemaProvider::table`]: crate::SchemaProvider::table
+    /// [`SchemaProvider::table_with_selector`]: crate::SchemaProvider::table_with_selector
+    fn selector(&self) -> Option<&TableSelector> {
         None
     }
 

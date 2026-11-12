@@ -853,7 +853,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .map(|t| self.convert_data_type_to_field(&t))
                     .collect::<Result<_>>()?;
 
-                self.check_prepared_table_versions(&statement)?;
+                self.check_prepared_table_selectors(&statement)?;
 
                 // Create planner context with parameters
                 let mut planner_context = PlannerContext::new()

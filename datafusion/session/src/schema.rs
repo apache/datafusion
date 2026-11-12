@@ -6,7 +6,7 @@
 //! representing collections of named tables.
 
 use async_trait::async_trait;
-use datafusion_common::{DataFusionError, TableVersion, exec_err, not_impl_err};
+use datafusion_common::{DataFusionError, TableSelector, exec_err, not_impl_err};
 use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -38,28 +38,26 @@ pub trait SchemaProvider: Any + Debug + Sync + Send {
         name: &str,
     ) -> Result<Option<Arc<dyn TableProvider>>, DataFusionError>;
 
-    /// Retrieves a specific version of a table from the schema by name, if it
+    /// Retrieves a table from the schema by name and [`TableSelector`], if it
     /// exists, otherwise returns `None`.
     ///
-    /// This is used to plan time travel queries such as
-    /// `SELECT * FROM t VERSION AS OF 3` or
-    /// `SELECT * FROM t TIMESTAMP AS OF '2024-01-01'`. See [`TableVersion`]
-    /// for the syntaxes that are supported.
+    /// The selector specifies which state of the table to read, see
+    /// [`TableSelector`].
     ///
-    /// The returned provider must report the version it reads from
-    /// [`TableProvider::version`], otherwise planning fails. This may differ
-    /// from the requested `version`, for example when a timestamp resolves to
+    /// The returned provider must report the selector it reads from
+    /// [`TableProvider::selector`], otherwise planning fails. This may differ
+    /// from the requested `selector`, for example when a timestamp resolves to
     /// the latest snapshot committed before it.
     ///
     /// The default implementation returns a "not implemented" error, as
-    /// returning the current version of the table would silently produce
+    /// returning the current state of the table would silently produce
     /// wrong results.
-    async fn table_at(
+    async fn table_with_selector(
         &self,
         name: &str,
-        version: &TableVersion,
+        selector: &TableSelector,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        not_impl_err!("Time travel is not supported for table '{name}@{version}'")
+        not_impl_err!("Table selectors are not supported for table '{name}@{selector}'")
     }
 
     /// Retrieves the type of a specific table from the schema by name, if it exists, otherwise

@@ -19,12 +19,17 @@ use crate::datasource::provider_as_source;
 use crate::execution::SessionStateDefaults;
 use crate::execution::context::{EmptySerializerRegistry, FunctionFactory, QueryPlanner};
 use crate::physical_planner::{DefaultPhysicalPlanner, PhysicalPlanner};
-use arrow_schema::{DataType, FieldRef, TimeUnit};
+use arrow::record_batch::{RecordBatch, RecordBatchOptions};
+#[cfg(feature = "sql")]
+use arrow_schema::DataType;
+use arrow_schema::{FieldRef, Schema};
 use datafusion_catalog::MemoryCatalogProviderList;
 use datafusion_catalog::information_schema::{
     INFORMATION_SCHEMA, InformationSchemaProvider,
 };
 use datafusion_catalog::{TableFunction, TableFunctionImpl};
+#[cfg(feature = "sql")]
+use datafusion_common::TableSelector;
 use datafusion_common::alias::AliasGenerator;
 #[cfg(feature = "sql")]
 use datafusion_common::config::Dialect;
@@ -33,7 +38,7 @@ use datafusion_common::display::{PlanType, StringifiedPlan, ToStringifiedPlan};
 use datafusion_common::tree_node::TreeNode;
 use datafusion_common::{
     DFSchema, DataFusionError, ResolvedTableReference, ScalarValue, TableReference,
-    TableVersion, config_err, exec_err, internal_err, plan_datafusion_err, plan_err,
+    config_err, exec_err, plan_datafusion_err, plan_err,
 };
 use datafusion_execution::TaskContext;
 use datafusion_execution::config::SessionConfig;
@@ -43,7 +48,7 @@ use datafusion_expr::TableSource;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::expr_rewriter::FunctionRewrite;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
-use datafusion_expr::planner::{ExprPlanner, TableVersionExpr};
+use datafusion_expr::planner::ExprPlanner;
 #[cfg(feature = "sql")]
 use datafusion_expr::planner::{RelationPlanner, TypePlanner};
 use datafusion_expr::registry::{
@@ -52,7 +57,7 @@ use datafusion_expr::registry::{
 };
 use datafusion_expr::simplify::SimplifyContext;
 use datafusion_expr::{
-    AggregateUDF, Explain, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF, cast,
+    AggregateUDF, Explain, Expr, HigherOrderUDF, LogicalPlan, ScalarUDF, WindowUDF,
 };
 use datafusion_optimizer::simplify_expressions::ExprSimplifier;
 use datafusion_optimizer::{
@@ -70,6 +75,7 @@ use datafusion_session::{
 use datafusion_sql::{
     parser::{DFParserBuilder, Statement},
     planner::{ContextProvider, ParserOptions, PlannerContext, SqlToRel},
+    resolve::ResolvedReference,
 };
 
 use async_trait::async_trait;
@@ -633,138 +639,210 @@ impl SessionState {
     }
 
     /// Convert an AST Statement into a LogicalPlan
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+    // TableSelector holds a ScalarValue, which clippy cannot prove immutable (nested
+    // values sit behind `Arc<dyn Array>`). Arrow arrays are immutable, so the hash is stable.
     #[cfg(feature = "sql")]
     pub async fn statement_to_plan(
         &self,
         statement: Statement,
     ) -> datafusion_common::Result<LogicalPlan> {
-        let references = datafusion_sql::resolve::resolve_table_references_with_versions(
-            &statement,
+        let table_references = self.extract_table_references(&statement)?;
+
+        let tables = self.prefetch_tables(table_references).await?;
+
+        let provider = SessionContextProvider {
+            state: self,
+            tables,
+        };
+        let sql_to_rel = SqlToRel::new_with_options(&provider, self.get_parser_options());
+        sql_to_rel.statement_to_plan(statement)
+    }
+
+    #[cfg(feature = "sql")]
+    fn extract_table_references(
+        &self,
+        statement: &Statement,
+    ) -> Result<Vec<(TableReference, Option<TableSelector>)>, DataFusionError> {
+        let provider = SessionContextProvider {
+            state: self,
+            tables: HashMap::new(),
+        };
+        let sql_to_rel = SqlToRel::new_with_options(&provider, self.get_parser_options());
+
+        let mut table_references = vec![];
+        let handle_reference = |reference: ResolvedReference<'_>| {
+            match reference {
+                // Determine the selector the table is read with
+                ResolvedReference::TableFactor(table, table_factor) => self
+                    .add_table_selector(
+                        &sql_to_rel,
+                        table,
+                        table_factor,
+                        &mut table_references,
+                    ),
+                ResolvedReference::Table(table) => table_references.push((table, None)),
+                // CTEs are not retrieved from the catalog. The tables their
+                // bodies reference are reported separately.
+                ResolvedReference::Cte(_) => {}
+            }
+            Ok(())
+        };
+        datafusion_sql::resolve::resolve_references(
+            statement,
             self.config()
                 .options()
                 .sql_parser
                 .enable_ident_normalization,
+            handle_reference,
         )?;
+        Ok(table_references)
+    }
 
-        let mut provider = SessionContextProvider {
-            state: self,
-            tables: HashMap::with_capacity(references.tables.len()),
-            versioned_tables: HashMap::with_capacity(references.versioned_tables.len()),
-        };
-
-        // A `RelationPlanner` may handle a time travel clause itself, starting
-        // from the current version of the table, so also fetch that version.
-        // Without relation planners, the current version would go unused.
-        let mut tables = references.tables;
-        if !self.relation_planners().is_empty() {
-            tables.extend(references.versioned_tables.iter().map(|(t, _)| t.clone()));
-        }
-
-        for reference in tables {
-            let resolved = self.resolve_table_ref(reference);
-            if let Entry::Vacant(v) = provider.tables.entry(resolved) {
-                let resolved = v.key();
-                if let Ok(schema) = self.schema_for_ref(resolved.clone())
-                    && let Some(table) = schema.table(&resolved.table).await?
-                {
-                    v.insert(provider_as_source(table));
+    /// Determines the [`TableSelector`] of `table_factor`, which references
+    /// the table `reference`, ahead of planning, and adds the table to
+    /// `tables`, so it can be fetched from the catalog.
+    ///
+    /// Table factors whose selector cannot be determined are skipped: the SQL
+    /// planner reports the same error, unless a [`RelationPlanner`] handles
+    /// the table factor itself.
+    #[cfg(feature = "sql")]
+    fn add_table_selector(
+        &self,
+        sql_to_rel: &SqlToRel<'_, SessionContextProvider<'_>>,
+        reference: TableReference,
+        table_factor: &sqlparser::ast::TableFactor,
+        tables: &mut Vec<(TableReference, Option<TableSelector>)>,
+    ) {
+        // A `RelationPlanner` may handle a table factor with a selector itself,
+        // starting from the table without a selector, so also fetch that
+        // table. Without relation planners, it would go unused.
+        let has_relation_planners = !self.relation_planners().is_empty();
+        match sql_to_rel.table_selector(&reference, table_factor) {
+            Ok(None) => tables.push((reference, None)),
+            Ok(Some(selector)) => {
+                if has_relation_planners {
+                    tables.push((reference.clone(), None));
                 }
+                tables.push((reference, Some(selector)));
             }
+            Err(_) if has_relation_planners => tables.push((reference, None)),
+            Err(_) => {}
         }
+    }
 
-        let versions =
-            self.evaluate_table_versions(&provider, references.versioned_tables);
-        for key in versions {
-            if let Entry::Vacant(v) = provider.versioned_tables.entry(key) {
-                let (resolved, version) = v.key();
-                if let Ok(schema) = self.schema_for_ref(resolved.clone()) {
-                    match schema.table_at(&resolved.table, version).await {
-                        Ok(Some(table)) => {
-                            v.insert(Ok(provider_as_source(table)));
-                        }
-                        Ok(None) => {}
-                        Err(e) => {
-                            v.insert(Err(Arc::new(e)));
-                        }
+    #[allow(clippy::allow_attributes, clippy::mutable_key_type)]
+    // TableSelector holds a ScalarValue, which clippy cannot prove immutable (nested
+    // values sit behind `Arc<dyn Array>`). Arrow arrays are immutable, so the hash is stable.
+    #[cfg(feature = "sql")]
+    async fn prefetch_tables(
+        &self,
+        table_references: Vec<(TableReference, Option<TableSelector>)>,
+    ) -> Result<
+        HashMap<(ResolvedTableReference, Option<TableSelector>), TableSourceResult>,
+        DataFusionError,
+    > {
+        let mut tables = HashMap::with_capacity(table_references.len());
+        for (reference, selector) in table_references {
+            let resolved = self.resolve_table_ref(reference);
+            if let Entry::Vacant(v) = tables.entry((resolved, selector)) {
+                let (resolved, selector) = v.key();
+                let Ok(schema) = self.schema_for_ref(resolved.clone()) else {
+                    continue;
+                };
+                let Some(selector) = selector else {
+                    if let Some(table) = schema.table(&resolved.table).await? {
+                        v.insert(Ok(provider_as_source(table)));
+                    }
+                    continue;
+                };
+                match table_with_selector(schema.as_ref(), resolved, selector).await {
+                    Ok(Some(table)) => {
+                        v.insert(Ok(provider_as_source(table)));
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        v.insert(Err(Arc::new(e)));
                     }
                 }
             }
         }
-
-        let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
-        query.statement_to_plan(statement)
+        Ok(tables)
     }
 
-    /// Evaluates the time travel clauses of `versioned_tables` ahead of
-    /// planning, so the referenced table versions can be fetched from the
-    /// catalog.
+    /// Evaluates a constant expression to a [`ScalarValue`].
     ///
-    /// Clauses that fail to evaluate are skipped: a [`RelationPlanner`] may
-    /// handle them, and otherwise the SQL planner reports the same error.
-    #[cfg(feature = "sql")]
-    fn evaluate_table_versions(
+    /// An expression is constant if it has the same value for every row of a
+    /// query: it does not reference any columns or parameters, and does not
+    /// call volatile functions such as `random()`. Deterministic functions
+    /// and functions whose value is fixed for the duration of a query, such
+    /// as `now()`, are allowed.
+    ///
+    /// The result may be a null value.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the expression is not constant, such as when it
+    /// references a column, or if evaluating it fails, such as for `1 / 0`.
+    pub fn evaluate_const_expr(
         &self,
-        provider: &SessionContextProvider<'_>,
-        versioned_tables: Vec<(TableReference, sqlparser::ast::TableVersion)>,
-    ) -> Vec<(ResolvedTableReference, TableVersion)> {
-        let query = SqlToRel::new_with_options(provider, self.get_parser_options());
-        versioned_tables
-            .into_iter()
-            .filter_map(|(reference, version)| {
-                let version = query
-                    .sql_table_version_to_expr(version, &mut PlannerContext::new())
-                    .and_then(|version| self.evaluate_table_version(version))
-                    .ok()?;
-                Some((self.resolve_table_ref(reference), version))
-            })
-            .collect()
+        expr: Expr,
+    ) -> datafusion_common::Result<ScalarValue> {
+        let schema = DFSchema::empty();
+        let simplifier = self.expr_simplifier(&schema);
+        let expr = self.coerce_and_rewrite(&simplifier, expr, &schema)?;
+        match simplifier.simplify(expr)? {
+            Expr::Literal(value, _) => Ok(value),
+            expr => {
+                // The simplifier leaves expressions that fail to evaluate, such
+                // as `1 / 0`, unchanged. Evaluate it to report why.
+                let batch = RecordBatch::try_new_with_options(
+                    Arc::new(Schema::empty()),
+                    vec![],
+                    &RecordBatchOptions::new().with_row_count(Some(1)),
+                )?;
+                create_physical_expr(
+                    &expr,
+                    &schema,
+                    self.execution_props(),
+                    &PhysicalPlanningContext::default(),
+                )?
+                .evaluate(&batch)?;
+                plan_err!("Expression must evaluate to a constant, got: {expr}")
+            }
+        }
     }
 
-    /// Evaluates the expression of a time travel clause, such as
-    /// `VERSION AS OF <expr>`, to a constant [`TableVersion`].
-    ///
-    /// The expression must not reference any columns. Functions such as
-    /// `now()` are evaluated using this session's query execution start time.
-    /// Timestamps are converted to nanoseconds in the UTC time zone.
-    pub fn evaluate_table_version(
-        &self,
-        version: TableVersionExpr,
-    ) -> datafusion_common::Result<TableVersion> {
+    /// Returns an [`ExprSimplifier`] for expressions over `df_schema`.
+    fn expr_simplifier(&self, df_schema: &DFSchema) -> ExprSimplifier {
         let simplify_context = SimplifyContext::builder()
+            .with_schema(Arc::new(df_schema.clone()))
             .with_config_options(Arc::clone(self.config_options()))
             .with_query_execution_start_time(
                 self.execution_props().query_execution_start_time,
             )
             .build();
-        let simplifier = ExprSimplifier::new(simplify_context);
-        let (expr, is_timestamp) = match version {
-            TableVersionExpr::Version(expr) => (expr, false),
-            TableVersionExpr::Timestamp(expr) => (
-                cast(
-                    expr,
-                    DataType::Timestamp(TimeUnit::Nanosecond, Some("UTC".into())),
-                ),
-                true,
-            ),
-        };
-        let expr = simplifier.coerce(expr, &DFSchema::empty())?;
-        let value = match simplifier.simplify(expr)? {
-            Expr::Literal(value, _) if !value.is_null() => value,
-            expr => {
-                return plan_err!(
-                    "Time travel version must evaluate to a non-null constant, got: {expr}"
-                );
-            }
-        };
-        match value {
-            ScalarValue::TimestampNanosecond(Some(ns), _) if is_timestamp => {
-                Ok(TableVersion::Timestamp(ns))
-            }
-            value if !is_timestamp => Ok(TableVersion::Version(value)),
-            value => {
-                internal_err!("Expected a timestamp time travel version, got: {value:?}")
-            }
+        ExprSimplifier::new(simplify_context)
+    }
+
+    /// Applies type coercion and this session's function rewrites to `expr`.
+    fn coerce_and_rewrite(
+        &self,
+        simplifier: &ExprSimplifier,
+        expr: Expr,
+        df_schema: &DFSchema,
+    ) -> datafusion_common::Result<Expr> {
+        let config_options = self.config_options();
+        // apply type coercion here to ensure types match
+        let mut expr = simplifier.coerce(expr, df_schema)?;
+
+        // rewrite Exprs to functions if necessary
+        for rewrite in self.inner.analyzer.function_rewrites() {
+            expr = expr
+                .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
+                .data;
         }
+        Ok(expr)
     }
 
     #[cfg(feature = "sql")]
@@ -835,7 +913,6 @@ impl SessionState {
         let provider = SessionContextProvider {
             state: self,
             tables: HashMap::new(),
-            versioned_tables: HashMap::new(),
         };
 
         let query = SqlToRel::new_with_options(&provider, self.get_parser_options());
@@ -1003,24 +1080,8 @@ impl SessionState {
         expr: Expr,
         df_schema: &DFSchema,
     ) -> datafusion_common::Result<Arc<dyn PhysicalExpr>> {
-        let config_options = self.config_options();
-        let simplify_context = SimplifyContext::builder()
-            .with_schema(Arc::new(df_schema.clone()))
-            .with_config_options(Arc::clone(config_options))
-            .with_query_execution_start_time(
-                self.execution_props().query_execution_start_time,
-            )
-            .build();
-        let simplifier = ExprSimplifier::new(simplify_context);
-        // apply type coercion here to ensure types match
-        let mut expr = simplifier.coerce(expr, df_schema)?;
-
-        // rewrite Exprs to functions if necessary
-        for rewrite in self.inner.analyzer.function_rewrites() {
-            expr = expr
-                .transform_up(|expr| rewrite.rewrite(expr, df_schema, config_options))?
-                .data;
-        }
+        let simplifier = self.expr_simplifier(df_schema);
+        let expr = self.coerce_and_rewrite(&simplifier, expr, df_schema)?;
         create_physical_expr(
             &expr,
             df_schema,
@@ -2221,17 +2282,37 @@ impl From<SessionState> for SessionStateBuilder {
 #[cfg(feature = "sql")]
 struct SessionContextProvider<'a> {
     state: &'a SessionState,
-    tables: HashMap<ResolvedTableReference, Arc<dyn TableSource>>,
-    /// Tables referenced with a time travel clause. Lookup errors are kept
-    /// and only reported if the planner actually needs the table, as a
-    /// [`RelationPlanner`] may handle the time travel clause itself.
-    versioned_tables:
-        HashMap<(ResolvedTableReference, TableVersion), VersionedTableSource>,
+    /// The tables referenced by the statement, with their selector. Errors
+    /// retrieving a table with a selector are kept and only reported if the
+    /// planner actually needs the table, as a [`RelationPlanner`] may handle
+    /// the selector itself.
+    tables: HashMap<(ResolvedTableReference, Option<TableSelector>), TableSourceResult>,
 }
 
-/// The result of looking up a specific version of a table
+/// The result of retrieving a table from the catalog
 #[cfg(feature = "sql")]
-type VersionedTableSource = Result<Arc<dyn TableSource>, Arc<DataFusionError>>;
+type TableSourceResult = Result<Arc<dyn TableSource>, Arc<DataFusionError>>;
+
+/// Retrieves the table `name` with `selector` from `schema`, see
+/// [`SchemaProvider::table_with_selector`].
+///
+/// Returns an error if the provider does not report the selector it reads.
+#[cfg(feature = "sql")]
+async fn table_with_selector(
+    schema: &dyn SchemaProvider,
+    name: &ResolvedTableReference,
+    selector: &TableSelector,
+) -> datafusion_common::Result<Option<Arc<dyn crate::catalog::TableProvider>>> {
+    let table = schema.table_with_selector(&name.table, selector).await?;
+    if let Some(table) = &table
+        && table.selector().is_none()
+    {
+        return plan_err!(
+            "The table provider of '{name}@{selector}' must report the selector it reads"
+        );
+    }
+    Ok(table)
+}
 
 #[cfg(feature = "sql")]
 impl ContextProvider for SessionContextProvider<'_> {
@@ -2255,30 +2336,28 @@ impl ContextProvider for SessionContextProvider<'_> {
         &self,
         name: TableReference,
     ) -> datafusion_common::Result<Arc<dyn TableSource>> {
-        let name = self.state.resolve_table_ref(name);
-        self.tables
-            .get(&name)
-            .cloned()
-            .ok_or_else(|| plan_datafusion_err!("table '{name}' not found"))
-    }
-
-    fn evaluate_table_version(
-        &self,
-        version: TableVersionExpr,
-    ) -> datafusion_common::Result<TableVersion> {
-        self.state.evaluate_table_version(version)
-    }
-
-    fn get_table_source_at(
-        &self,
-        name: TableReference,
-        version: &TableVersion,
-    ) -> datafusion_common::Result<Arc<dyn TableSource>> {
-        let name = self.state.resolve_table_ref(name);
-        match self.versioned_tables.get(&(name.clone(), version.clone())) {
+        let key = (self.state.resolve_table_ref(name), None);
+        match self.tables.get(&key) {
             Some(Ok(table)) => Ok(Arc::clone(table)),
             Some(Err(e)) => Err(DataFusionError::Shared(Arc::clone(e))),
-            None => plan_err!("table '{name}@{version}' not found"),
+            None => plan_err!("table '{}' not found", key.0),
+        }
+    }
+
+    fn evaluate_const_expr(&self, expr: Expr) -> datafusion_common::Result<ScalarValue> {
+        self.state.evaluate_const_expr(expr)
+    }
+
+    fn get_table_source_with_selector(
+        &self,
+        name: TableReference,
+        selector: &TableSelector,
+    ) -> datafusion_common::Result<Arc<dyn TableSource>> {
+        let key = (self.state.resolve_table_ref(name), Some(selector.clone()));
+        match self.tables.get(&key) {
+            Some(Ok(table)) => Ok(Arc::clone(table)),
+            Some(Err(e)) => Err(DataFusionError::Shared(Arc::clone(e))),
+            None => plan_err!("table '{}@{selector}' not found", key.0),
         }
     }
 
@@ -2747,7 +2826,6 @@ mod tests {
             let provider = SessionContextProvider {
                 state,
                 tables: HashMap::new(),
-                versioned_tables: HashMap::new(),
             };
 
             let sql = "[1,2,3]";
@@ -2778,7 +2856,6 @@ mod tests {
         let provider = SessionContextProvider {
             state: &state,
             tables: HashMap::new(),
-            versioned_tables: HashMap::new(),
         };
 
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, true)]);
@@ -2930,6 +3007,69 @@ mod tests {
             .build();
         assert!(session_state.table_factories().get("test").is_some());
 
+        Ok(())
+    }
+
+    // Expressions may evaluate to null; whether that is valid is up to the
+    // caller
+    #[test]
+    fn evaluate_const_expr_allows_null() -> Result<()> {
+        use datafusion_common::ScalarValue;
+        use datafusion_expr::{cast, lit};
+
+        let state = SessionStateBuilder::new().with_default_features().build();
+        assert_eq!(
+            state.evaluate_const_expr(cast(lit(ScalarValue::Null), DataType::Int64))?,
+            ScalarValue::Int64(None)
+        );
+        Ok(())
+    }
+
+    // Function rewrites apply when evaluating expressions to constants, as
+    // they do when planning queries
+    #[test]
+    fn evaluate_const_expr_applies_function_rewrites() -> Result<()> {
+        use datafusion_common::ScalarValue;
+        use datafusion_common::config::ConfigOptions;
+        use datafusion_common::tree_node::Transformed;
+        use datafusion_expr::expr_rewriter::FunctionRewrite;
+        use datafusion_expr::lit;
+        use datafusion_expr::registry::FunctionRegistry;
+
+        /// Rewrites the string `'old'` to `'new'`
+        #[derive(Debug)]
+        struct RenameOld;
+
+        impl FunctionRewrite for RenameOld {
+            fn name(&self) -> &str {
+                "rename_old"
+            }
+
+            fn rewrite(
+                &self,
+                expr: Expr,
+                _schema: &DFSchema,
+                _config: &ConfigOptions,
+            ) -> Result<Transformed<Expr>> {
+                Ok(match expr {
+                    Expr::Literal(ScalarValue::Utf8(Some(s)), _) if s == "old" => {
+                        Transformed::yes(lit("new"))
+                    }
+                    expr => Transformed::no(expr),
+                })
+            }
+        }
+
+        let mut state = SessionStateBuilder::new().with_default_features().build();
+        assert_eq!(
+            state.evaluate_const_expr(lit("old"))?,
+            ScalarValue::from("old")
+        );
+        state.register_function_rewrite(Arc::new(RenameOld))?;
+        assert_eq!(
+            state.evaluate_const_expr(lit("old"))?,
+            ScalarValue::from("new")
+        );
         Ok(())
     }
 

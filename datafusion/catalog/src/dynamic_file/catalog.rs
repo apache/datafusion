@@ -6,7 +6,7 @@
 
 use crate::{CatalogProvider, CatalogProviderList, SchemaProvider, TableProvider};
 use async_trait::async_trait;
-use datafusion_common::TableVersion;
+use datafusion_common::TableSelector;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -139,12 +139,12 @@ impl SchemaProvider for DynamicFileSchemaProvider {
         self.factory.try_new(name).await
     }
 
-    async fn table_at(
+    async fn table_with_selector(
         &self,
         name: &str,
-        version: &TableVersion,
+        selector: &TableSelector,
     ) -> datafusion_common::Result<Option<Arc<dyn TableProvider>>> {
-        self.inner.table_at(name, version).await
+        self.inner.table_with_selector(name, selector).await
     }
 
     fn register_table(

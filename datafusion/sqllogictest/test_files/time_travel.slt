@@ -204,6 +204,39 @@ SELECT * FROM first_version
 statement ok
 DROP VIEW first_version;
 
+# Time travel clauses in CTE bodies
+query IT rowsort
+WITH old AS (SELECT * FROM versioned.t VERSION AS OF 1) SELECT * FROM old
+----
+1 a
+
+statement ok
+SET datafusion.catalog.default_schema = 'versioned'
+
+# A CTE body is not in the scope of its own name, so `t` in the body is the
+# table, while `t` in the query is the CTE
+query IT rowsort
+WITH t AS (SELECT * FROM t VERSION AS OF 1) SELECT * FROM t
+----
+1 a
+
+# Nor in the scope of CTEs defined after it: `t VERSION AS OF 2` in the body
+# of `a` is the table, not the CTE `t`
+query IT rowsort
+WITH a AS (
+  WITH b AS (SELECT * FROM t VERSION AS OF 1)
+  SELECT * FROM b UNION ALL SELECT * FROM t VERSION AS OF 2
+),
+t AS (SELECT * FROM a)
+SELECT * FROM t
+----
+1 a
+1 a
+2 b
+
+statement ok
+SET datafusion.catalog.default_schema = 'public'
+
 ##########
 ## EXPLAIN shows the resolved version
 ##########
@@ -249,29 +282,36 @@ SELECT * FROM versioned.t TIMESTAMP AS OF '2023-01-01'
 statement error DataFusion error: Error during planning: table 'datafusion.versioned.unknown@1' not found
 SELECT * FROM versioned.unknown VERSION AS OF 1
 
-# Catalogs must return a table that reports the version it reads
-statement error DataFusion error: Error during planning: The source of table 'versioned.no_version@1' must report the version it reads
+# Catalogs must return a table that reports the selector it reads
+statement error DataFusion error: Error during planning: The table provider of 'datafusion\.versioned\.no_version@1' must report the selector it reads
 SELECT * FROM versioned.no_version VERSION AS OF 1
 
 # Tables that do not support time travel
 statement ok
 CREATE TABLE plain AS VALUES (1);
 
-statement error DataFusion error: This feature is not implemented: Time travel is not supported for table 'plain@1'
+statement error DataFusion error: This feature is not implemented: Table selectors are not supported for table 'plain@1'
 SELECT * FROM plain VERSION AS OF 1
 
 statement ok
 DROP TABLE plain;
 
-# The version must be a non-null constant
+# The version must be a constant, which is not NULL
 statement error DataFusion error: Schema error: No field named id\.
 SELECT * FROM versioned.t AT (VERSION => id)
 
-statement error DataFusion error: Error during planning: Time travel version must evaluate to a non-null constant, got: NULL
+statement error DataFusion error: Error during planning: The version of a time travel clause must not be NULL: versioned\.t AT\(VERSION => NULL\)
 SELECT * FROM versioned.t AT (VERSION => NULL)
 
-statement error DataFusion error: Error during planning: Time travel version must evaluate to a non-null constant
+statement error DataFusion error: Error during planning: The timestamp of a time travel clause must not be NULL: versioned\.t TIMESTAMP AS OF NULL
+SELECT * FROM versioned.t TIMESTAMP AS OF NULL
+
+statement error DataFusion error: Error during planning: Expression must evaluate to a constant, got: random\(\)
 SELECT * FROM versioned.t AT (VERSION => random())
+
+# Errors evaluating the expression are reported as is
+statement error DataFusion error: Arrow error: Divide by zero error
+SELECT * FROM versioned.t AT (VERSION => 1 / 0)
 
 statement error Error parsing timestamp from 'yesterday'
 SELECT * FROM versioned.t AT (TIMESTAMP => 'yesterday')
@@ -316,22 +356,27 @@ statement ok
 DEALLOCATE versioned_lookup;
 
 # Parameters are not supported in time travel clauses
-statement error DataFusion error: This feature is not implemented: Parameters are not supported in time travel clauses: versioned\.t
+statement error DataFusion error: This feature is not implemented: Parameters are not supported in table selectors: versioned\.t AT\(VERSION => \$1\)
 PREPARE p AS SELECT * FROM versioned.t AT (VERSION => $1)
 
 # Clauses that depend on the time of execution would be evaluated when the
 # statement is prepared instead
-statement error DataFusion error: This feature is not implemented: Time travel clauses in prepared statements must not depend on the time of execution, such as with now\(\): AT\(TIMESTAMP => now\(\) \- INTERVAL '1 hour'\)
+statement error DataFusion error: This feature is not implemented: Table selectors in prepared statements must not depend on the time of execution, such as with now\(\): versioned\.t AT\(TIMESTAMP => now\(\) \- INTERVAL '1 hour'\)
 PREPARE p AS SELECT * FROM versioned.t AT (TIMESTAMP => now() - INTERVAL '1 hour')
 
 # Also within subqueries and DML statements
-statement error DataFusion error: This feature is not implemented: Time travel clauses in prepared statements must not depend on the time of execution
+statement error DataFusion error: This feature is not implemented: Table selectors in prepared statements must not depend on the time of execution
 PREPARE p AS SELECT * FROM (SELECT * FROM versioned.t AT (TIMESTAMP => now()))
+
+# References to CTEs are read without a selector, so their time travel clause is
+# rejected as for unprepared statements
+statement error DataFusion error: Error during planning: Time travel is not supported for CTE 'c'
+PREPARE p AS WITH c AS (SELECT 1) SELECT * FROM c AT (TIMESTAMP => now())
 
 statement ok
 CREATE TABLE copied (id BIGINT, name VARCHAR);
 
-statement error DataFusion error: This feature is not implemented: Time travel clauses in prepared statements must not depend on the time of execution
+statement error DataFusion error: This feature is not implemented: Table selectors in prepared statements must not depend on the time of execution
 PREPARE p AS INSERT INTO copied SELECT * FROM versioned.t AT (TIMESTAMP => now())
 
 statement ok

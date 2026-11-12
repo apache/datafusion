@@ -7,7 +7,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue, TableReference,
-    TableVersion, assert_contains,
+    TableSelector, assert_contains,
 };
 use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion_expr::test::function_stub::{
@@ -1700,7 +1700,7 @@ fn test_table_scan_version_to_sql() -> Result<()> {
     /// A source that reads a specific version of a table
     struct VersionedSource {
         schema: SchemaRef,
-        version: TableVersion,
+        selector: TableSelector,
     }
 
     impl TableSource for VersionedSource {
@@ -1708,15 +1708,15 @@ fn test_table_scan_version_to_sql() -> Result<()> {
             Arc::clone(&self.schema)
         }
 
-        fn version(&self) -> Option<&TableVersion> {
-            Some(&self.version)
+        fn selector(&self) -> Option<&TableSelector> {
+            Some(&self.selector)
         }
     }
 
-    let scan = |version: TableVersion, filters: Vec<Expr>| -> Result<LogicalPlan> {
+    let scan = |selector: TableSelector, filters: Vec<Expr>| -> Result<LogicalPlan> {
         let source = Arc::new(VersionedSource {
             schema: Arc::new(schema.clone()),
-            version,
+            selector,
         });
         Ok(LogicalPlan::TableScan(
             TableScanBuilder::new("t1", source)
@@ -1724,10 +1724,10 @@ fn test_table_scan_version_to_sql() -> Result<()> {
                 .build()?,
         ))
     };
-    let version = TableVersion::Version(ScalarValue::Int64(Some(3)));
-    let tag = TableVersion::Version(ScalarValue::from("v1"));
+    let version = TableSelector::Version(ScalarValue::Int64(Some(3)));
+    let tag = TableSelector::Version(ScalarValue::from("v1"));
     // 2024-01-01T00:00:00Z
-    let timestamp = TableVersion::Timestamp(1_704_067_200_000_000_000);
+    let timestamp = TableSelector::Timestamp(1_704_067_200_000_000_000);
 
     let sql = plan_to_sql(&scan(version.clone(), vec![])?)?;
     assert_snapshot!(sql, @"SELECT * FROM t1 AT(VERSION => 3)");

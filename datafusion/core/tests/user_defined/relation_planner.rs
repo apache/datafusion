@@ -14,15 +14,16 @@ use datafusion::catalog::memory::MemTable;
 use datafusion::catalog::{SchemaProvider, TableProvider};
 use datafusion::common::test_util::batches_to_string;
 use datafusion::prelude::*;
-use datafusion_common::{DFSchema, Result, ScalarValue, TableVersion, not_impl_err};
+use datafusion_common::{
+    DFSchema, Result, ScalarValue, TableReference, TableSelector, not_impl_err,
+};
 use datafusion_expr::Expr;
 use datafusion_expr::logical_plan::builder::LogicalPlanBuilder;
 use datafusion_expr::planner::{
     PlannedRelation, RelationPlanner, RelationPlannerContext, RelationPlanning,
+    TableSelectorContext, TableSelectorPlanning,
 };
-use datafusion_sql::sqlparser::ast::{
-    TableAlias, TableFactor, TableVersion as SQLTableVersion,
-};
+use datafusion_sql::sqlparser::ast::{TableAlias, TableFactor, TableVersion};
 use insta::assert_snapshot;
 
 // ============================================================================
@@ -347,11 +348,11 @@ fn create_context_with_catalog_table(
 #[derive(Debug)]
 struct CountingSchema {
     table: Arc<dyn TableProvider>,
-    /// Whether `table_at` is implemented, or returns "not implemented" like
+    /// Whether `table_with_selector` is implemented, or returns "not implemented" like
     /// catalogs that predate it
     supports_time_travel: bool,
     table_calls: AtomicUsize,
-    table_at_calls: AtomicUsize,
+    table_with_selector_calls: AtomicUsize,
 }
 
 #[async_trait]
@@ -365,12 +366,13 @@ impl SchemaProvider for CountingSchema {
         Ok((name == "t").then(|| Arc::clone(&self.table)))
     }
 
-    async fn table_at(
+    async fn table_with_selector(
         &self,
         name: &str,
-        version: &TableVersion,
+        selector: &TableSelector,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
-        self.table_at_calls.fetch_add(1, Ordering::SeqCst);
+        self.table_with_selector_calls
+            .fetch_add(1, Ordering::SeqCst);
         if !self.supports_time_travel {
             return not_impl_err!("Time travel is not supported");
         }
@@ -378,7 +380,7 @@ impl SchemaProvider for CountingSchema {
             return Ok(None);
         }
         let table = MemTable::try_new(self.table.schema(), vec![vec![]])?
-            .with_version(Some(version.clone()));
+            .with_selector(Some(selector.clone()));
         Ok(Some(Arc::new(table)))
     }
 
@@ -417,10 +419,10 @@ fn create_context_with_simple_table(
 // ============================================================================
 
 /// Example planner that implements time travel itself, for tables whose
-/// catalog does not support [`SchemaProvider::table_at`]. It emulates version
+/// catalog does not support [`SchemaProvider::table_with_selector`]. It emulates version
 /// `n` of a table by only returning the rows with an `id` of at most `n`.
 ///
-/// [`SchemaProvider::table_at`]: datafusion::catalog::SchemaProvider::table_at
+/// [`SchemaProvider::table_with_selector`]: datafusion::catalog::SchemaProvider::table_with_selector
 #[derive(Debug)]
 struct EmulatedVersionPlanner;
 
@@ -434,7 +436,7 @@ impl RelationPlanner for EmulatedVersionPlanner {
             name,
             alias,
             args: None,
-            version: Some(SQLTableVersion::VersionAsOf(version)),
+            version: Some(TableVersion::VersionAsOf(version)),
             ..
         } = relation
         else {
@@ -451,6 +453,51 @@ impl RelationPlanner for EmulatedVersionPlanner {
         Ok(RelationPlanning::Planned(Box::new(PlannedRelation::new(
             plan, alias,
         ))))
+    }
+}
+
+/// Example planner that reads a specific version of a table in the `counting`
+/// schema, given by a table hint such as `t WITH (1 + 1)`, rather than a time
+/// travel clause.
+#[derive(Debug)]
+struct VersionHintPlanner;
+
+impl RelationPlanner for VersionHintPlanner {
+    fn plan_table_selector(
+        &self,
+        table: &TableReference,
+        relation: &TableFactor,
+        context: &dyn TableSelectorContext,
+    ) -> Result<TableSelectorPlanning> {
+        if table.schema() != Some("counting") {
+            return Ok(TableSelectorPlanning::Original);
+        }
+        let TableFactor::Table { with_hints, .. } = relation else {
+            return Ok(TableSelectorPlanning::Original);
+        };
+        let [hint] = with_hints.as_slice() else {
+            return Ok(TableSelectorPlanning::Original);
+        };
+        let version = context.evaluate_const_expr(hint.clone())?;
+        Ok(TableSelectorPlanning::Planned(Some(
+            TableSelector::Version(version),
+        )))
+    }
+}
+
+/// Example planner that ignores time travel clauses, reading the table as
+/// returned by the catalog instead
+#[derive(Debug)]
+struct IgnoreTimeTravelPlanner;
+
+impl RelationPlanner for IgnoreTimeTravelPlanner {
+    fn plan_table_selector(
+        &self,
+        _table: &TableReference,
+        _relation: &TableFactor,
+        _context: &dyn TableSelectorContext,
+    ) -> Result<TableSelectorPlanning> {
+        Ok(TableSelectorPlanning::Planned(None))
     }
 }
 
@@ -825,12 +872,12 @@ mod tests {
         let error = execute_sql(&ctx, "SELECT * FROM t VERSION AS OF 2")
             .await
             .expect_err("time travel should not be supported");
-        assert_snapshot!(error.strip_backtrace(), @"This feature is not implemented: Time travel is not supported for table 't@2'");
+        assert_snapshot!(error.strip_backtrace(), @"This feature is not implemented: Table selectors are not supported for table 't@2'");
     }
 
     // The current version of a table referenced with a time travel clause is
     // only fetched when a RelationPlanner may handle the time travel clause
-    // itself, whether or not the catalog implements `table_at`.
+    // itself, whether or not the catalog implements `table_with_selector`.
     #[tokio::test]
     async fn time_travel_fetches_current_version_only_for_planners() {
         for (supports_time_travel, with_planner) in
@@ -852,7 +899,7 @@ mod tests {
                 table,
                 supports_time_travel,
                 table_calls: AtomicUsize::new(0),
-                table_at_calls: AtomicUsize::new(0),
+                table_with_selector_calls: AtomicUsize::new(0),
             });
             ctx.catalog("datafusion")
                 .unwrap()
@@ -873,8 +920,120 @@ mod tests {
                 usize::from(with_planner),
                 "{case}"
             );
-            assert_eq!(schema.table_at_calls.load(Ordering::SeqCst), 1, "{case}");
+            assert_eq!(
+                schema.table_with_selector_calls.load(Ordering::SeqCst),
+                1,
+                "{case}"
+            );
         }
+    }
+
+    /// Registers a [`CountingSchema`] named `counting` in `ctx`, with a table
+    /// `t` that has the schema of table `unused`
+    async fn register_counting_schema(
+        ctx: &SessionContext,
+        supports_time_travel: bool,
+    ) -> Arc<CountingSchema> {
+        let table = ctx.table_provider("unused").await.unwrap();
+        let schema = Arc::new(CountingSchema {
+            table,
+            supports_time_travel,
+            table_calls: AtomicUsize::new(0),
+            table_with_selector_calls: AtomicUsize::new(0),
+        });
+        ctx.catalog("datafusion")
+            .unwrap()
+            .register_schema("counting", Arc::clone(&schema) as _)
+            .unwrap();
+        schema
+    }
+
+    // A RelationPlanner can determine the selector of a table from syntax
+    // other than a time travel clause
+    #[tokio::test]
+    async fn planner_determines_table_selector() {
+        let ctx = create_context_with_catalog_table("unused", vec![1, 2], vec!["a", "b"])
+            .with_planner(VersionHintPlanner);
+        ctx.sql("SET datafusion.sql_parser.dialect = 'MsSQL'")
+            .await
+            .unwrap();
+        let schema = register_counting_schema(&ctx, true).await;
+
+        let plan = ctx
+            .sql("SELECT * FROM counting.t WITH (1 + 1)")
+            .await
+            .unwrap()
+            .into_unoptimized_plan();
+        assert_snapshot!(plan, @r"
+        Projection: counting.t.id, counting.t.name
+          TableScan: counting.t@2
+        ");
+        assert_eq!(schema.table_with_selector_calls.load(Ordering::SeqCst), 1);
+
+        // The planner only handles tables in the `counting` schema, so the
+        // hint of other tables is ignored by DataFusion's default logic
+        let plan = ctx
+            .sql("SELECT * FROM unused WITH (1 + 1)")
+            .await
+            .unwrap()
+            .into_unoptimized_plan();
+        assert_snapshot!(plan, @r"
+        Projection: unused.id, unused.name
+          TableScan: unused
+        ");
+
+        // References to CTEs are read without a selector, so the planner is
+        // not asked for one
+        let plan = ctx
+            .sql("WITH c AS (SELECT 1 AS id) SELECT * FROM c WITH (1 + 1)")
+            .await
+            .unwrap()
+            .into_unoptimized_plan();
+        assert_snapshot!(plan, @r"
+        Projection: c.id
+          SubqueryAlias: c
+            Projection: Int64(1) AS id
+              EmptyRelation: rows=1
+        ");
+
+        // Also not in prepared statements, where evaluating `now()` for a
+        // selector would otherwise be rejected
+        ctx.sql("PREPARE p AS WITH c AS (SELECT 1 AS id) SELECT * FROM c WITH (now())")
+            .await
+            .unwrap();
+    }
+
+    // A RelationPlanner can read a table as returned by the catalog,
+    // regardless of its time travel clause. The first planner that determines
+    // the selector of a table takes precedence, and the planner registered
+    // last is asked first.
+    #[tokio::test]
+    async fn planner_ignores_time_travel() {
+        let ctx = create_context_with_catalog_table("unused", vec![1, 2], vec!["a", "b"])
+            .with_planner(IgnoreTimeTravelPlanner)
+            .with_planner(VersionHintPlanner);
+        ctx.sql("SET datafusion.sql_parser.dialect = 'MsSQL'")
+            .await
+            .unwrap();
+        let schema = register_counting_schema(&ctx, false).await;
+
+        let plan = ctx
+            .sql("SELECT * FROM counting.t FOR SYSTEM_TIME AS OF '2024-01-01'")
+            .await
+            .unwrap()
+            .into_unoptimized_plan();
+        assert_snapshot!(plan, @r"
+        Projection: counting.t.id, counting.t.name
+          TableScan: counting.t
+        ");
+        assert_eq!(schema.table_with_selector_calls.load(Ordering::SeqCst), 0);
+
+        // `VersionHintPlanner` takes precedence over `IgnoreTimeTravelPlanner`,
+        // so the catalog's lack of support for table selectors is reported
+        let error = execute_sql(&ctx, "SELECT * FROM counting.t WITH (2)")
+            .await
+            .expect_err("table selectors should not be supported");
+        assert_snapshot!(error.strip_backtrace(), @"This feature is not implemented: Time travel is not supported");
     }
 
     // SamplingJoinPlanner recursively calls `context.plan()` on both sides of a

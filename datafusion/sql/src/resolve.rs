@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 use std::ops::ControlFlow;
 
 use datafusion_common::{DataFusionError, Result};
@@ -14,100 +14,177 @@ use sqlparser::ast::*;
 
 // Collect table/CTE references as `TableReference`s and normalize them during traversal.
 // This avoids a second normalization/conversion pass after visiting the AST.
-struct RelationVisitor {
-    relations: BTreeSet<TableReference>,
-    versioned_relations: BTreeSet<(TableReference, TableVersion)>,
-    all_ctes: BTreeSet<TableReference>,
+//
+// # Non-recursive CTEs
+//
+// The name of a non-recursive CTE is in scope after its definition, but not
+// within its own body. The `Visitor` trait has no hooks for individual CTEs,
+// so `pre_visit_query` visits these CTE bodies itself, putting each name in
+// scope after its body.
+// The AST traversal cannot be instructed to skip subtrees so the CTE bodies
+// are visited a second time, with all CTEs of the query in scope. During this
+// second visit we shouldn't record anything: it's redundant, and its scope is
+// wrong.
+//
+// For example, in this query the inner `b` is a CTE inside the body of CTE
+// `a`, and the `c` in `a`'s body is a table because CTE `c` is defined later:
+//
+// ```sql
+// WITH a AS (
+//   WITH b AS (SELECT * FROM t)  -- [1]
+//   SELECT * FROM b, c, u        -- [2]
+// ),
+// c AS (SELECT * FROM a)         -- [3]
+// SELECT * FROM c                -- [4]
+// ```
+//
+// First pass, by `pre_visit_query` of the outer query, with
+// `skipped_cte_body_depth` 0:
+//
+// * The body of `a`, with no CTEs in scope. Its own `pre_visit_query` visits
+//   [1]: `t` is recorded, then `b` is put in scope. The traversal then visits
+//   [1] again, as described below, which records nothing. At [2], `b` is a CTE
+//   reference, and `c` and `u` are recorded as tables. Then `a` is put in
+//   scope.
+// * [3], with `a` in scope: `a` is a CTE reference. Then `c` is put in scope.
+//
+// Second pass, by the traversal of the outer query. Each body visited in the
+// first pass increments `skipped_cte_body_depth` on entry and decrements it on
+// exit:
+//
+// * The body of `a`: `skipped_cte_body_depth` becomes 1. `pre_visit_query` no
+//   longer visits CTE bodies itself, but still puts `b` in scope.
+// * [1]: `skipped_cte_body_depth` becomes 2, and is back to 1 afterwards.
+// * [2]: `skipped_cte_body_depth` is still 1, so nothing is recorded. Here `c`
+//   is in scope and would wrongly be seen as a CTE reference. With a flag
+//   instead of a counter, leaving [1] would have cleared it, and `u` would
+//   have been recorded twice.
+// * [3]: skipped the same way, after which `skipped_cte_body_depth` is back
+//   to 0.
+// * [4]: the main body of the query, which was not visited in the first pass.
+//   Nothing is skipped, but `c` is a CTE reference, so it is not recorded.
+//
+// Each table factor, `t`, `c` and `u`, was reported once.
+struct RelationVisitor<F> {
     ctes_in_scope: Vec<TableReference>,
     enable_ident_normalization: bool,
-    /// The names of the table factors with a time travel clause that are
-    /// being visited, innermost last. These names are recorded in
-    /// `versioned_relations`, so they are skipped when visited as relations.
-    /// Only used for pointer comparison.
-    versioned_names: Vec<*const ObjectName>,
+    /// The names of the table factors that are being visited, innermost
+    /// last. These names are reported with their table factor, so they are
+    /// skipped when visited as relations. Only used for pointer comparison.
+    table_factor_names: Vec<*const ObjectName>,
+    /// The bodies of the non-recursive CTEs that have been visited before
+    /// their name was put in scope. They are skipped when visited again as
+    /// part of their query. Only used for pointer comparison.
+    visited_cte_bodies: HashSet<*const Query>,
+    /// The number of CTE bodies in `visited_cte_bodies` that are being
+    /// visited again. While positive, nothing is reported.
+    skipped_cte_body_depth: usize,
+    /// Called for each reference
+    on_reference: F,
 }
 
-impl RelationVisitor {
-    /// Record the reference to `relation`, if it's not a CTE reference.
-    fn insert_relation(&mut self, relation: &ObjectName) -> ControlFlow<DataFusionError> {
-        match object_name_to_table_reference(
-            relation.clone(),
-            self.enable_ident_normalization,
-        ) {
-            Ok(relation) => {
-                if !self.relations.contains(&relation)
-                    && !self.ctes_in_scope.contains(&relation)
-                {
-                    self.relations.insert(relation);
-                }
-                ControlFlow::Continue(())
-            }
+impl<F: FnMut(ResolvedReference<'_>) -> Result<()>> RelationVisitor<F> {
+    fn new(enable_ident_normalization: bool, on_reference: F) -> Self {
+        Self {
+            ctes_in_scope: vec![],
+            enable_ident_normalization,
+            table_factor_names: vec![],
+            visited_cte_bodies: HashSet::new(),
+            skipped_cte_body_depth: 0,
+            on_reference,
+        }
+    }
+
+    fn report(
+        &mut self,
+        reference: ResolvedReference<'_>,
+    ) -> ControlFlow<DataFusionError> {
+        match (self.on_reference)(reference) {
+            Ok(()) => ControlFlow::Continue(()),
             Err(e) => ControlFlow::Break(e),
         }
     }
 
-    /// Record the reference to `relation` with a time travel clause, such as
-    /// `VERSION AS OF 3`, if it's not a CTE reference.
-    fn insert_versioned_relation(
+    /// Normalizes `name`, and returns `None` if it references a CTE
+    fn table_reference(
+        &self,
+        name: &ObjectName,
+    ) -> ControlFlow<DataFusionError, Option<TableReference>> {
+        match object_name_to_table_reference(
+            name.clone(),
+            self.enable_ident_normalization,
+        ) {
+            Ok(table) if self.ctes_in_scope.contains(&table) => {
+                ControlFlow::Continue(None)
+            }
+            Ok(table) => ControlFlow::Continue(Some(table)),
+            Err(e) => ControlFlow::Break(e),
+        }
+    }
+
+    /// Report the reference to the table `relation`, if it's not a CTE
+    /// reference
+    fn visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<DataFusionError> {
+        if let Some(table) = self.table_reference(relation)? {
+            self.report(ResolvedReference::Table(table))?;
+        }
+        ControlFlow::Continue(())
+    }
+
+    /// Report `table_factor`, which references the table `relation`, if it's
+    /// not a CTE reference
+    fn visit_table_factor(
         &mut self,
         relation: &ObjectName,
-        version: &TableVersion,
+        table_factor: &TableFactor,
     ) -> ControlFlow<DataFusionError> {
-        match object_name_to_table_reference(
-            relation.clone(),
-            self.enable_ident_normalization,
-        ) {
-            Ok(relation) => {
-                if !self.ctes_in_scope.contains(&relation) {
-                    self.versioned_relations.insert((relation, version.clone()));
-                }
-                ControlFlow::Continue(())
-            }
-            Err(e) => ControlFlow::Break(e),
+        if let Some(table) = self.table_reference(relation)? {
+            self.report(ResolvedReference::TableFactor(table, table_factor))?;
         }
+        ControlFlow::Continue(())
     }
 }
 
-/// Returns the name and time travel clause of `table_factor`, if it is a
-/// table with a time travel clause, such as `t VERSION AS OF 3`
-fn versioned_table(table_factor: &TableFactor) -> Option<(&ObjectName, &TableVersion)> {
+/// Returns the name of the table referenced by `table_factor`, if it
+/// references a table or view, rather than for example a subquery
+fn table_factor_name(table_factor: &TableFactor) -> Option<&ObjectName> {
     match table_factor {
         TableFactor::Table {
-            name,
-            args: None,
-            version: Some(version),
-            ..
-        } => Some((name, version)),
+            name, args: None, ..
+        } => Some(name),
         _ => None,
     }
 }
 
-impl Visitor for RelationVisitor {
+impl<F: FnMut(ResolvedReference<'_>) -> Result<()>> Visitor for RelationVisitor<F> {
     type Break = DataFusionError;
 
     fn pre_visit_relation(&mut self, relation: &ObjectName) -> ControlFlow<Self::Break> {
-        if self
-            .versioned_names
-            .iter()
-            .any(|name| std::ptr::eq(*name, relation))
+        if self.skipped_cte_body_depth > 0
+            || self
+                .table_factor_names
+                .iter()
+                .any(|name| std::ptr::eq(*name, relation))
         {
             return ControlFlow::Continue(());
         }
 
-        self.insert_relation(relation)
+        self.visit_relation(relation)
     }
 
     fn pre_visit_table_factor(
         &mut self,
         table_factor: &TableFactor,
     ) -> ControlFlow<Self::Break> {
-        if let Some((name, version)) = versioned_table(table_factor) {
+        if let Some(name) = table_factor_name(table_factor) {
             // The table name is also visited as a relation. Skip exactly that
-            // node, so it is not recorded without its version as well. Other
-            // relations within this table factor, such as those in a subquery
-            // in the time travel clause, are still recorded.
-            self.versioned_names.push(name);
-            self.insert_versioned_relation(name, version)?;
+            // node, so it is not reported without its table factor as well.
+            // Other relations within this table factor, such as those in a
+            // subquery in a time travel clause, are still reported.
+            self.table_factor_names.push(name);
+            if self.skipped_cte_body_depth == 0 {
+                self.visit_table_factor(name, table_factor)?;
+            }
         }
         ControlFlow::Continue(())
     }
@@ -116,23 +193,27 @@ impl Visitor for RelationVisitor {
         &mut self,
         table_factor: &TableFactor,
     ) -> ControlFlow<Self::Break> {
-        if versioned_table(table_factor).is_some() {
-            self.versioned_names.pop();
+        if table_factor_name(table_factor).is_some() {
+            self.table_factor_names.pop();
         }
         ControlFlow::Continue(())
     }
 
     fn pre_visit_query(&mut self, q: &Query) -> ControlFlow<Self::Break> {
+        if self.visited_cte_bodies.contains(&std::ptr::from_ref(q)) {
+            self.skipped_cte_body_depth += 1;
+        }
         if let Some(with) = &q.with {
             for cte in &with.cte_tables {
                 // The non-recursive CTE name is not in scope when evaluating the CTE itself, so this is valid:
                 // `WITH t AS (SELECT * FROM t) SELECT * FROM t`
                 // Where the first `t` refers to a predefined table. So we are careful here
-                // to visit the CTE first, before putting it in scope.
-                if !with.recursive {
-                    // This is a bit hackish as the CTE will be visited again as part of visiting `q`,
-                    // but thankfully `insert_relation` is idempotent.
+                // to visit the CTE first, before putting it in scope. Its body is skipped when
+                // visited again as part of `q`; see "Non-recursive CTEs" on `RelationVisitor`.
+                if !with.recursive && self.skipped_cte_body_depth == 0 {
                     cte.visit(self)?;
+                    self.visited_cte_bodies
+                        .insert(std::ptr::from_ref(cte.query.as_ref()));
                 }
                 let cte_name = ObjectName::from(vec![cte.alias.name.clone()]);
                 match object_name_to_table_reference(
@@ -151,8 +232,15 @@ impl Visitor for RelationVisitor {
         if let Some(with) = &q.with {
             for _ in &with.cte_tables {
                 // Unwrap: We just pushed these in `pre_visit_query`
-                self.all_ctes.insert(self.ctes_in_scope.pop().unwrap());
+                let cte = self.ctes_in_scope.pop().unwrap();
+                // CTEs in skipped bodies were reported when first visited
+                if self.skipped_cte_body_depth == 0 {
+                    self.report(ResolvedReference::Cte(cte))?;
+                }
             }
+        }
+        if self.visited_cte_bodies.contains(&std::ptr::from_ref(q)) {
+            self.skipped_cte_body_depth -= 1;
         }
         ControlFlow::Continue(())
     }
@@ -163,7 +251,7 @@ impl Visitor for RelationVisitor {
             obj_name,
         } = statement
         {
-            self.insert_relation(obj_name)?;
+            self.visit_relation(obj_name)?;
         }
 
         ControlFlow::Continue(())
@@ -177,17 +265,20 @@ fn control_flow_to_result(flow: ControlFlow<DataFusionError>) -> Result<()> {
     }
 }
 
-fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) -> Result<()> {
+fn visit_statement<F: FnMut(ResolvedReference<'_>) -> Result<()>>(
+    statement: &DFStatement,
+    visitor: &mut RelationVisitor<F>,
+) -> Result<()> {
     match statement {
         DFStatement::Statement(s) => {
             control_flow_to_result(s.as_ref().visit(visitor))?;
         }
         DFStatement::CreateExternalTable(table) => {
-            control_flow_to_result(visitor.insert_relation(&table.name))?;
+            control_flow_to_result(visitor.visit_relation(&table.name))?;
         }
         DFStatement::CopyTo(CopyToStatement { source, .. }) => match source {
             CopyToSource::Relation(table_name) => {
-                control_flow_to_result(visitor.insert_relation(table_name))?;
+                control_flow_to_result(visitor.visit_relation(table_name))?;
             }
             CopyToSource::Query(query) => {
                 control_flow_to_result(query.visit(visitor))?;
@@ -203,25 +294,24 @@ fn visit_statement(statement: &DFStatement, visitor: &mut RelationVisitor) -> Re
     Ok(())
 }
 
-/// Tables, views and CTEs referenced in a SQL statement, as collected by
-/// [`resolve_table_references_with_versions`].
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct TableReferences {
-    /// Tables and views referenced without a time travel clause
-    pub tables: Vec<TableReference>,
-    /// Tables and views referenced with a time travel clause, such as
-    /// `VERSION AS OF 3`, together with that clause
-    pub versioned_tables: Vec<(TableReference, TableVersion)>,
-    /// CTE aliases that were defined and possibly referenced
-    pub ctes: Vec<TableReference>,
+/// A reference in a SQL statement, as reported by [`resolve_references`]
+#[derive(Debug, Clone, PartialEq)]
+pub enum ResolvedReference<'a> {
+    /// A table or view referenced by a table factor, such as `t` in
+    /// `SELECT * FROM t`
+    TableFactor(TableReference, &'a TableFactor),
+    /// A table or view referenced other than by a table factor, such as the
+    /// target of an `INSERT` statement
+    Table(TableReference),
+    /// A CTE defined in the statement
+    Cte(TableReference),
 }
 
 /// Collects all tables and views referenced in the SQL statement. CTEs are collected separately.
 /// This can be used to determine which tables need to be in the catalog for a query to be planned.
 ///
-/// Tables referenced with a time travel clause, such as `VERSION AS OF 3`,
-/// are included without their version. Use
-/// [`resolve_table_references_with_versions`] to also obtain those versions.
+/// Only the tables are returned, not the table factors that reference them.
+/// Use [`resolve_references`] to also visit the table factors.
 ///
 /// # Returns
 ///
@@ -242,9 +332,9 @@ pub struct TableReferences {
 /// assert_eq!(ctes.len(), 0);
 /// ```
 ///
-/// ## Example with CTEs  
-///  
-/// ```  
+/// ## Example with CTEs
+///
+/// ```
 /// # use datafusion_sql::parser::DFParser;
 /// # use datafusion_sql::resolve::resolve_table_references;
 /// let query = "with my_cte as (values (1), (2)) SELECT * from my_cte;";
@@ -258,70 +348,84 @@ pub fn resolve_table_references(
     statement: &crate::parser::Statement,
     enable_ident_normalization: bool,
 ) -> Result<(Vec<TableReference>, Vec<TableReference>)> {
-    let visitor = visit_relations(statement, enable_ident_normalization)?;
-    let mut relations = visitor.relations;
-    relations.extend(visitor.versioned_relations.into_iter().map(|(r, _)| r));
-    Ok((
-        relations.into_iter().collect(),
-        visitor.all_ctes.into_iter().collect(),
-    ))
+    let mut tables = BTreeSet::new();
+    let mut ctes = BTreeSet::new();
+    resolve_references(statement, enable_ident_normalization, |reference| {
+        match reference {
+            ResolvedReference::TableFactor(table, _)
+            | ResolvedReference::Table(table) => {
+                tables.insert(table);
+            }
+            ResolvedReference::Cte(cte) => {
+                ctes.insert(cte);
+            }
+        }
+        Ok(())
+    })?;
+    Ok((tables.into_iter().collect(), ctes.into_iter().collect()))
 }
 
-/// Collects all tables, views and CTEs referenced in the SQL statement, like
-/// [`resolve_table_references`], and also the time travel clauses of tables,
-/// such as `VERSION AS OF 3`.
+/// Finds the tables, views and CTEs referenced in a SQL statement.
 ///
-/// A table referenced with a time travel clause is only included in
-/// [`TableReferences::tables`] if it is also referenced without one.
+/// Unlike [`resolve_table_references`], this also reports the table factor
+/// through which a table is referenced, which determines the
+/// [`TableSelector`] used to read the table.
+///
+/// [`TableSelector`]: datafusion_common::TableSelector
+///
+/// Each reference is passed to `on_reference` as a [`ResolvedReference`].
+/// Callers should not make assumptions on the order in which references are passed
+/// to the callback. Table factors that reference a CTE are not reported, but the
+/// definition of the CTE is.
+///
+/// References are reported as often as they occur, so the same table or CTE
+/// may be reported more than once. For example, in
+/// `INSERT INTO t SELECT * FROM t JOIN t AS t2 ON true`, `t` is reported as a
+/// [`ResolvedReference::Table`] and twice as a
+/// [`ResolvedReference::TableFactor`]. Callers that need the distinct set of tables
+/// must remove duplicates themselves, as [`resolve_table_references`] does.
+///
+/// [`TableReference`]s are reported in the form they are encountered. For instance, `t` will be
+/// reported as a [`TableReference::Bare`] and `public.t` as a [`TableReference::Partial`].
 ///
 /// ## Example
 ///
 /// ```
-/// # use datafusion_sql::parser::DFParserBuilder;
-/// # use datafusion_sql::resolve::resolve_table_references_with_versions;
-/// # use datafusion_sql::sqlparser::dialect::DatabricksDialect;
-/// let query = "SELECT * FROM foo JOIN bar VERSION AS OF 3 ON foo.id = bar.id";
-/// let statement = DFParserBuilder::new(query)
-///     .with_dialect(&DatabricksDialect {})
-///     .build()
-///     .unwrap()
-///     .parse_statements()
-///     .unwrap()
-///     .pop_back()
-///     .unwrap();
-/// let references = resolve_table_references_with_versions(&statement, true).unwrap();
-/// assert_eq!(references.tables.len(), 1);
-/// assert_eq!(references.tables[0].to_string(), "foo");
-/// assert_eq!(references.versioned_tables.len(), 1);
-/// assert_eq!(references.versioned_tables[0].0.to_string(), "bar");
-/// assert_eq!(references.versioned_tables[0].1.to_string(), "VERSION AS OF 3");
+/// # use datafusion_sql::parser::DFParser;
+/// # use datafusion_sql::resolve::{ResolvedReference, resolve_references};
+/// let query = "INSERT INTO foo SELECT * FROM bar AS b";
+/// let statement = DFParser::parse_sql(query).unwrap().pop_back().unwrap();
+/// let mut references = vec![];
+/// resolve_references(&statement, true, |reference| {
+///     references.push(match reference {
+///         ResolvedReference::TableFactor(table, table_factor) => {
+///             format!("table factor {table}: {table_factor}")
+///         }
+///         ResolvedReference::Table(table) => format!("table {table}"),
+///         ResolvedReference::Cte(cte) => format!("cte {cte}"),
+///     });
+///     Ok(())
+/// })
+/// .unwrap();
+/// assert_eq!(references, ["table foo", "table factor bar: bar AS b"]);
 /// ```
-pub fn resolve_table_references_with_versions(
+pub fn resolve_references(
     statement: &crate::parser::Statement,
     enable_ident_normalization: bool,
-) -> Result<TableReferences> {
-    let visitor = visit_relations(statement, enable_ident_normalization)?;
-    Ok(TableReferences {
-        tables: visitor.relations.into_iter().collect(),
-        versioned_tables: visitor.versioned_relations.into_iter().collect(),
-        ctes: visitor.all_ctes.into_iter().collect(),
-    })
+    on_reference: impl FnMut(ResolvedReference<'_>) -> Result<()>,
+) -> Result<()> {
+    let mut visitor = RelationVisitor::new(enable_ident_normalization, on_reference);
+    visit_statement(statement, &mut visitor)
 }
 
-fn visit_relations(
-    statement: &crate::parser::Statement,
+/// Like [`resolve_references`], for a SQL statement as parsed by sqlparser
+pub(crate) fn resolve_sql_references(
+    statement: &Statement,
     enable_ident_normalization: bool,
-) -> Result<RelationVisitor> {
-    let mut visitor = RelationVisitor {
-        relations: BTreeSet::new(),
-        versioned_relations: BTreeSet::new(),
-        all_ctes: BTreeSet::new(),
-        ctes_in_scope: vec![],
-        enable_ident_normalization,
-        versioned_names: vec![],
-    };
-    visit_statement(statement, &mut visitor)?;
-    Ok(visitor)
+    on_reference: impl FnMut(ResolvedReference<'_>) -> Result<()>,
+) -> Result<()> {
+    let mut visitor = RelationVisitor::new(enable_ident_normalization, on_reference);
+    control_flow_to_result(statement.visit(&mut visitor))
 }
 
 #[cfg(test)]
@@ -342,112 +446,120 @@ mod tests {
             .unwrap()
     }
 
+    /// Returns the references reported for `query`, in the Snowflake dialect
+    fn references_of(query: &str) -> Vec<String> {
+        let mut references = vec![];
+        resolve_references(&parse_snowflake(query), true, |reference| {
+            references.push(match reference {
+                ResolvedReference::TableFactor(table, table_factor) => {
+                    format!("{table}: {table_factor}")
+                }
+                ResolvedReference::Table(table) => format!("table {table}"),
+                ResolvedReference::Cte(cte) => format!("cte {cte}"),
+            });
+            Ok(())
+        })
+        .unwrap();
+        references
+    }
+
     #[test]
-    fn resolve_table_references_with_versions_collects_versions() {
-        let statement = parse_snowflake(
-            "SELECT * FROM a \
+    fn resolve_references_reports_table_factors() {
+        let query = "SELECT * FROM a \
              JOIN b AT (VERSION => 1) ON true \
              JOIN B AT (VERSION => 1) ON true \
              JOIN b TIMESTAMP AS OF now() ON true \
-             WHERE a.x IN (SELECT x FROM c VERSION AS OF 2)",
-        );
-        let references =
-            resolve_table_references_with_versions(&statement, true).unwrap();
-        let tables: Vec<_> = references.tables.iter().map(|t| t.to_string()).collect();
-        assert_eq!(tables, ["a"]);
-        let versioned: Vec<_> = references
-            .versioned_tables
-            .iter()
-            .map(|(t, v)| format!("{t} {v}"))
-            .collect();
+             WHERE a.x IN (SELECT x FROM c VERSION AS OF 2)";
         assert_eq!(
-            versioned,
+            references_of(query),
             [
-                "b TIMESTAMP AS OF now()",
-                "b AT(VERSION => 1)",
-                "c VERSION AS OF 2"
+                "a: a",
+                "b: b AT(VERSION => 1)",
+                "b: B AT(VERSION => 1)",
+                "b: b TIMESTAMP AS OF now()",
+                "c: c VERSION AS OF 2"
             ]
         );
-        assert!(references.ctes.is_empty());
 
-        // `resolve_table_references` returns all tables, without versions
-        let (tables, ctes) = resolve_table_references(&statement, true).unwrap();
+        // `resolve_table_references` returns all tables, without their table
+        // factors
+        let (tables, ctes) =
+            resolve_table_references(&parse_snowflake(query), true).unwrap();
         let tables: Vec<_> = tables.iter().map(|t| t.to_string()).collect();
         assert_eq!(tables, ["a", "b", "c"]);
-        assert_eq!(ctes, references.ctes);
+        assert!(ctes.is_empty());
     }
 
     #[test]
-    fn resolve_table_references_with_versions_mixed() {
-        // A table referenced both with and without a time travel clause
-        let statement = parse_snowflake(
-            "SELECT * FROM t AS cur JOIN t VERSION AS OF 1 AS old ON true",
+    fn resolve_references_other_references() {
+        // Tables referenced other than by a table factor
+        assert_eq!(
+            references_of("INSERT INTO t SELECT * FROM t AS cur JOIN t AS old ON true"),
+            ["table t", "t: t AS cur", "t: t AS old"]
         );
-        let references =
-            resolve_table_references_with_versions(&statement, true).unwrap();
-        let tables: Vec<_> = references.tables.iter().map(|t| t.to_string()).collect();
-        assert_eq!(tables, ["t"]);
-        let versioned: Vec<_> = references
-            .versioned_tables
-            .iter()
-            .map(|(t, v)| format!("{t} {v}"))
-            .collect();
-        assert_eq!(versioned, ["t VERSION AS OF 1"]);
     }
 
     #[test]
-    fn resolve_table_references_with_versions_subquery_in_version() {
-        // Tables in a subquery in the time travel clause are still recorded.
+    fn resolve_references_subquery_in_version() {
+        // Tables in a subquery in a time travel clause are still reported.
         // Planning reports an error for the non-constant version.
-        let tables_of = |query: &str| {
-            let references =
-                resolve_table_references_with_versions(&parse_snowflake(query), true)
-                    .unwrap();
-            let tables: Vec<_> =
-                references.tables.iter().map(|t| t.to_string()).collect();
-            let versioned: Vec<_> = references
-                .versioned_tables
-                .iter()
-                .map(|(t, _)| t.to_string())
-                .collect();
-            (tables, versioned)
-        };
-
-        let (tables, versioned) =
-            tables_of("SELECT * FROM t TIMESTAMP AS OF (SELECT max(ts) FROM log)");
-        assert_eq!(tables, ["log"]);
-        assert_eq!(versioned, ["t"]);
-
-        let (tables, versioned) = tables_of(
-            "SELECT * FROM t AT (VERSION => (SELECT max(v) FROM a JOIN b ON true))",
+        assert_eq!(
+            references_of("SELECT * FROM t TIMESTAMP AS OF (SELECT max(ts) FROM log)"),
+            ["t: t TIMESTAMP AS OF (SELECT max(ts) FROM log)", "log: log"]
         );
-        assert_eq!(tables, ["a", "b"]);
-        assert_eq!(versioned, ["t"]);
-
-        let (tables, versioned) = tables_of(
-            "SELECT * FROM t AT (VERSION => \
-             (SELECT max(v) FROM log VERSION AS OF 1 JOIN a ON true))",
+        assert_eq!(
+            references_of(
+                "SELECT * FROM t AT (VERSION => \
+                 (SELECT max(v) FROM log VERSION AS OF 1 JOIN a ON true))"
+            ),
+            [
+                "t: t AT(VERSION => (SELECT max(v) FROM log VERSION AS OF 1 JOIN a ON true))",
+                "log: log VERSION AS OF 1",
+                "a: a"
+            ]
         );
-        assert_eq!(tables, ["a"]);
-        assert_eq!(versioned, ["log", "t"]);
     }
 
     #[test]
-    fn resolve_table_references_with_versions_skips_ctes() {
-        // A versioned reference to a CTE is not a table reference. Planning
-        // reports an error for it.
-        let statement = parse_snowflake(
-            "WITH t AS (SELECT * FROM t VERSION AS OF 1) SELECT * FROM t VERSION AS OF 2",
+    fn resolve_references_visits_ctes_once() {
+        // The body of a non-recursive CTE is visited before the CTE is in
+        // scope, and not again afterwards
+        assert_eq!(
+            references_of("WITH a AS (SELECT * FROM t VERSION AS OF 1) SELECT * FROM a"),
+            ["t: t VERSION AS OF 1", "cte a"]
         );
-        let references =
-            resolve_table_references_with_versions(&statement, true).unwrap();
-        let versioned: Vec<_> = references
-            .versioned_tables
-            .iter()
-            .map(|(t, v)| format!("{t} {v}"))
-            .collect();
-        assert_eq!(versioned, ["t VERSION AS OF 1"]);
-        assert_eq!(references.ctes.len(), 1);
+
+        // The example of "Non-recursive CTEs" on `RelationVisitor`
+        assert_eq!(
+            references_of(
+                "WITH a AS (WITH b AS (SELECT * FROM t) SELECT * FROM b, c, u), \
+                 c AS (SELECT * FROM a) \
+                 SELECT * FROM c"
+            ),
+            ["t: t", "c: c", "u: u", "cte b", "cte c", "cte a"]
+        );
+
+        // The body of a recursive CTE is only visited with the CTE in scope
+        assert_eq!(
+            references_of(
+                "WITH RECURSIVE a AS (SELECT * FROM t UNION ALL SELECT * FROM a) \
+                 SELECT * FROM a"
+            ),
+            ["t: t", "cte a"]
+        );
+    }
+
+    #[test]
+    fn resolve_references_skips_cte_references() {
+        // A reference to a CTE is not a table reference. Planning reports an
+        // error for its time travel clause.
+        assert_eq!(
+            references_of(
+                "WITH t AS (SELECT * FROM t VERSION AS OF 1) \
+                 SELECT * FROM t VERSION AS OF 2"
+            ),
+            ["t: t VERSION AS OF 1", "cte t"]
+        );
     }
 
     #[test]

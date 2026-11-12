@@ -19,7 +19,7 @@ use arrow::record_batch::RecordBatch;
 use datafusion_common::error::Result;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{
-    Constraints, DFSchema, SchemaExt, TableVersion, internal_datafusion_err,
+    Constraints, DFSchema, SchemaExt, TableSelector, internal_datafusion_err,
     internal_err, not_impl_err, plan_err,
 };
 use datafusion_datasource::memory::{MemSink, MemorySourceConfig};
@@ -70,8 +70,8 @@ pub struct MemTable {
     /// Optional pre-known sort order(s). Must be `SortExpr`s.
     /// inserting data into this table removes the order
     pub sort_order: Arc<Mutex<Vec<Vec<SortExpr>>>>,
-    /// The version of the table this provider reads, if versioned
-    version: Option<TableVersion>,
+    /// The selector of the table this provider reads, if any
+    selector: Option<TableSelector>,
 }
 
 impl MemTable {
@@ -105,14 +105,14 @@ impl MemTable {
             constraints: Constraints::default(),
             column_defaults: HashMap::new(),
             sort_order: Arc::new(Mutex::new(vec![])),
-            version: None,
+            selector: None,
         })
     }
 
-    /// Set the version of the table this provider reads, for time travel
-    /// queries. See [`TableProvider::version`].
-    pub fn with_version(mut self, version: Option<TableVersion>) -> Self {
-        self.version = version;
+    /// Set the selector of the table this provider reads. See
+    /// [`TableProvider::selector`].
+    pub fn with_selector(mut self, selector: Option<TableSelector>) -> Self {
+        self.selector = selector;
         self
     }
 
@@ -188,8 +188,8 @@ impl TableProvider for MemTable {
         Some(&self.constraints)
     }
 
-    fn version(&self) -> Option<&TableVersion> {
-        self.version.as_ref()
+    fn selector(&self) -> Option<&TableSelector> {
+        self.selector.as_ref()
     }
 
     fn table_type(&self) -> TableType {

@@ -329,12 +329,12 @@ WHERE cur.status <> prev.status;
 ```
 
 Time travel requires a catalog that supports it (see
-[`SchemaProvider::table_at`]); the built-in in-memory and listing tables do not.
+[`SchemaProvider::table_with_selector`]); the built-in in-memory and listing tables do not.
 Time travel clauses are currently only parsed by the `Snowflake`, `Databricks`,
 `BigQuery` and `MsSQL` dialects (see `datafusion.sql_parser.dialect`), and not
 every dialect supports every syntax.
 
-[`schemaprovider::table_at`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.SchemaProvider.html#method.table_at
+[`schemaprovider::table_with_selector`]: https://docs.rs/datafusion/latest/datafusion/catalog/trait.SchemaProvider.html#method.table_with_selector
 
 ## WHERE clause
 

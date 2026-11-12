@@ -13,11 +13,10 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::file_options::file_type::FileType;
 use datafusion_common::{
-    DFSchema, GetExt, Result, TableReference, TableVersion, not_impl_err, plan_err,
+    DFSchema, GetExt, Result, ScalarValue, TableReference, TableSelector, not_impl_err,
+    plan_err,
 };
-use datafusion_expr::planner::{
-    ExprPlanner, PlannerResult, TableVersionExpr, TypePlanner,
-};
+use datafusion_expr::planner::{ExprPlanner, PlannerResult, TypePlanner};
 use datafusion_expr::{
     AggregateUDF, Expr, HigherOrderUDF, ScalarUDF, TableSource, WindowUDF,
 };
@@ -337,32 +336,23 @@ impl ContextProvider for MockContextProvider {
         Ok(Arc::new(EmptyTable::new(schema)))
     }
 
-    /// Only literal versions are supported, as evaluating expressions
-    /// requires an `ExprSimplifier`
-    fn evaluate_table_version(&self, version: TableVersionExpr) -> Result<TableVersion> {
-        match version {
-            TableVersionExpr::Version(Expr::Literal(value, _)) => {
-                Ok(TableVersion::Version(value))
-            }
-            version => not_impl_err!("Unsupported table version: {version:?}"),
+    /// Only literals are supported, as evaluating expressions requires an
+    /// `ExprSimplifier`
+    fn evaluate_const_expr(&self, expr: Expr) -> Result<ScalarValue> {
+        match expr {
+            Expr::Literal(value, _) => Ok(value),
+            expr => not_impl_err!("Unsupported constant: {expr:?}"),
         }
     }
 
-    /// Only `person` supports time travel. For `j1`, the current version is
-    /// returned without reporting a version, which is invalid.
-    fn get_table_source_at(
+    /// Returns the current table without reporting a selector, which is
+    /// invalid. The planner must reject it.
+    fn get_table_source_with_selector(
         &self,
         name: TableReference,
-        version: &TableVersion,
+        _selector: &TableSelector,
     ) -> Result<Arc<dyn TableSource>> {
-        match name.table() {
-            "person" => Ok(Arc::new(EmptyTable::new_with_version(
-                self.get_table_source(name)?.schema(),
-                version.clone(),
-            ))),
-            "j1" => self.get_table_source(name),
-            _ => not_impl_err!("Time travel is not supported for table '{name}'"),
-        }
+        self.get_table_source(name)
     }
 
     fn udf_names(&self) -> Vec<String> {
@@ -396,32 +386,17 @@ impl ContextProvider for MockContextProvider {
 
 struct EmptyTable {
     table_schema: SchemaRef,
-    version: Option<TableVersion>,
 }
 
 impl EmptyTable {
     fn new(table_schema: SchemaRef) -> Self {
-        Self {
-            table_schema,
-            version: None,
-        }
-    }
-
-    fn new_with_version(table_schema: SchemaRef, version: TableVersion) -> Self {
-        Self {
-            table_schema,
-            version: Some(version),
-        }
+        Self { table_schema }
     }
 }
 
 impl TableSource for EmptyTable {
     fn schema(&self) -> SchemaRef {
         Arc::clone(&self.table_schema)
-    }
-
-    fn version(&self) -> Option<&TableVersion> {
-        self.version.as_ref()
     }
 }
 

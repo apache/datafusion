@@ -9,7 +9,7 @@ use arrow::datatypes::{DataType, Field, Schema};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use datafusion::catalog::SchemaProvider;
-use datafusion::common::{Result, ScalarValue, TableVersion, plan_err};
+use datafusion::common::{Result, ScalarValue, TableSelector, plan_err};
 use datafusion::datasource::{MemTable, TableProvider};
 use datafusion::prelude::SessionContext;
 
@@ -76,8 +76,8 @@ impl VersionedSchema {
         )?;
         // Report the version that is read, which may differ from the requested
         // version, e.g. when it was requested by tag or timestamp
-        let table = MemTable::try_new(schema, vec![vec![batch]])?.with_version(Some(
-            TableVersion::Version(ScalarValue::Int64(Some(version))),
+        let table = MemTable::try_new(schema, vec![vec![batch]])?.with_selector(Some(
+            TableSelector::Version(ScalarValue::Int64(Some(version))),
         ));
         Ok(Arc::new(table))
     }
@@ -96,13 +96,13 @@ impl SchemaProvider for VersionedSchema {
         Self::table_version(VERSIONS[VERSIONS.len() - 1].version).map(Some)
     }
 
-    async fn table_at(
+    async fn table_with_selector(
         &self,
         name: &str,
-        version: &TableVersion,
+        selector: &TableSelector,
     ) -> Result<Option<Arc<dyn TableProvider>>> {
         if name == "no_version" {
-            // Invalid: the provider does not report the version it reads
+            // Invalid: the provider does not report the selector it reads
             let schema =
                 Arc::new(Schema::new(vec![Field::new("id", DataType::Int64, false)]));
             return Ok(Some(Arc::new(MemTable::try_new(schema, vec![vec![]])?)));
@@ -110,8 +110,8 @@ impl SchemaProvider for VersionedSchema {
         if name != "t" {
             return Ok(None);
         }
-        let version = match version {
-            TableVersion::Version(value) => {
+        let version = match selector {
+            TableSelector::Version(value) => {
                 if let Some(Some(tag)) = value.try_as_str() {
                     match TAGS.iter().find(|(t, _)| *t == tag) {
                         Some((_, version)) => *version,
@@ -124,10 +124,10 @@ impl SchemaProvider for VersionedSchema {
                     }
                 }
             }
-            TableVersion::Timestamp(ts) => {
+            TableSelector::Timestamp(ts) => {
                 match VERSIONS.iter().rev().find(|v| v.committed <= *ts) {
                     Some(v) => v.version,
-                    None => return plan_err!("Table t did not exist at {version}"),
+                    None => return plan_err!("Table t did not exist at {selector}"),
                 }
             }
         };

@@ -129,9 +129,9 @@ pub struct ListingTableScanNode {
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "18")]
     pub skip: ::core::option::Option<u64>,
-    /// The version of the table to read, for time travel queries.
+    /// The selector of the table to read, such as a specific version.
     #[prost(message, optional, tag = "19")]
-    pub version: ::core::option::Option<TableVersion>,
+    pub selector: ::core::option::Option<TableSelector>,
     #[prost(
         oneof = "listing_table_scan_node::FileFormatType",
         tags = "10, 11, 12, 15, 16"
@@ -174,9 +174,9 @@ pub struct ViewTableScanNode {
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "8")]
     pub skip: ::core::option::Option<u64>,
-    /// The version of the table to read, for time travel queries.
+    /// The selector of the table to read, such as a specific version.
     #[prost(message, optional, tag = "9")]
-    pub version: ::core::option::Option<TableVersion>,
+    pub selector: ::core::option::Option<TableSelector>,
 }
 /// Logical Plan to Scan a CustomTableProvider registered at runtime
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -197,9 +197,9 @@ pub struct CustomTableScanNode {
     /// Optional number of rows to skip.
     #[prost(uint64, optional, tag = "8")]
     pub skip: ::core::option::Option<u64>,
-    /// The version of the table to read, for time travel queries.
+    /// The selector of the table to read, such as a specific version.
     #[prost(message, optional, tag = "9")]
-    pub version: ::core::option::Option<TableVersion>,
+    pub selector: ::core::option::Option<TableSelector>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProjectionNode {
@@ -1401,16 +1401,17 @@ pub mod table_reference {
         Full(super::FullTableReference),
     }
 }
-/// A version of a table, for time travel queries
+/// Selects which state of a table to read, such as a version for time travel
+/// queries
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct TableVersion {
-    #[prost(oneof = "table_version::TableVersionEnum", tags = "1, 2")]
-    pub table_version_enum: ::core::option::Option<table_version::TableVersionEnum>,
+pub struct TableSelector {
+    #[prost(oneof = "table_selector::TableSelectorEnum", tags = "1, 2")]
+    pub table_selector_enum: ::core::option::Option<table_selector::TableSelectorEnum>,
 }
-/// Nested message and enum types in `TableVersion`.
-pub mod table_version {
+/// Nested message and enum types in `TableSelector`.
+pub mod table_selector {
     #[derive(Clone, PartialEq, ::prost::Oneof)]
-    pub enum TableVersionEnum {
+    pub enum TableSelectorEnum {
         /// A catalog specific version identifier, such as a snapshot id or a tag
         #[prost(message, tag = "1")]
         Version(super::super::datafusion_common::ScalarValue),
@@ -2696,9 +2697,9 @@ pub struct EmptyTableScanNode {
     pub projection: ::core::option::Option<ProjectionColumns>,
     #[prost(message, repeated, tag = "4")]
     pub filters: ::prost::alloc::vec::Vec<LogicalExprNode>,
-    /// The version of the table to read, for time travel queries.
+    /// The selector of the table to read, such as a specific version.
     #[prost(message, optional, tag = "5")]
-    pub version: ::core::option::Option<TableVersion>,
+    pub selector: ::core::option::Option<TableSelector>,
 }
 #[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct GenerateSeriesArgsContainsNull {

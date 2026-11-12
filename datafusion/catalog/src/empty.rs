@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::*;
 use async_trait::async_trait;
-use datafusion_common::{Result, TableVersion, project_schema};
+use datafusion_common::{Result, TableSelector, project_schema};
 use datafusion_expr::{Expr, TableType};
 use datafusion_physical_plan::ExecutionPlan;
 use datafusion_physical_plan::empty::EmptyExec;
@@ -22,8 +22,8 @@ use crate::TableProvider;
 pub struct EmptyTable {
     schema: SchemaRef,
     partitions: usize,
-    /// The version of the table this provider reads, if versioned
-    version: Option<TableVersion>,
+    /// The selector of the table this provider reads, if any
+    selector: Option<TableSelector>,
 }
 
 impl EmptyTable {
@@ -32,14 +32,14 @@ impl EmptyTable {
         Self {
             schema,
             partitions: 1,
-            version: None,
+            selector: None,
         }
     }
 
-    /// Set the version of the table this provider reads, for time travel
-    /// queries. See [`TableProvider::version`].
-    pub fn with_version(mut self, version: Option<TableVersion>) -> Self {
-        self.version = version;
+    /// Set the selector of the table this provider reads. See
+    /// [`TableProvider::selector`].
+    pub fn with_selector(mut self, selector: Option<TableSelector>) -> Self {
+        self.selector = selector;
         self
     }
 
@@ -60,8 +60,8 @@ impl TableProvider for EmptyTable {
         TableType::Base
     }
 
-    fn version(&self) -> Option<&TableVersion> {
-        self.version.as_ref()
+    fn selector(&self) -> Option<&TableSelector> {
+        self.selector.as_ref()
     }
 
     async fn scan(

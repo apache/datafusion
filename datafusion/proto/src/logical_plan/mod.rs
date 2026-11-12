@@ -28,7 +28,7 @@ use datafusion_common::format::{
 };
 use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_common::{
-    NullEquality, Result, TableReference, TableVersion, assert_or_internal_err, context,
+    NullEquality, Result, TableReference, TableSelector, assert_or_internal_err, context,
     internal_datafusion_err, internal_err, not_impl_err, plan_err,
 };
 use datafusion_datasource::file_format::FileFormat;
@@ -360,10 +360,10 @@ fn from_table_reference(
     Ok(TableReference::try_from(table_ref.clone())?)
 }
 
-fn from_table_version(
-    version: Option<&protobuf::TableVersion>,
-) -> Result<Option<TableVersion>> {
-    Ok(version.map(TableVersion::try_from).transpose()?)
+fn from_table_selector(
+    selector: Option<&protobuf::TableSelector>,
+) -> Result<Option<TableSelector>> {
+    Ok(selector.map(TableSelector::try_from).transpose()?)
 }
 
 /// Converts [LogicalPlan::TableScan] to [TableSource]
@@ -682,7 +682,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                     .with_cache(
                         ctx.runtime_env().cache_manager.get_file_statistic_cache(),
                     )
-                    .with_version(from_table_version(scan.version.as_ref())?);
+                    .with_selector(from_table_selector(scan.selector.as_ref())?);
 
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ListingTableScan")?;
@@ -733,15 +733,15 @@ impl AsLogicalPlan for LogicalPlanNode {
                     schema,
                     ctx,
                 )?;
-                // The codec restores the version as part of the provider's
-                // state. Fail rather than silently reading another version.
-                let version = from_table_version(scan.version.as_ref())?;
-                if provider.version() != version.as_ref() {
+                // The codec restores the selector as part of the provider's
+                // state. Fail rather than silently reading another state.
+                let selector = from_table_selector(scan.selector.as_ref())?;
+                if provider.selector() != selector.as_ref() {
                     return internal_err!(
-                        "Decoded table provider for '{table_name}' reads version {:?}, \
+                        "Decoded table provider for '{table_name}' reads selector {:?}, \
                          but {:?} was encoded",
-                        provider.version(),
-                        version
+                        provider.selector(),
+                        selector
                     );
                 }
 
@@ -1243,7 +1243,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                 };
 
                 let provider = ViewTable::new(input, definition)
-                    .with_version(from_table_version(scan.version.as_ref())?);
+                    .with_selector(from_table_selector(scan.selector.as_ref())?);
 
                 let table_name =
                     from_table_reference(scan.table_name.as_ref(), "ViewScan")?;
@@ -1393,7 +1393,7 @@ impl AsLogicalPlan for LogicalPlanNode {
 
                 let provider = Arc::new(
                     EmptyTable::new(Arc::clone(&schema))
-                        .with_version(from_table_version(scan.version.as_ref())?),
+                        .with_selector(from_table_selector(scan.selector.as_ref())?),
                 );
 
                 let table_scan =
@@ -1457,9 +1457,9 @@ impl AsLogicalPlan for LogicalPlanNode {
             }) => {
                 let provider = source_as_provider(source)?;
                 let schema = provider.schema();
-                let version = source
-                    .version()
-                    .map(protobuf::TableVersion::try_from)
+                let selector = source
+                    .selector()
+                    .map(protobuf::TableSelector::try_from)
                     .transpose()?;
 
                 let projection = match projection {
@@ -1592,7 +1592,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 file_sort_order: exprs_vec,
                                 fetch: fetch.map(|f| f as u64),
                                 skip: skip.map(|o| o as u64),
-                                version,
+                                selector,
                             },
                         )),
                     })
@@ -1618,7 +1618,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                     .unwrap_or_default(),
                                 fetch: fetch.map(|f| f as u64),
                                 skip: skip.map(|o| o as u64),
-                                version,
+                                selector,
                             },
                         ))),
                     })
@@ -1649,7 +1649,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                                 schema: Some(schema),
                                 projection,
                                 filters,
-                                version,
+                                selector,
                             },
                         )),
                     })
@@ -1669,7 +1669,7 @@ impl AsLogicalPlan for LogicalPlanNode {
                         custom_table_data: bytes,
                         fetch: fetch.map(|f| f as u64),
                         skip: skip.map(|o| o as u64),
-                        version,
+                        selector,
                     });
                     let node = LogicalPlanNode {
                         logical_plan_type: Some(scan),

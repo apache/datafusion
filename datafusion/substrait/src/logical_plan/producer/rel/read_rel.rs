@@ -50,9 +50,9 @@ pub fn from_table_scan(
     producer: &mut impl SubstraitProducer,
     scan: &TableScan,
 ) -> datafusion::common::Result<Box<Rel>> {
-    if let Some(version) = scan.source.version() {
+    if let Some(selector) = scan.source.selector() {
         return not_impl_err!(
-            "Time travel table scans are not supported in Substrait: {}@{version}",
+            "Table scans with a selector are not supported in Substrait: {}@{selector}",
             scan.table_name
         );
     }
