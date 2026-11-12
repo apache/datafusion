@@ -17,7 +17,7 @@ use arrow::compute::{
 use arrow::datatypes::{DataType, Field, FieldRef, Schema, UInt32Type, UnionMode};
 use arrow::error::ArrowError;
 use datafusion_common::cast::as_boolean_array;
-use datafusion_common::metadata::coerced_fields_metadata;
+use datafusion_common::metadata::{FieldMetadata, coerced_fields_metadata};
 use datafusion_common::{
     DataFusionError, Result, ScalarValue, assert_or_internal_err, exec_err,
     internal_datafusion_err, internal_err,
@@ -757,6 +757,29 @@ impl CaseExpr {
     pub fn else_expr(&self) -> Option<&Arc<dyn PhysicalExpr>> {
         self.body.else_expr.as_ref()
     }
+
+    /// The metadata of [`PhysicalExpr::return_field`]. A nested CASE branch only
+    /// computes its metadata, not its name and nullability, which would walk its
+    /// whole subtree again at every level.
+    fn return_metadata(&self, input_schema: &Schema) -> Result<FieldMetadata> {
+        let fields = self
+            .body
+            .when_then_expr
+            .iter()
+            .map(|(_, then)| then)
+            .chain(self.body.else_expr.iter())
+            .map(|expr| match expr.downcast_ref::<CaseExpr>() {
+                Some(case) => {
+                    let field = Field::new("", case.data_type(input_schema)?, true);
+                    Ok(Arc::new(
+                        case.return_metadata(input_schema)?.add_to_field(field),
+                    ))
+                }
+                None => expr.return_field(input_schema),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        coerced_fields_metadata(fields.iter().map(|f| f.as_ref()))
+    }
 }
 
 impl CaseBody {
@@ -1326,21 +1349,15 @@ impl PhysicalExpr for CaseExpr {
     }
 
     fn return_field(&self, input_schema: &Schema) -> Result<FieldRef> {
-        let fields = self
-            .body
-            .when_then_expr
-            .iter()
-            .map(|(_, then)| then)
-            .chain(self.body.else_expr.iter())
-            .map(|expr| expr.return_field(input_schema))
-            .collect::<Result<Vec<_>>>()?;
-        let metadata = coerced_fields_metadata(fields.iter().map(|f| f.as_ref()))?;
         let field = Field::new(
             format!("{self}"),
             self.data_type(input_schema)?,
             self.nullable(input_schema)?,
         );
-        Ok(metadata.add_to_field(field).into())
+        Ok(self
+            .return_metadata(input_schema)?
+            .add_to_field(field)
+            .into())
     }
 
     fn evaluate(&self, batch: &RecordBatch) -> Result<ColumnarValue> {

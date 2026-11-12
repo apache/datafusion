@@ -704,11 +704,14 @@ the name field the name field arrow.json
 the name field the name field arrow.json
 the name field the name field arrow.json
 
-statement error Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'arrow\.json' and 'b\.type'
+statement error
 select case when id > 1
   then cast(name as json)
   else with_metadata(l_name, 'ARROW:extension:name', 'b.type') end
 from table_with_metadata;
+----
+DataFusion error: Error during planning: Cannot merge field metadata with differing values of 'ARROW:extension:name': 'arrow.json' and 'b.type'
+
 
 # A branch without metadata, an untyped NULL ELSE, or no ELSE does not block the
 # extension type of another branch, as for coalesce

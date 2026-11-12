@@ -698,9 +698,18 @@ impl ExprSchemable for Expr {
                     .collect::<Result<Vec<_>>>()?;
                 let metadata =
                     coerced_fields_metadata(fields.iter().map(|f| f.as_ref()))?;
+                // Same as `get_type`: the first non-NULL branch type. Reading it from
+                // `fields` avoids a second walk of the branches, which multiplies with
+                // the depth of nested CASE and function calls.
+                let data_type = fields
+                    .iter()
+                    .map(|f| f.data_type())
+                    .find(|t| !t.is_null())
+                    .cloned()
+                    .unwrap_or(DataType::Null);
                 Ok(Arc::new(metadata.add_to_field(Field::new(
                     &schema_name,
-                    self.get_type(schema)?,
+                    data_type,
                     self.nullable(schema)?,
                 ))))
             }
