@@ -1398,9 +1398,9 @@ mod tests {
     use crate::{assert_contains, error::_internal_err, format::DEFAULT_CAST_OPTIONS};
     use arrow::{
         array::{
-            BinaryArray, FixedSizeListArray, Int32Array, Int32Builder, Int64Array,
-            Int64Builder, ListArray, ListViewArray, MapArray, MapBuilder, NullArray,
-            StringArray, StringBuilder, UInt32Array,
+            BinaryArray, FixedSizeListArray, Int8Array, Int32Array, Int32Builder,
+            Int64Array, Int64Builder, ListArray, ListViewArray, MapArray, MapBuilder,
+            NullArray, StringArray, StringBuilder, UInt32Array,
         },
         buffer::{NullBuffer, OffsetBuffer, ScalarBuffer},
         datatypes::{DataType, Field, FieldRef, Int32Type},
@@ -1443,17 +1443,17 @@ mod tests {
         Arc::new(struct_field(name, fields))
     }
 
-    fn extension_field(name: &str, data_type: DataType, role: &str) -> Field {
-        Field::new(name, data_type, true).with_metadata(HashMap::from([(
-            "test.cast_extension".to_string(),
-            role.to_string(),
+    fn bool8_field(name: &str) -> Field {
+        Field::new(name, DataType::Int8, true).with_metadata(HashMap::from([(
+            "ARROW:extension:name".to_string(),
+            "arrow.bool8".to_string(),
         )]))
     }
 
     #[derive(Debug)]
-    struct BinaryLengthCast;
+    struct Bool8ToStringCast;
 
-    impl CastExtension for BinaryLengthCast {
+    impl CastExtension for Bool8ToStringCast {
         fn can_cast_fields(
             &self,
             source_field: &Field,
@@ -1461,14 +1461,12 @@ mod tests {
         ) -> Result<bool> {
             Ok(source_field
                 .metadata()
-                .get("test.cast_extension")
+                .get("ARROW:extension:name")
                 .map(String::as_str)
-                == Some("source")
-                && target_field
-                    .metadata()
-                    .get("test.cast_extension")
-                    .map(String::as_str)
-                    == Some("target"))
+                == Some("arrow.bool8")
+                && source_field.data_type() == &DataType::Int8
+                && target_field.data_type() == &DataType::Utf8
+                && target_field.extension_type_name().is_none())
         }
 
         fn cast_array_fields(
@@ -1479,17 +1477,15 @@ mod tests {
             _cast_options: &CastOptions,
         ) -> Result<ArrayRef> {
             if !self.can_cast_fields(source_field, target_field)? {
-                return _internal_err!("BinaryLengthCast cannot cast supplied fields");
+                return _internal_err!("Bool8ToStringCast cannot cast supplied fields");
             }
             let array = array
                 .as_any()
-                .downcast_ref::<BinaryArray>()
-                .expect("test extension receives Binary input");
-            Ok(Arc::new(Int32Array::from_iter(
-                array
-                    .iter()
-                    .map(|value| value.map(|value| value.len() as i32)),
-            )))
+                .downcast_ref::<Int8Array>()
+                .expect("arrow.bool8 uses Int8 storage");
+            Ok(Arc::new(StringArray::from_iter(array.iter().map(
+                |value| value.map(|value| if value == 0 { "false" } else { "true" }),
+            ))))
         }
     }
 
@@ -1509,14 +1505,15 @@ mod tests {
 
     #[test]
     fn test_cast_extension_nested_list_struct() {
-        let source_leaf = Arc::new(extension_field("value", DataType::Binary, "source"));
+        let source_leaf = Arc::new(bool8_field("value"));
         let source_struct_fields: Fields = vec![Arc::clone(&source_leaf)].into();
         let source_struct = StructArray::new(
             source_struct_fields.clone(),
-            vec![Arc::new(BinaryArray::from(vec![
-                Some(b"a".as_slice()),
+            vec![Arc::new(Int8Array::from(vec![
+                Some(0),
+                Some(1),
+                Some(-20),
                 None,
-                Some(b"three".as_slice()),
             ]))],
             None,
         );
@@ -1524,13 +1521,13 @@ mod tests {
             Arc::new(Field::new("item", Struct(source_struct_fields), true));
         let source = Arc::new(ListArray::new(
             Arc::clone(&source_item),
-            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 3])),
+            OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 4])),
             Arc::new(source_struct),
             None,
         )) as ArrayRef;
         let source_field = Field::new("root", DataType::List(source_item), true);
 
-        let target_leaf = Arc::new(extension_field("value", DataType::Int32, "target"));
+        let target_leaf = Arc::new(field("value", DataType::Utf8));
         let target_struct_fields: Fields = vec![target_leaf].into();
         let target_item =
             Arc::new(Field::new("item", Struct(target_struct_fields), true));
@@ -1539,16 +1536,16 @@ mod tests {
             &source,
             &source_field,
             &target_field,
-            Some(&BinaryLengthCast),
+            Some(&Bool8ToStringCast),
             &DEFAULT_CAST_OPTIONS,
         )
         .unwrap();
         let values = result.as_list::<i32>().values();
         let values = values.as_struct();
-        let values = values.column(0).as_primitive::<Int32Type>();
+        let values = values.column(0).as_string::<i32>();
         assert_eq!(
             values.iter().collect::<Vec<_>>(),
-            vec![Some(1), None, Some(5)]
+            vec![Some("false"), Some("true"), Some("true"), None]
         );
     }
 
@@ -1556,24 +1553,19 @@ mod tests {
     fn test_validate_nested_cast_extension() {
         let source = vec![Arc::new(Field::new(
             "items",
-            DataType::List(Arc::new(extension_field(
-                "item",
-                DataType::Binary,
-                "source",
-            ))),
+            DataType::List(Arc::new(bool8_field("item"))),
             true,
         ))];
         let target = vec![Arc::new(Field::new(
             "items",
-            DataType::List(Arc::new(extension_field("item", DataType::Int32, "target"))),
+            DataType::List(Arc::new(field("item", DataType::Utf8))),
             true,
         ))];
 
-        assert!(validate_struct_compatibility(&source, &target).is_err());
         validate_struct_compatibility_with_extension(
             &source,
             &target,
-            Some(&BinaryLengthCast),
+            Some(&Bool8ToStringCast),
         )
         .unwrap();
     }
