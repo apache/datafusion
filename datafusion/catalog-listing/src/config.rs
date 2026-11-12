@@ -269,6 +269,11 @@ impl ListingTableConfig {
         }
     }
 
+    /// Returns the [`PhysicalExprAdapterFactory`] used by this configuration, if set.
+    pub fn expr_adapter_factory(&self) -> Option<&Arc<dyn PhysicalExprAdapterFactory>> {
+        self.expr_adapter_factory.as_ref()
+    }
+
     /// Set the [`PhysicalExprAdapterFactory`] for the [`crate::ListingTable`]
     ///
     /// The expression adapter factory is used to create physical expression adapters that can
