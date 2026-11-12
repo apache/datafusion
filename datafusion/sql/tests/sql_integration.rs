@@ -403,51 +403,88 @@ fn parse_ident_normalization_uppercase() {
     }
 }
 
-#[rstest]
-#[case::copy("COPY foo TO 'out.csv' STORED AS CSV", false)]
-#[case::copy_partition("COPY foo TO 'out.csv' STORED AS CSV PARTITIONED BY (x)", true)]
-#[case::copy_backtick_partition(
-    "COPY foo TO 'out.csv' STORED AS CSV PARTITIONED BY (`X`)",
-    true
-)]
-#[case::typed_external_partition(
-    "CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED BY (x INT) LOCATION 'in.csv'",
-    false
-)]
-#[case::external_partition(
-    "CREATE EXTERNAL TABLE t(x INT) STORED AS CSV PARTITIONED BY (x) LOCATION 'in.csv'",
-    false
-)]
-#[case::quoted_external_partition(r#"CREATE EXTERNAL TABLE t("x" INT) STORED AS CSV PARTITIONED BY ("x") LOCATION 'in.csv'"#, false)]
-#[case::pipe_alias("SELECT 1 AS x |> AGGREGATE SUM(x) AS total |> SELECT total", false)]
-fn ident_normalization_binding_paths(
-    #[case] sql: &str,
-    #[case] expect_copy_partition: bool,
-) {
+#[test]
+fn ident_normalization_partitions() {
+    let generic: &dyn Dialect = &GenericDialect {};
+    let mssql: &dyn Dialect = &sqlparser::dialect::MsSqlDialect {};
     let options =
         ParserOptions::new().with_ident_normalization(IdentNormalization::Upper);
-    let plan = logical_plan_with_options(sql, options).unwrap();
-    match plan {
-        LogicalPlan::Copy(copy) => {
-            assert_eq!(
-                copy.input.schema().qualified_field(0).0.unwrap(),
-                &TableReference::bare("FOO")
-            );
-            if expect_copy_partition {
-                assert_eq!(copy.partition_by, vec!["X"]);
+    for (sql, dialect, partition) in [
+        ("COPY foo TO 'out.csv' STORED AS CSV", generic, None),
+        (
+            "COPY foo TO 'out.csv' STORED AS CSV PARTITIONED BY (x)",
+            generic,
+            Some("X"),
+        ),
+        (
+            "COPY foo TO 'out.csv' STORED AS CSV PARTITIONED BY (`X`)",
+            generic,
+            Some("X"),
+        ),
+        (
+            "COPY foo TO 'out.csv' STORED AS CSV PARTITIONED BY ([X])",
+            mssql,
+            Some("X"),
+        ),
+        (
+            "CREATE EXTERNAL TABLE t STORED AS CSV PARTITIONED BY (x INT) LOCATION 'in.csv'",
+            generic,
+            Some("X"),
+        ),
+        (
+            "CREATE EXTERNAL TABLE t(x INT) STORED AS CSV PARTITIONED BY (x) LOCATION 'in.csv'",
+            generic,
+            Some("X"),
+        ),
+        (
+            r#"CREATE EXTERNAL TABLE t("x" INT) STORED AS CSV PARTITIONED BY ("x") LOCATION 'in.csv'"#,
+            generic,
+            Some("x"),
+        ),
+        (
+            r#"CREATE EXTERNAL TABLE t("a""b" INT) STORED AS CSV PARTITIONED BY ("a""b") LOCATION 'in.csv'"#,
+            generic,
+            Some("a\"b"),
+        ),
+        (
+            "CREATE EXTERNAL TABLE t([x] INT) STORED AS CSV PARTITIONED BY ([x]) LOCATION 'in.csv'",
+            mssql,
+            Some("x"),
+        ),
+    ] {
+        let plan = logical_plan_with_dialect_and_options(sql, dialect, options).unwrap();
+        let expected: Vec<_> = partition.into_iter().collect();
+        match plan {
+            LogicalPlan::Copy(copy) => {
+                assert_eq!(
+                    copy.input.schema().qualified_field(0).0.unwrap(),
+                    &TableReference::bare("FOO"),
+                    "{sql}",
+                );
+                assert_eq!(copy.partition_by, expected, "{sql}");
             }
+            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(table)) => {
+                assert_eq!(table.table_partition_cols, expected, "{sql}");
+                assert_eq!(table.schema.field(0).name(), partition.unwrap(), "{sql}");
+            }
+            other => panic!("unexpected plan: {other:?}"),
         }
-        LogicalPlan::Ddl(DdlStatement::CreateExternalTable(table)) => {
-            assert_eq!(
-                table.table_partition_cols,
-                vec![table.schema.field(0).name().clone()]
-            );
-        }
-        LogicalPlan::Projection(projection) => {
-            assert_eq!(projection.schema.field(0).name(), "TOTAL")
-        }
-        other => panic!("unexpected plan: {other:?}"),
     }
+}
+
+#[test]
+fn ident_normalization_pipe_alias() {
+    let options =
+        ParserOptions::new().with_ident_normalization(IdentNormalization::Upper);
+    let plan = logical_plan_with_options(
+        "SELECT 1 AS x |> AGGREGATE SUM(x) AS total |> SELECT total",
+        options,
+    )
+    .unwrap();
+    let LogicalPlan::Projection(projection) = plan else {
+        panic!("expected projection");
+    };
+    assert_eq!(projection.schema.field(0).name(), "TOTAL");
 }
 
 #[rstest]
@@ -482,77 +519,34 @@ fn ident_normalization_update(
 }
 
 #[rstest]
-#[case::struct_alias("SELECT STRUCT(1 AS x) AS s", "X")]
-#[case::quoted_struct_alias(r#"SELECT STRUCT(1 AS "x") AS s"#, "x")]
-#[case::dictionary("SELECT {x: 1} AS s", "X")]
-#[case::quoted_dictionary("SELECT {'x': 1} AS s", "x")]
-fn ident_normalization_struct_fields(#[case] sql: &str, #[case] expected: &str) {
-    let options =
-        ParserOptions::new().with_ident_normalization(IdentNormalization::Upper);
-    let plan = logical_plan_with_options(sql, options).unwrap();
-    let DataType::Struct(fields) = plan.schema().field(0).data_type() else {
-        panic!("expected struct");
-    };
-    assert_eq!(fields[0].name(), expected);
-}
-
-#[rstest]
-#[case::unquoted("SELECT s.x FROM (SELECT STRUCT(1 AS x) AS s)", "X")]
-#[case::quoted(r#"SELECT s."x" FROM (SELECT STRUCT(1 AS "x") AS s)"#, "x")]
-fn ident_normalization_struct_field_references(#[case] sql: &str, #[case] field: &str) {
+#[case::struct_alias("SELECT STRUCT(1 AS x) AS s", "X", "x")]
+#[case::quoted_struct_alias(r#"SELECT STRUCT(1 AS "x") AS s"#, "x", r#""x""#)]
+#[case::dictionary("SELECT {x: 1} AS s", "X", "x")]
+#[case::quoted_dictionary("SELECT {'x': 1} AS s", "x", r#""x""#)]
+fn ident_normalization_struct_fields(
+    #[case] sql: &str,
+    #[case] expected: &str,
+    #[case] reference: &str,
+) {
     use datafusion_functions::core::expr_ext::FieldAccessor;
 
     let options =
         ParserOptions::new().with_ident_normalization(IdentNormalization::Upper);
-    let plan = logical_plan_with_options(sql, options).unwrap();
-    let LogicalPlan::Projection(projection) = plan else {
+    let referenced =
+        logical_plan_with_options(&format!("SELECT s.{reference} FROM ({sql})"), options)
+            .unwrap();
+    let LogicalPlan::Projection(projection) = referenced else {
         panic!("expected projection");
     };
     assert_eq!(projection.schema.field(0).data_type(), &DataType::Int64);
     assert_eq!(
         projection.expr,
-        vec![datafusion_expr::ident("S").field(field)]
+        vec![datafusion_expr::ident("S").field(expected)]
     );
-}
-
-#[test]
-fn ident_normalization_escaped_partition_delimiter() {
-    let options =
-        ParserOptions::new().with_ident_normalization(IdentNormalization::Upper);
-    let plan = logical_plan_with_options(
-        r#"CREATE EXTERNAL TABLE t("a""b" INT) STORED AS CSV PARTITIONED BY ("a""b") LOCATION 'in.csv'"#,
-        options,
-    )
-    .unwrap();
-    let LogicalPlan::Ddl(DdlStatement::CreateExternalTable(table)) = plan else {
-        panic!("expected CREATE EXTERNAL TABLE");
+    let DataType::Struct(fields) = projection.input.schema().field(0).data_type() else {
+        panic!("expected struct");
     };
-    assert_eq!(table.table_partition_cols, vec!["a\"b"]);
-    assert_eq!(table.schema.field(0).name(), "a\"b");
-}
-
-#[test]
-fn ident_normalization_quoted_partition_dialects() {
-    let options =
-        ParserOptions::new().with_ident_normalization(IdentNormalization::Upper);
-    for sql in [
-        "COPY foo TO 'out.csv' STORED AS CSV PARTITIONED BY ([X])",
-        "CREATE EXTERNAL TABLE t([x] INT) STORED AS CSV PARTITIONED BY ([x]) LOCATION 'in.csv'",
-    ] {
-        let plan = logical_plan_with_dialect_and_options(
-            sql,
-            &sqlparser::dialect::MsSqlDialect {},
-            options,
-        )
-        .unwrap();
-        match plan {
-            LogicalPlan::Copy(copy) => assert_eq!(copy.partition_by, vec!["X"]),
-            LogicalPlan::Ddl(DdlStatement::CreateExternalTable(table)) => {
-                assert_eq!(table.table_partition_cols, vec!["x"])
-            }
-            other => panic!("unexpected plan: {other:?}"),
-        }
-    }
+    assert_eq!(fields[0].name(), expected);
 }
 
 #[test]
@@ -5868,9 +5862,14 @@ fn test_variable_identifier() {
 }
 
 #[rstest]
-#[case::lower(true)]
-#[case::preserve(false)]
-fn ident_normalization_scalar_variables(#[case] enabled: bool) {
+#[case::lower(true, ["@variable", "member"], DataType::Date32, DataType::Utf8)]
+#[case::preserve(false, ["@Variable", "Member"], DataType::Int64, DataType::Int64)]
+fn ident_normalization_scalar_variables(
+    #[case] enabled: bool,
+    #[case] member_names: [&str; 2],
+    #[case] member_type: DataType,
+    #[case] quoted_member_type: DataType,
+) {
     for policy in [
         None,
         Some(IdentNormalization::Lower),
@@ -5883,25 +5882,13 @@ fn ident_normalization_scalar_variables(#[case] enabled: bool) {
             ("SELECT @variable", vec!["@variable"], DataType::Date32),
             (
                 "SELECT @Variable.Member",
-                if enabled {
-                    vec!["@variable", "member"]
-                } else {
-                    vec!["@Variable", "Member"]
-                },
-                if enabled {
-                    DataType::Date32
-                } else {
-                    DataType::Int64
-                },
+                member_names.to_vec(),
+                member_type.clone(),
             ),
             (
                 r#"SELECT @Variable."Member""#,
-                vec![if enabled { "@variable" } else { "@Variable" }, "Member"],
-                if enabled {
-                    DataType::Utf8
-                } else {
-                    DataType::Int64
-                },
+                vec![member_names[0], "Member"],
+                quoted_member_type.clone(),
             ),
         ] {
             let plan = logical_plan_with_options(sql, options).unwrap();
@@ -5947,7 +5934,14 @@ fn plan_create_index() {
 
 #[test]
 fn lateral_table_function_lookup_preserves_legacy_name_normalization() {
-    let dialect = &GenericDialect {};
+    let plan = |sql, options, name| {
+        logical_plan_from_state(
+            sql,
+            &GenericDialect {},
+            options,
+            MockSessionState::default().with_table_function(name),
+        )
+    };
 
     // Explicit object normalization must not change table-function registry keys.
     for policy in [
@@ -5956,65 +5950,42 @@ fn lateral_table_function_lookup_preserves_legacy_name_normalization() {
         IdentNormalization::Preserve,
     ] {
         let options = ParserOptions::default().with_ident_normalization(policy);
-        let result = logical_plan_from_state(
-            "SELECT * FROM LATERAL foo()",
-            dialect,
-            options,
-            MockSessionState::default().with_table_function("foo"),
-        );
+        let result = plan("SELECT * FROM LATERAL foo()", options, "foo");
         assert!(result.is_ok(), "policy {policy:?}: {result:?}");
     }
 
-    let quoted =
+    let upper =
         ParserOptions::default().with_ident_normalization(IdentNormalization::Upper);
-    assert!(
-        logical_plan_from_state(
-            "SELECT * FROM LATERAL \"foo\"()",
-            dialect,
-            quoted,
-            MockSessionState::default().with_table_function("foo"),
-        )
-        .is_ok()
-    );
-    let err = logical_plan_from_state(
-        "SELECT * FROM LATERAL \"foo\"()",
-        dialect,
-        quoted,
-        MockSessionState::default().with_table_function("FOO"),
-    )
-    .unwrap_err()
-    .to_string();
-    assert_contains!(err, "No table function named: foo");
+    for (sql, registered, error) in [
+        (r#"SELECT * FROM LATERAL "foo"()"#, "foo", None),
+        (
+            r#"SELECT * FROM LATERAL "foo"()"#,
+            "FOO",
+            Some("No table function named: foo"),
+        ),
+        ("SELECT * FROM foo()", "foo", None),
+    ] {
+        let result = plan(sql, upper, registered);
+        match error {
+            Some(expected) => {
+                assert_contains!(result.unwrap_err().to_string(), expected);
+            }
+            None => assert!(result.is_ok(), "{sql}, registry {registered}: {result:?}"),
+        }
+    }
 
     for policy in [None, Some(IdentNormalization::Upper)] {
         for (enabled, expected_name) in [(true, "foo"), (false, "Foo")] {
             let mut options =
                 ParserOptions::default().with_enable_ident_normalization(enabled);
             options.ident_normalization = policy;
-            let result = logical_plan_from_state(
-                "SELECT * FROM LATERAL Foo()",
-                dialect,
-                options,
-                MockSessionState::default().with_table_function(expected_name),
-            );
+            let result = plan("SELECT * FROM LATERAL Foo()", options, expected_name);
             assert!(
                 result.is_ok(),
                 "policy {policy:?}, legacy flag {enabled}: {result:?}"
             );
         }
     }
-
-    let options =
-        ParserOptions::default().with_ident_normalization(IdentNormalization::Upper);
-    assert!(
-        logical_plan_from_state(
-            "SELECT * FROM foo()",
-            dialect,
-            options,
-            MockSessionState::default().with_table_function("foo"),
-        )
-        .is_ok()
-    );
 }
 
 #[test]
