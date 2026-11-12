@@ -33,10 +33,25 @@ CREATE TABLE cond_r(v INT) AS VALUES (0), (5)
 statement ok
 CREATE TABLE cond_r2(v INT) AS VALUES (0), (5), (-1)
 
+statement ok
+CREATE TABLE cond_r_null(v INT) AS VALUES (NULL)
+
 # CASE THEN branch
 query TI
 SELECT l.s, r.v FROM cond_l l JOIN cond_r r
 ON CASE WHEN r.v > 100 THEN CAST(l.s AS INT) ELSE 0 END > 1
+----
+
+# CASE ELSE branch
+query TI
+SELECT l.s, r.v FROM cond_l l JOIN cond_r r
+ON CASE WHEN r.v < 100 THEN 0 ELSE CAST(l.s AS INT) END > 1
+----
+
+# Simple CASE with NULL base expression does not evaluate its WHEN branch
+query TI
+SELECT l.s, r.v FROM cond_l l JOIN cond_r_null r
+ON CASE r.v WHEN CAST(l.s AS INT) THEN 1 ELSE 0 END = 1
 ----
 
 # CASE WHEN after the first one
@@ -137,3 +152,6 @@ DROP TABLE cond_r
 
 statement ok
 DROP TABLE cond_r2
+
+statement ok
+DROP TABLE cond_r_null
