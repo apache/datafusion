@@ -74,7 +74,6 @@ FORK_PR_SKIPPED_JOBS = frozenset(
         "linux-build-lib",
         "linux-cargo-check-datafusion",
         "linux-cargo-check-datafusion-functions",
-        "linux-cargo-check-datafusion-spark",
         "linux-datafusion-common-features",
         "linux-datafusion-ffi-features",
         "linux-datafusion-proto-features",

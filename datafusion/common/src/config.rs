@@ -2249,8 +2249,8 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
 }
 
 config_namespace! {
-    /// Options controlling DataFusion's Spark-compatibility layer (functions
-    /// under `datafusion/spark`). Keys here mirror their `spark.sql.*`
+    /// Options controlling DataFusion's Spark-compatibility layer (the
+    /// `datafusion-spark` crate). Keys here mirror their `spark.sql.*`
     /// equivalents in Apache Spark.
     pub struct SparkOptions {
         /// Policy for handling duplicate keys in Spark-compatible map-construction
@@ -2297,7 +2297,7 @@ pub struct ConfigOptions {
     pub extensions: Extensions,
     /// Formatting options when printing batches
     pub format: FormatOptions,
-    /// Spark-compatibility options (functions under `datafusion/spark`)
+    /// Spark-compatibility options (the `datafusion-spark` crate)
     pub spark: SparkOptions,
 }
 
