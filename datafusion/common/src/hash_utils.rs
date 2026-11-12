@@ -1,34 +1,23 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Functionality used both on logical and physical plans
 
+#[cfg(not(feature = "force_hash_collisions"))]
+use crate::utils::compact_oversized_dictionary;
 use arrow::array::types::{IntervalDayTime, IntervalMonthDayNano};
 use arrow::array::*;
 #[cfg(not(feature = "force_hash_collisions"))]
-use arrow::compute::take;
+use arrow::buffer::ScalarBuffer;
+#[cfg(not(feature = "force_hash_collisions"))]
+use arrow::compute::{nullif, take};
 use arrow::datatypes::*;
 #[cfg(not(feature = "force_hash_collisions"))]
 use arrow::{downcast_dictionary_array, downcast_primitive_array};
 use foldhash::fast::FixedState;
 #[cfg(not(feature = "force_hash_collisions"))]
 use itertools::Itertools;
-#[cfg(not(feature = "force_hash_collisions"))]
-use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash, Hasher};
 
 /// [`RandomState`] is optimized for speed and suitable for hash tables and
@@ -89,6 +78,7 @@ use crate::cast::{
 };
 use crate::error::Result;
 use crate::error::{_internal_datafusion_err, _internal_err};
+use crate::float_semantics::hash_input;
 #[cfg(not(feature = "force_hash_collisions"))]
 use crate::utils::offset_span;
 use std::cell::RefCell;
@@ -258,24 +248,20 @@ hash_value!(i8, i16, i32, i64, i128, i256, u8, u16, u32, u64, u128);
 hash_value!(bool, str, [u8], IntervalDayTime, IntervalMonthDayNano);
 
 macro_rules! hash_float_value {
-    ($(($t:ty, $i:ty)),+) => {
+    ($($t:ty),+) => {
         $(impl HashValue for $t {
+            // Hash the normalized bits so values SQL considers equal
+            // (e.g. +0.0 and -0.0) hash the same.
             fn hash_one<S: BuildHasher>(&self, state: &S) -> u64 {
-                // +0.0 and -0.0 differ only in the sign bit but compare equal
-                // under IEEE 754; normalize -0.0 → +0.0 so Hash agrees with Eq.
-                let bits = <$i>::from_ne_bytes(self.to_ne_bytes());
-                let bits = if bits << 1 == 0 { 0 } else { bits };
-                state.hash_one(bits)
+                state.hash_one(hash_input(*self).to_bits())
             }
             fn hash_write(&self, hasher: &mut impl Hasher) {
-                let bits = <$i>::from_ne_bytes(self.to_ne_bytes());
-                let bits: $i = if bits << 1 == 0 { 0 } else { bits };
-                hasher.write(&bits.to_ne_bytes())
+                hasher.write(&hash_input(*self).to_bits().to_ne_bytes())
             }
         })+
     };
 }
-hash_float_value!((half::f16, u16), (f32, u32), (f64, u64));
+hash_float_value!(half::f16, f32, f64);
 
 #[cfg(not(feature = "force_hash_collisions"))]
 trait ChildHashing {
@@ -321,15 +307,9 @@ fn hash_array_primitive<T>(
 
     if array.null_count() == 0 {
         if rehash {
-            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                let mut hasher = random_state.seeded_state(*hash).build_hasher();
-                value.hash_write(&mut hasher);
-                *hash = hasher.finish();
-            }
+            hash_prim_rehash_dense(array.values(), hashes_buffer, random_state);
         } else {
-            for (hash, &value) in hashes_buffer.iter_mut().zip(array.values().iter()) {
-                *hash = value.hash_one(random_state);
-            }
+            hash_prim_fresh_dense(array.values(), hashes_buffer, random_state);
         }
     } else if rehash {
         for i in array.nulls().unwrap().valid_indices() {
@@ -343,6 +323,51 @@ fn hash_array_primitive<T>(
             let value = unsafe { array.value_unchecked(i) };
             hashes_buffer[i] = value.hash_one(random_state);
         }
+    }
+}
+
+/// Overwrite each slot with `value.hash_one(state)`, 16 rows per iteration.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_prim_fresh_dense<N, S>(values: &[N], hashes: &mut [u64], state: &S)
+where
+    N: HashValue + Copy,
+    S: HashState,
+{
+    const LANES: usize = 16;
+    let (value_chunks, value_tail) = values.as_chunks::<LANES>();
+    let (hash_chunks, hash_tail) = hashes.as_chunks_mut::<LANES>();
+    for (h, v) in hash_chunks.iter_mut().zip(value_chunks) {
+        *h = v.map(|value| value.hash_one(state));
+    }
+    for (h, v) in hash_tail.iter_mut().zip(value_tail) {
+        *h = v.hash_one(state);
+    }
+}
+
+/// Fold `prev_hash` + `value` into a new hash, 8 rows per iteration. 8 is
+/// narrower than `hash_prim_fresh_dense` because each lane holds both `prev` and
+/// `value` live; widening past 8 spilled registers in the multi-column case.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[inline(always)]
+fn hash_prim_rehash_dense<N, S>(values: &[N], hashes: &mut [u64], state: &S)
+where
+    N: HashValue + Copy,
+    S: HashState,
+{
+    const LANES: usize = 8;
+    let rehash_one = |prev_hash: u64, value: N| {
+        let mut hasher = state.seeded_state(prev_hash).build_hasher();
+        value.hash_write(&mut hasher);
+        hasher.finish()
+    };
+    let (value_chunks, value_tail) = values.as_chunks::<LANES>();
+    let (hash_chunks, hash_tail) = hashes.as_chunks_mut::<LANES>();
+    for (h, v) in hash_chunks.iter_mut().zip(value_chunks) {
+        *h = std::array::from_fn(|lane| rehash_one(h[lane], v[lane]));
+    }
+    for (h, &v) in hash_tail.iter_mut().zip(value_tail) {
+        *h = rehash_one(*h, v);
     }
 }
 
@@ -538,29 +563,55 @@ fn hash_dictionary_scatter<
     hashes_buffer: &mut [u64],
 ) {
     let dict_values = array.values();
-    if HAS_NULL_KEYS {
-        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().iter()) {
-            if let Some(key) = key {
-                let idx = key.as_usize();
-                if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
-                    if MULTI_COL {
-                        *hash = combine_hashes(dict_hashes[idx], *hash);
-                    } else {
-                        *hash = dict_hashes[idx];
+    let scatter_row = |hash: &mut u64, key: &K::Native| {
+        let idx = key.as_usize();
+        if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
+            // SAFETY: `idx` is a valid Arrow dict key, in-bounds for `dict_hashes`.
+            let dict_hash = unsafe { *dict_hashes.get_unchecked(idx) };
+            *hash = if MULTI_COL {
+                combine_hashes(dict_hash, *hash)
+            } else {
+                dict_hash
+            };
+        }
+    };
+    let keys = array.keys().values();
+    if HAS_NULL_KEYS && let Some(key_nulls) = array.keys().nulls() {
+        // Like the `zip` below, stop at the end of `hashes_buffer`. Null slots keep
+        // their hash, and their (possibly out-of-range) keys are never read.
+        let len = hashes_buffer.len().min(keys.len());
+        let (hashes, keys) = (&mut hashes_buffer[..len], &keys[..len]);
+        // Walk the validity bitmap 64 rows at a time: a word with no nulls takes
+        // the same dense loop as the no-null path, which is much cheaper than
+        // visiting each set bit when nulls are sparse
+        let chunks = key_nulls.inner().bit_chunks();
+        let words = chunks
+            .iter()
+            .chain(std::iter::once(chunks.remainder_bits()));
+        for (word_idx, mut word) in words.enumerate() {
+            let start = word_idx * 64;
+            if start >= len {
+                break;
+            }
+            if word == u64::MAX {
+                let end = (start + 64).min(len);
+                for (hash, key) in hashes[start..end].iter_mut().zip(&keys[start..end]) {
+                    scatter_row(hash, key);
+                }
+            } else {
+                while word != 0 {
+                    let i = start + word.trailing_zeros() as usize;
+                    if i >= len {
+                        break;
                     }
+                    scatter_row(&mut hashes[i], &keys[i]);
+                    word &= word - 1;
                 }
             }
         }
     } else {
-        for (hash, key) in hashes_buffer.iter_mut().zip(array.keys().values()) {
-            let idx = key.as_usize();
-            if !HAS_NULL_VALUES || dict_values.is_valid(idx) {
-                if MULTI_COL {
-                    *hash = combine_hashes(dict_hashes[idx], *hash);
-                } else {
-                    *hash = dict_hashes[idx];
-                }
-            }
+        for (hash, key) in hashes_buffer.iter_mut().zip(keys) {
+            scatter_row(hash, key);
         }
     }
 }
@@ -629,7 +680,11 @@ fn hash_dictionary<K: ArrowDictionaryKeyType>(
 ) -> Result<()> {
     // Hash each dictionary value once, and then use that computed
     // hash for each key value to avoid a potentially expensive
-    // redundant hashing for large dictionary elements (e.g. strings)
+    // redundant hashing for large dictionary elements (e.g. strings).
+    // A dictionary with many more values than rows (e.g. a slice) is first
+    // reduced to the values its rows reference.
+    let compacted = compact_oversized_dictionary(array)?;
+    let array = compacted.as_ref().unwrap_or(array);
     let dict_values = array.values();
     let mut dict_hashes = vec![0; dict_values.len()];
     create_hashes([dict_values], random_state, &mut dict_hashes)?;
@@ -644,6 +699,8 @@ fn hash_dictionary_with_child_hashing<K: ArrowDictionaryKeyType>(
     hashes_buffer: &mut [u64],
     multi_col: bool,
 ) -> Result<()> {
+    let compacted = compact_oversized_dictionary(array)?;
+    let array = compacted.as_ref().unwrap_or(array);
     let dict_values = array.values();
     let mut dict_hashes = vec![0; dict_values.len()];
     child_hashing.create_hashes([dict_values], &mut dict_hashes)?;
@@ -826,67 +883,61 @@ fn hash_union_array(
     };
 
     if array.is_dense() {
-        // Dense union: children only contain values of their type, so they're already compact.
-        // Use the default hashing approach which is efficient for dense unions.
-        hash_union_array_default(array, union_fields, child_hashing, hashes_buffer)
+        hash_dense_union_array(array, union_fields, child_hashing, hashes_buffer)
     } else {
-        // Sparse union: each child has the same length as the union array.
-        // Optimization: only hash the elements that are actually referenced by type_ids,
-        // instead of hashing all K*N elements (where K = num types, N = array length).
         hash_sparse_union_array(array, union_fields, child_hashing, hashes_buffer)
     }
 }
 
-/// Default hashing for union arrays - hashes all elements of each child array fully.
-///
-/// This approach works for both dense and sparse union arrays:
-/// - Dense unions: children are compact (each child only contains values of that type)
-/// - Sparse unions: children have the same length as the union array
-///
-/// For sparse unions with 3+ types, the optimized take/scatter approach in
-/// `hash_sparse_union_array` is more efficient, but for 1-2 types or dense unions,
-/// this simpler approach is preferred.
+/// Slicing a dense union does not slice its children, so when their total length
+/// exceeds the union's, only the span its offsets reference is hashed.
 #[cfg(not(feature = "force_hash_collisions"))]
-fn hash_union_array_default(
+fn hash_dense_union_array(
     array: &UnionArray,
     union_fields: &UnionFields,
     child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
-    let mut child_hashes: HashMap<i8, Vec<u64>> =
-        HashMap::with_capacity(union_fields.len());
+    let type_ids = array.type_ids();
+    let offsets = array.offsets().expect("dense union has offsets");
 
-    // Hash each child array fully
-    for (type_id, _field) in union_fields.iter() {
-        let child = array.child(type_id);
-        let mut child_hash_buffer = vec![0; child.len()];
-        child_hashing.create_hashes([child], &mut child_hash_buffer)?;
-
-        child_hashes.insert(type_id, child_hash_buffer);
+    // `[start, end)` of each child to hash, indexed by type id
+    let mut spans = [(0, 0); 128];
+    for (type_id, _) in union_fields.iter() {
+        spans[type_id as usize].1 = array.child(type_id).len();
+    }
+    if spans.iter().map(|(_, end)| end).sum::<usize>() > array.len() {
+        spans = [(usize::MAX, 0); 128];
+        for (&type_id, &offset) in type_ids.iter().zip(offsets.iter()) {
+            let (start, end) = &mut spans[type_id as usize];
+            *start = (*start).min(offset as usize);
+            *end = (*end).max(offset as usize + 1);
+        }
     }
 
-    // Combine hashes for each row using the appropriate child offset
-    // For dense unions: value_offset points to the actual position in the child
-    // For sparse unions: value_offset equals the row index
-    #[expect(clippy::needless_range_loop)]
-    for i in 0..array.len() {
-        let type_id = array.type_id(i);
-        let child_offset = array.value_offset(i);
+    let mut child_hashes = vec![vec![]; spans.len()];
+    for (type_id, _) in union_fields.iter() {
+        let (start, end) = spans[type_id as usize];
+        if start < end {
+            let child = array.child(type_id).slice(start, end - start);
+            let hashes = &mut child_hashes[type_id as usize];
+            hashes.resize(end - start, 0);
+            child_hashing.create_hashes([child], hashes)?;
+        }
+    }
 
-        let child_hash = child_hashes.get(&type_id).expect("invalid type_id");
-        hashes_buffer[i] = combine_hashes(hashes_buffer[i], child_hash[child_offset]);
+    for ((hash, &type_id), &offset) in hashes_buffer.iter_mut().zip(type_ids).zip(offsets)
+    {
+        let start = spans[type_id as usize].0;
+        let child_hash = child_hashes[type_id as usize][offset as usize - start];
+        *hash = combine_hashes(*hash, child_hash);
     }
 
     Ok(())
 }
 
-/// Hash a sparse union array.
-/// Sparse unions have child arrays with the same length as the union array.
-/// For 3+ types, we optimize by only hashing the N elements that are actually used
-/// (via take/scatter), instead of hashing all K*N elements.
-///
-/// For 1-2 types, the overhead of take/scatter outweighs the benefit, so we use
-/// the default approach of hashing all children (same as dense unions).
+/// Each row of a sparse union uses only one child, so each child is hashed
+/// only at the rows that select it.
 #[cfg(not(feature = "force_hash_collisions"))]
 fn hash_sparse_union_array(
     array: &UnionArray,
@@ -894,53 +945,84 @@ fn hash_sparse_union_array(
     child_hashing: &impl ChildHashing,
     hashes_buffer: &mut [u64],
 ) -> Result<()> {
-    use std::collections::HashMap;
-
-    // For 1-2 types, the take/scatter overhead isn't worth it.
-    // Fall back to the default approach (same as dense union).
-    if union_fields.len() <= 2 {
-        return hash_union_array_default(
-            array,
-            union_fields,
-            child_hashing,
-            hashes_buffer,
-        );
-    }
-
     let type_ids = array.type_ids();
+    let len = array.len();
 
-    // Group indices by type_id
-    let mut indices_by_type: HashMap<i8, Vec<u32>> = HashMap::new();
-    for (i, &type_id) in type_ids.iter().enumerate() {
-        indices_by_type.entry(type_id).or_default().push(i as u32);
-    }
-
-    // For each type, extract only the needed elements, hash them, and scatter back
-    for (type_id, _field) in union_fields.iter() {
-        if let Some(indices) = indices_by_type.get(&type_id) {
-            if indices.is_empty() {
+    // Rows the child hashing skips keep a hash of 0
+    let mut child_hashes = vec![0; len];
+    if let Some(&type_id) = type_ids.first()
+        && type_ids.iter().all(|&t| t == type_id)
+    {
+        child_hashing.create_hashes([array.child(type_id)], &mut child_hashes)?;
+    } else {
+        let (starts, rows) = group_rows_by_type_id(type_ids);
+        let mut taken_hashes: Vec<u64> = Vec::new();
+        for (type_id, _) in union_fields.iter() {
+            let (start, end) = (starts[type_id as usize], starts[type_id as usize + 1]);
+            if start == end {
                 continue;
             }
 
             let child = array.child(type_id);
-            let indices_array = UInt32Array::from(indices.clone());
-
-            // Extract only the elements we need using take()
-            let filtered = take(child.as_ref(), &indices_array, None)?;
-
-            // Hash the filtered array
-            let mut filtered_hashes = vec![0u64; filtered.len()];
-            child_hashing.create_hashes([&filtered], &mut filtered_hashes)?;
-
-            // Scatter hashes back to correct positions
-            for (hash, &idx) in filtered_hashes.iter().zip(indices.iter()) {
-                hashes_buffer[idx as usize] =
-                    combine_hashes(hashes_buffer[idx as usize], *hash);
+            let variable_width = matches!(
+                child.data_type(),
+                DataType::Utf8
+                    | DataType::LargeUtf8
+                    | DataType::Binary
+                    | DataType::LargeBinary
+            );
+            // Masking the other rows as null (skipped by hashing) avoids copying
+            // variable-width values but costs O(len) per child, so `take` wins for
+            // fixed-width values and for children selecting few rows
+            if variable_width && (end - start) * 32 >= len {
+                let mut other_rows = BooleanBufferBuilder::new(len);
+                other_rows.append_n(len, true);
+                for &row in &rows[start..end] {
+                    other_rows.set_bit(row as usize, false);
+                }
+                let masked =
+                    nullif(child, &BooleanArray::new(other_rows.finish(), None))?;
+                child_hashing.create_hashes([masked], &mut child_hashes)?;
+            } else {
+                let indices = UInt32Array::new(rows.slice(start, end - start), None);
+                taken_hashes.clear();
+                taken_hashes.resize(indices.len(), 0);
+                child_hashing
+                    .create_hashes([take(child, &indices, None)?], &mut taken_hashes)?;
+                for (&row, &hash) in indices.values().iter().zip(&taken_hashes) {
+                    child_hashes[row as usize] = hash;
+                }
             }
         }
     }
 
+    for (hash, child_hash) in hashes_buffer.iter_mut().zip(child_hashes) {
+        *hash = combine_hashes(*hash, child_hash);
+    }
+
     Ok(())
+}
+
+/// Counting sort of row indices by type id: the rows of `type_id` are
+/// `rows[starts[type_id]..starts[type_id + 1]]`
+#[cfg(not(feature = "force_hash_collisions"))]
+fn group_rows_by_type_id(type_ids: &[i8]) -> ([usize; 129], ScalarBuffer<u32>) {
+    let mut starts = [0; 129];
+    for &type_id in type_ids {
+        starts[type_id as usize + 1] += 1;
+    }
+    let mut total = 0;
+    for start in &mut starts {
+        total += *start;
+        *start = total;
+    }
+    let mut next = starts;
+    let mut rows = vec![0; type_ids.len()];
+    for (row, &type_id) in type_ids.iter().enumerate() {
+        rows[next[type_id as usize]] = row as u32;
+        next[type_id as usize] += 1;
+    }
+    (starts, rows.into())
 }
 
 #[cfg(not(feature = "force_hash_collisions"))]
@@ -1280,6 +1362,9 @@ mod tests {
     #[cfg(not(feature = "force_hash_collisions"))]
     use std::hash::{BuildHasherDefault, Hasher};
     use std::sync::Arc;
+
+    #[cfg(not(feature = "force_hash_collisions"))]
+    use arrow::buffer::{NullBuffer, ScalarBuffer};
 
     use super::*;
 
@@ -1784,6 +1869,264 @@ mod tests {
     #[test]
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_arrays_with_null_keys() {
+        check_dict_null_keys::<Int8Type>();
+        check_dict_null_keys::<Int32Type>();
+        check_dict_null_keys::<Int64Type>();
+    }
+
+    /// Compares hashes of sliced dictionaries with null keys against the
+    /// equivalent `StringArray`, for one and two columns
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn check_dict_null_keys<K: ArrowDictionaryKeyType>() {
+        let random_state = RandomState::with_seed(0);
+        let value_sets: [&[Option<&str>]; 2] = [
+            &[Some("alpha"), Some("beta"), Some("gamma")],
+            &[Some("alpha"), None, Some("gamma")],
+        ];
+        // Scattered nulls, then an all-valid word, an all-null word, alternating
+        let is_null = |row: usize| match row / 64 {
+            0 => row % 5 == 1,
+            1 => false,
+            2 => true,
+            _ => row.is_multiple_of(2),
+        };
+        for values in value_sets {
+            // Out-of-range keys hidden behind null slots must never be read
+            let invalid_keys = [usize::MAX, values.len(), 127];
+            for offset in [0, 3, 5, 64] {
+                for len in [0, 1, 7, 8, 9, 63, 64, 65, 127, 128, 129] {
+                    let rows = 0..offset + len;
+                    let keys = rows
+                        .clone()
+                        .map(|row| {
+                            let key = if is_null(row) {
+                                invalid_keys[row % invalid_keys.len()]
+                            } else {
+                                row % values.len()
+                            };
+                            K::Native::usize_as(key)
+                        })
+                        .collect::<Vec<_>>();
+                    let validity =
+                        rows.clone().map(|row| !is_null(row)).collect::<Vec<_>>();
+                    let dict = DictionaryArray::<K>::try_new(
+                        PrimitiveArray::new(
+                            ScalarBuffer::from(keys),
+                            Some(NullBuffer::from(validity)),
+                        ),
+                        Arc::new(values.iter().copied().collect::<StringArray>()),
+                    )
+                    .unwrap()
+                    .slice(offset, len);
+                    let strings = rows
+                        .skip(offset)
+                        .map(|row| {
+                            if is_null(row) {
+                                None
+                            } else {
+                                values[row % values.len()]
+                            }
+                        })
+                        .collect::<StringArray>();
+                    let prefix = Int32Array::from_iter_values(0..len as i32);
+
+                    let mut expected = vec![0; len];
+                    create_hashes([&strings as &dyn Array], &random_state, &mut expected)
+                        .unwrap();
+                    let mut actual = vec![0; len];
+                    create_hashes([&dict as &dyn Array], &random_state, &mut actual)
+                        .unwrap();
+                    assert_eq!(actual, expected, "single, offset {offset}, len {len}");
+
+                    // A shorter buffer hashes only its prefix
+                    let mut short = vec![0; len / 2];
+                    create_hashes([&dict as &dyn Array], &random_state, &mut short)
+                        .unwrap();
+                    assert_eq!(
+                        short,
+                        expected[..len / 2],
+                        "short, offset {offset}, len {len}"
+                    );
+
+                    let mut expected = vec![0; len];
+                    create_hashes(
+                        [&prefix as &dyn Array, &strings],
+                        &random_state,
+                        &mut expected,
+                    )
+                    .unwrap();
+                    let mut actual = vec![0; len];
+                    create_hashes(
+                        [&prefix as &dyn Array, &dict],
+                        &random_state,
+                        &mut actual,
+                    )
+                    .unwrap();
+                    assert_eq!(actual, expected, "multiple, offset {offset}, len {len}");
+                }
+            }
+        }
+
+        // An empty dictionary is valid when every key is null
+        let dict = DictionaryArray::<K>::try_new(
+            PrimitiveArray::new(
+                ScalarBuffer::from(vec![K::Native::usize_as(usize::MAX); 64]),
+                Some(NullBuffer::new_null(64)),
+            ),
+            Arc::new(StringArray::new_null(0)),
+        )
+        .unwrap();
+        let mut hashes = vec![0; 64];
+        create_hashes([&dict as &dyn Array], &random_state, &mut hashes).unwrap();
+        assert_eq!(hashes, vec![0; 64]);
+        let prefix = Int32Array::from_iter_values(0..64);
+        let mut expected = vec![0; 64];
+        create_hashes([&prefix as &dyn Array], &random_state, &mut expected).unwrap();
+        let mut actual = vec![0; 64];
+        create_hashes([&prefix as &dyn Array, &dict], &random_state, &mut actual)
+            .unwrap();
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_short_buffer_before_all_valid_word() {
+        // The validity word at row 64 is all valid and starts past the end of
+        // the shorter buffers, and the last row is null
+        let rows = 200;
+        let keys = Int32Array::from_iter((0..rows).map(|row| (row != 199).then_some(0)));
+        let dict = DictionaryArray::try_new(
+            keys,
+            Arc::new(StringArray::from(vec!["alpha"])) as ArrayRef,
+        )
+        .unwrap();
+        let strings = (0..rows)
+            .map(|row| (row != 199).then_some("alpha"))
+            .collect::<StringArray>();
+        let prefix = Int32Array::from_iter_values(0..rows);
+        let random_state = RandomState::with_seed(0);
+
+        // The equivalent `StringArray` only hashes into a full-length buffer
+        let mut expected_single = vec![0; rows as usize];
+        create_hashes(
+            [&strings as &dyn Array],
+            &random_state,
+            &mut expected_single,
+        )
+        .unwrap();
+        let mut expected_multiple = vec![0; rows as usize];
+        create_hashes(
+            [&prefix as &dyn Array, &strings],
+            &random_state,
+            &mut expected_multiple,
+        )
+        .unwrap();
+
+        // A shorter buffer hashes only its prefix. Only a single column can have
+        // one: any other column must be as long as the buffer
+        for len in [0, 1, 10, 63, 64, 65, 100, 128, 129, 199, 200] {
+            let mut actual = vec![0; len];
+            create_hashes([&dict as &dyn Array], &random_state, &mut actual).unwrap();
+            assert_eq!(actual, expected_single[..len], "buffer len {len}");
+        }
+
+        // The same dictionary as a later column of a full-length buffer
+        let mut actual = vec![0; rows as usize];
+        create_hashes([&prefix as &dyn Array, &dict], &random_state, &mut actual)
+            .unwrap();
+        assert_eq!(actual, expected_multiple);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_with_more_rows_than_the_key_type_holds() {
+        fn check<K: ArrowDictionaryKeyType>(distinct_keys: usize) {
+            let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+                (0..20_000).map(|i| format!("v{i}")),
+            ));
+            let keys: ScalarBuffer<K::Native> = (0..300)
+                .map(|i| K::Native::usize_as(i % distinct_keys))
+                .collect();
+            let keys = PrimitiveArray::<K>::new(keys, None);
+            let dict: ArrayRef =
+                Arc::new(DictionaryArray::try_new(keys, values).unwrap());
+            let decoded = arrow::compute::cast(&dict, &DataType::Utf8).unwrap();
+            let random_state = RandomState::with_seed(0);
+
+            let mut dict_hashes = vec![0; dict.len()];
+            create_hashes([&dict], &random_state, &mut dict_hashes).unwrap();
+            let mut decoded_hashes = vec![0; dict.len()];
+            create_hashes([&decoded], &random_state, &mut decoded_hashes).unwrap();
+            assert_eq!(dict_hashes, decoded_hashes);
+        }
+        check::<UInt8Type>(250);
+        check::<Int8Type>(120);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_does_not_copy_a_value_per_row() {
+        // 64 copies of this value wouldn't fit in `i32` offsets
+        let long = "x".repeat(34 * 1024 * 1024);
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..5000).map(|i| if i == 0 { long.as_str() } else { "short" }),
+        ));
+        let dict: ArrayRef = Arc::new(
+            DictionaryArray::try_new(Int32Array::from(vec![0; 64]), values).unwrap(),
+        );
+        let single: ArrayRef = Arc::new(StringArray::from(vec![long.as_str()]));
+        let random_state = RandomState::with_seed(0);
+
+        let mut dict_hashes = vec![0; dict.len()];
+        create_hashes([&dict], &random_state, &mut dict_hashes).unwrap();
+        let mut single_hash = vec![0; 1];
+        create_hashes([&single], &random_state, &mut single_hash).unwrap();
+        assert_eq!(dict_hashes, vec![single_hash[0]; 64]);
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_dict_slices_with_more_values_than_rows() {
+        use crate::utils::MAX_DICTIONARY_VALUES_PER_ROW;
+
+        let values: ArrayRef = Arc::new(StringArray::from_iter(
+            (0..200).map(|i| (i != 2).then(|| format!("v{i}"))),
+        ));
+        let keys = Int8Array::from_iter((0..48).map(|i| (i % 7 != 1).then_some(i)));
+        let dict: ArrayRef = Arc::new(DictionaryArray::try_new(keys, values).unwrap());
+        let ints: ArrayRef = Arc::new(Int32Array::from_iter_values(0..48));
+        let random_state = RandomState::with_seed(0);
+
+        let mut single = vec![0; dict.len()];
+        create_hashes([&dict], &random_state, &mut single).unwrap();
+        let mut multi = vec![0; dict.len()];
+        create_hashes([&ints, &dict], &random_state, &mut multi).unwrap();
+
+        for (offset, len) in [(0, 2), (1, 2), (8, 1), (46, 2)] {
+            let slice = dict.slice(offset, len);
+            assert!(
+                slice.as_any_dictionary().values().len()
+                    > MAX_DICTIONARY_VALUES_PER_ROW * len
+            );
+            let mut hashes = vec![0; len];
+            create_hashes([&slice], &random_state, &mut hashes).unwrap();
+            assert_eq!(hashes, single[offset..offset + len]);
+
+            let ints = ints.slice(offset, len);
+            let mut hashes = vec![0; len];
+            create_hashes([&ints, &slice], &random_state, &mut hashes).unwrap();
+            assert_eq!(hashes, multi[offset..offset + len]);
+        }
+    }
+
+    #[test]
+    // Tests actual values of hashes, which are different if forcing collisions
+    #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_list_arrays() {
         let data = vec![
             Some(vec![Some(0), Some(1), Some(2)]),
@@ -1833,8 +2176,6 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_list_view_arrays() {
-        use arrow::buffer::{NullBuffer, ScalarBuffer};
-
         // Create values array: [0, 1, 2, 3, null, 5]
         let values = Arc::new(Int32Array::from(vec![
             Some(0),
@@ -1883,8 +2224,6 @@ mod tests {
     // Tests actual values of hashes, which are different if forcing collisions
     #[cfg(not(feature = "force_hash_collisions"))]
     fn create_hashes_for_large_list_view_arrays() {
-        use arrow::buffer::{NullBuffer, ScalarBuffer};
-
         // Create values array: [0, 1, 2, 3, null, 5]
         let values = Arc::new(Int32Array::from(vec![
             Some(0),
@@ -2404,6 +2743,102 @@ mod tests {
         assert_ne!(hashes[2], hashes[3]);
         // 67 vs 67
         assert_eq!(hashes[0], hashes[4]);
+    }
+
+    #[test]
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn create_hashes_for_union_arrays_match_selected_values() {
+        // In sparse unions both string children are masked, the others use `take`
+        let children = |lens: [usize; 5]| -> Vec<ArrayRef> {
+            let ints = |len| {
+                Int32Array::from_iter((0..len as i32).map(|v| (v % 3 != 1).then_some(v)))
+            };
+            let views = (0..lens[0]).map(|v| format!("longer than inline {}", v % 2));
+            let strings = (0..lens[1]).map(|v| (v % 3 != 1).then(|| format!("s{v}")));
+            let large = (0..lens[4]).map(|v| (v % 2 == 0).then(|| format!("l{v}")));
+            vec![
+                Arc::new(StringViewArray::from_iter_values(views)),
+                Arc::new(StringArray::from_iter(strings)),
+                Arc::new(StructArray::from(vec![(
+                    Arc::new(Field::new("i", DataType::Int32, true)),
+                    Arc::new(ints(lens[2])) as ArrayRef,
+                )])),
+                Arc::new(NullArray::new(lens[3])),
+                Arc::new(LargeStringArray::from_iter(large)),
+            ]
+        };
+        let fields: UnionFields = [0, 3, 5, 7, 9]
+            .into_iter()
+            .zip(children([0; 5]))
+            .map(|(id, c)| (id, Arc::new(Field::new("", c.data_type().clone(), true))))
+            .collect();
+        let type_ids = ScalarBuffer::from(vec![0, 3, 9, 0, 0, 0, 5, 7, 3, 9]);
+        let offsets = ScalarBuffer::from(vec![0, 0, 0, 1, 2, 3, 0, 0, 1, 1]);
+        let sparse = UnionArray::try_new(
+            fields.clone(),
+            type_ids.clone(),
+            None,
+            children([10; 5]),
+        )
+        .unwrap();
+        // Utf8 selecting too few rows to mask is hashed through `take` instead
+        let few_strings = (0..40).map(|i| if i == 20 { 3 } else { [0, 5, 7][i % 3] });
+        let sparse_few_strings = UnionArray::try_new(
+            fields.clone(),
+            few_strings.collect(),
+            None,
+            children([40; 5]),
+        )
+        .unwrap();
+        let dense = UnionArray::try_new(
+            fields,
+            type_ids,
+            Some(offsets),
+            children([4, 2, 1, 1, 2]),
+        )
+        .unwrap();
+
+        for union in [
+            sparse.clone(),
+            sparse.slice(1, 6),
+            sparse.slice(3, 3), // every row selects the same child
+            sparse_few_strings,
+            dense.clone(),
+            dense.slice(2, 4),
+        ] {
+            assert_union_hashes_match_selected_values(&union, |arrays, hashes| {
+                let random_state = RandomState::with_seed(0);
+                create_hashes(arrays.iter().copied(), &random_state, hashes).unwrap();
+            });
+            assert_union_hashes_match_selected_values(&union, |arrays, hashes| {
+                let hasher = BuildHasherDefault::<TestHasher>::default();
+                create_hashes_with_hasher(arrays.iter().copied(), &hasher, hashes)
+                    .unwrap();
+            });
+        }
+    }
+
+    /// Asserts each union row contributes the hash of its selected value on its own
+    #[cfg(not(feature = "force_hash_collisions"))]
+    fn assert_union_hashes_match_selected_values(
+        union: &UnionArray,
+        create_hashes: impl Fn(&[&dyn Array], &mut [u64]),
+    ) {
+        let prev = Int64Array::from_iter_values(0..union.len() as i64);
+        let mut prev_hashes = vec![0; union.len()];
+        create_hashes(&[&prev], &mut prev_hashes);
+
+        let mut hashes = vec![0; union.len()];
+        create_hashes(&[&prev, union], &mut hashes);
+        for (i, hash) in hashes.into_iter().enumerate() {
+            let value = union
+                .child(union.type_id(i))
+                .slice(union.value_offset(i), 1);
+            let mut value_hash = [0];
+            create_hashes(&[&value], &mut value_hash);
+            let expected = combine_hashes(prev_hashes[i], value_hash[0]);
+            assert_eq!(hash, expected, "row {i} of {union:?}");
+        }
     }
 
     #[test]

@@ -1,26 +1,15 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Defines the spilling functions
 
 pub(crate) mod in_progress_spill_file;
+mod lengths;
 pub(crate) mod replayable_spill_input;
 pub(crate) mod spill_manager;
 pub mod spill_pool;
+pub(crate) mod spilled_row_sizes;
 use datafusion_execution::spill_file::{AsyncSpillWriter, SpillWriter};
 // Moved for refactor, re-export to keep the public API stable
 pub use datafusion_common::utils::memory::get_record_batch_memory_size;
@@ -28,16 +17,16 @@ pub use datafusion_common::utils::memory::get_record_batch_memory_size;
 #[doc(hidden)]
 pub use spill_manager::SpillManager;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::{Arc, LazyLock};
 use std::task::{Context, Poll};
 
 use arrow::array::{
-    Array, ArrayRef, BinaryViewArray, BufferSpec, GenericByteViewArray, StringViewArray,
-    layout, make_array,
+    Array, ArrayRef, AsArray, BinaryViewArray, BufferSpec, GenericByteViewArray,
+    StringViewArray, layout, make_array,
 };
-use arrow::buffer::Buffer;
+use arrow::buffer::{Buffer, ScalarBuffer};
 use arrow::datatypes::DataType;
 use arrow::datatypes::{ByteViewType, Schema, SchemaRef};
 use arrow::ipc::{
@@ -46,10 +35,11 @@ use arrow::ipc::{
     writer::{IpcWriteOptions, StreamEncoder},
 };
 use arrow::record_batch::RecordBatch;
-use arrow_data::ArrayDataBuilder;
+use arrow_data::{ArrayDataBuilder, ByteView, MAX_INLINE_VIEW_LEN};
 #[cfg(test)]
 use arrow_ipc::writer::StreamWriter;
 use arrow_ipc::{CompressionType, root_as_message};
+use arrow_select::dictionary::garbage_collect_any_dictionary;
 
 use datafusion_common::config::SpillCompression;
 use datafusion_common::{Result, internal_datafusion_err};
@@ -88,6 +78,9 @@ struct SpillReaderStream {
     _spill_file: Arc<dyn SpillFile>,
 
     schema_validated: bool,
+
+    /// Whether the file stores byte arrays as lengths, see [`lengths`]
+    decode_lengths: bool,
 }
 
 // Small margin allowed to accommodate slight memory accounting variation
@@ -348,6 +341,7 @@ impl SpillReaderStream {
             pending: VecDeque::new(),
             _spill_file: spill_file,
             schema_validated: false,
+            decode_lengths: false,
         })
     }
 }
@@ -379,7 +373,12 @@ impl Stream for SpillReaderStream {
                         if !this.schema_validated {
                             this.schema_validated = true;
                             let actual = batch.schema();
-                            if actual != this.schema {
+                            // Compressed spill files store byte arrays as lengths
+                            this.decode_lengths = actual != this.schema;
+                            if this.decode_lengths
+                                && !lengths::encode_schema(&this.schema)
+                                    .is_some_and(|encoded| encoded == actual)
+                            {
                                 this.is_done = true;
                                 return Poll::Ready(Some(Err(
                                     datafusion_common::exec_datafusion_err!(
@@ -392,6 +391,17 @@ impl Stream for SpillReaderStream {
                                 )));
                             }
                         }
+                        let batch = if this.decode_lengths {
+                            match lengths::decode(&batch, &this.schema) {
+                                Ok(batch) => batch,
+                                Err(e) => {
+                                    this.is_done = true;
+                                    return Poll::Ready(Some(Err(e)));
+                                }
+                            }
+                        } else {
+                            batch
+                        };
                         if let Some(max_record_batch_memory) =
                             this.max_record_batch_memory
                         {
@@ -478,10 +488,11 @@ impl IPCStreamWriter {
         spill_writer: Box<dyn SpillWriter>,
         schema: &Schema,
         spill_compression: SpillCompression,
+        first_batch_rows: usize,
     ) -> Result<Self> {
         Ok(Self {
             writer: spill_writer,
-            encoder: IPCStreamEncoder::new(schema, spill_compression)?,
+            encoder: IPCStreamEncoder::new(schema, spill_compression, first_batch_rows)?,
         })
     }
 
@@ -658,9 +669,15 @@ impl Drop for AsyncIPCStreamWriter {
     }
 }
 
+/// Fewer rows per batch than this and the struct and run-end metadata of a
+/// lengths column outweighs what the lengths save, see [`lengths`]
+const MIN_LENGTHS_ROWS: usize = 128;
+
 /// Encodes Arrow IPC streams without performing I/O.
 struct IPCStreamEncoder {
     encoder: Option<StreamEncoder>,
+    /// The schema written when byte arrays are spilled as lengths, see [`lengths`]
+    lengths_schema: Option<SchemaRef>,
 }
 
 impl IPCStreamEncoder {
@@ -676,7 +693,11 @@ impl IPCStreamEncoder {
     /// contract local and build-visible during Cargo feature resolution,
     /// rather than relying solely on workspace-level feature unification;
     /// see #21917.
-    fn new(schema: &Schema, spill_compression: SpillCompression) -> Result<Self> {
+    fn new(
+        schema: &Schema,
+        spill_compression: SpillCompression,
+        first_batch_rows: usize,
+    ) -> Result<Self> {
         let metadata_version = MetadataVersion::V5;
         // Depending on the schema, some array types such as StringViewArray require larger (16 byte in this case) alignment.
         // If the actual buffer layout after IPC read does not satisfy the alignment requirement,
@@ -690,23 +711,60 @@ impl IPCStreamEncoder {
         let compression_type = Option::<CompressionType>::from(spill_compression);
         write_options = write_options.try_with_compression(compression_type)?;
 
-        let encoder = StreamEncoder::try_new_with_options(schema, write_options)?;
+        // Lengths take as much space as offsets when uncompressed
+        let lengths_schema = compression_type
+            .filter(|_| first_batch_rows >= MIN_LENGTHS_ROWS)
+            .and_then(|_| lengths::encode_schema(schema));
+        let encoder = StreamEncoder::try_new_with_options(
+            lengths_schema.as_deref().unwrap_or(schema),
+            write_options,
+        )?;
         Ok(Self {
             encoder: Some(encoder),
+            lengths_schema,
         })
     }
 
     fn encode(&mut self, batch: &RecordBatch) -> Result<(usize, usize, Vec<Buffer>)> {
-        let buffers = self.encoder.as_mut().unwrap().encode(batch)?;
+        let encoder = self.encoder.as_mut().unwrap();
+        let buffers = match &self.lengths_schema {
+            Some(schema) => encoder.encode(&lengths::encode(batch, schema)?)?,
+            None => encoder.encode(batch)?,
+        };
         let bytes = buffers.iter().map(Buffer::len).sum();
-        Ok((batch.num_rows(), bytes, buffers))
+        Ok((batch.num_rows(), bytes, coalesce_buffers(buffers)))
     }
 
     fn finish(&mut self) -> Result<(usize, Vec<Buffer>)> {
         let buffers = self.encoder.take().unwrap().finish()?;
         let bytes = buffers.iter().map(Buffer::len).sum();
-        Ok((bytes, buffers))
+        Ok((bytes, coalesce_buffers(buffers)))
     }
+}
+
+/// Buffers at least this large are written on their own, see [`coalesce_buffers`]
+const COALESCE_BUFFERS_BELOW: usize = 64 * 1024;
+
+/// Copies runs of small buffers into one, so that writing a batch takes a few
+/// writes instead of one per IPC buffer and padding. The copy lives only for
+/// the write, unlike a buffer kept by every open spill file.
+fn coalesce_buffers(buffers: Vec<Buffer>) -> Vec<Buffer> {
+    let mut coalesced = Vec::new();
+    let mut small: Vec<u8> = Vec::new();
+    for buffer in buffers {
+        if buffer.len() < COALESCE_BUFFERS_BELOW {
+            small.extend_from_slice(buffer.as_slice());
+            continue;
+        }
+        if !small.is_empty() {
+            coalesced.push(Buffer::from_vec(std::mem::take(&mut small)));
+        }
+        coalesced.push(buffer);
+    }
+    if !small.is_empty() {
+        coalesced.push(Buffer::from_vec(small));
+    }
+    coalesced
 }
 
 struct ArrowBufferOwner(Buffer);
@@ -748,7 +806,7 @@ fn get_max_alignment_for_schema(schema: &Schema) -> usize {
 /// Each view is 16 bytes: 4 bytes length + 4 bytes prefix + 8 bytes buffer ID/offset.
 const VIEW_SIZE_BYTES: usize = 16;
 
-/// Performs garbage collection on StringView and BinaryView arrays before spilling to reduce memory usage.
+/// Compacts view buffers and oversized dictionaries before spilling.
 ///
 /// # Why GC is needed
 ///
@@ -769,26 +827,71 @@ const VIEW_SIZE_BYTES: usize = 16;
 ///    containing only the data referenced by the current views
 /// 4. Returns a new batch with GC'd arrays (or original arrays if GC not needed)
 ///
+/// Dictionary arrays with more values than keys are also compacted using Arrow's
+/// dictionary garbage collector before visiting their children. This avoids spilling
+/// whole value tables retained by sliced or merged dictionaries.
+///
 /// # When GC is triggered
 ///
-/// GC is only performed when data buffers exceed a threshold (currently 10KB).
-/// This balances memory savings against the CPU overhead of garbage collection.
-/// Small arrays are passed through unchanged since the GC overhead would exceed
-/// any memory savings.
+/// View GC runs when data buffers above a threshold (currently 10KB) hold more
+/// bytes than the views use. This balances memory savings against the CPU
+/// overhead of garbage collection. It also runs at any size when several data
+/// buffers remain and the views share no bytes, since each buffer read back
+/// from the spill is charged for the whole IPC message.
 ///
 /// # Performance considerations
 ///
-/// - If no view arrays need compaction, the original batch is cloned cheaply
-/// - GC is skipped for small buffers to avoid unnecessary CPU overhead
+/// - If no arrays need compaction, the original batch is cloned cheaply
+/// - View GC is skipped for a single small data buffer to avoid unnecessary CPU
+///   overhead
 /// - Nested container types are traversed recursively so view arrays inside
 ///   `List`, `Map`, `Union`, `Dictionary`, and other child-bearing arrays are compacted too
+/// - Traversal uses physical children, not logical reachability. For example,
+///   unused ListView child entries can still retain dictionary values
 /// - The Arrow `gc()` method itself is optimized and only copies referenced data
 pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
+    gc_arrays_of_columns(batch, |_, _| true, false)
+}
+
+/// Like [`gc_view_arrays`], but only compacts `columns`, and also removes the
+/// dictionary values that no key of theirs references.
+///
+/// `take` and `slice` keep every value of a dictionary, so a few rows taken
+/// from a large batch carry the values of all its rows.
+pub(crate) fn gc_columns(batch: &RecordBatch, columns: &[usize]) -> Result<RecordBatch> {
+    gc_arrays_of_columns(batch, |index, _| columns.contains(&index), true)
+}
+
+/// Like [`gc_view_arrays`], but only compacts nested columns, such as lists of
+/// strings, and also removes the dictionary values that no key of theirs
+/// references.
+///
+/// A batch built by `interleave`, such as the output of a sort-preserving
+/// merge, references the whole data buffers of the batches it takes rows
+/// from, and can hold all their dictionary values. An accumulator that keeps
+/// the arrays it merges, such as `array_agg`, keeps them alive with each
+/// group. Top-level columns are left as they are, since group keys and the
+/// accumulators of top-level states typically copy the values they keep.
+pub(crate) fn gc_nested_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
+    gc_arrays_of_columns(batch, |_, array| array.data_type().is_nested(), true)
+}
+
+/// Compacts the view arrays of the columns of `batch` that `include` selects
+/// by index, and their dictionary arrays if `dictionaries` is set.
+fn gc_arrays_of_columns(
+    batch: &RecordBatch,
+    include: impl Fn(usize, &ArrayRef) -> bool,
+    dictionaries: bool,
+) -> Result<RecordBatch> {
     let mut mutated = false;
     let mut new_columns: Vec<Arc<dyn Array>> = Vec::with_capacity(batch.num_columns());
 
-    for array in batch.columns() {
-        let (gc_array, array_mutated) = gc_array(array)?;
+    for (index, array) in batch.columns().iter().enumerate() {
+        let (gc_array, array_mutated) = if include(index, array) {
+            gc_array(array, dictionaries)?
+        } else {
+            (Arc::clone(array), false)
+        };
         mutated |= array_mutated;
         new_columns.push(gc_array);
     }
@@ -800,35 +903,159 @@ pub(crate) fn gc_view_arrays(batch: &RecordBatch) -> Result<RecordBatch> {
     }
 }
 
-fn gc_array(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
+/// Compacts the view arrays in `array`, and its dictionary arrays if
+/// `dictionaries` is set. Also returns whether anything was compacted.
+fn gc_array(array: &ArrayRef, dictionaries: bool) -> Result<(ArrayRef, bool)> {
     match array.data_type() {
         DataType::Utf8View => {
             let string_view = array
                 .as_any()
                 .downcast_ref::<StringViewArray>()
                 .expect("Utf8View array should downcast to StringViewArray");
-            if should_gc_view_array(string_view) {
-                Ok((Arc::new(string_view.gc()) as ArrayRef, true))
-            } else {
-                Ok((Arc::clone(array), false))
-            }
+            Ok(match compact_view_array(string_view) {
+                Some(compacted) => (Arc::new(compacted) as ArrayRef, true),
+                None => (Arc::clone(array), false),
+            })
         }
         DataType::BinaryView => {
             let binary_view = array
                 .as_any()
                 .downcast_ref::<BinaryViewArray>()
                 .expect("BinaryView array should downcast to BinaryViewArray");
-            if should_gc_view_array(binary_view) {
-                Ok((Arc::new(binary_view.gc()) as ArrayRef, true))
-            } else {
-                Ok((Arc::clone(array), false))
-            }
+            Ok(match compact_view_array(binary_view) {
+                Some(compacted) => (Arc::new(compacted) as ArrayRef, true),
+                None => (Arc::clone(array), false),
+            })
         }
-        _ => gc_array_children(array),
+        DataType::Dictionary(_, _) if dictionaries => {
+            let dictionary = array.as_any_dictionary();
+            let gc = garbage_collect_any_dictionary(dictionary)?;
+            let gc = gc.as_any_dictionary();
+            let shrunk = gc.values().len() < dictionary.values().len();
+            let (values, values_mutated) = gc_array(gc.values(), dictionaries)?;
+            if !shrunk && !values_mutated {
+                return Ok((Arc::clone(array), false));
+            }
+            // `gc` holds only the values its rows reference, so there are no more
+            // than it has rows.
+            #[expect(clippy::disallowed_methods)]
+            let compacted = gc.with_values(values);
+            Ok((compacted, true))
+        }
+        DataType::Dictionary(_, _)
+            if array.as_any_dictionary().values().len() > array.len() =>
+        {
+            // Struct-valued merge dictionaries can concatenate whole value tables.
+            // Prune the outer dictionary before compacting its retained children.
+            let compacted = garbage_collect_any_dictionary(array.as_any_dictionary())?;
+            let (compacted, _) = gc_array_children(&compacted, dictionaries)?;
+            Ok((compacted, true))
+        }
+        _ => gc_array_children(array, dictionaries),
     }
 }
 
-fn gc_array_children(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
+/// Compacts a view array before spilling, or returns `None` to spill it as is.
+///
+/// The IPC writer writes every data buffer of an array in full, once per
+/// entry, and `gc()` copies the bytes of every view separately. Neither
+/// handles views that share bytes, as the views of a dictionary-encoded
+/// Parquet column do: after `concat` the dictionary is listed once per input
+/// batch, and `gc()` copies it once per row
+/// (<https://github.com/apache/datafusion/issues/23564>).
+///
+/// Repeated buffer entries are merged first. `gc()` then runs if it writes
+/// less than the merged buffers hold, or if several buffers remain and the
+/// views share no bytes, since each buffer read back from the spill is a slice
+/// of one IPC message and is charged for all of it. It runs on the original
+/// array so that the views are rewritten at most once.
+fn compact_view_array<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+) -> Option<GenericByteViewArray<T>> {
+    let buffers = array.data_buffers();
+    if buffers.is_empty() {
+        return None;
+    }
+
+    let (remap, unique) = dedup_buffer_entries(buffers);
+    let unique_size: usize = unique.iter().map(|b| b.len()).sum();
+    if should_gc_view_array(array, unique_size)
+        || (unique.len() > 1 && array.total_buffer_bytes_used() <= unique_size)
+    {
+        return Some(array.gc());
+    }
+    if unique.len() == buffers.len() {
+        return None;
+    }
+
+    let views: Vec<u128> = array
+        .views()
+        .iter()
+        .enumerate()
+        .map(|(i, &raw)| {
+            if array.is_null(i) {
+                0
+            } else if (raw as u32) <= MAX_INLINE_VIEW_LEN {
+                raw
+            } else {
+                let view = ByteView::from(raw);
+                ByteView {
+                    buffer_index: remap[view.buffer_index as usize],
+                    ..view
+                }
+                .as_u128()
+            }
+        })
+        .collect();
+
+    // SAFETY: every non-null, non-inline view points at the same bytes as
+    // before, in an entry of `unique` that holds the same buffer, and inline
+    // views are unchanged.
+    Some(unsafe {
+        GenericByteViewArray::new_unchecked(
+            ScalarBuffer::from(views),
+            unique.into(),
+            array.nulls().cloned(),
+        )
+    })
+}
+
+/// Returns, for each entry of `buffers`, its index in a list without repeated
+/// entries of the same buffer, and that list.
+fn dedup_buffer_entries(buffers: &[Buffer]) -> (Vec<u32>, Vec<Buffer>) {
+    let mut first_index: HashMap<(*const u8, usize), u32> =
+        HashMap::with_capacity(buffers.len());
+    let mut unique: Vec<Buffer> = Vec::with_capacity(buffers.len());
+    let remap = buffers
+        .iter()
+        .map(|buffer| {
+            *first_index
+                .entry((buffer.as_ptr(), buffer.len()))
+                .or_insert_with(|| {
+                    unique.push(buffer.clone());
+                    (unique.len() - 1) as u32
+                })
+        })
+        .collect();
+    (remap, unique)
+}
+
+/// Returns whether a view column of `batch` references more bytes than its
+/// data buffers hold, as the views of a dictionary-encoded Parquet column do.
+/// Compacting such views would copy the shared bytes once per row.
+pub(crate) fn views_share_bytes(batch: &RecordBatch) -> bool {
+    fn shares_bytes<T: ByteViewType>(array: &GenericByteViewArray<T>) -> bool {
+        let (_, unique) = dedup_buffer_entries(array.data_buffers());
+        array.total_buffer_bytes_used() > unique.iter().map(|b| b.len()).sum::<usize>()
+    }
+    batch.columns().iter().any(|array| match array.data_type() {
+        DataType::Utf8View => shares_bytes(array.as_string_view()),
+        DataType::BinaryView => shares_bytes(array.as_binary_view()),
+        _ => false,
+    })
+}
+
+fn gc_array_children(array: &ArrayRef, dictionaries: bool) -> Result<(ArrayRef, bool)> {
     let data = array.to_data();
     if data.child_data().is_empty() {
         return Ok((Arc::clone(array), false));
@@ -838,7 +1065,7 @@ fn gc_array_children(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
     let mut child_data = Vec::with_capacity(data.child_data().len());
     for child in data.child_data() {
         let child_array = make_array(child.clone());
-        let (gc_child, child_mutated) = gc_array(&child_array)?;
+        let (gc_child, child_mutated) = gc_array(&child_array, dictionaries)?;
         mutated |= child_mutated;
         child_data.push(gc_child.to_data());
     }
@@ -858,28 +1085,32 @@ fn gc_array_children(array: &ArrayRef) -> Result<(ArrayRef, bool)> {
     Ok((make_array(rebuilt), true))
 }
 
-/// Determines whether a view array should be garbage collected before spilling.
+/// Determines whether a view array should be garbage collected before spilling,
+/// given `data_size`, the bytes its data buffers hold after
+/// [`dedup_buffer_entries`].
 ///
-/// Arrow's `gc()` always allocates new compact buffers (it is never a no-op), so we
-/// check here to skip the allocation cost when data buffers are small. We subtract
-/// the views buffer (16 bytes × n_rows) from `get_buffer_memory_size()` so the
-/// threshold tracks non-inline string data rather than row count.
-fn should_gc_view_array<T: ByteViewType>(array: &GenericByteViewArray<T>) -> bool {
+/// Arrow's `gc()` always allocates new compact buffers (it is never a no-op), so
+/// it is skipped when the data buffers are small. It is also skipped when it
+/// would write more than the data buffers hold: `gc()` copies the bytes of
+/// every view separately, so views that share bytes each get their own copy.
+/// Both sizes come from the views and buffer lengths, without reading values.
+fn should_gc_view_array<T: ByteViewType>(
+    array: &GenericByteViewArray<T>,
+    data_size: usize,
+) -> bool {
     const MIN_BUFFER_SIZE_FOR_GC: usize = 10 * 1024; // 10KB threshold
 
-    if array.data_buffers().is_empty() {
-        return false;
-    }
+    // `total_buffer_bytes_used` is the size of the data buffer `gc()` writes
+    data_size > MIN_BUFFER_SIZE_FOR_GC && array.total_buffer_bytes_used() < data_size
+}
 
-    let data_buffer_size = array
-        .get_buffer_memory_size()
-        .saturating_sub(array.len() * VIEW_SIZE_BYTES);
-    data_buffer_size > MIN_BUFFER_SIZE_FOR_GC
+#[cfg(test)]
+fn data_buffers_size(array: &StringViewArray) -> usize {
+    array.data_buffers().iter().map(|b| b.len()).sum()
 }
 
 #[cfg(test)]
 fn calculate_string_view_waste_ratio(array: &StringViewArray) -> f64 {
-    use arrow_data::MAX_INLINE_VIEW_LEN;
     calculate_view_waste_ratio(array.len(), array.data_buffers(), |i| {
         if !array.is_null(i) {
             let value = array.value(i);
@@ -921,9 +1152,12 @@ mod tests {
     use crate::metrics::SpillMetrics;
     use crate::spill::spill_manager::SpillManager;
     use crate::test::build_table_i32;
-    use arrow::array::{ArrayRef, Int32Array, StringArray};
+    use arrow::array::{
+        ArrayRef, DictionaryArray, Int32Array, ListArray, StringArray, StructArray,
+    };
+    use arrow::buffer::OffsetBuffer;
     use arrow::compute::cast;
-    use arrow::datatypes::{DataType, Field};
+    use arrow::datatypes::{DataType, Field, Int32Type};
     use arrow::ipc::reader::StreamReader;
     use datafusion_execution::runtime_env::RuntimeEnv;
     use futures::StreamExt as _;
@@ -1052,8 +1286,11 @@ mod tests {
             finished: Arc::clone(&finished),
             aborted: Arc::clone(&aborted),
         };
-        let encoder =
-            IPCStreamEncoder::new(schema.as_ref(), SpillCompression::Uncompressed)?;
+        let encoder = IPCStreamEncoder::new(
+            schema.as_ref(),
+            SpillCompression::Uncompressed,
+            usize::MAX,
+        )?;
         let mut writer = AsyncIPCStreamWriter::new(Box::new(spill_writer), encoder);
 
         let (_, first_bytes) = writer.write(&batch1).await?;
@@ -1061,7 +1298,8 @@ mod tests {
         let trailing_bytes = writer.finish().await?;
 
         assert!(finished.load(Ordering::Relaxed));
-        assert!(writes.load(Ordering::Relaxed) > 2);
+        // One write per batch and one for the end of the stream
+        assert_eq!(writes.load(Ordering::Relaxed), 3);
         drop(writer);
         assert!(!aborted.load(Ordering::Relaxed));
 
@@ -1094,6 +1332,7 @@ mod tests {
         let encoder = IPCStreamEncoder::new(
             batch.schema().as_ref(),
             SpillCompression::Uncompressed,
+            usize::MAX,
         )?;
         let mut writer = AsyncIPCStreamWriter::new(
             Box::new(FailingAsyncWriter {
@@ -1128,6 +1367,7 @@ mod tests {
                 let encoder = IPCStreamEncoder::new(
                     batch.schema().as_ref(),
                     SpillCompression::Uncompressed,
+                    usize::MAX,
                 )?;
                 let mut writer = AsyncIPCStreamWriter::new(
                     Box::new(PendingFinishAsyncWriter {
@@ -1165,7 +1405,8 @@ mod tests {
         let schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
         let abort_count = Arc::new(AtomicUsize::new(0));
         let cleanup_done = Arc::new(Notify::new());
-        let encoder = IPCStreamEncoder::new(&schema, SpillCompression::Uncompressed)?;
+        let encoder =
+            IPCStreamEncoder::new(&schema, SpillCompression::Uncompressed, usize::MAX)?;
         let mut writer = AsyncIPCStreamWriter::new(
             Box::new(FailOnceAbortWriter {
                 abort_count: Arc::clone(&abort_count),
@@ -1207,6 +1448,7 @@ mod tests {
             let encoder = IPCStreamEncoder::new(
                 batch.schema().as_ref(),
                 SpillCompression::Uncompressed,
+                usize::MAX,
             )?;
             AsyncIPCStreamWriter::new(Box::new(spill_writer), encoder)
         };
@@ -1914,15 +2156,15 @@ mod tests {
         // After appending each batch, spilled_rows and spilled_bytes should increase incrementally,
         // while spill_file_count remains 1 (since we're writing to the same file)
         in_progress_file.append_batch(&batch1)?;
-        verify_metrics(&in_progress_file, 1, 440, 3)?;
+        verify_metrics(&in_progress_file, 1, 424, 3)?;
 
         in_progress_file.append_batch(&batch2)?;
-        verify_metrics(&in_progress_file, 1, 704, 6)?;
+        verify_metrics(&in_progress_file, 1, 672, 6)?;
 
         let completed_file = in_progress_file.finish()?;
         assert!(completed_file.is_some());
         assert!(completed_file.unwrap().path().unwrap().exists());
-        verify_metrics(&in_progress_file, 1, 712, 6)?;
+        verify_metrics(&in_progress_file, 1, 680, 6)?;
         // Double finish produce error
         let result = in_progress_file.finish();
         assert!(result.is_err());
@@ -2057,7 +2299,7 @@ mod tests {
 
         // Metrics should be updated immediately (at least schema and first batch)
         let bytes_after_batch1 = metrics.spilled_bytes.value();
-        assert_eq!(bytes_after_batch1, 440);
+        assert_eq!(bytes_after_batch1, 424);
         assert_eq!(metrics.spill_file_count.value(), 1);
 
         // Check global progress
@@ -2178,13 +2420,12 @@ mod tests {
         let batch = RecordBatch::try_new(Arc::clone(&schema), vec![array_ref])?;
 
         // GC should return the original batch for small arrays
-        let should_gc = should_gc_view_array(
-            batch
-                .column(0)
-                .as_any()
-                .downcast_ref::<StringViewArray>()
-                .unwrap(),
-        );
+        let array = batch
+            .column(0)
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        let should_gc = should_gc_view_array(array, data_buffers_size(array));
         let gc_batch = gc_view_arrays(&batch)?;
 
         assert!(!should_gc);
@@ -2256,7 +2497,8 @@ mod tests {
             .as_any()
             .downcast_ref::<StringViewArray>()
             .unwrap();
-        let should_gc = should_gc_view_array(sliced_array);
+        let should_gc =
+            should_gc_view_array(sliced_array, data_buffers_size(sliced_array));
         let waste_ratio = calculate_string_view_waste_ratio(sliced_array);
 
         assert!(
@@ -2407,6 +2649,191 @@ mod tests {
         Ok(())
     }
 
+    /// `len` distinct 63 byte values in a single data buffer
+    fn dictionary_array(len: u32) -> Result<StringViewArray> {
+        use arrow::array::AsArray;
+
+        let values = StringArray::from_iter_values(
+            (0..len).map(|i| format!("container-id-{i:0>50}")),
+        );
+        // Casting to Utf8View keeps the values in the one existing buffer
+        let dictionary = cast(&values, &DataType::Utf8View)?;
+        let dictionary = dictionary.as_string_view().clone();
+        assert_eq!(dictionary.data_buffers().len(), 1);
+        Ok(dictionary)
+    }
+
+    /// Arrays that each hold views into one shared dictionary buffer, as the
+    /// Parquet reader produces for a dictionary-encoded column, combined with
+    /// `concat` as a sort combines its buffered batches. The rows cycle through
+    /// the dictionary (<https://github.com/apache/datafusion/issues/23564>).
+    fn shared_dictionary_views(
+        dictionary_len: u32,
+        inputs: u32,
+        rows_per_input: u32,
+    ) -> Result<(StringViewArray, StringViewArray)> {
+        use arrow::array::{AsArray, UInt32Array};
+        use arrow::compute::{concat, take};
+
+        let dictionary = dictionary_array(dictionary_len)?;
+        let arrays = (0..inputs)
+            .map(|input| {
+                let indices = UInt32Array::from_iter_values(
+                    (0..rows_per_input)
+                        .map(|row| (input * rows_per_input + row) % dictionary_len),
+                );
+                take(&dictionary, &indices, None)
+            })
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let arrays: Vec<&dyn Array> = arrays.iter().map(|a| a.as_ref()).collect();
+        let merged = concat(&arrays)?;
+        Ok((dictionary, merged.as_string_view().clone()))
+    }
+
+    #[test]
+    fn test_views_share_bytes() -> Result<()> {
+        use arrow::array::UInt32Array;
+        use arrow::compute::take;
+
+        // 8192 views over 1024 values reference 8x the dictionary's bytes
+        let dictionary = dictionary_array(1024)?;
+        let indices = UInt32Array::from_iter_values((0..8192).map(|i| i % 1024));
+        let batch =
+            RecordBatch::try_from_iter([("c", take(&dictionary, &indices, None)?)])?;
+        assert!(views_share_bytes(&batch));
+        // 8192 values used once each reference exactly the buffer's bytes
+        let views: ArrayRef = Arc::new(dictionary_array(8192)?);
+        let batch = RecordBatch::try_from_iter([("c", views)])?;
+        assert!(!views_share_bytes(&batch));
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_keeps_shared_views_in_two_buffers() -> Result<()> {
+        use arrow::array::AsArray;
+        use arrow::compute::concat;
+
+        let (_, first) = shared_dictionary_views(1000, 8, 1024)?;
+        let (_, second) = shared_dictionary_views(1000, 8, 1024)?;
+        let merged = concat(&[&first as &dyn Array, &second])?;
+        let merged = merged.as_string_view();
+
+        // `gc()` would copy 16384 values, 8x what the two dictionaries hold
+        let compacted = compact_view_array(merged).expect("buffer entries repeat");
+        assert_eq!(compacted.data_buffers().len(), 2);
+        assert_eq!(&compacted, merged);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_keeps_shared_dictionary_buffer() -> Result<()> {
+        let (dictionary, merged) = shared_dictionary_views(1000, 8, 1024)?;
+        // `concat` lists the dictionary once per input
+        assert_eq!(merged.data_buffers().len(), 8);
+        // `gc()` would copy 8192 values of 63 bytes, 8x the dictionary
+        assert!(merged.total_buffer_bytes_used() > data_buffers_size(&dictionary));
+
+        let compacted = compact_view_array(&merged).expect("buffer entries repeat");
+        assert_eq!(compacted.data_buffers().len(), 1);
+        assert_eq!(
+            compacted.data_buffers()[0].as_ptr(),
+            dictionary.data_buffers()[0].as_ptr()
+        );
+        assert_eq!(compacted, merged);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_small_slice_of_shared_buffer() -> Result<()> {
+        // 8 inputs of 4 rows each reference a 63 KB dictionary: `gc()` writes
+        // 32 values, far less than the dictionary
+        let (dictionary, merged) = shared_dictionary_views(1000, 8, 4)?;
+        assert_eq!(merged.data_buffers().len(), 8);
+
+        let compacted = compact_view_array(&merged).expect("gc() is smaller");
+        assert_eq!(compacted.data_buffers().len(), 1);
+        assert_eq!(data_buffers_size(&compacted), 32 * 63);
+        assert_ne!(
+            compacted.data_buffers()[0].as_ptr(),
+            dictionary.data_buffers()[0].as_ptr()
+        );
+        assert_eq!(compacted, merged);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_shared_buffer_with_nulls() -> Result<()> {
+        use arrow::array::{AsArray, BooleanArray};
+        use arrow::compute::nullif;
+
+        let (_, merged) = shared_dictionary_views(1000, 8, 1024)?;
+        let mask = BooleanArray::from_iter((0..merged.len()).map(|i| Some(i % 7 == 0)));
+        let with_nulls = nullif(&merged, &mask)?;
+        let with_nulls = with_nulls.as_string_view();
+
+        let compacted = compact_view_array(with_nulls).expect("buffer entries repeat");
+        assert_eq!(compacted.data_buffers().len(), 1);
+        assert_eq!(compacted.null_count(), with_nulls.null_count());
+        assert_eq!(&compacted, with_nulls);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_skips_array_that_shares_one_buffer() -> Result<()> {
+        use arrow::array::{AsArray, UInt32Array};
+        use arrow::compute::take;
+
+        // 10,000 views into one 63 KB dictionary: `gc()` would write 630 KB
+        let dictionary = dictionary_array(1000)?;
+        let indices = UInt32Array::from_iter_values((0..10_000).map(|i| i % 1000));
+        let shared = take(&dictionary, &indices, None)?;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "label",
+            DataType::Utf8View,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(schema, vec![Arc::clone(&shared)])?;
+
+        assert!(compact_view_array(shared.as_string_view()).is_none());
+        let gc_batch = gc_view_arrays(&batch)?;
+        assert!(Arc::ptr_eq(batch.column(0), gc_batch.column(0)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_spill_shared_dictionary_writes_it_once() -> Result<()> {
+        let (dictionary, merged) = shared_dictionary_views(1000, 8, 1024)?;
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "label",
+            DataType::Utf8View,
+            false,
+        )]));
+        let batch = RecordBatch::try_new(Arc::clone(&schema), vec![Arc::new(merged)])?;
+
+        let env = Arc::new(RuntimeEnv::default());
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let spill_manager = SpillManager::new(env, metrics, schema);
+        let mut in_progress_file = spill_manager.create_in_progress_file("Test GC")?;
+        in_progress_file.append_batch(&batch)?;
+        let spill_file = in_progress_file.finish()?.unwrap();
+        let file_size = std::fs::metadata(spill_file.path().unwrap())?.len() as usize;
+
+        // The views and one copy of the dictionary, not 8192 copied values
+        let views_size = batch.num_rows() * VIEW_SIZE_BYTES;
+        let dictionary_size = data_buffers_size(&dictionary);
+        assert!(
+            file_size < views_size + 2 * dictionary_size,
+            "spill file is {file_size} bytes, views {views_size}, dictionary {dictionary_size}"
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn test_gc_recurses_into_nested_view_arrays() -> Result<()> {
         use arrow::array::{DictionaryArray, Int32Array};
@@ -2470,6 +2897,181 @@ mod tests {
             "GC should compact nested Dictionary values"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_nested_arrays_skips_top_level_columns() -> Result<()> {
+        use arrow::buffer::Buffer;
+
+        let strings: Vec<String> = (0..400)
+            .map(|i| format!("http://example.com/nested/path/that/is/not/inlined/{i}"))
+            .collect();
+        let string_values = Arc::new(StringViewArray::from(strings)) as ArrayRef;
+
+        // Both columns hold 20 of the strings, but reference the data of all 400
+        let top_level = string_values.slice(0, 20);
+        let list_data = ArrayDataBuilder::new(DataType::List(Arc::new(
+            Field::new_list_field(DataType::Utf8View, true),
+        )))
+        .len(20)
+        .buffers(vec![Buffer::from_iter(0..=20_i32)])
+        .child_data(vec![string_values.slice(20, 20).to_data()])
+        .build()?;
+        let list_array = make_array(list_data);
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("strings", DataType::Utf8View, false),
+            Field::new(
+                "list_strings",
+                DataType::List(Arc::new(Field::new_list_field(DataType::Utf8View, true))),
+                false,
+            ),
+        ]));
+        let batch =
+            RecordBatch::try_new(schema, vec![Arc::clone(&top_level), list_array])?;
+
+        // `gc_view_arrays` compacts the top-level column, `gc_nested_arrays` does not
+        assert!(!Arc::ptr_eq(gc_view_arrays(&batch)?.column(0), &top_level));
+        let gc_batch = gc_nested_arrays(&batch)?;
+        assert!(Arc::ptr_eq(gc_batch.column(0), &top_level));
+
+        let gc_list_values =
+            make_array(gc_batch.column(1).to_data().child_data()[0].clone());
+        let gc_list_values = gc_list_values
+            .as_any()
+            .downcast_ref::<StringViewArray>()
+            .unwrap();
+        assert!(
+            calculate_string_view_waste_ratio(gc_list_values) < 0.2,
+            "GC should compact nested List child views"
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_gc_columns_compacts_dictionaries() -> Result<()> {
+        use arrow::array::{DictionaryArray, ListArray};
+        use arrow::buffer::OffsetBuffer;
+        use arrow::datatypes::Int32Type;
+
+        // Every column references a few of the same 100 values
+        let values: ArrayRef = Arc::new(StringArray::from_iter_values(
+            (0..100).map(|i| format!("value {i}")),
+        ));
+        let dictionary = |keys: Vec<i32>| {
+            DictionaryArray::new(Int32Array::from(keys), Arc::clone(&values))
+        };
+        let decode = |array: &ArrayRef| -> Vec<String> {
+            let dictionary = array.as_dictionary::<Int32Type>();
+            let strings = dictionary.downcast_dict::<StringArray>().unwrap();
+            strings
+                .into_iter()
+                .map(|s| s.unwrap().to_string())
+                .collect()
+        };
+        let list = ListArray::new(
+            Arc::new(Field::new_list_field(
+                DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8)),
+                true,
+            )),
+            OffsetBuffer::from_lengths([2, 1]),
+            Arc::new(dictionary(vec![7, 3, 7])),
+            None,
+        );
+        let batch = RecordBatch::try_from_iter(vec![
+            ("compacted", Arc::new(dictionary(vec![5, 9])) as ArrayRef),
+            ("other", Arc::new(dictionary(vec![1, 2])) as ArrayRef),
+            ("list", Arc::new(list) as ArrayRef),
+        ])?;
+
+        // `gc_view_arrays` prunes only dictionaries with more values than keys,
+        // so it leaves one whose keys reference every value as it is
+        let dense = RecordBatch::try_from_iter(vec![(
+            "dense",
+            Arc::new(DictionaryArray::new(
+                Int32Array::from(vec![0, 1, 0]),
+                Arc::new(StringArray::from(vec!["a", "b"])) as ArrayRef,
+            )) as ArrayRef,
+        )])?;
+        let gc_dense = gc_view_arrays(&dense)?;
+        assert!(Arc::ptr_eq(dense.column(0), gc_dense.column(0)));
+
+        // `gc_columns` keeps only the values that the given columns reference
+        let gc_batch = gc_columns(&batch, &[0, 2])?;
+        let compacted = gc_batch.column(0);
+        assert_eq!(compacted.as_any_dictionary().values().len(), 2);
+        assert_eq!(decode(compacted), ["value 5", "value 9"]);
+        assert!(Arc::ptr_eq(gc_batch.column(1), batch.column(1)));
+        let list_values = gc_batch.column(2).as_list::<i32>().values();
+        assert_eq!(list_values.as_any_dictionary().values().len(), 2);
+        assert_eq!(decode(list_values), ["value 7", "value 3", "value 7"]);
+
+        // `gc_nested_arrays` compacts only the nested column
+        let gc_batch = gc_nested_arrays(&batch)?;
+        assert!(Arc::ptr_eq(gc_batch.column(0), batch.column(0)));
+        let list_values = gc_batch.column(2).as_list::<i32>().values();
+        assert_eq!(list_values.as_any_dictionary().values().len(), 2);
+
+        Ok(())
+    }
+
+    #[rstest::rstest]
+    #[case(SpillCompression::Uncompressed)]
+    #[case(SpillCompression::Lz4Frame)]
+    #[case(SpillCompression::Zstd)]
+    #[tokio::test]
+    async fn test_spill_prunes_unused_nested_dictionary_values(
+        #[case] compression: SpillCompression,
+    ) -> Result<()> {
+        let values = Arc::new(StructArray::from(vec![
+            (
+                Arc::new(Field::new("id", DataType::Int32, false)),
+                Arc::new(Int32Array::from_iter_values(0..1024)) as ArrayRef,
+            ),
+            (
+                Arc::new(Field::new("name", DataType::Utf8View, false)),
+                Arc::new(StringViewArray::from_iter_values(
+                    (0..1024).map(|id| format!("{id}:{}", "x".repeat(256))),
+                )) as ArrayRef,
+            ),
+        ])) as ArrayRef;
+        let batch = |keys, values| -> Result<RecordBatch> {
+            let dictionary = DictionaryArray::<Int32Type>::try_new(keys, values)?;
+            let list = ListArray::new(
+                Arc::new(Field::new_list_field(dictionary.data_type().clone(), true)),
+                OffsetBuffer::new(vec![0_i32, 1, 3, 4].into()),
+                Arc::new(dictionary),
+                None,
+            );
+            Ok(RecordBatch::try_from_iter([(
+                "stacktrace",
+                Arc::new(list) as ArrayRef,
+            )])?)
+        };
+        let input = batch(
+            Int32Array::from(vec![Some(1023), None, Some(17), Some(1023)]),
+            Arc::clone(&values),
+        )?;
+        let expected = batch(
+            Int32Array::from(vec![Some(1), None, Some(0), Some(1)]),
+            arrow::compute::take(&values, &Int32Array::from(vec![17, 1023]), None)?,
+        )?;
+        let metrics = SpillMetrics::new(&ExecutionPlanMetricsSet::new(), 0);
+        let manager =
+            SpillManager::new(Arc::new(RuntimeEnv::default()), metrics, input.schema())
+                .with_compression_type(compression);
+        let file = manager
+            .spill_record_batch_and_finish(&[input], "nested dictionary GC")?
+            .unwrap();
+        let size = file.size().unwrap();
+        assert!(
+            size < 16 * 1024,
+            "unused dictionary values spilled: {size} bytes"
+        );
+        let actual = collect(manager.read_spill_as_stream(file, None)?).await?;
+        assert_eq!(actual, vec![expected]);
         Ok(())
     }
 

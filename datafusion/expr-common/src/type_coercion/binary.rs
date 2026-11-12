@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Coercion rules for matching argument types for binary operators
 
@@ -79,6 +66,7 @@ pub struct BinaryTypeCoercer<'a> {
     lhs: &'a DataType,
     op: &'a Operator,
     rhs: &'a DataType,
+    session_time_zone: Option<&'a str>,
 
     lhs_spans: Spans,
     op_spans: Spans,
@@ -93,10 +81,18 @@ impl<'a> BinaryTypeCoercer<'a> {
             lhs,
             op,
             rhs,
+            session_time_zone: None,
             lhs_spans: Spans::new(),
             op_spans: Spans::new(),
             rhs_spans: Spans::new(),
         }
+    }
+
+    /// Sets the session timezone used to coerce mixed timezone-aware and
+    /// timezone-naive timestamps for comparisons and subtraction.
+    pub fn with_session_time_zone(mut self, session_time_zone: Option<&'a str>) -> Self {
+        self.session_time_zone = session_time_zone;
+        self
     }
 
     /// Sets the spans information for the left side of the binary expression,
@@ -197,7 +193,13 @@ impl<'a> BinaryTypeCoercer<'a> {
         GtEq |
         IsDistinctFrom |
         IsNotDistinctFrom => {
-            comparison_coercion(lhs, rhs).map(Signature::comparison).ok_or_else(|| {
+            comparison_coercion_with_session_timezone_inner(
+                lhs,
+                rhs,
+                self.session_time_zone,
+            )
+            .map(Signature::comparison)
+            .ok_or_else(|| {
                 plan_datafusion_err!(
                     "Cannot infer common argument type for comparison operation {} {} {}",
                     self.lhs,
@@ -285,22 +287,22 @@ impl<'a> BinaryTypeCoercer<'a> {
             return Ok(Signature { lhs, rhs, ret });
         }
         Plus | Minus | Multiply | Divide | Modulo  =>  {
-            // `Timestamp(u, Some(tz)) - Timestamp(u, None)` at *equal* units is
-            // the one mixed timezone-aware/naive pair arrow can subtract
-            // directly, so the `self.get_result` probe below would accept it
-            // and no cast would be inserted: arrow then subtracts the raw
-            // values, i.e. reads the naive operand as UTC. Every other unit
-            // pairing falls through to `temporal_coercion_strict_timezone`
-            // below and reads the naive operand in the aware operand's zone,
-            // as comparisons already do. Coerce here so that all unit pairings
-            // agree.
+            // Interpret the naive operand in the session timezone when set,
+            // or in the aware operand's timezone otherwise. Coerce before the
+            // Arrow probe so equal units follow the same rule as different units.
             if self.op == &Minus
                 && matches!(
                     (lhs, rhs),
                     (Timestamp(_, Some(_)), Timestamp(_, None))
                         | (Timestamp(_, None), Timestamp(_, Some(_)))
                 )
-                && let Some(coerced) = temporal_coercion_strict_timezone(lhs, rhs)
+                && let Some(coerced) = timestamp_types_with_session_timezone(
+                    lhs,
+                    rhs,
+                    self.session_time_zone,
+                )
+                .map(|(lhs, _)| lhs)
+                .or_else(|| temporal_coercion_strict_timezone(lhs, rhs))
             {
                 let ret = self.get_result(&coerced, &coerced).map_err(|e| {
                     plan_datafusion_err!(
@@ -394,6 +396,33 @@ impl<'a> BinaryTypeCoercer<'a> {
     pub fn get_input_types(&'a self) -> Result<(DataType, DataType)> {
         self.signature().map(|sig| (sig.lhs, sig.rhs))
     }
+}
+
+/// Coerces a mixed timezone-aware and timezone-naive timestamp pair to the
+/// session timezone and widens both operands to the finer of the two units.
+///
+/// A timezone-naive timestamp does not identify an instant on its own, so
+/// comparing or subtracting it against a timezone-aware one has to read it in
+/// some zone. Postgres and DuckDB read it in the session timezone.
+fn timestamp_types_with_session_timezone(
+    lhs: &DataType,
+    rhs: &DataType,
+    session_time_zone: Option<&str>,
+) -> Option<(DataType, DataType)> {
+    use DataType::Timestamp;
+
+    let session_time_zone = session_time_zone?;
+    let ((Timestamp(lhs_unit, Some(_)), Timestamp(rhs_unit, None))
+    | (Timestamp(lhs_unit, None), Timestamp(rhs_unit, Some(_)))) = (lhs, rhs)
+    else {
+        return None;
+    };
+    let data_type = Timestamp(
+        timeunit_coercion(lhs_unit, rhs_unit),
+        Some(Arc::from(session_time_zone)),
+    );
+
+    Some((data_type.clone(), data_type))
 }
 
 // TODO Move the rest inside of BinaryTypeCoercer
@@ -861,7 +890,7 @@ pub fn try_type_union_resolution_with_struct(
     let mut keys_string: Option<String> = None;
     for data_type in data_types {
         if let DataType::Struct(fields) = data_type {
-            let keys = fields.iter().map(|f| f.name().to_owned()).join(",");
+            let keys = fields.iter().map(|f| f.name()).join(",");
             if let Some(ref k) = keys_string {
                 if *k != keys {
                     return exec_err!(
@@ -889,11 +918,10 @@ pub fn try_type_union_resolution_with_struct(
 
     for data_type in data_types.iter().skip(1) {
         if let DataType::Struct(fields) = data_type {
-            let incoming_struct_types: Vec<DataType> =
-                fields.iter().map(|f| f.data_type().to_owned()).collect();
             // The order of field is verified above
-            for (lhs_type, rhs_type) in
-                struct_types.iter_mut().zip(incoming_struct_types.iter())
+            for (lhs_type, rhs_type) in struct_types
+                .iter_mut()
+                .zip(fields.iter().map(|f| f.data_type()))
             {
                 if let Some(coerced_type) =
                     type_union_resolution_coercion(lhs_type, rhs_type)
@@ -912,9 +940,9 @@ pub fn try_type_union_resolution_with_struct(
         }
     }
 
-    let mut final_struct_types = vec![];
+    let mut final_struct_types = Vec::with_capacity(data_types.len());
     for s in data_types {
-        let mut new_fields = vec![];
+        let mut new_fields = Vec::with_capacity(struct_types.len());
         if let DataType::Struct(fields) = s {
             for (i, f) in fields.iter().enumerate() {
                 let field = Arc::unwrap_or_clone(Arc::clone(f))
@@ -941,7 +969,8 @@ pub fn try_type_union_resolution_with_struct(
 /// [`comparison_coercion`], which prefers numeric types so that ordering and
 /// equality follow numeric semantics.
 pub fn type_union_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type.equals_datatype(rhs_type) {
+    if lhs_type.equals_datatype(rhs_type) && struct_field_names_match(lhs_type, rhs_type)
+    {
         return Some(lhs_type.clone());
     }
     binary_numeric_coercion(lhs_type, rhs_type)
@@ -979,23 +1008,74 @@ pub fn type_union_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<D
 /// For type unification contexts (UNION, CASE THEN/ELSE), use
 /// [`type_union_coercion`] instead.
 pub fn comparison_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type.equals_datatype(rhs_type) {
+    comparison_coercion_inner(lhs_type, rhs_type, comparison_coercion)
+}
+
+fn comparison_coercion_inner<F>(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
+    if lhs_type.equals_datatype(rhs_type) && struct_field_names_match(lhs_type, rhs_type)
+    {
         // same type => equality is possible
         return Some(lhs_type.clone());
     }
     binary_numeric_coercion(lhs_type, rhs_type)
-        .or_else(|| dictionary_coercion(lhs_type, rhs_type, true, comparison_coercion))
-        .or_else(|| ree_coercion(lhs_type, rhs_type, true, comparison_coercion))
+        .or_else(|| dictionary_coercion(lhs_type, rhs_type, true, coerce_fn))
+        .or_else(|| ree_coercion(lhs_type, rhs_type, true, coerce_fn))
         .or_else(|| temporal_coercion_nonstrict_timezone(lhs_type, rhs_type))
         .or_else(|| string_coercion(lhs_type, rhs_type))
-        .or_else(|| list_coercion(lhs_type, rhs_type, comparison_coercion))
+        .or_else(|| list_coercion(lhs_type, rhs_type, coerce_fn))
         .or_else(|| null_coercion(lhs_type, rhs_type))
         .or_else(|| string_numeric_coercion(lhs_type, rhs_type))
         .or_else(|| string_temporal_coercion(lhs_type, rhs_type))
         .or_else(|| binary_coercion(lhs_type, rhs_type))
-        .or_else(|| struct_coercion(lhs_type, rhs_type, comparison_coercion))
-        .or_else(|| map_coercion(lhs_type, rhs_type, comparison_coercion))
+        .or_else(|| struct_coercion(lhs_type, rhs_type, coerce_fn))
+        .or_else(|| map_coercion(lhs_type, rhs_type, coerce_fn))
         .or_else(|| union_coercion(lhs_type, rhs_type))
+}
+
+fn comparison_coercion_with_session_timezone_inner(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    session_time_zone: Option<&str>,
+) -> Option<DataType> {
+    timestamp_types_with_session_timezone(lhs_type, rhs_type, session_time_zone)
+        .map(|(lhs_type, _)| lhs_type)
+        .or_else(|| {
+            comparison_coercion_inner(lhs_type, rhs_type, |lhs_type, rhs_type| {
+                comparison_coercion_with_session_timezone_inner(
+                    lhs_type,
+                    rhs_type,
+                    session_time_zone,
+                )
+            })
+        })
+}
+
+/// Returns the common type for the non-binary comparison expressions
+/// (`IN`, `BETWEEN`, `CASE x WHEN`, `IN (<subquery>)`, `= ANY/ALL`), using the
+/// same rules as `=` itself so they cannot disagree with it.
+///
+/// `session_time_zone` is `datafusion.execution.time_zone`; see
+/// [`BinaryTypeCoercer::with_session_time_zone`].
+///
+/// The session timezone is applied recursively to timestamps inside dictionary,
+/// run-end encoded, list, struct, and map types.
+pub fn comparison_coercion_with_session_timezone(
+    lhs_type: &DataType,
+    rhs_type: &DataType,
+    session_time_zone: Option<&str>,
+) -> Option<DataType> {
+    BinaryTypeCoercer::new(lhs_type, &Operator::Eq, rhs_type)
+        .with_session_time_zone(session_time_zone)
+        .get_input_types()
+        .ok()
+        .map(|(lhs_type, _)| lhs_type)
 }
 
 /// Coerce a numeric/string pair to the numeric type.
@@ -1338,11 +1418,14 @@ fn coerce_numeric_type_to_decimal256(numeric_type: &DataType) -> Option<DataType
 
 /// Coerce two struct types by recursively coercing their fields using
 /// `coerce_fn` (either [`comparison_coercion`] or [`type_union_coercion`]).
-fn struct_coercion(
+fn struct_coercion<F>(
     lhs_type: &DataType,
     rhs_type: &DataType,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
 
     match (lhs_type, rhs_type) {
@@ -1352,26 +1435,70 @@ fn struct_coercion(
                 return None;
             }
 
-            // If the two structs have exactly the same set of field names (possibly in
-            // different order), prefer name-based coercion. Otherwise fall back to
-            // positional coercion which preserves backward compatibility.
-            //
-            // Name-based coercion is used in:
-            // 1. Array construction: [s1, s2] where s1 and s2 have reordered fields
-            // 2. UNION operations: different field orders unified by name
-            // 3. VALUES clauses: heterogeneous struct rows unified by field name
-            // 4. JOIN conditions: structs with matching field names
-            // 5. Window functions: partitions/orders by struct fields
-            // 6. Aggregate functions: collecting structs with reordered fields
-            //
-            // See docs/source/user-guide/sql/struct_coercion.md for detailed examples.
+            // Structs coerce only when they have the same set of field names
+            // (any order). Field names are part of the struct type, and the
+            // cast layer matches fields by name, so no other common type is
+            // executable. See docs/source/user-guide/sql/struct_coercion.md.
             if fields_have_same_names(lhs_fields, rhs_fields) {
                 return coerce_struct_by_name(lhs_fields, rhs_fields, coerce_fn);
             }
 
-            coerce_struct_by_position(lhs_fields, rhs_fields, coerce_fn)
+            None
         }
         _ => None,
+    }
+}
+
+/// Return true if the field names of every nested struct agree.
+///
+/// Guards the `equals_datatype` fast paths: `equals_datatype` ignores struct
+/// field names, but struct casts match fields by name, so types that differ
+/// only in struct field names must not count as equal. Container labels
+/// (list items, map entries and their key/value fields, union variants) stay
+/// ignored because casts do not depend on them.
+///
+/// Call this only after `equals_datatype` returned true, so the two type
+/// trees have the same shape.
+fn struct_field_names_match(lhs_type: &DataType, rhs_type: &DataType) -> bool {
+    use arrow::datatypes::DataType::*;
+    match (lhs_type, rhs_type) {
+        (Struct(lhs), Struct(rhs)) => {
+            lhs.len() == rhs.len()
+                && lhs.iter().zip(rhs.iter()).all(|(l, r)| {
+                    l.name() == r.name()
+                        && struct_field_names_match(l.data_type(), r.data_type())
+                })
+        }
+        (List(l), List(r))
+        | (LargeList(l), LargeList(r))
+        | (ListView(l), ListView(r))
+        | (LargeListView(l), LargeListView(r))
+        | (FixedSizeList(l, _), FixedSizeList(r, _)) => {
+            struct_field_names_match(l.data_type(), r.data_type())
+        }
+        // Map entry key/value fields are positional; check only their types.
+        (Map(l, _), Map(r, _)) => match (l.data_type(), r.data_type()) {
+            (Struct(le), Struct(re)) => {
+                le.len() == re.len()
+                    && le.iter().zip(re.iter()).all(|(lf, rf)| {
+                        struct_field_names_match(lf.data_type(), rf.data_type())
+                    })
+            }
+            _ => true,
+        },
+        (Dictionary(_, l), Dictionary(_, r)) => struct_field_names_match(l, r),
+        (RunEndEncoded(_, l), RunEndEncoded(_, r)) => {
+            struct_field_names_match(l.data_type(), r.data_type())
+        }
+        // Union variants are identified by type id, not by listing order.
+        (Union(l, _), Union(r, _)) => l.iter().all(|(lid, lf)| {
+            r.iter()
+                .find(|(rid, _)| *rid == lid)
+                .is_some_and(|(_, rf)| {
+                    struct_field_names_match(lf.data_type(), rf.data_type())
+                })
+        }),
+        _ => true,
     }
 }
 
@@ -1414,11 +1541,14 @@ fn fields_have_same_names(lhs_fields: &Fields, rhs_fields: &Fields) -> bool {
 
 /// Coerce two structs by matching fields by name using `coerce_fn`.
 /// Assumes the name-sets match.
-fn coerce_struct_by_name(
+fn coerce_struct_by_name<F>(
     lhs_fields: &Fields,
     rhs_fields: &Fields,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
 
     let rhs_by_name: HashMap<&str, &FieldRef> =
@@ -1440,33 +1570,6 @@ fn coerce_struct_by_name(
     Some(Struct(coerced.into()))
 }
 
-/// Coerce two structs positionally (left-to-right) using `coerce_fn`.
-/// Preserves field names from the left struct and uses combined nullability.
-fn coerce_struct_by_position(
-    lhs_fields: &Fields,
-    rhs_fields: &Fields,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
-    use arrow::datatypes::DataType::*;
-
-    // First coerce individual types; fail early if any pair cannot be coerced.
-    let coerced_types: Vec<DataType> = lhs_fields
-        .iter()
-        .zip(rhs_fields.iter())
-        .map(|(l, r)| coerce_fn(l.data_type(), r.data_type()))
-        .collect::<Option<Vec<DataType>>>()?;
-
-    // Build final fields preserving left-side names and combined nullability.
-    let orig_pairs = lhs_fields.iter().zip(rhs_fields.iter());
-    let fields: Vec<FieldRef> = coerced_types
-        .into_iter()
-        .zip(orig_pairs)
-        .map(|(datatype, (lhs, rhs))| coerce_fields(datatype, lhs, rhs))
-        .collect();
-
-    Some(Struct(fields.into()))
-}
-
 /// returns the result of coercing two fields to a common type
 fn coerce_fields(common_type: DataType, lhs: &FieldRef, rhs: &FieldRef) -> FieldRef {
     let is_nullable = lhs.is_nullable() || rhs.is_nullable();
@@ -1476,22 +1579,44 @@ fn coerce_fields(common_type: DataType, lhs: &FieldRef, rhs: &FieldRef) -> Field
 
 /// Coerce two Map types by coercing their inner entry fields using
 /// `coerce_fn` (either [`comparison_coercion`] or [`type_union_coercion`]).
-fn map_coercion(
+fn map_coercion<F>(
     lhs_type: &DataType,
     rhs_type: &DataType,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (Map(lhs_field, lhs_ordered), Map(rhs_field, rhs_ordered)) => {
-            struct_coercion(lhs_field.data_type(), rhs_field.data_type(), coerce_fn).map(
-                |key_value_type| {
-                    Map(
-                        Arc::new((**lhs_field).clone().with_data_type(key_value_type)),
-                        *lhs_ordered && *rhs_ordered,
-                    )
-                },
-            )
+            // A map entry struct has exactly two positional fields (key,
+            // value) with arbitrary names; coerce their types positionally
+            // and keep the left side's names.
+            let (Struct(lhs_entry), Struct(rhs_entry)) =
+                (lhs_field.data_type(), rhs_field.data_type())
+            else {
+                return None;
+            };
+            if lhs_entry.len() != 2 || rhs_entry.len() != 2 {
+                return None;
+            }
+            let entry_fields: Vec<FieldRef> = lhs_entry
+                .iter()
+                .zip(rhs_entry.iter())
+                .map(|(lhs, rhs)| {
+                    coerce_fn(lhs.data_type(), rhs.data_type())
+                        .map(|common_type| coerce_fields(common_type, lhs, rhs))
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(Map(
+                Arc::new(
+                    (**lhs_field)
+                        .clone()
+                        .with_data_type(Struct(entry_fields.into())),
+                ),
+                *lhs_ordered && *rhs_ordered,
+            ))
         }
         _ => None,
     }
@@ -1650,12 +1775,15 @@ fn both_numeric_or_null_and_numeric(lhs_type: &DataType, rhs_type: &DataType) ->
 ///
 /// If `preserve_dictionaries` is true, dictionaries will be preserved
 /// when possible.
-fn dictionary_coercion(
+fn dictionary_coercion<F>(
     lhs_type: &DataType,
     rhs_type: &DataType,
     preserve_dictionaries: bool,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (
@@ -1678,12 +1806,15 @@ fn dictionary_coercion(
 /// (either [`comparison_coercion`] or [`type_union_coercion`]).
 ///
 /// If `preserve_ree` is true, REE will be preserved when possible.
-fn ree_coercion(
+fn ree_coercion<F>(
     lhs_type: &DataType,
     rhs_type: &DataType,
     preserve_ree: bool,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         (RunEndEncoded(_, lhs_values_field), RunEndEncoded(_, rhs_values_field)) => {
@@ -1762,7 +1893,8 @@ fn string_concat_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<Si
 }
 
 fn array_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataType> {
-    if lhs_type.equals_datatype(rhs_type) {
+    if lhs_type.equals_datatype(rhs_type) && struct_field_names_match(lhs_type, rhs_type)
+    {
         Some(lhs_type.to_owned())
     } else {
         None
@@ -1804,11 +1936,14 @@ pub fn string_coercion(lhs_type: &DataType, rhs_type: &DataType) -> Option<DataT
 
 /// Coerce two list element fields to a common type using the provided
 /// coercion function for element types.
-fn coerce_list_children(
+fn coerce_list_children<F>(
     lhs_field: &FieldRef,
     rhs_field: &FieldRef,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<FieldRef> {
+    coerce_fn: F,
+) -> Option<FieldRef>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     Some(Arc::new(
         (**lhs_field)
             .clone()
@@ -1819,11 +1954,14 @@ fn coerce_list_children(
 
 /// Coerce two list types by coercing their element types via `coerce_fn`
 /// (either [`comparison_coercion`] or [`type_union_coercion`]).
-fn list_coercion(
+fn list_coercion<F>(
     lhs_type: &DataType,
     rhs_type: &DataType,
-    coerce_fn: fn(&DataType, &DataType) -> Option<DataType>,
-) -> Option<DataType> {
+    coerce_fn: F,
+) -> Option<DataType>
+where
+    F: Fn(&DataType, &DataType) -> Option<DataType> + Copy,
+{
     use arrow::datatypes::DataType::*;
     match (lhs_type, rhs_type) {
         // Coerce to the left side FixedSizeList type if the list lengths are the same,

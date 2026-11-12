@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Reading Explain Plans
@@ -165,6 +152,14 @@ that is omitted from the default explain, as well as all intermediate physical
 plans DataFusion generates before returning. This mode can be very helpful for
 debugging to see why and when DataFusion added and removed operators from a plan.
 
+Each intermediate plan is labeled with the name of the optimizer rule that
+produced it. The rules, and the order in which they run, are listed in the
+documentation of [`Analyzer`], [`Optimizer`], and [`PhysicalOptimizer`].
+
+[`analyzer`]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Analyzer.html#built-in-analyzer-rules
+[`optimizer`]: https://docs.rs/datafusion/latest/datafusion/optimizer/struct.Optimizer.html#built-in-optimizer-rules
+[`physicaloptimizer`]: https://docs.rs/datafusion/latest/datafusion/physical_optimizer/optimizer/struct.PhysicalOptimizer.html#built-in-physical-optimizer-rules
+
 ## Execution Counters: `EXPLAIN ANALYZE`
 
 During execution, DataFusion operators collect detailed metrics. You can access
@@ -242,6 +237,12 @@ When predicate pushdown is enabled, `DataSourceExec` with `ParquetSource` gains 
 - `statistics_eval_time`: time spent parsing and evaluating row group-level statistics
 - `row_pushdown_eval_time`: time spent evaluating row-level filters
 - `page_index_eval_time`: time required to evaluate the page index filters
+
+`output_rows_skew` is also reported by operators that execute in multiple
+partitions: `RepartitionExec`, `HashJoinExec`, `AggregateExec`,
+`BoundedWindowAggExec` and `WindowAggExec`. It shows how evenly their output
+rows are spread across partitions, which helps spot data skew (for example, a
+hot join or grouping key). With a single partition the skew is always `0%`.
 
 ## Postgres-style `EXPLAIN (...)` options
 

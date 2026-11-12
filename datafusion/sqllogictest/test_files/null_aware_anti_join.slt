@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 #############
 ## Null-Aware Anti Join Tests
@@ -406,7 +393,301 @@ SELECT * FROM test_table t1 WHERE c1 NOT IN (SELECT c2 FROM test_table t2 WHERE 
 NULL 0
 
 #############
-## Cleanup
+## Test 19: Multi-column NOT IN plans
+#############
+
+# Results under a batch size sweep are in null_aware_multi_column.slt. A tuple
+# NOT IN is a null-aware join whose leading keys are the tuple elements that
+# can be NULL (`value_keys`), followed by the elements that cannot and by any
+# correlation keys, which only narrow the scope of a row. Like the scalar NOT
+# IN, JoinSelection swaps it into a null-aware RightAnti that builds on the
+# subquery side when that side is not larger, keeping the key order.
+
+statement ok
+CREATE TABLE multi_col_outer(k INT, a INT, b INT) AS VALUES
+(1, 1, 2),
+(2, NULL, 8);
+
+statement ok
+CREATE TABLE multi_col_inner(k INT, x INT, y INT) AS VALUES
+(1, 1, 2),
+(2, NULL, 4);
+
+query TT
+EXPLAIN SELECT * FROM multi_col_outer o
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner i WHERE i.k = o.k);
+----
+logical_plan
+01)LeftAnti Join: o.a = __correlated_sq_1.x, o.b = __correlated_sq_1.y, o.k = __correlated_sq_1.k null_aware(value_keys=2)
+02)--SubqueryAlias: o
+03)----TableScan: multi_col_outer projection=[k, a, b]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Projection: i.x, i.y, i.k
+06)------SubqueryAlias: i
+07)--------TableScan: multi_col_inner projection=[k, x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(x@0, a@1), (y@1, b@2), (k@2, k@0)], null_aware(value_keys=2)
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A constant element is projected as an outer column so that it stays a join
+# key in its tuple position.
+query TT
+EXPLAIN SELECT * FROM multi_col_outer
+WHERE (a, 2) NOT IN (SELECT x, y FROM multi_col_inner);
+----
+logical_plan
+01)Projection: multi_col_outer.k, multi_col_outer.a, multi_col_outer.b
+02)--LeftAnti Join: multi_col_outer.a = __correlated_sq_1.x, __correlated_sq_1_value_1 = __correlated_sq_1.multi_col_inner.y null_aware(value_keys=2)
+03)----Projection: multi_col_outer.k, multi_col_outer.a, multi_col_outer.b, Int64(2) AS __correlated_sq_1_value_1
+04)------TableScan: multi_col_outer projection=[k, a, b]
+05)----SubqueryAlias: __correlated_sq_1
+06)------Projection: multi_col_inner.x, CAST(multi_col_inner.y AS Int64)
+07)--------TableScan: multi_col_inner projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(x@0, a@1), (multi_col_inner.y@1, __correlated_sq_1_value_1@3)], projection=[k@0, a@1, b@2], null_aware(value_keys=2)
+02)--ProjectionExec: expr=[x@0 as x, CAST(y@1 AS Int64) as multi_col_inner.y]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[k@0 as k, a@1 as a, b@2 as b, 2 as __correlated_sq_1_value_1]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# As a nullable value, the tuple NOT IN is a null-aware mark join.
+query TT
+EXPLAIN SELECT a, b, (a, b) NOT IN (SELECT x, y FROM multi_col_inner) AS r
+FROM multi_col_outer;
+----
+logical_plan
+01)Projection: multi_col_outer.a, multi_col_outer.b, NOT __correlated_sq_1.mark AS r
+02)--LeftMark Join: multi_col_outer.a = __correlated_sq_1.x, multi_col_outer.b = __correlated_sq_1.y null_aware(value_keys=2)
+03)----TableScan: multi_col_outer projection=[a, b]
+04)----SubqueryAlias: __correlated_sq_1
+05)------TableScan: multi_col_inner projection=[x, y]
+physical_plan
+01)ProjectionExec: expr=[a@0 as a, b@1 as b, NOT mark@2 as r]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(a@0, x@0), (b@1, y@1)], null_aware(value_keys=2)
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A tuple element that cannot be NULL on either side never makes the tuple
+# comparison UNKNOWN. It follows the elements that can be NULL as a scope key,
+# so `value_keys` counts only the nullable elements.
+statement ok
+CREATE TABLE multi_col_outer_nn(k INT NOT NULL, a INT, b INT NOT NULL) AS VALUES
+(1, 1, 2),
+(2, NULL, 8);
+
+statement ok
+CREATE TABLE multi_col_inner_nn(k INT NOT NULL, x INT, y INT NOT NULL) AS VALUES
+(1, 1, 2),
+(2, NULL, 4);
+
+# `b = y` moves after `a = x`.
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_nn
+WHERE (b, a) NOT IN (SELECT y, x FROM multi_col_inner_nn);
+----
+logical_plan
+01)LeftAnti Join: multi_col_outer_nn.a = __correlated_sq_1.x, multi_col_outer_nn.b = __correlated_sq_1.y null_aware
+02)--TableScan: multi_col_outer_nn projection=[k, a, b]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: multi_col_inner_nn.y, multi_col_inner_nn.x
+05)------TableScan: multi_col_inner_nn projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(x@1, a@1), (y@0, b@2)], null_aware
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The element scope key comes before the correlation keys.
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_nn o
+WHERE (b, a) NOT IN (SELECT y, x FROM multi_col_inner_nn i WHERE i.k = o.k);
+----
+logical_plan
+01)LeftAnti Join: o.a = __correlated_sq_1.x, o.b = __correlated_sq_1.y, o.k = __correlated_sq_1.k null_aware
+02)--SubqueryAlias: o
+03)----TableScan: multi_col_outer_nn projection=[k, a, b]
+04)--SubqueryAlias: __correlated_sq_1
+05)----Projection: i.y, i.x, i.k
+06)------SubqueryAlias: i
+07)--------TableScan: multi_col_inner_nn projection=[k, x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(x@1, a@1), (y@0, b@2), (k@2, k@0)], null_aware
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# `NULLIF` can give a NULL, so `k` stays a value key, after `a` as in the
+# tuple, and only `b` moves.
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_nn
+WHERE (b, a, k) NOT IN (SELECT y, x, NULLIF(k, 0) FROM multi_col_inner_nn);
+----
+logical_plan
+01)LeftAnti Join: multi_col_outer_nn.a = __correlated_sq_1.x, CAST(multi_col_outer_nn.k AS Int64) = __correlated_sq_1.nullif(multi_col_inner_nn.k,Int64(0)), multi_col_outer_nn.b = __correlated_sq_1.y null_aware(value_keys=2)
+02)--TableScan: multi_col_outer_nn projection=[k, a, b]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: multi_col_inner_nn.y, multi_col_inner_nn.x, nullif(CAST(multi_col_inner_nn.k AS Int64), Int64(0))
+05)------TableScan: multi_col_inner_nn projection=[k, x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(x@1, a@1), (nullif(multi_col_inner_nn.k,Int64(0))@2, CAST(multi_col_outer_nn.k AS Int64)@3), (y@0, b@2)], projection=[k@0, a@1, b@2], null_aware(value_keys=2)
+02)--ProjectionExec: expr=[y@2 as y, x@1 as x, nullif(CAST(k@0 AS Int64), 0) as nullif(multi_col_inner_nn.k,Int64(0))]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[k@0 as k, a@1 as a, b@2 as b, CAST(k@0 AS Int64) as CAST(multi_col_outer_nn.k AS Int64)]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A constant element is NOT NULL, so against a NOT NULL column it is a scope
+# key.
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_nn
+WHERE (2, a) NOT IN (SELECT y, x FROM multi_col_inner_nn);
+----
+logical_plan
+01)Projection: multi_col_outer_nn.k, multi_col_outer_nn.a, multi_col_outer_nn.b
+02)--LeftAnti Join: multi_col_outer_nn.a = __correlated_sq_1.x, __correlated_sq_1_value_0 = __correlated_sq_1.multi_col_inner_nn.y null_aware
+03)----Projection: multi_col_outer_nn.k, multi_col_outer_nn.a, multi_col_outer_nn.b, Int64(2) AS __correlated_sq_1_value_0
+04)------TableScan: multi_col_outer_nn projection=[k, a, b]
+05)----SubqueryAlias: __correlated_sq_1
+06)------Projection: CAST(multi_col_inner_nn.y AS Int64), multi_col_inner_nn.x
+07)--------TableScan: multi_col_inner_nn projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(x@1, a@1), (multi_col_inner_nn.y@0, __correlated_sq_1_value_0@3)], projection=[k@0, a@1, b@2], null_aware
+02)--ProjectionExec: expr=[CAST(y@1 AS Int64) as multi_col_inner_nn.y, x@0 as x]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--ProjectionExec: expr=[k@0 as k, a@1 as a, b@2 as b, 2 as __correlated_sq_1_value_0]
+05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+# NOT NULL on the outer side only: the subquery can still give a NULL `y`, so
+# `b` stays a value key.
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_nn
+WHERE (b, a) NOT IN (SELECT y, x FROM multi_col_inner);
+----
+logical_plan
+01)LeftAnti Join: multi_col_outer_nn.b = __correlated_sq_1.y, multi_col_outer_nn.a = __correlated_sq_1.x null_aware(value_keys=2)
+02)--TableScan: multi_col_outer_nn projection=[k, a, b]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: multi_col_inner.y, multi_col_inner.x
+05)------TableScan: multi_col_inner projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(y@0, b@2), (x@1, a@1)], null_aware(value_keys=2)
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The mark join reorders the same way.
+query TT
+EXPLAIN SELECT b, a, (b, a) NOT IN (SELECT y, x FROM multi_col_inner_nn) AS r
+FROM multi_col_outer_nn;
+----
+logical_plan
+01)Projection: multi_col_outer_nn.b, multi_col_outer_nn.a, NOT __correlated_sq_1.mark AS r
+02)--LeftMark Join: multi_col_outer_nn.a = __correlated_sq_1.x, multi_col_outer_nn.b = __correlated_sq_1.y null_aware
+03)----TableScan: multi_col_outer_nn projection=[a, b]
+04)----SubqueryAlias: __correlated_sq_1
+05)------Projection: multi_col_inner_nn.y, multi_col_inner_nn.x
+06)--------TableScan: multi_col_inner_nn projection=[x, y]
+physical_plan
+01)ProjectionExec: expr=[b@1 as b, a@0 as a, NOT mark@2 as r]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----HashJoinExec: mode=CollectLeft, join_type=LeftMark, on=[(a@0, x@1), (b@1, y@0)], null_aware
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+05)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A correlated filter that rejects NULL makes `b = y` a scope key although
+# both columns are nullable (the `mc_scope` results in
+# null_aware_multi_column.slt).
+query TT
+EXPLAIN SELECT * FROM multi_col_outer o
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner i WHERE i.y >= o.b);
+----
+logical_plan
+01)LeftAnti Join: o.a = __correlated_sq_1.x, o.b = __correlated_sq_1.y Filter: __correlated_sq_1.y >= o.b null_aware
+02)--SubqueryAlias: o
+03)----TableScan: multi_col_outer projection=[k, a, b]
+04)--SubqueryAlias: __correlated_sq_1
+05)----SubqueryAlias: i
+06)------TableScan: multi_col_inner projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(x@0, a@1), (y@1, b@2)], filter=y@1 >= b@0, null_aware
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+# A dictionary can hold a NULL without a null bit, so its NOT NULL field does
+# not rule out a NULL element. A cast to a common type hides the dictionary
+# from the key's type, so the type of each column the key reads counts too:
+# `b` stays a value key whichever side is cast.
+statement ok
+CREATE TABLE multi_col_outer_dict AS
+SELECT k, a, arrow_cast(b, 'Dictionary(Int32, Int32)') AS b FROM multi_col_outer_nn;
+
+statement ok
+CREATE TABLE multi_col_inner_i64 AS
+SELECT k, x, arrow_cast(y, 'Int64') AS y FROM multi_col_inner_nn;
+
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_dict
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner_i64);
+----
+logical_plan
+01)LeftAnti Join: multi_col_outer_dict.a = __correlated_sq_1.x, CAST(multi_col_outer_dict.b AS Int64) = __correlated_sq_1.y null_aware(value_keys=2)
+02)--TableScan: multi_col_outer_dict projection=[k, a, b]
+03)--SubqueryAlias: __correlated_sq_1
+04)----TableScan: multi_col_inner_i64 projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(x@0, a@1), (y@1, CAST(multi_col_outer_dict.b AS Int64)@3)], projection=[k@0, a@1, b@2], null_aware(value_keys=2)
+02)--DataSourceExec: partitions=1, partition_sizes=[1]
+03)--ProjectionExec: expr=[k@0 as k, a@1 as a, b@2 as b, CAST(b@2 AS Int64) as CAST(multi_col_outer_dict.b AS Int64)]
+04)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+CREATE TABLE multi_col_outer_i64 AS
+SELECT k, a, arrow_cast(b, 'Int64') AS b FROM multi_col_outer_nn;
+
+statement ok
+CREATE TABLE multi_col_inner_dict AS
+SELECT k, x, arrow_cast(y, 'Dictionary(Int32, Int32)') AS y FROM multi_col_inner_nn;
+
+query TT
+EXPLAIN SELECT * FROM multi_col_outer_i64
+WHERE (a, b) NOT IN (SELECT x, y FROM multi_col_inner_dict);
+----
+logical_plan
+01)LeftAnti Join: multi_col_outer_i64.a = __correlated_sq_1.x, multi_col_outer_i64.b = __correlated_sq_1.multi_col_inner_dict.y null_aware(value_keys=2)
+02)--TableScan: multi_col_outer_i64 projection=[k, a, b]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: multi_col_inner_dict.x, CAST(multi_col_inner_dict.y AS Int64)
+05)------TableScan: multi_col_inner_dict projection=[x, y]
+physical_plan
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(x@0, a@1), (multi_col_inner_dict.y@1, b@2)], null_aware(value_keys=2)
+02)--ProjectionExec: expr=[x@0 as x, CAST(y@1 AS Int64) as multi_col_inner_dict.y]
+03)----DataSourceExec: partitions=1, partition_sizes=[1]
+04)--DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+DROP TABLE multi_col_outer_dict;
+
+statement ok
+DROP TABLE multi_col_inner_i64;
+
+statement ok
+DROP TABLE multi_col_outer_i64;
+
+statement ok
+DROP TABLE multi_col_inner_dict;
+
+statement ok
+DROP TABLE multi_col_outer_nn;
+
+statement ok
+DROP TABLE multi_col_inner_nn;
+
+statement ok
+DROP TABLE multi_col_outer;
+
+statement ok
+DROP TABLE multi_col_inner;
+
+#############
+## Cleanup (original tables)
 #############
 
 statement ok
@@ -542,8 +823,8 @@ query I
 SELECT id FROM nai_outer WHERE id > 5 AND id NOT IN (SELECT id FROM nai_inner) ORDER BY id;
 ----
 
-# Same query under SortMergeJoin + multiple partitions: null-aware joins must
-# be planned as a CollectLeft HashJoin, not a plain anti SortMergeJoin.
+# When hash joins are not preferred, the supported uncorrelated case uses a null-aware
+# SortMergeJoin, which must still preserve the subquery NULL.
 statement ok
 SET datafusion.optimizer.prefer_hash_join = false;
 
@@ -702,6 +983,22 @@ NULL
 # The projected value column must be the FIRST equi-join key: a null-aware hash
 # join reads `on[0]` as the `NOT IN` value key and `on[1..]` as correlation
 # scope keys, positionally. Giving the correlation that slot returns wrong rows.
+# Correlated null-aware joins must keep the CollectLeft HashJoin fallback even
+# when hash joins are not preferred: the single-key SMJ path cannot handle scopes.
+statement ok
+SET datafusion.optimizer.prefer_hash_join = false;
+
+query I
+SELECT z FROM naconst_corr_t3 WHERE 1 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z) ORDER BY z;
+----
+7
+NULL
+
+query I
+SELECT z FROM naconst_corr_t3 WHERE 2 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z) ORDER BY z;
+----
+NULL
+
 query TT
 EXPLAIN SELECT z FROM naconst_corr_t3 WHERE 1 NOT IN (SELECT naconst_corr_t4.id FROM naconst_corr_t4 WHERE naconst_corr_t4.z = naconst_corr_t3.z);
 ----
@@ -719,6 +1016,9 @@ physical_plan
 03)----DataSourceExec: partitions=1, partition_sizes=[1]
 04)--ProjectionExec: expr=[CAST(id@0 AS Int64) as naconst_corr_t4.id, z@1 as z]
 05)----DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+SET datafusion.optimizer.prefer_hash_join = true;
 
 statement ok
 DROP TABLE naconst_corr_t3;
@@ -910,7 +1210,8 @@ NULL 0
 
 # The shape must stay a single anti join that carries the correlation as a
 # filter. The alternative lowering materializes the mark of three joins, which
-# is correct but far slower.
+# is correct but far slower. JoinSelection may still swap it into a null-aware
+# RightAnti, which applies the filter before deciding each outer row.
 query TT
 EXPLAIN SELECT id, g FROM nai_res_og WHERE nai_res_og.id NOT IN (SELECT i.id FROM nai_res_ig i WHERE nai_res_og.g > 0);
 ----
@@ -921,7 +1222,7 @@ logical_plan
 04)----SubqueryAlias: i
 05)------TableScan: nai_res_ig projection=[id]
 physical_plan
-01)HashJoinExec: mode=CollectLeft, join_type=LeftAnti, on=[(id@0, id@0)], filter=g@0 > 0, null_aware
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(id@0, id@0)], filter=g@0 > 0, null_aware
 02)--DataSourceExec: partitions=1, partition_sizes=[1]
 03)--DataSourceExec: partitions=1, partition_sizes=[1]
 
@@ -942,3 +1243,175 @@ DROP TABLE nai_res_outer;
 
 statement ok
 DROP TABLE nai_res_inner;
+
+#############
+## Regression: a NULL `NOT IN` value over a `NOT NULL` subquery column
+##
+## `NULL NOT IN (non-empty set)` is UNKNOWN, so a `WHERE` clause must remove
+## every row, even when no column in the comparison is nullable. The join must
+## be null-aware when the value *expression* can be NULL: a NULL constant
+## (https://github.com/apache/datafusion/issues/25473) or a nullable expression
+## over `NOT NULL` columns (https://github.com/apache/datafusion/issues/25474).
+#############
+
+statement ok
+CREATE TABLE nanull_o(x INT NOT NULL) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE nanull_on(x INT) AS VALUES (1), (2);
+
+statement ok
+CREATE TABLE nanull_i(id INT NOT NULL) AS VALUES (1), (3);
+
+statement ok
+CREATE TABLE nanull_ie(id INT NOT NULL) AS SELECT * FROM (VALUES (1)) WHERE false;
+
+# NULL constants: UNKNOWN for every row, so no rows.
+query I
+SELECT x FROM nanull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i);
+----
+
+query I
+SELECT x FROM nanull_o WHERE NULL NOT IN (SELECT id FROM nanull_i);
+----
+
+query I
+SELECT x FROM nanull_o WHERE NULLIF(1, 1) NOT IN (SELECT id FROM nanull_i);
+----
+
+# `x + NULL` is simplified to a NULL constant before decorrelation.
+query I
+SELECT x FROM nanull_o WHERE x + CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i);
+----
+
+query I
+SELECT x FROM nanull_o WHERE NOT (CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i));
+----
+
+# The nullability of the outer column does not matter.
+query I
+SELECT x FROM nanull_on WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i);
+----
+
+# Control: against an empty subquery, a NULL value gives TRUE.
+query I rowsort
+SELECT x FROM nanull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_ie);
+----
+1
+2
+
+# Control: a non-NULL constant absent from the subquery gives TRUE.
+query I rowsort
+SELECT x FROM nanull_o WHERE 5 NOT IN (SELECT id FROM nanull_i);
+----
+1
+2
+
+# Assert decorrelation and null-awareness, not physical join choices.
+statement ok
+SET datafusion.explain.logical_plan_only = true;
+
+# The NULL constant is projected as the key of a null-aware anti join, and no
+# filter is pushed into the subquery.
+query TT
+EXPLAIN SELECT x FROM nanull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i);
+----
+logical_plan
+01)Projection: nanull_o.x
+02)--LeftAnti Join: __correlated_sq_1_value = __correlated_sq_1.id null_aware
+03)----Projection: nanull_o.x, Int32(NULL) AS __correlated_sq_1_value
+04)------TableScan: nanull_o projection=[x]
+05)----SubqueryAlias: __correlated_sq_1
+06)------TableScan: nanull_i projection=[id]
+
+# Nullable expressions over `NOT NULL` columns: NULL for every row, so no rows.
+query I
+SELECT x FROM nanull_o WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
+----
+
+# Not folded: the key keeps its column reference, so null-awareness comes from
+# the nullability of the whole expression.
+query I
+SELECT x FROM nanull_o WHERE x + (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
+----
+
+# Control: the same expression over a nullable column.
+query I
+SELECT x FROM nanull_on WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
+----
+
+# Control: against an empty subquery, a NULL value gives TRUE.
+query I rowsort
+SELECT x FROM nanull_o WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_ie);
+----
+1
+2
+
+# Nullable expression on the subquery side: every inner value is NULL, so no
+# rows.
+query I
+SELECT x FROM nanull_o WHERE x NOT IN (SELECT CASE WHEN id > 100 THEN id END FROM nanull_i);
+----
+
+query TT
+EXPLAIN SELECT x FROM nanull_o WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
+----
+logical_plan
+01)LeftAnti Join: CASE WHEN nanull_o.x > Int32(100) THEN Int64(1) END = __correlated_sq_1.nanull_i.id null_aware
+02)--TableScan: nanull_o projection=[x]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: CAST(nanull_i.id AS Int64)
+05)------TableScan: nanull_i projection=[id]
+
+# `x + 1` over `NOT NULL x` cannot be NULL, so the anti join stays plain.
+query I
+SELECT x FROM nanull_o WHERE x + 1 NOT IN (SELECT id FROM nanull_i);
+----
+1
+
+query TT
+EXPLAIN SELECT x FROM nanull_o WHERE x + 1 NOT IN (SELECT id FROM nanull_i);
+----
+logical_plan
+01)LeftAnti Join: CAST(nanull_o.x AS Int64) + Int64(1) = __correlated_sq_1.nanull_i.id
+02)--TableScan: nanull_o projection=[x]
+03)--SubqueryAlias: __correlated_sq_1
+04)----Projection: CAST(nanull_i.id AS Int64)
+05)------TableScan: nanull_i projection=[id]
+
+statement ok
+RESET datafusion.explain.logical_plan_only;
+
+# The same results with a single partition.
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+query I
+SELECT x FROM nanull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_i);
+----
+
+query I
+SELECT x FROM nanull_o WHERE (CASE WHEN x > 100 THEN 1 END) NOT IN (SELECT id FROM nanull_i);
+----
+
+query I rowsort
+SELECT x FROM nanull_o WHERE CAST(NULL AS INT) NOT IN (SELECT id FROM nanull_ie);
+----
+1
+2
+
+# The SLT runner sets target_partitions to 4, so restore that value explicitly.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE nanull_o;
+
+statement ok
+DROP TABLE nanull_on;
+
+statement ok
+DROP TABLE nanull_i;
+
+statement ok
+DROP TABLE nanull_ie;

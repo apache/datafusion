@@ -1,27 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! This module contains tests for limiting memory at runtime in DataFusion
 
 use std::num::NonZeroUsize;
 use std::sync::{Arc, LazyLock};
 
-#[cfg(feature = "extended_tests")]
-mod memory_limit_validation;
 mod nlj_spill_unmatched;
 mod repartition_mem_limit;
 mod union_nullable_spill;
@@ -446,6 +431,80 @@ async fn group_by_count_distinct_utf8_view() {
         .await
 }
 
+/// TopK keeps its input batches as they are, so zero-copy slices of one batch
+/// share its buffers and must reserve them once rather than once per slice.
+/// The 2,000 one-row slices below retain one ~280 KB batch, but reserving it
+/// per slice needs ~560 MB.
+#[tokio::test]
+async fn topk_reserves_shared_input_buffers_once() -> Result<()> {
+    let num_rows = 2_000;
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("k", DataType::Int64, false),
+        Field::new("v", DataType::Utf8, false),
+    ]));
+    let batch = RecordBatch::try_new(
+        Arc::clone(&schema),
+        vec![
+            Arc::new(Int64Array::from_iter_values(0..num_rows as i64)),
+            Arc::new(StringArray::from_iter_values(
+                (0..num_rows).map(|i| format!("{i:0>100}")),
+            )),
+        ],
+    )?;
+    let slices = (0..num_rows).map(|i| batch.slice(i, 1)).collect();
+
+    let runtime = RuntimeEnvBuilder::new()
+        .with_memory_limit(16 * 1024 * 1024, 1.0)
+        .build_arc()?;
+    let config = SessionConfig::new().with_target_partitions(1);
+    let ctx = SessionContext::new_with_config_rt(config, runtime);
+    ctx.register_table("t", Arc::new(MemTable::try_new(schema, vec![slices])?))?;
+
+    // The limit is larger than the input, so TopK retains every slice
+    let batches = ctx
+        .sql("SELECT k, v FROM t ORDER BY k DESC LIMIT 100000")
+        .await?
+        .collect()
+        .await?;
+    let rows: usize = batches.iter().map(|b| b.num_rows()).sum();
+    assert_eq!(rows, num_rows);
+    Ok(())
+}
+
+/// A grouped aggregate emits its output as zero-copy slices of one batch, and
+/// the sort that buffers them must reserve their shared buffers once rather
+/// than once per slice. For 100,000 groups that needs about 6 MB instead of
+/// about 24 MB, so 12 MB separates the two. The two orderings cover both ways
+/// the buffered slices are sorted: coalesced into runs for a single sort key,
+/// and one run per slice otherwise. The in-place threshold is below the slice
+/// size, so that coalescing keeps the slices as separate runs.
+///
+/// Skipped under `force_hash_collisions`, where the 100,000 colliding group
+/// keys make the aggregate quadratic and the test take many minutes.
+#[cfg(not(feature = "force_hash_collisions"))]
+#[tokio::test]
+async fn sort_after_group_by_reserves_shared_output_once() {
+    for order_by in ["group_key", "s desc, group_key"] {
+        TestCase::new()
+            .with_query(format!(
+                "select group_key, sum(payload) as s from t group by group_key order by {order_by}"
+            ))
+            .with_scenario(Scenario::GroupedDistinctStrings {
+                groups: 100_000,
+                string_view: false,
+            })
+            .with_config(
+                SessionConfig::new()
+                    .with_target_partitions(1)
+                    .with_sort_in_place_threshold_bytes(64 * 1024),
+            )
+            .with_memory_limit(12_000_000)
+            .with_expected_success()
+            .run()
+            .await
+    }
+}
+
 #[tokio::test]
 async fn join_by_key_multiple_partitions() {
     let config = SessionConfig::new().with_target_partitions(2);
@@ -519,7 +578,7 @@ async fn sort_merge_join_no_spill() {
         ])
         .with_memory_limit(1_000)
         .with_config(config)
-        .with_scenario(Scenario::AccessLogStreaming)
+        .with_scenario(Scenario::AccessLogStreamingByPodTime)
         .run()
         .await
 }
@@ -538,7 +597,7 @@ async fn sort_merge_join_spill() {
         .with_memory_limit(1_000)
         .with_config(config)
         .with_disk_manager_builder(DiskManagerBuilder::default())
-        .with_scenario(Scenario::AccessLogStreaming)
+        .with_scenario(Scenario::AccessLogStreamingByPodTime)
         .with_expected_success()
         .run()
         .await
@@ -775,9 +834,9 @@ async fn test_stringview_external_sort() {
     for _ in 0..num_batches {
         let strings: Vec<String> = (0..array_length)
             .map(|_| {
-                (0..100)
-                    .map(|_| rng.random_range(0..=u8::MAX) as char)
-                    .collect()
+                let mut bytes = [0_u8; 100];
+                rng.fill(&mut bytes);
+                bytes.into_iter().map(char::from).collect()
             })
             .collect();
 
@@ -862,15 +921,19 @@ async fn test_external_sort_zero_merge_reservation() {
 
     let ctx = SessionContext::new_with_config_rt(config, runtime);
 
-    let query = "select * from generate_series(1,10000000) as t1(v1) order by v1 desc;";
+    // The input and its sorted copy exceed the 10 MiB pool.
+    let query = "select * from generate_series(1,1048576) as t1(v1) order by v1 desc;";
     let df = ctx.sql(query).await.unwrap();
 
     let physical_plan = df.create_physical_plan().await.unwrap();
     let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
     let stream = physical_plan.execute(0, task_ctx).unwrap();
 
-    // Ensures execution succeed
-    let _result = collect(stream).await;
+    let result = collect(stream).await.unwrap();
+    assert_eq!(
+        result.iter().map(RecordBatch::num_rows).sum::<usize>(),
+        1_048_576
+    );
 
     // Ensures the query spilled during execution
     let spill_count = plan_spill_count(physical_plan.as_ref());
@@ -1398,6 +1461,11 @@ enum Scenario {
     /// [`StreamingTable`]
     AccessLogStreaming,
 
+    /// [`Self::AccessLogStreaming`], sorted by `pod, time`, with a
+    /// [`StreamingTable`] that declares that order. A sort merge join on
+    /// `pod, time` then needs no sort.
+    AccessLogStreamingByPodTime,
+
     /// N partitions of sorted, dictionary encoded strings.
     DictionaryStrings {
         partitions: usize,
@@ -1459,6 +1527,23 @@ impl Scenario {
                 .with_infinite_table(true);
                 Arc::new(table)
             }
+            Self::AccessLogStreamingByPodTime => {
+                let batches = access_log_batches_by_pod_time();
+                let table = StreamingTable::try_new(
+                    batches[0].schema(),
+                    vec![Arc::new(DummyStreamPartition {
+                        schema: batches[0].schema(),
+                        batches,
+                    })],
+                )
+                .unwrap()
+                .with_infinite_table(true)
+                .with_sort_order(vec![
+                    datafusion_expr::col("pod").sort(true, true),
+                    datafusion_expr::col("time").sort(true, true),
+                ]);
+                Arc::new(table)
+            }
             Self::DictionaryStrings {
                 partitions,
                 single_row_batches,
@@ -1507,7 +1592,7 @@ impl Scenario {
                 // has a memory budget which we'll likely hit first)
                 Some(vec![Arc::new(JoinSelection::new())])
             }
-            Self::AccessLogStreaming => {
+            Self::AccessLogStreaming | Self::AccessLogStreamingByPodTime => {
                 // Disable all physical optimizer rules except the
                 // JoinSelection rule to avoid sorts or repartition,
                 // as they also have memory budgets that may be hit
@@ -1580,6 +1665,26 @@ fn access_log_batches() -> Vec<RecordBatch> {
     AccessLogGenerator::new()
         .with_row_limit(1000)
         .with_max_batch_size(50)
+        .collect()
+}
+
+/// [`access_log_batches`] sorted by `pod, time`, in batches of 50 rows
+fn access_log_batches_by_pod_time() -> Vec<RecordBatch> {
+    let batches = access_log_batches();
+    let batch = arrow::compute::concat_batches(&batches[0].schema(), &batches).unwrap();
+    let sort_column = |name: &str| arrow::compute::SortColumn {
+        values: Arc::clone(batch.column_by_name(name).unwrap()),
+        options: Some(SortOptions::default()),
+    };
+    let indices = arrow::compute::lexsort_to_indices(
+        &[sort_column("pod"), sort_column("time")],
+        None,
+    )
+    .unwrap();
+    let batch = arrow::compute::take_record_batch(&batch, &indices).unwrap();
+    (0..batch.num_rows())
+        .step_by(50)
+        .map(|offset| batch.slice(offset, 50.min(batch.num_rows() - offset)))
         .collect()
 }
 

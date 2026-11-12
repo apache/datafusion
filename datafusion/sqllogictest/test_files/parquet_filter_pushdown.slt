@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ##########
 # Tests for parquet filter pushdown (filtering on data in the
@@ -374,9 +361,8 @@ logical_plan
 03)----Filter: t_pushdown.b > Int32(2) AND t_pushdown.a IS NOT NULL
 04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.b > Int32(2), t_pushdown.a IS NOT NULL]
 physical_plan
-01)SortPreservingMergeExec: [a@0 ASC NULLS LAST]
-02)--SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 > 2 AND a@0 IS NOT NULL, sort_order_for_reorder=[a@0 ASC NULLS LAST], pruning_predicate=b_null_count@1 != row_count@2 AND b_max@0 > 2 AND a_null_count@3 != row_count@2, required_guarantees=[]
+01)SortExec: expr=[a@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet]]}, projection=[a], file_type=parquet, predicate=b@1 > 2 AND a@0 IS NOT NULL, sort_order_for_reorder=[a@0 ASC NULLS LAST], pruning_predicate=b_null_count@1 != row_count@2 AND b_max@0 > 2 AND a_null_count@3 != row_count@2, required_guarantees=[]
 
 
 query I
@@ -393,9 +379,8 @@ logical_plan
 03)----Filter: t_pushdown.a = Utf8View("bar")
 04)------TableScan: t_pushdown projection=[a, b], partial_filters=[t_pushdown.a = Utf8View("bar")]
 physical_plan
-01)SortPreservingMergeExec: [b@0 ASC NULLS LAST]
-02)--SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[true]
-03)----DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/2.parquet]]}, projection=[b], file_type=parquet, predicate=a@0 = bar, sort_order_for_reorder=[b@0 ASC NULLS LAST], pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= bar AND bar <= a_max@1, required_guarantees=[a in (bar)]
+01)SortExec: expr=[b@0 ASC NULLS LAST], preserve_partitioning=[false]
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/parquet_filter_pushdown/parquet_table/1.parquet]]}, projection=[b], file_type=parquet, predicate=a@0 = bar, sort_order_for_reorder=[b@0 ASC NULLS LAST], pruning_predicate=a_null_count@2 != row_count@3 AND a_min@0 <= bar AND bar <= a_max@1, required_guarantees=[a in (bar)]
 
 
 # should not push down volatile predicates such as RANDOM
@@ -1052,3 +1037,87 @@ set datafusion.execution.parquet.reorder_filters = false;
 
 statement ok
 DROP TABLE dict_filter_bug;
+
+# Regression: a `CASE` with no `ELSE` leaves unmatched rows UNKNOWN, not FALSE.
+# Treating them as FALSE lets the inverse predicate call a row group fully
+# matched and skip the row filter. Required columns admit no `IS NULL` rescue.
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+COPY (SELECT column1 AS a, column2 AS b FROM (VALUES (2, 1), (1, 2)))
+TO 'test_files/scratch/parquet_filter_pushdown/case_without_else.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '1');
+
+statement ok
+CREATE EXTERNAL TABLE case_without_else (a BIGINT NOT NULL, b BIGINT NOT NULL)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/case_without_else.parquet';
+
+query II
+SELECT * FROM case_without_else
+WHERE NOT (CASE WHEN a = 1 THEN false END) AND b > 0 ORDER BY a;
+----
+1 2
+
+query II
+SELECT * FROM case_without_else
+WHERE NOT (CASE WHEN a = 1 THEN false END) AND b > 0 LIMIT 1;
+----
+1 2
+
+query II
+SELECT * FROM case_without_else
+WHERE NOT (CASE WHEN a = 1 THEN false ELSE NULL END) AND b > 0 ORDER BY a;
+----
+1 2
+
+query II
+SELECT * FROM case_without_else
+WHERE NOT (CASE WHEN a = 1 THEN NULL ELSE false END) AND b > 0 ORDER BY a;
+----
+2 1
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+DROP TABLE case_without_else;
+
+###
+# The physical simplifier must not unwrap a narrowing TRY_CAST either
+# (max_passes = 0 so only the physical rewrite runs).
+# See https://github.com/apache/datafusion/issues/24702
+###
+
+statement ok
+COPY (VALUES (5::bigint), (7::bigint), (9999999999::bigint), (10000000000::bigint))
+TO 'test_files/scratch/parquet_filter_pushdown/try_cast_narrowing.parquet'
+STORED AS PARQUET
+OPTIONS ('format.max_row_group_size' '2');
+
+statement ok
+CREATE EXTERNAL TABLE try_cast_narrowing_pq STORED AS PARQUET
+LOCATION 'test_files/scratch/parquet_filter_pushdown/try_cast_narrowing.parquet';
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+set datafusion.optimizer.max_passes = 0;
+
+query I rowsort
+SELECT column1 FROM try_cast_narrowing_pq WHERE try_cast(column1 AS INT) > 1;
+----
+5
+7
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+statement ok
+set datafusion.execution.parquet.pushdown_filters = false;
+
+statement ok
+DROP TABLE try_cast_narrowing_pq;

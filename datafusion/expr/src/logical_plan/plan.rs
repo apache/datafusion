@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Logical plan types
 
@@ -23,28 +10,31 @@ use std::fmt::{self, Debug, Display, Formatter};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, LazyLock};
 
-use super::DdlStatement;
 use super::dml::CopyTo;
 use super::invariants::{
     InvariantLevel, assert_always_invariants_at_current_node,
     assert_executable_invariants,
 };
+use super::{DdlStatement, information_schema};
 use crate::builder::{unique_field_aliases, unnest_with_options};
 use crate::expr::{
     Alias, Placeholder, Sort as SortExpr, WindowFunction, WindowFunctionParams,
-    intersect_metadata_for_union,
 };
 use crate::expr_rewriter::{
     NamePreserver, create_col_from_scalar_expr, normalize_cols, normalize_sorts,
 };
 use crate::logical_plan::display::{GraphvizVisitor, IndentVisitor};
 use crate::logical_plan::extension::UserDefinedLogicalNode;
+use crate::logical_plan::materialized_cte::{
+    MaterializedCte, MaterializedCtePlan, MaterializedCteScan,
+};
 use crate::logical_plan::{DmlStatement, Statement, WriteOp};
+use crate::type_coercion::other::coerce_union_type;
 use crate::utils::{
     check_aggregate_and_window_nesting, check_no_window_functions,
     enumerate_grouping_sets, expr_to_columns, exprlist_to_fields,
-    find_out_reference_exprs, grouping_set_expr_count, grouping_set_to_exprlist,
-    merge_schema, split_conjunction,
+    find_out_reference_exprs, get_unnested_list_field, grouping_set_expr_count,
+    grouping_set_to_exprlist, merge_schema, passthrough_field_index, split_conjunction,
 };
 use crate::{
     BinaryExpr, CreateMemoryTable, CreateView, Execute, Expr, ExprSchemable, GroupingSet,
@@ -53,12 +43,15 @@ use crate::{
     requalify_sides_if_needed,
 };
 
+use crate::logical_plan::information_schema::ColumnsDetail;
 use crate::statistics::StatisticsRequest;
 use arrow::compute::SortOptions;
-use arrow::datatypes::{DataType, Field, FieldRef, Metadata, Schema, SchemaRef};
+use arrow::datatypes::{DataType, Field, FieldRef, Schema, SchemaRef};
 use datafusion_common::cse::{NormalizeEq, Normalizeable};
 use datafusion_common::format::{ExplainAnalyzeCategories, ExplainFormat, MetricType};
-use datafusion_common::metadata::check_metadata_with_storage_equal;
+use datafusion_common::metadata::{
+    check_metadata_with_storage_equal, merge_metadata_for_union,
+};
 use datafusion_common::tree_node::{
     Transformed, TreeNode, TreeNodeContainer, TreeNodeRecursion,
 };
@@ -66,10 +59,10 @@ use datafusion_common::{
     Column, Constraints, DFSchema, DFSchemaRef, DataFusionError, Dependency,
     FunctionalDependence, FunctionalDependencies, NullEquality, ParamValues, Result,
     ScalarValue, Spans, SplitPoint, TableReference, UnnestOptions,
-    aggregate_functional_dependencies, assert_eq_or_internal_err, assert_or_internal_err,
-    internal_err, plan_datafusion_err, plan_err, validate_range_split_points,
+    aggregate_functional_dependencies_with_computed_inputs, assert_eq_or_internal_err,
+    assert_or_internal_err, internal_err, plan_datafusion_err, plan_err,
+    validate_range_split_points,
 };
-use indexmap::IndexSet;
 use itertools::Itertools as _;
 
 // backwards compatibility
@@ -111,7 +104,8 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # Visiting and Rewriting `LogicalPlan`s
 ///
 /// Using the [`tree_node`] API, you can recursively walk all nodes in a
-/// `LogicalPlan`. For example, to find all column references in a plan:
+/// `LogicalPlan`. [`TreeNode::apply`] visits a node before its inputs. For
+/// example, to find table names and expressions in a plan:
 ///
 /// ```
 /// # use std::collections::HashSet;
@@ -134,17 +128,22 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 ///  .project(vec![col("name"), col("salary")])?
 ///  .build()?;
 ///
-/// // use apply to walk the plan and collect all expressions
+/// // use apply to walk the plan and collect table names and expressions
+/// let mut table_names = HashSet::new();
 /// let mut expressions = HashSet::new();
 /// plan.apply(|node| {
+///   if let LogicalPlan::TableScan(scan) = node {
+///     table_names.insert(scan.table_name.to_string());
+///   }
 ///   // collect all expressions in the plan
 ///   node.apply_expressions(|expr| {
 ///    expressions.insert(expr.clone());
 ///    Ok(TreeNodeRecursion::Continue) // control walk of expressions
 ///   })?;
 ///   Ok(TreeNodeRecursion::Continue) // control walk of plan nodes
-/// }).unwrap();
+/// })?;
 ///
+/// assert_eq!(table_names, HashSet::from(["employee".to_string()]));
 /// // we found the expression in projection and filter
 /// assert_eq!(expressions.len(), 3);
 /// println!("Found expressions: {:?}", expressions);
@@ -159,6 +158,11 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # Ok(())
 /// # }
 /// ```
+///
+/// [`TreeNode::apply`] and [`TreeNode::rewrite`] traverse plan inputs, but do
+/// not visit subqueries embedded in expressions. Use
+/// [`LogicalPlan::apply_with_subqueries`] and
+/// [`LogicalPlan::rewrite_with_subqueries`] to include those subqueries.
 ///
 /// You can also rewrite plans using the [`tree_node`] API. For example, to
 /// replace the filter predicate in a plan:
@@ -211,6 +215,56 @@ pub use datafusion_common::{JoinConstraint, JoinType};
 /// # Ok(())
 /// # }
 /// ```
+///
+/// For more control over traversal, implement a [`TreeNodeRewriter`] and use
+/// [`TreeNode::rewrite`]. Its `f_down` method runs before rewriting inputs and
+/// `f_up` runs after them. The following example removes Filter nodes in
+/// `f_up` by replacing each with its already rewritten input. This changes
+/// query semantics and is only an illustration of the API.
+///
+/// ```
+/// # use arrow::datatypes::{DataType, Field, Schema};
+/// # use datafusion_expr::{col, lit, LogicalPlan, table_scan};
+/// # use datafusion_common::tree_node::{Transformed, TreeNode, TreeNodeRewriter};
+/// # use datafusion_common::Result;
+/// # fn main() -> Result<()> {
+/// # let schema = Schema::new(vec![
+/// #     Field::new("name", DataType::Utf8, false),
+/// #     Field::new("salary", DataType::Int32, false),
+/// # ]);
+/// let plan = table_scan(Some("employee"), &schema, None)?
+///     .filter(col("salary").gt(lit(1000)))?
+///     .project(vec![col("name"), col("salary")])?
+///     .build()?;
+///
+/// struct RemoveFilters;
+///
+/// impl TreeNodeRewriter for RemoveFilters {
+///     type Node = LogicalPlan;
+///
+///     fn f_up(&mut self, node: LogicalPlan) -> Result<Transformed<LogicalPlan>> {
+///         match node {
+///             LogicalPlan::Filter(filter) => {
+///                 Ok(Transformed::yes(filter.input.as_ref().clone()))
+///             }
+///             _ => Ok(Transformed::no(node)),
+///         }
+///     }
+/// }
+///
+/// let rewritten = plan.rewrite(&mut RemoveFilters)?;
+/// assert!(rewritten.transformed);
+/// assert_eq!(rewritten.data.display_indent().to_string(),
+///     "Projection: employee.name, employee.salary\n  TableScan: employee");
+/// # Ok(())
+/// # }
+/// ```
+///
+/// See the [plan walking example] for a complete walkthrough, including
+/// collecting tables and filter predicates from subqueries.
+///
+/// [`TreeNodeRewriter`]: datafusion_common::tree_node::TreeNodeRewriter
+/// [plan walking example]: https://github.com/apache/datafusion/blob/main/datafusion-examples/examples/query_planning/plan_walk.rs
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Hash)]
 pub enum LogicalPlan {
     /// Evaluates an arbitrary list of expressions (essentially a
@@ -291,9 +345,10 @@ pub enum LogicalPlan {
     Ddl(DdlStatement),
     /// `COPY TO` for writing plan results to files
     Copy(CopyTo),
-    /// Describe the schema of the table. This is used to implement the
-    /// SQL `DESCRIBE` command from MySQL.
-    DescribeTable(DescribeTable),
+    /// A `SHOW`-class SQL statement: `SHOW TABLES`, `SHOW COLUMNS`,
+    /// `SHOW FUNCTIONS`, `SHOW <variable>`, `SHOW CREATE TABLE`, and
+    /// `DESCRIBE` (MySQL's alias for `SHOW COLUMNS FROM`).
+    Show(Show),
     /// Unnest a column that contains a nested list type such as an
     /// ARRAY. This is used to implement SQL `UNNEST`
     Unnest(Unnest),
@@ -302,6 +357,9 @@ pub enum LogicalPlan {
     /// Match each left row with at most one ordered row from the right input.
     /// This is used to implement SQL `ASOF JOIN`.
     AsOfJoin(AsOfJoin),
+    /// A node of a SQL `WITH x AS MATERIALIZED (...)` CTE. See
+    /// [`MaterializedCtePlan`].
+    MaterializedCte(MaterializedCtePlan),
 }
 
 impl Default for LogicalPlan {
@@ -358,10 +416,10 @@ impl LogicalPlan {
             LogicalPlan::Explain(explain) => &explain.schema,
             LogicalPlan::Analyze(analyze) => &analyze.schema,
             LogicalPlan::Extension(extension) => extension.node.schema(),
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => cte.schema(),
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(scan)) => &scan.schema,
             LogicalPlan::Union(Union { schema, .. }) => schema,
-            LogicalPlan::DescribeTable(DescribeTable { output_schema, .. }) => {
-                output_schema
-            }
+            LogicalPlan::Show(Show { output_schema, .. }) => output_schema,
             LogicalPlan::Dml(DmlStatement { output_schema, .. }) => output_schema,
             LogicalPlan::Copy(CopyTo { output_schema, .. }) => output_schema,
             LogicalPlan::Ddl(ddl) => ddl.schema(),
@@ -398,11 +456,7 @@ impl LogicalPlan {
 
     /// Returns the (fixed) output schema for `DESCRIBE` plans
     pub fn describe_schema() -> Schema {
-        Schema::new(vec![
-            Field::new("column_name", DataType::Utf8, false),
-            Field::new("data_type", DataType::Utf8, false),
-            Field::new("is_nullable", DataType::Utf8, false),
-        ])
+        information_schema::columns_schema(ColumnsDetail::Describe)
     }
 
     /// Returns all expressions (non-recursively) evaluated by the current
@@ -476,6 +530,12 @@ impl LogicalPlan {
             LogicalPlan::Subquery(Subquery { subquery, .. }) => vec![subquery],
             LogicalPlan::SubqueryAlias(SubqueryAlias { input, .. }) => vec![input],
             LogicalPlan::Extension(extension) => extension.node.inputs(),
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(MaterializedCte {
+                cte,
+                continuation,
+                ..
+            })) => vec![cte, continuation],
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => vec![],
             LogicalPlan::Union(Union { inputs, .. }) => {
                 inputs.iter().map(|arc| arc.as_ref()).collect()
             }
@@ -498,7 +558,7 @@ impl LogicalPlan {
             LogicalPlan::TableScan { .. }
             | LogicalPlan::EmptyRelation { .. }
             | LogicalPlan::Values { .. }
-            | LogicalPlan::DescribeTable(_) => vec![],
+            | LogicalPlan::Show(_) => vec![],
         }
     }
 
@@ -522,8 +582,9 @@ impl LogicalPlan {
             };
             if let Some(on) = on {
                 // The join keys in using-join must be columns.
-                let columns =
-                    on.iter().try_fold(HashSet::new(), |mut accumu, (l, r)| {
+                let columns = on.iter().try_fold(
+                    HashSet::with_capacity(on.len() * 2),
+                    |mut accumu, (l, r)| {
                         let Some(l) = l.get_as_join_column() else {
                             return internal_err!(
                                 "Invalid join key. Expected column, found {l:?}"
@@ -537,7 +598,8 @@ impl LogicalPlan {
                         accumu.insert(l.to_owned());
                         accumu.insert(r.to_owned());
                         Result::<_, DataFusionError>::Ok(accumu)
-                    })?;
+                    },
+                )?;
                 using_columns.push(columns);
             }
             Ok(TreeNodeRecursion::Continue)
@@ -609,17 +671,22 @@ impl LogicalPlan {
                     })
                     .map_or(Ok(None), |v| v.map(Some))
             }
+            // A materialized CTE outputs the output of its continuation.
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+                cte.continuation.head_output_expr()
+            }
+            LogicalPlan::Extension(_)
+            | LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => Ok(None),
             LogicalPlan::Subquery(_) => Ok(None),
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Statement(_)
             | LogicalPlan::Values(_)
             | LogicalPlan::Explain(_)
             | LogicalPlan::Analyze(_)
-            | LogicalPlan::Extension(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
             | LogicalPlan::Ddl(_)
-            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Show(_)
             | LogicalPlan::Unnest(_) => Ok(None),
         }
     }
@@ -688,6 +755,7 @@ impl LogicalPlan {
                 schema: _,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
             }) => {
                 let schema =
                     build_join_schema(left.schema(), right.schema(), &join_type)?;
@@ -710,6 +778,7 @@ impl LogicalPlan {
                     schema: DFSchemaRef::new(schema),
                     null_equality,
                     null_aware,
+                    null_aware_value_keys,
                 }))
             }
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -740,6 +809,10 @@ impl LogicalPlan {
             }) => SubqueryAlias::try_new(input, alias).map(LogicalPlan::SubqueryAlias),
             LogicalPlan::Limit(_) => Ok(self),
             LogicalPlan::Ddl(_) => Ok(self),
+            // A `Cte` takes the schema of its continuation, and does not store
+            // it. A `Scan` keeps the schema of the CTE body, which also keeps
+            // its schema.
+            LogicalPlan::MaterializedCte(_) => Ok(self),
             LogicalPlan::Extension(Extension { node }) => {
                 // todo make an API that does not require cloning
                 // This requires a copy of the extension nodes expressions and inputs
@@ -796,7 +869,7 @@ impl LogicalPlan {
             LogicalPlan::TableScan(_) => Ok(self),
             LogicalPlan::EmptyRelation(_) => Ok(self),
             LogicalPlan::Statement(_) => Ok(self),
-            LogicalPlan::DescribeTable(_) => Ok(self),
+            LogicalPlan::Show(_) => Ok(self),
             LogicalPlan::Unnest(Unnest {
                 input,
                 exec_columns,
@@ -991,6 +1064,7 @@ impl LogicalPlan {
                 on,
                 null_equality,
                 null_aware,
+                null_aware_value_keys,
                 ..
             }) => {
                 let (left, right) = self.only_two_inputs(inputs)?;
@@ -1033,6 +1107,7 @@ impl LogicalPlan {
                     schema: DFSchemaRef::new(schema),
                     null_equality: *null_equality,
                     null_aware: *null_aware,
+                    null_aware_value_keys: *null_aware_value_keys,
                 }))
             }
             LogicalPlan::AsOfJoin(AsOfJoin {
@@ -1155,6 +1230,18 @@ impl LogicalPlan {
             LogicalPlan::Extension(e) => Ok(LogicalPlan::Extension(Extension {
                 node: e.node.with_exprs_and_inputs(expr, inputs)?,
             })),
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(cte)) => {
+                self.assert_no_expressions(expr)?;
+                let (body, continuation) = self.only_two_inputs(inputs)?;
+                Ok(LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                    cte.with_new_inputs(Arc::new(body), Arc::new(continuation)),
+                )))
+            }
+            LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(_)) => {
+                self.assert_no_expressions(expr)?;
+                self.assert_no_inputs(inputs)?;
+                Ok(self.clone())
+            }
             LogicalPlan::Union(Union { schema, .. }) => {
                 self.assert_no_expressions(expr)?;
                 let input_schema = inputs[0].schema();
@@ -1264,7 +1351,7 @@ impl LogicalPlan {
             LogicalPlan::EmptyRelation(_)
             | LogicalPlan::Ddl(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::DescribeTable(_) => {
+            | LogicalPlan::Show(_) => {
                 // All of these plan types have no inputs / exprs so should not be called
                 self.assert_no_expressions(expr)?;
                 self.assert_no_inputs(inputs)?;
@@ -1528,9 +1615,10 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Show(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::Extension(_) => None,
+            | LogicalPlan::Extension(_)
+            | LogicalPlan::MaterializedCte(_) => None,
         }
     }
 
@@ -1605,9 +1693,10 @@ impl LogicalPlan {
             | LogicalPlan::Analyze(_)
             | LogicalPlan::Dml(_)
             | LogicalPlan::Copy(_)
-            | LogicalPlan::DescribeTable(_)
+            | LogicalPlan::Show(_)
             | LogicalPlan::Statement(_)
-            | LogicalPlan::Extension(_) => 0,
+            | LogicalPlan::Extension(_)
+            | LogicalPlan::MaterializedCte(_) => 0,
         }
     }
 
@@ -1640,11 +1729,12 @@ impl LogicalPlan {
             LogicalPlan::Explain(_) => Ok(None),
             LogicalPlan::Analyze(_) => Ok(None),
             LogicalPlan::Extension(_) => Ok(None),
+            LogicalPlan::MaterializedCte(_) => Ok(None),
             LogicalPlan::Distinct(_) => Ok(None),
             LogicalPlan::Dml(_) => Ok(None),
             LogicalPlan::Ddl(_) => Ok(None),
             LogicalPlan::Copy(_) => Ok(None),
-            LogicalPlan::DescribeTable(_) => Ok(None),
+            LogicalPlan::Show(_) => Ok(None),
             LogicalPlan::Unnest(_) => Ok(None),
             LogicalPlan::RecursiveQuery(_) => Ok(None),
         }
@@ -1679,11 +1769,12 @@ impl LogicalPlan {
             LogicalPlan::Explain(_) => Ok(None),
             LogicalPlan::Analyze(_) => Ok(None),
             LogicalPlan::Extension(_) => Ok(None),
+            LogicalPlan::MaterializedCte(_) => Ok(None),
             LogicalPlan::Distinct(_) => Ok(None),
             LogicalPlan::Dml(_) => Ok(None),
             LogicalPlan::Ddl(_) => Ok(None),
             LogicalPlan::Copy(_) => Ok(None),
-            LogicalPlan::DescribeTable(_) => Ok(None),
+            LogicalPlan::Show(_) => Ok(None),
             LogicalPlan::Unnest(_) => Ok(None),
             LogicalPlan::RecursiveQuery(_) => Ok(None),
         }
@@ -1836,14 +1927,21 @@ impl LogicalPlan {
             .collect())
     }
 
-    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and FieldRefs
+    /// Walk the logical plan, find any `Placeholder` tokens, and return a map of their IDs and FieldRefs.
+    /// Bare `LIMIT`/`OFFSET` parameters default to `Int64` if no occurrence provides a type.
     pub fn get_parameter_fields(
         &self,
     ) -> Result<HashMap<String, Option<FieldRef>>, DataFusionError> {
         let mut param_types: HashMap<String, Option<FieldRef>> = HashMap::new();
+        let mut row_count_parameters: HashSet<String> = HashSet::new();
 
         self.apply_with_subqueries(|plan| {
             plan.apply_expressions(|expr| {
+                if matches!(plan, LogicalPlan::Limit(_))
+                    && let Expr::Placeholder(Placeholder { id, field: None }) = expr
+                {
+                    row_count_parameters.insert(id.clone());
+                }
                 expr.apply(|expr| {
                     if let Expr::Placeholder(Placeholder { id, field }) = expr {
                         let prev = param_types.get(id);
@@ -1860,15 +1958,22 @@ impl LogicalPlan {
                                 param_types.insert(id.clone(), Some(Arc::clone(field)));
                             }
                             _ => {
-                                param_types.insert(id.clone(), None);
+                                param_types.entry(id.clone()).or_insert(None);
                             }
                         }
                     }
                     Ok(TreeNodeRecursion::Continue)
                 })
             })
-        })
-        .map(|_| param_types)
+        })?;
+
+        for id in row_count_parameters {
+            param_types
+                .entry(id)
+                .or_default()
+                .get_or_insert_with(|| Arc::new(Field::new("", DataType::Int64, true)));
+        }
+        Ok(param_types)
     }
 
     // ------------
@@ -2194,7 +2299,11 @@ impl LogicalPlan {
                         Ok(())
                     }
                     LogicalPlan::Dml(DmlStatement { table_name, op, .. }) => {
-                        write!(f, "Dml: op=[{op}] table=[{table_name}]")
+                        write!(f, "Dml: op=[{op}] table=[{table_name}]")?;
+                        if let WriteOp::MergeInto(merge_op) = op {
+                            write!(f, " {merge_op}")?;
+                        }
+                        Ok(())
                     }
                     LogicalPlan::Copy(CopyTo {
                         input: _,
@@ -2258,6 +2367,7 @@ impl LogicalPlan {
                         join_constraint,
                         join_type,
                         null_aware,
+                        null_aware_value_keys,
                         ..
                     }) => {
                         let join_expr: Vec<String> =
@@ -2266,8 +2376,12 @@ impl LogicalPlan {
                             .as_ref()
                             .map(|expr| format!(" Filter: {expr}"))
                             .unwrap_or_else(|| "".to_string());
-                        let null_aware_expr =
-                            if *null_aware { " null_aware" } else { "" };
+                        let null_aware_expr = match (*null_aware, *null_aware_value_keys)
+                        {
+                            (false, _) => "".to_string(),
+                            (true, 0 | 1) => " null_aware".to_string(),
+                            (true, n) => format!(" null_aware(value_keys={n})"),
+                        };
                         let join_type = if filter.is_none()
                             && keys.is_empty()
                             && *join_type == JoinType::Inner
@@ -2402,9 +2516,28 @@ impl LogicalPlan {
                     LogicalPlan::Analyze { .. } => write!(f, "Analyze"),
                     LogicalPlan::Union(_) => write!(f, "Union"),
                     LogicalPlan::Extension(e) => e.node.fmt_for_explain(f),
-                    LogicalPlan::DescribeTable(DescribeTable { .. }) => {
-                        write!(f, "DescribeTable")
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Cte(
+                        MaterializedCte { name, .. },
+                    )) => {
+                        write!(f, "MaterializedCte: name={name}")
                     }
+                    LogicalPlan::MaterializedCte(MaterializedCtePlan::Scan(
+                        MaterializedCteScan { name, .. },
+                    )) => {
+                        write!(f, "MaterializedCteScan: name={name}")
+                    }
+                    LogicalPlan::Show(Show { kind, .. }) => match kind {
+                        ShowKind::Describe { .. }
+                        | ShowKind::Columns {
+                            detail: ColumnsDetail::Describe,
+                            ..
+                        } => write!(f, "DescribeTable"),
+                        ShowKind::Tables => write!(f, "ShowTables"),
+                        ShowKind::Columns { .. } => write!(f, "ShowColumns"),
+                        ShowKind::CreateTable { .. } => write!(f, "ShowCreateTable"),
+                        ShowKind::Variables { .. } => write!(f, "ShowVariables"),
+                        ShowKind::Functions { .. } => write!(f, "ShowFunctions"),
+                    },
                     LogicalPlan::Unnest(Unnest {
                         input: plan,
                         list_type_columns: list_col_indices,
@@ -2831,12 +2964,18 @@ impl Filter {
     /// Create a new filter operator.
     ///
     /// Skips the type-checking, window function check and dealiasing done in
-    /// [Self::try_new]. For internal use in DataFusion only.
+    /// [Self::try_new].
     ///
     /// **Preconditions:**
     /// - the `predicate` expression returns a boolean value
     /// - the `predicate` expression is not aliased
     /// - the `predicate` expression contains no window function calls
+    ///
+    /// # Public Only for Internal Use:
+    ///
+    /// This is not a public API and is for internal use only; see [API policy] for details.
+    ///
+    /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
     #[doc(hidden)]
     pub fn new(predicate: Expr, input: Arc<LogicalPlan>) -> Self {
         Self { predicate, input }
@@ -3404,9 +3543,11 @@ impl Union {
     }
 
     /// Constructs new Union instance deriving schema from inputs.
-    /// Inputs do not have to have matching types and produced schema will
-    /// take type from the first input.
-    // TODO (https://github.com/apache/datafusion/issues/14380): Avoid creating uncoerced union at all.
+    /// Infers common output types without inserting casts into the inputs.
+    /// If a common type cannot be inferred, keeps the first input's type so
+    /// the analyzer can resolve or reject the inputs later.
+    // TODO (https://github.com/apache/datafusion/issues/14380): Inputs are still
+    // uncast until the analyzer runs.
     pub fn try_new_with_loose_types(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, true, false)?;
         Ok(Union { inputs, schema })
@@ -3415,6 +3556,11 @@ impl Union {
     /// Constructs a new Union instance that combines rows from different tables by name,
     /// instead of by position. This means that the specified inputs need not have schemas
     /// that are all the same width.
+    ///
+    /// Like [`Self::try_new_with_loose_types`], this infers common output types
+    /// without inserting casts. Missing columns contribute `NULL` at their input
+    /// position. For example, a missing `Dictionary(Int32, Utf8)` column and a
+    /// present one produce `Utf8` in either input order.
     pub fn try_new_by_name(inputs: Vec<Arc<LogicalPlan>>) -> Result<Self> {
         let schema = Self::derive_schema_from_inputs(&inputs, true, true)?;
         let inputs = Self::rewrite_inputs_from_schema(&schema, inputs)?;
@@ -3458,9 +3604,8 @@ impl Union {
 
     /// Constructs new Union instance deriving schema from inputs.
     ///
-    /// If `loose_types` is true, inputs do not need to have matching types and
-    /// the produced schema will use the type from the first input.
-    /// TODO (<https://github.com/apache/datafusion/issues/14380>): This is not necessarily reasonable behavior.
+    /// If `loose_types` is true, infers common types where possible without
+    /// inserting casts. Otherwise, input types must match exactly.
     ///
     /// If `by_name` is `true`, input schemas need not be the same width. That is,
     /// the constructed schema follows `UNION BY NAME` semantics.
@@ -3484,62 +3629,64 @@ impl Union {
         inputs: &[Arc<LogicalPlan>],
         loose_types: bool,
     ) -> Result<DFSchemaRef> {
-        type FieldData<'a> = (&'a DataType, bool, Vec<&'a Metadata>, usize);
-        let mut cols: Vec<(&str, FieldData)> = Vec::new();
-        for input in inputs.iter() {
+        let mut cols: Vec<(&str, Vec<Option<&Field>>)> = Vec::new();
+        for (input_index, input) in inputs.iter().enumerate() {
             for field in input.schema().fields() {
-                if let Some((_, (data_type, is_nullable, metadata, occurrences))) =
+                if let Some((_, fields)) =
                     cols.iter_mut().find(|(name, _)| name == field.name())
                 {
-                    if !loose_types && *data_type != field.data_type() {
-                        return plan_err!(
-                            "Found different types for field {}",
-                            field.name()
-                        );
-                    }
-
-                    metadata.push(field.metadata());
-                    // If the field is nullable in any one of the inputs,
-                    // then the field in the final schema is also nullable.
-                    *is_nullable |= field.is_nullable();
-                    *occurrences += 1;
+                    fields[input_index] = Some(field.as_ref());
                 } else {
-                    cols.push((
-                        field.name(),
-                        (
-                            field.data_type(),
-                            field.is_nullable(),
-                            vec![field.metadata()],
-                            1,
-                        ),
-                    ));
+                    let mut fields = vec![None; inputs.len()];
+                    fields[input_index] = Some(field.as_ref());
+                    cols.push((field.name(), fields));
                 }
             }
         }
 
+        // The analyzer sees missing fields as NULL literals in the alignment
+        // projections. Include them so both passes infer the same type.
+        let null_field = Field::new("", DataType::Null, true);
         let union_fields = cols
             .into_iter()
-            .map(
-                |(name, (data_type, is_nullable, unmerged_metadata, occurrences))| {
-                    // If the final number of occurrences of the field is less
-                    // than the number of inputs (i.e. the field is missing from
-                    // one or more inputs), then it must be treated as nullable.
-                    let final_is_nullable = if occurrences == inputs.len() {
-                        is_nullable
-                    } else {
-                        true
-                    };
+            .map(|(name, fields)| {
+                let first_type = fields
+                    .iter()
+                    .flatten()
+                    .next()
+                    .expect("column has at least one input field")
+                    .data_type();
+                let data_type = if loose_types {
+                    coerce_union_type(
+                        fields.iter().map(|field| field.unwrap_or(&null_field)),
+                    )
+                    .unwrap_or_else(|_| first_type.clone())
+                } else {
+                    if fields
+                        .iter()
+                        .flatten()
+                        .any(|field| field.data_type() != first_type)
+                    {
+                        return plan_err!("Found different types for field {name}");
+                    }
+                    first_type.clone()
+                };
+                let nullable = fields
+                    .iter()
+                    .any(|field| field.is_none_or(|field| field.is_nullable()));
+                let metadata = merge_metadata_for_union(
+                    fields.iter().flatten().map(|field| field.metadata()),
+                );
+                Ok((
+                    None,
+                    Arc::new(
+                        Field::new(name, data_type, nullable).with_metadata(metadata),
+                    ),
+                ))
+            })
+            .collect::<Result<Vec<(Option<TableReference>, _)>>>()?;
 
-                    let mut field =
-                        Field::new(name, data_type.clone(), final_is_nullable);
-                    field.set_metadata(intersect_metadata_for_union(unmerged_metadata));
-
-                    (None, Arc::new(field))
-                },
-            )
-            .collect::<Vec<(Option<TableReference>, _)>>();
-
-        let union_schema_metadata = intersect_metadata_for_union(
+        let union_schema_metadata = merge_metadata_for_union(
             inputs.iter().map(|input| input.schema().metadata()),
         );
 
@@ -3567,25 +3714,24 @@ impl Union {
             }
         }
 
-        let mut name_counts: HashMap<String, usize> = HashMap::new();
+        let mut name_counts: HashMap<String, usize> =
+            HashMap::with_capacity(fields_count);
+        let mut fields: Vec<&FieldRef> = Vec::with_capacity(inputs.len());
         let union_fields = (0..fields_count)
             .map(|i| {
-                let fields = inputs
-                    .iter()
-                    .map(|input| input.schema().field(i))
-                    .collect::<Vec<_>>();
+                fields.clear();
+                fields.extend(inputs.iter().map(|input| input.schema().field(i)));
                 let first_field = fields[0];
                 let base_name = first_field.name().to_string();
 
                 let data_type = if loose_types {
-                    // TODO apply type coercion here, or document why it's better to defer
-                    // temporarily use the data type from the left input and later rely on the analyzer to
-                    // coerce the two schemas into a common one.
-                    first_field.data_type()
+                    coerce_union_type(fields.iter().map(|field| field.as_ref()))
+                        .unwrap_or_else(|_| first_field.data_type().clone())
                 } else {
-                    fields.iter().skip(1).try_fold(
-                        first_field.data_type(),
-                        |acc, field| {
+                    fields
+                        .iter()
+                        .skip(1)
+                        .try_fold(first_field.data_type(), |acc, field| {
                             if acc != field.data_type() {
                                 return plan_err!(
                                     "UNION field {i} have different type in inputs: \
@@ -3595,8 +3741,8 @@ impl Union {
                                 );
                             }
                             Ok(acc)
-                        },
-                    )?
+                        })?
+                        .clone()
                 };
                 let nullable = fields.iter().any(|field| field.is_nullable());
 
@@ -3609,15 +3755,14 @@ impl Union {
                     base_name
                 };
 
-                let mut field = Field::new(&name, data_type.clone(), nullable);
-                let field_metadata = intersect_metadata_for_union(
-                    fields.iter().map(|field| field.metadata()),
-                );
+                let mut field = Field::new(&name, data_type, nullable);
+                let field_metadata =
+                    merge_metadata_for_union(fields.iter().map(|field| field.metadata()));
                 field.set_metadata(field_metadata);
                 Ok((None, Arc::new(field)))
             })
             .collect::<Result<_>>()?;
-        let union_schema_metadata = intersect_metadata_for_union(
+        let union_schema_metadata = merge_metadata_for_union(
             inputs.iter().map(|input| input.schema().metadata()),
         );
 
@@ -3639,9 +3784,10 @@ impl PartialOrd for Union {
     }
 }
 
-/// Describe the schema of table
+/// A `SHOW`-class SQL statement: `SHOW TABLES`, `SHOW COLUMNS`, `SHOW
+/// FUNCTIONS`, `SHOW <variable>`, `SHOW CREATE TABLE`, and `DESCRIBE`.
 ///
-/// # Example output:
+/// # Example output (`DESCRIBE`):
 ///
 /// ```sql
 /// > describe traces;
@@ -3662,16 +3808,52 @@ impl PartialOrd for Union {
 /// +--------------------+-----------------------------+-------------+
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct DescribeTable {
-    /// Table schema
-    pub schema: Arc<Schema>,
-    /// schema of describe table output
+pub struct Show {
+    /// Which `SHOW`-class statement this is, and any parameters it carries
+    pub kind: ShowKind,
+    /// schema of the output produced by this statement
     pub output_schema: DFSchemaRef,
 }
 
+/// The specific `SHOW`-class statement carried by a [`Show`] plan.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ShowKind {
+    /// `DESCRIBE <query>`
+    Describe {
+        /// The schema to describe
+        schema: Arc<Schema>,
+    },
+    /// `SHOW TABLES`
+    Tables,
+    /// `SHOW [FULL|EXTENDED] COLUMNS FROM <table>` and `DESCRIBE <table>`
+    Columns {
+        /// Table to describe
+        table_ref: TableReference,
+        /// How detailed the output should be
+        detail: ColumnsDetail,
+    },
+    /// `SHOW CREATE TABLE <table>`
+    CreateTable {
+        /// Table to describe
+        table_ref: TableReference,
+    },
+    /// `SHOW <variable>` / `SHOW ALL`
+    Variables {
+        /// The name of the variable to show, or `None` if all variables should be shown.
+        name: Option<String>,
+        /// Whether to include the `description` column (`SHOW ... VERBOSE`)
+        verbose: bool,
+    },
+    /// `SHOW FUNCTIONS [LIKE <pattern>]`
+    Functions {
+        /// The `LIKE` pattern to filter function names by, if any
+        filter: Option<String>,
+    },
+}
+
 // Manual implementation of `PartialOrd`, returning none since there are no comparable types in
-// `DescribeTable`. This allows `LogicalPlan` to derive `PartialOrd`.
-impl PartialOrd for DescribeTable {
+// `Show`. This allows `LogicalPlan` to derive `PartialOrd`.
+impl PartialOrd for Show {
     fn partial_cmp(&self, _other: &Self) -> Option<Ordering> {
         // There is no relevant comparison for schemas
         None
@@ -4323,7 +4505,7 @@ impl PartialOrd for Aggregate {
 #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // Expr contains Arc with interior mutability but is intentionally used as hash key
 fn max_grouping_set_duplicate_ordinal(group_expr: &[Expr]) -> usize {
     if let Some(Expr::GroupingSet(GroupingSet::GroupingSets(sets))) = group_expr.first() {
-        let mut counts: HashMap<&[Expr], usize> = HashMap::new();
+        let mut counts: HashMap<&[Expr], usize> = HashMap::with_capacity(sets.len());
         for set in sets {
             *counts.entry(set).or_insert(0) += 1;
         }
@@ -4355,21 +4537,55 @@ fn calc_func_dependencies_for_aggregate(
     //   that GROUP BY expression results will be unique.
     // - Otherwise, it may be possible to propagate functional dependencies.
     if !contains_grouping_set(group_expr) {
-        let group_by_expr_names = group_expr
+        // One entry per GROUP BY output field, in the order of `aggr_schema`
+        let group_exprs = grouping_set_to_exprlist(group_expr)?;
+        let group_by_input_indices = group_exprs
             .iter()
-            .map(|item| item.schema_name().to_string())
-            .collect::<IndexSet<_>>()
-            .into_iter()
+            .map(|item| passthrough_field_index(item, input.schema()))
             .collect::<Vec<_>>();
-        let aggregate_func_dependencies = aggregate_functional_dependencies(
-            input.schema(),
-            &group_by_expr_names,
-            aggr_schema,
-        );
+        let computed_input_indices = group_exprs
+            .iter()
+            .zip(&group_by_input_indices)
+            .map(|(item, input_idx)| match input_idx {
+                Some(_) => None,
+                None => deterministic_input_indices(item, input.schema()),
+            })
+            .collect::<Vec<_>>();
+        let aggregate_func_dependencies =
+            aggregate_functional_dependencies_with_computed_inputs(
+                input.schema(),
+                &group_by_input_indices,
+                &computed_input_indices,
+                aggr_schema,
+            );
         Ok(aggregate_func_dependencies)
     } else {
         Ok(FunctionalDependencies::empty())
     }
+}
+
+/// Returns the input fields that `expr` reads, or `None` if `expr` is volatile,
+/// contains a subquery or reads a column that is not an input field.
+fn deterministic_input_indices(expr: &Expr, schema: &DFSchema) -> Option<Vec<usize>> {
+    let has_subquery = expr
+        .exists(|e| {
+            Ok(matches!(
+                e,
+                Expr::ScalarSubquery(_)
+                    | Expr::Exists(_)
+                    | Expr::InSubquery(_)
+                    | Expr::SetComparison(_)
+                    | Expr::OuterReferenceColumn(..)
+            ))
+        })
+        .unwrap_or(true);
+    if expr.is_volatile() || has_subquery {
+        return None;
+    }
+    expr.column_refs()
+        .into_iter()
+        .map(|column| schema.index_of_column(column).ok())
+        .collect()
 }
 
 /// This function projects functional dependencies of the `input` plan according
@@ -4381,7 +4597,19 @@ fn calc_func_dependencies_for_project(
     // Sentinel for projection outputs that do not map back to any input field.
     const COMPUTED_EXPR_INDEX: usize = usize::MAX;
 
-    let input_fields = input.schema().field_names();
+    let input_func_dependencies = input.schema().functional_dependencies();
+    // Projecting an empty set of dependencies always yields an empty set, so
+    // skip resolving projection expressions against the input fields. This is
+    // the common case because table sources carry no constraints by default.
+    if input_func_dependencies.is_empty() {
+        return Ok(FunctionalDependencies::empty());
+    }
+
+    let input_schema = input.schema();
+    let input_index = |expr: &Expr| {
+        passthrough_field_index(expr, input_schema).unwrap_or(COMPUTED_EXPR_INDEX)
+    };
+
     // Map each projection output position to its input column index.
     // A projection expression can produce multiple output columns, such as `*`.
     let proj_indices = exprs
@@ -4400,42 +4628,21 @@ fn calc_func_dependencies_for_project(
                     wildcard_fields
                         .into_iter()
                         .map(|(qualifier, f)| {
-                            let flat_name = qualifier
-                                .map(|t| format!("{}.{}", t, f.name()))
-                                .unwrap_or_else(|| f.name().clone());
-                            input_fields
-                                .iter()
-                                .position(|item| *item == flat_name)
+                            input_schema
+                                .index_of_column_by_name(qualifier.as_ref(), f.name())
                                 .unwrap_or(COMPUTED_EXPR_INDEX)
                         })
                         .collect::<Vec<_>>(),
                 )
             }
-            Expr::Alias(alias) => {
-                let name = format!("{}", alias.expr);
-                let input_index = input_fields
-                    .iter()
-                    .position(|item| *item == name)
-                    .unwrap_or(COMPUTED_EXPR_INDEX);
-                Ok(vec![input_index])
-            }
-            _ => {
-                let name = format!("{expr}");
-                let input_index = input_fields
-                    .iter()
-                    .position(|item| *item == name)
-                    .unwrap_or(COMPUTED_EXPR_INDEX);
-                Ok(vec![input_index])
-            }
+            _ => Ok(vec![input_index(expr)]),
         })
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
         .collect::<Vec<_>>();
 
-    Ok(input
-        .schema()
-        .functional_dependencies()
+    Ok(input_func_dependencies
         .project_functional_dependencies(&proj_indices, exprs.len()))
 }
 
@@ -4477,6 +4684,24 @@ pub struct Join {
     /// For `LeftMark`, the generated `mark` column becomes nullable so unmatched rows can produce
     /// `NULL` rather than `false` when SQL three-valued logic requires it.
     pub null_aware: bool,
+    /// Number of `NOT IN` value keys of a null-aware join; ignored unless
+    /// [`Self::null_aware`] is set.
+    ///
+    /// A scalar `x NOT IN (SELECT y ...)` has one value key, a multi-column
+    /// `(a, b) NOT IN (SELECT x, y ...)` one per tuple element that can be
+    /// NULL in scope. A tuple element that cannot be NULL on either side never
+    /// makes the comparison UNKNOWN, so it is a scope key instead. The value keys
+    /// are the leading equi-join keys (`on[..n]`, or the leading equality
+    /// conjuncts of `filter` before they are extracted into `on`); any keys
+    /// after them are correlation scope keys of a correlated subquery. A NULL
+    /// in a value key follows SQL three-valued logic across the whole tuple,
+    /// while the scope keys only select which subquery rows are compared.
+    ///
+    /// `0` leaves the count unset, which is the default of [`Self::try_new`]
+    /// and the `LogicalPlanBuilder` join methods. Physical planning accepts an
+    /// unset count only for a single-key join, a scalar `NOT IN`, and rejects
+    /// it for more keys: no default can tell which of them are value keys.
+    pub null_aware_value_keys: usize,
 }
 
 /// The ordered comparison used by an [`AsOfJoin`].
@@ -4704,7 +4929,15 @@ impl Join {
             schema: Arc::new(join_schema),
             null_equality,
             null_aware,
+            null_aware_value_keys: 0,
         })
+    }
+
+    /// Sets the number of `NOT IN` value keys of a null-aware join, see
+    /// [`Self::null_aware_value_keys`].
+    pub fn with_null_aware_value_keys(mut self, null_aware_value_keys: usize) -> Self {
+        self.null_aware_value_keys = null_aware_value_keys;
+        self
     }
 
     /// Create Join with input which wrapped with projection, this method is used in physical planning only to help
@@ -4759,6 +4992,7 @@ impl Join {
                 schema: Arc::new(join_schema),
                 null_equality: original_join.null_equality,
                 null_aware: original_join.null_aware,
+                null_aware_value_keys: original_join.null_aware_value_keys,
             },
             requalified,
         ))
@@ -5110,7 +5344,7 @@ impl Unnest {
 
         let input_schema = input.schema();
 
-        let mut dependency_indices = vec![];
+        let mut dependency_indices = Vec::with_capacity(input_schema.fields().len());
         // Transform input schema into new schema
         // Given this comprehensive example
         //
@@ -5214,8 +5448,47 @@ impl Unnest {
 
         let metadata = input_schema.metadata().clone();
         let df_schema = DFSchema::new_with_metadata(fields, metadata)?;
-        // We can use the existing functional dependencies:
-        let deps = input_schema.functional_dependencies().clone();
+        let list_indices: HashSet<_> =
+            list_columns.iter().map(|(index, _)| *index).collect();
+        // Struct unnest may replace one input column with several output columns,
+        // so remap dependencies using the input index of each output column.
+        let remap_indices = |indices: &[usize], exclude_lists: bool| {
+            dependency_indices
+                .iter()
+                .enumerate()
+                .filter_map(|(output_index, input_index)| {
+                    (indices.contains(input_index)
+                        && (!exclude_lists || !list_indices.contains(input_index)))
+                    .then_some(output_index)
+                })
+                .collect()
+        };
+        let deps = FunctionalDependencies::new(
+            input_schema
+                .functional_dependencies()
+                .iter()
+                // A list input no longer determines the rows produced by unnest.
+                // A struct input is also unsafe as a source: a null struct and
+                // a non-null struct with all-null fields have the same outputs.
+                .filter(|dep| {
+                    dep.source_indices.iter().all(|index| {
+                        !list_indices.contains(index) && !struct_columns.contains(index)
+                    })
+                })
+                .map(|dep| FunctionalDependence {
+                    source_indices: remap_indices(&dep.source_indices, false),
+                    // The unnested values are not determined by the input key.
+                    target_indices: remap_indices(&dep.target_indices, true),
+                    // One input row can produce multiple output rows.
+                    mode: if list_indices.is_empty() {
+                        dep.mode
+                    } else {
+                        Dependency::Multi
+                    },
+                    ..dep.clone()
+                })
+                .collect(),
+        );
         let schema = Arc::new(df_schema.with_functional_dependencies(deps)?);
 
         Ok(Unnest {
@@ -5252,13 +5525,15 @@ fn get_unnested_columns(
         | DataType::LargeList(_)
         | DataType::ListView(_)
         | DataType::LargeListView(_) => {
-            let data_type = get_unnested_list_datatype_recursive(data_type, depth)?;
-            let new_field = Arc::new(Field::new(
-                col_name, data_type,
-                // Unnesting may produce NULLs even if the list is not null.
-                // For example: unnest([1], []) -> 1, null
-                true,
-            ));
+            let field = get_unnested_list_field(data_type, depth)?;
+            let new_field = Arc::new(
+                field
+                    .clone()
+                    .with_name(col_name)
+                    // Unnesting may produce NULLs even if the list is not null.
+                    // For example: unnest([1], []) -> 1, null
+                    .with_nullable(true),
+            );
             let column = Column::from_name(col_name);
             // let column = Column::from((None, &new_field));
             qualified_columns.push((column, new_field));
@@ -5283,29 +5558,6 @@ fn get_unnested_columns(
     Ok(qualified_columns)
 }
 
-// Get the data type of a multi-dimensional type after unnesting it
-// with a given depth
-fn get_unnested_list_datatype_recursive(
-    data_type: &DataType,
-    depth: usize,
-) -> Result<DataType> {
-    match data_type {
-        DataType::List(field)
-        | DataType::FixedSizeList(field, _)
-        | DataType::LargeList(field)
-        | DataType::ListView(field)
-        | DataType::LargeListView(field) => {
-            if depth == 1 {
-                return Ok(field.data_type().clone());
-            }
-            return get_unnested_list_datatype_recursive(field.data_type(), depth - 1);
-        }
-        _ => {}
-    }
-
-    internal_err!("trying to unnest on invalid data type {data_type}")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -5317,11 +5569,12 @@ mod tests {
         GroupingSet, binary_expr, col, exists, in_subquery, lit, placeholder,
         scalar_subquery,
     };
+    use arrow::datatypes::Metadata;
     use datafusion_common::metadata::ScalarAndMetadata;
     use datafusion_common::tree_node::{
         TransformedResult, TreeNodeRewriter, TreeNodeVisitor,
     };
-    use datafusion_common::{Constraint, not_impl_err};
+    use datafusion_common::{Constraint, RecursionUnnestOption, not_impl_err};
     use insta::{assert_debug_snapshot, assert_snapshot};
     use std::hash::DefaultHasher;
 
@@ -5402,6 +5655,80 @@ mod tests {
     }
 
     #[test]
+    fn unnest_remaps_functional_dependencies() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new_struct(
+                "s",
+                vec![
+                    Field::new("a", DataType::Int32, true),
+                    Field::new("b", DataType::Int32, true),
+                ],
+                true,
+            ),
+            Field::new("k", DataType::Int32, false),
+            Field::new_list(
+                "xs",
+                Field::new_list(
+                    "item",
+                    Field::new_list_field(DataType::Int32, true),
+                    true,
+                ),
+                true,
+            ),
+            Field::new("payload", DataType::Utf8, true),
+        ]));
+        let constraints = Constraints::new_unverified(vec![
+            Constraint::PrimaryKey(vec![1]),
+            Constraint::Unique(vec![0]),
+            Constraint::Unique(vec![2]),
+        ]);
+        let source: Arc<dyn TableSource> =
+            Arc::new(LogicalTableSource::new(schema).with_constraints(constraints));
+
+        // Expanding a struct preserves row count and remaps keys and targets,
+        // but a dependency sourced from the struct itself cannot be kept.
+        let struct_only = LogicalPlanBuilder::scan("t", Arc::clone(&source), None)?
+            .unnest_column("s")?
+            .build()?;
+        assert_eq!(
+            struct_only.schema().functional_dependencies(),
+            &FunctionalDependencies::new(vec![
+                FunctionalDependence::new(vec![2], vec![0, 1, 2, 3, 4], false)
+                    .with_mode(Dependency::Single),
+                FunctionalDependence::new(vec![3], vec![0, 1, 2, 3, 4], true)
+                    .with_mode(Dependency::Single),
+            ])
+        );
+
+        // The two recursion outputs both replace the same list input. Neither
+        // is determined by k, and a list-sourced dependency is no longer valid.
+        let options = UnnestOptions::default()
+            .with_recursions(RecursionUnnestOption {
+                input_column: "xs".into(),
+                output_column: "xs_depth_1".into(),
+                depth: 1,
+            })
+            .with_recursions(RecursionUnnestOption {
+                input_column: "xs".into(),
+                output_column: "xs_depth_2".into(),
+                depth: 2,
+            });
+        let plan = LogicalPlanBuilder::scan("t", source, None)?
+            .unnest_columns_with_options(vec!["s".into(), "xs".into()], options)?
+            .build()?;
+        assert_eq!(plan.schema().fields().len(), 6);
+        assert_eq!(
+            plan.schema().functional_dependencies(),
+            &FunctionalDependencies::new(vec![
+                FunctionalDependence::new(vec![2], vec![0, 1, 2, 5], false,)
+                    .with_mode(Dependency::Multi)
+            ])
+        );
+
+        Ok(())
+    }
+
+    #[test]
     fn projection_with_leading_computed_column_preserves_pk() -> Result<()> {
         let constraints =
             Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
@@ -5473,6 +5800,151 @@ mod tests {
         let deps = projection.schema.functional_dependencies();
         assert_eq!(deps.len(), 1);
         assert_eq!(deps[0].source_indices, vec![1]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_with_alias_preserves_pk() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .project(vec![col("id").alias("emp_id"), col("first_name")])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].target_indices, vec![0, 1]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_over_unconstrained_table_has_no_dependencies() -> Result<()> {
+        let source = Arc::new(LogicalTableSource::new(Arc::new(employee_schema())));
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .project(vec![col("id"), col("first_name")])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert!(deps.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_group_by_repeated_key_keeps_key_dependency() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        // `id` is in the GROUP BY list two times: as itself and as `k`.
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .aggregate(
+                vec![col("id"), col("state"), col("id").alias("k")],
+                Vec::<Expr>::new(),
+            )?
+            .build()?;
+
+        // `id` alone still determines the row.
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].target_indices, vec![0, 1, 2]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn projection_resolves_columns_not_flattened_names() -> Result<()> {
+        // Build an input schema where a qualified field (`orders`.`id`) and an
+        // unqualified field that is literally named `"orders.id"` (the name of
+        // e.g. `CAST(orders.id AS INT)`) have the same flattened name. The
+        // projection must resolve the column it references, not the first
+        // field with the same flattened name.
+        let schema = DFSchema::new_with_metadata(
+            vec![
+                (
+                    Some(TableReference::bare("orders")),
+                    Arc::new(Field::new("id", DataType::Int32, false)),
+                ),
+                (
+                    None,
+                    Arc::new(Field::new("orders.id", DataType::Int32, false)),
+                ),
+            ],
+            Metadata::default(),
+        )?
+        .with_functional_dependencies(FunctionalDependencies::new(vec![
+            FunctionalDependence::new(vec![0], vec![0, 1], false)
+                .with_mode(Dependency::Single),
+        ]))?;
+        let input = LogicalPlan::EmptyRelation(EmptyRelation {
+            produce_one_row: true,
+            schema: Arc::new(schema),
+        });
+
+        // References the *unqualified* second field, which is not a key.
+        let exprs = vec![Expr::Column(Column::new_unqualified("orders.id"))];
+        let deps = calc_func_dependencies_for_project(&exprs, &input)?;
+        assert!(deps.is_empty());
+
+        // References the qualified first field, which is a key.
+        let exprs = vec![Expr::Column(Column::new(Some("orders"), "id"))];
+        let deps = calc_func_dependencies_for_project(&exprs, &input)?;
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_group_by_on_primary_key_reports_single_dependency() -> Result<()> {
+        let constraints =
+            Constraints::new_unverified(vec![Constraint::PrimaryKey(vec![0])]);
+        let source = Arc::new(
+            LogicalTableSource::new(Arc::new(employee_schema()))
+                .with_constraints(constraints),
+        );
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .aggregate(vec![col("id")], vec![count(lit(true))])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].mode, Dependency::Single);
+
+        Ok(())
+    }
+
+    #[test]
+    fn aggregate_group_by_without_constraints_still_reports_single_dependency()
+    -> Result<()> {
+        // Grouping guarantees uniqueness of the GROUP BY key regardless of
+        // whether the input table carries any PRIMARY KEY / UNIQUE
+        // constraints, so `aggregate_functional_dependencies` must still
+        // report a `Single` dependency spanning the whole aggregate output.
+        // This pins that behavior so the early return added for the (far
+        // more common) case of an input with no functional dependencies at
+        // all cannot be mistakenly widened to also skip this GROUP BY-only
+        // dependency.
+        let source = Arc::new(LogicalTableSource::new(Arc::new(employee_schema())));
+        let plan = LogicalPlanBuilder::scan("employee_csv", source, None)?
+            .aggregate(vec![col("id")], vec![count(lit(true))])?
+            .build()?;
+
+        let deps = plan.schema().functional_dependencies();
+        assert_eq!(deps.len(), 1);
+        assert_eq!(deps[0].source_indices, vec![0]);
+        assert_eq!(deps[0].mode, Dependency::Single);
 
         Ok(())
     }
@@ -6528,21 +7000,25 @@ mod tests {
             schema: Arc::new(DFSchema::empty()),
         });
 
-        let describe_table = LogicalPlan::DescribeTable(DescribeTable {
-            schema: Arc::new(Schema::new(vec![Field::new(
-                "foo",
-                DataType::Int32,
-                false,
-            )])),
+        let describe_table = LogicalPlan::Show(Show {
+            kind: ShowKind::Describe {
+                schema: Arc::new(Schema::new(vec![Field::new(
+                    "foo",
+                    DataType::Int32,
+                    false,
+                )])),
+            },
             output_schema: DFSchemaRef::new(DFSchema::empty()),
         });
 
-        let describe_table_clone = LogicalPlan::DescribeTable(DescribeTable {
-            schema: Arc::new(Schema::new(vec![Field::new(
-                "foo",
-                DataType::Int32,
-                false,
-            )])),
+        let describe_table_clone = LogicalPlan::Show(Show {
+            kind: ShowKind::Describe {
+                schema: Arc::new(Schema::new(vec![Field::new(
+                    "foo",
+                    DataType::Int32,
+                    false,
+                )])),
+            },
             output_schema: DFSchemaRef::new(DFSchema::empty()),
         });
 
@@ -6804,6 +7280,7 @@ mod tests {
                 schema: Arc::new(left_schema.join(&right_schema)?),
                 null_equality: NullEquality::NullEqualsNothing,
                 null_aware: false,
+                null_aware_value_keys: 0,
             }))
         }
 
@@ -7333,6 +7810,53 @@ mod tests {
         let rebuilt = unnest_plan.with_new_exprs(vec![], inputs)?;
         assert_eq!(rebuilt.schema(), unnest_plan.schema());
 
+        Ok(())
+    }
+
+    #[test]
+    fn union_infers_types_without_rewriting_inputs() -> Result<()> {
+        let input = |data_type, nullable, source: &str| {
+            table_scan(
+                Some(source),
+                &Schema::new(vec![
+                    Field::new("x", data_type, nullable)
+                        .with_metadata(Metadata::new().with("source", source)),
+                ]),
+                None,
+            )?
+            .build()
+            .map(Arc::new)
+        };
+        let left = input(DataType::Int16, false, "left")?;
+        let right = input(DataType::Int64, true, "right")?;
+        let inputs = vec![Arc::clone(&left), Arc::clone(&right)];
+        let union = Union::try_new_with_loose_types(inputs.clone())?;
+        assert_eq!(union.inputs, inputs);
+        assert_eq!(union.schema.field(0).name(), "x");
+        assert_eq!(union.schema.field(0).data_type(), &DataType::Int64);
+        assert!(union.schema.field(0).is_nullable());
+        assert_eq!(
+            union
+                .schema
+                .field(0)
+                .metadata()
+                .get("source")
+                .map(String::as_str),
+            Some("right")
+        );
+        assert!(Union::try_new(inputs.clone()).is_err());
+        assert!(Union::try_new_with_loose_types(vec![Arc::clone(&left)]).is_err());
+
+        // Keep the original type when a later input prevents builtin inference.
+        // A custom analyzer can still resolve the raw inputs without earlier casts.
+        let incompatible = input(DataType::Boolean, false, "third")?;
+        let inputs = vec![left, right, incompatible];
+        for union in [
+            Union::try_new_with_loose_types(inputs.clone())?,
+            Union::try_new_by_name(inputs)?,
+        ] {
+            assert_eq!(union.schema.field(0).data_type(), &DataType::Int16);
+        }
         Ok(())
     }
 }

@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Common behaviors that every file format needs to implement
 
@@ -31,6 +18,7 @@ use crate::schema_adapter::SchemaAdapterFactory;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::tree_node::TreeNodeRecursion;
 use datafusion_common::{Result, not_impl_err};
+use datafusion_execution::memory_pool::MemoryPool;
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::{EquivalenceProperties, LexOrdering, PhysicalExpr};
 use datafusion_physical_plan::DisplayFormatType;
@@ -106,6 +94,18 @@ pub trait FileSource: Any + Send + Sync {
 
     /// Initialize new type with batch size configuration
     fn with_batch_size(&self, batch_size: usize) -> Arc<dyn FileSource>;
+
+    /// Returns a copy of this source that charges the memory it buffers
+    /// while scanning to `pool`, or `None` (the default) when the source
+    /// keeps nothing worth accounting for between the batches it emits.
+    ///
+    /// Called with the task's memory pool before the scan is opened.
+    fn with_memory_pool(
+        &self,
+        _memory_pool: &Arc<dyn MemoryPool>,
+    ) -> Option<Arc<dyn FileSource>> {
+        None
+    }
 
     /// Returns the filter expression that will be applied *during* the file scan.
     ///

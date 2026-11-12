@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ##########
 # Tests for projection pushdown behavior with get_field expressions
@@ -767,7 +754,7 @@ physical_plan
 03)----SortExec: expr=[id@1 ASC NULLS LAST], preserve_partitioning=[true]
 04)------FilterExec: id@1 > 2
 05)--------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=3
-06)----------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part1.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part2.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part3.parquet, WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part4.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part5.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, id], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
+06)----------DataSourceExec: file_groups={3 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part3.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part4.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/multi/part5.parquet]]}, projection=[get_field(s@1, value) as __datafusion_extracted_1, id], file_type=parquet, predicate=id@0 > 2, pruning_predicate=id_null_count@1 != row_count@2 AND id_max@0 > 2, required_guarantees=[]
 
 # Verify correctness
 query II
@@ -1059,7 +1046,7 @@ query TT
 EXPLAIN SELECT s['value'] * 2 + length(s['label']) as score FROM simple_struct WHERE id > 1;
 ----
 logical_plan
-01)Projection: __datafusion_extracted_1 * Int64(2) + CAST(character_length(__datafusion_extracted_2) AS Int64) AS score
+01)Projection: __datafusion_extracted_1 * Int64(2) + CAST(character_length(__datafusion_extracted_2) AS length(get_field(simple_struct.s, Utf8("label"))) AS Int64) AS score
 02)--Filter: simple_struct.id > Int64(1)
 03)----Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_1, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_2, simple_struct.id
 04)------TableScan: simple_struct projection=[id, s], partial_filters=[simple_struct.id > Int64(1)]
@@ -2122,7 +2109,7 @@ SET datafusion.execution.target_partitions = 4;
 # reused. Projection pushdown must not merge the outer projection into the file
 # scan when doing so would inline and duplicate the volatile expression.
 # Reproduces only against a file scan (not an in-memory table); if the volatile
-# expression is duplicated, the two references diverge and `x = y` is false.
+# expression is duplicated, it is evaluated two times per row.
 #####################
 
 statement ok
@@ -2134,15 +2121,20 @@ statement ok
 CREATE EXTERNAL TABLE volatile_scan STORED AS PARQUET
 LOCATION 'test_files/scratch/projection_pushdown/volatile.parquet';
 
-# The two references to the aliased `random()` value must be equal on every
-# row: the expression is evaluated once and reused, not inlined twice.
-query B rowsort
-SELECT s.x = s.y
-FROM (SELECT r AS x, r AS y FROM (SELECT random() AS r FROM volatile_scan) AS t) AS s;
+# The aliased volatile value is evaluated one time per row and reused, not
+# inlined twice.
+query II rowsort
+SELECT s.x, s.y
+FROM (SELECT r AS x, r AS y FROM (SELECT counted_volatile(id) AS r FROM volatile_scan) AS t) AS s;
 ----
-true
-true
-true
+1 1
+2 2
+3 3
+
+query I
+SELECT evaluations();
+----
+3
 
 #####################
 # Section: leaf expression extraction does not duplicate volatile expressions
@@ -2189,37 +2181,52 @@ logical_plan
 statement ok
 set datafusion.explain.logical_plan_only = false;
 
-# Every row's `field` is the `a` field of that row's own struct.
-query B
-SELECT bool_and(field = s['a'])
+# The struct is evaluated one time per row; `field` reads it.
+query II
+SELECT count(s), sum(field)
 FROM (
   SELECT s, s['a'] AS field
-  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000))
+  FROM (SELECT named_struct('a', counted_volatile(value)) AS s FROM generate_series(1, 10))
 );
 ----
-true
+10 55
 
-# Same invariant when the extraction is routed into one side of a join.
-query B
-SELECT bool_and(field = s['a'])
+query I
+SELECT evaluations();
+----
+10
+
+# Same when the extraction is routed into one side of a join.
+query II
+SELECT count(s), sum(field)
 FROM (
   SELECT l.s, l.s['a'] AS field
-  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000)) AS l
+  FROM (SELECT named_struct('a', counted_volatile(value)) AS s FROM generate_series(1, 10)) AS l
   INNER JOIN (SELECT 1 AS k) AS r ON true
 );
 ----
-true
+10 55
 
-# Every surviving row satisfies the predicate it was filtered on.
-query B
-SELECT bool_and(s['a'] > 0.5)
+query I
+SELECT evaluations();
+----
+10
+
+# The filter tests the struct that is returned, not a second evaluation.
+query I
+SELECT count(s)
 FROM (
   SELECT s
-  FROM (SELECT named_struct('a', random()) AS s FROM generate_series(1, 1000))
-  WHERE s['a'] > 0.5
+  FROM (SELECT named_struct('a', counted_volatile(value)) AS s FROM generate_series(1, 10))
+  WHERE s['a'] > 5
 );
 ----
-true
+5
+
+query I
+SELECT evaluations();
+----
+10
 
 #####################
 # Section: expensive expressions are not re-inlined by projection pushdown
@@ -2331,12 +2338,542 @@ logical_plan
 05)--------SubqueryAlias: inner_t
 06)----------Projection: simple_struct.id, simple_struct.s, __datafusion_extracted_1
 07)------------Limit: skip=0, fetch=1
-08)--------------Filter: __datafusion_extracted_2 > Int64(120) AND __datafusion_extracted_1 != Utf8("delta")
-09)----------------Filter: simple_struct.id = outer_ref(outer_t.id)
-10)------------------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_2, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_1, simple_struct.id, simple_struct.s
-11)--------------------TableScan: simple_struct, partial_filters=[simple_struct.id = outer_ref(outer_t.id), get_field(simple_struct.s, Utf8("value")) > Int64(120)]
-12)--SubqueryAlias: outer_t
-13)----TableScan: simple_struct projection=[id]
+08)--------------Filter: simple_struct.id = outer_ref(outer_t.id) AND __datafusion_extracted_2 > Int64(120) AND __datafusion_extracted_1 != Utf8("delta")
+09)----------------Projection: get_field(simple_struct.s, Utf8("value")) AS __datafusion_extracted_2, simple_struct.id, simple_struct.s, get_field(simple_struct.s, Utf8("label")) AS __datafusion_extracted_1
+10)------------------TableScan: simple_struct, partial_filters=[simple_struct.id = outer_ref(outer_t.id), get_field(simple_struct.s, Utf8("value")) > Int64(120)]
+11)--SubqueryAlias: outer_t
+12)----TableScan: simple_struct projection=[id]
 
 statement ok
 set datafusion.explain.logical_plan_only = false;
+
+#####################
+# Section 17: Precedence between PushDownFilter and PushDownLeafProjections
+#
+# Both rules move nodes towards the leaves, and for an adjacent filter and
+# "pure extraction projection" they want the opposite order. The precedence is:
+# the extraction projection wins. It stays next to the scan, so the scan can
+# absorb it and read only the struct leaf, and the filter stays above it.
+#
+# See https://github.com/apache/datafusion/issues/14540
+#####################
+
+statement ok
+SET datafusion.execution.target_partitions = 1;
+
+statement ok
+CREATE TABLE events_mem (
+    "date" DATE,
+    "timestamp" TIMESTAMP,
+    ids STRUCT<id1 VARCHAR, extra INT>,
+    structs STRUCT<var1 VARCHAR, extra VARCHAR>
+) AS VALUES
+    (DATE '2025-01-03', TIMESTAMP '2025-01-03 01:00:00', {id1: 'dev1', extra: 1}, {var1: 'user1', extra: 'e1'}),
+    (DATE '2025-01-03', TIMESTAMP '2025-01-03 02:00:00', {id1: 'dev1', extra: 2}, {var1: 'user2', extra: 'e2'}),
+    (DATE '2025-01-04', TIMESTAMP '2025-01-04 01:00:00', {id1: 'dev2', extra: 3}, {var1: 'user3', extra: 'e3'});
+
+# The query from #14540. The extraction projection is the bottom node and the
+# filter sits above it.
+query TT
+EXPLAIN WITH events AS (
+    SELECT ids.id1 AS device, structs.var1 AS user, "timestamp"
+    FROM events_mem
+    WHERE "date" = '2025-01-03'
+)
+SELECT *, LAG(user, 1) OVER (PARTITION BY device ORDER BY "timestamp") AS prev
+FROM events
+WHERE device IS NOT NULL AND device != '' AND user IS NOT NULL AND user != ''
+LIMIT 100;
+----
+logical_plan
+01)Projection: events.device, events.user, events.timestamp, lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS prev
+02)--Limit: skip=0, fetch=100
+03)----WindowAggr: windowExpr=[[lag(events.user, Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------SubqueryAlias: events
+05)--------Projection: __datafusion_extracted_1 AS device, __datafusion_extracted_2 AS user, events_mem.timestamp
+06)----------Filter: events_mem.date = Date32("2025-01-03") AND __datafusion_extracted_1 IS NOT NULL AND __datafusion_extracted_1 != Utf8View("") AND __datafusion_extracted_2 IS NOT NULL AND __datafusion_extracted_2 != Utf8View("")
+07)------------Projection: get_field(events_mem.ids, Utf8("id1")) AS __datafusion_extracted_1, get_field(events_mem.structs, Utf8("var1")) AS __datafusion_extracted_2, events_mem.date, events_mem.timestamp
+08)--------------TableScan: events_mem projection=[date, timestamp, ids, structs]
+physical_plan
+01)ProjectionExec: expr=[device@0 as device, user@1 as user, timestamp@2 as timestamp, lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as prev]
+02)--GlobalLimitExec: skip=0, fetch=100
+03)----BoundedWindowAggExec: wdw=[lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Utf8View }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[device@0 ASC NULLS LAST, timestamp@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[__datafusion_extracted_1@0 as device, __datafusion_extracted_2@1 as user, timestamp@2 as timestamp]
+06)----------FilterExec: date@2 = 2025-01-03 AND __datafusion_extracted_1@0 IS NOT NULL AND __datafusion_extracted_1@0 !=  AND __datafusion_extracted_2@1 IS NOT NULL AND __datafusion_extracted_2@1 != , projection=[__datafusion_extracted_1@0, __datafusion_extracted_2@1, timestamp@3]
+07)------------ProjectionExec: expr=[get_field(ids@2, id1) as __datafusion_extracted_1, get_field(structs@3, var1) as __datafusion_extracted_2, date@0 as date, timestamp@1 as timestamp]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# Determinism: the plan is a fixed point reached before the default pass limit,
+# so it does not depend on which of the two rules runs last. One pass is enough
+# for the simple shape.
+statement ok
+SET datafusion.optimizer.max_passes = 1;
+
+query TT
+EXPLAIN SELECT ids['id1'] FROM events_mem WHERE "date" = '2025-01-03';
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS events_mem.ids[id1]
+02)--Filter: events_mem.date = Date32("2025-01-03")
+03)----Projection: get_field(events_mem.ids, Utf8("id1")) AS __datafusion_extracted_1, events_mem.date
+04)------TableScan: events_mem projection=[date, ids]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_extracted_1@0 as events_mem.ids[id1]]
+02)--FilterExec: date@1 = 2025-01-03, projection=[__datafusion_extracted_1@0]
+03)----ProjectionExec: expr=[get_field(ids@1, id1) as __datafusion_extracted_1, date@0 as date]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+query TT
+EXPLAIN SELECT ids['id1'] FROM events_mem WHERE "date" = '2025-01-03';
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS events_mem.ids[id1]
+02)--Filter: events_mem.date = Date32("2025-01-03")
+03)----Projection: get_field(events_mem.ids, Utf8("id1")) AS __datafusion_extracted_1, events_mem.date
+04)------TableScan: events_mem projection=[date, ids]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_extracted_1@0 as events_mem.ids[id1]]
+02)--FilterExec: date@1 = 2025-01-03, projection=[__datafusion_extracted_1@0]
+03)----ProjectionExec: expr=[get_field(ids@1, id1) as __datafusion_extracted_1, date@0 as date]
+04)------DataSourceExec: partitions=1, partition_sizes=[1]
+
+# The #14540 shape needs a second pass, because the two filters merge into one.
+# It is stable from that pass on.
+statement ok
+SET datafusion.optimizer.max_passes = 2;
+
+query TT
+EXPLAIN WITH events AS (
+    SELECT ids.id1 AS device, structs.var1 AS user, "timestamp"
+    FROM events_mem
+    WHERE "date" = '2025-01-03'
+)
+SELECT *, LAG(user, 1) OVER (PARTITION BY device ORDER BY "timestamp") AS prev
+FROM events
+WHERE device IS NOT NULL AND device != '' AND user IS NOT NULL AND user != ''
+LIMIT 100;
+----
+logical_plan
+01)Projection: events.device, events.user, events.timestamp, lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS prev
+02)--Limit: skip=0, fetch=100
+03)----WindowAggr: windowExpr=[[lag(events.user, Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------SubqueryAlias: events
+05)--------Projection: __datafusion_extracted_1 AS device, __datafusion_extracted_2 AS user, events_mem.timestamp
+06)----------Filter: events_mem.date = Date32("2025-01-03") AND __datafusion_extracted_1 IS NOT NULL AND __datafusion_extracted_1 != Utf8View("") AND __datafusion_extracted_2 IS NOT NULL AND __datafusion_extracted_2 != Utf8View("")
+07)------------Projection: get_field(events_mem.ids, Utf8("id1")) AS __datafusion_extracted_1, get_field(events_mem.structs, Utf8("var1")) AS __datafusion_extracted_2, events_mem.date, events_mem.timestamp
+08)--------------TableScan: events_mem projection=[date, timestamp, ids, structs]
+physical_plan
+01)ProjectionExec: expr=[device@0 as device, user@1 as user, timestamp@2 as timestamp, lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as prev]
+02)--GlobalLimitExec: skip=0, fetch=100
+03)----BoundedWindowAggExec: wdw=[lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Utf8View }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[device@0 ASC NULLS LAST, timestamp@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[__datafusion_extracted_1@0 as device, __datafusion_extracted_2@1 as user, timestamp@2 as timestamp]
+06)----------FilterExec: date@2 = 2025-01-03 AND __datafusion_extracted_1@0 IS NOT NULL AND __datafusion_extracted_1@0 !=  AND __datafusion_extracted_2@1 IS NOT NULL AND __datafusion_extracted_2@1 != , projection=[__datafusion_extracted_1@0, __datafusion_extracted_2@1, timestamp@3]
+07)------------ProjectionExec: expr=[get_field(ids@2, id1) as __datafusion_extracted_1, get_field(structs@3, var1) as __datafusion_extracted_2, date@0 as date, timestamp@1 as timestamp]
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+query TTT
+WITH events AS (
+    SELECT ids.id1 AS device, structs.var1 AS user, "timestamp"
+    FROM events_mem
+    WHERE "date" = '2025-01-03'
+)
+SELECT device, user, CAST(LAG(user, 1) OVER (PARTITION BY device ORDER BY "timestamp") AS VARCHAR) AS prev
+FROM events
+WHERE device IS NOT NULL AND device != '' AND user IS NOT NULL AND user != ''
+ORDER BY user;
+----
+dev1 user1 NULL
+dev1 user2 user1
+
+statement ok
+DROP TABLE events_mem;
+
+# Parquet: both properties must survive. `DataSourceExec` reads only the struct
+# leaf `ids.id1` (the `get_field` is in the scan projection), and the `date`
+# predicate reaches the scan for row group pruning.
+statement ok
+COPY (
+    SELECT
+        column1 AS "date",
+        column2 AS "timestamp",
+        column3 AS ids,
+        column4 AS structs
+    FROM VALUES
+        (DATE '2025-01-03', TIMESTAMP '2025-01-03 01:00:00', {id1: 'dev1', extra: 1}, {var1: 'user1', extra: 'e1'}),
+        (DATE '2025-01-03', TIMESTAMP '2025-01-03 02:00:00', {id1: 'dev1', extra: 2}, {var1: 'user2', extra: 'e2'}),
+        (DATE '2025-01-04', TIMESTAMP '2025-01-04 01:00:00', {id1: 'dev2', extra: 3}, {var1: 'user3', extra: 'e3'})
+) TO 'test_files/scratch/projection_pushdown/events.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE events_pq STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/events.parquet';
+
+query TT
+EXPLAIN SELECT ids['id1'] FROM events_pq WHERE "date" = '2025-01-03';
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS events_pq.ids[id1]
+02)--Filter: events_pq.date = Date32("2025-01-03")
+03)----Projection: get_field(events_pq.ids, Utf8("id1")) AS __datafusion_extracted_1, events_pq.date
+04)------TableScan: events_pq projection=[date, ids], partial_filters=[events_pq.date = Date32("2025-01-03")]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_extracted_1@0 as events_pq.ids[id1]]
+02)--FilterExec: date@1 = 2025-01-03, projection=[__datafusion_extracted_1@0]
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/events.parquet]]}, projection=[get_field(ids@2, id1) as __datafusion_extracted_1, date], file_type=parquet, predicate=date@0 = 2025-01-03, pruning_predicate=date_null_count@2 != row_count@3 AND date_min@0 <= 2025-01-03 AND 2025-01-03 <= date_max@1, required_guarantees=[date in (2025-01-03)]
+
+query TT
+EXPLAIN WITH events AS (
+    SELECT ids.id1 AS device, structs.var1 AS user, "timestamp"
+    FROM events_pq
+    WHERE "date" = '2025-01-03'
+)
+SELECT *, LAG(user, 1) OVER (PARTITION BY device ORDER BY "timestamp") AS prev
+FROM events
+WHERE device IS NOT NULL AND device != '' AND user IS NOT NULL AND user != ''
+LIMIT 100;
+----
+logical_plan
+01)Projection: events.device, events.user, events.timestamp, lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW AS prev
+02)--Limit: skip=0, fetch=100
+03)----WindowAggr: windowExpr=[[lag(events.user, Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW]]
+04)------SubqueryAlias: events
+05)--------Projection: __datafusion_extracted_1 AS device, __datafusion_extracted_2 AS user, events_pq.timestamp
+06)----------Filter: events_pq.date = Date32("2025-01-03") AND __datafusion_extracted_1 IS NOT NULL AND __datafusion_extracted_1 != Utf8("") AND __datafusion_extracted_2 IS NOT NULL AND __datafusion_extracted_2 != Utf8("")
+07)------------Projection: get_field(events_pq.ids, Utf8("id1")) AS __datafusion_extracted_1, get_field(events_pq.structs, Utf8("var1")) AS __datafusion_extracted_2, events_pq.date, events_pq.timestamp
+08)--------------TableScan: events_pq projection=[date, timestamp, ids, structs], partial_filters=[events_pq.date = Date32("2025-01-03")]
+physical_plan
+01)ProjectionExec: expr=[device@0 as device, user@1 as user, timestamp@2 as timestamp, lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@3 as prev]
+02)--GlobalLimitExec: skip=0, fetch=100
+03)----BoundedWindowAggExec: wdw=[lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW: Field { "lag(events.user,Int64(1)) PARTITION BY [events.device] ORDER BY [events.timestamp ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW": nullable Utf8 }, frame: RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW], mode=[Sorted]
+04)------SortExec: expr=[device@0 ASC NULLS LAST, timestamp@2 ASC NULLS LAST], preserve_partitioning=[false]
+05)--------ProjectionExec: expr=[__datafusion_extracted_1@0 as device, __datafusion_extracted_2@1 as user, timestamp@2 as timestamp]
+06)----------FilterExec: date@2 = 2025-01-03 AND __datafusion_extracted_1@0 IS NOT NULL AND __datafusion_extracted_1@0 !=  AND __datafusion_extracted_2@1 IS NOT NULL AND __datafusion_extracted_2@1 != , projection=[__datafusion_extracted_1@0, __datafusion_extracted_2@1, timestamp@3]
+07)------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/events.parquet]]}, projection=[get_field(ids@2, id1) as __datafusion_extracted_1, get_field(structs@3, var1) as __datafusion_extracted_2, date, timestamp], file_type=parquet, predicate=date@0 = 2025-01-03 AND get_field(ids@2, id1) IS NOT NULL AND get_field(ids@2, id1) !=  AND get_field(structs@3, var1) IS NOT NULL AND get_field(structs@3, var1) != , pruning_predicate=date_null_count@2 != row_count@3 AND date_min@0 <= 2025-01-03 AND 2025-01-03 <= date_max@1, required_guarantees=[date in (2025-01-03)]
+
+statement ok
+DROP TABLE events_pq;
+
+statement ok
+RESET datafusion.optimizer.max_passes;
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+#####################
+# Union inputs that take different leaf pushdown paths
+#####################
+
+# A union matches its inputs by position. The first input is a projection over
+# a limit, so the extraction merges into that projection. The second input is
+# a bare limit, so the extraction gets a new projection. Both inputs must still
+# place the extracted alias at the same position.
+
+statement ok
+CREATE TABLE union_leaf_a (s STRUCT<y VARCHAR>, k VARCHAR) AS VALUES (named_struct('y', 'struct-a'), 'column-a');
+
+statement ok
+CREATE TABLE union_leaf_b (s STRUCT<y VARCHAR>, k VARCHAR) AS VALUES (named_struct('y', 'struct-b'), 'column-b');
+
+query T
+SELECT get_field(s, 'y') AS y FROM (
+  SELECT s, k2 AS k FROM (SELECT s, k AS k2 FROM union_leaf_a LIMIT 10)
+  UNION ALL
+  (SELECT s, k FROM union_leaf_b LIMIT 10)
+) ORDER BY y;
+----
+struct-a
+struct-b
+
+statement ok
+CREATE TABLE union_leaf_c (k VARCHAR, s STRUCT<x DOUBLE, y VARCHAR>) AS VALUES ('ka', named_struct('x', 1.5, 'y', 'ya'));
+
+statement ok
+CREATE TABLE union_leaf_d (k VARCHAR, s STRUCT<x DOUBLE, y VARCHAR>) AS VALUES ('kb', named_struct('x', 2.5, 'y', 'yb'));
+
+query RT
+SELECT get_field(s, 'x') AS x, get_field(s, 'y') AS y FROM (
+  SELECT k2 AS k, s FROM (SELECT k AS k2, s FROM union_leaf_c LIMIT 10)
+  UNION ALL
+  (SELECT k, s FROM union_leaf_d LIMIT 10)
+) ORDER BY x;
+----
+1.5 ya
+2.5 yb
+
+# Select an ordinary column alongside the extracted fields.
+query RTT
+SELECT get_field(s, 'x') AS x, get_field(s, 'y') AS y, k FROM (
+  SELECT k2 AS k, s FROM (SELECT k AS k2, s FROM union_leaf_c LIMIT 10)
+  UNION ALL
+  (SELECT k, s FROM union_leaf_d LIMIT 10)
+) ORDER BY x;
+----
+1.5 ya ka
+2.5 yb kb
+
+# Reverse the union inputs, so the other pushdown path supplies the output names.
+query RT
+SELECT get_field(s, 'x') AS x, get_field(s, 'y') AS y FROM (
+  (SELECT k, s FROM union_leaf_d LIMIT 10)
+  UNION ALL
+  SELECT k2 AS k, s FROM (SELECT k AS k2, s FROM union_leaf_c LIMIT 10)
+) ORDER BY x;
+----
+1.5 ya
+2.5 yb
+
+statement ok
+DROP TABLE union_leaf_a;
+
+statement ok
+DROP TABLE union_leaf_b;
+
+statement ok
+DROP TABLE union_leaf_c;
+
+statement ok
+DROP TABLE union_leaf_d;
+
+#####################
+# A sort key that a filter makes constant, read through a duplicate extraction alias
+# See https://github.com/apache/datafusion/issues/26391
+#####################
+
+# The filter and the projection each extract `s['k']`, under two aliases. The
+# filter moves into the scan, and the scan computes both aliases. The sort key
+# `c` reads the second alias, and the filter's constant reads the first. The
+# planner must still know that `c` is a constant after the projections merge.
+statement ok
+SET datafusion.execution.parquet.pushdown_filters = true;
+
+statement ok
+COPY (SELECT * FROM (VALUES ({k: 'a'}, 1), ({k: 'b'}, 2)) AS v(s, id))
+TO 'test_files/scratch/projection_pushdown/duplicate_alias.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE duplicate_alias STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/duplicate_alias.parquet';
+
+query TI
+SELECT upper(s['k']) AS c, synth
+FROM (SELECT s, id + 1 AS synth FROM duplicate_alias) AS v
+WHERE upper(s['k']) = 'A'
+ORDER BY synth, c;
+----
+A 2
+
+statement ok
+DROP TABLE duplicate_alias;
+
+# A leaf expression must still reach the scan when its projection also holds a
+# `KeepInPlace` expression. See `try_split_leaf_projection` in
+# `datafusion/physical-optimizer/src/projection_pushdown.rs` for why that used
+# to be impossible.
+#
+# These are plan assertions on purpose. `get_field` stranded above the
+# repartition still returns the right answer, it just reads the whole struct,
+# so a result-only test passes whether or not the bug is present.
+#
+# Needs both a repartition (`target_partitions` > 1) and a row estimate above
+# `batch_size`, hence the two SETs. Restore them with `SET` rather than `RESET`:
+# `RESET` puts back the global default instead of the harness value, and the
+# harness rejects a file that leaves configuration modified.
+
+# `arr` and `tags` are only read by the lambda queries further down. They are
+# appended after `s` so the `get_field(s@1, ...)` indices below do not move.
+statement ok
+COPY (
+    SELECT column1 AS id, column2 AS s, column3 AS arr, column4 AS tags
+    FROM VALUES
+        (1, {value: 100, label: 'alpha'},   [1, 2, 3], ['a', 'b']),
+        (2, {value: 200, label: 'beta'},    [4, 5],    ['c']),
+        (3, {value: 150, label: 'gamma'},   [6],       ['d', 'e', 'f']),
+        (4, {value: 300, label: 'delta'},   [7, 8, 9], ['g']),
+        (5, {value: 250, label: 'epsilon'}, [10],      ['h', 'i'])
+) TO 'test_files/scratch/projection_pushdown/leaf_split.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE leaf_split STORED AS PARQUET
+LOCATION 'test_files/scratch/projection_pushdown/leaf_split.parquet';
+
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+SET datafusion.execution.batch_size = 2;
+
+# The scan must read only the `value` leaf. A plan holding a bare `s` in the
+# `DataSourceExec` projection means the whole struct is being read.
+query TT
+EXPLAIN SELECT s['value'] + 1 AS v FROM leaf_split;
+----
+logical_plan
+01)Projection: get_field(leaf_split.s, Utf8("value")) + Int64(1) AS v
+02)--TableScan: leaf_split projection=[s]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@0 + 1 as v]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+
+# The leaf is bare here: the unrelated computed column is what triggers it.
+query TT
+EXPLAIN SELECT s['value'] AS v, id + 1 AS w FROM leaf_split;
+----
+logical_plan
+01)Projection: get_field(leaf_split.s, Utf8("value")) AS v, leaf_split.id + Int64(1) AS w
+02)--TableScan: leaf_split projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 as v, id@0 + 1 as w]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+
+# `s` is genuinely needed by the outer projection here, so it must stay.
+query TT
+EXPLAIN SELECT s['value'] + 1 AS v, s AS whole FROM leaf_split;
+----
+logical_plan
+01)Projection: get_field(leaf_split.s, Utf8("value")) + Int64(1) AS v, leaf_split.s AS whole
+02)--TableScan: leaf_split projection=[s]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 + 1 as v, s@0 as whole]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[s, get_field(s@1, value) as __datafusion_leaf_0], file_type=parquet
+
+# Two distinct leaves plus a computed sibling: both leaves must reach the scan
+# and the struct must not be read whole.
+query TT
+EXPLAIN SELECT s['value'] AS v, s['label'] AS l, id + 1 AS w FROM leaf_split;
+----
+logical_plan
+01)Projection: get_field(leaf_split.s, Utf8("value")) AS v, get_field(leaf_split.s, Utf8("label")) AS l, leaf_split.id + Int64(1) AS w
+02)--TableScan: leaf_split projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@1 as v, __datafusion_leaf_1@2 as l, id@0 + 1 as w]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/projection_pushdown/leaf_split.parquet]]}, projection=[id, get_field(s@1, value) as __datafusion_leaf_0, get_field(s@1, label) as __datafusion_leaf_1], file_type=parquet
+
+query ITI
+SELECT s['value'] AS v, s['label'] AS l, id + 1 AS w FROM leaf_split ORDER BY v;
+----
+100 alpha 2
+150 gamma 4
+200 beta 3
+250 epsilon 6
+300 delta 5
+
+query I
+SELECT s['value'] + 1 AS v FROM leaf_split ORDER BY v;
+----
+101
+151
+201
+251
+301
+
+# A lambda parameter is indexed after the input columns, so the split moves it;
+# see `rewrite_outer_expr`. These are value queries because an index left behind
+# is only sometimes an error, see the third one.
+
+statement ok
+SET datafusion.sql_parser.dialect = databricks;
+
+query ?IT
+SELECT array_transform(arr, x -> x + 1) AS a, s['value'] AS v, s['label'] AS l
+FROM leaf_split ORDER BY v;
+----
+[2, 3, 4] 100 alpha
+[7] 150 gamma
+[5, 6] 200 beta
+[11] 250 epsilon
+[8, 9, 10] 300 delta
+
+# Nested lambdas need two leaves: with one the split is width-neutral, the
+# parameter does not move, and the query passes against broken code.
+query ?IT
+SELECT array_transform(arr, x -> x + array_length(array_transform(arr, y -> y * 2))) AS a,
+       s['value'] AS v, s['label'] AS l
+FROM leaf_split ORDER BY v;
+----
+[4, 5, 6] 100 alpha
+[7] 150 gamma
+[6, 7] 200 beta
+[11] 250 epsilon
+[10, 11, 12] 300 delta
+
+# Naming the parameter after the column a stale index would land on makes
+# `LambdaVariable`'s field check match, so the wrong column is read with no
+# error at all. The name has to track `leaf_column_name` to stay adversarial.
+query ?ITI
+SELECT array_transform(tags, __datafusion_leaf_1 -> concat(__datafusion_leaf_1, '!')) AS a,
+       s['value'] AS v, s['label'] AS l, id
+FROM leaf_split ORDER BY v;
+----
+[a!, b!] 100 alpha 1
+[d!, e!, f!] 150 gamma 3
+[c!] 200 beta 2
+[h!, i!] 250 epsilon 5
+[g!] 300 delta 4
+
+# A leaf expression inside the lambda body, rather than beside it: the split has
+# to find it through `LambdaExpr` before the parameter rebase even applies.
+query ?IT
+SELECT array_transform(arr, x -> x + file_row_index()) AS a, s['value'] AS v, s['label'] AS l
+FROM leaf_split ORDER BY v;
+----
+[1, 2, 3] 100 alpha
+[8] 150 gamma
+[5, 6] 200 beta
+[14] 250 epsilon
+[10, 11, 12] 300 delta
+
+statement ok
+SET datafusion.sql_parser.dialect = generic;
+
+# A source that does not absorb the projection keeps the plan unchanged: the
+# split must not add a projection nobody can use. A memory table refuses
+# because `all_alias_free_columns` rejects the aliased `get_field`, and that is
+# the default for any node that does not override `try_swapping_with_projection`.
+statement ok
+CREATE TABLE leaf_split_mem AS
+SELECT column1 AS id, column2 AS s FROM VALUES
+    (1, {value: 100}), (2, {value: 200}), (3, {value: 150}),
+    (4, {value: 300}), (5, {value: 250});
+
+query TT
+EXPLAIN SELECT s['value'] AS v, id + 1 AS w FROM leaf_split_mem;
+----
+logical_plan
+01)Projection: get_field(leaf_split_mem.s, Utf8("value")) AS v, leaf_split_mem.id + Int64(1) AS w
+02)--TableScan: leaf_split_mem projection=[id, s]
+physical_plan
+01)ProjectionExec: expr=[get_field(s@1, value) as v, id@0 + 1 as w]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
+03)----DataSourceExec: partitions=1, partition_sizes=[3]
+
+statement ok
+DROP TABLE leaf_split_mem;
+
+statement ok
+SET datafusion.execution.batch_size = 8192;
+
+# Back to 4, which is what this file leaves configured and what the harness
+# started from.
+statement ok
+SET datafusion.execution.target_partitions = 4;
+
+statement ok
+DROP TABLE leaf_split;
+
+statement ok
+RESET datafusion.execution.parquet.pushdown_filters;

@@ -1,24 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! "math" DataFusion functions
 
 use crate::math::monotonicity::*;
-use datafusion_common::{Result, exec_err};
 use datafusion_expr::ScalarUDF;
 use std::sync::Arc;
 
@@ -44,12 +30,10 @@ pub mod round;
 pub mod signum;
 pub mod trunc;
 
-fn validate_sqrt_input(value: f64) -> Result<()> {
-    if value < 0.0 {
-        exec_err!("cannot take square root of a negative number")
-    } else {
-        Ok(())
-    }
+/// `f64::sqrt` returns NaN for negative numbers; like PostgreSQL, `sqrt`
+/// returns an error instead.
+fn sqrt_input_error(value: f64) -> Option<&'static str> {
+    (value < 0.0).then_some("cannot take square root of a negative number")
 }
 
 // Create UDFs
@@ -238,7 +222,7 @@ make_math_unary_udf!(
     super::bounds::sqrt_bounds,
     true,
     super::get_sqrt_doc,
-    Some(super::validate_sqrt_input)
+    Some(super::sqrt_input_error)
 );
 make_math_unary_udf!(
     TanFunc,
@@ -264,7 +248,7 @@ make_udf_function!(trunc::TruncFunc, trunc);
 mod strict_tests {
     use super::*;
     use arrow::datatypes::Field;
-    use datafusion_common::ScalarValue;
+    use datafusion_common::{Result, ScalarValue};
     use datafusion_expr::{
         ColumnarValue, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF,
     };

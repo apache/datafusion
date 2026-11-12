@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 # Each test command below is implemented with `cargo xtask` so developers can
 # run the same suite locally. Append `--explain` to print the underlying
@@ -60,7 +47,7 @@ jobs:
     runs-on: ${{ vars.USE_RUNS_ON == 'true' && format('runs-on={0},family=m8a+m7a+c8a,cpu=32,image=ubuntu24-full-x64,extras=s3-cache,disk=large,tag=datafusion', github.run_id) || 'ubuntu-latest' }}
     # note: do not use amd/rust container to preserve disk space
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
@@ -82,8 +69,14 @@ jobs:
       - name: Show available disk space
         run: |
           df -h
-      - name: Run tests (excluding doctests)
+      - name: Run extended tests
         run: cargo xtask ci step test extended
+      - name: Run fuzz tests
+        run: cargo xtask ci step test fuzz
+      # Migrate it to the above unified fuzz runner over time
+      # Tracker: https://github.com/apache/datafusion/issues/27082
+      - name: Run unmigrated fuzzers with more iterations
+        run: cargo xtask ci step test fuzz-legacy
       - parallel:
           - name: Verify Working Directory Clean
             run: git diff --exit-code
@@ -99,7 +92,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           ref: ${{ github.event.inputs.pr_head_sha }} # otherwise use the event's commit, including the merge group
@@ -123,7 +116,7 @@ jobs:
     container:
       image: amd64/rust
     steps:
-      - uses: runs-on/action@efac073ea2507ec18797de3a81704201ade11d9d  # v2.3.1
+      - uses: runs-on/action@13fbb6a39310a0dac9ab4716da2c4e74a3326dfc  # v2.7.0
       - parallel:
           - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
             with:

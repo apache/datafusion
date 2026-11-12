@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -26,13 +13,14 @@ use arrow::array::{
 use arrow::array::{Int8Array, UInt64Array, as_string_array, create_array, record_batch};
 use arrow::compute::kernels::numeric::add;
 use arrow::datatypes::{DataType, Field, Metadata, Schema};
-use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType};
+use arrow_schema::extension::{Bool8, CanonicalExtensionType, ExtensionType, Uuid};
 use arrow_schema::{ArrowError, FieldRef, SchemaRef};
 use datafusion::common::test_util::batches_to_string;
 use datafusion::execution::context::{FunctionFactory, RegisterFunction, SessionState};
 use datafusion::prelude::*;
 use datafusion::{execution::registry::FunctionRegistry, test_util};
 use datafusion_common::cast::{as_float64_array, as_int32_array};
+use datafusion_common::datatype::DataTypeExt;
 use datafusion_common::metadata::FieldMetadata;
 use datafusion_common::tree_node::{Transformed, TreeNode};
 use datafusion_common::utils::take_function_args;
@@ -46,7 +34,7 @@ use datafusion_expr::simplify::{ExprSimplifyResult, SimplifyContext};
 use datafusion_expr::{
     Accumulator, ColumnarValue, CreateFunction, CreateFunctionBody, LogicalPlanBuilder,
     OperateFunctionArg, ReturnFieldArgs, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl,
-    Signature, TypeSignatureClass, Volatility, lit_with_metadata,
+    Signature, TypeSignatureClass, Volatility, expr::Placeholder, lit_with_metadata,
 };
 use datafusion_expr_common::signature::Coercion;
 use datafusion_expr_common::signature::TypeSignature;
@@ -1029,7 +1017,10 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                         type_signatures.push(TypeSignature::Nullary)
                     } else {
                         type_signatures.push(TypeSignature::Exact(
-                            args.iter().take(n).map(|a| a.data_type.clone()).collect(),
+                            args.iter()
+                                .take(n)
+                                .map(|a| a.field.data_type().clone())
+                                .collect(),
                         ))
                     }
                 }
@@ -1039,7 +1030,7 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                 )
             }
             None => Signature::exact(
-                args.iter().map(|a| a.data_type.clone()).collect(),
+                args.iter().map(|a| a.field.data_type().clone()).collect(),
                 definition.params.behavior.unwrap_or(Volatility::Volatile),
             ),
         };
@@ -1050,8 +1041,10 @@ impl TryFrom<CreateFunction> for ScalarFunctionWrapper {
                 .function_body
                 .expect("Expression has to be defined!"),
             return_type: definition
-                .return_type
-                .expect("Return type has to be defined!"),
+                .return_field
+                .expect("Return type has to be defined!")
+                .data_type()
+                .clone(),
             signature,
             defaults,
         })
@@ -1124,23 +1117,6 @@ async fn create_scalar_function_from_sql_statement() -> Result<()> {
         RETURN $1 + $3
     "#;
     assert!(ctx.sql(bad_definition_sql).await.is_err());
-
-    // FIXME: Definitions with invalid placeholders are allowed, fail at runtime
-    let bad_expression_sql = r#"
-    CREATE FUNCTION better_add(DOUBLE, DOUBLE)
-        RETURNS DOUBLE
-        RETURN $1 + $3
-    "#;
-    assert!(ctx.sql(bad_expression_sql).await.is_ok());
-
-    let err = ctx
-        .sql("select better_add(2.0, 2.0)")
-        .await?
-        .collect()
-        .await
-        .expect_err("unknown placeholder");
-    let expected = "Optimizer rule 'simplify_expressions' failed\ncaused by\nExecution error: Invalid placeholder, out of range: $3";
-    assert!(expected.starts_with(&err.strip_backtrace()));
 
     Ok(())
 }
@@ -1367,10 +1343,10 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
                 quote_style: None,
                 span: Span::empty(),
             }),
-            data_type: DataType::Utf8View,
+            field: Arc::new(Field::new("name", DataType::Utf8View, true)),
             default_expr: None,
         }]),
-        return_type: Some(DataType::Int32),
+        return_field: Some(DataType::Int32.into_nullable_field_ref()),
         params: CreateFunctionBody {
             language: Some(Ident {
                 value: "plrust".into(),
@@ -1384,6 +1360,39 @@ async fn create_scalar_function_from_sql_statement_postgres_syntax() -> Result<(
     };
 
     assert_eq!(call, &expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn create_function_keeps_extension_types() -> Result<()> {
+    let function_factory = Arc::new(RecordingFunctionFactory::new());
+    let ctx = SessionContext::new().with_function_factory(function_factory.clone());
+
+    ctx.sql("CREATE FUNCTION same_uuid(id UUID) RETURNS UUID RETURN $1")
+        .await?;
+
+    let calls = function_factory.calls();
+    assert_eq!(calls.len(), 1);
+    let call = &calls[0];
+    let uuid_field = |name| {
+        Arc::new(
+            Field::new(name, DataType::FixedSizeBinary(16), true)
+                .with_extension_type(Uuid),
+        )
+    };
+    let args = call.args.as_ref().expect("arguments");
+    assert_eq!(args.len(), 1);
+    assert_eq!(args[0].field, uuid_field("id"));
+    assert_eq!(call.return_field, Some(uuid_field("")));
+    // The placeholder in the body has the type of the argument
+    assert_eq!(
+        call.params.function_body,
+        Some(Expr::Placeholder(Placeholder::new_with_field(
+            "$1".to_string(),
+            Some(uuid_field("id")),
+        )))
+    );
 
     Ok(())
 }
@@ -1965,7 +1974,12 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
         }
 
         fn invoke_with_args(&self, args: ScalarFunctionArgs) -> Result<ColumnarValue> {
-            let tz = args.config_options.execution.time_zone.clone();
+            let tz = args
+                .config_options
+                .execution
+                .time_zone
+                .as_ref()
+                .map(ToString::to_string);
             Ok(ColumnarValue::Scalar(ScalarValue::from(tz)))
         }
     }
@@ -1975,7 +1989,7 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     });
 
     let mut config = SessionConfig::new();
-    config.options_mut().execution.time_zone = Some("AEST".into());
+    config.options_mut().execution.time_zone = Some("Australia/Sydney".parse().unwrap());
 
     let ctx = SessionContext::new_with_config(config);
 
@@ -1988,7 +2002,7 @@ async fn test_config_options_work_for_scalar_func() -> Result<()> {
     let expected_schema = Schema::new(vec![Field::new("a", DataType::Utf8, false)]);
     let expected = RecordBatch::try_new(
         SchemaRef::from(expected_schema),
-        vec![create_array!(Utf8, ["AEST"])],
+        vec![create_array!(Utf8, ["Australia/Sydney"])],
     )?;
 
     assert_eq!(expected, actual[0]);

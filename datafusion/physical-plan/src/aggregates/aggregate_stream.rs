@@ -1,22 +1,10 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 //! Aggregate without grouping columns
 
+use crate::aggregates::aggregate_argument::{AggregateArgument, AggregateFilter};
 use crate::aggregates::group_values::{
     AccumulatorPhase, AggregateAccumulatorMetrics, AggregateArgumentMetrics,
     aggregate_sub_metrics,
@@ -45,9 +33,7 @@ use std::sync::Arc;
 use std::task::{Context, Poll};
 
 use super::AggregateExec;
-use crate::filter::batch_filter;
 use datafusion_execution::memory_pool::{MemoryConsumer, MemoryReservation};
-use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 use futures::stream::{Stream, StreamExt};
 
 /// stream struct for aggregation without grouping columns
@@ -68,8 +54,8 @@ struct AggregateStreamInner {
     schema: SchemaRef,
     mode: AggregateMode,
     input: SendableRecordBatchStream,
-    aggregate_expressions: Vec<Vec<Arc<dyn PhysicalExpr>>>,
-    filter_expressions: Arc<[Option<Arc<dyn PhysicalExpr>>]>,
+    aggregate_arguments: Vec<Vec<AggregateArgument>>,
+    filters: Vec<Option<AggregateFilter>>,
     aggregate_argument_metrics: AggregateArgumentMetrics,
     aggregate_accumulator_metrics: AggregateAccumulatorMetrics,
 
@@ -122,8 +108,8 @@ impl AggregateStreamInner {
                 guard.clone()
             };
 
-            let agg_exprs = self
-                .aggregate_expressions
+            let agg_args = self
+                .aggregate_arguments
                 .get(acc_info.aggr_index)
                 .ok_or_else(|| {
                     internal_datafusion_err!(
@@ -132,12 +118,15 @@ impl AggregateStreamInner {
                     )
                 })?;
             // Only aggregates with a single argument are supported.
-            let column_expr = agg_exprs.first().ok_or_else(|| {
-                internal_datafusion_err!(
-                    "Aggregate expression at index {} expected a single argument",
-                    acc_info.aggr_index
-                )
-            })?;
+            let column_expr = agg_args
+                .first()
+                .ok_or_else(|| {
+                    internal_datafusion_err!(
+                        "Aggregate expression at index {} expected a single argument",
+                        acc_info.aggr_index
+                    )
+                })?
+                .expr();
 
             let literal = lit(bound);
             let predicate: Arc<dyn PhysicalExpr> = match acc_info.aggr_type {
@@ -299,11 +288,29 @@ impl AggregateStream {
 
         let baseline_metrics = BaselineMetrics::new(&agg.metrics, partition);
         let input = agg.input.execute(partition, Arc::clone(context))?;
+        let input_schema = input.schema();
 
-        let aggregate_expressions = aggregate_expressions(agg.aggr_expr(), &agg.mode, 0)?;
-        let filter_expressions = match agg.mode.input_mode() {
-            AggregateInputMode::Raw => agg_filter_expr,
-            AggregateInputMode::Partial => vec![None; agg.aggr_expr().len()].into(),
+        let aggregate_arguments: Vec<Vec<_>> =
+            aggregate_expressions(agg.aggr_expr(), &agg.mode, 0)?
+                .into_iter()
+                .map(|exprs| {
+                    exprs
+                        .into_iter()
+                        .map(|expr| AggregateArgument::try_new(expr, &input_schema))
+                        .collect::<Result<Vec<_>>>()
+                })
+                .collect::<Result<_>>()?;
+        let filters = match agg.mode.input_mode() {
+            AggregateInputMode::Raw => agg_filter_expr
+                .iter()
+                .zip(&aggregate_arguments)
+                .map(|(filter, arguments)| {
+                    filter.as_ref().map(|predicate| {
+                        AggregateFilter::new(Arc::clone(predicate), arguments)
+                    })
+                })
+                .collect(),
+            AggregateInputMode::Partial => agg.aggr_expr().iter().map(|_| None).collect(),
         };
         let aggregate_labels = agg
             .aggr_expr()
@@ -361,8 +368,8 @@ impl AggregateStream {
             mode: agg.mode,
             input,
             baseline_metrics,
-            aggregate_expressions,
-            filter_expressions,
+            aggregate_arguments,
+            filters,
             aggregate_argument_metrics,
             aggregate_accumulator_metrics,
             accumulators,
@@ -386,8 +393,8 @@ impl AggregateStream {
                                 &this.mode,
                                 &batch,
                                 &mut this.accumulators,
-                                &this.aggregate_expressions,
-                                &this.filter_expressions,
+                                &mut this.aggregate_arguments,
+                                &mut this.filters,
                                 &this.aggregate_argument_metrics,
                                 &this.aggregate_accumulator_metrics,
                             )
@@ -476,32 +483,39 @@ fn aggregate_batch(
     mode: &AggregateMode,
     batch: &RecordBatch,
     accumulators: &mut [AccumulatorItem],
-    expressions: &[Vec<Arc<dyn PhysicalExpr>>],
-    filters: &[Option<Arc<dyn PhysicalExpr>>],
+    arguments: &mut [Vec<AggregateArgument>],
+    filters: &mut [Option<AggregateFilter>],
     aggregate_argument_metrics: &AggregateArgumentMetrics,
     aggregate_accumulator_metrics: &AggregateAccumulatorMetrics,
 ) -> Result<usize> {
     let mut allocated = 0usize;
 
     // 1.1 iterate accumulators and respective expressions together
-    // 1.2 filter the batch if necessary
+    // 1.2 select the rows passing the aggregate FILTER, if any (only the
+    //     columns the arguments read are copied)
     // 1.3 evaluate expressions
     // 1.4 update / merge accumulators with the expressions' values
 
     // 1.1
     accumulators
         .iter_mut()
-        .zip(expressions)
+        .zip(arguments)
         .zip(filters)
         .enumerate()
-        .try_for_each(|(index, ((accum, expr), filter))| {
+        .try_for_each(|(index, ((accum, arguments), filter))| {
             // 1.2 and 1.3
             let values = aggregate_argument_metrics.time(index, || {
                 let batch = match filter {
-                    Some(filter) => Cow::Owned(batch_filter(batch, filter)?),
+                    Some(filter) => {
+                        let selection = filter.evaluate(batch)?;
+                        Cow::Owned(filter.select(batch, &selection)?)
+                    }
                     None => Cow::Borrowed(batch),
                 };
-                evaluate_expressions_to_arrays(expr, batch.as_ref())
+                arguments
+                    .iter_mut()
+                    .map(|argument| argument.evaluate(batch.as_ref()))
+                    .collect::<Result<Vec<_>>>()
             })?;
 
             // 1.4

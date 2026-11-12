@@ -1,22 +1,12 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+use crate::logical_plan::consumer::SubstraitConsumerContext;
 
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
 use datafusion::common::Result;
+use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
 use datafusion::common::{
     DFSchema, DataFusionError, ScalarValue, not_impl_err, plan_err, substrait_err,
 };
@@ -29,6 +19,7 @@ pub async fn from_scalar_function(
     consumer: &impl SubstraitConsumer,
     f: &ScalarFunction,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> Result<Expr> {
     let Some(fn_signature) = consumer
         .get_extensions()
@@ -42,7 +33,8 @@ pub async fn from_scalar_function(
     };
 
     let fn_name = substrait_fun_name(fn_signature);
-    let args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
+    let args =
+        from_substrait_func_args(consumer, &f.arguments, input_schema, context).await?;
 
     let higher_order_func = consumer
         .get_function_registry()
@@ -69,10 +61,24 @@ pub async fn from_scalar_function(
     // try to first match the requested function into registered higher-order functions, then udfs, built-in ops
     // and finally built-in expressions
     if let Ok(func) = higher_order_func {
-        Ok(Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
+        let expr = Expr::HigherOrderFunction(expr::HigherOrderFunction::new(
             func.to_owned(),
             args,
-        )))
+        ));
+        // Substrait types carry no struct field names, so a lambda parameter over a list
+        // of structs is declared as `{c0, c1, ...}`, and a field access in the body such
+        // as `get_field(x, 'b')` would not find `b`. Give the parameters the fields the
+        // function derives from its arguments instead, which keep the list's field names.
+        //
+        // A function that uses a parameter of an outer lambda can't be resolved on its
+        // own, as only the outer function knows that parameter's type. In
+        // `array_transform(s, x -> array_transform([1, 2], i -> get_field(x, 'a') + i))`
+        // the inner call uses `x`, so it is resolved when the outer call is.
+        if uses_outer_lambda_parameters(&expr, &mut Vec::new())? {
+            Ok(expr)
+        } else {
+            Ok(expr.resolve_lambda_variables(input_schema)?.data)
+        }
     } else if let Ok(func) = udf_func {
         Ok(Expr::ScalarFunction(expr::ScalarFunction::new_udf(
             func.to_owned(),
@@ -91,6 +97,47 @@ pub async fn from_scalar_function(
         builder.build(consumer, f, args)
     } else {
         not_impl_err!("Unsupported function name: {fn_name:?}")
+    }
+}
+
+/// Checks whether `expr` uses a lambda parameter that comes from outside of it.
+///
+/// In `array_transform(s, x -> array_transform([1, 2], i -> get_field(x, 'a') + i))`,
+/// the inner `array_transform([1, 2], i -> get_field(x, 'a') + i)` uses its own
+/// parameter `i`, but also `x`, which belongs to the outer lambda, so this returns true
+/// for it. For the whole expression it returns false: `x` and `i` both belong to
+/// lambdas inside it.
+///
+/// `own_params` collects the parameters of the lambdas we are inside of while walking
+/// `expr`.
+fn uses_outer_lambda_parameters(
+    expr: &Expr,
+    own_params: &mut Vec<String>,
+) -> Result<bool> {
+    match expr {
+        // a parameter that wasn't collected on the way down comes from outside `expr`
+        Expr::LambdaVariable(var) => Ok(!own_params.contains(&var.name)),
+        Expr::Lambda(lambda) => {
+            // a lambda's parameters can be used in its body, and only there
+            let before = own_params.len();
+            own_params.extend(lambda.params.iter().cloned());
+            let uses = uses_outer_lambda_parameters(&lambda.body, own_params);
+            own_params.truncate(before);
+            uses
+        }
+        // anything else: check its children, stopping at the first one that uses one
+        _ => {
+            let mut uses = false;
+            expr.apply_children(|child| {
+                uses = uses_outer_lambda_parameters(child, own_params)?;
+                Ok(if uses {
+                    TreeNodeRecursion::Stop
+                } else {
+                    TreeNodeRecursion::Continue
+                })
+            })?;
+            Ok(uses)
+        }
     }
 }
 
@@ -187,6 +234,32 @@ fn arg_list_to_binary_op_tree_inner(
     }))
 }
 
+/// Reads the `case_sensitivity` option of a `like` call.
+///
+/// Substrait says a consumer must use the first value it supports, and must
+/// reject the call when it supports none of them.
+fn case_insensitive_option(f: &ScalarFunction) -> Result<bool> {
+    let Some(option) = f
+        .options
+        .iter()
+        .find(|option| option.name.eq_ignore_ascii_case("case_sensitivity"))
+    else {
+        return Ok(false);
+    };
+    for preference in &option.preference {
+        if preference.eq_ignore_ascii_case("CASE_SENSITIVE") {
+            return Ok(false);
+        }
+        if preference.eq_ignore_ascii_case("CASE_INSENSITIVE") {
+            return Ok(true);
+        }
+    }
+    not_impl_err!(
+        "Unsupported case_sensitivity for `like`: {:?}",
+        option.preference
+    )
+}
+
 /// Build [`Expr`] from its name and required inputs.
 struct BuiltinExprBuilder {
     expr_name: String,
@@ -213,7 +286,10 @@ impl BuiltinExprBuilder {
         args: Vec<Expr>,
     ) -> Result<Expr> {
         match self.expr_name.as_str() {
-            "like" => Self::build_like_expr(false, false, f, args),
+            // `like` carries case sensitivity as an option. `ilike` is not a
+            // Substrait function, but DataFusion used to emit it, so plans
+            // written by an older version are still read.
+            "like" => Self::build_like_expr(case_insensitive_option(f)?, false, f, args),
             "ilike" => Self::build_like_expr(true, false, f, args),
             "like_match" => Self::build_like_expr(false, false, f, args),
             "like_imatch" => Self::build_like_expr(true, false, f, args),
@@ -374,8 +450,9 @@ impl BuiltinExprBuilder {
 
 #[cfg(test)]
 mod tests {
-    use super::arg_list_to_binary_op_tree;
+    use super::{arg_list_to_binary_op_tree, case_insensitive_option};
     use crate::extensions::Extensions;
+    use crate::logical_plan::consumer::SubstraitConsumerContext;
     use crate::logical_plan::consumer::tests::TEST_SESSION_STATE;
     use crate::logical_plan::consumer::{DefaultSubstraitConsumer, SubstraitConsumer};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -417,7 +494,13 @@ mod tests {
         let df_schema = DFSchema::try_from(schema).unwrap();
 
         // Consume the expression and ensure we don't crash
-        let _ = consumer.consume_scalar_function(&func, &df_schema).await?;
+        let _ = consumer
+            .consume_scalar_function(
+                &func,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
+            .await?;
         Ok(())
     }
 
@@ -488,7 +571,13 @@ mod tests {
         let df_schema = DFSchema::try_from(schema).unwrap();
 
         // Consume the expression and ensure we don't get an error
-        let _ = consumer.consume_scalar_function(&func, &df_schema).await?;
+        let _ = consumer
+            .consume_scalar_function(
+                &func,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
+            .await?;
         Ok(())
     }
 
@@ -552,7 +641,11 @@ mod tests {
         };
 
         let result = consumer
-            .consume_scalar_function(&func_like, &df_schema)
+            .consume_scalar_function(
+                &func_like,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
             .await?;
 
         if let Expr::Like(like) = result {
@@ -571,7 +664,11 @@ mod tests {
         };
 
         let result = consumer
-            .consume_scalar_function(&func_not_like, &df_schema)
+            .consume_scalar_function(
+                &func_not_like,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
             .await?;
 
         if let Expr::Like(like) = result {
@@ -580,6 +677,85 @@ mod tests {
         } else {
             panic!("Expected Expr::Like (negated), got {result:?}");
         }
+
+        Ok(())
+    }
+
+    fn scalar_function_with_case_sensitivity_preference(
+        preference: &[&str],
+    ) -> ScalarFunction {
+        ScalarFunction {
+            options: vec![substrait::proto::FunctionOption {
+                name: "case_sensitivity".to_string(),
+                preference: preference.iter().map(|s| s.to_string()).collect(),
+            }],
+            ..Default::default()
+        }
+    }
+
+    /// Substrait says a consumer must use the first value it supports in the
+    /// `case_sensitivity` option's preference list, and must reject the call
+    /// when it supports none of them.
+    #[test]
+    fn case_insensitive_option_cases() -> Result<()> {
+        // No `case_sensitivity` option at all defaults to case-sensitive.
+        assert!(!case_insensitive_option(&ScalarFunction::default())?);
+
+        // A single supported preference, in either sensitivity.
+        assert!(!case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&["CASE_SENSITIVE"])
+        )?);
+        assert!(case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&["CASE_INSENSITIVE"])
+        )?);
+
+        // The option name and its preference values are matched
+        // case-insensitively (ASCII).
+        assert!(case_insensitive_option(&ScalarFunction {
+            options: vec![substrait::proto::FunctionOption {
+                name: "Case_Sensitivity".to_string(),
+                preference: vec!["case_insensitive".to_string()],
+            }],
+            ..Default::default()
+        })?);
+
+        // Preference ordering: a consumer must use the first value it
+        // supports, not necessarily the first value in the list.
+        // `CASE_INSENSITIVE_ASCII` is not a value this consumer supports, so
+        // it is skipped in favor of the next, supported preference.
+        assert!(case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&[
+                "CASE_INSENSITIVE_ASCII",
+                "CASE_INSENSITIVE"
+            ])
+        )?);
+        assert!(!case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&[
+                "CASE_INSENSITIVE_ASCII",
+                "CASE_SENSITIVE"
+            ])
+        )?);
+
+        // Rejection: every preference is unsupported.
+        let err =
+            case_insensitive_option(&scalar_function_with_case_sensitivity_preference(
+                &["CASE_INSENSITIVE_ASCII"],
+            ))
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Unsupported case_sensitivity"),
+            "unexpected error: {err}"
+        );
+
+        // Rejection: an empty preference list supports nothing.
+        let err = case_insensitive_option(
+            &scalar_function_with_case_sensitivity_preference(&[]),
+        )
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Unsupported case_sensitivity"),
+            "unexpected error: {err}"
+        );
 
         Ok(())
     }

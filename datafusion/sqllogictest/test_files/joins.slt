@@ -1,19 +1,6 @@
-# Licensed to the Apache Software Foundation (ASF) under one
-# or more contributor license agreements.  See the NOTICE file
-# distributed with this work for additional information
-# regarding copyright ownership.  The ASF licenses this file
-# to you under the Apache License, Version 2.0 (the
-# "License"); you may not use this file except in compliance
-# with the License.  You may obtain a copy of the License at
-#
-#   http://www.apache.org/licenses/LICENSE-2.0
-#
-# Unless required by applicable law or agreed to in writing,
-# software distributed under the License is distributed on an
-# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-# KIND, either express or implied.  See the License for the
-# specific language governing permissions and limitations
-# under the License.
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 ####
 # Configuration
@@ -2072,6 +2059,61 @@ set datafusion.explain.logical_plan_only = false;
 statement ok
 set datafusion.execution.target_partitions = 4;
 
+# A join key spanning two cross-joined inputs must survive join reordering.
+query II
+SELECT k.k, b.id
+FROM (VALUES (1, 17, 18)) AS a(t, x, y)
+CROSS JOIN (VALUES (0), (1)) AS k(k)
+JOIN (VALUES (1, 17), (1, 18), (1, 19)) AS b(t, id)
+  ON a.t = b.t AND b.id = CASE k.k WHEN 0 THEN a.x ELSE a.y END
+ORDER BY k.k, b.id;
+----
+0 17
+1 18
+
+# A null-safe child join must keep its NULL matches under an ordinary join.
+query I
+SELECT a.id
+FROM (VALUES (1, CAST(NULL AS INT)), (2, 5)) AS a(id, x)
+JOIN (VALUES (CAST(NULL AS INT)), (5)) AS k(x)
+  ON a.x IS NOT DISTINCT FROM k.x
+JOIN (VALUES (1), (2)) AS b(id) ON a.id = b.id
+ORDER BY a.id;
+----
+1
+2
+
+# An ordinary child join must not gain NULL matches under a null-safe join.
+query I
+SELECT a.id
+FROM (VALUES (1, CAST(NULL AS INT)), (2, 5)) AS a(id, x)
+JOIN (VALUES (CAST(NULL AS INT)), (5)) AS k(x) ON a.x = k.x
+JOIN (VALUES (1), (2)) AS b(id) ON a.id IS NOT DISTINCT FROM b.id
+ORDER BY a.id;
+----
+2
+
+# A residual join key must retain its null-safe comparison when used as a filter.
+query I
+SELECT b.x
+FROM (VALUES (1, CAST(NULL AS INT))) AS a(id, x)
+CROSS JOIN (VALUES (0)) AS k(x)
+JOIN (VALUES (1, CAST(NULL AS INT)), (1, 7)) AS b(id, x)
+  ON a.id IS NOT DISTINCT FROM b.id
+ AND a.x + k.x IS NOT DISTINCT FROM b.x;
+----
+NULL
+
+# Using a null-safe key does not enforce an ordinary equality on the same columns.
+query I
+SELECT a.x
+FROM (VALUES (CAST(NULL AS INT)), (1)) AS a(x)
+JOIN (VALUES (CAST(NULL AS INT)), (1)) AS b(x)
+  ON a.x IS NOT DISTINCT FROM b.x
+WHERE a.x = b.x;
+----
+1
+
 # Planning inner nested loop join
 # inputs are swapped due to inexact statistics + join reordering caused additional projection
 
@@ -2659,8 +2701,11 @@ SELECT t1.c1, t2.c2 FROM test_partition_table t1 JOIN test_partition_table t2 US
 0 10
 
 # left_join_using_qualified (snowflake syntax)
-query error DataFusion error: This feature is not implemented: Invalid identifier in USING clause\. Expected single identifier, got t2\.c2
+query error
 SELECT t1.c1, t2.c2 FROM test_partition_table t1 JOIN test_partition_table t2 USING (t2.c2) ORDER BY t2.c2;
+----
+DataFusion error: This feature is not implemented: Invalid identifier in USING clause. Expected single identifier, got t2.c2
+
 
 # left_join_using_join_key_projection
 query III
@@ -3508,7 +3553,7 @@ logical_plan
 08)----------TableScan: annotated_data projection=[a, b]
 physical_plan
 01)ProjectionExec: expr=[a@0 as a, last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]@3 as last_col1]
-02)--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]], ordering_mode=PartiallySorted([0])
+02)--AggregateExec: mode=Single, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]], group_clustering_mode=Partial([0])
 03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(a@0, a@0)]
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], file_type=csv, has_header=true
 05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST], file_type=csv, has_header=true
@@ -3555,7 +3600,7 @@ logical_plan
 12)------------------TableScan: multiple_ordered_table projection=[a, d]
 physical_plan
 01)ProjectionExec: expr=[last_value(l.d) ORDER BY [l.a ASC NULLS LAST]@1 as amount_usd]
-02)--AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[last_value(l.d) ORDER BY [l.a ASC NULLS LAST]], ordering_mode=Sorted
+02)--AggregateExec: mode=Single, gby=[row_n@2 as row_n], aggr=[last_value(l.d) ORDER BY [l.a ASC NULLS LAST]], group_clustering_mode=Full
 03)----HashJoinExec: mode=CollectLeft, join_type=Inner, on=[(d@1, d@1)], filter=CAST(a@0 AS Int64) >= CAST(a@1 AS Int64) - 10, projection=[a@0, d@1, row_n@4]
 04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, d], output_ordering=[a@0 ASC NULLS LAST], file_type=csv, has_header=true
 05)------ProjectionExec: expr=[a@0 as a, d@1 as d, row_number() ORDER BY [r.a ASC NULLS LAST] RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW@2 as row_n]
@@ -3590,9 +3635,9 @@ logical_plan
 physical_plan
 01)SortPreservingMergeExec: [a@0 ASC]
 02)--ProjectionExec: expr=[a@0 as a, last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]@3 as last_col1]
-03)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]], ordering_mode=PartiallySorted([0])
+03)----AggregateExec: mode=FinalPartitioned, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]], group_clustering_mode=Partial([0])
 04)------RepartitionExec: partitioning=Hash([a@0, b@1, c@2], 2), input_partitions=2, preserve_order=true, sort_exprs=a@0 ASC
-05)--------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]], ordering_mode=PartiallySorted([0])
+05)--------AggregateExec: mode=Partial, gby=[a@0 as a, b@1 as b, c@2 as c], aggr=[last_value(r.b) ORDER BY [r.a ASC NULLS FIRST]], group_clustering_mode=Partial([0])
 06)----------HashJoinExec: mode=Partitioned, join_type=Inner, on=[(a@0, a@0)]
 07)------------RepartitionExec: partitioning=Hash([a@0], 2), input_partitions=1, maintains_sort_order=true
 08)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/core/tests/data/window_2.csv]]}, projection=[a, b, c], output_ordering=[a@0 ASC, b@1 ASC NULLS LAST, c@2 ASC NULLS LAST], file_type=csv, has_header=true
@@ -4139,8 +4184,11 @@ physical_plan_error This feature is not implemented: Physical plan does not supp
 
 # Test CROSS JOIN LATERAL syntax (execution)
 # TODO: https://github.com/apache/datafusion/issues/10048
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(Field \{ name: "t1_int", data_type: UInt32, nullable: true \}, Column \{ relation: Some\(Bare \{ table: "t1" \}\), name: "t1_int" \}\)
+query error
 select t1_id, t1_name, i from join_t1 t1 cross join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
+----
+DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "t1_int", data_type: UInt32, nullable: true }, Column { relation: Some(Bare { table: "t1" }), name: "t1_int" })
+
 
 
 # Test INNER JOIN LATERAL syntax (planning)
@@ -4163,12 +4211,18 @@ physical_plan_error This feature is not implemented: Physical plan does not supp
 
 # Test INNER JOIN LATERAL syntax (execution)
 # TODO: https://github.com/apache/datafusion/issues/10048
-query error DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn\(Field \{ name: "t1_int", data_type: UInt32, nullable: true \}, Column \{ relation: Some\(Bare \{ table: "t2" \}\), name: "t1_int" \}\)
+query error
 select t1_id, t1_name, i from join_t1 t2 inner join lateral (select * from unnest(generate_series(1, t1_int))) as series(i) on(t1_id > i);
+----
+DataFusion error: This feature is not implemented: Physical plan does not support logical expression OuterReferenceColumn(Field { name: "t1_int", data_type: UInt32, nullable: true }, Column { relation: Some(Bare { table: "t2" }), name: "t1_int" })
+
 
 # Test RIGHT JOIN LATERAL syntax (unsupported)
-query error DataFusion error: This feature is not implemented: LATERAL syntax is not supported for FULL OUTER and RIGHT \[OUTER \| ANTI \| SEMI\] joins
+query error
 select t1_id, t1_name, i from join_t1 t1 right join lateral (select * from unnest(generate_series(1, t1_int))) as series(i);
+----
+DataFusion error: This feature is not implemented: LATERAL syntax is not supported for FULL OUTER and RIGHT [OUTER | ANTI | SEMI] joins
+
 
 
 # Functional dependencies across a join
@@ -4841,10 +4895,8 @@ logical_plan
 04)----Projection: Int64(1)
 05)------EmptyRelation: rows=1
 physical_plan
-01)CrossJoinExec
+01)ProjectionExec: expr=[j1_string@0 as j1_string, j1_id@1 as j1_id, 1 as Int64(1)]
 02)--DataSourceExec: partitions=1, partition_sizes=[0]
-03)--ProjectionExec: expr=[1 as Int64(1)]
-04)----PlaceholderRowExec
 
 statement count 0
 drop table j1;
@@ -5261,7 +5313,7 @@ LEFT ANTI JOIN (
 ) t2 ON t1.k = t2.k;
 ----
 Plan with Metrics
-01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k@0, k@0)], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, build_mem_used=<slt:ignore>, array_map_created_count=0, build_input_batches=0, build_input_rows=0, input_batches=1, input_rows=2, build_time=<slt:ignore>, join_time=<slt:ignore>, avg_fanout=N/A (0/0), probe_hit_rate=0% (0/2)]
+01)HashJoinExec: mode=CollectLeft, join_type=RightAnti, on=[(k@0, k@0)], metrics=[output_rows=2, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=1, build_mem_used=<slt:ignore>, array_map_created_count=0, build_input_batches=0, build_input_rows=0, input_batches=1, input_rows=2, build_time=<slt:ignore>, join_time=<slt:ignore>, avg_fanout=N/A (0/0), output_rows_skew=0%, probe_hit_rate=0% (0/2)]
 02)--ProjectionExec: expr=[column1@0 as k], metrics=[output_rows=0, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=0, expr_0_eval_time=<slt:ignore>]
 03)----FilterExec: column1@0 != 1, metrics=[output_rows=0, elapsed_compute=<slt:ignore>, output_bytes=<slt:ignore>, output_batches=0, selectivity=0% (0/1)]
 04)------DataSourceExec: partitions=1, partition_sizes=[1], metrics=[]
@@ -6297,3 +6349,162 @@ reset datafusion.optimizer.repartition_file_scans;
 
 statement ok
 set datafusion.execution.target_partitions = 4;
+
+# Projecting away a temporary join-filter column must preserve the equivalence
+# between a struct field and its extracted scalar column. The parallel sort and
+# merge can use different members of that equivalence class.
+statement ok
+set datafusion.execution.target_partitions = 2;
+
+statement ok
+CREATE TABLE projection_events (id BIGINT) AS VALUES (1), (2), (3);
+
+# UNION ALL gives the right input two partitions, so ordering needs a merge.
+statement ok
+CREATE TABLE projection_networks AS
+SELECT 'b' AS label UNION ALL SELECT 'a' AS label;
+
+query TT
+EXPLAIN SELECT * FROM projection_networks;
+----
+logical_plan TableScan: projection_networks projection=[label]
+physical_plan DataSourceExec: partitions=2, partition_sizes=[1, 1]
+
+query I?
+SELECT id, n
+FROM projection_events
+LEFT JOIN (
+  SELECT named_struct('label', label) AS n FROM projection_networks
+) ON id > 1
+ORDER BY id, n['label'];
+----
+1 NULL
+2 {label: a}
+2 {label: b}
+3 {label: a}
+3 {label: b}
+
+# Also exercise the equivalence with an explicitly projected scalar alias.
+query I?
+SELECT id, n
+FROM projection_events
+LEFT JOIN (
+  SELECT named_struct('label', label) AS n, label AS extracted
+  FROM projection_networks
+) ON id > 1
+ORDER BY id, extracted;
+----
+1 NULL
+2 {label: a}
+2 {label: b}
+3 {label: a}
+3 {label: b}
+
+statement ok
+DROP TABLE projection_events;
+
+statement ok
+DROP TABLE projection_networks;
+
+statement ok
+set datafusion.execution.target_partitions = 4;
+
+# A computed constant must survive the projection embedded into a sort-merge
+# join, even when only the expression's argument is projected.
+# https://github.com/apache/datafusion/issues/26624
+statement ok
+set datafusion.optimizer.prefer_hash_join = false;
+
+statement ok
+CREATE TABLE constant_projection (a INT, b INT, s VARCHAR) AS VALUES
+(1, 1, 'x'), (2, 0, 'X'), (3, 1, 'y'), (4, NULL, NULL), (5, 1, 'X');
+
+query II
+SELECT t1.b + 1 AS x, t2.a
+FROM constant_projection t1 JOIN constant_projection t2 ON t1.a = t2.a
+WHERE t1.b + 1 = 2
+ORDER BY x, t2.a;
+----
+2 1
+2 3
+2 5
+
+statement ok
+set datafusion.explain.physical_plan_only = true;
+
+query TT
+EXPLAIN SELECT t1.b + 1 AS x, t2.a
+FROM constant_projection t1 JOIN constant_projection t2 ON t1.a = t2.a
+WHERE t1.b + 1 = 2
+ORDER BY x, t2.a;
+----
+physical_plan
+01)SortPreservingMergeExec: [x@0 ASC NULLS LAST, a@1 ASC NULLS LAST]
+02)--SortExec: expr=[a@1 ASC NULLS LAST], preserve_partitioning=[true]
+03)----ProjectionExec: expr=[CAST(b@0 AS Int64) + 1 as x, a@1 as a]
+04)------SortMergeJoinExec: join_type=Inner, on=[(a@0, a@0)], projection=[b@1, a@2]
+05)--------SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+06)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+07)------------FilterExec: CAST(b@1 AS Int64) + 1 = 2
+08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
+09)--------SortExec: expr=[a@0 ASC], preserve_partitioning=[true]
+10)----------RepartitionExec: partitioning=Hash([a@0], 4), input_partitions=1
+11)------------DataSourceExec: partitions=1, partition_sizes=[1]
+
+statement ok
+reset datafusion.explain.physical_plan_only;
+
+query II
+SELECT t1.b + 1 AS x, t2.a
+FROM constant_projection t1 LEFT JOIN constant_projection t2 ON t1.a = t2.a
+WHERE t1.b + 1 = 2
+ORDER BY x, t2.a;
+----
+2 1
+2 3
+2 5
+
+# NULL padding invalidates the right side's constant, so x still needs sorting.
+query II
+SELECT t2.b + 1 AS x, t1.a
+FROM constant_projection t1
+LEFT JOIN (SELECT * FROM constant_projection WHERE b + 1 = 2) t2 ON t1.a = t2.a
+ORDER BY x, t1.a;
+----
+2 1
+2 3
+2 5
+NULL 2
+NULL 4
+
+query TI
+SELECT upper(t1.s) AS x, t2.a
+FROM constant_projection t1 JOIN constant_projection t2 ON t1.a = t2.a
+WHERE upper(t1.s) = 'X'
+ORDER BY x, t2.a;
+----
+X 1
+X 2
+X 5
+
+statement ok
+DROP TABLE constant_projection;
+
+# The expression must also survive when it contains a scalar-subquery leaf.
+statement ok
+CREATE TABLE subquery_projection (a INT, b INT) AS VALUES (1, 1), (2, 0);
+
+query III
+SELECT * FROM (
+  SELECT t1.b + (SELECT max(a) FROM subquery_projection) AS x
+  FROM subquery_projection t1 JOIN subquery_projection t2 ON t1.a = t2.a
+) s JOIN subquery_projection t3 ON s.x = t3.a
+WHERE s.x = 2;
+----
+2 2 0
+
+statement ok
+DROP TABLE subquery_projection;
+
+statement ok
+reset datafusion.optimizer.prefer_hash_join;

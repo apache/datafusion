@@ -1,23 +1,11 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 mod dependency; // Submodule containing DependencyMap and Dependencies
 mod joins; // Submodule containing join_equivalence_properties
 mod union; // Submodule containing calculate_union
+mod walk; // Submodule containing SortKeyWalk
 
 pub use joins::*;
 pub use union::*;
@@ -30,8 +18,10 @@ use self::dependency::{
     Dependencies, DependencyMap, construct_prefix_orderings,
     generate_dependency_orderings, referred_dependencies,
 };
+use self::walk::SortKeyWalk;
 use crate::equivalence::{
-    AcrossPartitions, EquivalenceGroup, OrderingEquivalenceClass, ProjectionMapping,
+    AcrossPartitions, EquivalenceGroup, GroupingEquivalenceClass,
+    OrderingEquivalenceClass, ProjectionMapping,
 };
 use crate::expressions::{Column, Literal, with_new_schema};
 use crate::{
@@ -39,20 +29,21 @@ use crate::{
     PhysicalSortRequirement,
 };
 
+use arrow::compute::SortOptions;
 use arrow::datatypes::SchemaRef;
-use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
-use datafusion_common::{Constraint, Constraints, HashMap, Result, plan_err};
+use datafusion_common::{Constraint, Constraints, HashMap, HashSet, Result, plan_err};
 use datafusion_expr::interval_arithmetic::Interval;
 use datafusion_expr::sort_properties::{ExprProperties, SortProperties};
-use datafusion_physical_expr_common::sort_expr::options_compatible;
-use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
 use indexmap::IndexSet;
-use itertools::Itertools;
+use itertools::{Either, Itertools};
 
-/// `EquivalenceProperties` stores information about the output of a plan node
-/// that can be used to optimize the plan. Currently, it keeps track of:
+/// `EquivalenceProperties` stores information about how values are distributed
+/// across the output of a plan node that can be used to optimize the plan.
+///
+/// Currently, it tracks:
 /// - Sort expressions (orderings),
+/// - When all rows of equal values are contiguous for certain tuples (groupings),
 /// - Equivalent expressions; i.e. expressions known to have the same value.
 /// - Constants expressions; i.e. expressions known to contain a single constant
 ///   value.
@@ -61,7 +52,24 @@ use itertools::Itertools;
 ///
 /// [Using Ordering for Better Plans]: https://datafusion.apache.org/blog/2025/03/11/ordering-analysis/
 ///
-/// # Example equivalent sort expressions
+/// This document explains the concepts and how the pieces fit together.
+///
+/// # Overview
+///
+/// | Concept                | Example                                   | Stored in                                                           |
+/// |------------------------|-------------------------------------------|---------------------------------------------------------------------|
+/// | Equivalent expressions | `a` and `b` after the filter `a = b`      | An [`EquivalenceGroup`] of [`EquivalenceClass`]es                   |
+/// | Constants              | `a` after the filter `a = 5`              | The `constant` of an [`EquivalenceClass`], added as a [`ConstExpr`] |
+/// | Orderings              | `[a ASC, b DESC]` after a sort            | An [`OrderingEquivalenceClass`]                                     |
+/// | Groupings              | `[a, b]` declared by a custom data source | A [`GroupingEquivalenceClass`]                                      |
+/// | Constraints            | A primary key or unique constraint        | [`Constraints`]                                                     |
+///
+/// [`EquivalenceClass`]: crate::equivalence::EquivalenceClass
+/// [Required orderings]: #required-orderings
+/// [`ExecutionPlan::required_input_ordering`]: https://docs.rs/datafusion-physical-plan/latest/datafusion_physical_plan/trait.ExecutionPlan.html#method.required_input_ordering
+/// [Checking whether a requirement is satisfied]: #checking-whether-a-requirement-is-satisfied
+///
+/// # Equivalent sort expressions
 ///
 /// Consider table below:
 ///
@@ -78,11 +86,11 @@ use itertools::Itertools;
 ///
 /// In this case, both `a ASC` and `b DESC` can describe the table ordering.
 /// `EquivalenceProperties` tracks these different valid sort expressions and
-/// treat `a ASC` and `b DESC` on an equal footing. For example, if the query
+/// treats `a ASC` and `b DESC` on an equal footing. For example, if the query
 /// specifies the output sorted by EITHER `a ASC` or `b DESC`, the sort can be
 /// avoided.
 ///
-/// # Example equivalent expressions
+/// # Equivalent expressions
 ///
 /// Similarly, consider the table below:
 ///
@@ -97,11 +105,242 @@ use itertools::Itertools;
 /// └---┴---┘
 /// ```
 ///
-/// In this case,  columns `a` and `b` always have the same value. With this
-/// information, Datafusion can optimize various operations. For example, if
-/// the partition requirement is `Hash(a)` and output partitioning is
-/// `Hash(b)`, then DataFusion avoids repartitioning the data as the existing
-/// partitioning satisfies the requirement.
+/// In this case, columns `a` and `b` always have the same value. DataFusion
+/// uses this information to optimize various operations. For example, if the
+/// partition requirement is `Hash(a)` and output partitioning is `Hash(b)`,
+/// then DataFusion avoids repartitioning the data as the existing partitioning
+/// satisfies the requirement.
+///
+/// # Constants
+///
+/// A constant is an expression with a single value in the output of a plan
+/// node. A constant is *uniform* if it has the same value in every output
+/// partition, and *heterogeneous* if it has one value within each output
+/// partition but may differ between output partitions (see
+/// [`AcrossPartitions`]).
+///
+/// ## Example: Uniform Constant from a Filter
+///
+/// Consider an input sorted by `b ASC` and the filter `a = 5`, which produces
+/// the following table:
+///
+/// ```text
+/// ┌───┬───┐
+/// │ a │ b │
+/// ├───┼───┤
+/// │ 5 │ 1 │
+/// │ 5 │ 2 │
+/// │ 5 │ 4 │
+/// └───┴───┘
+/// ```
+///
+/// The filter adds `a` as a uniform [`ConstExpr`]. If the query requests
+/// sorting on `[a ASC, b ASC]` DataFusion knows it can skip sorting.
+///
+/// ## Example: Heterogeneous Constant from `UNION ALL`
+///
+/// Consider `SELECT 1 AS c, x FROM t1 UNION ALL SELECT 2 AS c, x FROM t2`,
+/// where each input is sorted by `x ASC` and has one output partition. The
+/// union has two output partitions, one from each input:
+///
+/// ```text
+/// Partition 0   Partition 1
+/// ┌───┬───┐     ┌───┬───┐
+/// │ c │ x │     │ c │ x │
+/// ├───┼───┤     ├───┼───┤
+/// │ 1 │ 1 │     │ 2 │ 2 │
+/// │ 1 │ 3 │     │ 2 │ 5 │
+/// └───┴───┘     └───┴───┘
+/// ```
+///
+/// Observations:
+/// - Within each output partition `c` has one value, but the values differ
+///   between output partitions, so `c` is an
+///   [`AcrossPartitions::Heterogeneous`] constant.
+/// - Each output partition is sorted by `[x ASC]`, and therefore also by
+///   `[c ASC, x ASC]`.
+/// - However, when the output partitions are merged by `[x ASC]` alone, the
+///   result is NOT sorted by `c`, unlike with an [`AcrossPartitions::Uniform`]
+///   constant, which would have the same value in every output partition and
+///   thus be sorted by `[c ASC, x ASC]` as well.
+///
+/// Given those observations, `c` must stay in the ordering `[c ASC, x ASC]`
+/// rather than being removed as a uniform constant would be.
+///
+/// # Window functions
+///
+/// NOTE: it is important to distinguish between *window partition*, the rows
+/// with equal `PARTITION BY` keys, and *output partition*, how the data is
+/// divided up across execution units during execution.
+///
+/// ## Example: Window Functions with `PARTITION BY`
+///
+/// Consider an input sorted by `k ASC` and the window expression
+/// `SUM(x) OVER (PARTITION BY k) AS w`, which produces the following rows:
+///
+/// ```text
+/// ┌───┬───┬────┐
+/// │ k │ x │ w  │
+/// ├───┼───┼────┤
+/// │ 1 │ 3 │  5 │
+/// │ 1 │ 2 │  5 │
+/// │ 2 │ 4 │ 10 │
+/// │ 2 │ 6 │ 10 │
+/// │ 3 │ 1 │  1 │
+/// └───┴───┴────┘
+/// ```
+///
+/// Observations:
+/// - `w` is not a constant because it differs between window partitions.
+/// - The output is sorted by `k` (the window partition key), because
+///   DataFusion's window implementation keeps the input order.
+/// - Within each run of equal `k`, `w` has one value.
+///
+/// Given those observations, the output is sorted by `[k, w]` in *every*
+/// direction of `w`: ascending or descending, nulls first or last:
+///
+/// - `[k ASC, w ASC NULLS FIRST]`
+/// - `[k ASC, w ASC NULLS LAST]`
+/// - `[k ASC, w DESC NULLS FIRST]`
+/// - `[k ASC, w DESC NULLS LAST]`
+///
+/// ## Example: Window Functions without `PARTITION BY`
+///
+/// Consider the same input and the window expression `SUM(x) OVER () AS w`,
+/// which produces the following rows:
+///
+/// ```text
+/// ┌───┬───┬────┐
+/// │ k │ x │ w  │
+/// ├───┼───┼────┤
+/// │ 1 │ 3 │ 16 │
+/// │ 1 │ 2 │ 16 │
+/// │ 2 │ 4 │ 16 │
+/// │ 2 │ 6 │ 16 │
+/// │ 3 │ 1 │ 16 │
+/// └───┴───┴────┘
+/// ```
+///
+/// Observations:
+/// - The frame of every row is the whole table, so `w` has one value.
+/// - The output is still sorted by `k`, as the input was.
+///
+/// Given those observations, `w` is added as a constant (a [`ConstExpr`])
+/// rather than as orderings.
+///
+/// ## Example: Set-Monotonic Window Functions
+///
+/// Consider an input sorted by `[ts ASC]` and the window function
+/// `MAX(x) OVER (ORDER BY ts) AS m`, which produces the following rows:
+///
+/// ```text
+/// ┌────┬───┬───┐
+/// │ ts │ x │ m │
+/// ├────┼───┼───┤
+/// │  1 │ 3 │ 3 │
+/// │  2 │ 1 │ 3 │
+/// │  3 │ 5 │ 5 │
+/// │  4 │ 2 │ 5 │
+/// └────┴───┴───┘
+/// ```
+///
+/// Observations:
+/// - When written with explicit defaults, this query is equivalent to
+///   `SELECT ts, x, MAX(x) OVER (ORDER BY ts RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS m`,
+///   so each row's frame contains every earlier row's frame.
+/// - `MAX` is set-monotonically increasing: adding rows to its input can only
+///   raise its value or leave it unchanged (see [`SetMonotonicity`]).
+///
+/// Given those observations, `m` never decreases as `ts` increases, so the
+/// output sorting is described by both `[ts ASC]` and `[m ASC]`.
+///
+/// If the query had a `PARTITION BY k`, with the input sorted by `k` first,
+/// the added ordering would be `[k, m ASC]`.
+///
+/// A decreasing aggregate such as `MIN` results in `DESC`.
+///
+/// A frame that shrinks as rows advance, such as `CURRENT ROW` to
+/// `UNBOUNDED FOLLOWING`, reverses the direction: `MAX` then results in
+/// `DESC`.
+///
+/// [`SetMonotonicity`]: datafusion_expr::SetMonotonicity
+///
+/// # Required orderings
+///
+/// Some operators only work on sorted input. A sort merge join needs
+/// inputs sorted on the join keys, and a streaming window needs its input
+/// sorted by its `PARTITION BY` and then its `ORDER BY` expressions.
+///
+/// Each operator describes its requirements via
+/// [`ExecutionPlan::required_input_ordering`].
+///
+/// **Orderings** describe how the data is actually distributed.
+/// **Requirements** describe what an operator *needs*. The physical optimizer
+/// (`EnforceSorting`) compares orderings to requirements with
+/// [`Self::ordering_satisfy_requirement`] and inserts or removes Sort
+/// operations so that they match (see [Checking whether a requirement is
+/// satisfied]).
+///
+/// # Normal form
+///
+/// Orderings and requirements (see [Required orderings]) are compared in
+/// *normal form*: every expression is replaced by the first member of its
+/// equivalence class, uniform constants and expressions that repeat an earlier
+/// one are removed.
+///
+/// For example, if `a` and `b` are equal and `d` is a uniform constant, the
+/// requirement `[b ASC, d DESC, c ASC, a ASC]` normalizes to `[a ASC, c ASC]`.
+///
+/// # Checking whether a requirement is satisfied
+///
+/// The requirement `[a, b]` holds if the rows are sorted by `a`, and the rows
+/// that tie on `a` are sorted by `b`.
+///
+/// [`Self::ordering_satisfy_requirement`] checks whether a requirement is
+/// satisfied by an ordering, and is quite complex.
+///
+/// # Discovering orderings
+///
+/// `EquivalenceProperties` discovers and accounts for additional orderings that
+/// may not be obvious from various additional information such as constants and
+/// equality.
+///
+/// ## Example: Ordering Implied by a `CAST`
+///
+/// Consider a table `t` sorted by `[c ASC, a ASC, b ASC]` and a query `SELECT
+/// a, b, c FROM t WHERE c = CAST(a AS BIGINT) ORDER BY a, b` that produces the
+/// following rows:
+///
+/// ```text
+/// ┌───┬───┬───┐
+/// │ a │ b │ c │
+/// ├───┼───┼───┤
+/// │ 1 │ 2 │ 1 │
+/// │ 1 │ 5 │ 1 │
+/// │ 2 │ 1 │ 2 │
+/// │ 3 │ 4 │ 3 │
+/// └───┴───┴───┘
+/// ```
+///
+/// Observations:
+/// - The filter keeps the input order, so the rows are still sorted by
+///   `[c ASC, a ASC, b ASC]`.
+/// - Casting an `INT` to a `BIGINT` preserves order and never maps two
+///   different values to the same one, so rows with different `a` are in the
+///   order of `c`, which is the order of `a`.
+/// - Rows with equal `c` are sorted by `[a, b]`.
+///
+/// Given those observations, the rows are also sorted by `[a ASC, b ASC]`,
+/// even though `a` is not the leading sort key. `EquivalenceProperties`
+/// derives this ordering when the equality is added, so the `ORDER BY a, b`
+/// needs no sort.
+///
+/// This holds in general for a function `f` whose output follows the
+/// lexicographical order of its arguments, which `f` declares by setting
+/// [`ExprProperties::preserves_lex_ordering`].
+///
+/// [`Self::add_equal_conditions`] and [`Self::add_constants`] look for such
+/// orderings whenever they learn something new.
 ///
 /// # Code Example
 /// ```
@@ -118,10 +357,10 @@ use itertools::Itertools;
 /// # let col_a = col("a", &schema).unwrap();
 /// # let col_b = col("b", &schema).unwrap();
 /// # let col_c = col("c", &schema).unwrap();
-/// // This object represents data that is sorted by a ASC, c DESC
-/// // with a single constant value of b
 /// let mut eq_properties = EquivalenceProperties::new(schema);
+/// // Single constant value of b
 /// eq_properties.add_constants(vec![ConstExpr::from(col_b)]);
+/// // ORDER BY a ASC, c DESC
 /// eq_properties.add_ordering([
 ///     PhysicalSortExpr::new_default(col_a).asc(),
 ///     PhysicalSortExpr::new_default(col_c).desc(),
@@ -138,11 +377,20 @@ pub struct EquivalenceProperties {
     eq_group: EquivalenceGroup,
     /// Equivalent sort expressions (i.e. those define the same ordering).
     oeq_class: OrderingEquivalenceClass,
+    /// Complete expression tuples whose values occupy one contiguous run
+    /// in each output partition.
+    geq_class: GroupingEquivalenceClass,
     /// Cache storing equivalent sort expressions in normal form (i.e. without
     /// constants/duplicates and in standard form) and a map associating leading
     /// terms with full sort expressions.
     oeq_cache: OrderingEquivalenceCache,
-    /// Table constraints that factor in equivalence calculations.
+    /// Grouping expressions in normal form (i.e. without constants,
+    /// duplicates, or non-canonical equivalent expressions).
+    geq_cache: GroupingEquivalenceClass,
+    /// Table constraints that factor in equivalence calculations. Unlike
+    /// constants, constraints have no per-partition form: each one must hold
+    /// across all output partitions, since operators that merge partitions
+    /// keep them.
     constraints: Constraints,
     /// Schema associated with this object.
     schema: SchemaRef,
@@ -169,9 +417,10 @@ impl OrderingEquivalenceCache {
     pub fn new(
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
     ) -> Self {
+        let normal_cls = OrderingEquivalenceClass::new(orderings);
         let mut cache = Self {
-            normal_cls: OrderingEquivalenceClass::new(orderings),
-            leading_map: HashMap::new(),
+            leading_map: HashMap::with_capacity(normal_cls.len()),
+            normal_cls,
         };
         cache.update_map();
         cache
@@ -235,13 +484,15 @@ impl EquivalenceProperties {
         r_expr: Arc<dyn PhysicalExpr>,
         sort_expr: &PhysicalSortExpr,
         schema: &SchemaRef,
+        column_ranges: &ColumnRanges,
     ) -> Option<PhysicalSortExpr> {
         if r_expr.eq(&sort_expr.expr) {
             // No point in substituting an expression with itself.
             return None;
         }
         let dependencies = Dependencies::new(std::iter::once(sort_expr.clone()));
-        let properties = get_expr_properties(&r_expr, &dependencies, schema).ok()?;
+        let properties =
+            get_expr_properties(&r_expr, &dependencies, schema, column_ranges).ok()?;
         (properties.strictly_order_preserving
             && properties.sort_properties == SortProperties::Ordered(sort_expr.options))
         .then(|| PhysicalSortExpr::new(r_expr, sort_expr.options))
@@ -252,7 +503,9 @@ impl EquivalenceProperties {
         Self {
             eq_group: EquivalenceGroup::default(),
             oeq_class: OrderingEquivalenceClass::default(),
+            geq_class: GroupingEquivalenceClass::default(),
             oeq_cache: OrderingEquivalenceCache::default(),
+            geq_cache: GroupingEquivalenceClass::default(),
             constraints: Constraints::default(),
             schema,
         }
@@ -285,6 +538,8 @@ impl EquivalenceProperties {
         Self {
             oeq_cache: OrderingEquivalenceCache::new(normal_orderings),
             oeq_class,
+            geq_class: GroupingEquivalenceClass::default(),
+            geq_cache: GroupingEquivalenceClass::default(),
             eq_group,
             constraints: Constraints::default(),
             schema,
@@ -299,6 +554,11 @@ impl EquivalenceProperties {
     /// Returns a reference to the ordering equivalence class within.
     pub fn oeq_class(&self) -> &OrderingEquivalenceClass {
         &self.oeq_class
+    }
+
+    /// Returns a reference to the grouping equivalence class within.
+    pub fn geq_class(&self) -> &GroupingEquivalenceClass {
+        &self.geq_class
     }
 
     /// Returns a reference to the equivalence group within.
@@ -336,6 +596,7 @@ impl EquivalenceProperties {
         self.constraints.extend(other.constraints);
         self.add_equivalence_group(other.eq_group)?;
         self.add_orderings(other.oeq_class);
+        self.add_groupings(other.geq_class);
         Ok(self)
     }
 
@@ -346,8 +607,16 @@ impl EquivalenceProperties {
         self.oeq_cache.clear();
     }
 
-    /// Removes constant expressions that may change across partitions.
-    /// This method should be used when merging data from different partitions.
+    /// Clears grouping information invalidated by an operation that changes
+    /// row sequence or combines input partitions.
+    pub fn clear_groupings(&mut self) {
+        self.geq_class.clear();
+        self.geq_cache.clear();
+    }
+
+    /// Removes constant expressions that may change across output partitions.
+    /// This method should be used when merging data from different output
+    /// partitions.
     pub fn clear_per_partition_constants(&mut self) {
         if self.eq_group.clear_per_partition_constants() {
             // Renormalize orderings if the equivalence group changes:
@@ -357,10 +626,12 @@ impl EquivalenceProperties {
                 .cloned()
                 .map(|o| self.eq_group.normalize_sort_exprs(o));
             self.oeq_cache = OrderingEquivalenceCache::new(normal_orderings);
+            self.update_geq_cache();
         }
     }
 
-    /// Adds new orderings into the existing ordering equivalence class.
+    /// Adds new orderings into the existing ordering equivalence class, along
+    /// with the orderings they imply through known equalities.
     pub fn add_orderings(
         &mut self,
         orderings: impl IntoIterator<Item = impl IntoIterator<Item = PhysicalSortExpr>>,
@@ -372,19 +643,92 @@ impl EquivalenceProperties {
             .cloned()
             .filter_map(|o| self.normalize_sort_exprs(o))
             .collect();
-        if !normal_orderings.is_empty() {
-            self.oeq_class.extend(orderings);
-            // Normalize given orderings to update the cache:
-            self.oeq_cache.normal_cls.extend(normal_orderings);
-            // TODO: If no ordering is found to be redundant during extension, we
-            //       can use a shortcut algorithm to update the leading map.
-            self.oeq_cache.update_map();
+        if normal_orderings.is_empty() {
+            return;
         }
+        // `add_constants` and `add_equal_conditions` discover implied orderings
+        // too, and whether an ordering is satisfied must not depend on which of
+        // them ran last. Deriving one fails only on an expression that does not
+        // match the schema; that ordering is then not implied, which can cost a
+        // sort but not a wrong result.
+        let mut implied: Vec<LexOrdering> = vec![];
+        for ordering in &normal_orderings {
+            // Two orderings can imply the same one; expand it only once:
+            for ordering in self.implied_by(ordering).unwrap_or_default() {
+                if !implied.contains(&ordering) {
+                    implied.push(ordering);
+                }
+            }
+        }
+        self.oeq_class.extend(orderings);
+        // Normalize given orderings to update the cache:
+        self.oeq_cache.normal_cls.extend(normal_orderings);
+        // TODO: If no ordering is found to be redundant during extension, we
+        //       can use a shortcut algorithm to update the leading map.
+        self.oeq_cache.update_map();
+        // Each implied ordering is shorter than the one implying it, so this
+        // terminates:
+        self.add_orderings(implied);
     }
 
     /// Adds a single ordering to the existing ordering equivalence class.
     pub fn add_ordering(&mut self, ordering: impl IntoIterator<Item = PhysicalSortExpr>) {
         self.add_orderings(std::iter::once(ordering));
+    }
+
+    /// Adds complete grouping tuples whose values are contiguous within
+    /// every output partition.
+    ///
+    /// This is a correctness assertion. DataFusion does not verify the row
+    /// layout, and consumers may act on a tuple as soon as its values change.
+    /// Callers must therefore only add tuples that hold for every output
+    /// partition.
+    ///
+    /// Expression order within a tuple is not significant. A tuple only
+    /// describes its complete set of expressions: grouping `[a, b]` does not
+    /// imply grouping `[a]` or `[b]`.
+    pub fn add_groupings(
+        &mut self,
+        groupings: impl IntoIterator<Item = impl IntoIterator<Item = Arc<dyn PhysicalExpr>>>,
+    ) {
+        for grouping in GroupingEquivalenceClass::new(groupings) {
+            let normal_grouping = self.normalize_grouping(grouping.iter().cloned());
+            self.geq_class.add_groupings(std::iter::once(grouping));
+            if !normal_grouping.is_empty() {
+                self.geq_cache
+                    .add_groupings(std::iter::once(normal_grouping));
+            }
+        }
+    }
+
+    /// Adds one complete grouping tuple.
+    pub fn add_grouping(
+        &mut self,
+        grouping: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+    ) {
+        self.add_groupings(std::iter::once(grouping));
+    }
+
+    fn normalize_grouping(
+        &self,
+        grouping: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+    ) -> Vec<Arc<dyn PhysicalExpr>> {
+        let mut seen = HashSet::new();
+        grouping
+            .into_iter()
+            .map(|expr| self.eq_group.normalize_expr(expr))
+            .filter(|expr| self.eq_group.is_expr_constant(expr).is_none())
+            .filter(|expr| seen.insert(Arc::clone(expr)))
+            .collect()
+    }
+
+    fn update_geq_cache(&mut self) {
+        let groupings = self
+            .geq_class
+            .iter()
+            .map(|grouping| self.normalize_grouping(grouping.iter().cloned()))
+            .collect::<Vec<_>>();
+        self.geq_cache = GroupingEquivalenceClass::new(groupings);
     }
 
     fn update_oeq_cache(&mut self) -> Result<()> {
@@ -398,7 +742,7 @@ impl EquivalenceProperties {
         // Discover any new orderings based on the new equivalence classes:
         let leading_exprs: Vec<_> = self.oeq_cache.leading_map.keys().cloned().collect();
         for expr in leading_exprs {
-            self.discover_new_orderings(expr)?;
+            self.discover_new_orderings(&expr)?;
         }
         Ok(())
     }
@@ -412,6 +756,7 @@ impl EquivalenceProperties {
         if !other_eq_group.is_empty() {
             self.eq_group.extend(other_eq_group);
             self.update_oeq_cache()?;
+            self.update_geq_cache();
         }
         Ok(())
     }
@@ -428,6 +773,11 @@ impl EquivalenceProperties {
             .into()
     }
 
+    /// Returns the grouping equivalence class within in normal form.
+    pub fn normalized_geq_class(&self) -> GroupingEquivalenceClass {
+        self.geq_cache.clone()
+    }
+
     /// Adds a new equality condition into the existing equivalence group.
     /// If the given equality defines a new equivalence class, adds this new
     /// equivalence class to the equivalence group.
@@ -441,6 +791,7 @@ impl EquivalenceProperties {
             self.update_oeq_cache()?;
         }
         self.update_oeq_cache()?;
+        self.update_geq_cache();
         Ok(())
     }
 
@@ -463,91 +814,176 @@ impl EquivalenceProperties {
         });
         self.oeq_cache.normal_cls = OrderingEquivalenceClass::new(normal_orderings);
         self.oeq_cache.update_map();
+        self.update_geq_cache();
         // Discover any new orderings based on the constants:
         let leading_exprs: Vec<_> = self.oeq_cache.leading_map.keys().cloned().collect();
         for expr in leading_exprs {
-            self.discover_new_orderings(expr)?;
+            self.discover_new_orderings(&expr)?;
         }
         Ok(())
     }
 
     /// Discover new valid orderings in light of a new equality. Accepts a single
-    /// argument (`expr`) which is used to determine the orderings to update.
+    /// argument (`normal_expr`) which is used to determine the orderings to update.
     /// When constants or equivalence classes change, there may be new orderings
     /// that can be discovered with the new equivalence properties.
     /// For a discussion, see: <https://github.com/apache/datafusion/issues/9812>
     fn discover_new_orderings(
         &mut self,
-        normal_expr: Arc<dyn PhysicalExpr>,
+        normal_expr: &Arc<dyn PhysicalExpr>,
     ) -> Result<()> {
-        let Some(ordering_idxs) = self.oeq_cache.leading_map.get(&normal_expr) else {
+        let Some(ordering_idxs) = self.oeq_cache.leading_map.get(normal_expr) else {
             return Ok(());
         };
-        let eq_class = self
-            .eq_group
-            .get_equivalence_class(&normal_expr)
-            .map_or_else(|| vec![normal_expr], |class| class.clone().into());
-
         let mut new_orderings = vec![];
         for idx in ordering_idxs {
             let ordering = &self.oeq_cache.normal_cls[*idx];
-            let leading_ordering_options = ordering[0].options;
-
-            'exprs: for equivalent_expr in &eq_class {
-                let children = equivalent_expr.children();
-                if children.is_empty() {
-                    continue;
-                }
-                // Check if all children match the next expressions in the ordering:
-                let mut child_properties = vec![];
-                // Build properties for each child based on the next expression:
-                for (i, child) in children.into_iter().enumerate() {
-                    let Some(next) = ordering.get(i + 1) else {
-                        break 'exprs;
-                    };
-                    if !next.expr.eq(child) {
-                        break 'exprs;
-                    }
-                    let data_type = child.data_type(&self.schema)?;
-                    child_properties.push(ExprProperties {
-                        sort_properties: SortProperties::Ordered(next.options),
-                        range: Interval::make_unbounded(&data_type)?,
-                        preserves_lex_ordering: true,
-                        strictly_order_preserving: true,
-                    });
-                }
-                // Check if the expression is monotonic in all arguments:
-                let expr_properties =
-                    equivalent_expr.get_properties(&child_properties)?;
-                if expr_properties.preserves_lex_ordering
-                    && expr_properties.sort_properties
-                        == SortProperties::Ordered(leading_ordering_options)
-                {
-                    // Assume that `[c ASC, a ASC, b ASC]` is among existing
-                    // orderings. If equality `c = f(a, b)` is given, ordering
-                    // `[a ASC, b ASC]` implies the ordering `[c ASC]`. Thus,
-                    // ordering `[a ASC, b ASC]` is also a valid ordering.
-                    new_orderings.push(ordering[1..].to_vec());
-                    break;
-                }
-            }
+            // As in `add_orderings`, an ordering that cannot be derived is
+            // not implied, so the result does not depend on the call order:
+            new_orderings.extend(self.implied_by(ordering).unwrap_or_default());
         }
-
-        if !new_orderings.is_empty() {
-            self.add_orderings(new_orderings);
-        }
+        self.add_orderings(new_orderings);
         Ok(())
     }
 
-    /// Updates the ordering equivalence class within assuming that the table
-    /// is re-sorted according to the argument `ordering`, and returns whether
-    /// this operation resulted in any change. Note that equivalence classes
-    /// (and constants) do not change as they are unaffected by a re-sort. If
-    /// the given ordering is already satisfied, the function does nothing.
+    /// Returns the orderings that the normal ordering `ordering` implies
+    /// through known equalities: for each key that is a function of the keys
+    /// after it (see [`Self::implied_ordering`]), `ordering` without that key.
+    ///
+    /// # Example: a key that is a function of the keys after it
+    ///
+    /// * Ordering: `[k ASC, a ASC, c ASC]`
+    /// * Equality: `a = CAST(c AS DATE)`
+    /// * Returns: `[k ASC, c ASC]`
+    ///
+    /// Among the rows that tie on `k`, the rows are sorted by `a`, and the
+    /// rows that also tie on `a` are sorted by `c`. `a` is the date of `c`, so
+    /// a row with an earlier `a` also has an earlier `c`, and the rows that
+    /// tie on `k` are sorted by `c` alone:
+    ///
+    /// ```text
+    /// ┌───┬────────────┬──────────────────┐
+    /// │ k │ a          │ c                │
+    /// ├───┼────────────┼──────────────────┤
+    /// │ x │ 2026-01-01 │ 2026-01-01 09:00 │
+    /// │ x │ 2026-01-02 │ 2026-01-02 01:00 │
+    /// │ x │ 2026-01-02 │ 2026-01-02 05:00 │
+    /// │ y │ 2026-01-01 │ 2026-01-01 03:00 │
+    /// └───┴────────────┴──────────────────┘
+    /// ```
+    ///
+    /// # Example: a constant that differs between partitions
+    ///
+    /// * Ordering: `[k ASC, a ASC, c ASC]`, where `k` is a constant whose value
+    ///   differs between partitions
+    /// * Equality: `a = CAST(c AS DATE)`
+    /// * Returns: `[c ASC]`
+    ///
+    /// A normal ordering can keep such a constant (see
+    /// `EquivalenceGroup::normalize_sort_exprs`). Within a partition `k` has
+    /// one value, so it is left out of the keys and of the result.
+    ///
+    /// # Example: directions that differ
+    ///
+    /// * Ordering: `[a ASC, c DESC]`
+    /// * Equality: `a = CAST(c AS DATE)`
+    /// * Returns: nothing
+    ///
+    /// `c` descends within a date but ascends across dates, so the rows are
+    /// not sorted by `c` in either direction.
+    fn implied_by(&self, ordering: &LexOrdering) -> Result<Vec<LexOrdering>> {
+        let keys: Vec<_> = ordering
+            .iter()
+            .filter(|sort_expr| self.eq_group.is_expr_constant(&sort_expr.expr).is_none())
+            .collect();
+        let mut implied = vec![];
+        for (idx, key) in keys.iter().enumerate() {
+            if let Some(rest) =
+                self.implied_ordering(key, keys[idx + 1..].iter().copied())?
+            {
+                let prefix = keys[..idx].iter().copied().cloned();
+                implied.extend(LexOrdering::new(prefix.chain(rest)));
+            }
+        }
+        Ok(implied)
+    }
+
+    /// Returns the ordering that the normal ordering `[leading, rest..]`
+    /// implies through an equality on its leading expression, if any.
+    ///
+    /// If data is sorted by `[c, a, b]` and `c = f(a, b)` for a function `f`
+    /// that preserves the lexicographical order of its arguments, the data is
+    /// also sorted by `[a, b]`: rows with different `(a, b)` are in the order
+    /// of `f(a, b)`, which is the order of `c`, and rows with equal `c` are
+    /// sorted by `[a, b]` anyway. Whatever follows `b` stays sorted as well, so
+    /// the implied ordering is all of `rest`.
+    fn implied_ordering<'b>(
+        &self,
+        leading: &PhysicalSortExpr,
+        rest: impl Iterator<Item = &'b PhysicalSortExpr> + Clone,
+    ) -> Result<Option<Vec<PhysicalSortExpr>>> {
+        // The expressions equal to `leading`; any of them can play `f(a, b)`:
+        let members = match self.eq_group.get_equivalence_class(&leading.expr) {
+            Some(class) => Either::Left(class.iter()),
+            None => Either::Right(std::iter::once(&leading.expr)),
+        };
+        for member in members {
+            let args = member.children();
+            // An expression without arguments, such as a column, implies
+            // nothing:
+            if args.is_empty() {
+                continue;
+            }
+            // The arguments must be the next expressions of the ordering, in
+            // order, and are then sorted the way the ordering says:
+            let mut sorted = rest.clone();
+            let mut arg_properties = vec![];
+            for arg in args {
+                match sorted.next() {
+                    Some(sort_expr) if sort_expr.expr.eq(arg) => {
+                        let data_type = arg.data_type(&self.schema)?;
+                        arg_properties.push(ExprProperties {
+                            sort_properties: SortProperties::Ordered(sort_expr.options),
+                            range: Interval::make_unbounded(&data_type)?,
+                            preserves_lex_ordering: true,
+                            strictly_order_preserving: true,
+                        });
+                    }
+                    // This ends the whole search: members after this one are
+                    // not tried, even if their arguments would match.
+                    _ => return Ok(None),
+                }
+            }
+            // `member` must preserve the lexicographical order of its
+            // arguments, in the direction of `leading`. If that cannot be
+            // derived, this member implies nothing:
+            let Ok(properties) = member.get_properties(&arg_properties) else {
+                continue;
+            };
+            if properties.preserves_lex_ordering
+                && properties.sort_properties == SortProperties::Ordered(leading.options)
+            {
+                return Ok(Some(rest.cloned().collect()));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Updates the ordering equivalence class assuming that the table is
+    /// re-sorted according to `ordering`, and returns whether the ordering
+    /// class changed. Equivalence classes and constants are unaffected by a
+    /// re-sort. Explicit grouping assertions are cleared because a sort may
+    /// rearrange rows that compare equally, even when `ordering` was already
+    /// satisfied.
     pub fn reorder(
         &mut self,
         ordering: impl IntoIterator<Item = PhysicalSortExpr>,
     ) -> Result<bool> {
+        // A sort may reorder rows that compare equally under `ordering`, so
+        // explicit grouping assertions do not necessarily survive even when
+        // the requested ordering is already satisfied. Groupings implied by
+        // the output ordering remain discoverable through `oeq_class`.
+        self.clear_groupings();
         let (ordering, ordering_tee) = ordering.into_iter().tee();
         // First, standardize the given ordering:
         let Some(normal_ordering) = self.normalize_sort_exprs(ordering) else {
@@ -585,6 +1021,27 @@ impl EquivalenceProperties {
         LexRequirement::new(self.eq_group.normalize_sort_requirements(sort_reqs))
     }
 
+    /// Returns whether the given complete expression tuple is known to be
+    /// grouped within every output partition.
+    ///
+    /// A tuple is grouped when all rows with the same values for the complete
+    /// tuple occur in one contiguous run. The order of expressions within a
+    /// grouping tuple does not matter: `[a, b]` and `[b, a]` describe the same
+    /// groups. A lexicographical ordering also satisfies grouping for each of
+    /// its prefixes, regardless of sort direction.
+    pub fn grouping_satisfy(
+        &self,
+        given: impl IntoIterator<Item = Arc<dyn PhysicalExpr>>,
+    ) -> Result<bool> {
+        let normal_grouping = self.normalize_grouping(given);
+        if normal_grouping.is_empty() || self.geq_cache.contains(&normal_grouping) {
+            return Ok(true);
+        }
+
+        let (_, indices) = self.find_longest_permutation(&normal_grouping)?;
+        Ok(indices.len() == normal_grouping.len())
+    }
+
     /// Iteratively checks whether the given ordering is satisfied by any of
     /// the existing orderings. See [`Self::ordering_satisfy_requirement`] for
     /// more details and examples.
@@ -613,8 +1070,9 @@ impl EquivalenceProperties {
     /// **Existing orderings:** `[[a, b, c], [a, d]]`, **constants:** `[]`
     /// 1. The function first checks the leading requirement `a`, which is
     ///    satisfied by `[a, b, c].first()`.
-    /// 2. `a` is added as a constant for the next iteration.
-    /// 3. Normal orderings become `[[b, c], [d]]`.
+    /// 2. `a` is pinned: the next key only has to be sorted among rows that
+    ///    tie on `a`.
+    /// 3. The orderings now start at `[b, c]` and `[d]`.
     /// 4. The function fails for `c` in the second iteration, as neither
     ///    `[b, c]` nor `[d]` satisfies `c`.
     ///
@@ -623,9 +1081,14 @@ impl EquivalenceProperties {
     /// **Existing orderings:** `[[a, b, c], [a, d]]`, **constants:** `[]`
     /// 1. The function first checks the leading requirement `a`, which is
     ///    satisfied by `[a, b, c].first()`.
-    /// 2. `a` is added as a constant for the next iteration.
-    /// 3. Normal orderings become `[[b, c], [d]]`.
+    /// 2. `a` is pinned: the next key only has to be sorted among rows that
+    ///    tie on `a`.
+    /// 3. The orderings now start at `[b, c]` and `[d]`.
     /// 4. The function returns `true` as `[d]` satisfies `d`.
+    ///
+    /// See [Required orderings] for what a requirement is.
+    ///
+    /// [Required orderings]: EquivalenceProperties#required-orderings
     pub fn ordering_satisfy_requirement(
         &self,
         given: impl IntoIterator<Item = PhysicalSortRequirement>,
@@ -639,83 +1102,8 @@ impl EquivalenceProperties {
         if self.satisfied_by_constraints(&normal_reqs) {
             return Ok(true);
         }
-        let schema = self.schema();
-        // Registering satisfied keys as constants mutates the state, so it
-        // needs an owned copy -- but only from the second requirement onwards.
-        // Single-element requirements (the common case) never pay for the clone.
-        let last_idx = normal_reqs.len() - 1;
-        let mut owned = None::<Self>;
-        for (idx, element) in normal_reqs.into_iter().enumerate() {
-            let eq_properties = owned.as_ref().unwrap_or(self);
-            // Check whether given requirement is satisfied:
-            let ExprProperties {
-                sort_properties, ..
-            } = eq_properties.get_expr_properties(Arc::clone(&element.expr));
-            let satisfy = match sort_properties {
-                SortProperties::Ordered(options) => element.options.is_none_or(|opts| {
-                    let nullable = element.expr.nullable(schema).unwrap_or(true);
-                    options_compatible(&options, &opts, nullable)
-                }),
-                // Singleton expressions satisfy any requirement.
-                SortProperties::Singleton => true,
-                SortProperties::Unordered => false,
-            };
-            if !satisfy {
-                return Ok(false);
-            }
-            if idx == last_idx {
-                // Nothing left to check, so no need to update the state:
-                break;
-            }
-            // Treat satisfied keys (and the sub-expressions they pin down) as
-            // constants in subsequent iterations. See
-            // [`Self::add_satisfied_key_constants`] for the rationale.
-            owned
-                .get_or_insert_with(|| self.clone())
-                .add_satisfied_key_constants(element.expr)?;
-        }
-        Ok(true)
-    }
-
-    /// Registers a satisfied sort key as a constant for subsequent iterations
-    /// of the ordering satisfaction checks. We can do this because the "next"
-    /// key only matters in a lexicographical ordering when the keys to its
-    /// left have the same values (i.e. within a single tie group). Note that
-    /// these expressions are not properly "constants"; this is just an
-    /// implementation strategy confined to the satisfaction checks.
-    ///
-    /// For example, assume that the requirement is `[a ASC, (b + c) ASC]`,
-    /// and existing equivalent orderings are `[a ASC, b ASC]` and `[c ASC]`.
-    /// Once we deduce that `[a ASC]` is satisfied, we add column `a` as a
-    /// constant to the algorithm state. This enables us to deduce that
-    /// `(b + c) ASC` is satisfied, given `a` is constant.
-    ///
-    /// In addition to the key itself, this also registers any sub-expressions
-    /// whose values the key pins down: if an expression is strictly
-    /// order-preserving, equal outputs imply equal values of its ordered
-    /// children, so within a tie group of the key those children are constant
-    /// as well. For example, if data is sorted by `[a, b]`, the requirement
-    /// `[CAST(a AS BIGINT) ASC, b ASC]` is satisfied: `a` is constant within
-    /// each group of equal `CAST(a AS BIGINT)` values, and hence `b` is
-    /// sorted within each such group.
-    fn add_satisfied_key_constants(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
-        let mut stack = vec![expr];
-        while let Some(expr) = stack.pop() {
-            let properties = self.get_expr_properties(Arc::clone(&expr));
-            if properties.strictly_order_preserving {
-                for child in expr.children() {
-                    let child_properties = self.get_expr_properties(Arc::clone(child));
-                    if matches!(
-                        child_properties.sort_properties,
-                        SortProperties::Ordered(_)
-                    ) {
-                        stack.push(Arc::clone(child));
-                    }
-                }
-            }
-            self.add_constants(std::iter::once(ConstExpr::from(expr)))?;
-        }
-        Ok(())
+        let keys = normal_reqs.iter().map(|req| (&req.expr, req.options));
+        Ok(SortKeyWalk::new(self).sorted_prefix_len(keys)? == normal_reqs.len())
     }
 
     /// Returns the number of consecutive sort expressions (starting from the
@@ -728,45 +1116,10 @@ impl EquivalenceProperties {
             // length:
             return Ok(full_length);
         }
-        let schema = self.schema();
-        // Registering satisfied keys as constants mutates the state, so it
-        // needs an owned copy -- but only from the second sort expression
-        // onwards. Single-element orderings never pay for the clone.
-        let mut owned = None::<Self>;
-        for (idx, element) in normal_ordering.into_iter().enumerate() {
-            let eq_properties = owned.as_ref().unwrap_or(self);
-            // Check whether given ordering is satisfied:
-            let ExprProperties {
-                sort_properties, ..
-            } = eq_properties.get_expr_properties(Arc::clone(&element.expr));
-            let satisfy = match sort_properties {
-                SortProperties::Ordered(options) => options_compatible(
-                    &options,
-                    &element.options,
-                    element.expr.nullable(schema).unwrap_or(true),
-                ),
-                // Singleton expressions satisfy any ordering.
-                SortProperties::Singleton => true,
-                SortProperties::Unordered => false,
-            };
-            if !satisfy {
-                // As soon as one sort expression is unsatisfied, return how
-                // many we've satisfied so far:
-                return Ok(idx);
-            }
-            if idx + 1 == full_length {
-                // Nothing left to check, so no need to update the state:
-                break;
-            }
-            // Treat satisfied keys (and the sub-expressions they pin down) as
-            // constants in subsequent iterations. See
-            // [`Self::add_satisfied_key_constants`] for the rationale.
-            owned
-                .get_or_insert_with(|| self.clone())
-                .add_satisfied_key_constants(Arc::clone(&element.expr))?;
-        }
-        // All sort expressions are satisfied, return full length:
-        Ok(full_length)
+        let keys = normal_ordering
+            .iter()
+            .map(|sort_expr| (&sort_expr.expr, Some(sort_expr.options)));
+        SortKeyWalk::new(self).sorted_prefix_len(keys)
     }
 
     /// Determines the longest normal prefix of `ordering` satisfied by the
@@ -921,6 +1274,7 @@ impl EquivalenceProperties {
         schema: &SchemaRef,
         mapping: &ProjectionMapping,
         oeq_class: OrderingEquivalenceClass,
+        column_ranges: &ColumnRanges,
     ) -> OrderingEquivalenceClass {
         let new_orderings = oeq_class.into_iter().flat_map(|order| {
             // Modify/expand existing orderings by substituting sort
@@ -939,6 +1293,7 @@ impl EquivalenceProperties {
                                 r_expr,
                                 &original_sort_expr,
                                 schema,
+                                column_ranges,
                             )
                         })
                         .chain(std::iter::once(sort_expr))
@@ -1117,14 +1472,21 @@ impl EquivalenceProperties {
     ) -> Vec<LexOrdering> {
         // Normalize source expressions in the mapping:
         let mapping = self.normalize_mapping(mapping);
+        // Substitution examines every source that refers to an ordered column, and building the
+        // orderings examines every source, even one that refers to no ordered column (it then
+        // gets an empty set of dependencies). Sharing one cache across both steps builds the
+        // unbounded range of a wide column referenced by many sources only once.
+        let column_ranges = ColumnRanges::default();
+        oeq_class =
+            Self::substitute_oeq_class(&self.schema, &mapping, oeq_class, &column_ranges);
         // Get dependency map for existing orderings:
-        oeq_class = Self::substitute_oeq_class(&self.schema, &mapping, oeq_class);
         let dependency_map = self.construct_dependency_map(oeq_class, &mapping);
         let orderings = mapping.iter().flat_map(|(source, targets)| {
             referred_dependencies(&dependency_map, source)
                 .into_iter()
                 .filter_map(|deps| {
-                    let ep = get_expr_properties(source, &deps, &self.schema);
+                    let ep =
+                        get_expr_properties(source, &deps, &self.schema, &column_ranges);
                     let sort_properties = ep.map(|prop| prop.sort_properties);
                     if let Ok(SortProperties::Ordered(options)) = sort_properties {
                         Some((options, deps))
@@ -1184,6 +1546,21 @@ impl EquivalenceProperties {
         orderings.chain(projected_orderings).collect()
     }
 
+    /// Projects grouping tuples through `mapping`, dropping a tuple unless all
+    /// of its expressions can be represented by the projection.
+    fn projected_groupings(
+        &self,
+        mapping: &ProjectionMapping,
+    ) -> Vec<Vec<Arc<dyn PhysicalExpr>>> {
+        self.geq_cache
+            .iter()
+            .filter_map(|grouping| {
+                self.project_expressions(grouping.iter(), mapping)
+                    .collect::<Option<Vec<_>>>()
+            })
+            .collect()
+    }
+
     /// Projects constraints according to the given projection mapping.
     ///
     /// This function takes a projection mapping and extracts column indices of
@@ -1227,6 +1604,8 @@ impl EquivalenceProperties {
     ///   preserved through `c + 1` but dropped through `abs(c)`. Orderings
     ///   implied by the mapping are also derived, e.g. an ordering on `a + b`
     ///   yields one on the projected `a_new + b_new`.
+    /// - Groupings: a complete grouping tuple is carried only when every
+    ///   expression in the tuple can be represented in the output.
     /// - Equivalence group: each class is re-expressed on the output columns.
     /// - Constraints: projected onto the surviving column indices.
     ///
@@ -1278,17 +1657,22 @@ impl EquivalenceProperties {
     ) -> Self {
         let orderings =
             self.projected_orderings(mapping, self.oeq_cache.normal_cls.clone());
+        let groupings = self.projected_groupings(mapping);
         let normal_orderings = orderings
             .iter()
             .cloned()
             .map(|o| eq_group.normalize_sort_exprs(o));
-        Self {
+        let mut result = Self {
             oeq_cache: OrderingEquivalenceCache::new(normal_orderings),
             oeq_class: OrderingEquivalenceClass::new(orderings),
+            geq_class: GroupingEquivalenceClass::default(),
+            geq_cache: GroupingEquivalenceClass::default(),
             constraints: self.projected_constraints(mapping).unwrap_or_default(),
             schema: output_schema,
             eq_group,
-        }
+        };
+        result.add_groupings(groupings);
+        result
     }
 
     /// Returns the longest (potentially partial) permutation satisfying the
@@ -1305,13 +1689,12 @@ impl EquivalenceProperties {
         &self,
         exprs: &[Arc<dyn PhysicalExpr>],
     ) -> Result<(Vec<PhysicalSortExpr>, Vec<usize>)> {
-        let mut eq_properties = self.clone();
+        let mut walk = SortKeyWalk::new(self);
         let mut result = vec![];
         // The algorithm is as follows:
         // - Iterate over all the expressions and insert ordered expressions
         //   into the result.
-        // - Treat inserted expressions as constants (i.e. add them as constants
-        //   to the state).
+        // - Pin inserted expressions (see [`SortKeyWalk`]).
         // - Continue the above procedure until no expression is inserted; i.e.
         //   the algorithm reaches a fixed point.
         // This algorithm should reach a fixed point in at most `exprs.len()`
@@ -1324,7 +1707,7 @@ impl EquivalenceProperties {
                 .filter_map(|&idx| {
                     let ExprProperties {
                         sort_properties, ..
-                    } = eq_properties.get_expr_properties(Arc::clone(&exprs[idx]));
+                    } = walk.expr_properties(Arc::clone(&exprs[idx]));
                     match sort_properties {
                         SortProperties::Ordered(options) => {
                             let expr = Arc::clone(&exprs[idx]);
@@ -1344,16 +1727,17 @@ impl EquivalenceProperties {
                 break;
             }
             // Remove indices that have an ordering from `search_indices`, and
-            // treat ordered expressions as constants in subsequent iterations.
-            // We can do this because the "next" key only matters in a lexicographical
+            // pin the ordered expressions (in normal form, as the walk sees
+            // the orderings) for the next iterations, if any. We can do this
+            // because the "next" key only matters in a lexicographical
             // ordering when the keys to its left have the same values.
-            //
-            // Note that these expressions are not properly "constants". This is just
-            // an implementation strategy confined to this function.
-            for (PhysicalSortExpr { expr, .. }, idx) in &ordered_exprs {
-                let const_expr = ConstExpr::from(Arc::clone(expr));
-                eq_properties.add_constants(std::iter::once(const_expr))?;
+            for (_, idx) in &ordered_exprs {
                 search_indices.shift_remove(idx);
+            }
+            if !search_indices.is_empty() {
+                for (PhysicalSortExpr { expr, .. }, _) in &ordered_exprs {
+                    walk.pin(self.eq_group.normalize_expr(Arc::clone(expr)))?;
+                }
             }
             // Add new ordered section to the state.
             result.extend(ordered_exprs);
@@ -1376,7 +1760,7 @@ impl EquivalenceProperties {
     /// Returns a `Some` value if the expression is constant according to
     /// equivalence group, and `None` otherwise. The `Some` variant contains
     /// an `AcrossPartitions` value indicating whether the expression is
-    /// constant across partitions, and its actual value (if available).
+    /// constant across output partitions, and its actual value (if available).
     pub fn is_expr_constant(
         &self,
         expr: &Arc<dyn PhysicalExpr>,
@@ -1398,13 +1782,38 @@ impl EquivalenceProperties {
     /// # Returns
     ///
     /// Returns an [`ExprProperties`] object containing the ordering and range
-    /// information for the given expression.
+    /// information for the given expression. If its ordering is unknown, falls
+    /// back to the sort properties of an equivalent expression.
     pub fn get_expr_properties(&self, expr: Arc<dyn PhysicalExpr>) -> ExprProperties {
-        ExprPropertiesNode::new_unknown(expr)
-            .transform_up(|expr| update_properties(expr, self))
-            .data()
-            .map(|node| node.data)
-            .unwrap_or_else(|_| ExprProperties::new_unknown())
+        SortKeyWalk::new(self).expr_properties(expr)
+    }
+
+    /// Returns whether `transformed_expr` reports the same ordering direction
+    /// when `source_expr` is ordered and all other inputs are singleton.
+    pub(crate) fn is_same_direction_ordered_transform(
+        &self,
+        transformed_expr: &Arc<dyn PhysicalExpr>,
+        source_expr: &Arc<dyn PhysicalExpr>,
+    ) -> bool {
+        if transformed_expr.eq(source_expr) {
+            return false;
+        }
+
+        let options = SortOptions::default();
+        let dependencies = Dependencies::new(std::iter::once(PhysicalSortExpr::new(
+            Arc::clone(source_expr),
+            options,
+        )));
+        matches!(
+            get_expr_properties(
+                transformed_expr,
+                &dependencies,
+                &self.schema,
+                &ColumnRanges::default(),
+            )
+                .map(|properties| properties.sort_properties),
+            Ok(SortProperties::Ordered(actual)) if actual == options
+        )
     }
 
     /// Transforms this `EquivalenceProperties` by mapping columns in the
@@ -1431,7 +1840,7 @@ impl EquivalenceProperties {
         }
 
         // Rewrite equivalence classes according to the new schema:
-        let mut eq_classes = vec![];
+        let mut eq_classes = Vec::with_capacity(self.eq_group.len());
         for mut eq_class in self.eq_group {
             // Rewrite the expressions in the equivalence class:
             eq_class.exprs = eq_class
@@ -1468,6 +1877,11 @@ impl EquivalenceProperties {
         self.oeq_class = self.oeq_class.with_new_schema(&schema)?;
         self.oeq_cache.normal_cls = self.oeq_cache.normal_cls.with_new_schema(&schema)?;
 
+        // Rewrite grouping expressions according to new schema and rebuild
+        // their normalized form against the rewritten equivalence group.
+        self.geq_class = self.geq_class.with_new_schema(&schema)?;
+        self.update_geq_cache();
+
         // Update the schema:
         self.schema = schema;
 
@@ -1485,79 +1899,31 @@ impl From<EquivalenceProperties> for OrderingEquivalenceClass {
 ///
 /// Format:
 /// ```text
-/// order: [[b@1 ASC NULLS LAST]], eq: [{members: [a@0], constant: (heterogeneous)}]
+/// order: [[b@1 ASC NULLS LAST]], group: [[a@0, b@1]], eq: [{members: [a@0], constant: (heterogeneous)}]
 /// ```
 impl Display for EquivalenceProperties {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let empty_eq_group = self.eq_group.is_empty();
         let empty_oeq_class = self.oeq_class.is_empty();
-        if empty_oeq_class && empty_eq_group {
-            write!(f, "No properties")?;
-        } else if !empty_oeq_class {
+        let empty_geq_class = self.geq_class.is_empty();
+        if empty_oeq_class && empty_geq_class && empty_eq_group {
+            return write!(f, "No properties");
+        }
+
+        let mut separator = "";
+        if !empty_oeq_class {
             write!(f, "order: {}", self.oeq_class)?;
-            if !empty_eq_group {
-                write!(f, ", eq: {}", self.eq_group)?;
-            }
-        } else {
-            write!(f, "eq: {}", self.eq_group)?;
+            separator = ", ";
+        }
+        if !empty_geq_class {
+            write!(f, "{separator}group: {}", self.geq_class)?;
+            separator = ", ";
+        }
+        if !empty_eq_group {
+            write!(f, "{separator}eq: {}", self.eq_group)?;
         }
         Ok(())
     }
-}
-
-/// Calculates the properties of a given [`ExprPropertiesNode`].
-///
-/// Order information can be retrieved as:
-/// - If it is a leaf node, we directly find the order of the node by looking
-///   at the given sort expression and equivalence properties if it is a `Column`
-///   leaf, or we mark it as unordered. In the case of a `Literal` leaf, we mark
-///   it as singleton so that it can cooperate with all ordered columns.
-/// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
-///   and operator has its own rules on how to propagate the children orderings.
-///   However, before we engage in recursion, we check whether this intermediate
-///   node directly matches with the sort expression. If there is a match, the
-///   sort expression emerges at that node immediately, discarding the recursive
-///   result coming from its children.
-///
-/// Range information is calculated as:
-/// - If it is a `Literal` node, we set the range as a point value. If it is a
-///   `Column` node, we set the datatype of the range, but cannot give an interval
-///   for the range, yet.
-/// - If it is an intermediate node, the children states matter. Each `PhysicalExpr`
-///   and operator has its own rules on how to propagate the children range.
-fn update_properties(
-    mut node: ExprPropertiesNode,
-    eq_properties: &EquivalenceProperties,
-) -> Result<Transformed<ExprPropertiesNode>> {
-    // First, try to gather the information from the children:
-    if !node.expr.children().is_empty() {
-        // We have an intermediate (non-leaf) node, account for its children:
-        let children_props = node.children.iter().map(|c| c.data.clone()).collect_vec();
-        node.data = node.expr.get_properties(&children_props)?;
-    } else if node.expr.is::<Literal>() {
-        // We have a Literal, which is one of the two possible leaf node types:
-        node.data = node.expr.get_properties(&[])?;
-    } else if node.expr.is::<Column>() {
-        // We have a Column, which is the other possible leaf node type:
-        node.data.range =
-            Interval::make_unbounded(&node.expr.data_type(eq_properties.schema())?)?;
-        // A column is the identity mapping of itself, which is trivially
-        // strict:
-        node.data.strictly_order_preserving = true;
-    }
-    // Now, check what we know about orderings:
-    let normal_expr = eq_properties
-        .eq_group
-        .normalize_expr(Arc::clone(&node.expr));
-    let oeq_class = &eq_properties.oeq_cache.normal_cls;
-    if eq_properties.is_expr_constant(&normal_expr).is_some()
-        || oeq_class.is_expr_partial_const(&normal_expr)
-    {
-        node.data.sort_properties = SortProperties::Singleton;
-    } else if let Some(options) = oeq_class.get_options(&normal_expr) {
-        node.data.sort_properties = SortProperties::Ordered(options);
-    }
-    Ok(Transformed::yes(node))
 }
 
 /// This function examines whether a referring expression directly refers to a
@@ -1584,6 +1950,34 @@ fn expr_refers(
             .any(|child| expr_refers(child, referred_expr))
 }
 
+/// Unbounded ranges of the columns of one schema, built on first use.
+///
+/// Building the unbounded range of a nested type materializes a null array of that type, so
+/// a wide struct referenced by many projection sources is costly to rebuild per reference.
+/// Only `Column`s are cached, by index: the schema is fixed for the cache's lifetime. Other
+/// expressions and failures are computed as before and never cached. Cloning a cached range
+/// clones its two endpoints, which for nested types share their arrays.
+#[derive(Default)]
+struct ColumnRanges(std::cell::RefCell<HashMap<usize, Interval>>);
+
+impl ColumnRanges {
+    fn unbounded(
+        &self,
+        expr: &Arc<dyn PhysicalExpr>,
+        schema: &SchemaRef,
+    ) -> Result<Interval> {
+        let Some(column) = expr.downcast_ref::<Column>() else {
+            return Interval::make_unbounded(&expr.data_type(schema)?);
+        };
+        if let Some(range) = self.0.borrow().get(&column.index()) {
+            return Ok(range.clone());
+        }
+        let range = Interval::make_unbounded(&expr.data_type(schema)?)?;
+        self.0.borrow_mut().insert(column.index(), range.clone());
+        Ok(range)
+    }
+}
+
 /// This function examines the given expression and its properties to determine
 /// the ordering properties of the expression. The range knowledge is not utilized
 /// yet in the scope of this function.
@@ -1603,6 +1997,7 @@ fn get_expr_properties(
     expr: &Arc<dyn PhysicalExpr>,
     dependencies: &Dependencies,
     schema: &SchemaRef,
+    column_ranges: &ColumnRanges,
 ) -> Result<ExprProperties> {
     if let Some(column_order) = dependencies.iter().find(|&order| expr.eq(&order.expr)) {
         // If exact match is found, return its ordering. This is a base case
@@ -1615,14 +2010,14 @@ fn get_expr_properties(
         // sort key, so their strictness only has to be relative to it.
         Ok(ExprProperties {
             sort_properties: SortProperties::Ordered(column_order.options),
-            range: Interval::make_unbounded(&expr.data_type(schema)?)?,
+            range: column_ranges.unbounded(expr, schema)?,
             preserves_lex_ordering: false,
             strictly_order_preserving: true,
         })
     } else if expr.downcast_ref::<Column>().is_some() {
         Ok(ExprProperties {
             sort_properties: SortProperties::Unordered,
-            range: Interval::make_unbounded(&expr.data_type(schema)?)?,
+            range: column_ranges.unbounded(expr, schema)?,
             preserves_lex_ordering: false,
             // A base case of the recursion: a column is the identity mapping
             // of itself, which is trivially one-to-one.
@@ -1641,7 +2036,7 @@ fn get_expr_properties(
         let child_states = expr
             .children()
             .iter()
-            .map(|child| get_expr_properties(child, dependencies, schema))
+            .map(|child| get_expr_properties(child, dependencies, schema, column_ranges))
             .collect::<Result<Vec<_>>>()?;
         // Calculate expression ordering using ordering of its children.
         expr.get_properties(&child_states)

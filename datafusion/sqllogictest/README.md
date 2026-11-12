@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Apache DataFusion sqllogictest
@@ -178,6 +165,41 @@ SELECT * from foo;
 ```
 
 Assuming it looks good, check it in!
+
+## Cookbook: Testing errors
+
+To check an error message, write it as plain text after `----`:
+
+```text
+statement error
+SELECT * FROM no_such_table;
+----
+DataFusion error: Error during planning: table 'datafusion.public.no_such_table' not found
+
+
+```
+
+The message must match exactly, and the block must end with **two** blank
+lines. With only one, the next record is read as part of the expected error:
+the test fails, and `--complete` deletes that record from the file.
+
+To fill in the message, write the query, then `----` and two blank lines, and
+run `--complete`.
+
+Avoid putting the whole message on the `statement error` line. There it is a
+regex, so `--complete` escapes every special character:
+
+```text
+statement error DataFusion error: Error during planning: table 'datafusion\.public\.no_such_table' not found
+SELECT * FROM no_such_table;
+```
+
+Use that line only to match part of a message:
+
+```text
+statement error no_such_table
+SELECT * FROM no_such_table;
+```
 
 ## Cookbook: Testing for whitespace
 
@@ -345,7 +367,13 @@ PG_COMPAT=true cargo test --features=postgres --test sqllogictests
 Test files in `tpch` directory runs against the `TPCH` data set (SF =
 0.1), which must be generated before running. You can use following
 command to generate tpch data, assuming you are in the repository
-root:
+root, either with `uvx` and `tpchgen-cli`:
+
+```shell
+uvx tpchgen-cli tbl -v -s 0.1 --output-dir datafusion/sqllogictest/test_files/tpch/data
+```
+
+or with `docker`:
 
 ```shell
 mkdir -p datafusion/sqllogictest/test_files/tpch/data
@@ -437,7 +465,8 @@ Not all statements will be round-tripped, some statements like CREATE, INSERT, S
 issued as is, but any other statement will be round-tripped to/from Substrait.
 
 _WARNING_: this mode lives behind the `substrait` feature, and the full suite still reports failures. CI therefore
-runs it over a single file, through `cargo xtask ci step test substrait`, which filters to `limit.slt`. Some of the
+runs `limit.slt` through `cargo xtask ci step test substrait` and optimized conditionless-join tests through
+`cargo xtask ci step test substrait-optimized`. Some of the
 failures are collected in https://github.com/apache/datafusion/issues/16248. To run the default suite in this mode:
 
 ```shell
@@ -448,6 +477,14 @@ For focusing on one specific failing test, a file:line filter can be used:
 
 ```shell
 cargo test --test sqllogictests --features substrait -- --substrait-round-trip binary.slt:23
+```
+
+Add `--substrait-optimize` to optimize the logical plan before serialization. This exercises
+producer inputs created by optimizer rewrites, such as conditionless joins from `LEFT JOIN ... ON true`
+and uncorrelated `WHERE EXISTS`:
+
+```shell
+cargo test --test sqllogictests --features substrait -- --substrait-round-trip --substrait-optimize joins_conditionless.slt
 ```
 
 ## `.slt` file format

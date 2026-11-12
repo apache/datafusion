@@ -1,19 +1,6 @@
-// Licensed to the Apache Software Foundation (ASF) under one
-// or more contributor license agreements.  See the NOTICE file
-// distributed with this work for additional information
-// regarding copyright ownership.  The ASF licenses this file
-// to you under the Apache License, Version 2.0 (the
-// "License"); you may not use this file except in compliance
-// with the License.  You may obtain a copy of the License at
-//
-//   http://www.apache.org/licenses/LICENSE-2.0
-//
-// Unless required by applicable law or agreed to in writing,
-// software distributed under the License is distributed on an
-// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-// KIND, either express or implied.  See the License for the
-// specific language governing permissions and limitations
-// under the License.
+// SPDX-License-Identifier: Apache-2.0
+// SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+// SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use clap::{ColorChoice, Parser};
 use datafusion::common::instant::Instant;
@@ -239,6 +226,7 @@ async fn run_tests() -> Result<()> {
                             filters.as_ref(),
                             currently_running_sql_tracker_clone,
                             colored_output,
+                            options.substrait_optimize,
                         )
                         .await
                     }
@@ -461,7 +449,9 @@ fn is_env_truthy(name: &str) -> bool {
 enum Engine {
     DataFusion,
     #[cfg(feature = "substrait")]
-    SubstraitRoundTrip,
+    SubstraitRoundTrip {
+        optimize: bool,
+    },
 }
 
 impl Engine {
@@ -471,12 +461,13 @@ impl Engine {
         match self {
             Engine::DataFusion => "Datafusion",
             #[cfg(feature = "substrait")]
-            Engine::SubstraitRoundTrip => "DatafusionSubstraitRoundTrip",
+            Engine::SubstraitRoundTrip { .. } => "DatafusionSubstraitRoundTrip",
         }
     }
 }
 
 #[cfg(feature = "substrait")]
+#[expect(clippy::too_many_arguments, reason = "mirrors the other file runners")]
 async fn run_test_file_substrait_round_trip(
     test_file: TestFile,
     validator: Validator,
@@ -485,9 +476,10 @@ async fn run_test_file_substrait_round_trip(
     filters: &[Filter],
     currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
     colored_output: bool,
+    optimize: bool,
 ) -> Result<()> {
     run_matrix(
-        Engine::SubstraitRoundTrip,
+        Engine::SubstraitRoundTrip { optimize },
         test_file,
         validator,
         mp,
@@ -504,6 +496,10 @@ async fn run_test_file_substrait_round_trip(
     clippy::unused_async,
     reason = "matches the substrait-enabled implementation"
 )]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "matches the enabled implementation"
+)]
 async fn run_test_file_substrait_round_trip(
     _test_file: TestFile,
     _validator: Validator,
@@ -512,6 +508,7 @@ async fn run_test_file_substrait_round_trip(
     _filters: &[Filter],
     _currently_executing_sql_tracker: CurrentlyExecutingSqlTracker,
     _colored_output: bool,
+    _optimize: bool,
 ) -> Result<()> {
     exec_err!("Cannot run substrait round-trip: the 'substrait' feature is not enabled")
 }
@@ -620,8 +617,8 @@ impl MatrixRunner<'_> {
         match self.engine {
             Engine::DataFusion => self.run_datafusion(&test_ctx, pb).await,
             #[cfg(feature = "substrait")]
-            Engine::SubstraitRoundTrip => {
-                self.run_substrait_round_trip(&test_ctx, pb).await
+            Engine::SubstraitRoundTrip { optimize } => {
+                self.run_substrait_round_trip(&test_ctx, pb, optimize).await
             }
         }
     }
@@ -689,6 +686,7 @@ impl MatrixRunner<'_> {
         &self,
         test_ctx: &TestContext,
         pb: ProgressBar,
+        optimize: bool,
     ) -> Result<()> {
         let mut runner = sqllogictest::Runner::new(|| async {
             Ok(DataFusionSubstraitRoundTrip::new(
@@ -696,6 +694,7 @@ impl MatrixRunner<'_> {
                 self.relative_path.to_path_buf(),
                 pb.clone(),
             )
+            .with_optimization(optimize)
             .with_currently_executing_sql_tracker(
                 self.currently_executing_sql_tracker.clone(),
             ))
@@ -1064,6 +1063,13 @@ struct Options {
         help = "Before executing each query, convert its logical plan to Substrait and from Substrait back to its logical plan"
     )]
     substrait_round_trip: bool,
+
+    #[clap(
+        long,
+        requires = "substrait_round_trip",
+        help = "Optimize logical plans before serializing them in Substrait round-trip mode"
+    )]
+    substrait_optimize: bool,
 
     #[clap(long, env = "INCLUDE_SQLITE", help = "Include sqlite files")]
     include_sqlite: bool,
