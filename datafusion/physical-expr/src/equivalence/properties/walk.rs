@@ -19,32 +19,130 @@ use datafusion_physical_expr_common::utils::ExprPropertiesNode;
 
 use itertools::Itertools;
 
-/// The state of one walk along a sequence of sort keys, such as the keys of a
-/// required ordering.
+/// The state of a walk along a required ordering (a sequence of sort keys).
 ///
-/// A sort key only matters among the rows that tie on the keys before it. So
-/// once a key is satisfied, the walk *pins* it: for the rest of the walk, the
-/// key has one value, like a constant. An expression is *fixed* if it has one
-/// value among those rows: it is a literal, a constant, pinned, a leaf that
-/// reports itself as a singleton (such as an uncorrelated scalar subquery), or
-/// not volatile and computed only from fixed expressions. The *head* of an
-/// ordering is its first expression that is not fixed; an ordering whose
-/// expressions are all fixed has no head. With orderings `[a, b]` and
-/// `[a, c]`, the requirement `[a, c]` is satisfied, because pinning `a` makes
-/// `c` the head of the second ordering.
+/// [`EquivalenceProperties`] uses a `SortKeyWalk` to decide if a set of
+/// orderings satisfies a requirement. See [Checking whether a requirement is
+/// satisfied] for more details.
 ///
-/// Pins live in the walk; the equivalence properties it reads do not change.
+/// # Intuition and Definitions
+///
+/// An ordering `[x, y, z]` can be thought of as a chain of claims about the
+/// rows: they are sorted by `x`; among rows with equal `x`, sorted by `y`;
+/// among rows with equal `x` and `y`, sorted by `z`.
+///
+/// ## Pinning and Fixed Expressions
+///
+/// During a walk, the code scans the ordering requirement left to right. When
+/// it finds key `k` satisfied, it *pins* `k`, meaning that `k` is effectively a
+/// constant across the remaining ordering requirement.
+///
+/// An expression is *fixed* if it has one value for all rows that tie on the
+/// currently pinned expressions: it is a literal, a constant, pinned, a leaf
+/// that reports itself as a singleton (e.g. an uncorrelated scalar subquery),
+/// or not volatile and computed only from fixed expressions (e.g. `a + 1`
+/// once `a` is pinned).
+///
+/// ## Heads
+///
+/// The *head* of an ordering is its first expression that is not fixed: the
+/// claim that still holds among the rows that tie on the pinned expressions.
+/// Each pin moves every head past the expressions that are now fixed. An
+/// ordering whose expressions are all fixed has no head and is used up.
+///
+/// For example, if we have data ordered by `[a, b]` as well as `[c]`, and we
+/// walk the requirement `[a, c]`, pinning `a` after the first step results in:
+///
+/// | Step | Requirement Key | Pinned | Head `[a, b]` | Head `[c]` | Outcome   |
+/// |------|-----------------|--------|---------------|------------|-----------|
+/// | 1    | a               | {}     | a             | c          | pin a     |
+/// | 2    | c               | {a}    | b             | c          | satisfied |
+///
+/// It may be confusing that the head of `[c]` does not advance. The intuition
+/// is that `[c]` still promises the data is sorted by `c` for all equal values
+/// of `a`. This is true because the data was entirely sorted by `[c]` to begin
+/// with, and pinning `a` does not change the order of the rows that tie on `a`,
+/// as illustrated in this example:
+///
+/// ```text
+/// ┌───┬───┬───┐
+/// │ a │ b │ c │
+/// ├───┼───┼───┤
+/// │ 1 │ 1 │ 2 │
+/// │ 1 │ 3 │ 5 │
+/// │ 2 │ 1 │ 7 │
+/// │ 2 │ 2 │ 9 │
+/// └───┴───┴───┘
+/// ```
+///
+/// # Example: Walking a Requirement
+///
+/// * Orderings: `[a ASC, b ASC, c ASC]` and `[d ASC]`
+/// * Requirement: `[a ASC, b ASC]`
+///
+/// | Step | Requirement Key | Pinned | Head `[a, b, c]` | Head `[d]` | Outcome   |
+/// |------|-----------------|--------|------------------|------------|-----------|
+/// | 1    | a               | {}     | a                | d          | pin a     |
+/// | 2    | b               | {a}    | b                | d          | satisfied |
+///
+/// This requirement is satisfied (intuitively, because it is a prefix of the
+/// first ordering). The second ordering plays no part.
+///
+/// * Orderings: `[a ASC, b ASC]` and `[b ASC, c ASC]`
+/// * Requirement: `[a ASC, b ASC, c ASC]`
+///
+/// | Step | Requirement Key | Pinned | Head `[a, b]` | Head `[b, c]` | Outcome   |
+/// |------|-----------------|--------|---------------|---------------|-----------|
+/// | 1    | a               | {}     | a             | b             | pin a     |
+/// | 2    | b               | {a}    | b             | b             | pin b     |
+/// | 3    | c               | {a, b} | -             | c             | satisfied |
+///
+/// Note that after step 2, `[a, b]` is used up, as both of its expressions are
+/// pinned. Among the rows that tie on `a` and `b`, the second ordering says the
+/// rows are sorted by `c`, which satisfies the third key.
+///
+/// * Orderings: `[a ASC, c ASC]` and `[c ASC, b ASC]`
+/// * Requirement: `[a ASC, b ASC, c ASC]`
+///
+/// | Step | Requirement Key | Pinned | Head `[a, c]` | Head `[c, b]` | Outcome     |
+/// |------|-----------------|--------|---------------|---------------|-------------|
+/// | 1    | a               | {}     | a             | c             | pin a       |
+/// | 2    | b               | {a}    | c             | c             | unsatisfied |
+///
+/// After pinning `a`, both orderings are headed by `c`. Since nothing says the
+/// rows that tie on `a` are sorted by `b`, the walk stops and reports that the
+/// requirement is not satisfied.
+///
+/// * Orderings: `[a ASC, b ASC]` and `[a ASC, c ASC]`
+/// * Requirement: `[a ASC, c ASC]`
+///
+/// | Step | Requirement Key | Pinned | Head `[a, b]` | Head `[a, c]` | Outcome   |
+/// |------|-----------------|--------|---------------|---------------|-----------|
+/// | 1    | a               | {}     | a             | a             | pin a     |
+/// | 2    | c               | {a}    | b             | c             | satisfied |
+///
+/// [Checking whether a requirement is satisfied]: EquivalenceProperties#checking-whether-a-requirement-is-satisfied
 pub(super) struct SortKeyWalk<'a> {
     props: &'a EquivalenceProperties,
-    /// Pinned expressions. Pinning a member of an equivalence class pins all
-    /// of its members.
+    /// Pinned expressions.
     pinned: HashSet<Arc<dyn PhysicalExpr>>,
     /// Orderings that hold among the rows that tie on the pinned expressions,
     /// found by [`EquivalenceProperties::implied_ordering`] as the walk goes.
     implied: Vec<LexOrdering>,
-    /// For each ordering (the normal orderings of `props`, then `implied`),
-    /// the index of its head. Empty until a head moves, so that a walk that
-    /// moves no head allocates nothing; until then every head is at index 0.
+    /// The position of the head of each ordering. Empty until a head moves, so
+    /// that a walk that moves no head allocates nothing; until then every head
+    /// is at index 0.
+    ///
+    /// `head_idxs[i]` tracks the position in the `LexOrdering` at index `i`,
+    /// as returned by [`Self::ordering`].
+    ///
+    /// The ordering at index `i` is:
+    ///  * `self.props.oeq_cache.normal_cls[i]` if `i` is less than
+    ///    `self.props.oeq_cache.normal_cls.len()`,
+    ///  * `self.implied[i - self.props.oeq_cache.normal_cls.len()]` otherwise.
+    ///
+    /// The value is either an index into that ordering's sort expressions, or
+    /// its length when the ordering is used up.
     head_idxs: Vec<usize>,
 }
 
@@ -73,9 +171,11 @@ impl<'a> SortKeyWalk<'a> {
         walk
     }
 
-    /// Returns how many leading keys (in normal form) the existing orderings
+    /// Returns how many leading keys (in [normal form]) the existing orderings
     /// satisfy, pinning each satisfied key for the keys after it. A key
     /// without sort options only needs to be ordered in some direction.
+    ///
+    /// [normal form]: EquivalenceProperties#normal-form
     pub(super) fn sorted_prefix_len<'k>(
         mut self,
         keys: impl ExactSizeIterator<Item = (&'k Arc<dyn PhysicalExpr>, Option<SortOptions>)>,
@@ -147,10 +247,17 @@ impl<'a> SortKeyWalk<'a> {
         Ok(())
     }
 
-    /// Pins `expr` and the rest of its equivalence class (but, unlike
-    /// [`Self::pin_key`], not its children), then moves the head of each
-    /// ordering past the expressions that are now fixed, and adds the
-    /// orderings that the heads imply, until no new ordering is found.
+    /// Pins `expr`, an expression in [normal form].
+    ///
+    /// See [`SortKeyWalk`] for an explanation of pinning.
+    ///
+    /// This method pins `expr` (and thus, by extension, all members of its
+    /// equivalence class), but not its children. See [`Self::pin_key`] for
+    /// more details. It then moves the head of each ordering past the
+    /// expressions that are now fixed, and adds the orderings that the heads
+    /// imply, until no new ordering is found.
+    ///
+    /// [normal form]: EquivalenceProperties#normal-form
     pub(super) fn pin(&mut self, expr: Arc<dyn PhysicalExpr>) -> Result<()> {
         match self.props.eq_group.get_equivalence_class(&expr) {
             Some(class) => self.pinned.extend(class.iter().cloned()),
@@ -261,11 +368,12 @@ impl<'a> SortKeyWalk<'a> {
             // strict:
             node.data.strictly_order_preserving = true;
         }
-        // Now, check what we know about orderings. A whole-partition window
-        // such as `SUM(x) OVER (PARTITION BY k)` adds `[k, w]` in all four
-        // directions of `w` (see `OrderingEquivalenceClass::is_expr_partial_const`).
-        // Once `k` is pinned, `w` heads orderings in opposite directions, so it
-        // has one value among the rows that tie on `k`:
+        // Now, check what we know about orderings. A window aggregate over a
+        // whole window partition, such as `SUM(x) OVER (PARTITION BY k)`, adds
+        // `[k, w]` in all four directions of `w` (see `EquivalenceProperties`
+        // documentation for more details). Once `k` is pinned, `w` heads
+        // orderings in opposite directions, so it has one value among the rows
+        // that tie on `k`:
         let normal_expr = self.props.eq_group.normalize_expr(Arc::clone(&node.expr));
         if self.is_fixed(&normal_expr) || is_partial_const(self.heads(), &normal_expr) {
             node.data.sort_properties = SortProperties::Singleton;
@@ -285,10 +393,13 @@ impl<'a> SortKeyWalk<'a> {
         idx
     }
 
-    /// Whether `expr` is fixed (see [`SortKeyWalk`]). Callers pass `expr` in
-    /// normal form. Pins are stored as given, so a pinned expression that is
-    /// not in normal form is found only through its equivalence class, whose
-    /// members are all pinned.
+    /// Whether `expr` is fixed.
+    ///
+    /// Note that `expr` must be in [normal form].
+    ///
+    /// See [`SortKeyWalk`] for more details.
+    ///
+    /// [normal form]: EquivalenceProperties#normal-form
     fn is_fixed(&self, expr: &Arc<dyn PhysicalExpr>) -> bool {
         if expr.is::<Literal>() || self.pinned.contains(expr) {
             return true;
@@ -319,8 +430,10 @@ impl<'a> SortKeyWalk<'a> {
         children.into_iter().all(|child| self.is_fixed(child))
     }
 
-    /// The ordering at `idx`: the normal orderings of `props`, then
+    /// The ordering at `idx`: the orderings of `props` in [normal form], then
     /// `implied`.
+    ///
+    /// [normal form]: EquivalenceProperties#normal-form
     fn ordering(&self, idx: usize) -> &LexOrdering {
         let normal = &self.props.oeq_cache.normal_cls;
         normal
@@ -737,8 +850,10 @@ mod tests {
         Ok(())
     }
 
-    /// A window over a whole partition, such as `SUM(..) OVER (PARTITION BY
-    /// k)`, adds `[k, x]` in all four directions of `x`. Pinning `k` leaves `x`
+    /// A window over a whole window partition, such as `SUM(..) OVER
+    /// (PARTITION BY k)`, adds `[k, x]` in all four directions of `x`.
+    ///
+    /// Pinning `k` leaves `x`
     /// heading orderings in opposite directions, so `x` has one value, and so
     /// does `CAST(x AS BIGINT)`: `[k, CAST(x AS BIGINT)]` holds in every
     /// direction. Without the partial constant check, `x` would only be
@@ -779,10 +894,17 @@ mod tests {
         Ok(())
     }
 
-    /// `find_longest_permutation` pins what it finds in normal form. With
-    /// `b = c` and ordering `[a + b, d]`, finding either `a + b` or `a + c`
-    /// pins the head of the ordering, whichever of `b` and `c` the class
-    /// normalizes to, so `d` is found next.
+    /// `find_longest_permutation` pins what it finds in [normal form].
+    ///
+    /// For example, with `b = c` and ordering `[a + b, d]`, finding either
+    ///
+    /// * `a + b`
+    /// * `a + c`
+    ///
+    /// pins the head of the ordering (whichever of `b` or `c` the equivalence
+    /// class normalizes to), so `d` is found next.
+    ///
+    /// [normal form]: EquivalenceProperties#normal-form
     #[test]
     fn find_longest_permutation_pins_normal_form() -> Result<()> {
         let schema = Arc::new(Schema::new(
