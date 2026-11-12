@@ -105,6 +105,8 @@ pub(crate) struct MockContextProvider {
 impl ContextProvider for MockContextProvider {
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let schema = match name.table() {
+            "FOO" => Ok(Schema::new(vec![Field::new("X", DataType::Int64, false)])),
+            "foo" => Ok(Schema::new(vec![Field::new("x", DataType::Utf8, false)])),
             "test" => Ok(Schema::new(vec![
                 Field::new("t_date32", DataType::Date32, false),
                 Field::new("t_date64", DataType::Date64, false),
