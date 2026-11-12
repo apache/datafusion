@@ -13,7 +13,7 @@ use crate::sorts::{
 };
 use crate::{EmptyRecordBatchStream, SendableRecordBatchStream, SpillManager};
 use arrow::array::*;
-use arrow::datatypes::{DataType, SchemaRef};
+use arrow::datatypes::{DataType, Schema, SchemaRef};
 use datafusion_common::human_readable_size;
 use datafusion_common::{Result, assert_or_internal_err, internal_err};
 use datafusion_execution::SpillFile;
@@ -273,7 +273,8 @@ impl<'a> StreamingMergeBuilder<'a> {
         let reservation =
             reservation.expect("Reservation cannot be empty for streaming merge");
 
-        // Special case single column comparisons with optimized cursor implementations
+        // Special case single column comparisons with optimized cursor implementations.
+        // `merges_in_row_format` must match this choice.
         if expressions.len() == 1 {
             let sort = expressions[0].clone();
             let data_type = sort.expr.data_type(schema.as_ref())?;
@@ -306,6 +307,26 @@ impl<'a> StreamingMergeBuilder<'a> {
         .with_max_batch_bytes(max_batch_bytes)
         .into_stream())
     }
+}
+
+/// Returns whether [`StreamingMergeBuilder::build`] merges on `expressions` in
+/// the row format rather than with a cursor for a single column.
+pub(crate) fn merges_in_row_format(expressions: &LexOrdering, schema: &Schema) -> bool {
+    if expressions.len() > 1 {
+        return true;
+    }
+    let Ok(data_type) = expressions[0].expr.data_type(schema) else {
+        return true;
+    };
+    !(data_type.is_primitive()
+        || matches!(
+            data_type,
+            DataType::Utf8
+                | DataType::Utf8View
+                | DataType::LargeUtf8
+                | DataType::Binary
+                | DataType::LargeBinary
+        ))
 }
 
 #[cfg(test)]
