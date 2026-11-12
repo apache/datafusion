@@ -404,7 +404,6 @@ fn parse_ident_normalization_uppercase() {
 }
 
 #[rstest]
-#[case::update("UPDATE foo SET x = 1")]
 #[case::copy("COPY foo TO 'out.csv' STORED AS CSV")]
 #[case::copy_partition("COPY foo TO 'out.csv' STORED AS CSV PARTITIONED BY (x)")]
 #[case::copy_backtick_partition(
@@ -441,9 +440,39 @@ fn ident_normalization_binding_paths(#[case] sql: &str) {
         LogicalPlan::Projection(projection) => {
             assert_eq!(projection.schema.field(0).name(), "TOTAL")
         }
-        LogicalPlan::Dml(_) => {}
         other => panic!("unexpected plan: {other:?}"),
     }
+}
+
+#[rstest]
+#[case::unquoted("UPDATE foo SET x = 1", "FOO", "X", datafusion_expr::lit(1i64))]
+#[case::quoted(
+    r#"UPDATE "foo" SET "x" = 'updated'"#,
+    "foo",
+    "x",
+    datafusion_expr::lit("updated")
+)]
+fn ident_normalization_update(
+    #[case] sql: &str,
+    #[case] table: &str,
+    #[case] column: &str,
+    #[case] value: Expr,
+) {
+    let options =
+        ParserOptions::new().with_ident_normalization(IdentNormalization::Upper);
+    let LogicalPlan::Dml(dml) = logical_plan_with_options(sql, options).unwrap() else {
+        panic!("expected UPDATE");
+    };
+    assert_eq!(dml.table_name, TableReference::bare(table));
+    let LogicalPlan::Projection(projection) = dml.input.as_ref() else {
+        panic!("expected replacement projection");
+    };
+    assert_eq!(projection.expr, vec![value.alias(column)]);
+    assert_eq!(projection.schema.field(0).name(), column);
+    let LogicalPlan::TableScan(scan) = projection.input.as_ref() else {
+        panic!("expected target scan");
+    };
+    assert_eq!(scan.table_name, TableReference::bare(table));
 }
 
 #[rstest]
