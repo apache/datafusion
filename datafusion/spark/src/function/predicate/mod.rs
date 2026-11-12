@@ -5,6 +5,8 @@
 use datafusion_expr::ScalarUDF;
 use std::sync::Arc;
 
+pub mod at_least_n_non_nulls;
+
 pub mod expr_fn {}
 
 pub fn functions() -> Vec<Arc<ScalarUDF>> {
