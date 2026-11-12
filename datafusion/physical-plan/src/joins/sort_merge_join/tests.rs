@@ -42,6 +42,7 @@ use arrow_schema::SchemaRef;
 use bytes::Bytes;
 use datafusion_common::JoinType::*;
 use datafusion_common::instant::Instant;
+use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{
     DataFusionError, JoinType, NullEquality, Result, ScalarValue, assert_batches_eq,
     assert_contains,
@@ -4025,6 +4026,56 @@ async fn column_join_key_not_double_counted() -> Result<()> {
     }
 
     assert_eq!(peaks[0], peaks[1]);
+    Ok(())
+}
+
+/// Only a computed join key is charged on top of the batch, in memory and after spill read-back.
+#[tokio::test]
+async fn buffered_batch_reservation_column_and_computed_key() -> Result<()> {
+    let values = vec![1, 2, 3, 4];
+    let batch = build_table_i32(("a", &values), ("b", &values), ("c", &values));
+
+    let column: PhysicalExprRef = Arc::new(Column::new("b", 1));
+    let computed: PhysicalExprRef = Arc::new(BinaryExpr::new(
+        Arc::clone(&column),
+        Operator::Plus,
+        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+    ));
+    let computed_mem = RecordBatchMemoryCounter::new()
+        .count_array(&computed.evaluate(&batch)?.into_array(batch.num_rows())?);
+
+    for (key, key_mem) in [(column, 0), (computed, computed_mem)] {
+        let size_estimation = batch.get_array_memory_size()
+            + key_mem
+            + batch.num_rows().next_power_of_two() * size_of::<usize>()
+            + size_of::<std::ops::Range<usize>>()
+            + size_of::<usize>();
+
+        for memory_limit in [usize::MAX, size_estimation / 2] {
+            let runtime = RuntimeEnvBuilder::new()
+                .with_memory_limit(memory_limit, 1.0)
+                .build_arc()?;
+            let task_ctx = Arc::new(TaskContext::default().with_runtime(runtime));
+
+            let join = join(
+                build_table_from_batches(vec![batch.clone()]),
+                build_table_from_batches(vec![batch.clone()]),
+                vec![(Arc::clone(&key), Arc::clone(&key))],
+                Inner,
+            )?;
+            common::collect(join.execute(0, task_ctx)?).await?;
+
+            let metrics = join.metrics().unwrap();
+            assert_eq!(
+                metrics.spill_count().unwrap() > 0,
+                memory_limit != usize::MAX
+            );
+            assert_eq!(
+                metrics.sum_by_name("peak_mem_used").unwrap().as_usize(),
+                size_estimation
+            );
+        }
+    }
     Ok(())
 }
 
