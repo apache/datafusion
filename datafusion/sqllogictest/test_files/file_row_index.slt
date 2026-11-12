@@ -314,6 +314,191 @@ SELECT file_row_index() + 1, column1 FROM parquet_table ORDER BY column1
 # `RESET` restores the global default rather than the harness value, which the
 # harness rejects as leftover configuration.
 
+# A leaf expression must also reach the scan when the source pushes an `OFFSET`
+# down. The skip makes the source wrap its scan in a `GlobalLimitExec`, and a
+# scan with more than one file group gets a `CoalescePartitionsExec` under that,
+# so the leaf projection the logical rules placed on the scan ends up stranded
+# one or two nodes above it. See `try_split_leaf_projection` in
+# `datafusion/physical-optimizer/src/projection_pushdown.rs`.
+
+# Nothing below needs a repartition, so `batch_size` stays at the default set
+# just above. This is a different path from the split further up: raising
+# `batch_size`, lowering `target_partitions` or shrinking the table does not
+# hide it.
+
+# Every `OFFSET` below sets a skip that differs from the fetch, and the two
+# controls set no fetch at all -- never `OFFSET n LIMIT n`: the split rebuilds
+# the limit, and with the two numbers equal every assertion below would hold
+# just as well if they were swapped.
+
+# The marker is BARE here, and alone in its projection. Stranded above the
+# limit it reaches execution unrewritten and the query errors out.
+query I
+SELECT r FROM (SELECT file_row_index() AS r FROM parquet_table OFFSET 1 LIMIT 3)
+ORDER BY r
+----
+1
+2
+3
+
+# The marker wrapped in arithmetic.
+query I
+SELECT r FROM (SELECT file_row_index() + 1 AS r FROM parquet_table OFFSET 1 LIMIT 3)
+ORDER BY r
+----
+2
+3
+4
+
+# A computed sibling in the same projection, which stays above the limit.
+query II
+SELECT r, w FROM (
+    SELECT file_row_index() AS r, column1 + 1 AS w FROM parquet_table OFFSET 1 LIMIT 3
+) ORDER BY r
+----
+1 21
+2 31
+3 41
+
+# The sibling marker behaves the same way. Compared against a predicate rather
+# than printed, so the expectation does not depend on the absolute file path.
+query B
+SELECT n FROM (
+    SELECT length(input_file_name()) > 0 AS n FROM parquet_table OFFSET 1 LIMIT 3
+) ORDER BY n
+----
+true
+true
+true
+
+# Not specific to arithmetic: any enclosing expression has the same effect.
+query T
+SELECT t FROM (
+    SELECT arrow_typeof(file_row_index()) AS t FROM parquet_table OFFSET 1 LIMIT 3
+) ORDER BY t
+----
+Int64
+Int64
+Int64
+
+# The plan behind the values above: the marker is rewritten inside the scan and
+# the limit keeps both of its numbers, in that order.
+query TT
+EXPLAIN SELECT file_row_index() AS r FROM parquet_table OFFSET 1 LIMIT 3
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS r
+02)--Limit: skip=0, fetch=3
+03)----Projection: file_row_index() AS __datafusion_extracted_1
+04)------TableScan: parquet_table projection=[], fetch=3, skip=1
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@0 as r]
+02)--GlobalLimitExec: skip=1, fetch=3
+03)----DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as __datafusion_leaf_0], limit=4, file_type=parquet
+
+# `OFFSET 0` is the control. No skip means no limit for the source to push
+# down, so nothing is ever inserted below the projection and this shape never
+# depended on the split.
+query TT
+EXPLAIN SELECT file_row_index() AS r FROM parquet_table OFFSET 0 LIMIT 3
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS r
+02)--Limit: skip=0, fetch=3
+03)----Projection: file_row_index() AS __datafusion_extracted_1
+04)------TableScan: parquet_table projection=[], fetch=3
+physical_plan DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as r], limit=3, file_type=parquet
+
+# `OFFSET` with no `LIMIT` is the other control: the skip is not pushed into
+# the `TableScan` at all, so the scan absorbs the projection before any limit
+# exists and the split is never consulted.
+query TT
+EXPLAIN SELECT file_row_index() AS r FROM parquet_table OFFSET 2
+----
+logical_plan
+01)Limit: skip=2, fetch=None
+02)--Projection: file_row_index() AS r
+03)----TableScan: parquet_table projection=[]
+physical_plan
+01)GlobalLimitExec: skip=2, fetch=None
+02)--DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/parquet_table/data.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as r], file_type=parquet
+
+# More than one file group puts a `CoalescePartitionsExec` between the limit
+# and the scan, so the leaf has to descend past two nodes rather than one.
+# Stopping at the first one leaves this shape broken.
+
+statement ok
+COPY  (VALUES (10), (20), (30))
+TO 'test_files/scratch/file_row_index/offset_two_files/a.parquet'
+STORED AS PARQUET;
+
+statement ok
+COPY  (VALUES (40), (50), (60))
+TO 'test_files/scratch/file_row_index/offset_two_files/b.parquet'
+STORED AS PARQUET;
+
+statement ok
+CREATE EXTERNAL TABLE offset_two_files(column1 int)
+STORED AS PARQUET
+LOCATION 'test_files/scratch/file_row_index/offset_two_files/';
+
+query TT
+EXPLAIN SELECT file_row_index() AS r FROM offset_two_files OFFSET 1 LIMIT 3
+----
+logical_plan
+01)Projection: __datafusion_extracted_1 AS r
+02)--Limit: skip=0, fetch=3
+03)----Projection: file_row_index() AS __datafusion_extracted_1
+04)------TableScan: offset_two_files projection=[], fetch=3, skip=1
+physical_plan
+01)ProjectionExec: expr=[__datafusion_leaf_0@0 as r]
+02)--GlobalLimitExec: skip=1, fetch=3
+03)----CoalescePartitionsExec: fetch=4
+04)------DataSourceExec: file_groups={2 groups: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/offset_two_files/a.parquet], [WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/file_row_index/offset_two_files/b.parquet]]}, projection=[CAST(__datafusion_file_row_index@1 AS Int64;N) as __datafusion_leaf_0], limit=4, file_type=parquet
+
+# Which rows survive the skip depends on the order the partitions are merged
+# in, which is not guaranteed, so this counts them instead of listing them.
+# `count(r)` rather than `count(*)`: the latter lets `optimize_projections`
+# drop `r`, and then the marker is never evaluated and the query cannot fail.
+query I
+SELECT count(r) FROM (
+    SELECT file_row_index() AS r FROM offset_two_files OFFSET 1 LIMIT 3
+)
+----
+3
+
+statement ok
+DROP TABLE offset_two_files;
+
+# Not a parquet-only defect. `ListingTable::supports_skip_pushdown` is
+# unconditional and the `GlobalLimitExec` wrap only looks at `skip`
+# (`catalog-listing/src/table.rs`), so any listing format strands the leaf the
+# same way. Every other query in this file is parquet. `file_row_index()`
+# itself is parquet-only, so this uses the marker that is not:
+# `input_file_name()`, which errors here before the fix.
+
+statement ok
+COPY  (VALUES (10), (20), (30), (40), (50))
+TO 'test_files/scratch/file_row_index/offset_json/data.json'
+STORED AS JSON;
+
+statement ok
+CREATE EXTERNAL TABLE offset_json(column1 int)
+STORED AS JSON
+LOCATION 'test_files/scratch/file_row_index/offset_json/';
+
+query B
+SELECT n FROM (
+    SELECT length(input_file_name()) > 0 AS n FROM offset_json OFFSET 1 LIMIT 3
+) ORDER BY n
+----
+true
+true
+true
+
+statement ok
+DROP TABLE offset_json;
+
 statement ok
 DROP TABLE parquet_table;
 
