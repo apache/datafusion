@@ -796,6 +796,9 @@ FROM times LIMIT 1;
 ----
 Time64(ns) Time32(s) Time32(ms) Time64(µs) Time64(ns)
 
+statement ok
+DROP TABLE times;
+
 # Unsupported precisions, including values beyond nanoseconds, remain errors.
 statement error
 SELECT CAST('12:34:56' AS TIME(1));
