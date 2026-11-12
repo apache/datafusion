@@ -2,11 +2,13 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+use std::sync::Arc;
+
 use crate::planner::{ContextProvider, PlannerContext, SqlToRel};
 
 use arrow::datatypes::{DataType, FieldRef};
 use datafusion_common::{
-    DFSchema, Dependency, Diagnostic, HashSet, Result, Span, datatype::FieldExt,
+    Column, DFSchema, Dependency, Diagnostic, HashSet, Result, Span, datatype::FieldExt,
     internal_datafusion_err, internal_err, not_impl_err, plan_datafusion_err, plan_err,
 };
 use datafusion_expr::{
@@ -15,7 +17,7 @@ use datafusion_expr::{
     arguments::ArgumentName,
     expr::{
         self, HigherOrderFunction, Lambda, NullTreatment, ScalarFunction, Unnest,
-        WildcardOptions, WindowFunction,
+        WindowFunction,
     },
     planner::{PlannerResult, RawAggregateExpr, RawScalarExpr, RawWindowExpr},
     type_coercion::functions::value_fields_with_higher_order_udf,
@@ -629,6 +631,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             };
 
             if let Ok(fun) = self.find_window_func(&name) {
+                let (args, star) = self.strip_wildcard_arg(args, schema)?;
                 let (args, arg_names) =
                     self.function_args_to_expr_with_names(args, schema, planner_context)?;
 
@@ -660,6 +663,27 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     .transpose()?
                     .map(Box::new);
 
+                let star_name = star.map(|star| {
+                    Expr::from(WindowFunction {
+                        fun: fun.clone(),
+                        params: expr::WindowFunctionParams {
+                            args: vec![star],
+                            partition_by: partition_by.clone(),
+                            order_by: order_by.clone(),
+                            window_frame: window_frame.clone(),
+                            filter: filter.clone(),
+                            null_treatment,
+                            distinct,
+                        },
+                    })
+                    .schema_name()
+                    .to_string()
+                });
+                let with_star_name = |expr: Expr| match &star_name {
+                    Some(name) => expr.unalias().alias(name),
+                    None => expr,
+                };
+
                 let mut window_expr = RawWindowExpr {
                     func_def: fun,
                     args: resolved_args,
@@ -673,7 +697,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
 
                 for planner in self.context_provider.get_expr_planners().iter() {
                     match planner.plan_window(window_expr)? {
-                        PlannerResult::Planned(expr) => return Ok(expr),
+                        PlannerResult::Planned(expr) => return Ok(with_star_name(expr)),
                         PlannerResult::Original(expr) => window_expr = expr,
                     }
                 }
@@ -730,6 +754,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     );
                 }
 
+                let (args, star) = self.strip_wildcard_arg(args, schema)?;
                 let (mut args, mut arg_names) =
                     self.function_args_to_expr_with_names(args, schema, planner_context)?;
 
@@ -825,6 +850,23 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                     args
                 };
 
+                let star_name = star.map(|star| {
+                    Expr::AggregateFunction(expr::AggregateFunction::new_udf(
+                        Arc::clone(&fm),
+                        vec![star],
+                        distinct,
+                        filter.clone(),
+                        order_by.clone(),
+                        null_treatment,
+                    ))
+                    .schema_name()
+                    .to_string()
+                });
+                let with_star_name = |expr: Expr| match &star_name {
+                    Some(name) => expr.unalias().alias(name),
+                    None => expr,
+                };
+
                 let mut aggregate_expr = RawAggregateExpr {
                     func: fm,
                     args: resolved_args,
@@ -835,7 +877,7 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 for planner in self.context_provider.get_expr_planners().iter() {
                     match planner.plan_aggregate(aggregate_expr)? {
-                        PlannerResult::Planned(expr) => return Ok(expr),
+                        PlannerResult::Planned(expr) => return Ok(with_star_name(expr)),
                         PlannerResult::Original(expr) => aggregate_expr = expr,
                     }
                 }
@@ -1030,47 +1072,8 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 Ok((expr, Some(arg_name)))
             }
-            FunctionArg::Named {
-                name,
-                arg: FunctionArgExpr::Wildcard,
-                operator: _,
-            } => {
-                #[expect(deprecated)]
-                let expr = Expr::Wildcard {
-                    qualifier: None,
-                    options: Box::new(WildcardOptions::default()),
-                };
-                let arg_name = ArgumentName {
-                    value: name.value,
-                    is_quoted: name.quote_style.is_some(),
-                };
-                Ok((expr, Some(arg_name)))
-            }
             FunctionArg::Unnamed(FunctionArgExpr::Expr(arg)) => {
                 let expr = self.sql_expr_to_logical_expr(arg, schema, planner_context)?;
-                Ok((expr, None))
-            }
-            FunctionArg::Unnamed(FunctionArgExpr::Wildcard) => {
-                #[expect(deprecated)]
-                let expr = Expr::Wildcard {
-                    qualifier: None,
-                    options: Box::new(WildcardOptions::default()),
-                };
-                Ok((expr, None))
-            }
-            FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(object_name)) => {
-                let qualifier = self.object_name_to_table_reference(object_name)?;
-                // Sanity check on qualifier with schema
-                let qualified_indices = schema.fields_indices_with_qualified(&qualifier);
-                if qualified_indices.is_empty() {
-                    return plan_err!("Invalid qualifier {qualifier}");
-                }
-
-                #[expect(deprecated)]
-                let expr = Expr::Wildcard {
-                    qualifier: qualifier.into(),
-                    options: Box::new(WildcardOptions::default()),
-                };
                 Ok((expr, None))
             }
             // PostgreSQL dialect uses ExprNamed variant with expression for name
@@ -1086,22 +1089,17 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
                 };
                 Ok((expr, Some(arg_name)))
             }
-            FunctionArg::ExprNamed {
-                name: SQLExpr::Identifier(name),
+            FunctionArg::Named {
                 arg: FunctionArgExpr::Wildcard,
-                operator: _,
-            } => {
-                #[expect(deprecated)]
-                let expr = Expr::Wildcard {
-                    qualifier: None,
-                    options: Box::new(WildcardOptions::default()),
-                };
-                let arg_name = ArgumentName {
-                    value: name.value,
-                    is_quoted: name.quote_style.is_some(),
-                };
-                Ok((expr, Some(arg_name)))
+                ..
             }
+            | FunctionArg::ExprNamed {
+                arg: FunctionArgExpr::Wildcard,
+                ..
+            }
+            | FunctionArg::Unnamed(
+                FunctionArgExpr::Wildcard | FunctionArgExpr::QualifiedWildcard(_),
+            ) => plan_err!("Unsupported function argument type: {sql}"),
             _ => not_impl_err!("Unsupported qualified wildcard argument: {sql:?}"),
         }
     }
@@ -1184,6 +1182,31 @@ impl<S: ContextProvider> SqlToRel<'_, S> {
             _ => {
                 plan_err!("unnest() can only be applied to array, struct and null")
             }
+        }
+    }
+
+    /// Plans `f(*)` / `f(t.*)` as `f()`. The returned expression renders as `*` / `t.*`
+    /// and is only used to compute the output name; it must never be planned.
+    fn strip_wildcard_arg(
+        &self,
+        args: Vec<FunctionArg>,
+        schema: &DFSchema,
+    ) -> Result<(Vec<FunctionArg>, Option<Expr>)> {
+        match args.as_slice() {
+            [FunctionArg::Unnamed(FunctionArgExpr::Wildcard)] => {
+                Ok((vec![], Some(Expr::Column(Column::new_unqualified("*")))))
+            }
+            [FunctionArg::Unnamed(FunctionArgExpr::QualifiedWildcard(name))] => {
+                let qualifier = self.object_name_to_table_reference(name.clone())?;
+                if schema.fields_indices_with_qualified(&qualifier).is_empty() {
+                    return plan_err!("Invalid qualifier {qualifier}");
+                }
+                Ok((
+                    vec![],
+                    Some(Expr::Column(Column::new(Some(qualifier), "*"))),
+                ))
+            }
+            _ => Ok((args, None)),
         }
     }
 }

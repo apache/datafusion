@@ -566,21 +566,6 @@ impl Unparser<'_> {
                     format: None,
                 })
             }
-            // TODO: unparsing wildcard addition options
-            #[expect(deprecated)]
-            Expr::Wildcard { qualifier, .. } => {
-                let attached_token = AttachedToken::empty();
-                if let Some(qualifier) = qualifier {
-                    let idents: Vec<Ident> =
-                        qualifier.to_vec().into_iter().map(Ident::new).collect();
-                    Ok(ast::Expr::QualifiedWildcard(
-                        ObjectName::from(idents),
-                        attached_token,
-                    ))
-                } else {
-                    Ok(ast::Expr::Wildcard(attached_token))
-                }
-            }
             Expr::GroupingSet(grouping_set) => match grouping_set {
                 GroupingSet::GroupingSets(grouping_sets) => {
                     let expr_ast_sets = grouping_sets
@@ -959,19 +944,8 @@ impl Unparser<'_> {
     ) -> Result<Vec<ast::FunctionArg>> {
         args.iter()
             .map(|e| {
-                #[expect(deprecated)]
-                if matches!(
-                    e,
-                    Expr::Wildcard {
-                        qualifier: None,
-                        ..
-                    }
-                ) {
-                    Ok(ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Wildcard))
-                } else {
-                    self.expr_to_sql_with_nesting(e)
-                        .map(|e| ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e)))
-                }
+                self.expr_to_sql_with_nesting(e)
+                    .map(|e| ast::FunctionArg::Unnamed(ast::FunctionArgExpr::Expr(e)))
             })
             .collect::<Result<Vec<_>>>()
     }
@@ -1951,7 +1925,7 @@ mod tests {
     use ast::ObjectName;
     use datafusion_common::datatype::DataTypeExt;
     use datafusion_common::{Spans, TableReference};
-    use datafusion_expr::expr::WildcardOptions;
+    use datafusion_expr::utils::COUNT_STAR_EXPANSION;
     use datafusion_expr::{
         ColumnarValue, HigherOrderUDF, HigherOrderUDFImpl, LambdaParametersProgress,
         ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature, ValueOrLambda,
@@ -2050,12 +2024,8 @@ mod tests {
     #[test]
     fn expr_to_sql_ok() -> Result<()> {
         let dummy_schema = Schema::new(vec![Field::new("a", DataType::Int32, false)]);
-        #[expect(deprecated)]
         let dummy_logical_plan = table_scan(Some("t"), &dummy_schema, None)?
-            .project(vec![Expr::Wildcard {
-                qualifier: None,
-                options: Box::new(WildcardOptions::default()),
-            }])?
+            .project(vec![datafusion_expr::wildcard()])?
             .filter(col("a").eq(lit(1)))?
             .build()?;
 
@@ -2254,28 +2224,20 @@ mod tests {
             ),
             (sum(col("a")), r#"sum(a)"#),
             (
-                #[expect(deprecated)]
                 count_udaf()
-                    .call(vec![Expr::Wildcard {
-                        qualifier: None,
-                        options: Box::new(WildcardOptions::default()),
-                    }])
+                    .call(vec![lit(COUNT_STAR_EXPANSION)])
                     .distinct()
                     .build()
                     .unwrap(),
-                "count(DISTINCT *)",
+                "count(DISTINCT 1)",
             ),
             (
-                #[expect(deprecated)]
                 count_udaf()
-                    .call(vec![Expr::Wildcard {
-                        qualifier: None,
-                        options: Box::new(WildcardOptions::default()),
-                    }])
+                    .call(vec![lit(COUNT_STAR_EXPANSION)])
                     .filter(lit(true))
                     .build()
                     .unwrap(),
-                "count(*) FILTER (WHERE true)",
+                "count(1) FILTER (WHERE true)",
             ),
             (
                 Expr::from(WindowFunction {
@@ -2293,14 +2255,10 @@ mod tests {
                 r#"row_number(col) OVER (ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)"#,
             ),
             (
-                #[expect(deprecated)]
                 Expr::from(WindowFunction {
                     fun: WindowFunctionDefinition::AggregateUDF(count_udaf()),
                     params: WindowFunctionParams {
-                        args: vec![Expr::Wildcard {
-                            qualifier: None,
-                            options: Box::new(WildcardOptions::default()),
-                        }],
+                        args: vec![lit(COUNT_STAR_EXPANSION)],
                         partition_by: vec![],
                         order_by: vec![Sort::new(col("a"), false, true)],
                         window_frame: WindowFrame::new_bounds(
@@ -2317,7 +2275,7 @@ mod tests {
                         filter: Some(Box::new(col("a").gt(lit(100)))),
                     },
                 }),
-                r#"count(*) FILTER (WHERE (a > 100)) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
+                r#"count(1) FILTER (WHERE (a > 100)) OVER (ORDER BY a DESC NULLS FIRST RANGE BETWEEN 6 PRECEDING AND 2 FOLLOWING)"#,
             ),
             (col("a").is_not_null(), r#"a IS NOT NULL"#),
             (col("a").is_null(), r#"a IS NULL"#),
@@ -2353,11 +2311,11 @@ mod tests {
             (Expr::Negative(Box::new(col("a"))), r#"-a"#),
             (
                 exists(Arc::new(dummy_logical_plan.clone())),
-                r#"EXISTS (SELECT * FROM t WHERE (t.a = 1))"#,
+                r#"EXISTS (SELECT t.a FROM t WHERE (t.a = 1))"#,
             ),
             (
                 not_exists(Arc::new(dummy_logical_plan)),
-                r#"NOT EXISTS (SELECT * FROM t WHERE (t.a = 1))"#,
+                r#"NOT EXISTS (SELECT t.a FROM t WHERE (t.a = 1))"#,
             ),
             (
                 try_cast(col("a"), DataType::Date64),
