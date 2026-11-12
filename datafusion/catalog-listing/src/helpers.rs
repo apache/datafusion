@@ -29,7 +29,7 @@ use datafusion_datasource::{FileExtensions, ListingTableUrl};
 use datafusion_expr::{BinaryExpr, Operator, lit, utils};
 
 use arrow::{
-    array::AsArray,
+    array::{Array, AsArray},
     datatypes::{DataType, Field},
     record_batch::RecordBatch,
 };
@@ -44,6 +44,8 @@ use datafusion_expr::{Expr, Volatility};
 use datafusion_physical_expr::create_physical_expr;
 use object_store::path::Path;
 use object_store::{ObjectMeta, ObjectStore};
+
+const HIVE_DEFAULT_PARTITION_NAME: &str = "__HIVE_DEFAULT_PARTITION__";
 
 /// Check whether the given expression can be resolved using only the columns `col_names`.
 /// This means that if this function returns true:
@@ -349,9 +351,11 @@ fn filter_partitions(
     let expr = create_physical_expr(&filter, df_schema, &props)?;
 
     // Since we're only operating on a single file, our batch and resulting "array" holds only one
-    // value indicating if the input file matches the provided filters
+    // value indicating if the input file matches the provided filters. A NULL is not a match:
+    // a null partition value makes that reachable, as `part = 1` is NULL for a null partition.
     let matches = expr.evaluate(&batch)?.into_array(1)?;
-    if matches.as_boolean().value(0) {
+    let matches = matches.as_boolean();
+    if matches.is_valid(0) && matches.value(0) {
         return Ok(Some(pf));
     }
 
@@ -359,9 +363,10 @@ fn filter_partitions(
 }
 
 /// Returns `Ok(None)` when the file is not inside a valid partition path
-/// (e.g. a stale file in the table root directory). Such files are skipped
-/// because hive-style partition values are never null and there is no valid
-/// value to assign for non-partitioned files.
+/// (e.g. a stale file in the table root directory), as there is no value to
+/// assign for non-partitioned files.
+///
+/// A partition value named `__HIVE_DEFAULT_PARTITION__` is read as NULL.
 fn try_into_partitioned_file(
     object_meta: ObjectMeta,
     partition_cols: &[(String, DataType)],
@@ -379,6 +384,9 @@ fn try_into_partitioned_file(
         .into_iter()
         .zip(partition_cols)
         .map(|(parsed, (_, datatype))| {
+            if parsed == HIVE_DEFAULT_PARTITION_NAME {
+                return ScalarValue::try_new_null(datatype);
+            }
             ScalarValue::try_from_string(parsed.to_string(), datatype)
         })
         .collect::<Result<Vec<_>>>()?;
@@ -439,7 +447,7 @@ pub async fn pruned_partition_list<'a>(
         )?;
 
         Ok(objects
-            .try_filter_map(|object_meta| {
+            .try_filter_map(move |object_meta| {
                 futures::future::ready(try_into_partitioned_file(
                     object_meta,
                     partition_cols,
@@ -646,6 +654,50 @@ mod tests {
         assert_eq!(
             pf.partition_values[0],
             ScalarValue::Utf8(Some("2024-01".to_string()))
+        );
+    }
+
+    #[test]
+    fn test_try_into_partitioned_file_null_partition() {
+        let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
+        // A type the placeholder cannot be parsed as, which is how this used to fail.
+        let partition_cols = vec![("day".to_string(), DataType::Date32)];
+        let meta = ObjectMeta {
+            location: Path::from(
+                "bucket/mytable/day=__HIVE_DEFAULT_PARTITION__/data.parquet",
+            ),
+            last_modified: chrono::Utc::now(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+
+        let pf = try_into_partitioned_file(meta, &partition_cols, &table_path)
+            .unwrap()
+            .expect("file should be listed");
+
+        assert_eq!(pf.partition_values, vec![ScalarValue::Date32(None)]);
+    }
+
+    #[test]
+    fn test_try_into_partitioned_file_other_partition_name_is_literal() {
+        let table_path = ListingTableUrl::parse("file:///bucket/mytable").unwrap();
+        let partition_cols = vec![("category".to_string(), DataType::Utf8)];
+        let meta = ObjectMeta {
+            location: Path::from("bucket/mytable/category=MY_NULL/data.parquet"),
+            last_modified: chrono::Utc::now(),
+            size: 100,
+            e_tag: None,
+            version: None,
+        };
+
+        let pf = try_into_partitioned_file(meta, &partition_cols, &table_path)
+            .unwrap()
+            .expect("file should be listed");
+
+        assert_eq!(
+            pf.partition_values,
+            vec![ScalarValue::Utf8(Some("MY_NULL".to_string()))]
         );
     }
 
