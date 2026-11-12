@@ -233,6 +233,111 @@ async fn test_list_partition() {
     );
 }
 
+/// A partition directory named `__HIVE_DEFAULT_PARTITION__` holds the rows whose partition
+/// value is null, so it is read as NULL rather than parsed as the column's type.
+#[tokio::test]
+async fn test_pruned_partition_list_null_partition() {
+    let (store, state) = make_test_store_and_state(&[
+        ("tablepath/mypartition=3/file.parquet", 100),
+        (
+            "tablepath/mypartition=__HIVE_DEFAULT_PARTITION__/file.parquet",
+            100,
+        ),
+    ]);
+
+    let pruned = pruned_partition_list(
+        state.as_ref(),
+        store.as_ref(),
+        &ListingTableUrl::parse("file:///tablepath/").unwrap(),
+        &[],
+        ".parquet",
+        &[(String::from("mypartition"), DataType::Int32)],
+    )
+    .await
+    .expect("partition pruning failed")
+    .try_collect::<Vec<_>>()
+    .await
+    .unwrap();
+
+    assert_eq!(pruned.len(), 2);
+    assert_eq!(&pruned[0].partition_values, &[ScalarValue::Int32(Some(3))]);
+    assert_eq!(&pruned[1].partition_values, &[ScalarValue::Int32(None)]);
+}
+
+#[tokio::test]
+async fn test_pruned_partition_list_prunes_null_partition() {
+    let files: &[(&str, u64)] = &[
+        ("tablepath/mypartition=3/file.parquet", 100),
+        (
+            "tablepath/mypartition=__HIVE_DEFAULT_PARTITION__/file.parquet",
+            100,
+        ),
+    ];
+    let partition_cols = &[(String::from("mypartition"), DataType::Int32)];
+
+    let pruned_with = |filter: Expr| async move {
+        let (store, state) = make_test_store_and_state(files);
+        pruned_partition_list(
+            state.as_ref(),
+            store.as_ref(),
+            &ListingTableUrl::parse("file:///tablepath/").unwrap(),
+            &[filter],
+            ".parquet",
+            partition_cols,
+        )
+        .await
+        .expect("partition pruning failed")
+        .try_collect::<Vec<_>>()
+        .await
+        .unwrap()
+    };
+
+    // The null partition does not match an equality filter: `mypartition = 3` is NULL there.
+    let pruned = pruned_with(Expr::eq(col("mypartition"), lit(3i32))).await;
+    assert_eq!(pruned.len(), 1);
+    assert_eq!(
+        pruned[0].object_meta.location.as_ref(),
+        "tablepath/mypartition=3/file.parquet"
+    );
+
+    // ... and only the null partition matches `IS NULL`.
+    let pruned = pruned_with(col("mypartition").is_null()).await;
+    assert_eq!(pruned.len(), 1);
+    assert_eq!(
+        pruned[0].object_meta.location.as_ref(),
+        "tablepath/mypartition=__HIVE_DEFAULT_PARTITION__/file.parquet"
+    );
+}
+
+#[tokio::test]
+async fn test_pruned_partition_list_hive_null_partition_name() {
+    let (store, state) = make_test_store_and_state(&[
+        ("tablepath/mypartition=MY_NULL/file.parquet", 100),
+        (
+            "tablepath/mypartition=__HIVE_DEFAULT_PARTITION__/file.parquet",
+            100,
+        ),
+    ]);
+    let pruned = pruned_partition_list(
+        state.as_ref(),
+        store.as_ref(),
+        &ListingTableUrl::parse("file:///tablepath/").unwrap(),
+        &[],
+        ".parquet",
+        &[(String::from("mypartition"), DataType::Utf8)],
+    )
+    .await
+    .expect("partition pruning failed")
+    .try_collect::<Vec<_>>()
+    .await
+    .unwrap();
+
+    // Only the fixed Hive marker is read as NULL; other names remain literal values.
+    assert_eq!(pruned.len(), 2);
+    assert_eq!(&pruned[0].partition_values, &[ScalarValue::from("MY_NULL")]);
+    assert_eq!(&pruned[1].partition_values, &[ScalarValue::Utf8(None)]);
+}
+
 pub fn make_test_store_and_state(
     files: &[(&str, u64)],
 ) -> (Arc<InMemory>, Arc<dyn Session>) {
