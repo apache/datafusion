@@ -150,6 +150,9 @@ pub(crate) struct PartialHashAggregateStream {
     /// Tracks whether partial aggregation should switch to direct state conversion.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
+    /// Groups emitted early on memory pressure, counted by the skip probe.
+    emitted_groups: usize,
+
     /// Optional soft limit on the number of groups to accumulate before output.
     ///
     /// Invariant: when this is `Some(..)`, the accumulators inside `hash_table` must
@@ -268,6 +271,7 @@ impl PartialHashAggregateStream {
             reduction_factor,
             early_emit_count,
             skip_aggregation_probe,
+            emitted_groups: 0,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             hash_table: Some(hash_table),
         })
@@ -311,6 +315,7 @@ impl PartialHashAggregateStream {
                         })?;
 
                         self.early_emit_count.add(1);
+                        self.emitted_groups += materialized_group_states.num_rows();
                         timer.done();
                         self.emit_on_memory_pressure(
                             materialized_group_states,
@@ -398,7 +403,10 @@ impl PartialHashAggregateStream {
         // ----------------------------------------------
         // Step 3: Skip partial aggregation optimization
         // ----------------------------------------------
-        self.update_skip_aggregation_probe(input_rows, hash_table.building_group_count());
+        self.update_skip_aggregation_probe(
+            input_rows,
+            self.emitted_groups + hash_table.building_group_count(),
+        );
 
         // True branch: a decision has been made to skip partial aggregation.
         if self.should_skip_aggregation() {
@@ -1187,6 +1195,95 @@ mod tests {
             "Expected batch 3's rows ({batch3_rows}) to be skipped",
         );
 
+        Ok(())
+    }
+
+    /// Unique keys under a memory limit that forces early emits before the
+    /// probe threshold. Both partial streams must still switch to skipping.
+    #[tokio::test]
+    async fn test_partial_aggregation_skips_after_early_emits() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("group_col", DataType::Int32, false),
+            Field::new("value_col", DataType::Int64, false),
+        ]));
+        let batch_rows = 256;
+        let num_batches = 40;
+        let probe_batches = 16;
+        let batches = (0..num_batches)
+            .map(|i| {
+                let start = (i * batch_rows) as i32;
+                RecordBatch::try_new(
+                    Arc::clone(&schema),
+                    vec![
+                        Arc::new(Int32Array::from_iter_values(
+                            start..start + batch_rows as i32,
+                        )),
+                        Arc::new(Int64Array::from(vec![1; batch_rows])),
+                    ],
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let group_by = PhysicalGroupBy::new_single(vec![(
+            col("group_col", &schema)?,
+            "group_col".to_string(),
+        )]);
+        let aggr_expr = vec![Arc::new(
+            AggregateExprBuilder::new(count_udaf(), vec![col("value_col", &schema)?])
+                .schema(Arc::clone(&schema))
+                .alias("count_value")
+                .build()?,
+        )];
+
+        // `false` runs the legacy `GroupedHashAggregateStream`.
+        for enable_migration in [true, false] {
+            let session_config = SessionConfig::new()
+                .with_batch_size(batch_rows)
+                .set_usize(
+                    "datafusion.execution.skip_partial_aggregation_probe_rows_threshold",
+                    probe_batches * batch_rows,
+                )
+                .set_bool(
+                    "datafusion.execution.enable_migration_aggregate",
+                    enable_migration,
+                );
+            let runtime = RuntimeEnvBuilder::default()
+                .with_memory_limit(64 * 1024, 1.0)
+                .build_arc()?;
+            let task_ctx = Arc::new(
+                TaskContext::default()
+                    .with_runtime(runtime)
+                    .with_session_config(session_config),
+            );
+            let input = TestMemoryExec::try_new_exec(
+                std::slice::from_ref(&batches),
+                Arc::clone(&schema),
+                None,
+            )?;
+            let aggregate_exec = AggregateExec::try_new(
+                AggregateMode::Partial,
+                group_by.clone(),
+                aggr_expr.clone(),
+                vec![None],
+                input,
+                Arc::clone(&schema),
+            )?;
+
+            let output = collect(aggregate_exec.execute(0, task_ctx)?).await?;
+            let output_rows: usize = output.iter().map(|b| b.num_rows()).sum();
+            assert_eq!(output_rows, num_batches * batch_rows);
+
+            let metrics = aggregate_exec.metrics().unwrap();
+            let metric = |name| metrics.sum_by_name(name).map_or(0, |m| m.as_usize());
+            // Only the new stream reports early emits.
+            if enable_migration {
+                assert!(metric("early_emit_count") > 0, "expected early emits");
+            }
+            assert_eq!(
+                metric("skipped_aggregation_rows"),
+                (num_batches - probe_batches) * batch_rows,
+                "enable_migration_aggregate={enable_migration}"
+            );
+        }
         Ok(())
     }
 

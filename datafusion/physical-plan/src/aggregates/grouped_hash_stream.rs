@@ -352,6 +352,9 @@ pub(crate) struct GroupedHashAggregateStream {
     /// current stream.
     skip_aggregation_probe: Option<SkipAggregationProbe>,
 
+    /// Groups emitted early on memory pressure, counted by the skip probe.
+    emitted_groups: usize,
+
     // ========================================================================
     // EXECUTION RESOURCES:
     // Fields related to managing execution resources and monitoring performance.
@@ -641,6 +644,7 @@ impl GroupedHashAggregateStream {
             spill_state,
             group_values_soft_limit: agg.limit_options().map(|config| config.limit()),
             skip_aggregation_probe,
+            emitted_groups: 0,
             reduction_factor,
         })
     }
@@ -996,6 +1000,7 @@ impl GroupedHashAggregateStream {
                 if let Some(emit_to) = self.group_clustering.oom_emit_to(n)
                     && let Some(batch) = self.emit(emit_to, false)?
                 {
+                    self.emitted_groups += batch.num_rows();
                     return Ok(Some(ExecutionState::ProducingOutput(batch)));
                 }
                 Err(oom)
@@ -1396,7 +1401,7 @@ impl GroupedHashAggregateStream {
             // Skip aggregation probe is not supported if stream has any spills,
             // currently spilling is not supported for Partial aggregation
             assert!(self.spill_state.spills.is_empty());
-            probe.update_state(input_rows, self.group_values.len());
+            probe.update_state(input_rows, self.emitted_groups + self.group_values.len());
         }
     }
 
