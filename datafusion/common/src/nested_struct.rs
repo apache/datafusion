@@ -1373,12 +1373,20 @@ pub fn has_one_of_more_common_fields(
         .any(|field| source_names.contains(field.name().as_str()))
 }
 
-/// Extends array casting with conversions that depend on [`Field`] metadata.
+/// Extends array casting with conversions selected using the source and target
+/// [`Field`]s.
+///
+/// Implementations may select conversions using field metadata, the fields'
+/// bare [`DataType`]s, or both. Metadata is not required. Extensions are checked
+/// before Arrow's built-in cast, including when recursively casting nested types.
 ///
 /// Implementations should return `true` from [`Self::can_cast_fields`] only for
 /// conversions they can perform in [`Self::cast_array_fields`].
 pub trait CastExtension: std::fmt::Debug + Send + Sync {
     /// Returns whether this extension can cast between the supplied fields.
+    ///
+    /// Implementations may match only [`Field::data_type`] when the conversion
+    /// does not depend on metadata.
     fn can_cast_fields(&self, source_field: &Field, target_field: &Field)
     -> Result<bool>;
 
@@ -1489,6 +1497,41 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct BareInt8ToStringCast;
+
+    impl CastExtension for BareInt8ToStringCast {
+        fn can_cast_fields(
+            &self,
+            source_field: &Field,
+            target_field: &Field,
+        ) -> Result<bool> {
+            Ok(source_field.data_type() == &DataType::Int8
+                && target_field.data_type() == &DataType::Utf8)
+        }
+
+        fn cast_array_fields(
+            &self,
+            array: &ArrayRef,
+            source_field: &Field,
+            target_field: &Field,
+            _cast_options: &CastOptions,
+        ) -> Result<ArrayRef> {
+            if !self.can_cast_fields(source_field, target_field)? {
+                return _internal_err!(
+                    "BareInt8ToStringCast cannot cast supplied fields"
+                );
+            }
+            let array = array
+                .as_any()
+                .downcast_ref::<Int8Array>()
+                .expect("extension receives Int8 input");
+            Ok(Arc::new(StringArray::from_iter(array.iter().map(
+                |value| value.map(|value| if value == 0 { "false" } else { "true" }),
+            ))))
+        }
+    }
+
     #[test]
     fn test_cast_simple_column() {
         let source = Arc::new(Int32Array::from(vec![1, 2, 3])) as ArrayRef;
@@ -1503,7 +1546,26 @@ mod tests {
         assert_eq!(result.value(2), 3);
     }
 
-    fn bool8_values() -> ArrayRef {
+    #[test]
+    fn test_cast_extension_bare_data_types() {
+        let source_field = field("value", DataType::Int8);
+        let target_field = field("value", DataType::Utf8);
+        assert!(source_field.metadata().is_empty());
+        assert!(target_field.metadata().is_empty());
+
+        let result = cast_column_fields(
+            &int8_values(),
+            &source_field,
+            &target_field,
+            Some(&BareInt8ToStringCast),
+            &DEFAULT_CAST_OPTIONS,
+        )
+        .unwrap();
+
+        assert_boolean_strings(&result);
+    }
+
+    fn int8_values() -> ArrayRef {
         Arc::new(Int8Array::from(vec![Some(0), Some(1), Some(-20), None]))
     }
 
@@ -1529,7 +1591,7 @@ mod tests {
         .unwrap()
     }
 
-    fn assert_bool8_strings(values: &ArrayRef) {
+    fn assert_boolean_strings(values: &ArrayRef) {
         let values = values.as_string::<i32>();
         assert_eq!(
             values.iter().collect::<Vec<_>>(),
@@ -1542,7 +1604,7 @@ mod tests {
         let source_fields: Fields = vec![Arc::new(bool8_field("value"))].into();
         let source = Arc::new(StructArray::new(
             source_fields.clone(),
-            vec![bool8_values()],
+            vec![int8_values()],
             None,
         ));
         let target_fields: Fields = vec![arc_field("value", DataType::Utf8)].into();
@@ -1552,7 +1614,7 @@ mod tests {
             field("root", Struct(target_fields)),
         );
 
-        assert_bool8_strings(result.as_struct().column(0));
+        assert_boolean_strings(result.as_struct().column(0));
     }
 
     #[test]
@@ -1561,7 +1623,7 @@ mod tests {
         let source = Arc::new(ListArray::new(
             Arc::clone(&source_item),
             OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 4])),
-            bool8_values(),
+            int8_values(),
             None,
         ));
         let target_item = arc_field("item", DataType::Utf8);
@@ -1571,7 +1633,7 @@ mod tests {
             field("root", DataType::List(target_item)),
         );
 
-        assert_bool8_strings(result.as_list::<i32>().values());
+        assert_boolean_strings(result.as_list::<i32>().values());
     }
 
     #[test]
@@ -1580,7 +1642,7 @@ mod tests {
         let source = Arc::new(GenericListArray::<i64>::new(
             Arc::clone(&source_item),
             OffsetBuffer::new(ScalarBuffer::from(vec![0, 2, 4])),
-            bool8_values(),
+            int8_values(),
             None,
         ));
         let target_item = arc_field("item", DataType::Utf8);
@@ -1590,7 +1652,7 @@ mod tests {
             field("root", DataType::LargeList(target_item)),
         );
 
-        assert_bool8_strings(result.as_list::<i64>().values());
+        assert_boolean_strings(result.as_list::<i64>().values());
     }
 
     #[test]
@@ -1599,7 +1661,7 @@ mod tests {
         let source = Arc::new(FixedSizeListArray::new(
             Arc::clone(&source_item),
             2,
-            bool8_values(),
+            int8_values(),
             None,
         ));
         let target_item = arc_field("item", DataType::Utf8);
@@ -1609,7 +1671,7 @@ mod tests {
             field("root", DataType::FixedSizeList(target_item, 2)),
         );
 
-        assert_bool8_strings(result.as_fixed_size_list().values());
+        assert_boolean_strings(result.as_fixed_size_list().values());
     }
 
     #[test]
@@ -1619,7 +1681,7 @@ mod tests {
             Arc::clone(&source_item),
             ScalarBuffer::from(vec![0, 2]),
             ScalarBuffer::from(vec![2, 2]),
-            bool8_values(),
+            int8_values(),
             None,
         ));
         let target_item = arc_field("item", DataType::Utf8);
@@ -1629,7 +1691,7 @@ mod tests {
             field("root", DataType::ListView(target_item)),
         );
 
-        assert_bool8_strings(result.as_list_view::<i32>().values());
+        assert_boolean_strings(result.as_list_view::<i32>().values());
     }
 
     #[test]
@@ -1639,7 +1701,7 @@ mod tests {
             Arc::clone(&source_item),
             ScalarBuffer::from(vec![0, 2]),
             ScalarBuffer::from(vec![2, 2]),
-            bool8_values(),
+            int8_values(),
             None,
         ));
         let target_item = arc_field("item", DataType::Utf8);
@@ -1649,7 +1711,7 @@ mod tests {
             field("root", DataType::LargeListView(target_item)),
         );
 
-        assert_bool8_strings(result.as_list_view::<i64>().values());
+        assert_boolean_strings(result.as_list_view::<i64>().values());
     }
 
     #[test]
@@ -1662,7 +1724,7 @@ mod tests {
             .into(),
             vec![
                 Arc::new(StringArray::from(vec!["a", "b", "c", "d"])),
-                bool8_values(),
+                int8_values(),
             ],
             None,
         );
@@ -1690,14 +1752,14 @@ mod tests {
             field("root", DataType::Map(target_entries_field, false)),
         );
 
-        assert_bool8_strings(result.as_map().values());
+        assert_boolean_strings(result.as_map().values());
     }
 
     #[test]
     fn test_cast_extension_nested_dictionary() {
         let source_values = Arc::new(StructArray::new(
             vec![Arc::new(bool8_field("value"))].into(),
-            vec![bool8_values()],
+            vec![int8_values()],
             None,
         ));
         let source: ArrayRef = Arc::new(DictionaryArray::<Int32Type>::new(
@@ -1718,7 +1780,7 @@ mod tests {
             .downcast_ref::<DictionaryArray<Int32Type>>()
             .unwrap();
 
-        assert_bool8_strings(result.values().as_struct().column(0));
+        assert_boolean_strings(result.values().as_struct().column(0));
     }
 
     #[test]
@@ -1730,7 +1792,7 @@ mod tests {
                 source_fields.clone(),
                 ScalarBuffer::from(vec![0i8, 0, 0, 0]),
                 None,
-                vec![bool8_values()],
+                vec![int8_values()],
             )
             .unwrap(),
         );
@@ -1742,7 +1804,7 @@ mod tests {
             field("root", DataType::Union(target_fields, UnionMode::Sparse)),
         );
 
-        assert_bool8_strings(result.as_union().child(0));
+        assert_boolean_strings(result.as_union().child(0));
     }
 
     #[test]
