@@ -49,10 +49,12 @@ use arrow::compute::{
     self, BatchCoalescer, SortOptions, concat_batches, filter_record_batch, interleave,
     take, take_arrays,
 };
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{Schema, SchemaRef};
 use arrow::ipc::reader::StreamReader;
 use datafusion_common::cast::as_uint64_array;
-use datafusion_common::{JoinType, NullEquality, Result, exec_err, internal_err};
+use datafusion_common::{
+    JoinSide, JoinType, NullEquality, Result, exec_err, internal_err,
+};
 use datafusion_execution::disk_manager::RefCountedTempFile;
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_execution::runtime_env::RuntimeEnv;
@@ -328,6 +330,10 @@ pub(super) struct MaterializingSortMergeJoinStream {
     pub filter: Option<JoinFilter>,
     /// How the join is performed
     pub join_type: JoinType,
+    /// The join filter's schema with buffered-side fields marked nullable,
+    /// since NULL-padded rows reach filter evaluation. `None` unless the join
+    /// needs deferred filtering (outer join with a filter).
+    pub filter_schema: Option<SchemaRef>,
     /// Target output batch size
     pub batch_size: usize,
 
@@ -811,6 +817,31 @@ impl MaterializingSortMergeJoinStream {
             "MaterializingSortMergeJoinStream does not handle {join_type:?}; \
              semi/anti/mark joins use BitwiseSortMergeJoinStream"
         );
+        let buffered_side = if join_type == JoinType::Right {
+            JoinSide::Left
+        } else {
+            JoinSide::Right
+        };
+        let filter_schema = if needs_deferred_filtering(&filter, join_type)
+            && let Some(f) = &filter
+        {
+            let mut fields = Vec::with_capacity(f.schema().fields().len());
+            for (column_index, field) in
+                f.column_indices().iter().zip(f.schema().fields().iter())
+            {
+                if column_index.side == buffered_side {
+                    fields.push(Arc::new(field.as_ref().clone().with_nullable(true)));
+                } else {
+                    fields.push(Arc::clone(field));
+                }
+            }
+            Some(Arc::new(Schema::new_with_metadata(
+                fields,
+                f.schema().metadata().clone(),
+            )))
+        } else {
+            None
+        };
         Ok(Self {
             state: SortMergeJoinState::Init,
             sort_options,
@@ -829,6 +860,7 @@ impl MaterializingSortMergeJoinStream {
             current_ordering: Ordering::Equal,
             on_streamed,
             on_buffered,
+            filter_schema,
             filter,
             joined_record_batches: JoinedRecordBatches {
                 joined_batches: BatchCoalescer::new(Arc::clone(&schema), batch_size)
@@ -1460,8 +1492,9 @@ impl MaterializingSortMergeJoinStream {
 
         if !filter_columns.is_empty() {
             if let Some(f) = &self.filter {
+                let schema = self.filter_schema.as_ref().unwrap_or_else(|| f.schema());
                 let filter_batch =
-                    RecordBatch::try_new(Arc::clone(f.schema()), filter_columns)?;
+                    RecordBatch::try_new(Arc::clone(schema), filter_columns)?;
                 let filter_result = f
                     .expression()
                     .evaluate(&filter_batch)?
