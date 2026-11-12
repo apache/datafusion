@@ -2,6 +2,12 @@
 # SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 # SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
+# By default `encode` follows Spark 4.0 and later: only us-ascii, iso-8859-1, utf-8,
+# utf-16be, utf-16le, utf-16 and utf-32 are accepted, and a character the charset
+# cannot represent is an error. The legacy Spark 3.x behavior is selected by
+# `datafusion.spark.legacy_java_charsets` and
+# `datafusion.spark.legacy_coding_error_action`, which are tested at the end.
+
 # UTF-8 encoding
 query ?
 SELECT encode('Spark SQL'::string, 'utf-8'::string);
@@ -38,19 +44,7 @@ SELECT encode('Spark SQL'::string, 'utf-16'::string);
 ----
 feff0053007000610072006b002000530051004c
 
-# UTF-32BE encoding
-query ?
-SELECT encode('A'::string, 'utf-32be'::string);
-----
-00000041
-
-# UTF-32LE encoding
-query ?
-SELECT encode('AB'::string, 'utf-32le'::string);
-----
-4100000042000000
-
-# UTF-32 (Spark 3.5 / 4.1: no BOM, identical to UTF-32BE)
+# UTF-32 (no BOM, big-endian)
 query ?
 SELECT encode('A'::string, 'utf-32'::string);
 ----
@@ -62,17 +56,16 @@ SELECT encode('hello'::string, 'Utf-8'::string);
 ----
 68656c6c6f
 
-# US-ASCII: unmappable characters are silently replaced with '?' (Spark 3.5 behavior)
 query ?
-SELECT encode('é'::string, 'us-ascii'::string);
+SELECT encode('hello'::string, 'US-ASCII'::string);
 ----
-3f
+68656c6c6f
 
-# ISO-8859-1: code points above U+00FF are replaced with '?' (Ā is U+0100)
+# Characters the charset can represent are not affected by the strict mode
 query ?
-SELECT encode('Ā'::string, 'iso-8859-1'::string);
+SELECT encode('é'::string, 'iso-8859-1'::string);
 ----
-3f
+e9
 
 # Multi-byte input (emoji 😀 = U+1F600) across charsets
 query ?
@@ -94,16 +87,6 @@ query ?
 SELECT encode('😀'::string, 'utf-16'::string);
 ----
 feffd83dde00
-
-query ?
-SELECT encode('😀'::string, 'utf-32be'::string);
-----
-0001f600
-
-query ?
-SELECT encode('😀'::string, 'utf-32le'::string);
-----
-00f60100
 
 query ?
 SELECT encode('😀'::string, 'utf-32'::string);
@@ -140,6 +123,10 @@ SELECT encode(X'FEFF00610073', 'utf-8'::string);
 ----
 efbfbdefbfbd00610073
 
+# U+FFFD is not representable in US-ASCII
+statement error \[MALFORMED_CHARACTER_CODING\] Invalid value found when performing `encode` with us-ascii
+SELECT encode(X'61FF', 'us-ascii'::string);
+
 # NULL input
 query ?
 SELECT encode(NULL::string, 'utf-8'::string);
@@ -174,10 +161,206 @@ SELECT encode(a, b) FROM VALUES (X'0a', 'US-ASCII'), (X'deadbeef', 'UTF-16be') A
 0a
 07adfffdfffd
 
-# Error: unsupported charset
-statement error Unsupported charset for encode
+# Error: charsets Spark 4 does not accept, including aliases and UTF-32BE/LE
+statement error \[INVALID_PARAMETER_VALUE\.CHARSET\] .*`charset` in `encode` is invalid: expects one of the iso-8859-1, us-ascii, utf-16, utf-16be, utf-16le, utf-32, utf-8, but got utf-32be\.
+SELECT encode('A'::string, 'utf-32be'::string);
+
+statement error \[INVALID_PARAMETER_VALUE\.CHARSET\] .*but got utf-32le\.
+SELECT encode('A'::string, 'utf-32le'::string);
+
+statement error \[INVALID_PARAMETER_VALUE\.CHARSET\] .*but got UTF8\.
+SELECT encode('A'::string, 'UTF8'::string);
+
+statement error \[INVALID_PARAMETER_VALUE\.CHARSET\] .*but got latin1\.
+SELECT encode('A'::string, 'latin1'::string);
+
+statement error \[INVALID_PARAMETER_VALUE\.CHARSET\] .*but got EBCDIC\.
 SELECT encode('hello'::string, 'EBCDIC'::string);
+
+# Error: an invalid charset in one row fails the query
+statement error \[INVALID_PARAMETER_VALUE\.CHARSET\] .*but got utf-32be\.
+SELECT encode(a, b) FROM VALUES ('x', 'utf-8'), ('y', 'utf-32be') AS t(a, b);
+
+# Error: a character the charset cannot represent (é is U+00E9, Ā is U+0100)
+statement error \[MALFORMED_CHARACTER_CODING\] Invalid value found when performing `encode` with us-ascii
+SELECT encode('é'::string, 'us-ascii'::string);
+
+statement error \[MALFORMED_CHARACTER_CODING\] Invalid value found when performing `encode` with iso-8859-1
+SELECT encode('Ā'::string, 'iso-8859-1'::string);
+
+statement error \[MALFORMED_CHARACTER_CODING\] Invalid value found when performing `encode` with iso-8859-1
+SELECT encode('😀'::string, 'iso-8859-1'::string);
+
+# Error: an unmappable character in one row fails the query
+statement error \[MALFORMED_CHARACTER_CODING\] Invalid value found when performing `encode` with US-ASCII
+SELECT encode(a, b) FROM VALUES ('x', 'utf-8'), ('é', 'US-ASCII') AS t(a, b);
 
 # Error: no arguments
 statement error encode function requires 2 arguments
 SELECT encode();
+
+# ---------------------------------------------------------------------------
+# datafusion.spark.legacy_java_charsets (spark.sql.legacy.javaCharsets)
+# ---------------------------------------------------------------------------
+
+statement ok
+set datafusion.spark.legacy_java_charsets = true;
+
+# UTF-32BE and UTF-32LE are accepted
+query ?
+SELECT encode('A'::string, 'utf-32be'::string);
+----
+00000041
+
+query ?
+SELECT encode('AB'::string, 'utf-32le'::string);
+----
+4100000042000000
+
+query ?
+SELECT encode('😀'::string, 'utf-32be'::string);
+----
+0001f600
+
+query ?
+SELECT encode('😀'::string, 'utf-32le'::string);
+----
+00f60100
+
+# Aliases are accepted
+query ?
+SELECT encode('naïve'::string, 'LATIN1'::string);
+----
+6e61ef7665
+
+query ?
+SELECT encode('naïve'::string, 'ISO_8859_1'::string);
+----
+6e61ef7665
+
+query ?
+SELECT encode('hello'::string, 'UTF8'::string);
+----
+68656c6c6f
+
+query ?
+SELECT encode('hello'::string, 'ASCII'::string);
+----
+68656c6c6f
+
+query ?
+SELECT encode('A'::string, 'UTF16'::string);
+----
+feff0041
+
+query ?
+SELECT encode('A'::string, 'UTF32'::string);
+----
+00000041
+
+# The names Spark 4 accepts still work
+query ?
+SELECT encode('A'::string, 'utf-8'::string);
+----
+41
+
+# Per-row charsets
+query ?
+SELECT encode(a, b) FROM VALUES ('A', 'utf-32be'), ('A', 'latin1') AS t(a, b);
+----
+00000041
+41
+
+# Names that Java rejects are still errors, as they are in Spark with the same option
+statement error Unsupported charset for encode: 'ISO88591'
+SELECT encode('A'::string, 'ISO88591'::string);
+
+statement error Unsupported charset for encode: 'UTF16BE'
+SELECT encode('A'::string, 'UTF16BE'::string);
+
+# A charset that is not supported at all is still an error, without the Spark 4 error class
+statement error Unsupported charset for encode: 'EBCDIC'
+SELECT encode('hello'::string, 'EBCDIC'::string);
+
+# The legacy charsets option does not change what happens to unmappable characters
+statement error \[MALFORMED_CHARACTER_CODING\] Invalid value found when performing `encode` with ascii
+SELECT encode('é'::string, 'ascii'::string);
+
+statement ok
+set datafusion.spark.legacy_java_charsets = false;
+
+# Back to Spark 4: aliases are rejected again
+statement error \[INVALID_PARAMETER_VALUE\.CHARSET\] .*but got latin1\.
+SELECT encode('A'::string, 'latin1'::string);
+
+# ---------------------------------------------------------------------------
+# datafusion.spark.legacy_coding_error_action (spark.sql.legacy.codingErrorAction)
+# ---------------------------------------------------------------------------
+
+statement ok
+set datafusion.spark.legacy_coding_error_action = true;
+
+# US-ASCII: unmappable characters are replaced with '?'
+query ?
+SELECT encode('é'::string, 'us-ascii'::string);
+----
+3f
+
+query ?
+SELECT encode('aéb'::string, 'us-ascii'::string);
+----
+613f62
+
+# ISO-8859-1: code points above U+00FF are replaced with '?' (Ā is U+0100)
+query ?
+SELECT encode('Ā'::string, 'iso-8859-1'::string);
+----
+3f
+
+# One '?' for each code point, including one above the Basic Multilingual Plane
+query ?
+SELECT encode('Ā😀'::string, 'iso-8859-1'::string);
+----
+3f3f
+
+# Mappable characters are unchanged
+query ?
+SELECT encode('é'::string, 'iso-8859-1'::string);
+----
+e9
+
+# Invalid UTF-8 in binary input becomes U+FFFD, then '?'
+query ?
+SELECT encode(X'61FF', 'us-ascii'::string);
+----
+613f
+
+# Per-row charsets
+query ?
+SELECT encode(a, b) FROM VALUES ('é', 'us-ascii'), ('é', 'utf-8') AS t(a, b);
+----
+3f
+c3a9
+
+# The coding error option does not change which charsets are accepted
+statement error \[INVALID_PARAMETER_VALUE\.CHARSET\] .*but got ascii\.
+SELECT encode('é'::string, 'ascii'::string);
+
+# Both legacy options together restore the Spark 3.5 behavior
+statement ok
+set datafusion.spark.legacy_java_charsets = true;
+
+query ?
+SELECT encode('é'::string, 'ascii'::string);
+----
+3f
+
+statement ok
+set datafusion.spark.legacy_java_charsets = false;
+
+statement ok
+set datafusion.spark.legacy_coding_error_action = false;
+
+# Back to Spark 4: unmappable characters are an error again
+statement error \[MALFORMED_CHARACTER_CODING\] Invalid value found when performing `encode` with us-ascii
+SELECT encode('é'::string, 'us-ascii'::string);
