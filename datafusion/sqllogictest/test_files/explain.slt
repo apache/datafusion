@@ -333,9 +333,9 @@ query TT
 EXPLAIN SELECT t.a FROM null_check_statistics t LEFT JOIN null_check_join j ON t.a = j.a WHERE j.a IS NULL;
 ----
 physical_plan
-01)FilterExec: a@1 IS NULL, projection=[a@0], statistics=[Rows=Inexact(4), Bytes=Absent, [(Col[0]: Null=Inexact(2))]]
-02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Inexact(5), Bytes=Absent, [(Col[0]: Null=Inexact(2)),(Col[1]: Null=Inexact(4))]]
-03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, a@0)], projection=[a@1, a@0], statistics=[Rows=Inexact(5), Bytes=Absent, [(Col[0]: Null=Inexact(2)),(Col[1]: Null=Inexact(4))]]
+01)FilterExec: a@1 IS NULL, projection=[a@0], statistics=[Rows=Inexact(4), Bytes=Inexact(602), [(Col[0]: Null=Inexact(2))]]
+02)--RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, statistics=[Rows=Inexact(5), Bytes=Inexact(752), [(Col[0]: Null=Inexact(2)),(Col[1]: Null=Inexact(4))]]
+03)----HashJoinExec: mode=CollectLeft, join_type=Right, on=[(a@0, a@0)], projection=[a@1, a@0], statistics=[Rows=Inexact(5), Bytes=Inexact(752), [(Col[0]: Null=Inexact(2)),(Col[1]: Null=Inexact(4))]]
 04)------DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(1), Bytes=Exact(112), [(Col[0]: Null=Exact(0))]]
 05)------DataSourceExec: partitions=1, partition_sizes=[1], statistics=[Rows=Exact(5), Bytes=Exact(192), [(Col[0]: Null=Exact(2))]]
 

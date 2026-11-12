@@ -221,6 +221,49 @@ pub struct Filter {
 }
 
 /// A connected set of joins as relations plus the predicates between them.
+///
+/// It is another way to write the same part of a query: where the plan is a tree
+/// that fixes which join runs first, the graph only says what is joined (a node per
+/// relation) and by what (an edge per equi-join predicate), like the `FROM` and
+/// `WHERE` of a `SELECT`. Anything that is not a join the graph can take apart
+/// becomes a relation and is not looked inside.
+///
+/// Taking four tables, where `b` is aggregated before it is joined:
+///
+/// ```text
+/// HashJoinExec: a.x = b.x
+///   HashJoinExec: a.y = c.y
+///     DataSourceExec: a
+///     DataSourceExec: c
+///   HashJoinExec: b.z = d.z
+///     AggregateExec: gby=[b.x, b.z]
+///       DataSourceExec: b
+///     DataSourceExec: d
+/// ```
+///
+/// the three joins are flattened into four relations and three edges, the
+/// aggregate and what is below it being one relation:
+///
+/// ```text
+/// relations: 0: a    1: c    2: AggregateExec(b)    3: d
+///
+///    (1) c ─── a.y = c.y ─── (0) a
+///                             │
+///                         a.x = b.x
+///                             │
+///                         (2) Agg(b) ─── b.z = d.z ─── (3) d
+///
+/// output: the columns of a, c, Agg(b), d, in the order the tree emitted them
+/// ```
+///
+/// Every tree over these relations that joins along the edges computes the same
+/// rows, and the search picks one of them. The subtree is then rebuilt from the
+/// graph, with a projection restoring `output` wherever the order changed.
+///
+/// A predicate is kept apart from the pair of relations it connects only when it
+/// is not an equality between two of them: [`Self::edges`] are the equalities,
+/// each between two relations, while each of [`Self::filters`] names the set of
+/// relations it reads and is evaluated by the first join that covers that set.
 #[derive(Debug)]
 pub struct JoinGraph {
     /// The leaves, addressed by index throughout.

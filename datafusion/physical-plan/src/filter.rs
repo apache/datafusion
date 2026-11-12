@@ -1346,6 +1346,9 @@ fn in_list_selectivity(
         return None;
     }
     let stats = column_statistics.get(column.index())?;
+    // Without a real distinct count, `max_distinct_count` falls back to the row
+    // count, which treats every value as unique; leave such a column to the default.
+    stats.distinct_count.get_value()?;
     let distinct = *max_distinct_count(num_rows, stats).get_value()?;
     if distinct == 0 {
         return None;
@@ -2264,14 +2267,17 @@ mod tests {
         use datafusion_physical_expr::expressions::in_list;
 
         let schema = Schema::new(vec![Field::new("id", DataType::Utf8, true)]);
-        let rows = |list: Vec<&str>, negated: bool| -> Result<Precision<usize>> {
+        let rows_with = |list: Vec<&str>,
+                         negated: bool,
+                         distinct_count: Precision<usize>|
+         -> Result<Precision<usize>> {
             let input = Arc::new(StatisticsExec::new(
                 Statistics {
                     num_rows: Precision::Exact(100),
                     total_byte_size: Precision::Exact(800),
                     column_statistics: vec![ColumnStatistics {
                         null_count: Precision::Exact(0),
-                        distinct_count: Precision::Exact(100),
+                        distinct_count,
                         ..Default::default()
                     }],
                 },
@@ -2289,12 +2295,19 @@ mod tests {
                 .compute(filter.as_ref(), &StatisticsArgs::new())?
                 .num_rows)
         };
+        let rows = |list, negated| rows_with(list, negated, Precision::Exact(100));
 
         assert_eq!(rows(vec!["a", "b", "c"], false)?, Precision::Inexact(3));
         // Repeats ask for the same row twice.
         assert_eq!(rows(vec!["a", "b", "a"], false)?, Precision::Inexact(2));
         // `NOT IN` selects nearly everything, so the default applies.
         assert_eq!(rows(vec!["a", "b", "c"], true)?, Precision::Inexact(20));
+        // Nothing says how often a value repeats when the distinct count is unknown,
+        // so the list is not taken to match one row per value.
+        assert_eq!(
+            rows_with(vec!["a", "b", "c"], false, Precision::Absent)?,
+            Precision::Inexact(20)
+        );
 
         Ok(())
     }

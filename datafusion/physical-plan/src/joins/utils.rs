@@ -61,11 +61,11 @@ use datafusion_common::hash_utils::create_hashes;
 use datafusion_common::stats::Precision;
 use datafusion_common::utils::memory::RecordBatchMemoryCounter;
 use datafusion_common::{
-    DataFusionError, JoinSide, JoinType, NullEquality, Result, SharedResult,
+    DataFusionError, JoinSide, JoinType, NullEquality, Result, ScalarValue, SharedResult,
     internal_datafusion_err, not_impl_err, plan_err,
 };
 use datafusion_expr::interval_arithmetic::Interval;
-use datafusion_physical_expr::expressions::Column;
+use datafusion_physical_expr::expressions::{CastExpr, Column};
 use datafusion_physical_expr::utils::collect_columns;
 use datafusion_physical_expr::{
     LexOrdering, PhysicalExpr, PhysicalExprRef, add_offset_to_expr,
@@ -524,17 +524,19 @@ fn estimate_join_cardinality(
         .map(|(left, right)| equijoin_column_indices(left, right))
         .collect::<Vec<_>>();
 
-    let (left_key_stats, right_key_stats) = on_column_indices
+    let (left_key_stats, right_key_stats) = on
         .iter()
-        .map(|indices| match indices {
-            Some((left_index, right_index)) => (
-                left_stats.column_statistics[*left_index].clone(),
-                right_stats.column_statistics[*right_index].clone(),
-            ),
-            None => (
-                ColumnStatistics::new_unknown(),
-                ColumnStatistics::new_unknown(),
-            ),
+        .map(|(left, right)| {
+            match (
+                equijoin_key_statistics(left, &left_stats),
+                equijoin_key_statistics(right, &right_stats),
+            ) {
+                (Some(left), Some(right)) => (left, right),
+                _ => (
+                    ColumnStatistics::new_unknown(),
+                    ColumnStatistics::new_unknown(),
+                ),
+            }
         })
         .unzip::<_, _, Vec<_>, Vec<_>>();
 
@@ -753,14 +755,50 @@ fn estimate_join_cardinality(
     }
 }
 
+/// The input columns an equi-join key pair reads. See [`equijoin_key_column`].
 fn equijoin_column_indices(
     left: &PhysicalExprRef,
     right: &PhysicalExprRef,
 ) -> Option<(usize, usize)> {
     Some((
-        left.downcast_ref::<Column>()?.index(),
-        right.downcast_ref::<Column>()?.index(),
+        equijoin_key_column(left)?.0.index(),
+        equijoin_key_column(right)?.0.index(),
     ))
+}
+
+/// The column a join key reads, and the type it is cast to when the key is a cast of
+/// that column, as coercing the two sides of a join to one type leaves it. A cast
+/// keeps the column's nulls and adds no distinct values, so the column's statistics
+/// still describe the key.
+fn equijoin_key_column(key: &PhysicalExprRef) -> Option<(&Column, Option<&DataType>)> {
+    match key.downcast_ref::<CastExpr>() {
+        Some(cast) => Some((cast.expr().downcast_ref()?, Some(cast.cast_type()))),
+        None => Some((key.downcast_ref()?, None)),
+    }
+}
+
+/// Statistics of a join key over its input, with the bounds of a cast key converted
+/// to the type they are compared in, or dropped when they do not convert.
+fn equijoin_key_statistics(
+    key: &PhysicalExprRef,
+    input: &Statistics,
+) -> Option<ColumnStatistics> {
+    let (column, cast_type) = equijoin_key_column(key)?;
+    let mut statistics = input.column_statistics[column.index()].clone();
+    if let Some(cast_type) = cast_type {
+        let convert = |bound: &Precision<ScalarValue>| match bound.get_value() {
+            Some(value) => match value.cast_to(cast_type) {
+                Ok(value) if bound.is_exact().unwrap_or(false) => Precision::Exact(value),
+                Ok(value) => Precision::Inexact(value),
+                Err(_) => Precision::Absent,
+            },
+            None => Precision::Absent,
+        };
+        statistics.min_value = convert(&statistics.min_value);
+        statistics.max_value = convert(&statistics.max_value);
+        statistics.sum_value = Precision::Absent;
+    }
+    Some(statistics)
 }
 
 /// Adjusts the preserved input's column statistics to describe the subset of
@@ -3704,6 +3742,50 @@ mod tests {
             ),
             Some(Inexact((400 * 400) / 200))
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_join_cardinality_looks_through_cast_keys() -> Result<()> {
+        // Int32 on the left, coerced to the Int64 of the right.
+        let left_stats = create_stats(
+            Some(1_000),
+            vec![ColumnStatistics {
+                distinct_count: Inexact(100),
+                min_value: Inexact(ScalarValue::Int32(Some(0))),
+                max_value: Inexact(ScalarValue::Int32(Some(99))),
+                ..ColumnStatistics::new_unknown()
+            }],
+            false,
+        );
+        let right_stats = create_stats(
+            Some(500),
+            vec![create_column_stats(
+                Inexact(0),
+                Inexact(99),
+                Inexact(50),
+                Absent,
+            )],
+            false,
+        );
+        let left_key: PhysicalExprRef = Arc::new(Column::new("a", 0));
+        let right_key: PhysicalExprRef = Arc::new(Column::new("b", 0));
+        let cast_key: PhysicalExprRef =
+            Arc::new(CastExpr::new(Arc::clone(&left_key), DataType::Int64, None));
+
+        let rows = |left_key: PhysicalExprRef| {
+            estimate_join_cardinality(
+                &JoinType::Inner,
+                left_stats.clone(),
+                right_stats.clone(),
+                &vec![(left_key, Arc::clone(&right_key))],
+                NullEquality::NullEqualsNothing,
+            )
+            .map(|stats| stats.num_rows)
+        };
+        // A cast key is estimated as the column it reads would be if it had the
+        // type it is cast to.
+        assert_eq!(rows(cast_key), Some(1_000 * 500 / 100));
         Ok(())
     }
 
