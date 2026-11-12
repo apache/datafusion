@@ -655,12 +655,17 @@ mod tests {
             },
         ];
         for wrap in wrappers {
-            let physical = wrap(item(vec![int64("x"), utf8("pad")]));
-            let target = wrap(item(vec![int64("x")]));
-            let (kept, clipped) = clip_for_cast(&physical, &target).unwrap();
+            let physical = struct_of(vec![
+                wrap(item(vec![int64("a"), utf8("b")])).into_field("skip"),
+                wrap(item(vec![utf8("pad"), int64("x")])).into_field("keep"),
+            ]);
+            let narrow = struct_of(vec![wrap(item(vec![int64("x")])).into_field("keep")]);
+            let (kept, clipped) = clip_for_cast(&physical, &narrow).unwrap();
+            assert_eq!(kept, vec![3], "{physical}");
+            assert_eq!(clipped, narrow, "{physical}");
             assert_eq!(
                 type_for_leaf_subset(&physical, &kept),
-                Some(clipped),
+                Some(narrow),
                 "{physical}"
             );
         }
