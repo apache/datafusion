@@ -77,7 +77,7 @@ impl BloomFilterStatistics {
     /// If all values are confirmed absent by the Bloom filter, returns `true`.
     /// If any value might be present (or checking is unsupported), returns `false`.
     #[allow(clippy::allow_attributes, clippy::mutable_key_type)] // ScalarValue has interior mutability but is intentionally used as hash key
-    pub fn is_known_not_present(
+    pub(crate) fn is_known_not_present(
         sbbf: &Sbbf,
         values: &HashSet<ScalarValue>,
         parquet_type: &Type,

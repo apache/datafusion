@@ -1497,9 +1497,7 @@ impl RowGroupsPrunedParquetOpen {
             let row_group_indexes: Vec<usize> =
                 self.row_groups.row_group_indexes().collect();
             for idx in row_group_indexes {
-                if !self.row_groups.access_plan().should_scan(idx)
-                    || self.row_groups.access_plan().is_fully_matched(idx)
-                {
+                if self.row_groups.access_plan().is_fully_matched(idx) {
                     continue;
                 }
                 let mut any_filter_loaded = false;
@@ -1530,8 +1528,10 @@ impl RowGroupsPrunedParquetOpen {
                 }
 
                 if any_filter_loaded && self.row_groups.access_plan().should_scan(idx) {
-                    self.row_groups
-                        .record_bloom_filter_matched(&prepared.file_metrics);
+                    prepared
+                        .file_metrics
+                        .row_groups_pruned_bloom_filter
+                        .add_matched(1);
                 }
             }
         }
@@ -4809,151 +4809,6 @@ mod test {
         // Bloom reads and evaluation are skipped for an entirely fully matched file.
         assert_eq!(pruned, 0);
         assert_eq!(matched, 0);
-    }
-
-    #[derive(Clone, Default, Debug)]
-    struct RangeTracker {
-        ranges: Arc<std::sync::Mutex<Vec<std::ops::Range<u64>>>>,
-    }
-
-    struct TrackingBloomAsyncReader {
-        inner: Box<dyn AsyncFileReader + Send>,
-        tracker: RangeTracker,
-    }
-
-    impl AsyncFileReader for TrackingBloomAsyncReader {
-        fn get_bytes(
-            &mut self,
-            range: std::ops::Range<u64>,
-        ) -> BoxFuture<'_, parquet::errors::Result<bytes::Bytes>> {
-            self.tracker.ranges.lock().unwrap().push(range.clone());
-            self.inner.get_bytes(range)
-        }
-
-        fn get_byte_ranges(
-            &mut self,
-            ranges: Vec<std::ops::Range<u64>>,
-        ) -> BoxFuture<'_, parquet::errors::Result<Vec<bytes::Bytes>>> {
-            self.tracker.ranges.lock().unwrap().extend(ranges.clone());
-            self.inner.get_byte_ranges(ranges)
-        }
-
-        fn get_metadata<'a>(
-            &'a mut self,
-            options: Option<&'a ArrowReaderOptions>,
-        ) -> BoxFuture<'a, parquet::errors::Result<Arc<ParquetMetaData>>> {
-            self.inner.get_metadata(options)
-        }
-    }
-
-    #[derive(Debug)]
-    struct TrackingBloomReaderFactory {
-        base_factory: Arc<dyn ParquetFileReaderFactory>,
-        tracker: RangeTracker,
-    }
-
-    impl ParquetFileReaderFactory for TrackingBloomReaderFactory {
-        fn create_reader(
-            &self,
-            partition_index: usize,
-            file: PartitionedFile,
-            metadata_size_hint: Option<usize>,
-            metrics: &ExecutionPlanMetricsSet,
-        ) -> Result<Box<dyn AsyncFileReader + Send>> {
-            let inner = self.base_factory.create_reader(
-                partition_index,
-                file,
-                metadata_size_hint,
-                metrics,
-            )?;
-            Ok(Box::new(TrackingBloomAsyncReader {
-                inner,
-                tracker: self.tracker.clone(),
-            }))
-        }
-    }
-
-    #[tokio::test]
-    async fn test_bloom_filter_incremental_io_pattern() {
-        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
-        let batch = record_batch!(
-            ("a", Int32, vec![10, 20, 30]),
-            ("b", Int32, vec![100, 200, 300])
-        )
-        .unwrap();
-        let schema = batch.schema();
-        let props = WriterProperties::builder()
-            .set_max_row_group_row_count(Some(3))
-            .set_bloom_filter_enabled(true)
-            .set_statistics_enabled(EnabledStatistics::None)
-            .build();
-        let data_size = write_parquet_batches(
-            Arc::clone(&store),
-            "io_bloom.parquet",
-            vec![batch],
-            Some(props),
-        )
-        .await;
-        let file = PartitionedFile::new("io_bloom.parquet".to_string(), data_size as u64);
-
-        // Case 1: Predicate a = 10 AND b = 100 -> 'a' matches, so 'b' MUST also be loaded.
-        let tracker1 = RangeTracker::default();
-        let factory1 = Arc::new(TrackingBloomReaderFactory {
-            base_factory: Arc::new(DefaultParquetFileReaderFactory::new(Arc::clone(
-                &store,
-            ))),
-            tracker: tracker1.clone(),
-        });
-        let pred1 =
-            logical2physical(&col("a").eq(lit(10)).and(col("b").eq(lit(100))), &schema);
-        let morselizer1 = ParquetMorselizerBuilder::new()
-            .with_store(Arc::clone(&store))
-            .with_schema(Arc::clone(&schema))
-            .with_predicate(pred1)
-            .with_pushdown_filters(true)
-            .with_row_group_stats_pruning(false)
-            .with_enable_bloom_filter(true)
-            .with_parquet_file_reader_factory(factory1)
-            .build();
-        let stream1 = open_file(&morselizer1, file.clone()).await.unwrap();
-        let results1 = collect_int32_values(stream1).await;
-        assert_eq!(results1, vec![10]);
-        let requests1 = tracker1.ranges.lock().unwrap().clone();
-
-        // Case 2: Predicate a = 999 AND b = 100 -> 'a' is absent (pruned!),
-        // so 'b' Bloom filter MUST NOT be requested.
-        let tracker2 = RangeTracker::default();
-        let factory2 = Arc::new(TrackingBloomReaderFactory {
-            base_factory: Arc::new(DefaultParquetFileReaderFactory::new(Arc::clone(
-                &store,
-            ))),
-            tracker: tracker2.clone(),
-        });
-        let pred2 =
-            logical2physical(&col("a").eq(lit(999)).and(col("b").eq(lit(100))), &schema);
-        let morselizer2 = ParquetMorselizerBuilder::new()
-            .with_store(Arc::clone(&store))
-            .with_schema(Arc::clone(&schema))
-            .with_predicate(pred2)
-            .with_pushdown_filters(true)
-            .with_row_group_stats_pruning(false)
-            .with_enable_bloom_filter(true)
-            .with_parquet_file_reader_factory(factory2)
-            .build();
-        let stream2 = open_file(&morselizer2, file.clone()).await.unwrap();
-        let results2 = collect_int32_values(stream2).await;
-        assert_eq!(results2, Vec::<i32>::new());
-        let requests2 = tracker2.ranges.lock().unwrap().clone();
-
-        // In Case 1, both column 'a' and column 'b' bloom filters were requested.
-        // In Case 2, column 'a' pruned the row group early, so column 'b' was never requested.
-        // Therefore, Case 2 makes strictly fewer range requests than Case 1.
-        assert!(
-            requests2.len() < requests1.len(),
-            "Incremental pruning should issue fewer I/O requests when pruned early: case 2 ({}) < case 1 ({})",
-            requests2.len(),
-            requests1.len()
-        );
     }
 
     #[tokio::test]

@@ -505,7 +505,7 @@ impl RowGroupAccessPlanFilter {
 
     /// Extracts column guarantees from a [`PruningPredicate`] that can be evaluated against
     /// Parquet Bloom filters.
-    pub fn prepare_bloom_column_guarantees(
+    pub(crate) fn prepare_bloom_column_guarantees(
         predicate: &PruningPredicate,
         parquet_schema: &SchemaDescriptor,
         file_schema: &Schema,
@@ -543,7 +543,7 @@ impl RowGroupAccessPlanFilter {
     /// filter, the row group is marked as skipped in the access plan, the
     /// `row_groups_pruned_bloom_filter` metric is incremented, and `true` is returned to
     /// indicate early rejection (allowing callers to skip loading remaining column filters).
-    pub fn prune_row_group_with_bloom_filter(
+    pub(crate) fn prune_row_group_with_bloom_filter(
         &mut self,
         idx: usize,
         guarantee: &BloomColumnGuarantee,
@@ -567,11 +567,6 @@ impl RowGroupAccessPlanFilter {
         } else {
             false
         }
-    }
-
-    /// Records that the row group was evaluated against Bloom filters but was not pruned.
-    pub fn record_bloom_filter_matched(&mut self, metrics: &ParquetFileMetrics) {
-        metrics.row_groups_pruned_bloom_filter.add_matched(1);
     }
 }
 
@@ -1846,13 +1841,13 @@ mod tests {
 /// Pre-extracting guarantees avoids repeatedly re-traversing the [`PruningPredicate`]
 /// expression tree for every row group and column during incremental Bloom filter loading.
 #[derive(Debug, Clone)]
-pub struct BloomColumnGuarantee {
+pub(crate) struct BloomColumnGuarantee {
     /// Parquet physical column index
-    pub column_idx: usize,
+    pub(crate) column_idx: usize,
     /// Physical Parquet type of the column
-    pub physical_type: Type,
+    pub(crate) physical_type: Type,
     /// Type length for FIXED_LEN_BYTE_ARRAY, or 0
-    pub type_length: i32,
+    pub(crate) type_length: i32,
     /// Literal sets for IN guarantees on this column
-    pub in_guarantees: Vec<HashSet<ScalarValue>>,
+    pub(crate) in_guarantees: Vec<HashSet<ScalarValue>>,
 }
