@@ -35,7 +35,7 @@ use datafusion::physical_plan::{
     ExecutionPlan, Partitioning, PhysicalExpr, RangePartitioning, SplitPoint, Statistics,
     displayable,
 };
-use datafusion::prelude::SessionContext;
+use datafusion::prelude::{ParquetReadOptions, SessionConfig, SessionContext};
 use datafusion::scalar::ScalarValue;
 use datafusion_common::config::TableParquetOptions;
 use datafusion_common::stats::Precision;
@@ -166,6 +166,51 @@ async fn roundtrip_parquet_exec_with_sort_pushdown() -> Result<()> {
         before.contains("sort_order_for_reorder=[id@0 DESC NULLS LAST]")
             && before.contains("reverse_row_groups=true"),
         "expected sort pushdown in plan:\n{before}"
+    );
+
+    let roundtripped = roundtrip_test_and_return(
+        plan,
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let after = displayable(roundtripped.as_ref()).indent(true).to_string();
+    pretty_assertions::assert_eq!(before, after);
+    Ok(())
+}
+
+/// An exact reverse scan carries `reverse_rows` alongside
+/// `reverse_row_groups`; losing it in the round trip would make the decoded
+/// scan emit rows in on-disk order under a plan with no `SortExec` left.
+#[tokio::test]
+async fn roundtrip_parquet_exec_with_exact_reverse_scan() -> Result<()> {
+    let mut config = SessionConfig::new();
+    config
+        .options_mut()
+        .execution
+        .parquet
+        .enable_exact_reverse_scan = true;
+    let ctx = SessionContext::new_with_config(config);
+    let testdata = datafusion::test_util::parquet_test_data();
+    ctx.register_parquet(
+        "alltypes_plain",
+        &format!("{testdata}/alltypes_plain.parquet"),
+        ParquetReadOptions {
+            file_sort_order: vec![vec![datafusion::prelude::col("id").sort(true, false)]],
+            ..Default::default()
+        },
+    )
+    .await?;
+    let plan = ctx
+        .sql("SELECT id FROM alltypes_plain ORDER BY id DESC NULLS FIRST LIMIT 5")
+        .await?
+        .create_physical_plan()
+        .await?;
+    let before = displayable(plan.as_ref()).indent(true).to_string();
+    assert!(
+        before.contains("reverse_row_groups=true, reverse_rows=true")
+            && !before.contains("SortExec"),
+        "expected an exact reverse scan in plan:\n{before}"
     );
 
     let roundtripped = roundtrip_test_and_return(
