@@ -286,8 +286,6 @@ fn coerce_exprs_for_schema(
                         alias.expr = Box::new(alias.expr.cast_to(new_type, src_schema)?);
                         Ok(Expr::Alias(alias))
                     }
-                    #[expect(deprecated)]
-                    Expr::Wildcard { .. } => Ok(expr),
                     _ => {
                         match expr {
                             // maintain the original name when casting a column, to avoid the

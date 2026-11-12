@@ -15,10 +15,10 @@ use datafusion_execution::registry::FunctionRegistry;
 use datafusion_expr::dml::{
     InsertOp, MergeIntoAction, MergeIntoClause, MergeIntoClauseKind, MergeIntoOp,
 };
+use datafusion_expr::expr::Unnest;
 use datafusion_expr::expr::{
     Alias, Lambda, LambdaVariable, NullTreatment, Placeholder, Sort,
 };
-use datafusion_expr::expr::{Unnest, WildcardOptions};
 use datafusion_expr::logical_plan::Subquery;
 use datafusion_expr::{
     Between, BinaryExpr, Case, Cast, Expr, GroupingSet,
@@ -473,17 +473,6 @@ pub fn parse_expr(
             parse_exprs(&in_list.list, ctx, codec)?,
             in_list.negated,
         ))),
-        ExprType::Wildcard(protobuf::Wildcard { qualifier }) => {
-            let qualifier = qualifier
-                .to_owned()
-                .map(TableReference::try_from)
-                .transpose()?;
-            #[expect(deprecated)]
-            Ok(Expr::Wildcard {
-                qualifier,
-                options: Box::new(WildcardOptions::default()),
-            })
-        }
         ExprType::ScalarUdfExpr(protobuf::ScalarUdfExprNode {
             fun_name,
             args,

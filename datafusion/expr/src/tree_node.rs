@@ -59,8 +59,6 @@ impl TreeNode for Expr {
             Expr::GroupingSet(GroupingSet::GroupingSets(lists_of_exprs)) => {
                 lists_of_exprs.apply_elements(f)
             }
-            // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[expect(deprecated)]
             Expr::Column(_)
             // Treat OuterReferenceColumn as a leaf expression
             | Expr::OuterReferenceColumn(_, _)
@@ -68,7 +66,6 @@ impl TreeNode for Expr {
             | Expr::Literal(_, _)
             | Expr::Exists { .. }
             | Expr::ScalarSubquery(_)
-            | Expr::Wildcard { .. }
             | Expr::Placeholder(_)
             | Expr::LambdaVariable(_) => Ok(TreeNodeRecursion::Continue),
             Expr::BinaryExpr(BinaryExpr { left, right, .. }) => {
@@ -113,10 +110,7 @@ impl TreeNode for Expr {
         f: F,
     ) -> Result<Transformed<Self>> {
         Ok(match self {
-            // TODO: remove the next line after `Expr::Wildcard` is removed
-            #[expect(deprecated)]
             Expr::Column(_)
-            | Expr::Wildcard { .. }
             | Expr::Placeholder(Placeholder { .. })
             | Expr::OuterReferenceColumn(_, _)
             | Expr::Exists { .. }

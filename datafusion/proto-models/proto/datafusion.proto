@@ -507,7 +507,7 @@ message LogicalExprNode {
     CastNode cast = 11;
     NegativeNode negative = 13;
     InListNode in_list = 14;
-    Wildcard wildcard = 15;
+    // was  Wildcard wildcard = 15;
     // was  ScalarFunctionNode scalar_function = 16;
     TryCastNode try_cast = 17;
 
@@ -549,10 +549,6 @@ message LogicalExprNode {
     Lambda lambda = 38;
     LambdaVariable lambda_variable = 39;
   }
-}
-
-message Wildcard {
-  TableReference qualifier = 1;
 }
 
 message SubqueryNode {

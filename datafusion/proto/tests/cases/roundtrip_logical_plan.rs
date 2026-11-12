@@ -74,7 +74,7 @@ use datafusion_expr::dml::{
 };
 use datafusion_expr::expr::{
     self, Between, BinaryExpr, Case, Cast, GroupingSet, InList, LambdaVariable, Like,
-    NullTreatment, ScalarFunction, Unnest, WildcardOptions,
+    NullTreatment, ScalarFunction, Unnest,
 };
 use datafusion_expr::logical_plan::{
     ExplainOption, Extension, UserDefinedLogicalNodeCore,
@@ -2839,30 +2839,6 @@ fn roundtrip_unnest_outer() {
         expr: Box::new(col("col")),
         outer: true,
     });
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
-fn roundtrip_wildcard() {
-    #[expect(deprecated)]
-    let test_expr = Expr::Wildcard {
-        qualifier: None,
-        options: Box::new(WildcardOptions::default()),
-    };
-
-    let ctx = SessionContext::new();
-    roundtrip_expr_test(test_expr, ctx);
-}
-
-#[test]
-fn roundtrip_qualified_wildcard() {
-    #[expect(deprecated)]
-    let test_expr = Expr::Wildcard {
-        qualifier: Some("foo".into()),
-        options: Box::new(WildcardOptions::default()),
-    };
 
     let ctx = SessionContext::new();
     roundtrip_expr_test(test_expr, ctx);
