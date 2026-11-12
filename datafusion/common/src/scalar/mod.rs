@@ -1903,24 +1903,32 @@ impl ScalarValue {
             )),
 
             // List types
-            DataType::List(field) => {
-                let list =
-                    ScalarValue::new_list(&[], field.data_type(), field.is_nullable());
-                Ok(ScalarValue::List(list))
+            DataType::List(field) => Ok(SingleRowListArrayBuilder::new(new_empty_array(
+                field.data_type(),
+            ))
+            .with_field(field)
+            .build_list_scalar()),
+            DataType::FixedSizeList(field, size) => {
+                let list_size = size.to_usize().ok_or_else(|| {
+                    _internal_datafusion_err!("FixedSizeList size cannot be negative")
+                })?;
+                let values = ScalarValue::new_default(field.data_type())?
+                    .to_array_of_size(list_size)?;
+                Ok(ScalarValue::FixedSizeList(Arc::new(
+                    FixedSizeListArray::try_new_with_length(
+                        Arc::clone(field),
+                        *size,
+                        values,
+                        None,
+                        1,
+                    )?,
+                )))
             }
-            DataType::FixedSizeList(field, _size) => {
-                let empty_arr = new_empty_array(field.data_type());
-                let values = Arc::new(
-                    SingleRowListArrayBuilder::new(empty_arr)
-                        .with_field(field)
-                        .build_fixed_size_list_array(0),
-                );
-                Ok(ScalarValue::FixedSizeList(values))
-            }
-            DataType::LargeList(field) => {
-                let list = ScalarValue::new_large_list(&[], field.data_type());
-                Ok(ScalarValue::LargeList(list))
-            }
+            DataType::LargeList(field) => Ok(ScalarValue::LargeList(Arc::new(
+                SingleRowListArrayBuilder::new(new_empty_array(field.data_type()))
+                    .with_field(field)
+                    .build_large_list_array(),
+            ))),
             DataType::ListView(field) => {
                 let empty_arr = new_empty_array(field.data_type());
                 let values = Arc::new(
@@ -1977,9 +1985,15 @@ impl ScalarValue {
             }
 
             // Map types
-            DataType::Map(field, _) => Ok(ScalarValue::Map(Arc::new(MapArray::from(
-                ArrayData::new_empty(field.data_type()),
-            )))),
+            DataType::Map(field, sorted) => {
+                Ok(ScalarValue::Map(Arc::new(MapArray::try_new(
+                    Arc::clone(field),
+                    arrow::buffer::OffsetBuffer::from_lengths([0]),
+                    new_empty_array(field.data_type()).as_struct().clone(),
+                    None,
+                    *sorted,
+                )?)))
+            }
 
             // Union types - return first variant with default value
             DataType::Union(fields, mode) => {
@@ -11153,6 +11167,60 @@ mod tests {
             }
             _ => panic!("Expected Union"),
         }
+    }
+
+    #[test]
+    fn test_new_default_lists_preserve_item_field() -> Result<()> {
+        for nullable in [false, true] {
+            let field = Arc::new(
+                Field::new("custom_item", DataType::Int32, nullable).with_metadata(
+                    HashMap::from([("tag".to_string(), "preserved".to_string())]),
+                ),
+            );
+            for data_type in [
+                DataType::List(Arc::clone(&field)),
+                DataType::LargeList(Arc::clone(&field)),
+            ] {
+                let value = ScalarValue::new_default(&data_type)?;
+                assert_eq!(value.data_type(), data_type);
+                let array = value.to_array()?;
+                assert_eq!(array.len(), 1);
+                assert!(array.is_valid(0));
+                array.to_data().validate_full()?;
+                let nested = DataType::Struct(Fields::from(vec![Field::new(
+                    "items", data_type, false,
+                )]));
+                let value = ScalarValue::new_default(&nested)?;
+                assert_eq!(value.data_type(), nested);
+                value.to_array()?.to_data().validate_full()?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_new_default_map_preserves_type_and_has_one_empty_value() -> Result<()> {
+        let entries = Arc::new(Field::new(
+            "entries",
+            DataType::Struct(Fields::from(vec![
+                Field::new("key", DataType::Int32, false),
+                Field::new("value", DataType::Int32, false),
+            ])),
+            false,
+        ));
+        for sorted in [false, true] {
+            let data_type = DataType::Map(Arc::clone(&entries), sorted);
+            let value = ScalarValue::new_default(&data_type)?;
+            assert_eq!(value.data_type(), data_type);
+            let ScalarValue::Map(map) = value else {
+                panic!("expected Map")
+            };
+            assert_eq!(map.len(), 1);
+            assert!(map.is_valid(0));
+            assert_eq!(map.value_length(0), 0);
+            map.to_data().validate_full()?;
+        }
+        Ok(())
     }
 
     #[test]

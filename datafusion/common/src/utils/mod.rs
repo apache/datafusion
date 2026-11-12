@@ -1583,7 +1583,7 @@ mod tests {
     use super::*;
     use crate::ScalarValue::Null;
     use arrow::{
-        array::{Float64Array, Int32Array, NullArray, StringArray},
+        array::{Float64Array, Int8Array, Int32Array, NullArray, StringArray},
         datatypes::{Int8Type, Int32Type, UInt8Type},
     };
     #[cfg(feature = "sql")]
@@ -1676,6 +1676,34 @@ mod tests {
         } else {
             assert!(max.is_err());
         }
+    }
+
+    #[test]
+    fn single_row_list_builder_handles_conservatively_nullable_values() {
+        let keys = Int8Array::from(vec![0, 0]);
+        let dictionary_values = Arc::new(StringArray::from(vec![Some("a"), None]));
+        let values = Arc::new(
+            DictionaryArray::<Int8Type>::try_new(keys, dictionary_values).unwrap(),
+        ) as ArrayRef;
+
+        assert_eq!(values.logical_null_count(), 0);
+        assert!(values.is_nullable());
+
+        let list = SingleRowListArrayBuilder::new(Arc::clone(&values))
+            .with_nullable(false)
+            .build_list_array();
+        list.to_data().validate_full().unwrap();
+
+        let value = ScalarValue::try_from_array(&list, 0).unwrap();
+        assert_eq!(value.data_type(), list.data_type().clone());
+
+        let list = SingleRowListArrayBuilder::new(values)
+            .with_nullable(false)
+            .build_large_list_array();
+        list.to_data().validate_full().unwrap();
+
+        let value = ScalarValue::try_from_array(&list, 0).unwrap();
+        assert_eq!(value.data_type(), list.data_type().clone());
     }
 
     #[test]
