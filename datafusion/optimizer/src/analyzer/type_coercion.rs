@@ -661,16 +661,16 @@ impl<'a> TypeCoercionRewriter<'a> {
 
     /// Coerce the value and pattern expressions of a string pattern matching
     /// expression (`LIKE`, `ILIKE` or `SIMILAR TO`) to a common type using
-    /// the provided coercion rules. `LIKE` can preserve a dictionary-encoded
-    /// value expression, while regex array kernels require both operands to
-    /// have the same physical string type.
+    /// the provided coercion rules. `LIKE` can preserve dictionary-encoded or
+    /// run-end encoded Utf8 values, while regex array kernels require both
+    /// operands to have the same physical string type.
     fn coerce_like_operands(
         &self,
         expr: Expr,
         pattern: Expr,
         coercion: fn(&DataType, &DataType) -> Option<DataType>,
         op_name: &str,
-        preserve_utf8_dictionary: bool,
+        preserve_utf8_encoding: bool,
     ) -> Result<(Box<Expr>, Box<Expr>)> {
         let left_type = expr.get_type(self.schema)?;
         let right_type = pattern.get_type(self.schema)?;
@@ -681,7 +681,18 @@ impl<'a> TypeCoercionRewriter<'a> {
         })?;
         let expr = match left_type {
             DataType::Dictionary(_, inner)
-                if preserve_utf8_dictionary && *inner == DataType::Utf8 =>
+                if preserve_utf8_encoding && *inner == DataType::Utf8 =>
+            {
+                Box::new(expr)
+            }
+            DataType::RunEndEncoded(_, values)
+                if preserve_utf8_encoding
+                    && coerced_type == DataType::Utf8
+                    && match values.data_type() {
+                        DataType::Utf8 => true,
+                        DataType::Dictionary(_, inner) => **inner == DataType::Utf8,
+                        _ => false,
+                    } =>
             {
                 Box::new(expr)
             }
