@@ -122,6 +122,9 @@ impl CountRollup {
 /// separately. Keeping floats in this list would let `single_distinct_prefer_native`
 /// skip the rewrite for a float column, producing a different answer than the
 /// non-rewritten path — a silent correctness regression.
+///
+/// `Duration` is also excluded: `avg` has no native DISTINCT accumulator for duration
+/// types, so skipping the rewrite would cause a runtime error.
 fn is_fixed_width_type(dt: &DataType) -> bool {
     matches!(
         dt,
@@ -139,7 +142,6 @@ fn is_fixed_width_type(dt: &DataType) -> bool {
             | DataType::Time32(_)
             | DataType::Time64(_)
             | DataType::Timestamp(_, _)
-            | DataType::Duration(_)
             | DataType::Interval(_)
             | DataType::Decimal128(_, _)
             | DataType::Decimal256(_, _)
@@ -531,6 +533,7 @@ impl OptimizerRule for SingleDistinctToGroupBy {
 mod tests {
     use super::*;
     use crate::assert_optimized_plan_eq_display_indent_snapshot;
+    use crate::test::udfs;
     use crate::test::*;
     use crate::{Optimizer, OptimizerContext};
     use arrow::datatypes::{DataType, Field, Schema};
@@ -1481,50 +1484,12 @@ mod tests {
         Ok(())
     }
 
-    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-    struct UnsupportedUdaf {
-        signature: Signature,
-    }
-
-    impl UnsupportedUdaf {
-        fn new() -> Self {
-            Self {
-                signature: Signature::exact(
-                    vec![DataType::UInt32],
-                    Volatility::Immutable,
-                ),
-            }
-        }
-    }
-
-    impl AggregateUDFImpl for UnsupportedUdaf {
-        fn name(&self) -> &str {
-            "unsupported"
-        }
-
-        fn signature(&self) -> &Signature {
-            &self.signature
-        }
-
-        fn return_type(&self, _arg_types: &[DataType]) -> Result<DataType> {
-            Ok(DataType::UInt32)
-        }
-
-        fn accumulator(
-            &self,
-            _acc_args: AccumulatorArgs,
-        ) -> Result<Box<dyn Accumulator>> {
-            unimplemented!("not needed for optimizer tests")
-        }
-
-        fn distinct_handling(&self) -> DistinctHandling {
-            DistinctHandling::Unsupported
-        }
-    }
-
     fn unsupported_distinct(expr: Expr) -> Expr {
         Expr::AggregateFunction(AggregateFunction::new_udf(
-            Arc::new(AggregateUDF::from(UnsupportedUdaf::new())),
+            Arc::new(AggregateUDF::from(udfs::DistinctHandlingTestUDAF::new(
+                "unsupported",
+                DistinctHandling::Unsupported,
+            ))),
             vec![expr],
             true,
             None,

@@ -1940,23 +1940,25 @@ config_namespace! {
         /// projections or aliases.
         pub enable_unions_to_filter: bool, default = false
 
-        /// Prefer native grouped DISTINCT aggregation when target_partitions is 1
-        /// and every DISTINCT argument is a fixed-width, non-float type (such as
-        /// integers, decimals, dates), instead of rewriting into a two-phase `GROUP BY`.
-        /// Defaults to false, preserving the two-phase GROUP BY rewrite.
+        /// When `true`, the `SingleDistinctToGroupBy` optimizer rule keeps a grouped
+        /// DISTINCT aggregate native, instead of rewriting it into a two-phase `GROUP BY`,
+        /// when every DISTINCT argument is a fixed-width, non-float type. This lowers peak
+        /// memory when no memory limit is set, because the intermediate
+        /// `(group, distinct value)` result is never built.
         ///
         /// The native plan avoids materializing intermediate `(group, distinct value)`
-        /// pairs, lowering peak memory when no memory limit is set. However,
-        /// native DISTINCT must fit each group's distinct values in memory: under
-        /// a memory limit, the rewrite can spill those pairs, but the native
+        /// pairs, which lowers peak memory when there are few groups with many
+        /// distinct values each. With many small groups it can use more memory and
+        /// run slower, because functions without a specialized DISTINCT
+        /// `GroupsAccumulator` (such as `sum`) keep one accumulator per group.
+        /// Native DISTINCT must also fit each group's distinct values in memory:
+        /// under a memory limit, the rewrite can spill those pairs, but the native
         /// accumulator cannot, so queries that succeed by spilling with the rewrite
         /// may fail with this option enabled.
         ///
-        /// Queries with multiple target partitions, non-distinct companion aggregates,
-        /// floating-point arguments, and aggregates with unsupported distinct handling
-        /// (such as `approx_median` or `stddev`) continue with the rewrite.
+        /// Queries without `GROUP BY`, and other argument types, keep the rewrite.
         ///
-        /// See <https://github.com/apache/datafusion/issues/25932> and <https://github.com/apache/datafusion/pull/25988>
+        /// See <https://github.com/apache/datafusion/issues/25932>
         pub single_distinct_prefer_native: bool, default = false
     }
 }

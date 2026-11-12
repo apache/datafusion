@@ -541,6 +541,13 @@ SELECT g, count(DISTINCT f), avg(DISTINCT f) FROM t_prefer_mem_float GROUP BY g;
 statement ok
 DROP TABLE t_prefer_mem_float;
 
+# `avg` has no DISTINCT accumulator for durations, so durations keep the rewrite.
+query I?
+SELECT g, avg(DISTINCT d) FROM (SELECT g, arrow_cast(x, 'Duration(Second)') AS d FROM t_prefer_mem) GROUP BY g ORDER BY g;
+----
+1 0 days 0 hours 0 mins 15 secs
+2 0 days 0 hours 0 mins 10 secs
+
 # Multiple target partitions retain the rewrite even with single_distinct_prefer_native = true
 statement ok
 set datafusion.execution.target_partitions = 4;
