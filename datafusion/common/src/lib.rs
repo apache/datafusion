@@ -71,10 +71,13 @@ pub use file_options::file_type::{
     DEFAULT_ARROW_EXTENSION, DEFAULT_AVRO_EXTENSION, DEFAULT_CSV_EXTENSION,
     DEFAULT_JSON_EXTENSION, DEFAULT_PARQUET_EXTENSION, GetExt,
 };
+#[expect(deprecated)]
+pub use functional_dependencies::aggregate_functional_dependencies;
 pub use functional_dependencies::{
     Constraint, Constraints, Dependency, FunctionalDependence, FunctionalDependencies,
-    aggregate_functional_dependencies, get_required_group_by_exprs_indices,
-    get_required_sort_exprs_indices, get_target_functional_dependencies,
+    aggregate_functional_dependencies_with_computed_inputs,
+    get_required_group_by_exprs_indices, get_required_sort_exprs_indices,
+    get_target_functional_dependencies,
 };
 use hashbrown::DefaultHashBuilder;
 pub use join_type::{JoinConstraint, JoinSide, JoinType};

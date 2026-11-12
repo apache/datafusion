@@ -3,6 +3,7 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 use super::literal::{is_struct_literal, name_struct_literals_like_siblings};
+use crate::logical_plan::consumer::SubstraitConsumerContext;
 use crate::logical_plan::consumer::{SubstraitConsumer, from_substrait_func_args};
 use datafusion::common::Result;
 use datafusion::common::tree_node::{TreeNode, TreeNodeRecursion};
@@ -20,6 +21,7 @@ pub async fn from_scalar_function(
     consumer: &impl SubstraitConsumer,
     f: &ScalarFunction,
     input_schema: &DFSchema,
+    context: &SubstraitConsumerContext,
 ) -> Result<Expr> {
     let Some(fn_signature) = consumer
         .get_extensions()
@@ -33,7 +35,8 @@ pub async fn from_scalar_function(
     };
 
     let fn_name = substrait_fun_name(fn_signature);
-    let mut args = from_substrait_func_args(consumer, &f.arguments, input_schema).await?;
+    let mut args =
+        from_substrait_func_args(consumer, &f.arguments, input_schema, context).await?;
 
     let higher_order_func = consumer
         .get_function_registry()
@@ -500,6 +503,7 @@ impl BuiltinExprBuilder {
 mod tests {
     use super::{arg_list_to_binary_op_tree, case_insensitive_option};
     use crate::extensions::Extensions;
+    use crate::logical_plan::consumer::SubstraitConsumerContext;
     use crate::logical_plan::consumer::tests::TEST_SESSION_STATE;
     use crate::logical_plan::consumer::{DefaultSubstraitConsumer, SubstraitConsumer};
     use datafusion::arrow::datatypes::{DataType, Field, Schema};
@@ -541,7 +545,13 @@ mod tests {
         let df_schema = DFSchema::try_from(schema).unwrap();
 
         // Consume the expression and ensure we don't crash
-        let _ = consumer.consume_scalar_function(&func, &df_schema).await?;
+        let _ = consumer
+            .consume_scalar_function(
+                &func,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
+            .await?;
         Ok(())
     }
 
@@ -612,7 +622,13 @@ mod tests {
         let df_schema = DFSchema::try_from(schema).unwrap();
 
         // Consume the expression and ensure we don't get an error
-        let _ = consumer.consume_scalar_function(&func, &df_schema).await?;
+        let _ = consumer
+            .consume_scalar_function(
+                &func,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
+            .await?;
         Ok(())
     }
 
@@ -676,7 +692,11 @@ mod tests {
         };
 
         let result = consumer
-            .consume_scalar_function(&func_like, &df_schema)
+            .consume_scalar_function(
+                &func_like,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
             .await?;
 
         if let Expr::Like(like) = result {
@@ -695,7 +715,11 @@ mod tests {
         };
 
         let result = consumer
-            .consume_scalar_function(&func_not_like, &df_schema)
+            .consume_scalar_function(
+                &func_not_like,
+                &df_schema,
+                &SubstraitConsumerContext::default(),
+            )
             .await?;
 
         if let Expr::Like(like) = result {

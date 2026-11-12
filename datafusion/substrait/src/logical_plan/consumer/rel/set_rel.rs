@@ -2,10 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use crate::logical_plan::consumer::SubstraitConsumer;
 use crate::logical_plan::consumer::expr::{
     contains_struct, is_literal, name_struct_literal_like,
 };
+use crate::logical_plan::consumer::{SubstraitConsumer, SubstraitConsumerContext};
 use datafusion::arrow::datatypes::{DataType, Field};
 use datafusion::common::{JoinType, NullEquality, not_impl_err, substrait_err};
 use datafusion::logical_expr::{
@@ -19,13 +19,14 @@ use substrait::proto::set_rel::SetOp;
 pub async fn from_set_rel(
     consumer: &impl SubstraitConsumer,
     set: &SetRel,
+    context: &SubstraitConsumerContext,
 ) -> datafusion::common::Result<LogicalPlan> {
     if set.inputs.len() < 2 {
         return substrait_err!("Set operation requires at least two inputs");
     }
     let mut inputs = Vec::with_capacity(set.inputs.len());
     for input in &set.inputs {
-        inputs.push(consumer.consume_rel(input).await?);
+        inputs.push(consumer.consume_rel(input, context).await?);
     }
     let mut inputs = name_struct_literal_columns(inputs)?;
 
