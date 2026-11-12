@@ -446,33 +446,6 @@ impl Deref for FunctionalDependencies {
 /// input dependency; a computed expression such as `CAST(pk AS INT)` cannot,
 /// even though its output name may equal the column's name.
 ///
-/// Every computed GROUP BY expression is treated as not determined by any
-/// determinant.
-#[deprecated(
-    since = "57.0.0",
-    note = "Use `aggregate_functional_dependencies_with_computed_inputs` instead"
-)]
-pub fn aggregate_functional_dependencies(
-    aggr_input_schema: &DFSchema,
-    group_by_input_indices: &[Option<usize>],
-    aggr_schema: &DFSchema,
-) -> FunctionalDependencies {
-    aggregate_functional_dependencies_with_computed_inputs(
-        aggr_input_schema,
-        group_by_input_indices,
-        &vec![None; group_by_input_indices.len()],
-        aggr_schema,
-    )
-}
-
-/// Calculates functional dependencies for aggregate output, when there is a GROUP BY expression.
-///
-/// `group_by_input_indices[i]` is the index of the input field that GROUP BY
-/// expression `i` passes through unchanged (a column reference), or `None` if
-/// the expression computes a new value. Only a column reference can carry an
-/// input dependency; a computed expression such as `CAST(pk AS INT)` cannot,
-/// even though its output name may equal the column's name.
-///
 /// `computed_input_indices[i]` lists the input fields that a deterministic
 /// computed GROUP BY expression `i` reads, or is `None` for a column
 /// reference or a volatile expression. A computed expression whose fields

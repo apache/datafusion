@@ -5930,8 +5930,8 @@ mod tests {
     -> Result<()> {
         // Grouping guarantees uniqueness of the GROUP BY key regardless of
         // whether the input table carries any PRIMARY KEY / UNIQUE
-        // constraints, so `aggregate_functional_dependencies` must still
-        // report a `Single` dependency spanning the whole aggregate output.
+        // constraints, so the aggregate dependency calculation must still report
+        // a `Single` dependency spanning the whole aggregate output.
         // This pins that behavior so the early return added for the (far
         // more common) case of an input with no functional dependencies at
         // all cannot be mistakenly widened to also skip this GROUP BY-only
