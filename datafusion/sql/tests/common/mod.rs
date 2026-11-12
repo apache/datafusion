@@ -48,6 +48,7 @@ pub(crate) struct MockSessionState {
     expr_planners: Vec<Arc<dyn ExprPlanner>>,
     type_planner: Option<Arc<dyn TypePlanner>>,
     window_functions: HashMap<String, Arc<WindowUDF>>,
+    table_functions: HashMap<String, Arc<dyn TableSource>>,
     pub config_options: ConfigOptions,
 }
 
@@ -80,6 +81,16 @@ impl MockSessionState {
         self
     }
 
+    pub fn with_table_function(mut self, name: impl Into<String>) -> Self {
+        let source = Arc::new(EmptyTable::new(Arc::new(Schema::new(vec![Field::new(
+            "value",
+            DataType::Int64,
+            true,
+        )]))));
+        self.table_functions.insert(name.into(), source);
+        self
+    }
+
     pub fn with_window_function(mut self, window_function: Arc<WindowUDF>) -> Self {
         self.window_functions
             .insert(window_function.name().to_string(), window_function);
@@ -103,6 +114,22 @@ pub(crate) struct MockContextProvider {
 }
 
 impl ContextProvider for MockContextProvider {
+    fn get_table_function_source(
+        &self,
+        name: &str,
+        _args: Vec<Expr>,
+    ) -> Result<Arc<dyn TableSource>> {
+        self.state
+            .table_functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| {
+                datafusion_common::DataFusionError::Plan(format!(
+                    "No table function named: {name}"
+                ))
+            })
+    }
+
     fn get_table_source(&self, name: TableReference) -> Result<Arc<dyn TableSource>> {
         let schema = match name.table() {
             "FOO" => Ok(Schema::new(vec![Field::new("X", DataType::Int64, false)])),
