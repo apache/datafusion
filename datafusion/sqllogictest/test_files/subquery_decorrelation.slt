@@ -108,10 +108,12 @@ query error Physical plan does not support logical expression ScalarSubquery
 SELECT t1.t1_int, (SELECT SUM(t2.t2_int) FROM t2 GROUP BY GROUPING SETS((t1.t1_int))) AS c FROM t1;
 
 # invalid_aggregate_over_outer_column_without_from
+# Fails, as expected, but should fail while planning. Expected (DuckDB): an error, column "t1_int" must appear in the GROUP BY clause
 query error Physical plan does not support logical expression ScalarSubquery
 SELECT t1.t1_int, (SELECT SUM(t1.t1_int)) AS c FROM t1;
 
 # invalid_aggregate_over_outer_column_in_having
+# Fails, as expected, but should fail while planning. Expected (DuckDB): an error, WHERE clause cannot contain aggregates
 query error Physical plan does not support logical expression Exists
 SELECT t1.t1_id FROM t1 WHERE EXISTS (SELECT t2.t2_id FROM t2 GROUP BY t2.t2_id HAVING t2.t2_id > MIN(t1.t1_int));
 
@@ -177,6 +179,7 @@ statement ok
 INSERT INTO s VALUES ('a'),('b');
 
 # uncorrelated_scalar_subquery_returning_two_rows
+# Fails, as expected. Expected (DuckDB): an error, more than one row returned by a subquery
 query error Scalar subquery returned more than one row
 SELECT s.a, (SELECT x FROM (VALUES (1), (2)) t(x)) sub FROM s ORDER BY 1,2;
 
@@ -190,6 +193,7 @@ statement ok
 INSERT INTO d VALUES (1,10),(1,11);
 
 # correlated_scalar_subquery_returning_two_rows_per_outer_row
+# Fails, as expected. Expected (DuckDB): an error, more than one row returned by a subquery
 query error A GROUP BY clause in a scalar correlated subquery cannot contain non-correlated columns
 SELECT k, (SELECT max(v) FROM d d2 WHERE d2.k = d.k GROUP BY d2.k, d2.v) FROM d ORDER BY 1,2;
 
