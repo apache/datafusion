@@ -1103,4 +1103,40 @@ mod tests {
         let taken_array = builder.take_n(2);
         assert_eq!(&taken_array, &input_array.slice(2, 2));
     }
+
+    #[test]
+    fn test_byte_view_take_n_spans_completed_and_partial_in_progress() {
+        let mut builder =
+            ByteViewGroupValueBuilder::<StringViewType>::new().with_max_block_size(30);
+        let input_array: ArrayRef = Arc::new(StringViewArray::from(vec![
+            "aaaaaaaaaaaaaa",
+            "bbbbbbbbbbbbbb",
+            "cccccccccccccc",
+            "dddddddddddddd",
+            "eeeeeeeeeeeeee",
+            "ffffffffffffff",
+            "gggggggggggggg",
+        ]));
+
+        for row in 0..6 {
+            builder.append_val(&input_array, row).unwrap();
+        }
+        assert_eq!(builder.completed.len(), 2);
+        assert_eq!(builder.in_progress.len(), 28);
+
+        // Takes both completed buffers and the first half of `in_progress`
+        let taken_array = builder.take_n(5);
+        assert_eq!(&taken_array, &input_array.slice(0, 5));
+        let taken_buffers = taken_array.as_string_view().data_buffers();
+        assert_eq!(taken_buffers.len(), 3);
+        assert_eq!(taken_buffers[2].len(), 14);
+
+        assert!(builder.completed.is_empty());
+        assert_eq!(builder.in_progress.len(), 14);
+        assert!(builder.equal_to(0, &input_array, 5));
+
+        builder.append_val(&input_array, 6).unwrap();
+        let taken_array = builder.take_n(2);
+        assert_eq!(&taken_array, &input_array.slice(5, 2));
+    }
 }
