@@ -5827,6 +5827,78 @@ fn plan_create_index() {
 }
 
 #[test]
+fn lateral_table_function_lookup_preserves_legacy_name_normalization() {
+    let dialect = &GenericDialect {};
+
+    // Explicit object normalization must not change table-function registry keys.
+    for policy in [
+        IdentNormalization::Lower,
+        IdentNormalization::Upper,
+        IdentNormalization::Preserve,
+    ] {
+        let options = ParserOptions::default().with_ident_normalization(policy);
+        let result = logical_plan_from_state(
+            "SELECT * FROM LATERAL foo()",
+            dialect,
+            options,
+            MockSessionState::default().with_table_function("foo"),
+        );
+        assert!(result.is_ok(), "policy {policy:?}: {result:?}");
+    }
+
+    let quoted =
+        ParserOptions::default().with_ident_normalization(IdentNormalization::Upper);
+    assert!(
+        logical_plan_from_state(
+            "SELECT * FROM LATERAL \"foo\"()",
+            dialect,
+            quoted,
+            MockSessionState::default().with_table_function("foo"),
+        )
+        .is_ok()
+    );
+    let err = logical_plan_from_state(
+        "SELECT * FROM LATERAL \"foo\"()",
+        dialect,
+        quoted,
+        MockSessionState::default().with_table_function("FOO"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert_contains!(err, "No table function named: foo");
+
+    for policy in [None, Some(IdentNormalization::Upper)] {
+        for (enabled, expected_name) in [(true, "foo"), (false, "Foo")] {
+            let mut options =
+                ParserOptions::default().with_enable_ident_normalization(enabled);
+            options.ident_normalization = policy;
+            let result = logical_plan_from_state(
+                "SELECT * FROM LATERAL Foo()",
+                dialect,
+                options,
+                MockSessionState::default().with_table_function(expected_name),
+            );
+            assert!(
+                result.is_ok(),
+                "policy {policy:?}, legacy flag {enabled}: {result:?}"
+            );
+        }
+    }
+
+    let options =
+        ParserOptions::default().with_ident_normalization(IdentNormalization::Upper);
+    assert!(
+        logical_plan_from_state(
+            "SELECT * FROM foo()",
+            dialect,
+            options,
+            MockSessionState::default().with_table_function("foo"),
+        )
+        .is_ok()
+    );
+}
+
+#[test]
 fn test_table_function_with_unsupported_arg_propagates_error() {
     let sql = "SELECT * FROM my_func(('a', 'b', 'c'))";
     let dialect = &GenericDialect {};
