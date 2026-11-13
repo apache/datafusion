@@ -611,7 +611,10 @@ mod tests {
 
         let tmp_dir = TempDir::new()?;
         let path = tmp_dir.path().join("coerce.json");
-        fs::write(&path, "{\"a\": false}\n{\"a\": 3.5}\n{\"a\": \"text\"}\n")?;
+        fs::write(
+            &path,
+            "{\"a\": false}\n{\"a\": 3.5}\n{\"a\": \"text\"}\n{\"a\": null}\n{}\n",
+        )?;
         let file = PartitionedFile::from(local_unpartitioned_file(&path));
         let schema = Arc::new(Schema::new(vec![Field::new("a", DataType::Utf8, true)]));
 
@@ -630,15 +633,21 @@ mod tests {
             )
         };
 
-        assert_snapshot!(batches_to_string(&read(true).await?), @r"
+        let batches = read(true).await?;
+        assert_snapshot!(batches_to_string(&batches), @r"
         +-------+
         | a     |
         +-------+
         | false |
         | 3.5   |
         | text  |
+        |       |
+        |       |
         +-------+
         ");
+        // The snapshot shows NULL as an empty cell, the same as an empty string.
+        let nulls: usize = batches.iter().map(|b| b.column(0).null_count()).sum();
+        assert_eq!(nulls, 2);
         assert_contains!(
             read(false).await.unwrap_err().to_string(),
             "expected string got false"
