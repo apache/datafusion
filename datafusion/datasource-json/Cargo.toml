@@ -50,6 +50,8 @@ tokio-stream = { workspace = true, features = ["sync"] }
 workspace = true
 
 [dev-dependencies]
+datafusion-datasource = { workspace = true, features = ["compression"] }
+rstest = { workspace = true }
 serde_json = { workspace = true }
 tempfile = { workspace = true }
 

@@ -655,6 +655,7 @@ mod tests {
     use object_store::memory::InMemory;
     use object_store::path::Path;
     use object_store::{ObjectStoreExt, PutPayload};
+    use rstest::rstest;
     use std::fmt::Write as _;
 
     /// Helper to create a test schema
@@ -869,11 +870,12 @@ mod tests {
         file: PartitionedFile,
         newline_delimited: bool,
         coerce: bool,
+        compression: FileCompressionType,
     ) -> Result<Vec<String>> {
         let opener = JsonOpener::new(
             1024,
             test_schema(),
-            FileCompressionType::UNCOMPRESSED,
+            compression,
             Arc::clone(store),
             newline_delimited,
         )
@@ -886,45 +888,90 @@ mod tests {
             .collect())
     }
 
+    /// Two rows with a boolean and a number in the string column `name`.
+    fn primitive_names_json(newline_delimited: bool) -> &'static str {
+        if newline_delimited {
+            "{\"id\": 1, \"name\": false}\n{\"id\": 2, \"name\": 3.5}\n"
+        } else {
+            r#"[{"id": 1, "name": false}, {"id": 2, "name": 3.5}]"#
+        }
+    }
+
     /// With `coerce_primitive`, a JSON number or boolean in a string column is kept as its
     /// text; without it, reading fails. Covers each read path: a byte range, a local file,
     /// and a stream, for both newline-delimited JSON and JSON arrays.
+    #[rstest]
+    #[case::ndjson(true, false)]
+    #[case::array(false, false)]
+    // Only newline-delimited JSON can be read by byte range.
+    #[case::range(true, true)]
     #[tokio::test]
-    async fn test_coerce_primitive() -> Result<()> {
-        let ndjson = "{\"id\": 1, \"name\": false}\n{\"id\": 2, \"name\": 3.5}\n";
-        let array = r#"[{"id": 1, "name": false}, {"id": 2, "name": 3.5}]"#;
-        let ndjson_file = PartitionedFile::new("a.ndjson", ndjson.len() as u64);
-        let array_file = PartitionedFile::new("a.json", array.len() as u64);
-        // Only newline-delimited JSON can be read by byte range.
-        let range_file = ndjson_file.clone().with_range(0, ndjson.len() as i64);
-
-        let dir = tempfile::tempdir()?;
+    async fn test_coerce_primitive(
+        #[case] newline_delimited: bool,
+        #[case] byte_range: bool,
         // `InMemory` returns a stream payload and `LocalFileSystem` a file payload.
-        let stores: [Arc<dyn ObjectStore>; 2] = [
-            Arc::new(InMemory::new()),
+        #[values(false, true)] local_file: bool,
+    ) -> Result<()> {
+        let data = primitive_names_json(newline_delimited);
+        let dir = tempfile::tempdir()?;
+        let store: Arc<dyn ObjectStore> = if local_file {
             Arc::new(object_store::local::LocalFileSystem::new_with_prefix(
                 dir.path(),
-            )?),
-        ];
-        for store in &stores {
-            for (file, data) in [(&ndjson_file, ndjson), (&array_file, array)] {
-                let payload = PutPayload::from_static(data.as_bytes());
-                store.put(&file.object_meta.location, payload).await?;
-            }
-            for (case, file, newline_delimited) in [
-                ("ndjson", &ndjson_file, true),
-                ("array", &array_file, false),
-                ("range", &range_file, true),
-            ] {
-                let read =
-                    |coerce| read_names(store, file.clone(), newline_delimited, coerce);
-                assert_eq!(read(true).await?, ["false", "3.5"], "{case} via {store}");
-                assert_contains!(
-                    read(false).await.unwrap_err().to_string(),
-                    "expected string got false"
-                );
-            }
+            )?)
+        } else {
+            Arc::new(InMemory::new())
+        };
+        let mut file = PartitionedFile::new("a.json", data.len() as u64);
+        let payload = PutPayload::from_static(data.as_bytes());
+        store.put(&file.object_meta.location, payload).await?;
+        if byte_range {
+            file = file.with_range(0, data.len() as i64);
         }
+
+        let read = |coerce| {
+            read_names(
+                &store,
+                file.clone(),
+                newline_delimited,
+                coerce,
+                FileCompressionType::UNCOMPRESSED,
+            )
+        };
+        assert_eq!(read(true).await?, ["false", "3.5"]);
+        assert_contains!(
+            read(false).await.unwrap_err().to_string(),
+            "expected string got false"
+        );
+        Ok(())
+    }
+
+    /// One-byte chunks split every JSON token, such as `false` and `3.5`, across stream
+    /// chunks. For gzip, they split the compressed bytes: the decoded chunks can be larger.
+    #[rstest]
+    #[tokio::test]
+    async fn test_coerce_primitive_chunked_stream(
+        #[values(FileCompressionType::UNCOMPRESSED, FileCompressionType::GZIP)]
+        compression: FileCompressionType,
+        #[values(true, false)] newline_delimited: bool,
+    ) -> Result<()> {
+        let data = primitive_names_json(newline_delimited);
+        let plain = futures::stream::iter([Ok(Bytes::from(data))]).boxed();
+        let chunks: Vec<Bytes> = compression
+            .convert_to_compress_stream(plain)?
+            .try_collect()
+            .await?;
+        let bytes = chunks.concat();
+        let (store, path) = make_chunked_store(&bytes, 1).await;
+        let file = PartitionedFile::new(path.to_string(), bytes.len() as u64);
+
+        let read = |coerce| {
+            read_names(&store, file.clone(), newline_delimited, coerce, compression)
+        };
+        assert_eq!(read(true).await?, ["false", "3.5"]);
+        assert_contains!(
+            read(false).await.unwrap_err().to_string(),
+            "expected string got false"
+        );
         Ok(())
     }
 
