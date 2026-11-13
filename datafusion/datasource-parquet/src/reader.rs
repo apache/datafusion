@@ -10,6 +10,7 @@ use crate::metadata::DFParquetMetadata;
 use arrow::datatypes::SchemaRef;
 use bytes::Bytes;
 use datafusion_common::HashMap;
+use datafusion_common::not_impl_err;
 use datafusion_datasource::PartitionedFile;
 use datafusion_execution::cache::cache_manager::FileMetadata;
 use datafusion_execution::cache::cache_manager::FileMetadataCache;
@@ -48,15 +49,144 @@ pub trait ParquetFileSchemaProvider: Debug + Send + Sync + 'static {
     ) -> datafusion_common::Result<SchemaRef>;
 }
 
+/// Arguments to [`ParquetFileReaderFactory::create_reader_with_args`].
+///
+/// Create with [`Self::new`] and set optional arguments with the `with_*`
+/// methods. New arguments are added here rather than as new parameters of
+/// [`ParquetFileReaderFactory`] methods, so adding one does not change the
+/// trait.
+#[derive(Debug, Clone)]
+pub struct CreateReaderArgs {
+    partition_index: usize,
+    partitioned_file: PartitionedFile,
+    metrics: ExecutionPlanMetricsSet,
+    metadata_size_hint: Option<usize>,
+    file_metrics: Option<ParquetFileMetrics>,
+}
+
+impl CreateReaderArgs {
+    /// Create arguments for reading `partitioned_file` in partition
+    /// `partition_index`, reporting metrics into `metrics`.
+    pub fn new(
+        partition_index: usize,
+        partitioned_file: PartitionedFile,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> Self {
+        Self {
+            partition_index,
+            partitioned_file,
+            metrics: metrics.clone(),
+            metadata_size_hint: None,
+            file_metrics: None,
+        }
+    }
+
+    /// If specified, the first IO reads this many bytes from the end of the
+    /// file, to fetch the footer in a single request.
+    pub fn with_metadata_size_hint(mut self, metadata_size_hint: Option<usize>) -> Self {
+        self.metadata_size_hint = metadata_size_hint;
+        self
+    }
+
+    /// The [`ParquetFileMetrics`] the caller has already registered for this
+    /// file. The reader should record into this set rather than registering
+    /// another one in [`Self::metrics`].
+    pub fn with_file_metrics(mut self, file_metrics: ParquetFileMetrics) -> Self {
+        self.file_metrics = Some(file_metrics);
+        self
+    }
+
+    /// Index of the partition the file is read in (for reporting metrics).
+    pub fn partition_index(&self) -> usize {
+        self.partition_index
+    }
+
+    /// The file to be read.
+    pub fn partitioned_file(&self) -> &PartitionedFile {
+        &self.partitioned_file
+    }
+
+    /// Consume the arguments, returning the file to be read.
+    pub fn into_partitioned_file(self) -> PartitionedFile {
+        self.partitioned_file
+    }
+
+    /// The execution metrics of the scan.
+    pub fn metrics(&self) -> &ExecutionPlanMetricsSet {
+        &self.metrics
+    }
+
+    /// See [`Self::with_metadata_size_hint`].
+    pub fn metadata_size_hint(&self) -> Option<usize> {
+        self.metadata_size_hint
+    }
+
+    /// See [`Self::with_file_metrics`].
+    pub fn file_metrics(&self) -> Option<&ParquetFileMetrics> {
+        self.file_metrics.as_ref()
+    }
+
+    /// The file metrics the reader should record into: the set from
+    /// [`Self::with_file_metrics`] if the caller provided one, otherwise a new
+    /// set registered in [`Self::metrics`].
+    pub fn file_metrics_or_register(&self) -> ParquetFileMetrics {
+        self.file_metrics.clone().unwrap_or_else(|| {
+            ParquetFileMetrics::new(
+                self.partition_index,
+                self.partitioned_file.object_meta.location.as_ref(),
+                &self.metrics,
+            )
+        })
+    }
+}
+
 /// Interface for reading Apache Parquet files.
 ///
 /// The combined implementations of [`ParquetFileReaderFactory`] and
 /// [`AsyncFileReader`] can be used to provide custom data access operations
 /// such as pre-cached metadata, I/O coalescing, etc.
 ///
-/// See [`DefaultParquetFileReaderFactory`] for a simple implementation.
+/// Implement [`Self::create_reader_with_args`]. See
+/// [`DefaultParquetFileReaderFactory`] for a simple implementation.
 pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
     /// Provides an `AsyncFileReader` for reading data from a parquet file specified
+    ///
+    /// # Arguments
+    /// * partition_index - Index of the partition (for reporting metrics)
+    /// * file - The file to be read
+    /// * metadata_size_hint - If specified, the first IO reads this many bytes from the footer
+    /// * metrics - Execution metrics
+    ///
+    /// The default implementation returns a not-implemented error: factories
+    /// implement [`Self::create_reader_with_args`] instead.
+    #[deprecated(
+        since = "56.0.0",
+        note = "Implement and call `create_reader_with_args` instead"
+    )]
+    fn create_reader(
+        &self,
+        partition_index: usize,
+        partitioned_file: PartitionedFile,
+        metadata_size_hint: Option<usize>,
+        metrics: &ExecutionPlanMetricsSet,
+    ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
+        let _ = (
+            partition_index,
+            partitioned_file,
+            metadata_size_hint,
+            metrics,
+        );
+        not_impl_err!(
+            "ParquetFileReaderFactory::create_reader is deprecated; implement create_reader_with_args"
+        )
+    }
+
+    /// Provides an `AsyncFileReader` for reading data from the parquet file
+    /// described by `args`.
+    ///
+    /// If [`CreateReaderArgs::file_metrics`] is set, the reader should record
+    /// into that set rather than registering another one;
+    /// [`CreateReaderArgs::file_metrics_or_register`] does this.
     ///
     /// # Notes
     ///
@@ -65,18 +195,28 @@ pub trait ParquetFileReaderFactory: Debug + Send + Sync + 'static {
     /// to ensure that the returned `ParquetMetaData` has the necessary information
     /// if you wish to avoid a subsequent I/O
     ///
-    /// # Arguments
-    /// * partition_index - Index of the partition (for reporting metrics)
-    /// * file - The file to be read
-    /// * metadata_size_hint - If specified, the first IO reads this many bytes from the footer
-    /// * metrics - Execution metrics
-    fn create_reader(
+    /// The default implementation calls the deprecated [`Self::create_reader`]
+    /// and ignores [`CreateReaderArgs::file_metrics`], so factories written
+    /// against that method keep their behavior.
+    fn create_reader_with_args(
         &self,
-        partition_index: usize,
-        partitioned_file: PartitionedFile,
-        metadata_size_hint: Option<usize>,
-        metrics: &ExecutionPlanMetricsSet,
-    ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>>;
+        args: CreateReaderArgs,
+    ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
+        let CreateReaderArgs {
+            partition_index,
+            partitioned_file,
+            metrics,
+            metadata_size_hint,
+            file_metrics: _,
+        } = args;
+        #[expect(deprecated)]
+        self.create_reader(
+            partition_index,
+            partitioned_file,
+            metadata_size_hint,
+            &metrics,
+        )
+    }
 }
 
 /// Default implementation of [`ParquetFileReaderFactory`]
@@ -98,6 +238,7 @@ impl DefaultParquetFileReaderFactory {
 }
 
 impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
+    // Kept so direct callers of the deprecated method see no change.
     fn create_reader(
         &self,
         partition_index: usize,
@@ -105,16 +246,22 @@ impl ParquetFileReaderFactory for DefaultParquetFileReaderFactory {
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
-        let file_metrics = ParquetFileMetrics::new(
-            partition_index,
-            partitioned_file.object_meta.location.as_ref(),
-            metrics,
-        );
+        self.create_reader_with_args(
+            CreateReaderArgs::new(partition_index, partitioned_file, metrics)
+                .with_metadata_size_hint(metadata_size_hint),
+        )
+    }
 
+    fn create_reader_with_args(
+        &self,
+        args: CreateReaderArgs,
+    ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
+        let file_metrics = args.file_metrics_or_register();
+        let metadata_size_hint = args.metadata_size_hint();
         let reader = ParquetFileReader::new(
             file_metrics,
             Arc::clone(&self.store),
-            partitioned_file,
+            args.into_partitioned_file(),
         )
         .with_metadata_hint(metadata_size_hint);
         Ok(Box::new(reader))
@@ -146,6 +293,7 @@ impl CachedParquetFileReaderFactory {
 }
 
 impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
+    // Kept so direct callers of the deprecated method see no change.
     fn create_reader(
         &self,
         partition_index: usize,
@@ -153,16 +301,22 @@ impl ParquetFileReaderFactory for CachedParquetFileReaderFactory {
         metadata_size_hint: Option<usize>,
         metrics: &ExecutionPlanMetricsSet,
     ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
-        let file_metrics = ParquetFileMetrics::new(
-            partition_index,
-            partitioned_file.object_meta.location.as_ref(),
-            metrics,
-        );
+        self.create_reader_with_args(
+            CreateReaderArgs::new(partition_index, partitioned_file, metrics)
+                .with_metadata_size_hint(metadata_size_hint),
+        )
+    }
 
+    fn create_reader_with_args(
+        &self,
+        args: CreateReaderArgs,
+    ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
+        let file_metrics = args.file_metrics_or_register();
+        let metadata_size_hint = args.metadata_size_hint();
         let reader = ParquetFileReader::new(
             file_metrics,
             Arc::clone(&self.store),
-            partitioned_file,
+            args.into_partitioned_file(),
         )
         .with_metadata_hint(metadata_size_hint)
         .with_metadata_cache(Some(Arc::clone(&self.metadata_cache)));
@@ -351,5 +505,143 @@ impl FileMetadata for CachedParquetMetaData {
             .page_index()
             .is_some_and(|page_index| page_index.is_complete());
         HashMap::from([("page_index".to_owned(), page_index.to_string())])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use datafusion_common::DataFusionError;
+    use datafusion_execution::cache::cache_manager::CachedFileMetadataEntry;
+    use datafusion_execution::cache::default_cache::DefaultCache;
+    use object_store::memory::InMemory;
+    use object_store::path::Path;
+    use std::sync::Mutex;
+
+    fn store() -> Arc<dyn ObjectStore> {
+        Arc::new(InMemory::new())
+    }
+
+    fn file() -> PartitionedFile {
+        PartitionedFile::new("file.parquet".to_string(), 100)
+    }
+
+    /// How many sets of file metrics are registered in `metrics`.
+    fn registered_sets(metrics: &ExecutionPlanMetricsSet) -> usize {
+        metrics
+            .clone_inner()
+            .iter()
+            .filter(|metric| metric.value().name() == "bytes_scanned")
+            .count()
+    }
+
+    /// A factory written against the deprecated `create_reader` only.
+    #[derive(Debug)]
+    struct LegacyFactory {
+        inner: DefaultParquetFileReaderFactory,
+        calls: Mutex<Vec<(usize, Option<usize>)>>,
+    }
+
+    impl ParquetFileReaderFactory for LegacyFactory {
+        fn create_reader(
+            &self,
+            partition_index: usize,
+            partitioned_file: PartitionedFile,
+            metadata_size_hint: Option<usize>,
+            metrics: &ExecutionPlanMetricsSet,
+        ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push((partition_index, metadata_size_hint));
+            #[expect(deprecated)]
+            self.inner.create_reader(
+                partition_index,
+                partitioned_file,
+                metadata_size_hint,
+                metrics,
+            )
+        }
+    }
+
+    /// A factory implementing only `create_reader_with_args`.
+    #[derive(Debug)]
+    struct ArgsOnlyFactory(DefaultParquetFileReaderFactory);
+
+    impl ParquetFileReaderFactory for ArgsOnlyFactory {
+        fn create_reader_with_args(
+            &self,
+            args: CreateReaderArgs,
+        ) -> datafusion_common::Result<Box<dyn AsyncFileReader + Send>> {
+            self.0.create_reader_with_args(args)
+        }
+    }
+
+    #[test]
+    fn create_reader_with_args_falls_back_to_create_reader() {
+        let factory = LegacyFactory {
+            inner: DefaultParquetFileReaderFactory::new(store()),
+            calls: Mutex::new(vec![]),
+        };
+        let metrics = ExecutionPlanMetricsSet::new();
+        let args =
+            CreateReaderArgs::new(3, file(), &metrics).with_metadata_size_hint(Some(512));
+
+        factory.create_reader_with_args(args).unwrap();
+
+        assert_eq!(*factory.calls.lock().unwrap(), vec![(3, Some(512))]);
+        assert_eq!(registered_sets(&metrics), 1);
+    }
+
+    #[test]
+    fn deprecated_create_reader_is_not_implemented_by_default() {
+        let factory = ArgsOnlyFactory(DefaultParquetFileReaderFactory::new(store()));
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        #[expect(deprecated)]
+        let result = factory.create_reader(0, file(), None, &metrics);
+
+        assert!(matches!(result, Err(DataFusionError::NotImplemented(_))));
+    }
+
+    #[test]
+    fn built_in_factories_record_into_the_given_file_metrics() {
+        let store = store();
+        let factories: Vec<Arc<dyn ParquetFileReaderFactory>> = vec![
+            Arc::new(DefaultParquetFileReaderFactory::new(Arc::clone(&store))),
+            Arc::new(CachedParquetFileReaderFactory::new(
+                Arc::clone(&store),
+                Arc::new(DefaultCache::<Path, CachedFileMetadataEntry>::new(
+                    1024 * 1024,
+                )),
+            )),
+        ];
+        for factory in factories {
+            let metrics = ExecutionPlanMetricsSet::new();
+            let file_metrics = ParquetFileMetrics::new(0, "file.parquet", &metrics);
+
+            factory
+                .create_reader_with_args(
+                    CreateReaderArgs::new(0, file(), &metrics)
+                        .with_file_metrics(file_metrics),
+                )
+                .unwrap();
+            assert_eq!(
+                registered_sets(&metrics),
+                1,
+                "{factory:?} with file metrics"
+            );
+
+            // Without file metrics the factory registers its own set, as
+            // `create_reader` always did.
+            factory
+                .create_reader_with_args(CreateReaderArgs::new(0, file(), &metrics))
+                .unwrap();
+            assert_eq!(registered_sets(&metrics), 2, "{factory:?} without");
+
+            #[expect(deprecated)]
+            factory.create_reader(0, file(), None, &metrics).unwrap();
+            assert_eq!(registered_sets(&metrics), 3, "{factory:?} create_reader");
+        }
     }
 }

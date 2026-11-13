@@ -21,8 +21,9 @@ use crate::push_decoder::{
 };
 use crate::row_group_filter::{RowGroupAccessPlanFilter, row_group_in_range};
 use crate::{
-    BloomFilterStatistics, Int96Coercer, ParquetAccessPlan, ParquetFileMetrics,
-    ParquetFileReaderFactory, ParquetRowSelection, ParquetVirtualColumn, RowGroupAccess,
+    BloomFilterStatistics, CreateReaderArgs, Int96Coercer, ParquetAccessPlan,
+    ParquetFileMetrics, ParquetFileReaderFactory, ParquetRowSelection,
+    ParquetVirtualColumn, RowGroupAccess,
     schema_coercion::apply_file_schema_type_coercions_with_rle,
 };
 use arrow::array::RecordBatch;
@@ -847,12 +848,17 @@ impl ParquetMorselizer {
             .metadata_size_hint
             .or(self.metadata_size_hint);
 
+        // The reader records into this file's metrics rather than registering
+        // its own set, so each opened file registers one set of file metrics.
         let async_file_reader: Box<dyn AsyncFileReader> =
-            self.parquet_file_reader_factory.create_reader(
-                self.partition_index,
-                partitioned_file.clone(),
-                metadata_size_hint,
-                &self.metrics,
+            self.parquet_file_reader_factory.create_reader_with_args(
+                CreateReaderArgs::new(
+                    self.partition_index,
+                    partitioned_file.clone(),
+                    &self.metrics,
+                )
+                .with_metadata_size_hint(metadata_size_hint)
+                .with_file_metrics(file_metrics.clone()),
             )?;
 
         // Calculate the output schema from the original projection (before literal replacement)
@@ -1540,12 +1546,17 @@ impl RowGroupsPrunedParquetOpen {
             let reader_metadata = self.prepared.loaded.reader_metadata.clone();
             let replacement_reader = {
                 let prepared = &self.prepared.loaded.prepared;
-                prepared.parquet_file_reader_factory.create_reader(
-                    prepared.partition_index,
-                    prepared.partitioned_file.clone(),
-                    prepared.metadata_size_hint,
-                    &prepared.metrics,
-                )?
+                prepared
+                    .parquet_file_reader_factory
+                    .create_reader_with_args(
+                        CreateReaderArgs::new(
+                            prepared.partition_index,
+                            prepared.partitioned_file.clone(),
+                            &prepared.metrics,
+                        )
+                        .with_metadata_size_hint(prepared.metadata_size_hint)
+                        .with_file_metrics(prepared.file_metrics.clone()),
+                    )?
             };
 
             let prepared = &mut self.prepared.loaded.prepared;
@@ -3563,13 +3574,11 @@ mod test {
     /// Direct `MetricsSet` lookup, not plan display: idle Bloom metrics are
     /// omitted from displayed plans even when the counters remain registered.
     ///
-    /// Opening one file still registers this name more than once:
-    /// `prepare_open_file` creates `ParquetFileMetrics`, and each
-    /// `ParquetFileReaderFactory::create_reader` call (initial reader plus
-    /// Bloom replacement reader) creates another independent set. Sum the
+    /// Opening one file registers one set of file metrics, shared with the
+    /// readers it creates (initial reader plus Bloom replacement reader). A
+    /// scan of several files registers this name once per file, so sum the
     /// counters the same way `MetricsSet::sum_by_name` aggregates pruning
-    /// metrics. Only the opener's set is incremented by Bloom pruning; the
-    /// reader copies stay at zero.
+    /// metrics.
     fn bloom_filter_pruning_metrics(metrics: &ExecutionPlanMetricsSet) -> (usize, usize) {
         use datafusion_physical_plan::metrics::MetricValue;
         match metrics
@@ -5227,6 +5236,59 @@ mod test {
         // Bloom reads and evaluation are skipped for an entirely fully matched file.
         assert_eq!(pruned, 0);
         assert_eq!(matched, 0);
+    }
+
+    /// Each file the opener reads registers one set of file metrics, shared by
+    /// the opener and the readers it creates, including the replacement reader
+    /// built after Bloom filter pruning.
+    #[tokio::test]
+    async fn opening_a_file_registers_one_set_of_file_metrics() {
+        let store = Arc::new(InMemory::new()) as Arc<dyn ObjectStore>;
+        let batches = vec![
+            record_batch!(("a", Int32, vec![1, 1, 1])).unwrap(),
+            record_batch!(("a", Int32, vec![0, 1, 2])).unwrap(),
+        ];
+        let schema = batches[0].schema();
+        let props = WriterProperties::builder()
+            .set_max_row_group_row_count(Some(3))
+            .set_bloom_filter_enabled(true)
+            .set_statistics_enabled(EnabledStatistics::Chunk)
+            .build();
+        let data_size = write_parquet_batches(
+            Arc::clone(&store),
+            "one-set.parquet",
+            batches,
+            Some(props),
+        )
+        .await;
+        let file = PartitionedFile::new("one-set.parquet".to_string(), data_size as u64);
+        let predicate = logical2physical(&col("a").eq(lit(1)), &schema);
+
+        let metrics = ExecutionPlanMetricsSet::new();
+        let morselizer = ParquetMorselizerBuilder::new()
+            .with_store(Arc::clone(&store))
+            .with_schema(Arc::clone(&schema))
+            .with_predicate(predicate)
+            .with_pushdown_filters(true)
+            .with_row_group_stats_pruning(false)
+            .with_enable_bloom_filter(true)
+            .with_metrics(metrics.clone())
+            .build();
+        let stream = open_file(&morselizer, file).await.unwrap();
+        assert_eq!(collect_int32_values(stream).await, vec![1, 1, 1, 1]);
+
+        let registered = |name: &str| {
+            metrics
+                .clone_inner()
+                .iter()
+                .filter(|metric| metric.value().name() == name)
+                .count()
+        };
+        // Both row groups are checked against the Bloom filter, so the opener
+        // also builds a replacement reader; neither reader registers its own set.
+        assert_eq!(registered("bytes_scanned"), 1);
+        assert_eq!(registered("metadata_load_time"), 1);
+        assert!(counter_metric_value(&metrics, "bytes_scanned") > 0);
     }
 
     #[test]
