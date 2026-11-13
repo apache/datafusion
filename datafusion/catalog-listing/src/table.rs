@@ -1338,7 +1338,7 @@ impl ListingTable {
                 Arc::clone(&cached.statistics),
                 cached.ordering.clone(),
                 physical_statistics_required
-                    .then(|| cached.physical_statistics.clone())
+                    .then(|| cached.physical_statistics.as_deref().cloned())
                     .flatten(),
             ));
         }
