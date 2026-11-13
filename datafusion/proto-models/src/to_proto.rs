@@ -127,6 +127,11 @@ impl TryFrom<&TableReadSelector> for protobuf::TableReadSelector {
             TableReadSelector::AsOfTimestamp(ns) => {
                 TableReadSelectorEnum::AsOfTimestamp(*ns)
             }
+            TableReadSelector::Extension(extension) => {
+                return Err(datafusion_proto_common::ToProtoError::General(format!(
+                    "Table read selector {extension} must be encoded with a LogicalExtensionCodec"
+                )));
+            }
         };
         Ok(protobuf::TableReadSelector {
             table_read_selector_enum: Some(table_read_selector_enum),

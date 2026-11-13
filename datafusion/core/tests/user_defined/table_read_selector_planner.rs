@@ -4,6 +4,9 @@
 
 //! Tests for the TableReadSelectorPlanner extension point
 
+use std::any::Any;
+use std::fmt::{self, Display, Formatter};
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -13,11 +16,17 @@ use async_trait::async_trait;
 use datafusion::catalog::memory::MemTable;
 use datafusion::catalog::{SchemaProvider, TableProvider};
 use datafusion::prelude::*;
-use datafusion_common::{Result, TableReadSelector, TableReference, not_impl_err};
+use datafusion_common::{
+    Result, TableReadSelector, TableReadSelectorExtension, TableReference, not_impl_err,
+    plan_err,
+};
 use datafusion_expr::planner::{
     TableReadSelectorContext, TableReadSelectorPlanner, TableReadSelectorPlanning,
 };
-use datafusion_sql::sqlparser::ast::TableFactor;
+use datafusion_sql::sqlparser::ast::{
+    Expr as SQLExpr, FunctionArg, FunctionArgExpr, FunctionArguments, TableFactor,
+    TableVersion,
+};
 use insta::assert_snapshot;
 
 /// A schema with a single table `t`, which counts how often the current and
@@ -155,6 +164,90 @@ impl TableReadSelectorPlanner for IgnoreTimeTravelPlanner {
     }
 }
 
+/// A table read selector extension for the state of a table before a statement was
+/// executed
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
+struct BeforeStatement(String);
+
+impl Display for BeforeStatement {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "before statement {:?}", self.0)
+    }
+}
+
+impl TableReadSelectorExtension for BeforeStatement {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn dyn_eq(&self, other: &dyn TableReadSelectorExtension) -> bool {
+        other.as_any().downcast_ref::<Self>() == Some(self)
+    }
+
+    fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+        self.hash(&mut state)
+    }
+
+    fn dyn_ord(
+        &self,
+        other: &dyn TableReadSelectorExtension,
+    ) -> Option<std::cmp::Ordering> {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .and_then(|other| self.partial_cmp(other))
+    }
+}
+
+/// Example planner that maps Snowflake's `BEFORE (STATEMENT => <id>)` clause,
+/// which DataFusion does not support, to the [`BeforeStatement`] selector
+#[derive(Debug)]
+struct BeforeStatementPlanner;
+
+impl TableReadSelectorPlanner for BeforeStatementPlanner {
+    fn plan_read_selector(
+        &self,
+        _table: &TableReference,
+        relation: &TableFactor,
+        context: &dyn TableReadSelectorContext,
+    ) -> Result<TableReadSelectorPlanning> {
+        let TableFactor::Table {
+            version: Some(TableVersion::Function(SQLExpr::Function(func))),
+            ..
+        } = relation
+        else {
+            return Ok(TableReadSelectorPlanning::Original);
+        };
+        let FunctionArguments::List(list) = &func.args else {
+            return Ok(TableReadSelectorPlanning::Original);
+        };
+        let [
+            FunctionArg::Named {
+                name,
+                arg: FunctionArgExpr::Expr(statement),
+                ..
+            },
+        ] = list.args.as_slice()
+        else {
+            return Ok(TableReadSelectorPlanning::Original);
+        };
+        if !func.name.to_string().eq_ignore_ascii_case("BEFORE")
+            || !name.value.eq_ignore_ascii_case("STATEMENT")
+        {
+            return Ok(TableReadSelectorPlanning::Original);
+        }
+        let statement = context.evaluate_const_expr(statement.clone())?;
+        let Some(Some(statement)) = statement.try_as_str() else {
+            return plan_err!("The statement must be a string: {relation}");
+        };
+        Ok(TableReadSelectorPlanning::Planned(Some(
+            TableReadSelector::Extension(Arc::new(BeforeStatement(
+                statement.to_string(),
+            ))),
+        )))
+    }
+}
+
 // A TableReadSelectorPlanner can determine the selector of a table from
 // syntax other than a time travel clause
 #[tokio::test]
@@ -251,4 +344,29 @@ async fn planner_ignores_time_travel() {
         .await
         .expect_err("table read selectors should not be supported");
     assert_snapshot!(error.strip_backtrace(), @"This feature is not implemented: Time travel is not supported");
+}
+
+// A TableReadSelectorPlanner can determine a table read selector extension,
+// which the catalog receives to look up the table
+#[tokio::test]
+async fn planner_determines_read_selector_extension() {
+    let ctx = create_context(vec![Arc::new(BeforeStatementPlanner)]);
+    ctx.sql("SET datafusion.sql_parser.dialect = 'Snowflake'")
+        .await
+        .unwrap();
+    let schema = register_counting_schema(&ctx, true).await;
+
+    let plan = ctx
+        .sql("SELECT * FROM counting.t BEFORE (STATEMENT => 'q1')")
+        .await
+        .unwrap()
+        .into_unoptimized_plan();
+    assert_snapshot!(plan, @r#"
+    Projection: counting.t.id, counting.t.name
+      TableScan: counting.t@before statement "q1"
+    "#);
+    assert_eq!(
+        schema.table_with_read_selector_calls.load(Ordering::SeqCst),
+        1
+    );
 }

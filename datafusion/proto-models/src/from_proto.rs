@@ -112,9 +112,11 @@ impl TryFrom<&protobuf::TableReadSelector> for TableReadSelector {
             TableReadSelectorEnum::AsOfVersion(value) => {
                 Ok(TableReadSelector::AsOfVersion(value.try_into()?))
             }
-            TableReadSelectorEnum::AsOfTimestamp(ns) => {
-                Ok(TableReadSelector::AsOfTimestamp(*ns))
-            }
+            TableReadSelectorEnum::AsOfTimestamp(ns) => Ok(TableReadSelector::AsOfTimestamp(*ns)),
+            TableReadSelectorEnum::Extension(_) => Err(Error::General(
+                "Table read selector extensions must be decoded with a LogicalExtensionCodec"
+                    .to_string(),
+            )),
         }
     }
 }

@@ -1401,7 +1401,7 @@ pub mod table_reference {
 /// version or point in time for time travel queries
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct TableReadSelector {
-    #[prost(oneof = "table_read_selector::TableReadSelectorEnum", tags = "1, 2")]
+    #[prost(oneof = "table_read_selector::TableReadSelectorEnum", tags = "1, 2, 3")]
     pub table_read_selector_enum: ::core::option::Option<
         table_read_selector::TableReadSelectorEnum,
     >,
@@ -1417,6 +1417,10 @@ pub mod table_read_selector {
         /// A point in time, in nanoseconds since the Unix epoch (UTC)
         #[prost(int64, tag = "2")]
         AsOfTimestamp(i64),
+        /// A selector defined outside DataFusion, encoded by a
+        /// LogicalExtensionCodec
+        #[prost(bytes, tag = "3")]
+        Extension(::prost::alloc::vec::Vec<u8>),
     }
 }
 /// PhysicalPlanNode is a nested type

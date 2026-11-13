@@ -12,7 +12,7 @@ use super::{
 use arrow::array::timezone::Tz;
 use arrow::datatypes::TimeUnit;
 use chrono::DateTime;
-use datafusion_common::{Result, internal_err, not_impl_err};
+use datafusion_common::{Result, TableReadSelectorExtension, internal_err, not_impl_err};
 use datafusion_expr::Expr;
 use regex::Regex;
 use sqlparser::tokenizer::Span;
@@ -117,6 +117,19 @@ pub trait Dialect: Send + Sync {
     /// scan, such as `VERSION AS OF 3`
     fn table_version_style(&self) -> TableVersionStyle {
         TableVersionStyle::At
+    }
+
+    /// Unparses a [`TableReadSelector::Extension`] to the time travel clause of a
+    /// table scan. Returns `None` if the dialect does not support the
+    /// selector, in which case unparsing fails.
+    ///
+    /// [`TableReadSelector::Extension`]: datafusion_common::TableReadSelector::Extension
+    fn read_selector_extension_to_sql(
+        &self,
+        _unparser: &Unparser,
+        _selector: &dyn TableReadSelectorExtension,
+    ) -> Result<Option<ast::TableVersion>> {
+        Ok(None)
     }
 
     /// The SQL type to use for Arrow Int64 unparsing

@@ -2,7 +2,11 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-use std::fmt::{Display, Formatter};
+use std::any::Any;
+use std::cmp::Ordering;
+use std::fmt::{Debug, Display, Formatter};
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 use arrow::temporal_conversions::timestamp_ns_to_datetime;
 use chrono::SecondsFormat;
@@ -12,9 +16,10 @@ use crate::ScalarValue;
 /// Selects which read of a table to perform, such as reading the table as of
 /// a version or point in time for a time travel query.
 ///
-/// A selector typically picks a point in the history of a table, such as a
-/// snapshot. It determines *which* data is read, not *how* it is read: hints
-/// about how to scan a table do not belong in a selector.
+/// A selector typically picks a point or a range in the history of a table,
+/// such as a snapshot, or the changes between two snapshots. It determines
+/// *which* data is read, not *how* it is read: hints about how to scan a table
+/// do not belong in a selector.
 ///
 /// A selector plays two roles:
 ///
@@ -30,6 +35,9 @@ use crate::ScalarValue;
 /// data. The schema of that data is determined by the table provider, so it
 /// may differ between selectors, for example after the schema of the table
 /// evolved.
+///
+/// Selectors that are specific to a catalog or engine can be defined with
+/// [`TableReadSelector::Extension`].
 ///
 /// See [`SqlToRel::read_selector`] for how SQL time travel clauses are
 /// mapped to selectors.
@@ -55,6 +63,104 @@ pub enum TableReadSelector {
     /// time, so a commit made exactly at this time is included. As an
     /// identity, it is the state of the table at this time.
     AsOfTimestamp(i64),
+    /// A selector defined outside DataFusion, see [`TableReadSelectorExtension`].
+    Extension(Arc<dyn TableReadSelectorExtension>),
+}
+
+/// A [`TableReadSelector`] defined outside DataFusion, for a read of a table
+/// that is specific to a catalog or engine, such as the state of the table
+/// before a given statement was executed, or the changes between two versions.
+///
+/// Like other selectors, an extension is used both as a request and as an
+/// identity. Its [`Display`] implementation is shown in `EXPLAIN`, and scans
+/// of the same table with equal extensions are assumed to read the same data.
+/// A table provider for a read that is not a state of the table, such as a
+/// change feed, must not report the constraints of the table, such as its
+/// primary key, as they may not hold for the data it reads.
+///
+/// To serialize plans with `datafusion-proto`, implement
+/// [`LogicalExtensionCodec::try_encode_read_selector`] and
+/// [`LogicalExtensionCodec::try_decode_read_selector`]. To unparse plans
+/// to SQL, implement [`Dialect::read_selector_extension_to_sql`].
+///
+/// [`LogicalExtensionCodec::try_encode_read_selector`]: https://docs.rs/datafusion-proto/latest/datafusion_proto/logical_plan/trait.LogicalExtensionCodec.html#method.try_encode_read_selector
+/// [`LogicalExtensionCodec::try_decode_read_selector`]: https://docs.rs/datafusion-proto/latest/datafusion_proto/logical_plan/trait.LogicalExtensionCodec.html#method.try_decode_read_selector
+/// [`Dialect::read_selector_extension_to_sql`]: https://docs.rs/datafusion/latest/datafusion/sql/unparser/dialect/trait.Dialect.html#method.read_selector_extension_to_sql
+///
+/// # Example
+///
+/// ```
+/// # use std::any::Any;
+/// # use std::cmp::Ordering;
+/// # use std::fmt::{Display, Formatter};
+/// # use std::hash::{Hash, Hasher};
+/// # use datafusion_common::TableReadSelectorExtension;
+/// /// The state of a table before a statement was executed
+/// #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
+/// struct BeforeStatement(String);
+///
+/// impl Display for BeforeStatement {
+///     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+///         write!(f, "before statement {:?}", self.0)
+///     }
+/// }
+///
+/// impl TableReadSelectorExtension for BeforeStatement {
+///     fn as_any(&self) -> &dyn Any {
+///         self
+///     }
+///
+///     fn dyn_eq(&self, other: &dyn TableReadSelectorExtension) -> bool {
+///         other.as_any().downcast_ref::<Self>() == Some(self)
+///     }
+///
+///     fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+///         self.hash(&mut state)
+///     }
+///
+///     fn dyn_ord(&self, other: &dyn TableReadSelectorExtension) -> Option<Ordering> {
+///         other
+///             .as_any()
+///             .downcast_ref::<Self>()
+///             .and_then(|other| self.partial_cmp(other))
+///     }
+/// }
+/// ```
+pub trait TableReadSelectorExtension: Debug + Display + Send + Sync {
+    /// Returns the selector as [`Any`], so it can be downcast to its concrete
+    /// type.
+    fn as_any(&self) -> &dyn Any;
+
+    /// Compares `other`, respecting the requirements of [`Eq`]. Selectors of
+    /// different types are not equal.
+    fn dyn_eq(&self, other: &dyn TableReadSelectorExtension) -> bool;
+
+    /// Hashes the selector, consistently with [`Self::dyn_eq`].
+    fn dyn_hash(&self, state: &mut dyn Hasher);
+
+    /// Compares `other`, respecting the requirements of [`PartialOrd`]. Must
+    /// return `Some(Ordering::Equal)` if and only if `self.dyn_eq(other)`.
+    fn dyn_ord(&self, other: &dyn TableReadSelectorExtension) -> Option<Ordering>;
+}
+
+impl PartialEq for dyn TableReadSelectorExtension {
+    fn eq(&self, other: &Self) -> bool {
+        self.dyn_eq(other)
+    }
+}
+
+impl Eq for dyn TableReadSelectorExtension {}
+
+impl Hash for dyn TableReadSelectorExtension {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.dyn_hash(state);
+    }
+}
+
+impl PartialOrd for dyn TableReadSelectorExtension {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.dyn_ord(other)
+    }
 }
 
 impl Display for TableReadSelector {
@@ -74,6 +180,7 @@ impl Display for TableReadSelector {
                 ),
                 None => write!(f, "{ns}"),
             },
+            TableReadSelector::Extension(extension) => write!(f, "{extension}"),
         }
     }
 }
@@ -81,6 +188,36 @@ impl Display for TableReadSelector {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
+    struct Offset(i64);
+
+    impl Display for Offset {
+        fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+            write!(f, "offset {}", self.0)
+        }
+    }
+
+    impl TableReadSelectorExtension for Offset {
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+
+        fn dyn_eq(&self, other: &dyn TableReadSelectorExtension) -> bool {
+            other.as_any().downcast_ref::<Self>() == Some(self)
+        }
+
+        fn dyn_hash(&self, mut state: &mut dyn Hasher) {
+            self.hash(&mut state)
+        }
+
+        fn dyn_ord(&self, other: &dyn TableReadSelectorExtension) -> Option<Ordering> {
+            other
+                .as_any()
+                .downcast_ref::<Self>()
+                .and_then(|other| self.partial_cmp(other))
+        }
+    }
 
     #[test]
     fn display() {
@@ -105,6 +242,10 @@ mod tests {
             TableReadSelector::AsOfVersion(ScalarValue::Utf8View(Some("3".into())))
                 .to_string(),
             "\"3\""
+        );
+        assert_eq!(
+            TableReadSelector::Extension(Arc::new(Offset(-60))).to_string(),
+            "offset -60"
         );
     }
 }
