@@ -2541,6 +2541,15 @@ pub struct PhysicalHashRepartition {
     pub partition_count: u64,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct PhysicalGroupedPartitioning {
+    #[prost(message, repeated, tag = "1")]
+    pub keys: ::prost::alloc::vec::Vec<PhysicalExprNode>,
+    #[prost(string, tag = "2")]
+    pub scheme: ::prost::alloc::string::String,
+    #[prost(bytes = "vec", repeated, tag = "3")]
+    pub group_ids: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PhysicalRangePartitioning {
     #[prost(message, repeated, tag = "1")]
     pub sort_expr: ::prost::alloc::vec::Vec<PhysicalSortExprNode>,
@@ -2575,7 +2584,7 @@ pub struct RepartitionExecNode {
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Partitioning {
-    #[prost(oneof = "partitioning::PartitionMethod", tags = "1, 2, 3, 4")]
+    #[prost(oneof = "partitioning::PartitionMethod", tags = "1, 2, 3, 4, 5")]
     pub partition_method: ::core::option::Option<partitioning::PartitionMethod>,
 }
 /// Nested message and enum types in `Partitioning`.
@@ -2590,6 +2599,8 @@ pub mod partitioning {
         Unknown(u64),
         #[prost(message, tag = "4")]
         Range(super::PhysicalRangePartitioning),
+        #[prost(message, tag = "5")]
+        Grouped(super::PhysicalGroupedPartitioning),
     }
 }
 #[derive(Clone, PartialEq, ::prost::Message)]

@@ -2061,6 +2061,7 @@ impl ExecutionPlan for RepartitionExec {
         new_properties.partitioning = match new_properties.partitioning {
             RoundRobinBatch(_) => RoundRobinBatch(target_partitions),
             Hash(hash, _) => Hash(hash, target_partitions),
+            Grouped(_) => return Ok(None),
             Range(range) => {
                 let Some(range) = range.scale(target_partitions) else {
                     return Ok(None);
@@ -2177,6 +2178,11 @@ impl RepartitionExec {
         input: Arc<dyn ExecutionPlan>,
         partitioning: Partitioning,
     ) -> Result<Self> {
+        if matches!(partitioning, Partitioning::Grouped(_)) {
+            return datafusion_common::plan_err!(
+                "Source grouping is not an executable repartitioning scheme"
+            );
+        }
         let preserve_order = false;
         let cache = Self::compute_properties(&input, partitioning, preserve_order);
         Ok(RepartitionExec {

@@ -366,6 +366,9 @@ fn compatible_co_partitioning_layout(
 
     match (first_partitioning, other_partitioning) {
         (Partitioning::Hash(_, _), Partitioning::Hash(_, _)) => true,
+        (Partitioning::Grouped(left), Partitioning::Grouped(right)) => {
+            left.compatible_layout(right)
+        }
         (Partitioning::Range(left), Partitioning::Range(right)) => {
             left.split_points() == right.split_points()
                 && left.ordering().len() == right.ordering().len()
