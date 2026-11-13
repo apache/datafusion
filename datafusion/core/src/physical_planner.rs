@@ -1042,7 +1042,9 @@ impl DefaultPhysicalPlanner {
                     file_output_mode,
                 };
 
-                let ordering = input_exec.properties().output_ordering().cloned();
+                let ordering = input_exec
+                    .downcast_ref::<SortExec>()
+                    .map(|sort| sort.expr().clone());
 
                 sink_format
                     .create_writer_physical_plan(
