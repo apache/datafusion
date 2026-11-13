@@ -8,7 +8,7 @@ use arrow::array::{
     PrimitiveArray,
 };
 use arrow::compute::take;
-use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, DataType, Field};
+use arrow::datatypes::{ArrowDictionaryKeyType, ArrowNativeType, Field};
 use arrow::error::ArrowError;
 use datafusion_common::hash_utils::{RandomState, create_hashes};
 use datafusion_common::{DataFusionError, Result, exec_err};
@@ -20,6 +20,9 @@ use std::mem::size_of;
 use std::sync::{Arc, Weak};
 
 use crate::aggregates::AGGREGATION_HASH_SEED;
+use crate::aggregates::group_values::dictionary::{
+    into_dictionary, is_cached, key_type_fits,
+};
 
 /// [`GroupColumn`] for dictionary-encoded columns with key type `K`.
 ///
@@ -75,63 +78,12 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
         }
     }
 
-    /// Build a `DictionaryArray` from `values` (all inner slots) and the
-    /// per-group slot mapping.  The null inner slot, if any, is excluded from
-    /// the values array and its groups emit a null key — so it never consumes
-    /// a key index regardless of where it sits in `inner`.
-    fn into_dict(
-        values: ArrayRef,
-        group_to_inner: &[usize],
-        null_inner_slot: Option<usize>,
-    ) -> ArrayRef {
-        let Some(null_slot) = null_inner_slot else {
-            // Fast path: no null group — raw slot indices are valid keys.
-            let keys: PrimitiveArray<K> = group_to_inner
-                .iter()
-                .map(|&slot| Some(K::Native::usize_as(slot)))
-                .collect();
-            return Arc::new(DictionaryArray::<K>::new(keys, values));
-        };
-
-        // Build a compact remap: each non-null slot gets a contiguous key
-        // starting from 0; the null slot is skipped entirely.
-        let n = values.len();
-        let mut remap = vec![0usize; n];
-        let mut next = 0usize;
-        for (i, mapped) in remap.iter_mut().enumerate() {
-            if i != null_slot {
-                *mapped = next;
-                next += 1;
-            }
-        }
-
-        let keys: PrimitiveArray<K> = group_to_inner
-            .iter()
-            .map(|&slot| {
-                if slot == null_slot {
-                    None
-                } else {
-                    Some(K::Native::usize_as(remap[slot]))
-                }
-            })
-            .collect();
-
-        // Compact values array: drop the null slot so key indices stay tight.
-        let compact_indices: Int64Array = (0..n)
-            .filter(|&i| i != null_slot)
-            .map(|i| i as i64)
-            .collect();
-        let compact =
-            take(&*values, &compact_indices, None).expect("compact values in into_dict");
-        Arc::new(DictionaryArray::<K>::new(keys, compact))
-    }
-
     // https://github.com/apache/datafusion/issues/23127
     // Null groups emit a null key (None), not a slot index, so the null inner
     // slot never consumes a key index regardless of its position in inner.
     fn check_key_overflow(&self) -> Result<()> {
         let non_null_count = self.inner.len() - self.null_inner_slot.is_some() as usize;
-        if !Self::key_type_fits(non_null_count) {
+        if !key_type_fits::<K>(non_null_count) {
             return exec_err!(
                 "Dictionary key type {:?} cannot represent {} distinct values",
                 K::DATA_TYPE,
@@ -139,21 +91,6 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
             );
         }
         Ok(())
-    }
-
-    fn key_type_fits(num_values: usize) -> bool {
-        let max: usize = match K::DATA_TYPE {
-            DataType::Int8 => i8::MAX as usize,
-            DataType::Int16 => i16::MAX as usize,
-            DataType::Int32 => i32::MAX as usize,
-            DataType::Int64 => i64::MAX as usize,
-            DataType::UInt8 => u8::MAX as usize,
-            DataType::UInt16 => u16::MAX as usize,
-            DataType::UInt32 => u32::MAX as usize,
-            DataType::UInt64 => usize::MAX,
-            _ => return false,
-        };
-        num_values == 0 || num_values - 1 <= max
     }
 
     fn hash_values(&mut self, values: &ArrayRef) {
@@ -169,9 +106,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> DictionaryGroupValuesColumn<K> {
     }
 
     fn is_cached(&self, values: &ArrayRef) -> bool {
-        self.cached_values
-            .as_ref()
-            .is_some_and(|cached| std::ptr::addr_eq(cached.as_ptr(), Arc::as_ptr(values)))
+        is_cached(self.cached_values.as_ref(), values)
     }
 
     /// Makes `val_hashes` and `val_to_inner` correspond to `dict_values`,
@@ -505,7 +440,7 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
     fn build(self: Box<Self>) -> ArrayRef {
         let null_inner_slot = self.null_inner_slot;
         let values = self.inner.build();
-        Self::into_dict(values, &self.group_to_inner, null_inner_slot)
+        into_dictionary::<K>(values, Some(&self.group_to_inner), null_inner_slot)
     }
 
     fn values_preserving(&self, selection: GroupSelection<'_>) -> Result<ArrayRef> {
@@ -533,7 +468,11 @@ impl<K: ArrowDictionaryKeyType + Send + Sync> GroupColumn
         let null_inner_slot = self
             .null_inner_slot
             .and_then(|slot| old_to_new.get(&slot).copied());
-        Ok(Self::into_dict(values, &selected_groups, null_inner_slot))
+        Ok(into_dictionary::<K>(
+            values,
+            Some(&selected_groups),
+            null_inner_slot,
+        ))
     }
 
     fn take_n(&mut self, n: usize) -> ArrayRef {
