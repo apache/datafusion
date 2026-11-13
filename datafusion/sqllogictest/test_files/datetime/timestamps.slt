@@ -828,6 +828,13 @@ WHERE x IS NOT NULL;
 Time64(µs) 12:34:56
 Time64(µs) 12:34:56.123456
 
+query TD rowsort
+SELECT arrow_typeof(x), x FROM (SELECT s AS x FROM times UNION ALL SELECT t FROM times)
+WHERE x IS NOT NULL;
+----
+Time64(ns) 12:34:56
+Time64(ns) 12:34:56.123456789
+
 query TTTD rowsort
 SELECT arrow_typeof(coalesce(s, ms)), arrow_typeof(coalesce(ms, us)),
        arrow_typeof(coalesce(us, t)), coalesce(us, TIME '00:00:00')
@@ -835,6 +842,20 @@ FROM times;
 ----
 Time32(ms) Time64(µs) Time64(ns) 00:00:00
 Time32(ms) Time64(µs) Time64(ns) 12:34:56.123456
+
+query TD rowsort
+SELECT arrow_typeof(CASE WHEN s IS NOT NULL THEN s ELSE us END),
+       CASE WHEN s IS NOT NULL THEN s ELSE us END
+FROM times;
+----
+Time64(µs) 12:34:56
+Time64(µs) NULL
+
+# Subtraction is coerced to intervals before the rule above applies.
+query T?
+SELECT arrow_typeof(us - s), us - s FROM times WHERE s IS NOT NULL;
+----
+Interval(MonthDayNano) 0.123456000 secs
 
 statement ok
 DROP TABLE times;
