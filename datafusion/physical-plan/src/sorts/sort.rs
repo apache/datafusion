@@ -1383,6 +1383,12 @@ pub struct SortExec {
     metrics_set: ExecutionPlanMetricsSet,
     /// Preserve partitions of input plan. If false, the input partitions
     /// will be sorted and merged into a single output partition.
+    ///
+    /// This is an optimizer flag used for the
+    /// [`ExecutionPlan::required_input_distribution`] decision for this node. The optimizer
+    /// will optionally insert an extra `CoalescePartitionsExec` below it later.
+    /// This flag will not influence the semantics, execution logic, or plan property
+    /// propagation within `SortExec`.
     preserve_partitioning: bool,
     /// Fetch highest/lowest n results
     fetch: Option<usize>,
