@@ -21,6 +21,7 @@ mod exec;
 mod inlist_builder;
 mod not_in;
 mod partitioned_hash_eval;
+pub(crate) mod probe_cursor;
 mod regular_join;
 mod shared_bounds;
 mod stream;

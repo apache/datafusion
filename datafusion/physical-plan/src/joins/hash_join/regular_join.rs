@@ -21,6 +21,16 @@
 //! HashJoinExec is getting incrementally migrated to separated streams, see issue
 //! for detail:
 //! - <https://github.com/apache/datafusion/issues/26361>
+//!
+//! # Architecture
+//! Regular join has 3 major layers, from bottom to top:
+//!
+//! 1. JoinIndexMap: Maps a probe row to matching build-side row IDs (equi-join equality).
+//!   - e.g. `key1 -> [row0], key2 -> [row1, row3, row4]`
+//!   - Multiple matches are only handle, the upper layer is responsible for materializing
+//!     it incrementally.
+//!  2. BatchedJoinProcessor: Performs the pipeline `equi-join matches -> residual join filter -> output batch construction`, processing matches in chunks bounded by `batch_size`.
+//!  3. Entry point: The stream state machine drives `BatchedJoinProcessor`.
 
 use std::sync::Arc;
 
@@ -64,6 +74,7 @@ struct Building {
 
 struct Probing {
     probe: SendableRecordBatchStream,
+    batch_size: usize,
     metrics: BuildProbeJoinMetrics,
     processor: BatchedJoinProcessor,
 }
@@ -154,6 +165,7 @@ impl Building {
         let build = self.build.prepare().await?;
         Ok(ExecutionStage::Probing(Probing {
             probe: self.probe,
+            batch_size: self.config.batch_size,
             metrics: self.metrics.clone(),
             processor: BatchedJoinProcessor::new(build, self.config, self.metrics),
         }))
@@ -166,22 +178,47 @@ impl Probing {
         mut self,
         emitter: &mut TryEmitter<RecordBatch, DataFusionError>,
     ) -> Result<Option<ExecutionStage>> {
+        // Upstream operators may emit more rows than the configured batch size.
+        // Retain that batch and the next slice's offset while the processor
+        // drains each bounded input. Slicing shares the original array buffers.
+        let mut pending: Option<(RecordBatch, usize)> = None;
         loop {
             match self.processor.next_output_batch()? {
                 JoinStep::Output(batch) => emitter.emit(batch).await,
-                JoinStep::NeedInput => match self.probe.try_next().await? {
-                    Some(batch) => {
-                        self.metrics.input_batches.add(1);
-                        self.metrics.input_rows.add(batch.num_rows());
-                        self.metrics.probe_hit_rate.add_total(batch.num_rows());
-                        self.processor.push_batch(batch)?;
-                    }
-                    None => {
-                        drop(self.probe);
-                        self.processor.finish_probe()?;
-                        return Ok(Some(ExecutionStage::Outputting(self.processor)));
-                    }
-                },
+                JoinStep::NeedInput => {
+                    let (batch, offset) = if let Some(pending) = pending.take() {
+                        pending
+                    } else {
+                        match self.probe.try_next().await? {
+                            Some(batch) => {
+                                // Count source input, independently of how many
+                                // slices the processor needs to consume it.
+                                self.metrics.input_batches.add(1);
+                                self.metrics.input_rows.add(batch.num_rows());
+                                self.metrics.probe_hit_rate.add_total(batch.num_rows());
+                                (batch, 0)
+                            }
+                            None => {
+                                drop(self.probe);
+                                self.processor.finish_probe()?;
+                                return Ok(Some(ExecutionStage::Outputting(
+                                    self.processor,
+                                )));
+                            }
+                        }
+                    };
+                    let remaining = batch.num_rows() - offset;
+                    let input = if remaining > self.batch_size {
+                        let input = batch.slice(offset, self.batch_size);
+                        pending = Some((batch, offset + self.batch_size));
+                        input
+                    } else if offset == 0 {
+                        batch
+                    } else {
+                        batch.slice(offset, remaining)
+                    };
+                    self.processor.push_batch(input)?;
+                }
                 JoinStep::Finished => {
                     return Ok(None);
                 }

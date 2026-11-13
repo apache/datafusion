@@ -23,27 +23,23 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, UInt32Array, UInt64Array};
-use arrow::buffer::{BooleanBuffer, NullBuffer};
+use arrow::array::{UInt32Array, UInt64Array};
+use arrow::buffer::BooleanBuffer;
 use arrow::compute::BatchCoalescer;
 use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
-use datafusion_common::hash_utils::RandomState;
 use datafusion_common::{
-    JoinSide, JoinType, NullEquality, Result, assert_or_internal_err, internal_err,
+    JoinSide, JoinType, Result, assert_or_internal_err, internal_err,
 };
 use datafusion_physical_expr::PhysicalExprRef;
 use datafusion_physical_expr_common::utils::evaluate_expressions_to_arrays;
 
 use super::build::JoinBuildState;
-use super::stream::lookup_join_hashmap;
-use crate::hash_utils::create_hashes;
-use crate::joins::Map;
-use crate::joins::join_hash_map::ProbeOffset;
+use super::probe_cursor::{GroupCursor, MatchChunk, PairBuffer};
+use crate::joins::join_index::{LookupResult, LookupScratch, UniqueMatches};
 use crate::joins::utils::{
-    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, JoinKeyComparator,
-    adjust_indices_by_join_type, apply_join_filter_to_indices,
-    build_batch_empty_build_side, build_batch_from_indices, matchable_join_keys,
+    BuildProbeJoinMetrics, ColumnIndex, JoinFilter, adjust_indices_by_join_type,
+    apply_join_filter_to_indices, build_batch_empty_build_side, build_batch_from_indices,
 };
 
 /// Join semantics and output settings for one probe partition.
@@ -58,10 +54,6 @@ pub(super) struct BatchedJoinProcessorConfig {
     pub(super) column_indices: Vec<ColumnIndex>,
     /// Probe equality-key expressions, paired with the build keys by position.
     pub(super) on_right: Vec<PhysicalExprRef>,
-    /// Hash state shared with build-side insertion.
-    pub(super) random_state: RandomState,
-    /// Whether NULL equality keys can match.
-    pub(super) null_equality: NullEquality,
     /// Extra `ON` condition checked after key equality, e.g. `l.x > r.y`.
     /// Its input columns are independent of the output projection.
     pub(super) filter: Option<JoinFilter>,
@@ -73,11 +65,12 @@ pub(super) struct BatchedJoinProcessorConfig {
     pub(super) fetch: Option<usize>,
 }
 
-/// Joins probe batches directly against the build map, in bounded chunks.
+/// Joins probe batches directly against the build index, in bounded chunks.
 ///
-/// Each lookup chunk contains at most `batch_size` candidate pairs, even if one
-/// key has millions of matches. The lookup offset resumes that key in the next
-/// chunk. Hash collisions are checked before applying the residual predicate.
+/// Each input contains at most `batch_size` probe rows. Unique-key matches fit
+/// in one chunk; only duplicate groups need a cursor. Each lookup chunk contains
+/// at most `batch_size` key-equal pairs, even if one
+/// key has millions of matches. The cursor resumes that key in the next chunk.
 /// Residual predicates run before recording matches or emitting unmatched rows,
 /// and surviving rows accumulate in a [`BatchCoalescer`] across chunks and inputs.
 /// Output batches contain `batch_size` rows, except the final batch at EOF or a
@@ -111,27 +104,28 @@ pub(super) struct BatchedJoinProcessor {
     probe: Option<ProbeBatch>,
     phase: Phase,
     /// Lookup scratch and pair buffers are reused across input batches.
-    hashes_buffer: Vec<u64>,
-    probe_indices_buffer: Vec<u32>,
-    build_indices_buffer: Vec<u64>,
+    lookup_scratch: LookupScratch,
+    pair_buffers: PairBuffer,
     /// Materialized output retained across probe batches and join phases.
     output: BatchCoalescer,
     remaining_fetch: Option<usize>,
 }
 
-/// Input and lookup progress are separate from successful ON matches: rejecting
-/// a chunk advances its offset, but does not make those probe rows joined.
-struct ProbeBatch {
-    input: RecordBatch,
-    keys: Vec<ArrayRef>,
-    valid_keys: Option<NullBuffer>,
-    offset: ProbeOffset,
-    key_comparator: Option<JoinKeyComparator>,
-    /// Count each probe row once, even when its equality matches span chunks.
-    last_probe_row_with_key_match: Option<u32>,
-    /// RIGHT/FULL joins retain this across chunks to avoid treating a previously
-    /// joined probe row as unmatched after later pairs fail the residual filter.
-    last_probe_row_with_on_match: Option<u32>,
+/// One bounded input and its remaining work. Unique matches are consumed once.
+/// Groups distinguish enumeration progress from successful ON matches: rejecting
+/// 100 pairs advances the cursor, but does not make that probe row joined.
+enum ProbeBatch {
+    Unique {
+        input: RecordBatch,
+        pairs: UniqueMatches,
+    },
+    Groups {
+        input: RecordBatch,
+        cursor: GroupCursor,
+        /// Only RIGHT/FULL joins need this across chunks, to avoid emitting a
+        /// previously joined probe row as unmatched after later pairs fail.
+        last_probe_row_with_on_match: Option<u32>,
+    },
 }
 
 /// The next action for the caller of [`BatchedJoinProcessor::next_output_batch`].
@@ -177,12 +171,13 @@ impl BatchedJoinProcessor {
         } else {
             Phase::Probing
         };
+        let lookup_scratch = LookupScratch::new(&build.data.reservation);
+        let pair_buffers = PairBuffer::new(&build.data.reservation);
         Self {
             build,
             probe: None,
-            hashes_buffer: vec![],
-            probe_indices_buffer: vec![],
-            build_indices_buffer: vec![],
+            lookup_scratch,
+            pair_buffers,
             output: BatchCoalescer::new(Arc::clone(&context.schema), context.batch_size),
             remaining_fetch: context.fetch,
             context,
@@ -191,10 +186,11 @@ impl BatchedJoinProcessor {
         }
     }
 
-    /// Accept one probe batch after draining the previous input.
+    /// Accept at most `batch_size` probe rows. The stream slices larger inputs.
     ///
-    /// Evaluate keys and hashes once; candidate lookup and output materialization
-    /// happen incrementally in [`Self::next_output_batch`].
+    /// Resolve all exact-key handles now. Duplicate expansion and output
+    /// materialization happen incrementally in [`Self::next_output_batch`],
+    /// including when one probe row has more matches than the output batch size.
     pub(super) fn push_batch(&mut self, batch: RecordBatch) -> Result<()> {
         if !matches!(self.phase, Phase::Probing) {
             return internal_err!(
@@ -205,24 +201,32 @@ impl BatchedJoinProcessor {
             self.probe.is_none(),
             "BatchedJoinProcessor: drain the current input before pushing another batch"
         );
+        assert_or_internal_err!(
+            batch.num_rows() <= self.context.batch_size,
+            "BatchedJoinProcessor: probe input exceeds batch_size"
+        );
         let keys = evaluate_expressions_to_arrays(&self.context.on_right, &batch)?;
-        let valid_keys = if matches!(&**self.build.data.map, Map::HashMap(_)) {
+
+        // Unique results already fit in one chunk. Group handles defer duplicate
+        // expansion, so a large group does not materialize all its pairs here.
+        let matches = {
             let _timer = self.metrics.join_time.timer();
-            self.hashes_buffer.clear();
-            self.hashes_buffer.resize(batch.num_rows(), 0);
-            create_hashes(&keys, &self.context.random_state, &mut self.hashes_buffer)?;
-            matchable_join_keys(&keys, self.context.null_equality)
-        } else {
-            None
+            self.build.data.map.lookup_batch(
+                &self.build.data.values,
+                &keys,
+                &mut self.lookup_scratch,
+            )?
         };
-        self.probe = Some(ProbeBatch {
-            input: batch,
-            keys,
-            valid_keys,
-            offset: ProbeOffset::AtRow { row: 0 },
-            key_comparator: None,
-            last_probe_row_with_key_match: None,
-            last_probe_row_with_on_match: None,
+        self.probe = Some(match matches {
+            LookupResult::Unique(pairs) => ProbeBatch::Unique {
+                input: batch,
+                pairs,
+            },
+            LookupResult::Groups(matches) => ProbeBatch::Groups {
+                input: batch,
+                cursor: GroupCursor::new(matches),
+                last_probe_row_with_on_match: None,
+            },
         });
         Ok(())
     }
@@ -347,12 +351,16 @@ impl BatchedJoinProcessor {
         };
         let context = &self.context;
         let build = &self.build;
-        let input = &probe.input;
 
         // NULL build keys can leave the map empty even when build rows exist.
         // Such rows cannot match but are still emitted at build finalization
         // for left/full joins. Right/full joins preserve this entire probe batch.
         if build.data.map.is_empty() {
+            let input = match probe {
+                ProbeBatch::Unique { input, .. } | ProbeBatch::Groups { input, .. } => {
+                    input
+                }
+            };
             let batch = build_batch_empty_build_side(
                 &context.schema,
                 &build.data.batch,
@@ -364,52 +372,42 @@ impl BatchedJoinProcessor {
             return Ok(Some(batch));
         }
 
-        // Hash lookup reclaims its scratch internally. ArrayMap returns the
-        // scratch as Arrow arrays, so retain their buffers until materialization.
-        let mut array_map_buffers = None;
-        let (build_indices, probe_indices, next_offset) = match &**build.data.map {
-            Map::HashMap(map) => lookup_join_hashmap(
-                map.as_ref(),
-                &build.data.values,
-                &probe.keys,
-                context.null_equality,
-                &self.hashes_buffer,
-                probe.valid_keys.as_ref(),
-                context.batch_size,
-                probe.offset,
-                &mut self.probe_indices_buffer,
-                &mut self.build_indices_buffer,
-                &mut probe.key_comparator,
-            )?,
-            Map::ArrayMap(map) => {
-                let next_offset = map.get_matched_indices_with_limit_offset(
-                    &probe.keys,
+        // Keep the lookup result (and its reservation) alive until output has
+        // been materialized. Only an unfinished group is retained for later.
+        let (input, chunk, exhausted, last_on_match) = match probe {
+            ProbeBatch::Unique { input, pairs } => {
+                debug_assert_eq!(pairs.probe_len, input.num_rows());
+                (
+                    input,
+                    MatchChunk {
+                        build_rows: UInt64Array::new(pairs.build_rows.clone(), None),
+                        probe_rows: UInt32Array::new(pairs.probe_rows.clone(), None),
+                        newly_matched_probe_rows: pairs.probe_rows.len(),
+                    },
+                    true,
+                    None,
+                )
+            }
+            ProbeBatch::Groups {
+                input,
+                cursor,
+                last_probe_row_with_on_match,
+            } => {
+                let chunk = cursor.next_batch(
+                    &build.data.map,
                     context.batch_size,
-                    probe.offset,
-                    &mut self.probe_indices_buffer,
-                    &mut self.build_indices_buffer,
+                    &mut self.pair_buffers,
                 )?;
-                let build_indices: UInt64Array =
-                    std::mem::take(&mut self.build_indices_buffer).into();
-                let probe_indices: UInt32Array =
-                    std::mem::take(&mut self.probe_indices_buffer).into();
-                array_map_buffers = Some((
-                    build_indices.values().clone(),
-                    probe_indices.values().clone(),
-                ));
-                (build_indices, probe_indices, next_offset)
+                (
+                    input,
+                    chunk,
+                    cursor.is_finished(),
+                    Some(last_probe_row_with_on_match),
+                )
             }
         };
-
-        // Equality pairs are ordered by probe row. A row continuing from the
-        // previous chunk contributes fanout, but not another probe hit.
-        let mut matched_probe_rows = 0;
-        for &row in probe_indices.values().iter() {
-            if probe.last_probe_row_with_key_match != Some(row) {
-                matched_probe_rows += 1;
-                probe.last_probe_row_with_key_match = Some(row);
-            }
-        }
+        let matched_probe_rows = chunk.newly_matched_probe_rows;
+        let (build_indices, probe_indices) = (chunk.build_rows, chunk.probe_rows);
         self.metrics.probe_hit_rate.add_part(matched_probe_rows);
         self.metrics.avg_fanout.add_part(build_indices.len());
         self.metrics.avg_fanout.add_total(matched_probe_rows);
@@ -435,16 +433,19 @@ impl BatchedJoinProcessor {
 
         let (build_indices, probe_indices) = if context.kind.preserves_probe() {
             let last_joined_probe_row = probe_indices.values().last().copied();
-            let start = probe
-                .last_probe_row_with_on_match
+            let start = last_on_match
+                .as_ref()
+                .and_then(|row| **row)
                 .map_or(0, |row| row as usize + 1);
-            let end = if next_offset.is_none() {
+            let end = if exhausted {
                 input.num_rows()
             } else {
                 last_joined_probe_row.map_or(0, |row| row as usize + 1)
             };
-            if last_joined_probe_row.is_some() {
-                probe.last_probe_row_with_on_match = last_joined_probe_row;
+            if let Some(last_on_match) = last_on_match
+                && last_joined_probe_row.is_some()
+            {
+                *last_on_match = last_joined_probe_row;
             }
             adjust_indices_by_join_type(
                 build_indices,
@@ -468,14 +469,7 @@ impl BatchedJoinProcessor {
             context.kind.join_type(),
             None,
         )?;
-        drop((build_indices, probe_indices));
-        if let Some((build_buffer, probe_buffer)) = array_map_buffers {
-            self.build_indices_buffer = build_buffer.into();
-            self.probe_indices_buffer = probe_buffer.into();
-        }
-        if let Some(offset) = next_offset {
-            probe.offset = offset;
-        } else {
+        if exhausted {
             self.probe = None;
         }
         Ok(Some(output))
@@ -485,9 +479,8 @@ impl BatchedJoinProcessor {
     /// Output already materialized in the coalescer remains available.
     fn release_probe(&mut self) {
         self.probe = None;
-        self.hashes_buffer = Vec::new();
-        self.probe_indices_buffer = Vec::new();
-        self.build_indices_buffer = Vec::new();
+        self.lookup_scratch = LookupScratch::new(&self.build.data.reservation);
+        self.pair_buffers = PairBuffer::new(&self.build.data.reservation);
     }
 }
 

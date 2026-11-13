@@ -12,7 +12,6 @@ use std::sync::Arc;
 use arrow::array::BooleanBufferBuilder;
 pub use asof_join::{AsOfJoinExec, AsOfMatchExpr};
 pub use cross_join::CrossJoinExec;
-use datafusion_common::{Result, internal_err};
 use datafusion_execution::memory_pool::MemoryReservation;
 use datafusion_physical_expr::PhysicalExprRef;
 /// # Public Only for Internal Use:
@@ -57,6 +56,7 @@ mod join_filter;
 /// [API policy]: https://datafusion.apache.org/contributor-guide/api-health.html#internal-public-apis
 #[doc(hidden)]
 pub mod join_hash_map;
+mod join_index;
 pub mod key_range_bitmap;
 
 use array_map::ArrayMap;
@@ -124,14 +124,6 @@ impl ReservedMap {
         Self {
             map,
             reservation: None,
-        }
-    }
-
-    /// Charges `bytes` for data kept with the map.
-    pub(crate) fn try_grow(&self, bytes: usize) -> Result<()> {
-        match &self.reservation {
-            Some(reservation) => reservation.try_grow(bytes),
-            None => internal_err!("ReservedMap has no reservation to grow"),
         }
     }
 

@@ -977,9 +977,10 @@ config_namespace! {
         /// See <https://github.com/apache/datafusion/issues/22710> for details.
         pub enable_migration_aggregate: bool, default = true
 
-        /// Whether inner, left outer, right outer, and full outer hash joins use
-        /// the refactored probe implementation. When set to `false`, these joins
-        /// use the previous probe implementation.
+        /// Whether hash joins use the exact-key index with flat duplicate-row
+        /// groups. Inner, left outer, right outer, and full outer joins also use
+        /// the refactored probe implementation. When set to `false`, hash joins
+        /// use the previous index and probe implementations.
         ///
         /// The fallback exists only as a workaround for bugs in the new
         /// implementation and will be removed, together with this option, once

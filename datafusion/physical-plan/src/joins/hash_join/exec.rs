@@ -24,6 +24,7 @@ use crate::joins::hash_join::batched_join_processor::{
 use crate::joins::hash_join::build::{HashJoinBuild, JoinBuildState};
 use crate::joins::hash_join::inlist_builder::build_struct_inlist_values;
 use crate::joins::hash_join::not_in::{NotIn, NotInBuild};
+use crate::joins::hash_join::partitioned_hash_eval::JoinMembership;
 use crate::joins::hash_join::regular_join::RegularHashJoinStream;
 use crate::joins::hash_join::shared_bounds::{
     ColumnBounds, PartitionBounds, PushdownStrategy, SharedBuildAccumulator,
@@ -32,6 +33,7 @@ use crate::joins::hash_join::stream::{
     BuildSide, BuildSideInitialState, HashJoinStream, HashJoinStreamState,
 };
 use crate::joins::join_hash_map::{JoinHashMapU32, JoinHashMapU64};
+use crate::joins::join_index::{JoinIndexMap, ReservedJoinIndex};
 use crate::joins::key_range_bitmap::KeyRangeBitmap;
 use crate::joins::probe_completion::{Completion, ProbeCompletion};
 use crate::joins::utils::{
@@ -163,12 +165,10 @@ fn subtree_max_len(data: &ArrayData) -> usize {
 /// Decides whether the build side should be joined with an [`ArrayMap`]
 /// (perfect hash join), returning the `(min, max)` key range to build it over.
 ///
-/// On `Some`, the memory of the [`ArrayMap`] has already been added to
-/// `reservation`; the caller creates the map with [`ArrayMap::try_new`].
+/// The caller reserves the selected directory's storage before constructing it.
 fn array_map_key_range(
     bounds: Option<&PartitionBounds>,
     keys: &[ArrayRef],
-    reservation: &mut MemoryReservation,
     perfect_hash_join_small_build_threshold: usize,
     perfect_hash_join_min_key_density: f64,
     null_equality: NullEquality,
@@ -234,24 +234,22 @@ fn array_map_key_range(
         return Ok(None);
     }
 
-    let mem_size = ArrayMap::estimate_memory_size(min_val, max_val, num_rows);
-    reservation.try_grow(mem_size)?;
-
     Ok(Some((min_val, max_val)))
 }
 
-/// A prepared build retains its executor choice when reused with a different
-/// configuration.
+/// The physical build determines the executor that can probe it. In particular,
+/// a prepared build retains this choice when reused with a different config.
 pub(super) enum JoinBuildData {
     Regular(Arc<RegularBuildData>),
     /// Existence/null-aware joins and regular joins with migration disabled.
     Legacy(Arc<LegacyBuildData>),
 }
 
-pub(super) type RegularBuildData = BuildData<Arc<ReservedMap>>;
+pub(super) type RegularBuildData = BuildData<Arc<ReservedJoinIndex>>;
 type LegacyBuildData = BuildData<Arc<ReservedMap>>;
 
-/// Immutable build buffers shared by both executors.
+/// Immutable build buffers shared by both executors. `M` fixes the physical
+/// index type before a processor is constructed.
 pub(super) struct BuildData<M> {
     /// Hash table with row indices into `batch`, charged to its own
     /// reservation because it is also shared with dynamic filters.
@@ -331,7 +329,7 @@ struct CollectedBuild {
 impl CollectedBuild {
     fn into_regular(self) -> Result<JoinBuildState> {
         let JoinBuildData::Regular(build) = self.build else {
-            return internal_err!("Regular hash join requires a regular-executor build");
+            return internal_err!("Regular hash join requires a JoinIndexMap build");
         };
         Ok(JoinBuildState::new(
             build,
@@ -342,7 +340,7 @@ impl CollectedBuild {
 
     fn into_legacy(self) -> Result<JoinLeftData> {
         let JoinBuildData::Legacy(build) = self.build else {
-            return internal_err!("Legacy hash join requires a legacy-executor build");
+            return internal_err!("Legacy hash join requires a hash/array-map build");
         };
         Ok(JoinLeftData {
             not_in: self.not_in,
@@ -1954,8 +1952,6 @@ impl ExecutionPlan for HashJoinExec {
             );
             let config = BatchedJoinProcessorConfig {
                 on_right,
-                random_state: self.random_state.random_state().clone(),
-                null_equality: self.null_equality,
                 filter: self.filter.clone(),
                 kind,
                 batch_size,
@@ -3421,30 +3417,32 @@ fn build_in_memory(
     // Bound before the map so error paths release the map before its charge.
     let mut map_reservation = reservation.new_empty();
 
-    // Merge all batches into a single batch, so we can directly index into the
-    // arrays. Outside prepared mode the input batches are dropped here, before
-    // the map is allocated.
+    // Outside prepared mode, release the input batches before allocating the map.
     let batch = if prepared {
         concat_batches(schema, batches.iter())?
     } else {
         concat_build_batches(schema, batches, input_bytes, &mut reservation, metrics)?
     };
     let left_values = evaluate_expressions_to_arrays(on_left, &batch)?;
-
-    let join_hash_map = if let Some((min_val, max_val)) = array_map_key_range(
+    let dense_range = array_map_key_range(
         bounds.as_ref(),
         &left_values,
-        &mut map_reservation,
         config.execution.perfect_hash_join_small_build_threshold,
         config.execution.perfect_hash_join_min_key_density,
         null_equality,
-    )? {
+    )?;
+
+    let legacy_map = if regular {
+        None
+    } else if let Some((min_val, max_val)) = dense_range {
+        map_reservation
+            .try_grow(ArrayMap::estimate_memory_size(min_val, max_val, num_rows))?;
         let array_map = ArrayMap::try_new(&left_values[0], min_val, max_val)?;
 
         array_map_created_count.add(1);
         metrics.build_mem_used.add(array_map.size());
 
-        Map::ArrayMap(array_map)
+        Some(Map::ArrayMap(array_map))
     } else {
         // Estimation of memory size, required for hashtable, prior to allocation.
         // Final result can be verified using `RawTable.allocation_info()`
@@ -3499,20 +3497,15 @@ fn build_in_memory(
             )?;
         }
 
-        Map::HashMap(hashmap)
+        Some(Map::HashMap(hashmap))
     };
 
-    // Rewrite float `-0.0` to `+0.0` once here, so the per probe batch key
-    // comparison does not rescan the build side. Arrays without `-0.0`, and
-    // non-float keys, are shared rather than copied.
+    // Normalize and charge key buffers before exact-key index construction.
     let normalized_values: Vec<ArrayRef> = left_values
         .iter()
         .map(|values| float_semantics::normalize(Arc::clone(values)))
         .collect();
 
-    // Join keys that are plain columns share the buffers of `batch`, any other
-    // expression evaluates to new arrays that are kept for the whole join.
-    // The same goes for normalized keys: only a rewritten copy adds memory.
     let mut key_counter = RecordBatchMemoryCounter::new();
     key_counter.count_batch(&batch);
     let keys_size = left_values
@@ -3522,6 +3515,24 @@ fn build_in_memory(
         .sum::<usize>();
     reservation.try_grow(keys_size)?;
     metrics.build_mem_used.add(keys_size);
+
+    let (index, num_distinct) = if let Some(map) = &legacy_map {
+        (None, map.num_of_distinct_key())
+    } else {
+        let index = JoinIndexMap::try_new(
+            &normalized_values,
+            random_state,
+            null_equality,
+            dense_range,
+            &map_reservation,
+        )?;
+        if index.is_dense() {
+            array_map_created_count.add(1);
+        }
+        metrics.build_mem_used.add(map_reservation.size());
+        let num_distinct = index.num_of_distinct_key();
+        (Some(index), num_distinct)
+    };
 
     let allocate_bitmap = || -> Result<BooleanBufferBuilder> {
         let bitmap_size = bit_util::ceil(batch.num_rows(), 8);
@@ -3552,14 +3563,13 @@ fn build_in_memory(
         })
         .transpose()?;
 
-    let map = Arc::new(ReservedMap::new(join_hash_map, map_reservation));
-
     // For an ordinary build, nothing reads the strategy unless this join's own
     // dynamic filter accumulator exists. A prepared build is shared with joins
     // decided later, so it must always be ready to serve one.
-    let membership = if num_rows == 0 || (!prepared && !should_compute_dynamic_filters) {
-        PushdownStrategy::Empty
-    } else {
+    let needs_membership = num_rows != 0 && (prepared || should_compute_dynamic_filters);
+    let mut in_list = None;
+    let mut pruning_bitmap = None;
+    if needs_membership {
         // If the build side is small enough we can use IN list pushdown.
         // If it's too big we fall back to pushing down a reference to the hash table.
         // See `PushdownStrategy` for more details.
@@ -3571,43 +3581,36 @@ fn build_in_memory(
         let pushdown_inlist = !left_values.is_empty()
             && !left_values[0].is_empty()
             && estimated_size <= config.optimizer.hash_join_inlist_pushdown_max_size
-            && map.num_of_distinct_key()
+            && num_distinct
                 <= config
                     .optimizer
                     .hash_join_inlist_pushdown_max_distinct_values;
 
-        if pushdown_inlist
-            && let Some(in_list_values) = build_struct_inlist_values(&left_values)?
-        {
-            PushdownStrategy::InList(in_list_values)
-        } else {
+        if pushdown_inlist {
+            in_list = build_struct_inlist_values(&left_values)?;
+        }
+        if in_list.is_none() {
             // Past the InList threshold use a bucket bitmap for container pruning.
-            let pruning_bitmap = match (left_values.as_slice(), bounds.as_ref()) {
+            pruning_bitmap = match (left_values.as_slice(), bounds.as_ref()) {
                 ([keys], Some(bounds)) if !keys.is_empty() => bounds
                     .get_column_bounds(0)
                     .and_then(|b| {
-                        KeyRangeBitmap::try_new(
-                            keys,
-                            &b.min,
-                            &b.max,
-                            map.num_of_distinct_key(),
-                        )
+                        KeyRangeBitmap::try_new(keys, &b.min, &b.max, num_distinct)
                     })
                     .map(Arc::new),
                 _ => None,
             };
             // Shared with the map, so charge it with the map; it is optional,
             // so skip it rather than fail when the pool is full.
-            let pruning_bitmap = pruning_bitmap.filter(|bitmap| {
-                let ok = map.try_grow(bitmap.size()).is_ok();
+            pruning_bitmap = pruning_bitmap.filter(|bitmap| {
+                let ok = map_reservation.try_grow(bitmap.size()).is_ok();
                 if ok {
                     metrics.build_mem_used.add(bitmap.size());
                 }
                 ok
             });
-            PushdownStrategy::Map(Arc::clone(&map), pruning_bitmap)
         }
-    };
+    }
 
     if is_phj_candidate && !should_compute_dynamic_filters {
         bounds = None;
@@ -3626,18 +3629,40 @@ fn build_in_memory(
         )?;
     }
 
-    let data = Arc::new(BuildData {
-        map,
-        batch,
-        values: normalized_values,
-        bounds,
-        membership,
-        reservation,
-    });
-    let build = if regular {
-        JoinBuildData::Regular(data)
+    let membership_for = |map: Arc<dyn JoinMembership>| {
+        if !needs_membership {
+            PushdownStrategy::Empty
+        } else if let Some(values) = in_list {
+            PushdownStrategy::InList(values)
+        } else {
+            PushdownStrategy::Map(map, pruning_bitmap)
+        }
+    };
+    let build = if let Some(index) = index {
+        let map = Arc::new(ReservedJoinIndex::new(index, map_reservation));
+        let membership = membership_for(Arc::clone(&map) as _);
+        JoinBuildData::Regular(Arc::new(BuildData {
+            map,
+            batch,
+            values: normalized_values,
+            bounds,
+            membership,
+            reservation,
+        }))
     } else {
-        JoinBuildData::Legacy(data)
+        let map = Arc::new(ReservedMap::new(
+            legacy_map.expect("legacy build created a map"),
+            map_reservation,
+        ));
+        let membership = membership_for(Arc::clone(&map) as _);
+        JoinBuildData::Legacy(Arc::new(BuildData {
+            map,
+            batch,
+            values: normalized_values,
+            bounds,
+            membership,
+            reservation,
+        }))
     };
 
     Ok(CollectedBuild {
@@ -3824,7 +3849,11 @@ mod tests {
     /// key hashes to the same bucket, so `num_of_distinct_key()` no longer
     /// reflects the real 200 distinct keys and would otherwise take the
     /// IN-list branch instead of the one under test.
-    async fn build_mem_used(limit: usize, dynamic_filters: bool) -> Result<usize> {
+    async fn build_mem_used(
+        limit: usize,
+        dynamic_filters: bool,
+        enable_migration_hash_join: bool,
+    ) -> Result<usize> {
         let SparseKeyJoinInputs { build, probe, on } = sparse_key_join_inputs()?;
         let join = if dynamic_filters {
             hash_join_with_dynamic_filter(build, probe, on, JoinType::Inner)?.0
@@ -3841,7 +3870,11 @@ mod tests {
         let runtime = RuntimeEnvBuilder::new()
             .with_memory_limit(limit, 1.0)
             .build_arc()?;
-        let mut config = SessionConfig::new();
+        // Probe only three rows; keep its separately charged pair buffers
+        // small so this test isolates the optional build-side bitmap.
+        let mut config = SessionConfig::new().with_batch_size(8);
+        config.options_mut().execution.enable_migration_hash_join =
+            enable_migration_hash_join;
         config
             .options_mut()
             .optimizer
@@ -3863,11 +3896,21 @@ mod tests {
 
     /// The bitmap is pruning-only: never built when no dynamic filter will read
     /// it, and dropped rather than fatal when the pool cannot fit it.
+    #[rstest]
     #[tokio::test]
-    async fn pruning_bitmap_is_optional() -> Result<()> {
-        assert!(build_mem_used(1_000_000, false).await? < 100_000);
-        assert!(build_mem_used(1_000_000, true).await? > 100_000);
-        build_mem_used(100_000, true).await?;
+    async fn pruning_bitmap_is_optional(
+        #[values(false, true)] enable_migration_hash_join: bool,
+    ) -> Result<()> {
+        let without_bitmap =
+            build_mem_used(1_000_000, false, enable_migration_hash_join).await?;
+        let with_bitmap =
+            build_mem_used(1_000_000, true, enable_migration_hash_join).await?;
+        assert!(without_bitmap < 100_000);
+        assert!(with_bitmap > 100_000);
+        assert_eq!(
+            build_mem_used(100_000, true, enable_migration_hash_join).await?,
+            without_bitmap,
+        );
         Ok(())
     }
 
@@ -3879,6 +3922,7 @@ mod tests {
     async fn build_map_stays_reserved_with_dynamic_filter(
         #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
         mode: PartitionMode,
+        #[values(false, true)] enable_migration_hash_join: bool,
     ) -> Result<()> {
         let SparseKeyJoinInputs { build, probe, on } = sparse_key_join_inputs()?;
         let (join, filter) = hash_join_with_dynamic_filter_and_mode(
@@ -3895,6 +3939,8 @@ mod tests {
             .with_memory_pool(Arc::clone(&pool))
             .build_arc()?;
         let mut config = SessionConfig::new();
+        config.options_mut().execution.enable_migration_hash_join =
+            enable_migration_hash_join;
         config
             .options_mut()
             .optimizer
@@ -3914,10 +3960,10 @@ mod tests {
             .unwrap()
             .as_usize();
         let keys = sparse_keys();
-        let map_bytes =
-            estimate_memory_size::<(u32, u64)>(keys.len(), size_of::<JoinHashMapU32>())?
-                + keys.len() * size_of::<u32>();
         let keys_array: ArrayRef = Arc::new(Int64Array::from(keys.clone()));
+        let payload_bytes =
+            RecordBatchMemoryCounter::new().count_array(keys_array.as_ref());
+        let retained_map_bytes = build_mem_used - payload_bytes;
         let bitmap_bytes = KeyRangeBitmap::try_new(
             &keys_array,
             &ScalarValue::Int64(Some(0)),
@@ -3925,9 +3971,10 @@ mod tests {
             keys.len(),
         )
         .map_or(0, |bitmap| bitmap.size());
+        assert!(retained_map_bytes > bitmap_bytes);
         let expected = match mode {
             // The stream is gone; only the map and its bitmap are still held.
-            PartitionMode::Partitioned => map_bytes + bitmap_bytes,
+            PartitionMode::Partitioned => retained_map_bytes,
             PartitionMode::CollectLeft => build_mem_used,
             PartitionMode::Auto => unreachable!(),
         };
@@ -3935,19 +3982,20 @@ mod tests {
 
         // The filter is the last holder.
         drop(join);
-        assert_eq!(pool.reserved(), map_bytes + bitmap_bytes);
+        assert_eq!(pool.reserved(), retained_map_bytes);
         drop(filter);
         assert_eq!(pool.reserved(), 0);
         Ok(())
     }
 
-    /// Dense keys build an `ArrayMap`, which is charged to the map's own
-    /// reservation in `array_map_key_range` rather than the build's.
+    /// Dense keys and their duplicate row IDs are charged to the map's own
+    /// reservation rather than the build payload's reservation.
     #[rstest]
     #[tokio::test]
     async fn array_map_stays_reserved_with_dynamic_filter(
         #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
         mode: PartitionMode,
+        #[values(false, true)] enable_migration_hash_join: bool,
     ) -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new("k", DataType::Int64, false)]));
         let batch = |keys: Vec<i64>| {
@@ -3960,7 +4008,7 @@ mod tests {
             Arc::new(Column::new_with_schema("k", &schema)?) as _,
         )];
         let (join, filter) = hash_join_with_dynamic_filter_and_mode(
-            batch((0..20_000).collect())?,
+            batch((0..20_000).map(|row| row / 2).collect())?,
             batch(vec![0, 5, 15])?,
             on,
             JoinType::Inner,
@@ -3973,6 +4021,8 @@ mod tests {
             .with_memory_pool(Arc::clone(&pool))
             .build_arc()?;
         let mut config = SessionConfig::new();
+        config.options_mut().execution.enable_migration_hash_join =
+            enable_migration_hash_join;
         config
             .options_mut()
             .optimizer
@@ -3983,14 +4033,30 @@ mod tests {
                 .with_session_config(config),
         );
         let batches = common::collect(join.execute(0, task_ctx)?).await?;
-        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 3);
+        assert_eq!(batches.iter().map(|b| b.num_rows()).sum::<usize>(), 6);
         assert_phj_used(&join.metrics().unwrap(), true);
 
-        drop(join);
+        let build_mem_used = join
+            .metrics()
+            .unwrap()
+            .sum_by_name("build_mem_used")
+            .unwrap()
+            .as_usize();
+        let keys = Int64Array::from_iter_values((0..20_000).map(|row| row / 2));
+        let payload_bytes = RecordBatchMemoryCounter::new().count_array(&keys);
+        let retained_map_bytes = build_mem_used - payload_bytes;
+        assert!(retained_map_bytes > 0);
         assert_eq!(
             pool.reserved(),
-            ArrayMap::estimate_memory_size(0, 19_999, 20_000)
+            match mode {
+                PartitionMode::CollectLeft => build_mem_used,
+                PartitionMode::Partitioned => retained_map_bytes,
+                PartitionMode::Auto => unreachable!(),
+            }
         );
+
+        drop(join);
+        assert_eq!(pool.reserved(), retained_map_bytes);
         drop(filter);
         assert_eq!(pool.reserved(), 0);
         Ok(())
@@ -8969,7 +9035,10 @@ mod tests {
         #[values(PartitionMode::CollectLeft, PartitionMode::Partitioned)]
         mode: PartitionMode,
         #[values(false, true)] use_perfect_hash_join_as_possible: bool,
+        #[values(false, true)] enable_migration_hash_join: bool,
     ) -> Result<()> {
+        use datafusion_execution::memory_pool::PeakRecordingPool;
+
         let num_rows = 4000;
         let values = (0..num_rows).collect::<Vec<i32>>();
         let batches = (0..4)
@@ -8987,69 +9056,63 @@ mod tests {
             Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
         )];
 
-        // Reserved on top of the copy, once the inputs are dropped
-        let build_rows = batches.len() * num_rows as usize;
-        let cases = if use_perfect_hash_join_as_possible {
-            let map = ArrayMap::estimate_memory_size(0, num_rows as u64 - 1, build_rows);
-            assert!(map < inputs / 2);
-            vec![
-                // Room for the inputs plus the map, not for the inputs plus their copy
-                (inputs * 7 / 4, false),
-                // The map fits next to the copy
-                (inputs * 2 + map / 2, true),
-            ]
-        } else {
-            let map = estimate_memory_size::<(u32, u64)>(
-                build_rows,
-                size_of::<JoinHashMapU32>(),
-            )? + build_rows * size_of::<u32>();
-            assert!(map > inputs * 2);
-            vec![
-                // The copy fits next to the inputs, the map does not fit next
-                // to the copy
-                (map + inputs / 2, false),
-                // The map fits next to the copy, not next to the inputs too
-                (map + inputs * 3 / 2, true),
-            ]
+        let run = |pool: Arc<dyn MemoryPool>| {
+            let batches = batches.clone();
+            let left_schema = Arc::clone(&left_schema);
+            let right = Arc::clone(&right);
+            let on = on.clone();
+            async move {
+                let left = TestMemoryExec::try_new_exec(&[batches], left_schema, None)?;
+                let join = HashJoinExec::try_new(
+                    left,
+                    right,
+                    on,
+                    None,
+                    &JoinType::Inner,
+                    None,
+                    mode,
+                    NullEquality::NullEqualsNothing,
+                    false,
+                )?;
+                let runtime = RuntimeEnvBuilder::new()
+                    .with_memory_pool(pool)
+                    .build_arc()?;
+                let mut config =
+                    prepare_task_ctx(8192, use_perfect_hash_join_as_possible)
+                        .session_config()
+                        .clone();
+                config.options_mut().execution.enable_migration_hash_join =
+                    enable_migration_hash_join;
+                let task_ctx = Arc::new(
+                    TaskContext::default()
+                        .with_session_config(config)
+                        .with_runtime(runtime),
+                );
+                common::collect(join.execute(0, task_ctx)?).await
+            }
         };
 
-        for (limit, fits) in cases {
-            let left = TestMemoryExec::try_new_exec(
-                std::slice::from_ref(&batches),
-                Arc::clone(&left_schema),
-                None,
-            )?;
-            let join = HashJoinExec::try_new(
-                left,
-                Arc::clone(&right),
-                on.clone(),
-                None,
-                &JoinType::Inner,
-                None,
-                mode,
-                NullEquality::NullEqualsNothing,
-                false,
-            )?;
+        // Measure the selected index's peak rather than assuming a bucket or
+        // chain layout. The inputs and concatenated copy must overlap.
+        let recording = Arc::new(PeakRecordingPool::new(Arc::new(
+            UnboundedMemoryPool::default(),
+        )));
+        run(Arc::clone(&recording) as _).await?;
+        let peak = recording.peak_reserved();
+        assert!(peak >= inputs * 2);
+        assert_eq!(recording.reserved(), 0);
 
-            let runtime = RuntimeEnvBuilder::new()
-                .with_memory_limit(limit, 1.0)
-                .build_arc()?;
-            let task_ctx = prepare_task_ctx(8192, use_perfect_hash_join_as_possible);
-            let task_ctx = Arc::new(
-                TaskContext::default()
-                    .with_session_config(task_ctx.session_config().clone())
-                    .with_runtime(runtime),
-            );
-
-            let result = common::collect(join.execute(0, task_ctx)?).await;
+        for (limit, fits) in [(peak - 1, false), (peak, true)] {
+            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+            let result = run(Arc::clone(&pool)).await;
             if fits {
                 result?;
             } else {
-                assert_contains!(
-                    result.unwrap_err().to_string(),
-                    "Resources exhausted: Additional allocation failed for HashJoinInput"
-                );
+                let error = result.unwrap_err().to_string();
+                assert_contains!(error.as_str(), "Resources exhausted");
+                assert_contains!(error.as_str(), "HashJoinInput");
             }
+            assert_eq!(pool.reserved(), 0);
         }
         Ok(())
     }
@@ -9060,7 +9123,10 @@ mod tests {
     #[tokio::test]
     async fn join_build_key_arrays_are_reserved(
         #[values(false, true)] use_perfect_hash_join_as_possible: bool,
+        #[values(false, true)] enable_migration_hash_join: bool,
     ) -> Result<()> {
+        use datafusion_execution::memory_pool::PeakRecordingPool;
+
         let num_rows = 16000;
         let values = (0..num_rows).collect::<Vec<i32>>();
         // A single build batch, so that there is no concatenated copy
@@ -9074,70 +9140,80 @@ mod tests {
             ("c2", &vec![14, 15]),
         );
 
-        let map = if use_perfect_hash_join_as_possible {
-            ArrayMap::estimate_memory_size(1, num_rows as u64, num_rows as usize)
-        } else {
-            estimate_memory_size::<(u32, u64)>(
-                num_rows as usize,
-                size_of::<JoinHashMapU32>(),
-            )? + num_rows as usize * size_of::<u32>()
+        let run = |computed_key: bool, pool: Arc<dyn MemoryPool>| {
+            let batch = batch.clone();
+            let left_schema = Arc::clone(&left_schema);
+            let right = Arc::clone(&right);
+            async move {
+                let column = Arc::new(Column::new_with_schema("a1", &left_schema)?) as _;
+                let left_key: PhysicalExprRef = if computed_key {
+                    Arc::new(BinaryExpr::new(
+                        column,
+                        Operator::Plus,
+                        Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
+                    ))
+                } else {
+                    column
+                };
+                let on = vec![(
+                    left_key,
+                    Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
+                )];
+                let left =
+                    TestMemoryExec::try_new_exec(&[vec![batch]], left_schema, None)?;
+                let join = HashJoinExec::try_new(
+                    left,
+                    right,
+                    on,
+                    None,
+                    &JoinType::Inner,
+                    None,
+                    PartitionMode::CollectLeft,
+                    NullEquality::NullEqualsNothing,
+                    false,
+                )?;
+                let runtime = RuntimeEnvBuilder::new()
+                    .with_memory_pool(pool)
+                    .build_arc()?;
+                let mut config =
+                    prepare_task_ctx(8192, use_perfect_hash_join_as_possible)
+                        .session_config()
+                        .clone();
+                config.options_mut().execution.enable_migration_hash_join =
+                    enable_migration_hash_join;
+                let task_ctx = Arc::new(
+                    TaskContext::default()
+                        .with_session_config(config)
+                        .with_runtime(runtime),
+                );
+                common::collect(join.execute(0, task_ctx)?).await
+            }
         };
 
+        let recording = Arc::new(PeakRecordingPool::new(Arc::new(
+            UnboundedMemoryPool::default(),
+        )));
+        run(false, Arc::clone(&recording) as _).await?;
+        let column_peak = recording.peak_reserved();
+        assert_eq!(recording.reserved(), 0);
+
+        // The index has the same shape for k and k+1. Only the computed key
+        // owns an additional array, which must fit alongside index scratch.
         for (computed_key, limit, fits) in [
-            (false, inputs + map + keys / 2, true),
-            (true, inputs + map + keys / 2, false),
-            (true, inputs + map + keys * 2, true),
+            (false, column_peak + keys / 2, true),
+            (true, column_peak + keys / 2, false),
+            (true, column_peak + keys * 2, true),
         ] {
-            let column = Arc::new(Column::new_with_schema("a1", &left_schema)?) as _;
-            let left_key: PhysicalExprRef = if computed_key {
-                Arc::new(BinaryExpr::new(
-                    column,
-                    Operator::Plus,
-                    Arc::new(Literal::new(ScalarValue::Int32(Some(1)))),
-                ))
-            } else {
-                column
-            };
-            let on = vec![(
-                left_key,
-                Arc::new(Column::new_with_schema("b2", &right.schema())?) as _,
-            )];
-            let left = TestMemoryExec::try_new_exec(
-                &[vec![batch.clone()]],
-                Arc::clone(&left_schema),
-                None,
-            )?;
-            let join = HashJoinExec::try_new(
-                left,
-                Arc::clone(&right),
-                on,
-                None,
-                &JoinType::Inner,
-                None,
-                PartitionMode::CollectLeft,
-                NullEquality::NullEqualsNothing,
-                false,
-            )?;
-
-            let runtime = RuntimeEnvBuilder::new()
-                .with_memory_limit(limit, 1.0)
-                .build_arc()?;
-            let task_ctx = prepare_task_ctx(8192, use_perfect_hash_join_as_possible);
-            let task_ctx = Arc::new(
-                TaskContext::default()
-                    .with_session_config(task_ctx.session_config().clone())
-                    .with_runtime(runtime),
-            );
-
-            let result = common::collect(join.execute(0, task_ctx)?).await;
+            let pool: Arc<dyn MemoryPool> = Arc::new(GreedyMemoryPool::new(limit));
+            let result = run(computed_key, Arc::clone(&pool)).await;
             if fits {
                 result?;
             } else {
-                assert_contains!(
-                    result.unwrap_err().to_string(),
-                    "Resources exhausted: Additional allocation failed for HashJoinInput"
-                );
+                let error = result.unwrap_err().to_string();
+                assert_contains!(error.as_str(), "Resources exhausted");
+                assert_contains!(error.as_str(), "HashJoinInput");
             }
+            assert_eq!(pool.reserved(), 0);
         }
         Ok(())
     }
@@ -9218,9 +9294,11 @@ mod tests {
                 .with_memory_limit(limit, 1.0)
                 .build_arc()?;
             let task_ctx = prepare_task_ctx(8192, false);
+            let mut config = task_ctx.session_config().clone();
+            config.options_mut().execution.enable_migration_hash_join = false;
             let task_ctx = Arc::new(
                 TaskContext::default()
-                    .with_session_config(task_ctx.session_config().clone())
+                    .with_session_config(config)
                     .with_runtime(runtime),
             );
 
@@ -11491,12 +11569,16 @@ mod tests {
     /// scope key `grp`, over 10,000 build rows `(2 * i, i % 100)`, with a
     /// NULL `id` for each multiple of `null_build_every`, and the probe rows
     /// `(probe_ids[i], i)`, in a memory pool of `memory_limit` bytes or an
-    /// unbounded one. Returns the output rows and the `build_mem_used` metric.
+    /// unbounded one. Returns the output rows, `build_mem_used`, and peak
+    /// reservation, including transient index-construction buffers.
     async fn run_scope_key_anti_join(
         null_build_every: Option<i32>,
         probe_ids: Vec<Option<i32>>,
         memory_limit: Option<usize>,
-    ) -> Result<(usize, usize)> {
+        enable_migration_hash_join: bool,
+    ) -> Result<(usize, usize, usize)> {
+        use datafusion_execution::memory_pool::PeakRecordingPool;
+
         let build_rows = 10_000;
         let build_id = |i: i32| match null_build_every {
             Some(every) if i % every == 0 => None,
@@ -11526,7 +11608,24 @@ mod tests {
             JoinType::LeftAnti,
             PartitionMode::CollectLeft,
         )?;
-        let task_ctx = fallback_context(memory_limit);
+        let pool: Arc<dyn MemoryPool> = match memory_limit {
+            Some(limit) => Arc::new(GreedyMemoryPool::new(limit)),
+            None => Arc::new(UnboundedMemoryPool::default()),
+        };
+        let recording = Arc::new(PeakRecordingPool::new(pool));
+        let runtime = RuntimeEnvBuilder::new()
+            .with_memory_pool(Arc::clone(&recording) as _)
+            .build_arc()?;
+        let mut config = SessionConfig::default()
+            .with_batch_size(16)
+            .with_sort_spill_reservation_bytes(0);
+        config.options_mut().execution.enable_migration_hash_join =
+            enable_migration_hash_join;
+        let task_ctx = Arc::new(
+            TaskContext::default()
+                .with_session_config(config)
+                .with_runtime(runtime),
+        );
         let batches = common::collect(join.execute(0, task_ctx)?).await?;
         let rows = batches.iter().map(|b| b.num_rows()).sum();
         let build_mem_used = join
@@ -11535,7 +11634,10 @@ mod tests {
             .sum_by_name("build_mem_used")
             .unwrap()
             .as_usize();
-        Ok((rows, build_mem_used))
+        let peak = recording.peak_reserved();
+        drop(join);
+        assert_eq!(recording.reserved(), 0);
+        Ok((rows, build_mem_used, peak))
     }
 
     /// The hash table over the build rows' correlation scope keys is only
@@ -11543,25 +11645,41 @@ mod tests {
     /// without one never builds it. A memory pool that holds the build side
     /// but not that table makes the join pair the NULL-valued probe rows with
     /// every build row instead. The result is the same in all three runs.
+    #[rstest]
     #[tokio::test]
-    async fn null_aware_scope_map_built_only_for_null_probe_values() -> Result<()> {
+    async fn null_aware_scope_map_built_only_for_null_probe_values(
+        #[values(false, true)] enable_migration_hash_join: bool,
+    ) -> Result<()> {
         // `(0, 0)` matches the build row `(0, 0)`; `(1, 1)` matches nothing.
-        let (rows, without_null) =
-            run_scope_key_anti_join(None, vec![Some(0), Some(1)], None).await?;
+        let (rows, without_null, initial_peak) = run_scope_key_anti_join(
+            None,
+            vec![Some(0), Some(1)],
+            None,
+            enable_migration_hash_join,
+        )
+        .await?;
         assert_eq!(rows, 9_999);
         // `(NULL, 1)` makes the 100 build rows with `grp = 1` UNKNOWN.
-        let (rows, with_null) =
-            run_scope_key_anti_join(None, vec![Some(0), None], None).await?;
+        let (rows, with_null, _) = run_scope_key_anti_join(
+            None,
+            vec![Some(0), None],
+            None,
+            enable_migration_hash_join,
+        )
+        .await?;
         assert_eq!(rows, 9_899);
-        // The scope map holds a bucket and a chain entry for every build row.
-        assert!(
-            with_null >= without_null + 10_000 * size_of::<u32>(),
-            "{without_null} -> {with_null}"
-        );
-        // Not enough memory for the scope map.
-        let limit = without_null + 10_000 * size_of::<u32>() / 2;
-        let (rows, build_mem_used) =
-            run_scope_key_anti_join(None, vec![Some(0), None], Some(limit)).await?;
+        assert!(with_null > without_null, "the scope map must be reserved");
+        // Admit primary-index construction, but leave less than the measured
+        // additional scope-map charge available for its optional allocation.
+        let limit = initial_peak.max(without_null + (with_null - without_null) / 2);
+        assert!(limit < with_null);
+        let (rows, build_mem_used, _) = run_scope_key_anti_join(
+            None,
+            vec![Some(0), None],
+            Some(limit),
+            enable_migration_hash_join,
+        )
+        .await?;
         assert_eq!(rows, 9_899, "fallback without the scope map");
         assert_eq!(
             build_mem_used, without_null,
@@ -11572,18 +11690,30 @@ mod tests {
 
     /// The same for the hash table over the scope keys of the NULL-valued
     /// build rows, which is built with the build side.
+    #[rstest]
     #[tokio::test]
-    async fn null_aware_null_build_scope_map_falls_back_when_memory_is_short()
-    -> Result<()> {
-        // The build rows `(NULL, 0)` for each multiple of 100 are UNKNOWN for
-        // the probe row `(0, 0)`, and `(0, 0)` matches the build row `(0, 0)`
-        // no more, as its `id` is NULL.
+    async fn null_aware_null_build_scope_map_falls_back_when_memory_is_short(
+        #[values(false, true)] enable_migration_hash_join: bool,
+    ) -> Result<()> {
+        // Half the build IDs are NULL, making the optional NULL-row scope map
+        // larger than primary-index construction scratch. The 100 `(NULL, 0)`
+        // rows become UNKNOWN for probe `(0, 0)`; `(1, 1)` matches nothing.
         let probe_ids = vec![Some(0), Some(1)];
-        let (rows, unbounded) =
-            run_scope_key_anti_join(Some(100), probe_ids.clone(), None).await?;
+        let (rows, unbounded, _) = run_scope_key_anti_join(
+            Some(2),
+            probe_ids.clone(),
+            None,
+            enable_migration_hash_join,
+        )
+        .await?;
         assert_eq!(rows, 9_900);
-        let (rows, build_mem_used) =
-            run_scope_key_anti_join(Some(100), probe_ids, Some(unbounded - 1)).await?;
+        let (rows, build_mem_used, _) = run_scope_key_anti_join(
+            Some(2),
+            probe_ids,
+            Some(unbounded - 1),
+            enable_migration_hash_join,
+        )
+        .await?;
         assert_eq!(rows, 9_900);
         assert!(build_mem_used < unbounded, "{build_mem_used} < {unbounded}");
         Ok(())
