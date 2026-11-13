@@ -1481,11 +1481,85 @@ drop table target_struct_insert;
 
 # Test 10: CASE expression with different struct field orders
 query II
-select 
+select
   (case when true then {a: 1, b: 2} else {b: 3, a: 4} end)['a'] as a_val,
   (case when true then {a: 1, b: 2} else {b: 3, a: 4} end)['b'] as b_val;
 ----
 1 2
+
+############################
+# Mismatched Field Names
+############################
+
+# Structs with different field names have no common type, so implicit
+# coercion must fail at plan time.
+# See https://github.com/apache/datafusion/issues/14396
+
+statement ok
+create table mismatched_struct_names as values
+(
+  { 'foo': 'baz' },
+  { 'xxx': arrow_cast('blarg', 'Utf8View') }
+);
+
+# UNION of structs with different field names fails at plan time
+statement error Error during planning: Incompatible inputs for Union: Previous inputs were of type Struct\("foo": Utf8\), but got incompatible type Struct\("xxx": Utf8View\) on column 'column2'
+select column1 from mismatched_struct_names union all select column2 from mismatched_struct_names;
+
+# CASE with mismatched struct branches fails at plan time, even though the
+# mismatched branch is dead code
+statement error Error during planning: Failed to coerce then \(Struct\("foo": Utf8\)\) and else \(Struct\("xxx": Utf8View\)\) to common types in CASE WHEN expression
+select case when 1=2 then column1 else column2 end from mismatched_struct_names;
+
+# Comparison of structs with different field names fails at plan time
+statement error Error during planning: Cannot infer common argument type for comparison operation Struct\("foo": Utf8\) = Struct\("xxx": Utf8View\)
+select column1 = column2 from mismatched_struct_names;
+
+# Comparison with an anonymous struct literal (fields c0, c1) also fails
+statement error Error during planning: Cannot infer common argument type for comparison operation Struct\("foo": Utf8\) = Struct\("c0": Utf8\)
+select column1 = struct('baz') from mismatched_struct_names;
+
+statement ok
+drop table mismatched_struct_names;
+
+# Structs with identical field types but different field names must also
+# fail. These take the "types are already equal" fast path, which ignores
+# struct field names unless guarded.
+
+statement error Error during planning: Failed to coerce then \(Struct\("foo": Utf8\)\) and else \(Struct\("xxx": Utf8\)\) to common types in CASE WHEN expression
+select case when 1=2 then { 'foo': 'baz' } else { 'xxx': 'blarg' } end;
+
+statement error Error during planning: Cannot infer common argument type for comparison operation Struct\("foo": Utf8\) = Struct\("xxx": Utf8\)
+select { 'foo': 'baz' } = { 'xxx': 'blarg' };
+
+# Array containment over structs with different field names also fails.
+# The error differs from the ones above because the analyzer rewrites `@>`
+# to the `array_has_all` function before binary operator coercion runs, so
+# the function signature coercion reports the failure.
+statement error Error during planning: Failed to coerce arguments to satisfy a call to 'array_has_all' function
+select [{ 'foo': 1 }] @> [{ 'xxx': 1 }];
+
+# Same field names in a different order, with a field type that needs
+# coercion (Utf8 vs Utf8View), still unify by name.
+
+statement ok
+create table reordered_struct_names as values
+  ({ 'foo': 'baz', 'bar': 'bux' }),
+  ({ 'bar': 'b', 'foo': arrow_cast('bt', 'Utf8View') });
+
+query ?T
+select column1, arrow_typeof(column1) from reordered_struct_names order by column1['foo'];
+----
+{bar: bux, foo: baz} Struct("bar": Utf8, "foo": Utf8View)
+{bar: b, foo: bt} Struct("bar": Utf8, "foo": Utf8View)
+
+query ?
+select case when 1=2 then { 'foo': 'baz', 'bar': 'bux' } else { 'bar': 'b', 'foo': arrow_cast('bt', 'Utf8View') } end;
+----
+{bar: b, foo: bt}
+
+statement ok
+drop table reordered_struct_names;
 
 ############################
 # JOIN Coercion Tests

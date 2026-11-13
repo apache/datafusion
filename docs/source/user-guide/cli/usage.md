@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Usage
@@ -52,8 +39,6 @@ Options:
           [possible values: numbers(0/10/...), inf(no limit)] [default: 40]
       --color
           Enables console syntax highlighting
-      --spark
-          Enable Apache Spark-compatible SQL dialect, functions, and expression planning
   -d, --disk-limit <DISK_LIMIT>
           Available disk space for spilling queries (e.g. '10g'), default to None (uses DataFusion's default value of '100g')
       --object-store-profiling <OBJECT_STORE_PROFILING>
@@ -64,18 +49,6 @@ Options:
   -V, --version
           Print version
 ```
-
-## Apache Spark compatibility
-
-Use `--spark` to enable the Apache Spark SQL dialect, expression planner, and
-function library for the CLI session:
-
-```bash
-datafusion-cli --spark -c "SELECT next_day('2015-07-27'::DATE, 'Sun'::STRING);"
-```
-
-Spark compatibility is disabled by default. Enabling it overrides DataFusion
-functions with the same name for the duration of the session.
 
 ## Commands
 

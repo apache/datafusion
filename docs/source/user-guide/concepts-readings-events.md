@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Concepts, Readings, Events
@@ -221,6 +208,8 @@ This is a list of DataFusion related blog posts, articles, and other resources. 
 The [DataFusion Community Showcase](https://github.com/apache/datafusion/issues/22963) is a
 regular virtual event where community members share what they are building with DataFusion.
 
+- **2026-11-12** [Vol. 8: Cloudflare Basin SQL (Sergio Esteves) & Teradata Labs (Artur Borycki)](https://www.youtube.com/watch?v=zmp-jIzZcfg)
+- **2026-10-15** [Vol. 7: Bauplan (Jacopo Tagliabue) & Phoebe Genomics (Tim Poterba)](https://www.youtube.com/watch?v=dMUHiFvFpCc)
 - **2026-10-01** [Vol. 6: Hotdata (Shefeek Jinaah) & Veeva Systems (Bruce Ritchie)](https://www.youtube.com/watch?v=0QGbk6gnAX4)
 - **2026-09-17** [Vol. 5: Zarr DataFusion (Jayendra Parmar) & Rerun.io (Timothy Saucer)](https://www.youtube.com/watch?v=vD113GhJwaM)
 - **2026-08-20** [Vol. 4: RDF Fusion & Cloudflare R2 SQL](https://www.youtube.com/watch?v=oKEtmUzdPoM)

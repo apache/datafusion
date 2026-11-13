@@ -20,6 +20,7 @@ use crate::{DataFusionError, Result};
 #[cfg(feature = "parquet_encryption")]
 use hex;
 use std::any::Any;
+use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
 use std::error::Error;
 use std::fmt::{self, Display};
@@ -886,6 +887,10 @@ impl From<SpillCompression> for Option<CompressionType> {
     }
 }
 
+/// The directory name Hive compliant writers use in place of a null partition value, and the
+/// default for [`ExecutionOptions::listing_table_hive_default_partition_name`].
+pub const HIVE_DEFAULT_PARTITION_NAME: &str = "__HIVE_DEFAULT_PARTITION__";
+
 config_namespace! {
     /// Options related to query execution
     ///
@@ -1094,6 +1099,14 @@ config_namespace! {
         /// partitions from Hive compliant directories. Defaults to true (partition columns are
         /// inferred and will be represented in the table schema).
         pub listing_table_factory_infer_partitions: bool, default = true
+
+        /// The directory name Hive compliant writers use in place of a null partition
+        /// value, e.g. `/table/date=__HIVE_DEFAULT_PARTITION__/data.parquet`. Partition
+        /// values equal to this name are read as NULL, as Hive, Spark and Impala do, and
+        /// partitioned writes reject them. Corresponds to Hive's
+        /// `hive.exec.default.partition.name`. Set this to the empty string to read and
+        /// write such values as the literal directory name instead.
+        pub listing_table_hive_default_partition_name: String, default = HIVE_DEFAULT_PARTITION_NAME.to_string()
 
         /// Should DataFusion support recursive CTEs
         pub enable_recursive_ctes: bool, default = true
@@ -1325,7 +1338,9 @@ config_namespace! {
 
         /// (reading) If true, the parquet reader skip the optional embedded metadata that may be in
         /// the file Schema. This setting can help avoid schema conflicts when querying
-        /// multiple parquet files with schemas containing compatible types but different metadata
+        /// multiple parquet files with schemas containing compatible types but different metadata.
+        /// Arrow extension types (the `ARROW:extension:name` and `ARROW:extension:metadata`
+        /// field metadata) are kept, because they are part of the type of a column
         pub skip_metadata: bool, default = true
 
         /// (reading) If specified, the parquet reader will try and fetch the last `size_hint`
@@ -1351,6 +1366,16 @@ config_namespace! {
         /// choose between a RowSelection and a Bitmap based on the number and
         /// pattern of selected rows.
         pub force_filter_selections: bool, default = false
+
+        /// (reading) If true, a scan whose requested ordering is the reverse of
+        /// the files' declared ordering reads each row group into memory and
+        /// emits its rows in reverse, so the scan is exactly ordered and the
+        /// `SortExec` above it can be removed. Peak memory per scanned file is
+        /// one decoded row group (after projection and filtering). If false,
+        /// only the row group order is reversed and the sort is kept. The value
+        /// is captured when the table is created, so a later `SET` does not
+        /// affect existing tables.
+        pub enable_exact_reverse_scan: bool, default = false
 
         /// (reading) If true, parquet reader will read columns of `Utf8/Utf8Large` with `Utf8View`,
         /// and `Binary/BinaryLarge` with `BinaryView`.
@@ -1510,7 +1535,7 @@ config_namespace! {
         /// (writing)  Sets default encoding for any column.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
-        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case sensitive. If NULL, uses
         /// default parquet writer setting
         pub encoding: Option<DFParquetEncoding>, default = None
@@ -1641,6 +1666,16 @@ config_namespace! {
         /// can improve performance. However, for high cardinality keys, it may
         /// cause regressions in both memory usage and runtime.
         pub enable_window_topn: bool, default = false
+
+        /// When set to true, the optimizer will rewrite a "top-1 per group"
+        /// pattern of the form `Filter(row_number() = 1)` over a `PARTITION BY` window into an
+        /// `Aggregate(first_value(... ORDER BY ...) GROUP BY partition)`.
+        /// This avoids buffering / fully sorting the input, which is especially beneficial on wide payloads.
+        /// Disabled by default because on nested/wide value types the aggregate only becomes memory
+        /// efficient once the columnar nested-type `GroupsAccumulator` fast
+        /// path is available; enabling it without that support can route wide
+        /// payloads onto the slow per-group accumulator path.
+        pub enable_row_number_to_aggregate: bool, default = false
 
         /// When set to true, the optimizer will push TopK (Sort with fetch)
         /// below hash repartition when the partition key is a prefix of the
@@ -1914,6 +1949,18 @@ config_namespace! {
         /// branches share the same source and compatible wrapper nodes such as identical
         /// projections or aliases.
         pub enable_unions_to_filter: bool, default = false
+
+        /// Prefer native grouped DISTINCT aggregation when target_partitions is 1
+        /// and every aggregate explicitly supports a specialized GroupsAccumulator
+        /// for its DISTINCT argument types. Defaults to false, preserving the
+        /// two-phase GROUP BY rewrite.
+        ///
+        /// The native plan can avoid materializing distinct (group, value) pairs,
+        /// but can be slower for many groups with duplicate values. It must fit
+        /// each group's distinct values in memory, so queries that succeed by
+        /// spilling with the rewrite may fail with this option enabled. One target
+        /// partition can still have multiple input partitions and merge native states.
+        pub single_distinct_prefer_native: bool, default = false
     }
 }
 
@@ -2202,8 +2249,8 @@ impl<'a> TryFrom<&'a FormatOptions> for arrow::util::display::FormatOptions<'a> 
 }
 
 config_namespace! {
-    /// Options controlling DataFusion's Spark-compatibility layer (functions
-    /// under `datafusion/spark`). Keys here mirror their `spark.sql.*`
+    /// Options controlling DataFusion's Spark-compatibility layer (the
+    /// `datafusion-spark` crate). Keys here mirror their `spark.sql.*`
     /// equivalents in Apache Spark.
     pub struct SparkOptions {
         /// Policy for handling duplicate keys in Spark-compatible map-construction
@@ -2250,7 +2297,7 @@ pub struct ConfigOptions {
     pub extensions: Extensions,
     /// Formatting options when printing batches
     pub format: FormatOptions,
-    /// Spark-compatibility options (functions under `datafusion/spark`)
+    /// Spark-compatibility options (the `datafusion-spark` crate)
     pub spark: SparkOptions,
 }
 
@@ -2514,11 +2561,23 @@ impl ConfigOptions {
                 &mut docs,
                 "| {} | {} | {} |",
                 entry.key,
-                entry.value.as_deref().unwrap_or("NULL"),
+                display_default(entry.value.as_deref()),
                 entry.description
             );
         }
         docs
+    }
+}
+
+/// Renders a default value for the generated documentation table.
+///
+/// Values containing `_` or `*` are shown as code, since markdown would otherwise read them
+/// as formatting: a default of `__HIVE_DEFAULT_PARTITION__` renders as bold text.
+fn display_default(value: Option<&str>) -> Cow<'_, str> {
+    match value {
+        None => Cow::Borrowed("NULL"),
+        Some(value) if value.contains(['_', '*']) => Cow::Owned(format!("`{value}`")),
+        Some(value) => Cow::Borrowed(value),
     }
 }
 
@@ -3507,7 +3566,7 @@ config_namespace_with_hashmap! {
         /// Sets encoding for the column path.
         /// Valid values are: plain, plain_dictionary, rle,
         /// bit_packed, delta_binary_packed, delta_length_byte_array,
-        /// delta_byte_array, rle_dictionary, and byte_stream_split.
+        /// delta_byte_array, rle_dictionary, byte_stream_split, and alp.
         /// These values are not case-sensitive. If NULL, uses
         /// default parquet options
         pub encoding: Option<String>, default = None
@@ -4075,6 +4134,17 @@ config_namespace! {
         /// of columns, it creates a union schema containing all columns found across the files, and will
         /// pad any files missing columns with null values for their rows.
         pub truncated_rows: Option<bool>, default = None
+        /// Whether to map file columns to the table schema by header name instead of by position.
+        ///
+        /// Only applies when `has_header` is true. When enabled, each file's header row is read
+        /// and columns are matched by name: table columns missing from a file are filled with
+        /// nulls, and file columns not declared in the table are ignored. Names are matched exactly
+        /// (case-sensitive) and duplicate header names resolve to the first occurrence. Header
+        /// names containing quoted newlines are not supported. The header is located the same
+        /// way the CSV parser does: a leading UTF-8 BOM, blank lines, and comment lines are skipped.
+        ///
+        /// Defaults to `false` when `None`.
+        pub match_columns_by_header: Option<bool>, default = None
     }
 }
 
@@ -4197,6 +4267,13 @@ impl CsvOptions {
     /// If the record’s schema is not nullable, then it will still return an error.
     pub fn with_truncated_rows(mut self, allow: bool) -> Self {
         self.truncated_rows = Some(allow);
+        self
+    }
+
+    /// Whether to map file columns to the table schema by header name instead of by position.
+    /// Only applies when the file has a header.
+    pub fn with_match_columns_by_header(mut self, match_by_header: bool) -> Self {
+        self.match_columns_by_header = Some(match_by_header);
         self
     }
 

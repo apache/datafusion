@@ -440,8 +440,10 @@ fn test_filter_collapse_outer_fetch_preserved() {
 }
 
 #[test]
-fn test_filter_collapse_inner_fetch_preserved() {
-    // When the inner filter has fetch and outer does not, the merged filter should preserve fetch
+fn test_filter_not_collapsed_into_inner_fetch() {
+    // The inner filter keeps its first 5 matching rows before the outer filter
+    // applies, so merging the outer predicate into it would change which rows
+    // are kept. The filters stay separate.
     let scan = TestScanBuilder::new(schema()).with_support(false).build();
     let predicate1 = col_lit_predicate("a", "foo", &schema());
     let filter1 = Arc::new(
@@ -463,16 +465,17 @@ fn test_filter_collapse_inner_fetch_preserved() {
         -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
       output:
         Ok:
-          - FilterExec: b@1 = bar AND a@0 = foo, fetch=5
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          - FilterExec: b@1 = bar
+          -   FilterExec: a@0 = foo, fetch=5
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
 
 #[test]
-fn test_filter_collapse_both_fetch_uses_minimum() {
-    // When both filters have fetch, the merged filter should use the smaller (tighter) fetch.
-    // Inner fetch=5 is tighter than outer fetch=10, so the result should be fetch=5.
+fn test_filter_with_fetch_not_collapsed_into_inner_fetch() {
+    // Same as above with a fetch on the outer filter too: the inner filter's
+    // fetch still picks its rows first, so the filters stay separate.
     let scan = TestScanBuilder::new(schema()).with_support(false).build();
     let predicate1 = col_lit_predicate("a", "foo", &schema());
     let filter1 = Arc::new(
@@ -499,8 +502,9 @@ fn test_filter_collapse_both_fetch_uses_minimum() {
         -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
       output:
         Ok:
-          - FilterExec: b@1 = bar AND a@0 = foo, fetch=5
-          -   DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
+          - FilterExec: b@1 = bar, fetch=10
+          -   FilterExec: a@0 = foo, fetch=5
+          -     DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=false
     "
     );
 }
@@ -1152,7 +1156,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_partitioned() {
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Hash([a@0, b@1], 12), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE hash_repartition % 12 WHEN 5 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) WHEN 8 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}, {c0:aa,c1:ba}]) ]
     "
     );
 
@@ -1368,7 +1372,7 @@ async fn test_hashjoin_dynamic_filter_pushdown_range_partitioned() {
     -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
     -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, c], file_type=test, pushdown_supported=true
     -       RepartitionExec: partitioning=Range([a@0 ASC, b@1 ASC], [(aa, bb)], 2), input_partitions=1
-    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ CASE range_partition WHEN 0 THEN a@0 >= aa AND a@0 <= aa AND b@1 >= ba AND b@1 <= ba AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}]) WHEN 1 THEN a@0 >= ab AND a@0 <= ab AND b@1 >= bb AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:ab,c1:bb}]) ELSE false END ]
+    -         DataSourceExec: file_groups={1 group: [[test.parquet]]}, projection=[a, b, e], file_type=test, pushdown_supported=true, predicate=DynamicFilter [ a@0 >= aa AND a@0 <= ab AND b@1 >= ba AND b@1 <= bb AND struct(a@0, b@1) IN (SET) ([{c0:aa,c1:ba}, {c0:ab,c1:bb}]) ]
     "
     );
 

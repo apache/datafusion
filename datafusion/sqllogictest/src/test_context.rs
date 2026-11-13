@@ -22,11 +22,11 @@ use arrow::record_batch::RecordBatch;
 use datafusion::catalog::{
     CatalogProvider, MemoryCatalogProvider, MemorySchemaProvider, SchemaProvider, Session,
 };
-use datafusion::common::config::Dialect;
 use datafusion::common::stats::Precision;
 use datafusion::common::{DataFusionError, Result, not_impl_err};
 use datafusion::functions::math::abs;
 use datafusion::logical_expr::async_udf::{AsyncScalarUDF, AsyncScalarUDFImpl};
+use datafusion::logical_expr::registry::MemoryExtensionTypeRegistry;
 use datafusion::logical_expr::{
     ColumnarValue, Expr, ScalarFunctionArgs, ScalarUDF, ScalarUDFImpl, Signature,
     Volatility, create_udf,
@@ -38,9 +38,7 @@ use datafusion::{
     datasource::{MemTable, TableProvider, TableType},
     prelude::{CsvReadOptions, SessionContext},
 };
-use datafusion_spark::SessionStateBuilderSpark;
 
-use crate::is_spark_path;
 use range_partitioning::{
     register_range_partitioned_table, register_range_sorted_day_bin_table,
     register_range_sorted_time_bin_table,
@@ -109,11 +107,10 @@ impl TestContext {
             .with_runtime_env(runtime)
             .with_default_features();
 
-        if is_spark_path(relative_path) {
-            state_builder = state_builder.with_spark_features();
-            if let Some(config) = state_builder.config() {
-                config.options_mut().sql_parser.dialect = Dialect::Spark;
-            }
+        if file_name == "sql_extension_types.slt" {
+            state_builder = state_builder.with_extension_type_registry(Arc::new(
+                MemoryExtensionTypeRegistry::new_with_canonical_extension_types(),
+            ));
         }
 
         if matches!(

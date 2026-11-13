@@ -1,20 +1,7 @@
-<!---
-  Licensed to the Apache Software Foundation (ASF) under one
-  or more contributor license agreements.  See the NOTICE file
-  distributed with this work for additional information
-  regarding copyright ownership.  The ASF licenses this file
-  to you under the Apache License, Version 2.0 (the
-  "License"); you may not use this file except in compliance
-  with the License.  You may obtain a copy of the License at
-
-    http://www.apache.org/licenses/LICENSE-2.0
-
-  Unless required by applicable law or agreed to in writing,
-  software distributed under the License is distributed on an
-  "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
-  KIND, either express or implied.  See the License for the
-  specific language governing permissions and limitations
-  under the License.
+<!--
+SPDX-License-Identifier: Apache-2.0
+SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 -->
 
 # Struct Type Coercion and Field Mapping
@@ -187,6 +174,21 @@ SELECT [
 ```
 
 ### Limitations
+
+**Implicit coercion requires identical field name sets.** Two structs coerce to a common type only when they have the same field names (in any order). Structs with different field names have no common type, and the query fails at plan time:
+
+```sql
+-- Different field names: foo vs xxx
+SELECT {foo: 'baz'} UNION ALL SELECT {xxx: 'blarg'};
+-- Error: Incompatible inputs for Union
+
+SELECT CASE WHEN a = 1 THEN {foo: 'baz'} ELSE {xxx: 'blarg'} END FROM t;
+-- Error: Failed to coerce then (...) and else (...) to common types
+-- in CASE WHEN expression
+
+SELECT {foo: 'baz'} = {xxx: 'blarg'};
+-- Error: Cannot infer common argument type for comparison operation
+```
 
 **Field count must match exactly.** If structs have different numbers of fields and their field names don't completely overlap, the query will fail:
 

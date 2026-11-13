@@ -729,6 +729,47 @@ pub mod array_conversion {
     }
 }
 
+/// Extracts names in the first column of a markdown table.
+///
+/// Used to extract names from optimizer rule tables and verify they match
+///
+/// # Example
+///
+/// Given this `source`:
+///
+/// ```text
+/// /// # Built-in Analyzer Rules
+/// ///
+/// /// The rules are applied in the following order.
+/// ///
+/// /// | rule (name in EXPLAIN plan) | struct name                 | summary        |
+/// /// | --------------------------- | --------------------------- | -------------- |
+/// /// | `resolve_grouping_function` | [`ResolveGroupingFunction`] | Rewrites ...   |
+/// /// | `type_coercion`             | [`TypeCoercion`]            | Adds casts ... |
+/// #[derive(Clone, Debug)]
+/// pub struct Analyzer {
+/// ```
+///
+/// returns `["resolve_grouping_function", "type_coercion"]`.
+pub fn documented_rule_names(source: &str, heading: &str) -> Vec<String> {
+    let mut lines = source.lines().skip_while(|line| line.trim() != heading);
+    assert!(lines.next().is_some(), "heading '{heading}' not found");
+
+    lines
+        .map(str::trim)
+        // skip the text between the heading and the table
+        .skip_while(|line| !line.starts_with("/// |"))
+        .take_while(|line| line.starts_with("/// |"))
+        // skip the header and separator rows
+        .skip(2)
+        .map(|line| {
+            let first_column =
+                line.trim_start_matches("/// |").split('|').next().unwrap();
+            first_column.trim().trim_matches('`').to_string()
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use crate::cast::{as_float64_array, as_int32_array, as_string_array};

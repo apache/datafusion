@@ -5,10 +5,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::utils::{
-    add_sort_above_with_distribution, is_sort, is_sort_preserving_merge, is_union,
-    is_window,
-};
+use crate::utils::{add_sort_above_with_distribution, is_sort, is_union, is_window};
 
 use arrow::datatypes::SchemaRef;
 use datafusion_common::tree_node::{Transformed, TreeNode};
@@ -132,7 +129,7 @@ fn min_fetch(f1: Option<usize>, f2: Option<usize>) -> Option<usize> {
 }
 
 /// Returns whether a fetch on `plan` can move to its input.
-fn can_push_fetch_through(plan: &Arc<dyn ExecutionPlan>) -> bool {
+pub(crate) fn can_push_fetch_through(plan: &Arc<dyn ExecutionPlan>) -> bool {
     match plan.limit_behavior() {
         LimitBehavior::MoveToInput => true,
         LimitBehavior::Merge => plan.fetch().is_none(),
@@ -524,21 +521,10 @@ fn pushdown_requirement_to_children(
         } else {
             Ok(None)
         }
-    } else if plan.is::<SortPreservingMergeExec>() && plan.fetch().is_some() {
-        // Push down through a fetched merge when:
-        // - requirement is aligned with output ordering
-        // - it preserves ordering during execution
-        // Refining a fetched merge must preserve the ordering that selected its rows.
-        let Some(ordering) = plan.output_ordering() else {
-            return Ok(None);
-        };
-        Ok(plan
-            .equivalence_properties()
-            .requirements_compatible(
-                parent_required.first().clone(),
-                ordering.clone().into(),
-            )
-            .then(|| vec![Some(parent_required)]))
+    } else if plan.is::<SortPreservingMergeExec>() {
+        // A merge orders rows across partitions only by its own keys, and this
+        // function doesn't rewrite them. Keep the finer parent sort above it.
+        Ok(None)
     } else if is_union(plan) {
         // `UnionExec` does not have real sort requirements for its input, we
         // just propagate the sort requirements down:
@@ -593,21 +579,6 @@ fn pushdown_requirement_to_children(
         // Keep sorts above RepartitionExec even when a single input partition
         // lets it preserve order; pushing the sort below it provides no benefit.
         Ok(None)
-    } else if is_sort_preserving_merge(plan) {
-        let new_ordering = LexOrdering::from(parent_required.first().clone());
-        let mut spm_eqs = plan.equivalence_properties().clone();
-        let old_ordering = spm_eqs.output_ordering().unwrap();
-        // Sort preserving merge will have new ordering, one requirement above is pushed down to its below.
-        let change = spm_eqs.reorder(new_ordering)?;
-        if !change || spm_eqs.ordering_satisfy(old_ordering)? {
-            // Can push-down through SortPreservingMergeExec, because parent requirement is finer
-            // than SortPreservingMergeExec output ordering.
-            Ok(Some(vec![Some(parent_required)]))
-        } else {
-            // Do not push-down through SortPreservingMergeExec when
-            // ordering requirement invalidates requirement of sort preserving merge exec.
-            Ok(None)
-        }
     } else if let Some(hash_join) = plan.downcast_ref::<HashJoinExec>() {
         handle_hash_join(hash_join, parent_required)
     } else {
@@ -1318,10 +1289,34 @@ fn handle_projection_pushdown(
     // (expressed in the projection's output schema) must be remapped into the
     // child schema before being pushed down. Forwarding `score@1` unchanged
     // could refer to a different input column and sort on the wrong key.
-    Ok(
+    let Some(requirements) =
         remap_requirement_through_projection(projection_exec, parent_required)
-            .map(|requirements| vec![Some(requirements)]),
-    )
+    else {
+        return Ok(None);
+    };
+    // If the input already has this ordering, no sort will be added below the
+    // projection. The parent still needs the projection to prove it, which it
+    // may not be able to do: the proof can depend on a column that it drops,
+    // such as a leading per-partition constant. Keep the sort above the
+    // projection in that case. Alternatives that cannot be remapped are not
+    // pushed down, so compare against the first one that can.
+    let pushed = parent_required.iter().find_map(|required| {
+        remap_lex_requirement_through_projection(projection_exec.expr(), required)
+            .map(|remapped| (required, remapped))
+    });
+    if let Some((required, remapped)) = pushed
+        && projection_exec
+            .input()
+            .equivalence_properties()
+            .ordering_satisfy_requirement(remapped)?
+        && !projection_exec
+            .properties()
+            .equivalence_properties()
+            .ordering_satisfy_requirement(required.clone())?
+    {
+        return Ok(None);
+    }
+    Ok(Some(vec![Some(requirements)]))
 }
 
 #[cfg(test)]
@@ -1335,7 +1330,7 @@ mod tests {
         ScalarSubqueryResults, SubqueryIndex,
     };
     use datafusion_physical_expr::PhysicalExpr;
-    use datafusion_physical_expr::expressions::{BinaryExpr, col};
+    use datafusion_physical_expr::expressions::{BinaryExpr, col, lit};
     use datafusion_physical_plan::empty::EmptyExec;
     use datafusion_physical_plan::limit::GlobalLimitExec;
     use datafusion_physical_plan::scalar_subquery::{
@@ -1517,6 +1512,58 @@ mod tests {
         assert_eq!(remapped, expected);
         // Hardness/softness is preserved through the remap.
         assert!(matches!(remapped, OrderingRequirements::Soft(_)));
+    }
+
+    /// The guard keeps a sort above a projection when the input already has
+    /// the ordering that would be pushed down, but the projection cannot show
+    /// that ordering to its parent. When the parent accepts several
+    /// orderings, the guard must check the one that is pushed down, not the
+    /// first one.
+    ///
+    /// * Input: sorted by `[c DESC]`; the projection outputs `c` as `score`
+    /// * Parent requires: `[score % 2 ASC]` or `[score DESC]`
+    /// * Expected: `[c DESC]` is pushed down
+    ///
+    /// `score % 2` is not a column, so `[score % 2 ASC]` cannot be rewritten
+    /// in terms of the input and is dropped; `[score DESC]` becomes
+    /// `[c DESC]`. The projection does provide `[score DESC]`, so the guard
+    /// does not apply. Checking the first alternative, `[score % 2 ASC]`,
+    /// which the projection does not provide, would keep an unneeded sort
+    /// above the projection.
+    #[test]
+    fn projection_guard_compares_the_pushed_alternative() -> Result<()> {
+        let child = child_schema();
+        let empty: Arc<dyn ExecutionPlan> = Arc::new(EmptyExec::new(Arc::clone(&child)));
+        let sorted: Arc<dyn ExecutionPlan> = Arc::new(SortExec::new(
+            [PhysicalSortExpr::new(col("c", &child)?, DESC)].into(),
+            empty,
+        ));
+        let projection = ProjectionExec::try_new(
+            vec![
+                (col("a", &child)?, "a".to_string()),
+                (col("c", &child)?, "score".to_string()),
+                (col("b", &child)?, "value".to_string()),
+            ],
+            sorted,
+        )?;
+        let out = projection.schema();
+
+        let computed: Arc<dyn PhysicalExpr> = Arc::new(BinaryExpr::new(
+            col("score", &out)?,
+            Operator::Modulo,
+            lit(2),
+        ));
+        let mut required =
+            OrderingRequirements::new(lex([PhysicalSortRequirement::new(
+                computed,
+                Some(ASC),
+            )]));
+        required.add_alternative(lex([req("score", &out, DESC)]));
+
+        let pushed = handle_projection_pushdown(&projection, &required)?;
+        let expected = OrderingRequirements::new(lex([req("c", &child, DESC)]));
+        assert_eq!(pushed, Some(vec![Some(expected)]));
+        Ok(())
     }
 
     #[test]

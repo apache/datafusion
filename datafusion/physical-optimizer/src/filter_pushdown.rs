@@ -430,6 +430,16 @@ fn push_down_filters(
     config: &ConfigOptions,
     phase: FilterPushdownPhase,
 ) -> Result<FilterPushdownPropagation<Arc<dyn ExecutionPlan>>> {
+    // A node with a fetch picks its rows before a filter from above applies, so
+    // that filter can't move below or into it. The node's own filters still can.
+    if node.fetch().is_some() && !parent_predicates.is_empty() {
+        let result = push_down_filters(node, vec![], config, phase)?;
+        return Ok(FilterPushdownPropagation {
+            filters: vec![PushedDown::No; parent_predicates.len()],
+            updated_node: result.updated_node,
+        });
+    }
+
     let mut parent_filter_pushdown_supports: Vec<Vec<PushedDown>> =
         vec![vec![]; parent_predicates.len()];
 

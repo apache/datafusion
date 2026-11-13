@@ -21,6 +21,7 @@ pub use crate::schema_coercion::{
 pub use crate::sink::ParquetSink;
 
 use arrow::datatypes::{DataType, FieldRef, Fields, Metadata, Schema, SchemaRef};
+use arrow_schema::extension::{EXTENSION_TYPE_METADATA_KEY, EXTENSION_TYPE_NAME_KEY};
 use datafusion_datasource::TableSchema;
 use datafusion_datasource::file_compression_type::FileCompressionType;
 use datafusion_datasource::file_sink_config::FileSinkConfig;
@@ -244,7 +245,8 @@ impl ParquetFormat {
 }
 
 /// Clears all metadata (Schema level and field level) on an iterator
-/// of Schemas
+/// of Schemas, except for the extension type of the fields, which is part
+/// of the type of a field.
 fn clear_metadata(
     schemas: impl IntoIterator<Item = Schema>,
 ) -> impl Iterator<Item = Schema> {
@@ -253,7 +255,16 @@ fn clear_metadata(
             .fields()
             .iter()
             .map(|field| {
-                field.as_ref().clone().with_metadata(Metadata::new()) // clear meta
+                let metadata = field
+                    .metadata()
+                    .iter()
+                    .filter(|(key, _)| {
+                        key.as_str() == EXTENSION_TYPE_NAME_KEY
+                            || key.as_str() == EXTENSION_TYPE_METADATA_KEY
+                    })
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect::<Metadata>();
+                field.as_ref().clone().with_metadata(metadata)
             })
             .collect::<Fields>();
         Schema::new(fields)
@@ -802,6 +813,7 @@ impl From<&ParquetFormatFactory> for protobuf::TableParquetOptions {
             pushdown_filters: global_options.global.pushdown_filters,
             reorder_filters: global_options.global.reorder_filters,
             force_filter_selections: global_options.global.force_filter_selections,
+            enable_exact_reverse_scan: global_options.global.enable_exact_reverse_scan,
             data_pagesize_limit: global_options.global.data_pagesize_limit as u64,
             write_batch_size: global_options.global.write_batch_size as u64,
             writer_version: global_options.global.writer_version.to_string(),
