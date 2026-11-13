@@ -3,97 +3,106 @@
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
 // Used by the release_version_labeler workflow
+//
+// A merged pull request gets the release version that this file names at its
+// merge commit. Every push to `main` labels the pull requests merged in the
+// last week that have no release label yet. That covers the pull requests of
+// the push, and one that an earlier run missed, such as a merge whose push did
+// not run the workflow because its commit message has a skip marker.
 
-// A push can have many commits. Look them up this many at a time, to stay well
-// below GitHub's limit of 100 concurrent requests.
-const BATCH_SIZE = 10;
-
-// A squash merge or a merge queue commit maps to the merged pull request. The
-// pull request can lag the push by a few seconds, so retry.
-async function mergedPulls({ github, context, sha }) {
-    for (let attempt = 1; ; attempt++) {
-        const { data } = await github.rest.repos.listPullRequestsAssociatedWithCommit({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            commit_sha: sha
-        });
-        const pulls = data.filter((pull) => pull.merged_at && pull.base.ref === 'main');
-        if (pulls.length > 0 || attempt === 3) {
-            return pulls;
-        }
-        await new Promise((resolve) => setTimeout(resolve, 5000));
-    }
-}
+const WINDOW_DAYS = 7;
+const RELEASE_LABEL = /^v\d+\.\d+\.\d+$/;
+const SCRIPT_PATH = 'ci/scripts/release_version_labeler.js';
+// dev/update_datafusion_versions.py rewrites every match of its pattern in this
+// file. The quote is in a class here, so that only the constant below matches.
+const TARGET_VERSION = /const target_version = [']([^']+)'/;
 
 module.exports = async ({ github, context }) => {
     const target_version = 'v57.0.0';
+    const { owner, repo } = context.repo;
 
-    // create label first if not exists
-    try {
-        await github.rest.issues.getLabel({
-        owner: context.repo.owner,
-        repo: context.repo.repo,
-        name: target_version
-        });
-    } catch (error) {
-        if (error.status !== 404) {
-            throw error;
+    // The release version that this file names at a commit.
+    async function versionAt(sha) {
+        if (sha === context.sha) {
+            return target_version;
         }
+        const { data } = await github.rest.repos.getContent({ owner, repo, path: SCRIPT_PATH, ref: sha });
+        const match = TARGET_VERSION.exec(Buffer.from(data.content, 'base64').toString());
+        if (!match) {
+            throw new Error(`No target version in ${SCRIPT_PATH} at ${sha}`);
+        }
+        return match[1];
+    }
+
+    // A run for another push can create the label first.
+    async function createLabel(name) {
         try {
-            await github.rest.issues.createLabel({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                name: target_version,
-                color: '222222'
-            });
+            await github.rest.issues.getLabel({ owner, repo, name });
         } catch (error) {
-            // A run for another push can create the label first.
-            if (error.status !== 422) {
+            if (error.status !== 404) {
                 throw error;
             }
+            try {
+                await github.rest.issues.createLabel({ owner, repo, name, color: '222222' });
+            } catch (error) {
+                if (error.status !== 422) {
+                    throw error;
+                }
+            }
         }
     }
 
-    // A push can include several merged pull requests. Look the commits up a
-    // batch at a time, so the retries of commits without one overlap. A failed
-    // lookup or label must not cost the other pull requests their label, so
-    // log every error and throw the first one after labeling.
-    const pushed = (context.payload.commits || []).map((commit) => commit.id);
-    const shas = pushed.length ? pushed : [context.sha];
-    const numbers = new Set();
-    const errors = [];
-    for (let i = 0; i < shas.length; i += BATCH_SIZE) {
-        const batch = shas.slice(i, i + BATCH_SIZE);
-        const settled = await Promise.allSettled(
-            batch.map((sha) => mergedPulls({ github, context, sha }))
-        );
-        settled.forEach((result, index) => {
-            if (result.status === 'fulfilled') {
-                result.value.forEach((pull) => numbers.add(pull.number));
-            } else {
-                console.log(`Looking up ${batch[index]} failed: ${result.reason}`);
-                errors.push(result.reason);
+    // Merging a pull request updates it, so every pull request merged after the
+    // cutoff is listed before the first one updated before it.
+    const cutoff = Date.now() - WINDOW_DAYS * 24 * 60 * 60 * 1000;
+    const unlabeled = [];
+    const pages = github.paginate.iterator(github.rest.pulls.list, {
+        owner,
+        repo,
+        state: 'closed',
+        base: 'main',
+        sort: 'updated',
+        direction: 'desc',
+        per_page: 100
+    });
+    listing: for await (const { data } of pages) {
+        for (const pull of data) {
+            if (Date.parse(pull.updated_at) < cutoff) {
+                break listing;
             }
-        });
+            if (
+                pull.merged_at &&
+                Date.parse(pull.merged_at) >= cutoff &&
+                !pull.labels.some((label) => RELEASE_LABEL.test(label.name))
+            ) {
+                unlabeled.push(pull);
+            }
+        }
     }
-    if (numbers.size === 0 && errors.length === 0) {
-        console.log(`No merged pull request found for ${shas.join(', ')}`);
+    if (unlabeled.length === 0) {
+        console.log(`No pull request merged in the last ${WINDOW_DAYS} days needs a release label`);
     }
-    for (const number of numbers) {
+
+    // A failure must not cost the other pull requests their label, so log it
+    // and throw the first one after labeling.
+    const labels = new Set();
+    const errors = [];
+    for (const pull of unlabeled) {
         try {
-            await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: number,
-                labels: [target_version]
-            });
+            const version = await versionAt(pull.merge_commit_sha);
+            if (!labels.has(version)) {
+                await createLabel(version);
+                labels.add(version);
+            }
+            await github.rest.issues.addLabels({ owner, repo, issue_number: pull.number, labels: [version] });
+            console.log(`Labeled #${pull.number} with ${version}`);
         } catch (error) {
-            console.log(`Labeling #${number} failed: ${error}`);
+            console.log(`Labeling #${pull.number} failed: ${error}`);
             errors.push(error);
         }
     }
     if (errors.length > 0) {
-        console.log(`${errors.length} request(s) failed, see above.`);
+        console.log(`${errors.length} pull request(s) failed, see above.`);
         throw errors[0];
     }
 };

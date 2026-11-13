@@ -5,88 +5,115 @@
 
 // Test the release version labeler with stubbed GitHub APIs. No API calls are made.
 const assert = require("node:assert/strict");
+const { readFileSync } = require("node:fs");
+const path = require("node:path");
 const { test } = require("node:test");
 const labeler = require("./release_version_labeler.js");
 
+// The script, and the pattern that dev/update_datafusion_versions.py rewrites.
+const source = readFileSync(
+  path.join(__dirname, "release_version_labeler.js"),
+  "utf8"
+);
+const VERSION_SCRIPT_PATTERN = /const target_version = '.*?'/g;
+const [current] = source.match(VERSION_SCRIPT_PATTERN);
+const version = current.slice("const target_version = '".length, -1);
+// The script at another release version, as the version script writes it.
+const scriptAt = (other) =>
+  source.replace(VERSION_SCRIPT_PATTERN, `const target_version = '${other}'`);
+
+const DAY = 24 * 60 * 60 * 1000;
+const daysAgo = (days) => new Date(Date.now() - days * DAY).toISOString();
 const pull = (
   number,
-  { base = "main", merged_at = "2026-01-01T00:00:00Z" } = {}
+  { merged = 1, updated = merged, labels = [], commit = "head" } = {}
 ) => ({
   number,
-  merged_at,
-  base: { ref: base },
+  merged_at: merged === null ? null : daysAgo(merged),
+  updated_at: daysAgo(updated),
+  labels: labels.map((name) => ({ name })),
+  merge_commit_sha: commit,
 });
 
-// `lookups` maps a commit to the pull requests returned on each attempt (the
-// last response repeats once the attempts run out), or to an error to throw.
-// `failLabels` lists the pull requests that fail to get the label. `label` is
+// `pages` are the pages of recently updated closed pull requests. `scripts`
+// maps a merge commit to the script at it, or to an error to throw. `label` is
 // "missing" when the release label does not exist, or "raced" when another run
 // creates it between the lookup and the creation.
-async function run({ lookups, commits, failLabels = [], label = "exists" }) {
+async function run({ pages, scripts = {}, label = "exists", failLabels = [] }) {
   const result = {
-    listed: [],
     labeled: [],
-    delays: [],
+    read: [],
+    pagesRead: 0,
+    createdLabels: [],
     logs: [],
-    inFlight: 0,
-    maxInFlight: 0,
-    createdLabels: 0,
   };
-  const attempts = {};
   const github = {
     rest: {
+      pulls: { list: () => {} },
+      repos: {
+        getContent: async ({ owner, repo, path: file, ref }) => {
+          assert.deepEqual(
+            [owner, repo, file],
+            ["apache", "datafusion", "ci/scripts/release_version_labeler.js"]
+          );
+          result.read.push(ref);
+          const script = scripts[ref];
+          if (script instanceof Error) {
+            throw script;
+          }
+          // The API wraps the content in lines of 60 characters.
+          const content = Buffer.from(script)
+            .toString("base64")
+            .replace(/.{60}/g, "$&\n");
+          return { data: { content, encoding: "base64" } };
+        },
+      },
       issues: {
         getLabel: async () => {
           if (label !== "exists") {
             throw Object.assign(new Error("Not Found"), { status: 404 });
           }
         },
-        createLabel: async () => {
+        createLabel: async ({ name }) => {
           if (label === "raced") {
             throw Object.assign(new Error("Validation Failed"), {
               status: 422,
             });
           }
-          result.createdLabels++;
+          result.createdLabels.push(name);
         },
         addLabels: async ({ issue_number, labels }) => {
           if (failLabels.includes(issue_number)) {
             throw new Error(`cannot label ${issue_number}`);
           }
-          result.labeled.push([issue_number, labels]);
+          result.labeled.push([issue_number, ...labels]);
         },
       },
-      repos: {
-        listPullRequestsAssociatedWithCommit: async ({ commit_sha }) => {
-          result.listed.push(commit_sha);
-          result.maxInFlight = Math.max(result.maxInFlight, ++result.inFlight);
-          // Yield like a real request, so lookups that overlap are counted.
-          await Promise.resolve();
-          result.inFlight--;
-          const responses = lookups[commit_sha];
-          if (responses instanceof Error) {
-            throw responses;
-          }
-          attempts[commit_sha] = (attempts[commit_sha] || 0) + 1;
-          return {
-            data: responses[
-              Math.min(attempts[commit_sha], responses.length) - 1
-            ],
-          };
-        },
+    },
+    paginate: {
+      iterator: async function* (method, params) {
+        assert.equal(method, github.rest.pulls.list);
+        assert.deepEqual(params, {
+          owner: "apache",
+          repo: "datafusion",
+          state: "closed",
+          base: "main",
+          sort: "updated",
+          direction: "desc",
+          per_page: 100,
+        });
+        for (const data of pages) {
+          result.pagesRead++;
+          yield { data };
+        }
       },
     },
   };
   const context = {
     repo: { owner: "apache", repo: "datafusion" },
     sha: "head",
-    payload: commits ? { commits: commits.map((id) => ({ id })) } : {},
   };
-  const [realSetTimeout, realLog] = [globalThis.setTimeout, console.log];
-  globalThis.setTimeout = (callback, ms) => {
-    result.delays.push(ms);
-    callback();
-  };
+  const realLog = console.log;
   console.log = (message) => result.logs.push(message);
   let error;
   try {
@@ -94,7 +121,6 @@ async function run({ lookups, commits, failLabels = [], label = "exists" }) {
   } catch (thrown) {
     error = thrown;
   } finally {
-    globalThis.setTimeout = realSetTimeout;
     console.log = realLog;
   }
   return { result, error };
@@ -108,148 +134,85 @@ async function execute(args) {
   return result;
 }
 
-test("labels the merged pull request without waiting", async () => {
-  const result = await execute({ commits: ["a"], lookups: { a: [[pull(7)]] } });
-  assert.equal(result.labeled.length, 1);
-  assert.equal(result.labeled[0][0], 7);
-  assert.match(result.labeled[0][1][0], /^v\d+\.0\.0$/);
-  assert.deepEqual(result.delays, []);
+test("the version script rewrites only the target version", () => {
+  assert.equal(source.match(VERSION_SCRIPT_PATTERN).length, 1);
 });
 
-test("retries until a merged pull request to main appears", async () => {
+test("labels a pull request merged at the pushed commit without reading the script", async () => {
+  const result = await execute({ pages: [[pull(1)]] });
+  assert.deepEqual(result.labeled, [[1, version]]);
+  assert.deepEqual(result.read, []);
+});
+
+test("labels a pull request with the version the script names at its merge commit", async () => {
   const result = await execute({
-    commits: ["a"],
-    lookups: {
-      a: [
-        [],
-        [pull(7, { merged_at: null }), pull(8, { base: "branch-55" })],
-        [pull(9)],
+    pages: [[pull(2, { commit: "before-bump" })]],
+    scripts: { "before-bump": scriptAt("v1.0.0") },
+  });
+  assert.deepEqual(result.labeled, [[2, "v1.0.0"]]);
+  assert.deepEqual(result.read, ["before-bump"]);
+});
+
+test("labels only merged pull requests in the window that have no release label", async () => {
+  const result = await execute({
+    pages: [
+      [
+        pull(1, { merged: null, updated: 1 }),
+        pull(2, { labels: [version] }),
+        pull(3, { labels: ["development-process"] }),
+        pull(4, { merged: 8, updated: 1 }),
       ],
-    },
+    ],
   });
-  assert.deepEqual(result.listed, ["a", "a", "a"]);
-  assert.deepEqual(result.delays, [5000, 5000]);
-  assert.deepEqual(
-    result.labeled.map(([number]) => number),
-    [9]
-  );
+  assert.deepEqual(result.labeled, [[3, version]]);
 });
 
-test("gives up without failing and names every commit it searched", async () => {
+test("stops listing at the first pull request updated before the window", async () => {
   const result = await execute({
-    commits: ["a", "b"],
-    lookups: { a: [[]], b: [[]] },
+    pages: [[pull(1), pull(2, { merged: 8 })], [pull(3)]],
   });
-  assert.equal(result.listed.length, 6);
+  assert.deepEqual(result.labeled, [[1, version]]);
+  assert.equal(result.pagesRead, 1);
+});
+
+test("logs and succeeds when no pull request needs a release label", async () => {
+  const result = await execute({ pages: [[pull(1, { labels: [version] })]] });
   assert.deepEqual(result.labeled, []);
-  assert.deepEqual(result.logs, ["No merged pull request found for a, b"]);
-});
-
-test("labels every pull request in the push once", async () => {
-  const result = await execute({
-    commits: ["a", "b"],
-    lookups: { a: [[pull(1)]], b: [[pull(1), pull(2)]] },
-  });
-  assert.deepEqual(
-    result.labeled.map(([number]) => number),
-    [1, 2]
-  );
-});
-
-test("looks the commits up in parallel and retries only the one that lags", async () => {
-  const result = await execute({
-    commits: ["a", "b"],
-    lookups: { a: [[pull(1)]], b: [[], [pull(2)]] },
-  });
-  assert.equal(result.maxInFlight, 2);
-  assert.equal(result.listed.filter((sha) => sha === "a").length, 1);
-  assert.equal(result.listed.filter((sha) => sha === "b").length, 2);
-  assert.deepEqual(
-    result.labeled.map(([number]) => number),
-    [1, 2]
-  );
-});
-
-test("looks up the pushed commit when the payload has no commits", async () => {
-  const result = await execute({ lookups: { head: [[pull(3)]] } });
-  assert.deepEqual(result.listed, ["head"]);
-  assert.deepEqual(
-    result.labeled.map(([number]) => number),
-    [3]
-  );
-});
-
-test("looks up at most ten commits at a time", async () => {
-  const commits = Array.from({ length: 25 }, (_, i) => `c${i}`);
-  const lookups = Object.fromEntries(
-    commits.map((sha, i) => [sha, [[pull(i + 1)]]])
-  );
-  const result = await execute({ commits, lookups });
-  assert.equal(result.maxInFlight, 10);
-  assert.equal(result.labeled.length, 25);
-});
-
-test("labels the other pull requests when a lookup fails, then fails the run", async () => {
-  const failure = new Error("rate limited");
-  const { result, error } = await run({
-    commits: ["a", "b", "c"],
-    lookups: { a: [[pull(1)]], b: failure, c: [[pull(3)]] },
-  });
-  assert.equal(error, failure);
-  assert.deepEqual(
-    result.labeled.map(([number]) => number),
-    [1, 3]
-  );
-});
-
-test("labels the other pull requests when one label fails, then fails the run", async () => {
-  const { result, error } = await run({
-    commits: ["a", "b"],
-    lookups: { a: [[pull(1)]], b: [[pull(2)]] },
-    failLabels: [1],
-  });
-  assert.match(error.message, /cannot label 1/);
-  assert.deepEqual(
-    result.labeled.map(([number]) => number),
-    [2]
-  );
-});
-
-test("logs every failed request with its commit or pull request", async () => {
-  const { result, error } = await run({
-    commits: ["a", "b"],
-    lookups: { a: new Error("rate limited"), b: [[pull(2)]] },
-    failLabels: [2],
-  });
-  assert.equal(error.message, "rate limited");
   assert.deepEqual(result.logs, [
-    "Looking up a failed: Error: rate limited",
-    "Labeling #2 failed: Error: cannot label 2",
-    "2 request(s) failed, see above.",
+    "No pull request merged in the last 7 days needs a release label",
   ]);
 });
 
-test("creates the release label when it is missing", async () => {
+test("creates a missing release label once", async () => {
   const result = await execute({
-    commits: ["a"],
-    lookups: { a: [[pull(1)]] },
+    pages: [[pull(1), pull(2)]],
     label: "missing",
   });
-  assert.equal(result.createdLabels, 1);
-  assert.deepEqual(
-    result.labeled.map(([number]) => number),
-    [1]
-  );
+  assert.deepEqual(result.createdLabels, [version]);
+  assert.deepEqual(result.labeled, [
+    [1, version],
+    [2, version],
+  ]);
 });
 
 test("labels when another run creates the release label first", async () => {
-  const result = await execute({
-    commits: ["a"],
-    lookups: { a: [[pull(1)]] },
-    label: "raced",
+  const result = await execute({ pages: [[pull(1)]], label: "raced" });
+  assert.deepEqual(result.labeled, [[1, version]]);
+});
+
+test("logs a failure with its pull request, labels the others, then fails", async () => {
+  const failure = new Error("Not Found");
+  const { result, error } = await run({
+    pages: [[pull(1), pull(2, { commit: "gone" }), pull(3)]],
+    scripts: { gone: failure },
+    failLabels: [3],
   });
-  assert.deepEqual(
-    result.labeled.map(([number]) => number),
-    [1]
-  );
+  assert.equal(error, failure);
+  assert.deepEqual(result.labeled, [[1, version]]);
+  assert.deepEqual(result.logs, [
+    `Labeled #1 with ${version}`,
+    "Labeling #2 failed: Error: Not Found",
+    "Labeling #3 failed: Error: cannot label 3",
+    "2 pull request(s) failed, see above.",
+  ]);
 });

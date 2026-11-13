@@ -7,8 +7,10 @@
 
 name: Release Version Labeler
 
-# `pull_request_target` is disabled by ASF infra policy, so label on the push of
-# the merge commit to `main` and look up the merged pull request from it.
+# `pull_request_target` is disabled by ASF infra policy, so label on every push
+# to `main`. Each run labels the pull requests merged in the last week that have
+# no release label yet, so a later push also labels a merge whose own push did
+# not run this workflow, such as one with a skip marker in its commit message.
 on:
   push:
     branches:
