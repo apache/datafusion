@@ -57,4 +57,9 @@ jobs:
         # a breaking upgrade that can not be backported to this maintenance branch.
         # The same advisories are ignored on main, see
         # https://github.com/apache/datafusion/issues/23297
-        run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195
+        #
+        # RUSTSEC-2026-0435 (thrift) is ignored because the fix requires
+        # thrift 0.23, and parquet 58 depends on thrift 0.17. parquet 59 no
+        # longer depends on thrift, but is a breaking upgrade that can not be
+        # backported to this maintenance branch.
+        run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 --ignore RUSTSEC-2026-0435
