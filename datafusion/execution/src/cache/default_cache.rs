@@ -905,6 +905,7 @@ mod tests {
             None,
         )
         .with_physical_statistics(PhysicalFileStatistics {
+            num_rows: None,
             column_statistics: vec![PhysicalColumnStatistics::default(); 64],
         });
         let physical_statistics = Arc::clone(

@@ -6,9 +6,8 @@ use std::fs::{File, create_dir_all};
 use std::path::Path;
 use std::sync::Arc;
 
-use arrow::array::{Array, ArrayRef, Int64Array, StringViewArray};
+use arrow::array::{Array, Int64Array, StringViewArray};
 use arrow::datatypes::{DataType, Field, Schema};
-use arrow::record_batch::RecordBatch;
 use datafusion::datasource::source::DataSourceExec;
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::physical_plan::{ExecutionPlan, collect};
@@ -30,8 +29,8 @@ const VALUE: &str = "dictionary-value-dictionary-value";
 const OTHER_VALUE: &str = "second-dictionary-value-second-dictionary-value";
 const ROWS_PER_ROW_GROUP: usize = 150_000;
 const FILE_COUNT: usize = 2;
-const QUERY: &str = "SELECT t.key, COUNT(*) AS count FROM t JOIN dim ON t.bucket = dim.bucket \
-     GROUP BY t.key ORDER BY t.key NULLS FIRST";
+const QUERY: &str =
+    "SELECT key, COUNT(*) AS count FROM t GROUP BY key ORDER BY key NULLS FIRST";
 // Keep this independent from the optimizer implementation so a policy change
 // must update both the fixture and its asserted eligibility evidence.
 const MIN_VALUE_BYTES_PER_PARQUET_BYTE_FOR_TEST: usize = 4;
@@ -108,7 +107,7 @@ fn scan_has_physical_statistics(plan: &Arc<dyn ExecutionPlan>) -> Option<bool> {
         .find_map(scan_has_physical_statistics)
 }
 
-async fn register_tables(ctx: &SessionContext, path: &Path) -> Result<()> {
+async fn register_table(ctx: &SessionContext, path: &Path) -> Result<()> {
     ctx.register_parquet(
         "t",
         path.to_str().expect("temporary path should be UTF-8"),
@@ -116,11 +115,6 @@ async fn register_tables(ctx: &SessionContext, path: &Path) -> Result<()> {
             .table_partition_cols(vec![("bucket".to_string(), DataType::Int64)]),
     )
     .await?;
-    let batch = RecordBatch::try_from_iter([(
-        "bucket",
-        Arc::new(Int64Array::from(vec![1, 2])) as ArrayRef,
-    )])?;
-    ctx.register_batch("dim", batch)?;
     Ok(())
 }
 
@@ -202,7 +196,7 @@ async fn preserves_native_dictionary_for_profitable_group_by() -> Result<()> {
     let runtime = Arc::new(RuntimeEnv::default());
     let baseline_ctx =
         SessionContext::new_with_config_rt(baseline_config, Arc::clone(&runtime));
-    register_tables(&baseline_ctx, &table_path).await?;
+    register_table(&baseline_ctx, &table_path).await?;
     let baseline_plan = baseline_ctx
         .sql(QUERY)
         .await?
@@ -226,13 +220,16 @@ async fn preserves_native_dictionary_for_profitable_group_by() -> Result<()> {
     );
 
     let mut config = SessionConfig::new();
-    config.options_mut().optimizer.enable_dictionary_aggregation = true;
+    config
+        .options_mut()
+        .optimizer
+        .enable_dictionary_preservation = true;
     config.options_mut().execution.target_partitions = FILE_COUNT;
     // Reuse the runtime so this request sees the file-statistics cache entry
     // populated above without physical encoding statistics. Enabling the rule
     // must backfill those statistics instead of treating the entry as complete.
     let ctx = SessionContext::new_with_config_rt(config, Arc::clone(&runtime));
-    register_tables(&ctx, &table_path).await?;
+    register_table(&ctx, &table_path).await?;
 
     // Enabling the optimizer must not backfill physical metadata for scans
     // that project no Utf8View columns and therefore cannot be rewritten.
@@ -253,8 +250,8 @@ async fn preserves_native_dictionary_for_profitable_group_by() -> Result<()> {
             .all(|entry| entry.value.physical_statistics.is_none())
     );
 
-    // Data filters and scan limits make the dictionary rewrite ineligible, so
-    // they must not backfill or attach its optional physical metadata.
+    // Unsupported data filters and scan limits make the dictionary rewrite
+    // ineligible, so they must not backfill or attach its optional metadata.
     for query in [
         "SELECT key, COUNT(*) FROM t WHERE key IS NOT NULL GROUP BY key",
         "SELECT key FROM t LIMIT 1",
@@ -272,6 +269,24 @@ async fn preserves_native_dictionary_for_profitable_group_by() -> Result<()> {
             .values()
             .all(|entry| entry.value.physical_statistics.is_none())
     );
+
+    // An equality-filtered column can be profitable when filtering is its last
+    // consumer, so the listing scan must request physical encoding metadata.
+    // This fixture is deliberately below the filter workload threshold: it
+    // verifies metadata reachability without changing the scan representation.
+    let equality_filter_plan = ctx
+        .sql(&format!("SELECT COUNT(*) FROM t WHERE key = '{VALUE}'"))
+        .await?
+        .create_physical_plan()
+        .await?;
+    assert_eq!(
+        scan_has_physical_statistics(&equality_filter_plan),
+        Some(true)
+    );
+    assert!(matches!(
+        scan_details(&equality_filter_plan),
+        Some((DataType::Utf8View, _))
+    ));
 
     let dataframe = ctx.sql(QUERY).await?;
     let plan = dataframe.create_physical_plan().await?;

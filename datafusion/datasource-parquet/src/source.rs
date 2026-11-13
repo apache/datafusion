@@ -30,12 +30,12 @@ use datafusion_common::tree_node::TreeNodeRecursion;
 #[cfg(feature = "proto")]
 use datafusion_common::utils::{usize_from_wire, usize_to_wire};
 use datafusion_datasource::TableSchema;
-use datafusion_datasource::file::FileSource;
+use datafusion_datasource::file::{FileSource, try_rewrite_dictionary_filter_predicate};
 use datafusion_datasource::file_scan_config::FileScanConfig;
 use datafusion_functions::core::file_row_index::FileRowIndexFunc;
 use datafusion_physical_expr::expressions::{Column, DynamicFilterTracking};
 use datafusion_physical_expr::projection::ProjectionExprs;
-use datafusion_physical_expr::utils::split_conjunction;
+use datafusion_physical_expr::utils::{collect_columns, split_conjunction};
 use datafusion_physical_expr::{EquivalenceProperties, conjunction};
 use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
 use datafusion_physical_expr_adapter::rewrite::{
@@ -761,6 +761,19 @@ impl FileSource for ParquetSource {
         let file_schema = self.table_schema.file_schema();
         let mut fields = file_schema.fields().to_vec();
         for &index in column_indices {
+            if self.projection.iter().any(|projection| {
+                collect_columns(&projection.expr)
+                    .iter()
+                    .any(|column| column.index() == index)
+                    && projection
+                        .expr
+                        .downcast_ref::<Column>()
+                        .is_none_or(|column| column.index() != index)
+            }) {
+                // Retyping below a computed projection would leave that
+                // expression planned against the old input type.
+                return Ok(None);
+            }
             let Some(field) = fields.get_mut(index) else {
                 // Partition and virtual columns follow file columns in the table
                 // schema, but do not have a native Parquet dictionary page.
@@ -786,6 +799,20 @@ impl FileSource for ParquetSource {
             .with_table_partition_cols(self.table_schema.table_partition_cols().clone())
             .with_virtual_columns(self.table_schema.virtual_columns().clone())
             .build();
+        let table_schema = source.table_schema.table_schema();
+        source.predicate = if let Some(predicate) = &self.predicate {
+            let Some(predicate) = try_rewrite_dictionary_filter_predicate(
+                predicate,
+                table_schema.as_ref(),
+                column_indices,
+            )?
+            else {
+                return Ok(None);
+            };
+            Some(predicate)
+        } else {
+            None
+        };
         source.table_parquet_options.global.enable_rle_to_dictionary = true;
         Ok(Some(Arc::new(source)))
     }
@@ -1540,6 +1567,67 @@ mod tests {
                 .global
                 .enable_rle_to_dictionary
         );
+        Ok(())
+    }
+
+    #[test]
+    fn dictionary_encoding_pushdown_rejects_other_expression_consumers() -> Result<()> {
+        use datafusion_common::ScalarValue;
+        use datafusion_physical_expr::expressions::{InListExpr, Literal};
+        use datafusion_physical_expr::projection::ProjectionExpr;
+
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            DataType::Utf8View,
+            false,
+        )]));
+        let in_list = Arc::new(InListExpr::try_new(
+            Arc::new(Column::new("key", 0)),
+            vec![Arc::new(Literal::new(ScalarValue::Utf8View(Some(
+                "target".to_string(),
+            ))))],
+            false,
+            file_schema.as_ref(),
+        )?);
+        let projection = ProjectionExprs::new([
+            ProjectionExpr::new(Arc::new(Column::new("key", 0)), "key"),
+            ProjectionExpr::new(in_list, "matches"),
+        ]);
+        let source = ParquetSource::new(file_schema)
+            .try_pushdown_projection(&projection)?
+            .expect("projection should be accepted");
+        let source = source
+            .downcast_ref::<ParquetSource>()
+            .expect("projected source should remain ParquetSource");
+
+        assert!(source.try_pushdown_dictionary_encoding(&[0])?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn dictionary_encoding_pushdown_rejects_unsupported_predicate() -> Result<()> {
+        use datafusion_physical_expr::expressions::{InListExpr, IsNotNullExpr};
+
+        let file_schema = Arc::new(Schema::new(vec![Field::new(
+            "key",
+            DataType::Utf8View,
+            true,
+        )]));
+        let predicates = [
+            Arc::new(IsNotNullExpr::new(Arc::new(Column::new("key", 0))))
+                as Arc<dyn PhysicalExpr>,
+            Arc::new(InListExpr::try_new(
+                Arc::new(Column::new("key", 0)),
+                vec![],
+                false,
+                file_schema.as_ref(),
+            )?) as Arc<dyn PhysicalExpr>,
+        ];
+        for predicate in predicates {
+            let source =
+                ParquetSource::new(Arc::clone(&file_schema)).with_predicate(predicate);
+            assert!(source.try_pushdown_dictionary_encoding(&[0])?.is_none());
+        }
         Ok(())
     }
 

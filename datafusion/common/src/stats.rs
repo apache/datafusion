@@ -383,6 +383,11 @@ pub struct Statistics {
 #[doc(hidden)]
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PhysicalFileStatistics {
+    /// Exact number of rows described by the file footer.
+    ///
+    /// `None` means the format did not provide a valid count or the count
+    /// could not be represented by `usize`.
+    pub num_rows: Option<usize>,
     /// One entry for each column in the file schema.
     pub column_statistics: Vec<PhysicalColumnStatistics>,
 }

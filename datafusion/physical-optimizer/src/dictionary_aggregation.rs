@@ -2,9 +2,10 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! Preserve profitable file-native dictionary encodings through hash aggregation.
+//! Preserve profitable file-native dictionary encodings through supported operators.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::mem::size_of;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType, SchemaRef};
@@ -12,13 +13,21 @@ use datafusion_common::config::ConfigOptions;
 use datafusion_common::stats::Precision;
 use datafusion_common::tree_node::{Transformed, TransformedResult, TreeNode};
 use datafusion_common::{JoinSide, JoinType, PhysicalFileStatistics, Result, Statistics};
+use datafusion_datasource::file::try_rewrite_dictionary_filter_predicate;
 use datafusion_datasource::file_groups::FileGroup;
 use datafusion_datasource::file_scan_config::{FileScanConfig, FileScanConfigBuilder};
 use datafusion_datasource::source::DataSourceExec;
+use datafusion_expr::Operator;
 use datafusion_physical_expr::PhysicalExpr;
-use datafusion_physical_expr::expressions::{CastExpr, Column};
+use datafusion_physical_expr::expressions::{
+    BinaryExpr, CastExpr, Column, InListExpr, LikeExpr, Literal,
+};
 use datafusion_physical_expr::utils::collect_columns;
-use datafusion_physical_plan::aggregates::{AggregateExec, AggregateMode};
+use datafusion_physical_plan::aggregates::{
+    AggregateExec, AggregateInputMode, AggregateMode, AggregateOutputMode,
+    aggregate_expressions,
+};
+use datafusion_physical_plan::filter::{FilterExec, FilterExecBuilder};
 use datafusion_physical_plan::joins::HashJoinExec;
 use datafusion_physical_plan::joins::utils::build_join_schema;
 use datafusion_physical_plan::projection::ProjectionExec;
@@ -30,20 +39,87 @@ use datafusion_physical_plan::{
 use crate::PhysicalOptimizerRule;
 use crate::optimizer::{ConfigOnlyContext, PhysicalOptimizerContext};
 
-// Utf8View stores values up to 12 bytes inline. Require values to clear that
-// fast path with enough headroom for length variance and array metadata.
-const MIN_ROW_GROUP_VALUE_BYTES_PER_ROW: usize = 16;
+// Every Utf8View row hashes a 16-byte view, even when its value is inline and
+// much shorter. Dictionary grouping hashes each distinct value and then uses
+// the 4-byte keys, so cost short strings by their view slot rather than only
+// their logical payload width.
+const UTF8_VIEW_SLOT_BYTES: usize = size_of::<u128>();
 // Require the decoded values to be substantially larger than the uncompressed
 // Parquet dictionary representation.
 const MIN_VALUE_BYTES_PER_PARQUET_BYTE: usize = 4;
+// Filtering needs a larger storage win than grouping because it does not also
+// replace repeated hash-table keys. The TPC-H column sweep found no filter win
+// below this ratio, while both Q19 candidates clear it comfortably.
+const MIN_FILTER_VALUE_BYTES_PER_PARQUET_BYTE: usize = 8;
 // Avoid changing representation when too little string data reaches the
 // aggregate for cheaper key hashing to repay the scan and output conversions.
 const MIN_AGGREGATE_VALUE_BYTES: usize = 8 * 1024 * 1024;
+// A string filtered before grouping is also evaluated once per scanned row.
+// The TPC-H sweep found a repeatable win for this shape at a smaller grouped
+// input than grouping alone, while narrower strings did not pass this gate.
+const MIN_FILTERED_AGGREGATE_VALUE_BYTES: usize = 4_000_000;
+// A predicate on another column makes the aggregate row estimate inexact.
+// Require substantially more estimated post-filter work for this less certain
+// path than for an aggregate with an exact input size.
+const MIN_SOURCE_FILTERED_AGGREGATE_VALUE_BYTES: usize = 64 * 1024 * 1024;
+// Footer rows are only a reliable scale proxy when the post-filter estimate
+// says nearly all rows still reach the aggregate. Q1 is estimated at 96.4%.
+const MIN_SOURCE_FILTERED_INPUT_PERCENT: usize = 90;
+// A filter-only rewrite only saves the difference between a 16-byte Utf8View
+// slot and a 4-byte dictionary key. Require enough rows for those savings to
+// matter before paying for a different scan representation.
+const MIN_FILTER_SAVED_BYTES: usize = 64 * 1024 * 1024;
 
-/// Rewrites eligible string GROUP BY columns to use dictionaries emitted
-/// natively by their file source.
+#[derive(Debug, Clone, Copy)]
+enum DictionaryUse {
+    Aggregate,
+    FilteredAggregate,
+    SourceFilteredAggregate,
+    Filter,
+}
+
+impl DictionaryUse {
+    fn min_value_bytes_per_parquet_byte(self) -> usize {
+        match self {
+            Self::Aggregate | Self::FilteredAggregate | Self::SourceFilteredAggregate => {
+                MIN_VALUE_BYTES_PER_PARQUET_BYTE
+            }
+            Self::Filter => MIN_FILTER_VALUE_BYTES_PER_PARQUET_BYTE,
+        }
+    }
+
+    fn min_work_bytes(self) -> usize {
+        match self {
+            Self::Aggregate => MIN_AGGREGATE_VALUE_BYTES,
+            Self::FilteredAggregate => MIN_FILTERED_AGGREGATE_VALUE_BYTES,
+            Self::SourceFilteredAggregate => MIN_SOURCE_FILTERED_AGGREGATE_VALUE_BYTES,
+            Self::Filter => MIN_FILTER_SAVED_BYTES,
+        }
+    }
+
+    fn work_bytes_per_row(self, value_bytes_per_row: usize) -> usize {
+        match self {
+            Self::Aggregate | Self::FilteredAggregate | Self::SourceFilteredAggregate => {
+                value_bytes_per_row.max(UTF8_VIEW_SLOT_BYTES)
+            }
+            Self::Filter => UTF8_VIEW_SLOT_BYTES - size_of::<i32>(),
+        }
+    }
+}
+
+/// Rewrites eligible string columns to use dictionaries emitted natively by
+/// their file source when grouping or filter-only use can profit from them.
 #[derive(Debug, Default)]
-pub struct DictionaryAggregation {}
+pub struct DictionaryPreservation {
+    phase: DictionaryPhase,
+}
+
+#[derive(Debug, Default)]
+enum DictionaryPhase {
+    #[default]
+    Aggregation,
+    Filter,
+}
 
 #[derive(Debug, Clone)]
 struct GroupColumn {
@@ -52,6 +128,12 @@ struct GroupColumn {
     scan: Arc<dyn ExecutionPlan>,
     table_index: usize,
     scan_path: Vec<usize>,
+    /// Whether the scan-to-aggregate path contains a `FilterExec`.
+    has_filter_exec: bool,
+    /// Whether one of those filters evaluates this candidate column.
+    candidate_filtered: bool,
+    /// Whether this path contains only a scan, projections, and filters.
+    simple_filter_path: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +141,12 @@ struct ScanTarget {
     scan: Arc<dyn ExecutionPlan>,
     table_index: usize,
     scan_path: Vec<usize>,
+    /// Whether the traced path contains a `FilterExec`.
+    has_filter_exec: bool,
+    /// Whether one of those filters evaluates this candidate column.
+    candidate_filtered: bool,
+    /// Whether this path contains only a scan, projections, and filters.
+    simple_filter_path: bool,
 }
 
 impl ScanTarget {
@@ -74,13 +162,21 @@ struct ScanRewrite {
     table_indices: Vec<usize>,
 }
 
-impl DictionaryAggregation {
-    /// Create a new [`DictionaryAggregation`] optimizer rule.
+impl DictionaryPreservation {
+    /// Create the grouped-aggregation pass of [`DictionaryPreservation`].
     pub fn new() -> Self {
-        Self {}
+        Self::default()
     }
 
-    fn try_rewrite(
+    /// Create the filter pass that runs after projection pushdown has made
+    /// filter-only columns explicit.
+    pub fn new_filter_pass() -> Self {
+        Self {
+            phase: DictionaryPhase::Filter,
+        }
+    }
+
+    fn try_rewrite_aggregate(
         plan: &Arc<dyn ExecutionPlan>,
         context: &dyn PhysicalOptimizerContext,
     ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
@@ -104,6 +200,190 @@ impl DictionaryAggregation {
             }
             AggregateMode::Partial | AggregateMode::PartialReduce => Ok(None),
         }
+    }
+
+    fn try_rewrite_filter(
+        plan: &Arc<dyn ExecutionPlan>,
+        _context: &dyn PhysicalOptimizerContext,
+    ) -> Result<Option<Arc<dyn ExecutionPlan>>> {
+        let Some(filter) = plan.downcast_ref::<FilterExec>() else {
+            return Ok(None);
+        };
+        let Some(projection) = filter.projection() else {
+            return Ok(None);
+        };
+        if filter.fetch().is_some() {
+            return Ok(None);
+        }
+
+        let Some(scan) = filter.input().downcast_ref::<DataSourceExec>() else {
+            return Ok(None);
+        };
+        let Some(config) = scan.data_source().downcast_ref::<FileScanConfig>() else {
+            return Ok(None);
+        };
+        if config.limit.is_some() || config.file_source.exact_filter().is_some() {
+            return Ok(None);
+        }
+
+        let mut input_indices: Vec<_> = collect_columns(filter.predicate())
+            .into_iter()
+            .map(|column| column.index())
+            .collect();
+        input_indices.sort_unstable();
+        input_indices.dedup();
+
+        let input_schema = filter.input().schema();
+        let source_predicate = config.file_source.filter();
+        let mut table_indices = vec![];
+        for input_index in input_indices {
+            // ProjectionPushdown embeds the output projection into FilterExec.
+            // A candidate is safe only when the filter is its last consumer.
+            if projection.contains(&input_index)
+                || input_schema
+                    .fields()
+                    .get(input_index)
+                    .is_none_or(|field| field.data_type() != &DataType::Utf8View)
+                || !Self::candidate_has_supported_filter_use(
+                    filter.predicate(),
+                    input_index,
+                )
+            {
+                continue;
+            }
+            let Some(table_index) = Self::scan_table_index(config, input_index) else {
+                continue;
+            };
+            if source_predicate.as_ref().is_some_and(|predicate| {
+                !Self::candidate_has_supported_filter_use(predicate, table_index)
+            }) || !Self::is_profitable(
+                config,
+                table_index,
+                None,
+                DictionaryUse::Filter,
+            ) {
+                continue;
+            }
+            table_indices.push(table_index);
+        }
+        if table_indices.is_empty() {
+            return Ok(None);
+        }
+
+        let rewrites = [ScanRewrite {
+            scan_path: vec![0],
+            table_indices,
+        }];
+        let Some(rewritten) = Self::rewrite_scans(plan, &rewrites, &mut vec![])? else {
+            return Ok(None);
+        };
+        if rewritten.schema() != plan.schema() {
+            return Ok(None);
+        }
+        Ok(Some(rewritten))
+    }
+
+    fn scan_table_index(config: &FileScanConfig, output_index: usize) -> Option<usize> {
+        let Some(projection) = config.file_source.projection() else {
+            return Some(output_index);
+        };
+        let target = projection.as_ref().get(output_index)?;
+        let column = target.expr.downcast_ref::<Column>()?;
+        let table_index = column.index();
+        (projection
+            .iter()
+            .filter(|expr| {
+                expr.expr
+                    .downcast_ref::<Column>()
+                    .is_some_and(|column| column.index() == table_index)
+            })
+            .count()
+            == 1)
+            .then_some(table_index)
+    }
+
+    fn candidate_has_supported_filter_use(
+        expr: &Arc<dyn PhysicalExpr>,
+        candidate_index: usize,
+    ) -> bool {
+        let references_candidate = collect_columns(expr)
+            .iter()
+            .any(|column| column.index() == candidate_index);
+        if !references_candidate {
+            return true;
+        }
+
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+            return match binary.op() {
+                Operator::And | Operator::Or => {
+                    Self::candidate_has_supported_filter_use(
+                        binary.left(),
+                        candidate_index,
+                    ) && Self::candidate_has_supported_filter_use(
+                        binary.right(),
+                        candidate_index,
+                    )
+                }
+                Operator::Eq => {
+                    let is_candidate = |expr: &Arc<dyn PhysicalExpr>| {
+                        expr.downcast_ref::<Column>()
+                            .is_some_and(|column| column.index() == candidate_index)
+                    };
+                    (is_candidate(binary.left())
+                        && binary.right().downcast_ref::<Literal>().is_some())
+                        || (is_candidate(binary.right())
+                            && binary.left().downcast_ref::<Literal>().is_some())
+                }
+                _ => false,
+            };
+        }
+
+        expr.downcast_ref::<InListExpr>().is_some_and(|in_list| {
+            !in_list.negated()
+                && !in_list.list().is_empty()
+                && in_list
+                    .expr()
+                    .downcast_ref::<Column>()
+                    .is_some_and(|column| column.index() == candidate_index)
+                && in_list
+                    .list()
+                    .iter()
+                    .all(|expr| expr.downcast_ref::<Literal>().is_some())
+        })
+    }
+
+    fn candidate_has_supported_group_filter_use(
+        expr: &Arc<dyn PhysicalExpr>,
+        candidate_index: usize,
+    ) -> bool {
+        let references_candidate = collect_columns(expr)
+            .iter()
+            .any(|column| column.index() == candidate_index);
+        if !references_candidate {
+            return true;
+        }
+
+        if let Some(binary) = expr.downcast_ref::<BinaryExpr>() {
+            return matches!(binary.op(), Operator::And | Operator::Or)
+                && Self::candidate_has_supported_group_filter_use(
+                    binary.left(),
+                    candidate_index,
+                )
+                && Self::candidate_has_supported_group_filter_use(
+                    binary.right(),
+                    candidate_index,
+                );
+        }
+
+        expr.downcast_ref::<LikeExpr>().is_some_and(|like| {
+            like.negated()
+                && !like.case_insensitive()
+                && like
+                    .expr()
+                    .downcast_ref::<Column>()
+                    .is_some_and(|column| column.index() == candidate_index)
+                && like.pattern().downcast_ref::<Literal>().is_some()
+        })
     }
 
     fn rewrite_aggregate_chain(
@@ -131,13 +411,14 @@ impl DictionaryAggregation {
         // aggregate. Cost the representation change where it is consumed.
         let statistics =
             context.compute_statistics(raw_agg.input(), &StatisticsArgs::new())?;
-        let Some(&aggregate_input_rows) = statistics.num_rows.get_value() else {
+        if statistics.num_rows == Precision::Absent {
             return Ok(None);
-        };
+        }
 
         let group_columns: Vec<_> = group_columns
             .into_iter()
             .filter(|column| {
+                let table_index = column.table_index;
                 let scan = column
                     .scan
                     .downcast_ref::<DataSourceExec>()
@@ -146,12 +427,45 @@ impl DictionaryAggregation {
                     .data_source()
                     .downcast_ref::<FileScanConfig>()
                     .expect("group column lineage ends at a file scan");
-                config.file_source.filter().is_none()
-                    && config.limit.is_none()
+                let source_filter_supported =
+                    config.file_source.filter().is_none_or(|predicate| {
+                        let references_candidate = collect_columns(&predicate)
+                            .iter()
+                            .any(|column| column.index() == table_index);
+                        !references_candidate
+                            || (column.candidate_filtered
+                                && Self::candidate_has_supported_group_filter_use(
+                                    &predicate,
+                                    table_index,
+                                ))
+                    });
+                let has_source_filter = config.file_source.filter().is_some();
+                let (input_rows, dictionary_use) = match statistics.num_rows {
+                    Precision::Exact(rows)
+                        if !has_source_filter || column.has_filter_exec =>
+                    {
+                        (Some(rows), DictionaryUse::Aggregate)
+                    }
+                    Precision::Inexact(_) if column.candidate_filtered => {
+                        (None, DictionaryUse::FilteredAggregate)
+                    }
+                    Precision::Inexact(rows)
+                        if column.has_filter_exec && column.simple_filter_path =>
+                    {
+                        (Some(rows), DictionaryUse::SourceFilteredAggregate)
+                    }
+                    Precision::Exact(_) | Precision::Inexact(_) | Precision::Absent => {
+                        return false;
+                    }
+                };
+                config.limit.is_none()
+                    && config.file_source.exact_filter().is_none()
+                    && source_filter_supported
                     && Self::is_profitable(
                         config,
                         column.table_index,
-                        aggregate_input_rows,
+                        input_rows,
+                        dictionary_use,
                     )
             })
             .collect();
@@ -163,7 +477,9 @@ impl DictionaryAggregation {
             .iter()
             .map(|column| column.aggregate_input_index)
             .collect();
-        if Self::aggregate_references_columns(raw_agg, &encoded_input_indices) {
+        let raw_references_candidate =
+            Self::aggregate_references_columns(raw_agg, &encoded_input_indices)?;
+        if raw_references_candidate {
             return Ok(None);
         }
 
@@ -182,7 +498,9 @@ impl DictionaryAggregation {
                 .iter()
                 .map(|column| column.group_index)
                 .collect();
-            if Self::aggregate_references_columns(final_agg, &final_group_indices)
+            let final_references_candidate =
+                Self::aggregate_references_columns(final_agg, &final_group_indices)?;
+            if final_references_candidate
                 || partial_agg.group_expr().expr().len()
                     != final_agg.group_expr().expr().len()
             {
@@ -249,6 +567,9 @@ impl DictionaryAggregation {
                     scan: target.scan,
                     table_index: target.table_index,
                     scan_path: target.scan_path,
+                    has_filter_exec: target.has_filter_exec,
+                    candidate_filtered: target.candidate_filtered,
+                    simple_filter_path: target.simple_filter_path,
                 });
             }
         }
@@ -297,6 +618,9 @@ impl DictionaryAggregation {
                 scan: Arc::clone(plan),
                 table_index,
                 scan_path: vec![],
+                has_filter_exec: false,
+                candidate_filtered: false,
+                simple_filter_path: true,
             }));
         }
 
@@ -320,10 +644,85 @@ impl DictionaryAggregation {
             return Ok(target.map(|target| target.prepend_child(0)));
         }
 
+        if let Some(filter) = plan.downcast_ref::<FilterExec>() {
+            if filter.fetch().is_some() {
+                return Ok(None);
+            }
+            let input_index = match filter.projection() {
+                Some(projection) => {
+                    let Some(&input_index) = projection.get(output_index) else {
+                        return Ok(None);
+                    };
+                    if projection
+                        .iter()
+                        .filter(|&&index| index == input_index)
+                        .count()
+                        != 1
+                    {
+                        return Ok(None);
+                    }
+                    input_index
+                }
+                None => output_index,
+            };
+            let candidate_filtered = collect_columns(filter.predicate())
+                .iter()
+                .any(|column| column.index() == input_index);
+            if candidate_filtered
+                && !Self::candidate_has_supported_group_filter_use(
+                    filter.predicate(),
+                    input_index,
+                )
+            {
+                return Ok(None);
+            }
+            let target = Self::trace_group_column(filter.input(), input_index)?;
+            return Ok(target.map(|mut target| {
+                target.has_filter_exec = true;
+                target.candidate_filtered |= candidate_filtered;
+                target.prepend_child(0)
+            }));
+        }
+
+        if let Some(aggregate) = plan.downcast_ref::<AggregateExec>() {
+            if aggregate.group_expr().has_grouping_set()
+                || !aggregate.group_expr().null_expr().is_empty()
+                || aggregate.limit_options().is_some()
+            {
+                return Ok(None);
+            }
+            let Some((expr, _)) = aggregate.group_expr().expr().get(output_index) else {
+                return Ok(None);
+            };
+            let Some(column) = expr.downcast_ref::<Column>() else {
+                return Ok(None);
+            };
+            let input_index = column.index();
+            if aggregate.group_expr().expr().iter().enumerate().any(
+                |(index, (expr, _))| {
+                    index != output_index
+                        && collect_columns(expr)
+                            .iter()
+                            .any(|column| column.index() == input_index)
+                },
+            ) || Self::aggregate_references_columns(
+                aggregate,
+                &HashSet::from([input_index]),
+            )? {
+                return Ok(None);
+            }
+            let target = Self::trace_group_column(aggregate.input(), input_index)?;
+            return Ok(target.map(|mut target| {
+                target.simple_filter_path = false;
+                target.prepend_child(0)
+            }));
+        }
+
         if let Some(join) = plan.downcast_ref::<HashJoinExec>() {
-            // Keep the initial policy to pure inner equi-joins, which are the
-            // only join shape covered by the benchmark evidence.
-            if join.join_type() != &JoinType::Inner || join.filter().is_some() {
+            if !matches!(join.join_type(), JoinType::Inner | JoinType::RightAnti)
+                || join.filter().is_some()
+                || join.fetch().is_some()
+            {
                 return Ok(None);
             }
             let join_output_index = match &join.projection {
@@ -351,6 +750,11 @@ impl DictionaryAggregation {
             let Some(column_index) = column_indices.get(join_output_index) else {
                 return Ok(None);
             };
+            if join.join_type() == &JoinType::RightAnti
+                && column_index.side != JoinSide::Right
+            {
+                return Ok(None);
+            }
             let (input, child_index, is_join_key) = match column_index.side {
                 JoinSide::Left => (
                     join.left(),
@@ -376,14 +780,14 @@ impl DictionaryAggregation {
                 return Ok(None);
             }
             let target = Self::trace_group_column(input, column_index.index)?;
-            return Ok(target.map(|target| target.prepend_child(child_index)));
+            return Ok(target.map(|mut target| {
+                target.simple_filter_path = false;
+                target.prepend_child(child_index)
+            }));
         }
 
-        // Filters change how many rows reach the aggregate, so scan-wide file
-        // statistics are not sufficient to prove that dictionary grouping is
-        // profitable. Repartitions and every other unrecognized node are also
-        // rejected until their expression and reconstruction contracts are
-        // covered explicitly.
+        // Repartitions and every other unrecognized node are rejected until
+        // their expression and reconstruction contracts are covered explicitly.
         Ok(None)
     }
 
@@ -499,11 +903,76 @@ impl DictionaryAggregation {
                 new_children.swap_remove(0),
                 projection.schema().as_ref(),
             )?) as Arc<dyn ExecutionPlan>
+        } else if let Some(filter) = plan.downcast_ref::<FilterExec>() {
+            let new_input = new_children.swap_remove(0);
+            let old_schema = filter.input().schema();
+            let new_schema = new_input.schema();
+            let changed_column_indices = old_schema
+                .fields()
+                .iter()
+                .zip(new_schema.fields())
+                .enumerate()
+                .filter_map(|(index, (old, new))| {
+                    (old.data_type() != new.data_type()).then_some(index)
+                })
+                .collect::<Vec<_>>();
+            let Some(predicate) = try_rewrite_dictionary_filter_predicate(
+                filter.predicate(),
+                new_schema.as_ref(),
+                &changed_column_indices,
+            )?
+            else {
+                return Ok(None);
+            };
+            Arc::new(
+                FilterExecBuilder::from(filter)
+                    .with_input(new_input)
+                    .with_predicate(predicate)
+                    .build()?,
+            ) as Arc<dyn ExecutionPlan>
+        } else if let Some(aggregate) = plan.downcast_ref::<AggregateExec>() {
+            let input = new_children.swap_remove(0);
+            let input_schema = match aggregate.mode().input_mode() {
+                AggregateInputMode::Raw => input.schema(),
+                AggregateInputMode::Partial => {
+                    // These modes consume partial state, but `input_schema`
+                    // describes the raw input before the partial aggregate.
+                    // A traced nested aggregate chain is direct at this phase,
+                    // so preserve the rebuilt state producer's raw schema.
+                    let Some(state_producer) = input.downcast_ref::<AggregateExec>()
+                    else {
+                        return Ok(None);
+                    };
+                    if state_producer.mode().output_mode() != AggregateOutputMode::Partial
+                    {
+                        return Ok(None);
+                    }
+                    state_producer.input_schema()
+                }
+            };
+            Arc::new(AggregateExec::try_new(
+                *aggregate.mode(),
+                aggregate.group_expr().clone(),
+                aggregate.aggr_expr().to_vec(),
+                aggregate.filter_expr().to_vec(),
+                input,
+                input_schema,
+            )?) as Arc<dyn ExecutionPlan>
         } else {
-            Arc::clone(plan).replace_children(
+            let result = Arc::clone(plan).replace_children(
                 new_children,
                 ReplaceChildrenOptions::new(ChildrenPropertiesMode::Recompute),
-            )?
+            );
+            match result {
+                Ok(rewritten) => rewritten,
+                // A prepared hash join intentionally rejects replacing its
+                // build child. Treat that and any other unsupported hash-join
+                // reconstruction as an inapplicable rewrite, not a query error.
+                Err(_) if plan.downcast_ref::<HashJoinExec>().is_some() => {
+                    return Ok(None);
+                }
+                Err(error) => return Err(error),
+            }
         };
         Ok(Some(rewritten))
     }
@@ -534,48 +1003,157 @@ impl DictionaryAggregation {
     fn aggregate_references_columns(
         aggregate: &AggregateExec,
         column_indices: &HashSet<usize>,
-    ) -> bool {
+    ) -> Result<bool> {
         let references_candidate = |expr: &Arc<dyn PhysicalExpr>| {
             collect_columns(expr)
                 .iter()
                 .any(|column| column_indices.contains(&column.index()))
         };
-        aggregate.aggr_expr().iter().any(|aggregate| {
-            aggregate.expressions().iter().any(references_candidate)
-                || aggregate
-                    .order_bys()
-                    .iter()
-                    .any(|order| references_candidate(&order.expr))
-        }) || aggregate
-            .filter_expr()
+        let aggregate_expressions = aggregate_expressions(
+            aggregate.aggr_expr(),
+            aggregate.mode(),
+            aggregate.group_expr().expr().len(),
+        )?;
+        Ok(aggregate_expressions
             .iter()
             .flatten()
             .any(references_candidate)
+            || aggregate
+                .filter_expr()
+                .iter()
+                .flatten()
+                .any(references_candidate))
+    }
+
+    /// File scan repartitioning splits one Parquet file into byte ranges and
+    /// clones the file-level encoding metadata onto every range. Accept those
+    /// ranges only when they form one exact, non-overlapping cover of the full
+    /// object. This rejects caller-supplied partial or duplicated scans, whose
+    /// row count may not match the file-level cost evidence.
+    fn ranges_cover_full_files(config: &FileScanConfig) -> bool {
+        let mut files_by_path = HashMap::new();
+        for file in config.file_groups.iter().flat_map(|group| group.iter()) {
+            let Ok(file_size) = i64::try_from(file.object_meta.size) else {
+                return false;
+            };
+            let (object_meta, ranges) = files_by_path
+                .entry(file.object_meta.location.to_string())
+                .or_insert_with(|| (file.object_meta.clone(), Vec::new()));
+            if object_meta != &file.object_meta {
+                return false;
+            }
+            ranges.push(
+                file.range
+                    .clone()
+                    .unwrap_or(datafusion_datasource::FileRange {
+                        start: 0,
+                        end: file_size,
+                    }),
+            );
+        }
+
+        files_by_path
+            .into_values()
+            .all(|(object_meta, mut ranges)| {
+                let Ok(file_size) = i64::try_from(object_meta.size) else {
+                    return false;
+                };
+                ranges.sort_unstable();
+                let mut next_start = 0;
+                for range in ranges {
+                    if range.start != next_start
+                        || range.end <= range.start
+                        || range.end > file_size
+                    {
+                        return false;
+                    }
+                    next_start = range.end;
+                }
+                next_start == file_size
+            })
     }
 
     fn is_profitable(
         config: &FileScanConfig,
         table_index: usize,
-        aggregate_input_rows: usize,
+        input_rows: Option<usize>,
+        dictionary_use: DictionaryUse,
     ) -> bool {
         // Custom expression adapters can change values relative to the file
         // statistics used by this cost gate.
-        if config.expr_adapter_factory.is_some() {
+        if config.expr_adapter_factory.is_some() || !Self::ranges_cover_full_files(config)
+        {
             return false;
         }
-        let mut saw_file = false;
-        let mut min_value_bytes_per_row = usize::MAX;
+        let mut files_by_path = HashMap::new();
         for file in config.file_groups.iter().flat_map(|group| group.iter()) {
-            if file.range.is_some()
-                || file.arrow_schema.is_some()
-                || file.extensions.len() != 1
-            {
+            if file.arrow_schema.is_some() || file.extensions.len() != 1 {
                 return false;
             }
-            saw_file = true;
             let Some(physical) = file.extension::<PhysicalFileStatistics>() else {
                 return false;
             };
+            match files_by_path.entry(file.object_meta.location.clone()) {
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(physical.clone());
+                }
+                std::collections::hash_map::Entry::Occupied(entry)
+                    if entry.get() != physical =>
+                {
+                    return false;
+                }
+                std::collections::hash_map::Entry::Occupied(_) => {}
+            }
+        }
+
+        let footer_rows = || {
+            files_by_path.values().try_fold(0usize, |total, physical| {
+                total.checked_add(physical.num_rows?)
+            })
+        };
+        let input_rows = match dictionary_use {
+            DictionaryUse::Aggregate => {
+                let Some(input_rows) = input_rows else {
+                    return false;
+                };
+                input_rows
+            }
+            DictionaryUse::SourceFilteredAggregate => {
+                let (Some(input_rows), Some(footer_rows)) = (input_rows, footer_rows())
+                else {
+                    return false;
+                };
+                let Some(estimated_percent) = input_rows.checked_mul(100) else {
+                    return false;
+                };
+                let Some(minimum_percent) =
+                    footer_rows.checked_mul(MIN_SOURCE_FILTERED_INPUT_PERCENT)
+                else {
+                    return false;
+                };
+                if input_rows > footer_rows || estimated_percent < minimum_percent {
+                    return false;
+                }
+                input_rows
+            }
+            DictionaryUse::FilteredAggregate | DictionaryUse::Filter => {
+                if input_rows.is_some() {
+                    return false;
+                }
+                // These candidate-filtered paths were selected empirically.
+                // Footer rows provide a stable file-size heuristic, while
+                // hosted workload benchmarks remain the regression gate.
+                let Some(input_rows) = footer_rows() else {
+                    return false;
+                };
+                input_rows
+            }
+        };
+
+        let mut saw_file = false;
+        let mut min_value_bytes_per_row = usize::MAX;
+        for physical in files_by_path.values() {
+            saw_file = true;
             let Some(column) = physical.column_statistics.get(table_index) else {
                 return false;
             };
@@ -587,19 +1165,22 @@ impl DictionaryAggregation {
                 return false;
             };
             if column.native_dictionary_value_type != Some(DataType::Utf8)
-                || value_bytes_per_row < MIN_ROW_GROUP_VALUE_BYTES_PER_ROW
                 || column
                     .min_row_group_value_bytes_per_encoded_byte
-                    .is_none_or(|ratio| ratio < MIN_VALUE_BYTES_PER_PARQUET_BYTE)
+                    .is_none_or(|ratio| {
+                        ratio < dictionary_use.min_value_bytes_per_parquet_byte()
+                    })
             {
                 return false;
             }
             min_value_bytes_per_row = min_value_bytes_per_row.min(value_bytes_per_row);
         }
+        let work_bytes_per_row =
+            dictionary_use.work_bytes_per_row(min_value_bytes_per_row);
         saw_file
-            && aggregate_input_rows
-                .checked_mul(min_value_bytes_per_row)
-                .is_some_and(|bytes| bytes >= MIN_AGGREGATE_VALUE_BYTES)
+            && input_rows
+                .checked_mul(work_bytes_per_row)
+                .is_some_and(|bytes| bytes >= dictionary_use.min_work_bytes())
     }
 
     fn restore_output_schema(
@@ -638,7 +1219,7 @@ impl DictionaryAggregation {
     }
 }
 
-impl PhysicalOptimizerRule for DictionaryAggregation {
+impl PhysicalOptimizerRule for DictionaryPreservation {
     fn optimize(
         &self,
         plan: Arc<dyn ExecutionPlan>,
@@ -655,12 +1236,18 @@ impl PhysicalOptimizerRule for DictionaryAggregation {
         if !context
             .config_options()
             .optimizer
-            .enable_dictionary_aggregation
+            .enable_dictionary_preservation
         {
             return Ok(plan);
         }
         plan.transform_down(|plan| {
-            Ok(match Self::try_rewrite(&plan, context)? {
+            let rewritten = match self.phase {
+                DictionaryPhase::Aggregation => {
+                    Self::try_rewrite_aggregate(&plan, context)?
+                }
+                DictionaryPhase::Filter => Self::try_rewrite_filter(&plan, context)?,
+            };
+            Ok(match rewritten {
                 Some(rewritten) => Transformed::yes(rewritten),
                 None => Transformed::no(plan),
             })
@@ -669,7 +1256,10 @@ impl PhysicalOptimizerRule for DictionaryAggregation {
     }
 
     fn name(&self) -> &str {
-        "DictionaryAggregation"
+        match self.phase {
+            DictionaryPhase::Aggregation => "DictionaryPreservation(Aggregation)",
+            DictionaryPhase::Filter => "DictionaryPreservation(Filter)",
+        }
     }
 
     fn schema_check(&self) -> bool {
@@ -680,15 +1270,20 @@ impl PhysicalOptimizerRule for DictionaryAggregation {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::{Field, Schema};
+    use arrow::array::{ArrayRef, BooleanArray, DictionaryArray, Int64Array};
+    use arrow::datatypes::{Field, Int32Type, Schema};
+    use arrow::record_batch::RecordBatch;
     use datafusion_common::{
         ColumnStatistics, NullEquality, PhysicalColumnStatistics, ScalarValue, Statistics,
     };
     use datafusion_datasource::PartitionedFile;
+    use datafusion_datasource::file::FileSource;
     use datafusion_datasource::file_groups::FileGroup;
     use datafusion_datasource_parquet::source::ParquetSource;
     use datafusion_execution::object_store::ObjectStoreUrl;
+    use datafusion_expr::ColumnarValue;
     use datafusion_expr::test::function_stub::count_udaf;
+    use datafusion_functions_aggregate::count::count_udaf as real_count_udaf;
     use datafusion_physical_expr::aggregate::AggregateExprBuilder;
     use datafusion_physical_expr::expressions::IsNotNullExpr;
     use datafusion_physical_expr_adapter::DefaultPhysicalExprAdapterFactory;
@@ -714,6 +1309,7 @@ mod tests {
             .collect::<Vec<_>>();
         let schema = Arc::new(Schema::new(fields));
         let physical_statistics = PhysicalFileStatistics {
+            num_rows: Some(10_000_000),
             column_statistics: value_bytes
                 .iter()
                 .zip(parquet_uncompressed_bytes)
@@ -802,8 +1398,14 @@ mod tests {
 
     fn optimize(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
         let mut config = ConfigOptions::new();
-        config.optimizer.enable_dictionary_aggregation = true;
-        DictionaryAggregation::new().optimize(plan, &config)
+        config.optimizer.enable_dictionary_preservation = true;
+        DictionaryPreservation::new().optimize(plan, &config)
+    }
+
+    fn optimize_filter(plan: Arc<dyn ExecutionPlan>) -> Result<Arc<dyn ExecutionPlan>> {
+        let mut config = ConfigOptions::new();
+        config.optimizer.enable_dictionary_preservation = true;
+        DictionaryPreservation::new_filter_pass().optimize(plan, &config)
     }
 
     fn candidate_physical_statistics(
@@ -814,6 +1416,7 @@ mod tests {
         value_bytes_per_parquet_byte: usize,
     ) -> PhysicalFileStatistics {
         PhysicalFileStatistics {
+            num_rows: Some(10_000_000),
             column_statistics: (0..column_count)
                 .map(|index| {
                     if index == candidate_index {
@@ -886,6 +1489,101 @@ mod tests {
         Ok(DataSourceExec::from_data_source(builder.build()))
     }
 
+    fn equality_filter_plan(
+        project_candidate: bool,
+        value_bytes_per_parquet_byte: usize,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("measure", DataType::Int64, false),
+            Field::new("filter_key", DataType::Utf8View, true),
+        ]));
+        let predicate = Arc::new(BinaryExpr::new(
+            Arc::new(Column::new("filter_key", 1)),
+            Operator::Eq,
+            Arc::new(Literal::new(ScalarValue::Utf8View(Some(
+                "target".to_string(),
+            )))),
+        )) as Arc<dyn PhysicalExpr>;
+        let file = candidate_file(
+            "data.parquet",
+            2,
+            1,
+            DataType::Utf8,
+            12,
+            value_bytes_per_parquet_byte,
+        );
+        let scan =
+            scan_plan(schema, vec![file], None, Some(Arc::clone(&predicate)), None)?;
+        let projection = if project_candidate {
+            vec![0, 1]
+        } else {
+            vec![0]
+        };
+        Ok(Arc::new(
+            FilterExecBuilder::new(predicate, scan)
+                .apply_projection(Some(projection))?
+                .build()?,
+        ))
+    }
+
+    fn assert_predicate_result(
+        predicate: &Arc<dyn PhysicalExpr>,
+        batch: &RecordBatch,
+        expected: Vec<Option<bool>>,
+    ) -> Result<()> {
+        let ColumnarValue::Array(actual) = predicate.evaluate(batch)? else {
+            panic!("filter predicate should evaluate to an array");
+        };
+        let actual = actual
+            .as_any()
+            .downcast_ref::<BooleanArray>()
+            .expect("filter predicate should return a BooleanArray");
+        assert_eq!(actual, &BooleanArray::from(expected));
+        Ok(())
+    }
+
+    fn q19_filter_predicate(
+        schema: &Schema,
+        shipmode_index: usize,
+        shipinstruct_index: usize,
+    ) -> Result<Arc<dyn PhysicalExpr>> {
+        let literal = |value: Option<&str>| {
+            Arc::new(Literal::new(match value {
+                Some(value) => ScalarValue::Utf8View(Some(value.to_string())),
+                None => ScalarValue::Null,
+            })) as Arc<dyn PhysicalExpr>
+        };
+        let in_list = |values: &[Option<&str>]| -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(Arc::new(InListExpr::try_new(
+                Arc::new(Column::new("shipmode", shipmode_index)),
+                values.iter().map(|value| literal(*value)).collect(),
+                false,
+                schema,
+            )?))
+        };
+        let instruct_eq = |value: &str| {
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("shipinstruct", shipinstruct_index)),
+                Operator::Eq,
+                literal(Some(value)),
+            )) as Arc<dyn PhysicalExpr>
+        };
+        let branch = |modes: &[Option<&str>],
+                      instruction: &str|
+         -> Result<Arc<dyn PhysicalExpr>> {
+            Ok(Arc::new(BinaryExpr::new(
+                in_list(modes)?,
+                Operator::And,
+                instruct_eq(instruction),
+            )))
+        };
+        Ok(Arc::new(BinaryExpr::new(
+            branch(&[Some("AIR"), Some("AIR REG")], "DELIVER IN PERSON")?,
+            Operator::Or,
+            branch(&[Some("SHIP"), None], "TAKE BACK RETURN")?,
+        )))
+    }
+
     fn single_group_aggregate(
         input: Arc<dyn ExecutionPlan>,
         group_index: usize,
@@ -906,8 +1604,41 @@ mod tests {
         )?))
     }
 
+    fn two_phase_group_aggregate(
+        input: Arc<dyn ExecutionPlan>,
+        group_index: usize,
+    ) -> Result<Arc<dyn ExecutionPlan>> {
+        let input_schema = input.schema();
+        let field = input_schema.field(group_index);
+        let partial_group_by = PhysicalGroupBy::new_single(vec![(
+            Arc::new(Column::new(field.name(), group_index)) as Arc<dyn PhysicalExpr>,
+            field.name().clone(),
+        )]);
+        let partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            partial_group_by,
+            vec![],
+            vec![],
+            input,
+            Arc::clone(&input_schema),
+        )?);
+        let final_group_by = PhysicalGroupBy::new_single(vec![(
+            Arc::new(Column::new(field.name(), 0)) as Arc<dyn PhysicalExpr>,
+            field.name().clone(),
+        )]);
+        Ok(Arc::new(AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            final_group_by,
+            vec![],
+            vec![],
+            partial,
+            input_schema,
+        )?))
+    }
+
     fn profitable_scan(schema: SchemaRef) -> Arc<dyn ExecutionPlan> {
         let physical_statistics = PhysicalFileStatistics {
+            num_rows: Some(10_000_000),
             column_statistics: schema
                 .fields()
                 .iter()
@@ -957,6 +1688,7 @@ mod tests {
         InputFilter,
         DuplicateProjection,
         FilteredJoin,
+        FetchedJoin,
         LeftJoin,
         DuplicateJoinProjection,
     }
@@ -1016,7 +1748,7 @@ mod tests {
         } else {
             vec![1]
         };
-        let join = Arc::new(HashJoinExec::try_new(
+        let join = HashJoinExec::try_new(
             left,
             right,
             vec![(
@@ -1036,7 +1768,13 @@ mod tests {
             PartitionMode::CollectLeft,
             NullEquality::NullEqualsNothing,
             false,
-        )?) as Arc<dyn ExecutionPlan>;
+        )?;
+        let join = if matches!(shape, JoinPlanShape::FetchedJoin) {
+            join.builder().with_fetch(Some(1)).build()?
+        } else {
+            join
+        };
+        let join = Arc::new(join) as Arc<dyn ExecutionPlan>;
 
         let mut projection_expr = vec![(
             Arc::new(Column::new("group_key", 0)) as Arc<dyn PhysicalExpr>,
@@ -1093,6 +1831,15 @@ mod tests {
             .find_map(|child| find_scan_for_file(child, path))
     }
 
+    fn find_filter(plan: &Arc<dyn ExecutionPlan>) -> Option<&FilterExec> {
+        if let Some(filter) = plan.downcast_ref::<FilterExec>() {
+            return Some(filter);
+        }
+        plan.children()
+            .into_iter()
+            .find_map(|child| find_filter(child))
+    }
+
     fn rewritten_scan(plan: &Arc<dyn ExecutionPlan>) -> &FileScanConfig {
         let projection = plan
             .downcast_ref::<ProjectionExec>()
@@ -1138,7 +1885,7 @@ mod tests {
     fn rewrites_only_columns_that_pass_the_cost_gate() -> Result<()> {
         let plan = aggregate_plan(
             &[240_000_000, 80_000_000],
-            &[Some(12_000_000), Some(4_000_000)],
+            &[Some(12_000_000), Some(40_000_000)],
             true,
             true,
         )?;
@@ -1156,10 +1903,77 @@ mod tests {
     }
 
     #[test]
+    fn rewrites_multiple_short_group_keys() -> Result<()> {
+        let plan = aggregate_plan(
+            &[10_000_000, 10_000_000],
+            &[Some(2_000_000), Some(2_000_000)],
+            true,
+            true,
+        )?;
+        let optimized = optimize(plan)?;
+        let scan = rewritten_scan(&optimized);
+        for index in 0..2 {
+            assert!(matches!(
+                scan.file_schema().field(index).data_type(),
+                DataType::Dictionary(_, _)
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn final_state_columns_do_not_alias_raw_aggregate_arguments() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("value", DataType::Int64, false),
+            Field::new("group_key", DataType::Utf8View, false),
+        ]));
+        let file = candidate_file("data.parquet", 2, 1, DataType::Utf8, 24, 6);
+        let scan = scan_plan(Arc::clone(&schema), vec![file], None, None, None)?;
+        let raw_input_schema = scan.schema();
+        let aggregate = Arc::new(
+            AggregateExprBuilder::new(
+                real_count_udaf(),
+                vec![Arc::new(Column::new("value", 0))],
+            )
+            .schema(Arc::clone(&raw_input_schema))
+            .alias("count_value")
+            .build()?,
+        );
+        let partial = Arc::new(AggregateExec::try_new(
+            AggregateMode::Partial,
+            PhysicalGroupBy::new_single(vec![(
+                Arc::new(Column::new("group_key", 1)) as Arc<dyn PhysicalExpr>,
+                "group_key".to_string(),
+            )]),
+            vec![Arc::clone(&aggregate)],
+            vec![None],
+            scan,
+            Arc::clone(&raw_input_schema),
+        )?) as Arc<dyn ExecutionPlan>;
+        let final_aggregate = Arc::new(AggregateExec::try_new(
+            AggregateMode::FinalPartitioned,
+            PhysicalGroupBy::new_single(vec![(
+                Arc::new(Column::new("group_key", 0)) as Arc<dyn PhysicalExpr>,
+                "group_key".to_string(),
+            )]),
+            vec![aggregate],
+            vec![None],
+            partial,
+            raw_input_schema,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let optimized = optimize(final_aggregate)?;
+        let scan = find_scan(&optimized).expect("rewritten plan should contain scan");
+        assert!(matches!(
+            scan.file_schema().field(1).data_type(),
+            DataType::Dictionary(_, _)
+        ));
+        Ok(())
+    }
+
+    #[test]
     fn skips_when_cost_or_storage_evidence_is_incomplete() -> Result<()> {
         let cases = [
-            // Utf8View's short-value inline representation is faster.
-            (80_000_000, Some(4_000_000), true, true),
             // The dictionary representation does not avoid enough value bytes.
             (240_000_000, Some(80_000_000), true, true),
             // The writer did not report decoded byte-array sizes.
@@ -1186,7 +2000,7 @@ mod tests {
         let plan = aggregate_plan(&[240_000_000], &[Some(12_000_000)], true, true)?;
         let config = ConfigOptions::new();
         let optimized =
-            DictionaryAggregation::new().optimize(Arc::clone(&plan), &config)?;
+            DictionaryPreservation::new().optimize(Arc::clone(&plan), &config)?;
         assert!(Arc::ptr_eq(&optimized, &plan));
         Ok(())
     }
@@ -1201,35 +2015,178 @@ mod tests {
         let file = candidate_file("data.parquet", 1, 0, DataType::Utf8, 16, 4);
         let scan = scan_plan(Arc::clone(&schema), vec![file], None, None, None)?;
         let config = find_scan(&scan).expect("test scan should use FileScanConfig");
-        let rows_at_threshold =
-            MIN_AGGREGATE_VALUE_BYTES / MIN_ROW_GROUP_VALUE_BYTES_PER_ROW;
+        let rows_at_threshold = MIN_AGGREGATE_VALUE_BYTES / UTF8_VIEW_SLOT_BYTES;
 
-        assert!(!DictionaryAggregation::is_profitable(
+        assert!(!DictionaryPreservation::is_profitable(
             config,
             0,
-            rows_at_threshold - 1
+            Some(rows_at_threshold - 1),
+            DictionaryUse::Aggregate,
         ));
-        assert!(DictionaryAggregation::is_profitable(
+        assert!(DictionaryPreservation::is_profitable(
             config,
             0,
-            rows_at_threshold
+            Some(rows_at_threshold),
+            DictionaryUse::Aggregate,
         ));
-        assert!(!DictionaryAggregation::is_profitable(config, 0, usize::MAX));
+        assert!(!DictionaryPreservation::is_profitable(
+            config,
+            0,
+            Some(usize::MAX),
+            DictionaryUse::Aggregate,
+        ));
 
         let narrow = candidate_file(
             "narrow.parquet",
             1,
             0,
             DataType::Utf8,
-            MIN_ROW_GROUP_VALUE_BYTES_PER_ROW - 1,
+            1,
             MIN_VALUE_BYTES_PER_PARQUET_BYTE,
         );
         let scan = scan_plan(schema, vec![narrow], None, None, None)?;
-        assert!(!DictionaryAggregation::is_profitable(
-            find_scan(&scan).expect("test scan should use FileScanConfig"),
+        let config = find_scan(&scan).expect("test scan should use FileScanConfig");
+        assert!(!DictionaryPreservation::is_profitable(
+            config,
             0,
-            rows_at_threshold
+            Some(rows_at_threshold - 1),
+            DictionaryUse::Aggregate,
         ));
+        assert!(DictionaryPreservation::is_profitable(
+            config,
+            0,
+            Some(rows_at_threshold),
+            DictionaryUse::Aggregate,
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn filtered_aggregate_workload_cost_gate_boundaries() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group_key",
+            DataType::Utf8View,
+            false,
+        )]));
+        let rows_at_threshold =
+            MIN_FILTERED_AGGREGATE_VALUE_BYTES.div_ceil(UTF8_VIEW_SLOT_BYTES);
+        for (rows, expected) in [
+            (Some(rows_at_threshold - 1), false),
+            (Some(rows_at_threshold), true),
+            (None, false),
+        ] {
+            let physical_statistics = PhysicalFileStatistics {
+                num_rows: rows,
+                column_statistics: vec![PhysicalColumnStatistics {
+                    all_dictionary_encoded: true,
+                    native_dictionary_value_type: Some(DataType::Utf8),
+                    min_row_group_value_bytes_per_row: Some(16),
+                    min_row_group_value_bytes_per_encoded_byte: Some(
+                        MIN_VALUE_BYTES_PER_PARQUET_BYTE,
+                    ),
+                }],
+            };
+            let file = PartitionedFile::new("data.parquet", 1024)
+                .with_extension(physical_statistics);
+            let scan = scan_plan(Arc::clone(&schema), vec![file], None, None, None)?;
+            let config = find_scan(&scan).expect("test scan should use FileScanConfig");
+            assert_eq!(
+                DictionaryPreservation::is_profitable(
+                    config,
+                    0,
+                    None,
+                    DictionaryUse::FilteredAggregate,
+                ),
+                expected
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn source_filtered_aggregate_cost_gate_boundaries() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group_key",
+            DataType::Utf8View,
+            false,
+        )]));
+        let rows_at_threshold =
+            MIN_SOURCE_FILTERED_AGGREGATE_VALUE_BYTES.div_ceil(UTF8_VIEW_SLOT_BYTES);
+        for (footer_rows, input_rows, expected) in [
+            (rows_at_threshold, Some(rows_at_threshold - 1), false),
+            (rows_at_threshold, Some(rows_at_threshold), true),
+            (rows_at_threshold, None, false),
+            (10_000_000, Some(8_999_999), false),
+            (10_000_000, Some(9_000_000), true),
+            (10_000_000, Some(10_000_001), false),
+        ] {
+            let physical_statistics = PhysicalFileStatistics {
+                num_rows: Some(footer_rows),
+                column_statistics: vec![PhysicalColumnStatistics {
+                    all_dictionary_encoded: true,
+                    native_dictionary_value_type: Some(DataType::Utf8),
+                    min_row_group_value_bytes_per_row: Some(16),
+                    min_row_group_value_bytes_per_encoded_byte: Some(
+                        MIN_VALUE_BYTES_PER_PARQUET_BYTE,
+                    ),
+                }],
+            };
+            let file = PartitionedFile::new("data.parquet", 1024)
+                .with_extension(physical_statistics);
+            let scan = scan_plan(Arc::clone(&schema), vec![file], None, None, None)?;
+            let config = find_scan(&scan).expect("test scan should use FileScanConfig");
+            assert_eq!(
+                DictionaryPreservation::is_profitable(
+                    config,
+                    0,
+                    input_rows,
+                    DictionaryUse::SourceFilteredAggregate,
+                ),
+                expected
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn filter_workload_cost_gate_boundaries() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "filter_key",
+            DataType::Utf8View,
+            false,
+        )]));
+        let saved_bytes_per_row = UTF8_VIEW_SLOT_BYTES - size_of::<i32>();
+        let rows_at_threshold = MIN_FILTER_SAVED_BYTES.div_ceil(saved_bytes_per_row);
+        for (rows, expected) in [
+            (Some(rows_at_threshold - 1), false),
+            (Some(rows_at_threshold), true),
+            (None, false),
+        ] {
+            let physical_statistics = PhysicalFileStatistics {
+                num_rows: rows,
+                column_statistics: vec![PhysicalColumnStatistics {
+                    all_dictionary_encoded: true,
+                    native_dictionary_value_type: Some(DataType::Utf8),
+                    min_row_group_value_bytes_per_row: Some(16),
+                    min_row_group_value_bytes_per_encoded_byte: Some(
+                        MIN_FILTER_VALUE_BYTES_PER_PARQUET_BYTE,
+                    ),
+                }],
+            };
+            let file = PartitionedFile::new("data.parquet", 1024)
+                .with_extension(physical_statistics);
+            let scan = scan_plan(Arc::clone(&schema), vec![file], None, None, None)?;
+            let config = find_scan(&scan).expect("test scan should use FileScanConfig");
+            assert_eq!(
+                DictionaryPreservation::is_profitable(
+                    config,
+                    0,
+                    None,
+                    DictionaryUse::Filter,
+                ),
+                expected
+            );
+        }
         Ok(())
     }
 
@@ -1292,7 +2249,7 @@ mod tests {
     }
 
     #[test]
-    fn skips_files_with_reader_overrides_ranges_or_extra_extensions() -> Result<()> {
+    fn handles_file_ranges_and_skips_reader_overrides() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "group_key",
             DataType::Utf8View,
@@ -1304,10 +2261,8 @@ mod tests {
         let with_arrow_schema =
             candidate_file("arrow-schema.parquet", 1, 0, DataType::Utf8, 24, 6)
                 .with_arrow_schema(Arc::clone(&schema));
-        let with_range = candidate_file("range.parquet", 1, 0, DataType::Utf8, 24, 6)
-            .with_range(0, 1024);
 
-        for file in [with_extra_extension, with_arrow_schema, with_range] {
+        for file in [with_extra_extension, with_arrow_schema] {
             let scan = scan_plan(Arc::clone(&schema), vec![file], None, None, None)?;
             let plan = single_group_aggregate(scan, 0)?;
             let optimized = optimize(Arc::clone(&plan))?;
@@ -1316,6 +2271,35 @@ mod tests {
                 "reader-specific file behavior must fail closed"
             );
         }
+
+        for files in [
+            vec![
+                candidate_file("range.parquet", 1, 0, DataType::Utf8, 24, 6)
+                    .with_range(0, 1024),
+            ],
+            vec![
+                candidate_file("split.parquet", 1, 0, DataType::Utf8, 24, 6)
+                    .with_range(0, 512),
+                candidate_file("split.parquet", 1, 0, DataType::Utf8, 24, 6)
+                    .with_range(512, 1024),
+            ],
+        ] {
+            let scan = scan_plan(Arc::clone(&schema), files, None, None, None)?;
+            let optimized = optimize(single_group_aggregate(scan, 0)?)?;
+            let scan = find_scan(&optimized).expect("rewritten plan should contain scan");
+            assert!(matches!(
+                scan.file_schema().field(0).data_type(),
+                DataType::Dictionary(_, _)
+            ));
+        }
+
+        let partial_range =
+            candidate_file("partial.parquet", 1, 0, DataType::Utf8, 24, 6)
+                .with_range(0, 512);
+        let scan = scan_plan(schema, vec![partial_range], None, None, None)?;
+        let plan = single_group_aggregate(scan, 0)?;
+        let optimized = optimize(Arc::clone(&plan))?;
+        assert!(Arc::ptr_eq(&optimized, &plan));
         Ok(())
     }
 
@@ -1426,16 +2410,93 @@ mod tests {
     }
 
     #[test]
-    fn skips_scan_predicate_and_limit() -> Result<()> {
+    fn skips_source_predicate_without_filter_exec() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("filter_key", DataType::Int64, false),
+            Field::new("group_key", DataType::Utf8View, false),
+        ]));
+        let predicate =
+            Arc::new(IsNotNullExpr::new(Arc::new(Column::new("filter_key", 0))))
+                as Arc<dyn PhysicalExpr>;
+        let file = candidate_file("data.parquet", 2, 1, DataType::Utf8, 24, 6);
+        let scan = scan_plan(schema, vec![file], None, Some(predicate), None)?;
+        let plan = single_group_aggregate(scan, 1)?;
+        let optimized = optimize(Arc::clone(&plan))?;
+        assert!(Arc::ptr_eq(&optimized, &plan));
+        Ok(())
+    }
+
+    #[test]
+    fn source_filtered_aggregate_requires_near_passthrough_estimate() -> Result<()> {
+        for (upper_bound, pushdown_filters, expected_rewrite) in [
+            (94_i64, false, true),
+            (19_i64, false, false),
+            (94_i64, true, false),
+        ] {
+            let schema = Arc::new(Schema::new(vec![
+                Field::new("filter_key", DataType::Int64, false),
+                Field::new("group_key", DataType::Utf8View, false),
+            ]));
+            let predicate = Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("filter_key", 0)),
+                Operator::LtEq,
+                Arc::new(Literal::new(ScalarValue::Int64(Some(upper_bound)))),
+            )) as Arc<dyn PhysicalExpr>;
+            let source = ParquetSource::new(Arc::clone(&schema))
+                .with_predicate(Arc::clone(&predicate))
+                .with_pushdown_filters(pushdown_filters);
+            let statistics = Statistics {
+                num_rows: Precision::Exact(10_000_000),
+                total_byte_size: Precision::Absent,
+                column_statistics: vec![
+                    ColumnStatistics {
+                        null_count: Precision::Exact(0),
+                        min_value: Precision::Exact(ScalarValue::Int64(Some(0))),
+                        max_value: Precision::Exact(ScalarValue::Int64(Some(99))),
+                        ..Default::default()
+                    },
+                    ColumnStatistics {
+                        null_count: Precision::Exact(0),
+                        ..Default::default()
+                    },
+                ],
+            };
+            let scan = DataSourceExec::from_data_source(
+                FileScanConfigBuilder::new(
+                    ObjectStoreUrl::local_filesystem(),
+                    Arc::new(source),
+                )
+                .with_file(candidate_file("data.parquet", 2, 1, DataType::Utf8, 24, 6))
+                .with_statistics(statistics)
+                .build(),
+            );
+            let filter =
+                Arc::new(FilterExec::try_new(predicate, scan)?) as Arc<dyn ExecutionPlan>;
+            let config = ConfigOptions::new();
+            let context = ConfigOnlyContext::new(&config);
+            let filtered_rows = context
+                .compute_statistics(&filter, &StatisticsArgs::new())?
+                .num_rows;
+            assert!(matches!(filtered_rows, Precision::Inexact(_)));
+
+            let plan = single_group_aggregate(filter, 1)?;
+            let optimized = optimize(Arc::clone(&plan))?;
+            assert_eq!(!Arc::ptr_eq(&optimized, &plan), expected_rewrite);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn skips_scan_predicate_on_candidate_and_limit() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![Field::new(
             "group_key",
             DataType::Utf8View,
             false,
         )]));
-        let predicate =
+        let candidate_predicate =
             Arc::new(IsNotNullExpr::new(Arc::new(Column::new("group_key", 0))))
                 as Arc<dyn PhysicalExpr>;
-        let cases = [(Some(predicate), None), (None, Some(100))];
+        let cases = [(Some(candidate_predicate), None), (None, Some(100))];
 
         for (predicate, limit) in cases {
             let file = candidate_file("data.parquet", 1, 0, DataType::Utf8, 24, 6);
@@ -1443,6 +2504,535 @@ mod tests {
                 scan_plan(Arc::clone(&schema), vec![file], None, predicate, limit)?;
             let plan = single_group_aggregate(scan, 0)?;
             let optimized = optimize(Arc::clone(&plan))?;
+            assert!(Arc::ptr_eq(&optimized, &plan));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn traverses_filter_that_does_not_reference_candidate() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("filter_key", DataType::Int64, false),
+            Field::new("group_key", DataType::Utf8View, false),
+        ]));
+        let scan = profitable_scan(schema);
+        let predicate =
+            Arc::new(IsNotNullExpr::new(Arc::new(Column::new("filter_key", 0))));
+        let filter =
+            Arc::new(FilterExec::try_new(predicate, scan)?) as Arc<dyn ExecutionPlan>;
+        let optimized = optimize(single_group_aggregate(filter, 1)?)?;
+        let scan = find_scan(&optimized).expect("rewritten plan should contain scan");
+        assert!(matches!(
+            scan.file_schema().field(1).data_type(),
+            DataType::Dictionary(_, _)
+        ));
+        Ok(())
+    }
+
+    #[test]
+    fn rewrites_equality_filter_only_column() -> Result<()> {
+        let plan = equality_filter_plan(false, MIN_FILTER_VALUE_BYTES_PER_PARQUET_BYTE)?;
+        let output_schema = plan.schema();
+        let optimized = optimize_filter(plan)?;
+        assert_eq!(optimized.schema(), output_schema);
+        let filter = optimized
+            .downcast_ref::<FilterExec>()
+            .expect("optimized plan should remain a filter");
+        let arrays = vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+            Arc::new(DictionaryArray::<Int32Type>::from_iter([
+                Some("target"),
+                Some("other"),
+                None,
+            ])) as ArrayRef,
+        ];
+        let batch = RecordBatch::try_new(filter.input().schema(), arrays.clone())?;
+        assert_predicate_result(
+            filter.predicate(),
+            &batch,
+            vec![Some(true), Some(false), None],
+        )?;
+
+        let scan = find_scan(&optimized).expect("rewritten plan should contain scan");
+        assert!(matches!(
+            scan.file_schema().field(1).data_type(),
+            DataType::Dictionary(_, _)
+        ));
+        let source_predicate = scan
+            .file_source
+            .filter()
+            .expect("rewritten Parquet source should retain its predicate");
+        let batch = RecordBatch::try_new(
+            Arc::clone(scan.file_source.table_schema().table_schema()),
+            arrays,
+        )?;
+        assert_predicate_result(
+            &source_predicate,
+            &batch,
+            vec![Some(true), Some(false), None],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn rewrites_q19_filter_with_reordered_scan_projection() -> Result<()> {
+        let table_schema = Arc::new(Schema::new(vec![
+            Field::new("measure", DataType::Int64, false),
+            Field::new("shipmode", DataType::Utf8View, true),
+            Field::new("shipinstruct", DataType::Utf8View, true),
+        ]));
+        let source_predicate = q19_filter_predicate(&table_schema, 1, 2)?;
+        let source = ParquetSource::new(Arc::clone(&table_schema))
+            .with_predicate(source_predicate);
+        let candidate = || PhysicalColumnStatistics {
+            all_dictionary_encoded: true,
+            native_dictionary_value_type: Some(DataType::Utf8),
+            min_row_group_value_bytes_per_row: Some(12),
+            min_row_group_value_bytes_per_encoded_byte: Some(
+                MIN_FILTER_VALUE_BYTES_PER_PARQUET_BYTE,
+            ),
+        };
+        let file = PartitionedFile::new("lineitem.parquet", 1024).with_extension(
+            PhysicalFileStatistics {
+                num_rows: Some(10_000_000),
+                column_statistics: vec![
+                    PhysicalColumnStatistics::default(),
+                    candidate(),
+                    candidate(),
+                ],
+            },
+        );
+        let statistics = Statistics {
+            num_rows: Precision::Exact(10_000_000),
+            total_byte_size: Precision::Absent,
+            column_statistics: table_schema
+                .fields()
+                .iter()
+                .map(|_| ColumnStatistics::default())
+                .collect(),
+        };
+        let config = FileScanConfigBuilder::new(
+            ObjectStoreUrl::local_filesystem(),
+            Arc::new(source),
+        )
+        .with_file(file)
+        .with_statistics(statistics)
+        .with_projection_indices(Some(vec![2, 0, 1]))?
+        .build();
+        let scan: Arc<dyn ExecutionPlan> = DataSourceExec::from_data_source(config);
+        let scan_predicate = q19_filter_predicate(scan.schema().as_ref(), 2, 0)?;
+        let plan = Arc::new(
+            FilterExecBuilder::new(scan_predicate, scan)
+                .apply_projection(Some(vec![1]))?
+                .build()?,
+        ) as Arc<dyn ExecutionPlan>;
+        let output_schema = plan.schema();
+
+        let optimized = optimize_filter(plan)?;
+        assert_eq!(optimized.schema(), output_schema);
+        let filter = optimized
+            .downcast_ref::<FilterExec>()
+            .expect("optimized plan should remain a filter");
+        let measure = Arc::new(Int64Array::from(vec![1, 2, 3, 4, 5, 6])) as ArrayRef;
+        let shipmode = Arc::new(DictionaryArray::<Int32Type>::from_iter([
+            Some("AIR"),
+            Some("SHIP"),
+            Some("SHIP"),
+            Some("AIR"),
+            None,
+            Some("TRUCK"),
+        ])) as ArrayRef;
+        let shipinstruct = Arc::new(DictionaryArray::<Int32Type>::from_iter([
+            Some("DELIVER IN PERSON"),
+            Some("DELIVER IN PERSON"),
+            Some("TAKE BACK RETURN"),
+            None,
+            Some("OTHER"),
+            Some("TAKE BACK RETURN"),
+        ])) as ArrayRef;
+        let expected = vec![Some(true), Some(false), Some(true), None, Some(false), None];
+        let batch = RecordBatch::try_new(
+            filter.input().schema(),
+            vec![
+                Arc::clone(&shipinstruct),
+                Arc::clone(&measure),
+                Arc::clone(&shipmode),
+            ],
+        )?;
+        assert_predicate_result(filter.predicate(), &batch, expected.clone())?;
+
+        let scan = find_scan(&optimized).expect("rewritten plan should contain scan");
+        assert!(matches!(
+            scan.file_schema().field(1).data_type(),
+            DataType::Dictionary(_, _)
+        ));
+        assert!(matches!(
+            scan.file_schema().field(2).data_type(),
+            DataType::Dictionary(_, _)
+        ));
+        let source_predicate = scan
+            .file_source
+            .filter()
+            .expect("rewritten Parquet source should retain its predicate");
+        let batch = RecordBatch::try_new(
+            Arc::clone(scan.file_source.table_schema().table_schema()),
+            vec![measure, shipmode, shipinstruct],
+        )?;
+        assert_predicate_result(&source_predicate, &batch, expected)?;
+        Ok(())
+    }
+
+    #[test]
+    fn rewrites_q16_shaped_filtered_nested_group_key() -> Result<()> {
+        let part_schema = Arc::new(Schema::new(vec![
+            Field::new("partkey", DataType::Int64, false),
+            Field::new("part_type", DataType::Utf8View, true),
+        ]));
+        let not_like = Arc::new(LikeExpr::new(
+            true,
+            false,
+            Arc::new(Column::new("part_type", 1)),
+            Arc::new(Literal::new(ScalarValue::Utf8View(Some(
+                "MEDIUM POLISHED%".to_string(),
+            )))),
+        )) as Arc<dyn PhysicalExpr>;
+        let part_file = candidate_file("part.parquet", 2, 1, DataType::Utf8, 24, 6);
+        let part_scan = scan_plan(
+            Arc::clone(&part_schema),
+            vec![part_file],
+            None,
+            Some(Arc::clone(&not_like)),
+            None,
+        )?;
+        let filtered_part =
+            Arc::new(FilterExec::try_new(not_like, part_scan)?) as Arc<dyn ExecutionPlan>;
+
+        let partsupp_schema = Arc::new(Schema::new(vec![
+            Field::new("partkey", DataType::Int64, false),
+            Field::new("suppkey", DataType::Int64, false),
+        ]));
+        let partsupp = scan_plan(
+            partsupp_schema,
+            vec![PartitionedFile::new("partsupp.parquet", 1024)],
+            None,
+            None,
+            None,
+        )?;
+        let joined_part = Arc::new(HashJoinExec::try_new(
+            filtered_part,
+            partsupp,
+            vec![(
+                Arc::new(Column::new("partkey", 0)),
+                Arc::new(Column::new("partkey", 0)),
+            )],
+            None,
+            &JoinType::Inner,
+            // Keep the partsupp supplier key and the part type payload.
+            Some(vec![3, 1]),
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?) as Arc<dyn ExecutionPlan>;
+
+        let excluded_schema = Arc::new(Schema::new(vec![Field::new(
+            "suppkey",
+            DataType::Int64,
+            false,
+        )]));
+        let excluded = scan_plan(
+            excluded_schema,
+            vec![PartitionedFile::new("excluded.parquet", 1024)],
+            None,
+            None,
+            None,
+        )?;
+        let anti_join = Arc::new(HashJoinExec::try_new(
+            excluded,
+            joined_part,
+            vec![(
+                Arc::new(Column::new("suppkey", 0)),
+                Arc::new(Column::new("suppkey", 0)),
+            )],
+            None,
+            &JoinType::RightAnti,
+            None,
+            PartitionMode::CollectLeft,
+            NullEquality::NullEqualsNothing,
+            false,
+        )?) as Arc<dyn ExecutionPlan>;
+        let config = ConfigOptions::new();
+        let context = ConfigOnlyContext::new(&config);
+        let statistics =
+            context.compute_statistics(&anti_join, &StatisticsArgs::new())?;
+        assert!(matches!(statistics.num_rows, Precision::Inexact(_)));
+        let inner = two_phase_group_aggregate(anti_join, 1)?;
+        let plan = two_phase_group_aggregate(inner, 0)?;
+        let output_schema = plan.schema();
+
+        let optimized = optimize(plan)?;
+        assert_eq!(optimized.schema(), output_schema);
+        let scan = find_scan_for_file(&optimized, "part.parquet")
+            .expect("rewritten plan should retain the part scan");
+        assert_eq!(
+            scan.file_schema().field(1).data_type(),
+            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
+        );
+
+        // The nested final aggregate consumes partial state, but its
+        // `input_schema` must remain the raw pre-partial schema. In this Q16
+        // shape that schema includes both the supplier key and dictionary key.
+        let restore = optimized
+            .downcast_ref::<ProjectionExec>()
+            .expect("dictionary output should be restored by a projection");
+        let outer_final = restore
+            .input()
+            .downcast_ref::<AggregateExec>()
+            .expect("restore projection should wrap the outer final aggregate");
+        let outer_partial = outer_final
+            .input()
+            .downcast_ref::<AggregateExec>()
+            .expect("outer final should consume an outer partial aggregate");
+        let inner_final = outer_partial
+            .input()
+            .downcast_ref::<AggregateExec>()
+            .expect("outer partial should consume the nested final aggregate");
+        let inner_partial = inner_final
+            .input()
+            .downcast_ref::<AggregateExec>()
+            .expect("nested final should consume the nested partial aggregate");
+        assert_eq!(outer_final.input_schema(), outer_partial.input_schema());
+        assert_eq!(inner_final.input_schema(), inner_partial.input_schema());
+        assert_eq!(inner_final.input_schema().fields().len(), 2);
+        assert!(matches!(
+            inner_final.input_schema().field(1).data_type(),
+            DataType::Dictionary(_, _)
+        ));
+
+        let filter =
+            find_filter(&optimized).expect("rewritten plan should retain filter");
+        let arrays = vec![
+            Arc::new(Int64Array::from(vec![1, 2, 3])) as ArrayRef,
+            Arc::new(DictionaryArray::<Int32Type>::from_iter([
+                Some("LARGE POLISHED TIN"),
+                Some("MEDIUM POLISHED STEEL"),
+                None,
+            ])) as ArrayRef,
+        ];
+        let batch = RecordBatch::try_new(filter.input().schema(), arrays.clone())?;
+        assert_predicate_result(
+            filter.predicate(),
+            &batch,
+            vec![Some(true), Some(false), None],
+        )?;
+        let source_predicate = scan
+            .file_source
+            .filter()
+            .expect("rewritten Parquet source should retain its predicate");
+        let batch = RecordBatch::try_new(
+            Arc::clone(scan.file_source.table_schema().table_schema()),
+            arrays,
+        )?;
+        assert_predicate_result(
+            &source_predicate,
+            &batch,
+            vec![Some(true), Some(false), None],
+        )?;
+        Ok(())
+    }
+
+    #[test]
+    fn skips_filtered_group_key_with_fetch() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group_key",
+            DataType::Utf8View,
+            false,
+        )]));
+        let predicate = Arc::new(LikeExpr::new(
+            true,
+            false,
+            Arc::new(Column::new("group_key", 0)),
+            Arc::new(Literal::new(ScalarValue::Utf8View(Some(
+                "excluded%".to_string(),
+            )))),
+        )) as Arc<dyn PhysicalExpr>;
+        let file = candidate_file("data.parquet", 1, 0, DataType::Utf8, 24, 6);
+        let scan =
+            scan_plan(schema, vec![file], None, Some(Arc::clone(&predicate)), None)?;
+        let filtered = Arc::new(
+            FilterExecBuilder::new(predicate, scan)
+                .with_fetch(Some(1))
+                .build()?,
+        ) as Arc<dyn ExecutionPlan>;
+        let plan = single_group_aggregate(filtered, 0)?;
+
+        let optimized = optimize(Arc::clone(&plan))?;
+        assert!(Arc::ptr_eq(&optimized, &plan));
+        Ok(())
+    }
+
+    #[test]
+    fn skips_unbenchmarked_filtered_group_key_uses() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "group_key",
+            DataType::Utf8View,
+            false,
+        )]));
+        let literal = || {
+            Arc::new(Literal::new(ScalarValue::Utf8View(Some(
+                "excluded".to_string(),
+            )))) as Arc<dyn PhysicalExpr>
+        };
+        let predicates = [
+            Arc::new(InListExpr::try_new(
+                Arc::new(Column::new("group_key", 0)),
+                vec![literal()],
+                false,
+                schema.as_ref(),
+            )?) as Arc<dyn PhysicalExpr>,
+            Arc::new(BinaryExpr::new(
+                Arc::new(Column::new("group_key", 0)),
+                Operator::NotEq,
+                literal(),
+            )) as Arc<dyn PhysicalExpr>,
+            Arc::new(LikeExpr::new(
+                false,
+                false,
+                Arc::new(Column::new("group_key", 0)),
+                literal(),
+            )) as Arc<dyn PhysicalExpr>,
+            Arc::new(LikeExpr::new(
+                true,
+                true,
+                Arc::new(Column::new("group_key", 0)),
+                literal(),
+            )) as Arc<dyn PhysicalExpr>,
+        ];
+
+        for predicate in predicates {
+            let file = candidate_file("data.parquet", 1, 0, DataType::Utf8, 16, 8);
+            let scan = scan_plan(
+                Arc::clone(&schema),
+                vec![file],
+                None,
+                Some(Arc::clone(&predicate)),
+                None,
+            )?;
+            let filtered =
+                Arc::new(FilterExec::try_new(predicate, scan)?) as Arc<dyn ExecutionPlan>;
+            let plan = single_group_aggregate(filtered, 0)?;
+
+            let optimized = optimize(Arc::clone(&plan))?;
+            assert!(Arc::ptr_eq(&optimized, &plan));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn skips_filter_column_that_survives_or_misses_cost_gate() -> Result<()> {
+        let cases = [
+            equality_filter_plan(true, MIN_FILTER_VALUE_BYTES_PER_PARQUET_BYTE)?,
+            equality_filter_plan(false, MIN_FILTER_VALUE_BYTES_PER_PARQUET_BYTE - 1)?,
+        ];
+        for plan in cases {
+            let optimized = optimize_filter(Arc::clone(&plan))?;
+            assert!(Arc::ptr_eq(&optimized, &plan));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn skips_filter_rewrite_with_fetch_scan_limit_or_exact_filter() -> Result<()> {
+        let base = equality_filter_plan(false, MIN_FILTER_VALUE_BYTES_PER_PARQUET_BYTE)?;
+        let filter = base
+            .downcast_ref::<FilterExec>()
+            .expect("test plan should be a filter");
+        let fetched = Arc::new(
+            FilterExecBuilder::from(filter)
+                .with_fetch(Some(1))
+                .build()?,
+        ) as Arc<dyn ExecutionPlan>;
+
+        let config = find_scan(&base)
+            .expect("test plan should contain a file scan")
+            .clone();
+        let limited_scan = DataSourceExec::from_data_source(
+            FileScanConfigBuilder::from(config.clone())
+                .with_limit(Some(1))
+                .build(),
+        );
+        let limited = Arc::new(
+            FilterExecBuilder::from(filter)
+                .with_input(limited_scan)
+                .build()?,
+        ) as Arc<dyn ExecutionPlan>;
+
+        let parquet = config
+            .file_source
+            .downcast_ref::<ParquetSource>()
+            .expect("test scan should use ParquetSource")
+            .clone()
+            .with_pushdown_filters(true);
+        assert!(parquet.exact_filter().is_some());
+        let exact_scan = DataSourceExec::from_data_source(
+            FileScanConfigBuilder::from(config)
+                .with_source(Arc::new(parquet))
+                .build(),
+        );
+        let exact = Arc::new(
+            FilterExecBuilder::from(filter)
+                .with_input(exact_scan)
+                .build()?,
+        ) as Arc<dyn ExecutionPlan>;
+
+        for plan in [fetched, limited, exact] {
+            let optimized = optimize_filter(Arc::clone(&plan))?;
+            assert!(Arc::ptr_eq(&optimized, &plan));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn skips_non_equality_filter_use() -> Result<()> {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "filter_key",
+            DataType::Utf8View,
+            false,
+        )]));
+        let predicates = [
+            Arc::new(IsNotNullExpr::new(Arc::new(Column::new("filter_key", 0))))
+                as Arc<dyn PhysicalExpr>,
+            Arc::new(LikeExpr::new(
+                false,
+                false,
+                Arc::new(Column::new("filter_key", 0)),
+                Arc::new(Literal::new(ScalarValue::Utf8View(Some(
+                    "prefix%".to_string(),
+                )))),
+            )) as Arc<dyn PhysicalExpr>,
+        ];
+        for predicate in predicates {
+            let file = candidate_file(
+                "data.parquet",
+                1,
+                0,
+                DataType::Utf8,
+                12,
+                MIN_FILTER_VALUE_BYTES_PER_PARQUET_BYTE,
+            );
+            let scan = scan_plan(
+                Arc::clone(&schema),
+                vec![file],
+                None,
+                Some(Arc::clone(&predicate)),
+                None,
+            )?;
+            let plan = Arc::new(
+                FilterExecBuilder::new(predicate, scan)
+                    .apply_projection(Some(vec![]))?
+                    .build()?,
+            ) as Arc<dyn ExecutionPlan>;
+
+            let optimized = optimize_filter(Arc::clone(&plan))?;
             assert!(Arc::ptr_eq(&optimized, &plan));
         }
         Ok(())
@@ -1528,24 +3118,15 @@ mod tests {
     }
 
     #[test]
-    fn rewrites_join_payload_through_projection() -> Result<()> {
+    fn skips_unfiltered_inexact_join_payload_through_projection() -> Result<()> {
         let plan = join_aggregate_plan(JoinPlanShape::Safe)?;
-        let original_schema = plan.schema();
-        let optimized = optimize(plan)?;
-
-        assert_eq!(optimized.schema(), original_schema);
-        let scan = find_scan(&optimized).expect("rewritten plan should contain scan");
-        assert_eq!(
-            scan.file_schema().field(1).data_type(),
-            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
-        );
-        let optimized_again = optimize(Arc::clone(&optimized))?;
-        assert!(Arc::ptr_eq(&optimized_again, &optimized));
+        let optimized = optimize(Arc::clone(&plan))?;
+        assert!(Arc::ptr_eq(&optimized, &plan));
         Ok(())
     }
 
     #[test]
-    fn rewrites_right_join_payload() -> Result<()> {
+    fn skips_unfiltered_inexact_right_join_payload() -> Result<()> {
         let left_schema = Arc::new(Schema::new(vec![Field::new(
             "join_key",
             DataType::Int64,
@@ -1578,17 +3159,8 @@ mod tests {
             false,
         )?) as Arc<dyn ExecutionPlan>;
         let plan = single_group_aggregate(join, 0)?;
-        let optimized = optimize(plan)?;
-
-        let left = find_scan_for_file(&optimized, "left.parquet")
-            .expect("left input should remain a scan");
-        assert_eq!(left.file_schema().field(0).data_type(), &DataType::Int64);
-        let right = find_scan_for_file(&optimized, "data.parquet")
-            .expect("right input should remain a scan");
-        assert_eq!(
-            right.file_schema().field(1).data_type(),
-            &DataType::Dictionary(Box::new(DataType::Int32), Box::new(DataType::Utf8))
-        );
+        let optimized = optimize(Arc::clone(&plan))?;
+        assert!(Arc::ptr_eq(&optimized, &plan));
         Ok(())
     }
 
@@ -1635,6 +3207,7 @@ mod tests {
             join_aggregate_plan(JoinPlanShape::InputFilter)?,
             join_aggregate_plan(JoinPlanShape::DuplicateProjection)?,
             join_aggregate_plan(JoinPlanShape::FilteredJoin)?,
+            join_aggregate_plan(JoinPlanShape::FetchedJoin)?,
             join_aggregate_plan(JoinPlanShape::LeftJoin)?,
             join_aggregate_plan(JoinPlanShape::DuplicateJoinProjection)?,
         ] {
@@ -1648,7 +3221,7 @@ mod tests {
     }
 
     #[test]
-    fn rewrites_only_traced_use_of_shared_scan() -> Result<()> {
+    fn skips_unfiltered_inexact_shared_scan() -> Result<()> {
         let schema = Arc::new(Schema::new(vec![
             Field::new("join_key", DataType::Int64, false),
             Field::new("group_key", DataType::Utf8View, false),
@@ -1682,42 +3255,8 @@ mod tests {
             input_schema,
         )?) as Arc<dyn ExecutionPlan>;
 
-        let optimized = optimize(plan)?;
-        let restore = optimized
-            .downcast_ref::<ProjectionExec>()
-            .expect("rewrite should restore the output schema");
-        let aggregate = restore
-            .input()
-            .downcast_ref::<AggregateExec>()
-            .expect("projection input should be aggregate");
-        let join = aggregate
-            .input()
-            .downcast_ref::<HashJoinExec>()
-            .expect("aggregate input should be join");
-        let left = join
-            .left()
-            .downcast_ref::<DataSourceExec>()
-            .expect("left input should be scan");
-        let right = join
-            .right()
-            .downcast_ref::<DataSourceExec>()
-            .expect("right input should be scan");
-        let left = left
-            .data_source()
-            .downcast_ref::<FileScanConfig>()
-            .expect("left input should be file scan");
-        let right = right
-            .data_source()
-            .downcast_ref::<FileScanConfig>()
-            .expect("right input should be file scan");
-        assert!(matches!(
-            left.file_schema().field(1).data_type(),
-            DataType::Dictionary(_, _)
-        ));
-        assert_eq!(
-            right.file_schema().field(1).data_type(),
-            &DataType::Utf8View
-        );
+        let optimized = optimize(Arc::clone(&plan))?;
+        assert!(Arc::ptr_eq(&optimized, &plan));
         Ok(())
     }
 }
