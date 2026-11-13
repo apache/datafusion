@@ -150,7 +150,18 @@ pub(crate) fn physical_file_statistics(
         })
         .collect();
 
-    PhysicalFileStatistics { column_statistics }
+    let num_rows = metadata
+        .row_groups()
+        .iter()
+        .try_fold(0usize, |total, row_group| {
+            let rows = usize::try_from(row_group.num_rows()).ok()?;
+            total.checked_add(rows)
+        });
+
+    PhysicalFileStatistics {
+        num_rows,
+        column_statistics,
+    }
 }
 
 fn requires_unsigned_byte_array_order(column: &ColumnDescriptor) -> bool {
@@ -1511,6 +1522,7 @@ mod tests {
             assert_eq!(
                 physical_file_statistics(&metadata, &logical_schema),
                 PhysicalFileStatistics {
+                    num_rows: Some(20),
                     column_statistics: vec![PhysicalColumnStatistics {
                         all_dictionary_encoded: true,
                         native_dictionary_value_type: Some(DataType::Utf8),

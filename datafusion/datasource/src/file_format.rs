@@ -201,6 +201,7 @@ pub trait FileFormat: Any + Send + Sync + fmt::Debug {
             .infer_stats_and_ordering(state, store, table_schema, object)
             .await?;
         Ok(file_meta.with_physical_statistics(PhysicalFileStatistics {
+            num_rows: None,
             column_statistics: vec![Default::default(); column_count],
         }))
     }

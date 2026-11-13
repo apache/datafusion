@@ -34,7 +34,8 @@ use datafusion_expr::dml::InsertOp;
 use datafusion_expr::execution_props::ExecutionProps;
 use datafusion_expr::physical_planning_context::PhysicalPlanningContext;
 use datafusion_expr::{
-    Expr, Partitioning as LogicalPartitioning, TableProviderFilterPushDown, TableType,
+    Expr, Operator, Partitioning as LogicalPartitioning, TableProviderFilterPushDown,
+    TableType,
 };
 use datafusion_physical_expr::{create_lex_ordering, create_physical_partitioning};
 use datafusion_physical_expr_adapter::PhysicalExprAdapterFactory;
@@ -627,15 +628,65 @@ impl TableProvider for ListingTable {
 }
 
 impl ListingTable {
+    fn filter_supports_dictionary_column(expr: &Expr, column_name: &str) -> bool {
+        if !expr
+            .column_refs()
+            .iter()
+            .any(|column| column.name == column_name)
+        {
+            return true;
+        }
+
+        match expr {
+            Expr::BinaryExpr(binary) => match binary.op {
+                Operator::And | Operator::Or => {
+                    Self::filter_supports_dictionary_column(
+                        binary.left.as_ref(),
+                        column_name,
+                    ) && Self::filter_supports_dictionary_column(
+                        binary.right.as_ref(),
+                        column_name,
+                    )
+                }
+                Operator::Eq => {
+                    let is_column = |expr: &Expr| matches!(expr, Expr::Column(column) if column.name == column_name);
+                    (is_column(binary.left.as_ref())
+                        && matches!(binary.right.as_ref(), Expr::Literal(_, _)))
+                        || (is_column(binary.right.as_ref())
+                            && matches!(binary.left.as_ref(), Expr::Literal(_, _)))
+                }
+                _ => false,
+            },
+            Expr::InList(in_list) => {
+                !in_list.negated
+                    && !in_list.list.is_empty()
+                    && matches!(in_list.expr.as_ref(), Expr::Column(column) if column.name == column_name)
+                    && in_list
+                        .list
+                        .iter()
+                        .all(|expr| matches!(expr, Expr::Literal(_, _)))
+            }
+            Expr::Like(like) => {
+                like.negated
+                    && !like.case_insensitive
+                    && like.escape_char.is_none()
+                    && matches!(like.expr.as_ref(), Expr::Column(column) if column.name == column_name)
+                    && matches!(like.pattern.as_ref(), Expr::Literal(_, _))
+            }
+            _ => false,
+        }
+    }
+
     fn physical_statistics_required(
         &self,
         state: &dyn Session,
         projection: Option<&[usize]>,
+        excluded_columns: &HashSet<&str>,
     ) -> bool {
         if !state
             .config_options()
             .optimizer
-            .enable_dictionary_aggregation
+            .enable_dictionary_preservation
         {
             return false;
         }
@@ -643,13 +694,15 @@ impl ListingTable {
         let file_fields = self.file_schema.fields();
         match projection {
             Some(projection) => projection.iter().any(|index| {
-                file_fields
-                    .get(*index)
-                    .is_some_and(|field| field.data_type() == &DataType::Utf8View)
+                file_fields.get(*index).is_some_and(|field| {
+                    field.data_type() == &DataType::Utf8View
+                        && !excluded_columns.contains(field.name().as_str())
+                })
             }),
-            None => file_fields
-                .iter()
-                .any(|field| field.data_type() == &DataType::Utf8View),
+            None => file_fields.iter().any(|field| {
+                field.data_type() == &DataType::Utf8View
+                    && !excluded_columns.contains(field.name().as_str())
+            }),
         }
     }
 
@@ -693,12 +746,31 @@ impl ListingTable {
             filters.iter().cloned().partition(|filter| {
                 can_be_evaluated_for_partition_pruning(&table_partition_col_names, filter)
             });
-        // The dictionary aggregation rule rejects scans with data filters or
-        // limits, so avoid collecting its optional file metadata for plans it
-        // cannot rewrite. Partition-only filters remain eligible.
-        let physical_statistics_required = filters.is_empty()
-            && limit.is_none()
-            && self.physical_statistics_required(state, projection.as_deref());
+        // A data filter can remain transparent to a dictionary grouping column
+        // when it does not reference that column. Case-sensitive literal
+        // `NOT LIKE` filters can keep the dictionary through grouping, while
+        // equality and `IN` filters can benefit when the string is discarded
+        // immediately afterwards.
+        // Exclude only columns whose filter use cannot support either rewrite.
+        let filtered_columns: HashSet<_> = filters
+            .iter()
+            .flat_map(Expr::column_refs)
+            .map(|column| column.name.as_str())
+            .collect();
+        let excluded_columns: HashSet<_> = filtered_columns
+            .into_iter()
+            .filter(|column_name| {
+                filters.iter().any(|filter| {
+                    !Self::filter_supports_dictionary_column(filter, column_name)
+                })
+            })
+            .collect();
+        let physical_statistics_required = limit.is_none()
+            && self.physical_statistics_required(
+                state,
+                projection.as_deref(),
+                &excluded_columns,
+            );
 
         let declared_output_partitioning = self.options.output_partitioning.as_ref();
 
@@ -979,7 +1051,8 @@ impl ListingTable {
         filters: &'a [Expr],
         limit: Option<usize>,
     ) -> datafusion_common::Result<ListFilesResult> {
-        let physical_statistics_required = self.physical_statistics_required(ctx, None);
+        let physical_statistics_required =
+            self.physical_statistics_required(ctx, None, &HashSet::new());
         self.list_files_for_scan_inner(
             ctx,
             filters,
@@ -1041,15 +1114,7 @@ impl ListingTable {
         .await?;
         let meta_fetch_concurrency =
             ctx.config_options().execution.meta_fetch_concurrency.get();
-        // Table paths can overlap, for example when one path is a directory and
-        // another names a file inside it. A ListingTable uses one object store,
-        // so the object path uniquely identifies a file within this scan.
-        let mut seen_files = HashSet::new();
-        let file_list = stream::iter(file_list)
-            .flatten_unordered(meta_fetch_concurrency)
-            .try_filter(move |file| {
-                future::ready(seen_files.insert(file.object_meta.location.clone()))
-            });
+        let file_list = stream::iter(file_list).flatten_unordered(meta_fetch_concurrency);
         // collect the statistics and ordering if required by the config
         let files = file_list
             .map(|part_file| async {
@@ -1515,6 +1580,49 @@ mod tests {
             .with_schema(schema);
 
         ListingTable::try_new(config).unwrap()
+    }
+
+    #[test]
+    fn dictionary_filter_support_matches_q16_candidates() {
+        use datafusion_expr::{col, lit};
+
+        let filter = col("p_brand")
+            .not_eq(lit("Brand#45"))
+            .and(col("p_type").not_like(lit("MEDIUM POLISHED%")));
+        assert!(ListingTable::filter_supports_dictionary_column(
+            &filter, "p_type"
+        ));
+        assert!(!ListingTable::filter_supports_dictionary_column(
+            &filter, "p_brand"
+        ));
+        assert!(!ListingTable::filter_supports_dictionary_column(
+            &col("p_type").like(col("pattern")),
+            "p_type"
+        ));
+        assert!(!ListingTable::filter_supports_dictionary_column(
+            &col("p_type").like(lit("MEDIUM POLISHED%")),
+            "p_type"
+        ));
+        assert!(!ListingTable::filter_supports_dictionary_column(
+            &col("p_type").not_ilike(lit("MEDIUM POLISHED%")),
+            "p_type"
+        ));
+
+        let q19_filter = col("l_shipinstruct")
+            .eq(lit("DELIVER IN PERSON"))
+            .and(col("l_shipmode").in_list(vec![lit("AIR"), lit("AIR REG")], false));
+        assert!(ListingTable::filter_supports_dictionary_column(
+            &q19_filter,
+            "l_shipinstruct"
+        ));
+        assert!(ListingTable::filter_supports_dictionary_column(
+            &q19_filter,
+            "l_shipmode"
+        ));
+        assert!(!ListingTable::filter_supports_dictionary_column(
+            &col("l_shipmode").in_list(vec![lit("AIR")], true),
+            "l_shipmode"
+        ));
     }
 
     /// Helper to create a PhysicalSortExpr
