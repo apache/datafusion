@@ -41,6 +41,25 @@ FROM (
 ----
 6
 
+# CASE nullability does not depend on a draw of a volatile condition
+query B
+SELECT count(x1) + count(x2) + count(x3) + count(x4)
+  + count(x5) + count(x6) + count(x7) + count(x8) <= 512
+FROM (
+  SELECT
+    CASE WHEN random() < 0.5 THEN NULL ELSE value END AS x1,
+    CASE WHEN random() < 0.5 THEN NULL ELSE value END AS x2,
+    CASE WHEN random() < 0.5 THEN NULL ELSE value END AS x3,
+    CASE WHEN random() < 0.5 THEN NULL ELSE value END AS x4,
+    CASE WHEN random() < 0.5 THEN NULL ELSE value END AS x5,
+    CASE WHEN random() < 0.5 THEN NULL ELSE value END AS x6,
+    CASE WHEN random() < 0.5 THEN NULL ELSE value END AS x7,
+    CASE WHEN random() < 0.5 THEN NULL ELSE value END AS x8
+  FROM range(64)
+)
+----
+true
+
 # column or explicit null
 query I
 SELECT CASE WHEN a > 2 THEN b ELSE null END FROM foo
