@@ -1,0 +1,84 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
+# SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
+
+# Reproducer from https://github.com/apache/datafusion/issues/27323
+#
+# GROUP BY k, s on a file sorted by k, where s is Utf8View. The partial
+# aggregate emits a small batch every time k changes. Those batches used to
+# drag along the strings of earlier batches, and the query ran out of memory
+# in the order-preserving repartition even though the result is 7000 rows.
+
+statement ok
+SET datafusion.execution.target_partitions = 8
+
+query I
+COPY (
+  SELECT value % 1000 AS k, repeat('x', 100) || (value % 7)::varchar AS s, value AS v
+  FROM generate_series(1, 2000000)
+  ORDER BY k
+)
+TO 'test_files/scratch/aggregate_utf8view_partial_emit/data.parquet'
+STORED AS PARQUET;
+----
+2000000
+
+statement ok
+CREATE EXTERNAL TABLE t
+STORED AS PARQUET
+LOCATION 'test_files/scratch/aggregate_utf8view_partial_emit/data.parquet'
+WITH ORDER (k ASC);
+
+# Make sure we still get the streaming plan (Partial([0]) + preserve_order)
+query TT
+EXPLAIN SELECT k, s, count(*) FROM t GROUP BY k, s ORDER BY k
+----
+logical_plan
+01)Sort: t.k ASC NULLS LAST
+02)--Projection: t.k, t.s, count(Int64(1)) AS count(*)
+03)----Aggregate: groupBy=[[t.k, t.s]], aggr=[[count(Int64(1))]]
+04)------TableScan: t projection=[k, s]
+physical_plan
+01)SortPreservingMergeExec: [k@0 ASC NULLS LAST]
+02)--ProjectionExec: expr=[k@0 as k, s@1 as s, count(Int64(1))@2 as count(*)]
+03)----AggregateExec: mode=FinalPartitioned, gby=[k@0 as k, s@1 as s], aggr=[count(Int64(1))], group_clustering_mode=Partial([0])
+04)------RepartitionExec: partitioning=Hash([k@0, s@1], 8), input_partitions=8, preserve_order=true, sort_exprs=k@0 ASC NULLS LAST
+05)--------AggregateExec: mode=Partial, gby=[k@0 as k, s@1 as s], aggr=[count(Int64(1))], group_clustering_mode=Partial([0])
+06)----------DataSourceExec: file_groups={8 groups: <slt:ignore>
+
+# All three limits failed with ResourcesExhausted before the fix
+statement ok
+SET datafusion.runtime.memory_limit = '200M'
+
+query I
+SELECT count(*) FROM (SELECT k, s, count(*) FROM t GROUP BY k, s ORDER BY k)
+----
+7000
+
+statement ok
+SET datafusion.runtime.memory_limit = '50M'
+
+query I
+SELECT count(*) FROM (SELECT k, s, count(*) FROM t GROUP BY k, s ORDER BY k)
+----
+7000
+
+statement ok
+SET datafusion.runtime.memory_limit = '20M'
+
+query I
+SELECT count(*) FROM (SELECT k, s, count(*) FROM t GROUP BY k, s ORDER BY k)
+----
+7000
+
+statement ok
+RESET datafusion.runtime.memory_limit
+
+statement ok
+DROP TABLE t
+
+statement ok
+SET datafusion.execution.target_partitions = 4
+
+statement ok
+RESET datafusion.catalog.create_default_catalog_and_schema
