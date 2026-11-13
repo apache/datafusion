@@ -666,13 +666,6 @@ impl ListingTable {
                         .iter()
                         .all(|expr| matches!(expr, Expr::Literal(_, _)))
             }
-            Expr::Like(like) => {
-                like.negated
-                    && !like.case_insensitive
-                    && like.escape_char.is_none()
-                    && matches!(like.expr.as_ref(), Expr::Column(column) if column.name == column_name)
-                    && matches!(like.pattern.as_ref(), Expr::Literal(_, _))
-            }
             _ => false,
         }
     }
@@ -747,11 +740,9 @@ impl ListingTable {
                 can_be_evaluated_for_partition_pruning(&table_partition_col_names, filter)
             });
         // A data filter can remain transparent to a dictionary grouping column
-        // when it does not reference that column. Case-sensitive literal
-        // `NOT LIKE` filters can keep the dictionary through grouping, while
-        // equality and `IN` filters can benefit when the string is discarded
-        // immediately afterwards.
-        // Exclude only columns whose filter use cannot support either rewrite.
+        // when it does not reference that column. Equality and `IN` filters can
+        // also benefit when the string is discarded immediately afterwards.
+        // Exclude columns whose filter use cannot support either rewrite.
         let filtered_columns: HashSet<_> = filters
             .iter()
             .flat_map(Expr::column_refs)
@@ -1583,28 +1574,11 @@ mod tests {
     }
 
     #[test]
-    fn dictionary_filter_support_matches_q16_candidates() {
+    fn dictionary_filter_support_matches_tpch_candidates() {
         use datafusion_expr::{col, lit};
 
-        let filter = col("p_brand")
-            .not_eq(lit("Brand#45"))
-            .and(col("p_type").not_like(lit("MEDIUM POLISHED%")));
-        assert!(ListingTable::filter_supports_dictionary_column(
-            &filter, "p_type"
-        ));
         assert!(!ListingTable::filter_supports_dictionary_column(
-            &filter, "p_brand"
-        ));
-        assert!(!ListingTable::filter_supports_dictionary_column(
-            &col("p_type").like(col("pattern")),
-            "p_type"
-        ));
-        assert!(!ListingTable::filter_supports_dictionary_column(
-            &col("p_type").like(lit("MEDIUM POLISHED%")),
-            "p_type"
-        ));
-        assert!(!ListingTable::filter_supports_dictionary_column(
-            &col("p_type").not_ilike(lit("MEDIUM POLISHED%")),
+            &col("p_type").not_like(lit("MEDIUM POLISHED%")),
             "p_type"
         ));
 

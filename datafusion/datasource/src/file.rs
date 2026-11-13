@@ -22,7 +22,6 @@ use datafusion_common::{Result, ScalarValue, internal_err, not_impl_err};
 use datafusion_execution::memory_pool::MemoryPool;
 use datafusion_expr::Operator;
 use datafusion_expr_common::casts::try_cast_literal_to_type;
-use datafusion_physical_expr::expressions::LikeExpr;
 use datafusion_physical_expr::expressions::{BinaryExpr, Column, InListExpr, Literal};
 use datafusion_physical_expr::projection::ProjectionExprs;
 use datafusion_physical_expr::utils::collect_columns;
@@ -40,13 +39,12 @@ pub fn as_file_source<T: FileSource + 'static>(source: T) -> Arc<dyn FileSource>
     Arc::new(source)
 }
 
-/// Rebuild a supported equality, `IN`, or literal `LIKE` filter after selected
-/// columns change to a dictionary representation.
+/// Rebuild a supported equality or `IN` filter after selected columns change
+/// to a dictionary representation.
 ///
 /// Dictionary comparison kernels operate on the dictionary's value type, so
-/// corresponding literals, including a `LIKE` pattern, must be converted to
-/// that type. Rebuilding [`InListExpr`] also refreshes its type-specific static
-/// filter.
+/// corresponding literals must be converted to that type. Rebuilding
+/// [`InListExpr`] also refreshes its type-specific static filter.
 ///
 /// # Public Only for Internal Use:
 ///
@@ -182,34 +180,6 @@ pub fn try_rewrite_dictionary_filter_predicate(
             false,
             input_schema,
         )?)));
-    }
-
-    if let Some(like) = predicate.downcast_ref::<LikeExpr>() {
-        let Some(column) = like.expr().downcast_ref::<Column>() else {
-            return Ok(None);
-        };
-        if !changed_column_indices.contains(&column.index()) {
-            return Ok(None);
-        }
-        let Some(pattern) = like.pattern().downcast_ref::<Literal>() else {
-            return Ok(None);
-        };
-        let value_type = dictionary_value_type(column)?;
-        let value = if pattern.value().is_null() {
-            ScalarValue::try_new_null(value_type)?
-        } else {
-            let Some(value) = try_cast_literal_to_type(pattern.value(), value_type)
-            else {
-                return Ok(None);
-            };
-            value
-        };
-        return Ok(Some(Arc::new(LikeExpr::new(
-            like.negated(),
-            like.case_insensitive(),
-            Arc::clone(like.expr()),
-            Arc::new(Literal::new(value)),
-        ))));
     }
 
     Ok(None)
