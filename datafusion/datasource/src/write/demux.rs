@@ -38,7 +38,9 @@ use datafusion_common::cast::{
     as_int64_array, as_large_string_array, as_string_array, as_string_view_array,
     as_uint8_array, as_uint16_array, as_uint32_array, as_uint64_array,
 };
-use datafusion_common::{exec_datafusion_err, internal_datafusion_err, not_impl_err};
+use datafusion_common::{
+    exec_datafusion_err, exec_err, internal_datafusion_err, not_impl_err,
+};
 use datafusion_common_runtime::SpawnedTask;
 
 use chrono::NaiveDate;
@@ -47,6 +49,8 @@ use futures::StreamExt;
 use object_store::path::Path;
 use rand::distr::SampleString;
 use tokio::sync::mpsc::{self, Receiver, Sender, UnboundedReceiver, UnboundedSender};
+
+const HIVE_DEFAULT_PARTITION_NAME: &str = "__HIVE_DEFAULT_PARTITION__";
 
 type RecordBatchReceiver = Receiver<RecordBatch>;
 pub type DemuxedStreamReceiver = UnboundedReceiver<(Path, RecordBatchReceiver)>;
@@ -534,6 +538,16 @@ fn compute_partition_keys_by_row<'a>(
             }
         }
 
+        if partition_values
+            .iter()
+            .any(|v| v == HIVE_DEFAULT_PARTITION_NAME)
+        {
+            return exec_err!(
+                "Cannot write value '{HIVE_DEFAULT_PARTITION_NAME}' for partition column '{col}': \
+                 it is the null partition name and would be read back as NULL"
+            );
+        }
+
         all_partition_values.push(partition_values);
     }
 
@@ -594,4 +608,44 @@ fn compute_hive_style_file_path(
     }
 
     file_path.join(format!("{write_id}.{file_extension}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::array::{ArrayRef, DictionaryArray, Int32Array};
+    use arrow::datatypes::Int32Type;
+
+    fn partition_batch(column: ArrayRef) -> RecordBatch {
+        RecordBatch::try_from_iter_with_nullable([("p", column, true)]).unwrap()
+    }
+
+    #[test]
+    fn partition_keys_reject_null_partition_name() {
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(StringArray::from(vec!["a", HIVE_DEFAULT_PARTITION_NAME])),
+            Arc::new(DictionaryArray::<Int32Type>::new(
+                Int32Array::from(vec![0, 1]),
+                Arc::new(StringArray::from(vec!["a", HIVE_DEFAULT_PARTITION_NAME])),
+            )),
+        ];
+        for column in columns {
+            let partition_by = vec![("p".to_string(), column.data_type().clone())];
+            let batch = partition_batch(column);
+            let err = compute_partition_keys_by_row(&batch, &partition_by).unwrap_err();
+            assert_eq!(
+                err.strip_backtrace(),
+                "Execution error: Cannot write value '__HIVE_DEFAULT_PARTITION__' for partition column 'p': it is the null partition name and would be read back as NULL"
+            );
+        }
+    }
+
+    #[test]
+    fn partition_keys_accept_other_partition_names() {
+        let column = StringArray::from(vec!["MY_NULL"]);
+        let batch = partition_batch(Arc::new(column));
+        let partition_by = vec![("p".to_string(), DataType::Utf8)];
+        let keys = compute_partition_keys_by_row(&batch, &partition_by).unwrap();
+        assert_eq!(keys, vec![vec![Cow::Borrowed("MY_NULL")]]);
+    }
 }
