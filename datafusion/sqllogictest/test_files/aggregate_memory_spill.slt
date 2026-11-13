@@ -21,6 +21,9 @@ statement ok
 SET datafusion.execution.target_partitions = 1
 
 statement ok
+SET datafusion.optimizer.single_distinct_prefer_native = false
+
+statement ok
 SET datafusion.execution.batch_size = 128
 
 statement ok
@@ -106,7 +109,7 @@ FROM (
 <slt:ignore>
 
 # A few large DISTINCT groups must still finish with the default rewrite.
-# Native DISTINCT would need to hold 50,000 values per group under this 1M limit.
+# The rewritten path is the control for the native spill checks below.
 query II
 SELECT count(*), sum(d) FROM (
   SELECT v % 2 AS k, count(DISTINCT v) AS d
@@ -129,17 +132,52 @@ FROM generate_series(1, 100000) AS t(v)
 GROUP BY v % 2;
 ----
 physical_plan
-01)ProjectionExec: expr=[t.v % Int64(2)@0 as k, count(DISTINCT t.v)@1 as d]
-02)--AggregateExec: mode=Single, gby=[v@0 % 2 as t.v % Int64(2)], aggr=[count(DISTINCT t.v)]
+01)ProjectionExec: expr=[group_alias_0@0 as k, count(alias1)@1 as d]
+02)--AggregateExec: mode=Single, gby=[v@0 % 2 as group_alias_0], aggr=[count(alias1)]
 03)----ProjectionExec: expr=[value@0 as v]
 04)------LazyMemoryExec: partitions=1, batch_generators=[generate_series: start=1, end=100000, batch_size=128]
 
-statement error Resources exhausted
+query II
 SELECT count(*), sum(d) FROM (
   SELECT v % 2 AS k, count(DISTINCT v) AS d
   FROM generate_series(1, 100000) AS t(v)
   GROUP BY v % 2
 );
+----
+2 100000
+
+# Values repeated after several spill runs are counted once per group.
+query II
+SELECT count(*), sum(d) FROM (
+  SELECT v % 2 AS k, count(DISTINCT v % 50000) AS d
+  FROM generate_series(1, 200000) AS t(v)
+  GROUP BY v % 2
+);
+----
+2 50000
+
+# Empty DISTINCT sets still carry their group through spill and replay.
+query II
+SELECT count(*), sum(d) FROM (
+  SELECT (v * 7) % 50000 AS k,
+         count(DISTINCT CASE WHEN v % 2 = 0 THEN NULL ELSE v END)
+           FILTER (WHERE v % 2 = 0) AS d
+  FROM generate_series(1, 50000) AS t(v)
+  GROUP BY (v * 7) % 50000
+);
+----
+50000 0
+
+# Equal floating-point keys must have the same ordering in every spill run.
+query II
+SELECT count(*), sum(d) FROM (
+  SELECT CASE WHEN v % 2 = 0 THEN CAST('-0.0' AS DOUBLE) ELSE 0.0 END AS k,
+         count(DISTINCT v % 50000) AS d
+  FROM generate_series(1, 100000) AS t(v)
+  GROUP BY CASE WHEN v % 2 = 0 THEN CAST('-0.0' AS DOUBLE) ELSE 0.0 END
+);
+----
+1 50000
 
 statement ok
 SET datafusion.explain.physical_plan_only = false;
@@ -597,6 +635,9 @@ FROM (
 05)--------ProjectionExec: <slt:ignore>
 
 # Restore settings to slt runner defaults
+statement ok
+RESET datafusion.optimizer.single_distinct_prefer_native
+
 statement ok
 RESET datafusion.runtime.memory_limit
 

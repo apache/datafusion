@@ -9,13 +9,13 @@ use std::sync::Arc;
 
 use arrow::array::{Array, ArrayRef, AsArray, BooleanArray, new_null_array};
 use arrow::compute::prep_null_mask_filter;
-use arrow::datatypes::SchemaRef;
+use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use arrow::downcast_dictionary_array;
 use arrow::record_batch::RecordBatch;
 use datafusion_common::utils::compact_dictionary;
-use datafusion_common::{Result, internal_err};
+use datafusion_common::{Result, float_semantics, internal_err};
 use datafusion_execution::memory_pool::proxy::VecAllocExt;
-use datafusion_expr::{AggregateMetrics, EmitTo, GroupsAccumulator};
+use datafusion_expr::{AggregateMetrics, EmitTo, GroupSelection, GroupsAccumulator};
 use datafusion_physical_expr::GroupsAccumulatorAdapter;
 use datafusion_physical_expr::aggregate::AggregateFunctionExpr;
 use log::debug;
@@ -356,6 +356,106 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         self.state.building().group_values.len()
     }
 
+    /// Flat state is supported only by a single DISTINCT COUNT accumulator.
+    pub(in crate::aggregates) fn distinct_count_spill_schema(&self) -> Option<SchemaRef> {
+        let state = self.state.building();
+        if state.group_by.has_grouping_set()
+            || state.group_by.num_group_exprs() == 0
+            || state.accumulators.len() != 1
+            || !state.accumulators[0]
+                .accumulator
+                .supports_distinct_count_spill()
+            || !state.group_values.supports_values_preserving()
+        {
+            return None;
+        }
+        let mut fields = self.state_schema.fields().to_vec();
+        let last = fields.last_mut()?;
+        let DataType::List(value) = last.data_type() else {
+            return None;
+        };
+        if !value.data_type().is_integer() {
+            return None;
+        }
+        *last = Arc::new(Field::new(last.name(), value.data_type().clone(), true));
+        Some(Arc::new(Schema::new(fields)))
+    }
+
+    /// Move the accumulator's allocations into a bounded flat-state iterator.
+    /// The returned size covers both that iterator and its materialized keys.
+    pub(in crate::aggregates) fn take_distinct_count_batches(
+        &mut self,
+        schema: SchemaRef,
+        buffer_bytes: usize,
+    ) -> Result<Option<DistinctCountSpillState>> {
+        let state = self.state.building_mut();
+        let num_groups = state.group_values.len();
+        if num_groups == 0 {
+            return Ok(None);
+        }
+        let group_schema = state.group_by.group_schema(&self.input_schema)?;
+        let fixed_key_bytes = group_schema
+            .fields()
+            .iter()
+            .map(|field| field.data_type().primitive_width().map(|width| width + 1))
+            .sum::<Option<usize>>();
+        let empty_keys = new_group_values(group_schema, &GroupClustering::None)?;
+        let mut keys = std::mem::replace(&mut state.group_values, empty_keys);
+        let max_key_bytes = if let Some(bytes) = fixed_key_bytes {
+            // Fixed-width keys need no materialization to determine their size.
+            // One validity byte per column also covers nullable keys.
+            bytes
+        } else {
+            // Repeating a variable-width key must still fit the conversion
+            // workspace. Inspect one key at a time to find its largest row.
+            let mut max_key_bytes = 0;
+            for row in 0..num_groups {
+                let indices = [row];
+                let columns = keys.values_preserving(
+                    GroupSelection::try_from_indices(&indices, num_groups)?,
+                )?;
+                let mut bytes = 0;
+                for key in &columns {
+                    bytes += key.to_data().get_slice_memory_size()?;
+                }
+                max_key_bytes = max_key_bytes.max(bytes);
+            }
+            max_key_bytes
+        };
+        // One sorted run may contain several output batches. Its flat input is
+        // bounded by bytes, while the sorter controls the output batch size.
+        // The moved buffers coexist with the new empty table. Variable-width
+        // builders may also grow their capacity to twice the logical row size.
+        let empty_table_bytes = state.group_values.size()
+            + size_of_val(state.accumulators[0].accumulator.as_ref());
+        let conversion_bytes = buffer_bytes.saturating_sub(empty_table_bytes) / 2;
+        let batch_size = (conversion_bytes / (3 * max_key_bytes + 64).max(1)).max(1);
+        let retained_bytes = state.accumulators[0].accumulator.size() + keys.size();
+        let values = state.accumulators[0]
+            .accumulator
+            .take_distinct_count_values(batch_size)?;
+        state.group_values.clear_shrink(0);
+        state.batch_group_indices.clear();
+        state.batch_group_indices.shrink_to_fit();
+        state.accumulators[0].shrink_to_fit();
+        let batches = values.map(move |values| {
+            let (groups, values) = values?;
+            let mut columns = keys
+                .values_preserving(GroupSelection::try_from_indices(
+                    &groups, num_groups,
+                )?)?
+                .into_iter()
+                .map(float_semantics::normalize)
+                .collect::<Vec<_>>();
+            columns.push(values);
+            Ok(RecordBatch::try_new(Arc::clone(&schema), columns)?)
+        });
+        Ok(Some(DistinctCountSpillState {
+            batches: Box::new(batches),
+            retained_bytes,
+        }))
+    }
+
     /// Takes every intermediate aggregate state and resets the table so it can
     /// continue accumulating raw input.
     ///
@@ -503,6 +603,12 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
         Ok(())
     }
+}
+
+pub(in crate::aggregates) struct DistinctCountSpillState {
+    pub(in crate::aggregates) batches:
+        Box<dyn Iterator<Item = Result<RecordBatch>> + Send>,
+    pub(in crate::aggregates) retained_bytes: usize,
 }
 
 /// State and argument information for a single Aggregate

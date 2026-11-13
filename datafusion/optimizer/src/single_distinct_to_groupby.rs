@@ -68,9 +68,6 @@ use datafusion_expr::{
 /// `sum` of no rows is NULL.
 ///
 /// See `rewrite_pays_for_count` for when the `count` is allowed.
-/// With `single_distinct_prefer_native` enabled and one target partition, grouped
-/// all-DISTINCT aggregates stay native if every function explicitly supports a
-/// specialized `GroupsAccumulator` for its argument types.
 #[derive(Default, Debug)]
 pub struct SingleDistinctToGroupBy {}
 
@@ -115,7 +112,6 @@ fn is_single_distinct_agg(
     aggr_expr: &[Expr],
     input_schema: &DFSchema,
     count_rollup: Option<&CountRollup>,
-    use_native_grouped_distinct: bool,
 ) -> Result<bool> {
     let mut fields_set = HashSet::new();
     let mut aggregate_count = 0;
@@ -156,24 +152,6 @@ fn is_single_distinct_agg(
         }
     }
     if aggregate_count != aggr_expr.len() || fields_set.len() != 1 {
-        return Ok(false);
-    }
-    // With one target partition, a native GroupsAccumulator avoids building an
-    // extra aggregate with a row per (group, distinct value) pair. With multiple
-    // partitions, the rewrite also distributes deduplication by both keys;
-    // keeping DISTINCT instead repartitions lists of values by group and merges
-    // them in the final accumulator. That can concentrate work on a few groups.
-    // Even one target partition can have multiple input partitions (e.g. UNION
-    // ALL or an existing partitioned table), requiring Partial/Final state merging.
-    // This is opt-in: the rule cannot see memory limits or cost the input, and
-    // native DISTINCT must fit each group's distinct values in memory.
-    if use_native_grouped_distinct
-        && distinct_aggs.len() == aggregate_count
-        // An unknown answer must preserve the existing rewrite.
-        && distinct_groups_support(&distinct_aggs, input_schema)?
-            .iter()
-            .all(|support| *support == Some(true))
-    {
         return Ok(false);
     }
     if has_count_rollup && !rewrite_pays_for_count(&distinct_aggs, input_schema)? {
@@ -261,9 +239,6 @@ impl OptimizerRule for SingleDistinctToGroupBy {
                 &aggr_expr,
                 input.schema(),
                 count_rollup.as_ref(),
-                !group_expr.is_empty()
-                    && config.options().execution.target_partitions == 1
-                    && config.options().optimizer.single_distinct_prefer_native,
             )? && !contains_grouping_set(&group_expr) =>
             {
                 let group_size = group_expr.len();

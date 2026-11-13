@@ -206,6 +206,7 @@ mod clustered_partial_stream;
 mod clustered_single_stream;
 #[cfg(test)]
 mod clustered_test_util;
+mod distinct_count;
 pub mod group_values;
 mod grouped_hash_stream;
 mod grouped_topk_stream;

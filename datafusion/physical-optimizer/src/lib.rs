@@ -34,6 +34,7 @@ pub mod hash_join_buffering;
 pub mod pushdown_sort;
 mod row_bound;
 pub mod sanity_checker;
+mod single_distinct_aggregation;
 pub mod topk_aggregation;
 pub mod topk_repartition;
 pub mod update_aggr_exprs;

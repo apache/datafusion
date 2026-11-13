@@ -11,7 +11,7 @@ use arrow::datatypes::{ArrowPrimitiveType, Field};
 use datafusion_common::HashSet;
 use datafusion_common::hash_utils::RandomState;
 use datafusion_expr_common::groups_accumulator::{
-    EmitTo, GroupSelection, GroupsAccumulator,
+    DistinctCountValues, EmitTo, GroupSelection, GroupsAccumulator,
 };
 use std::hash::Hash;
 use std::mem::size_of;
@@ -247,6 +247,50 @@ where
         Ok(vec![Arc::new(list_array)])
     }
 
+    fn supports_distinct_count_spill(&self) -> bool {
+        true
+    }
+
+    fn take_distinct_count_values(
+        &mut self,
+        batch_size: usize,
+    ) -> datafusion_common::Result<DistinctCountValues> {
+        if batch_size == 0 {
+            return datafusion_common::exec_err!(
+                "Distinct spill batch size must be positive"
+            );
+        }
+        let mut first_values = self.first_values.take().map(Vec::into_iter);
+        let groups = std::mem::take(&mut self.counts).into_iter().enumerate();
+        let initial = groups.filter_map(move |(group, count)| {
+            let first = first_values.as_mut().and_then(Iterator::next);
+            if count == 0 {
+                Some((group, None))
+            } else {
+                first.map(|value| (group, Some(value)))
+            }
+        });
+        let additional = std::mem::take(&mut self.seen)
+            .into_iter()
+            .map(|(group, value)| (group, Some(value)));
+        let mut values = initial.chain(additional);
+        self.first_values = Some(Vec::new());
+
+        Ok(Box::new(std::iter::from_fn(move || {
+            let mut groups = Vec::with_capacity(batch_size);
+            let mut array = PrimitiveBuilder::<T>::with_capacity(batch_size);
+            for (group, value) in values.by_ref().take(batch_size) {
+                groups.push(group);
+                array.append_option(value);
+            }
+            if groups.is_empty() {
+                None
+            } else {
+                Some(Ok((groups, Arc::new(array.finish()) as ArrayRef)))
+            }
+        })))
+    }
+
     fn merge_batch(
         &mut self,
         values: &[ArrayRef],
@@ -332,6 +376,60 @@ mod tests {
     use arrow::array::Int32Array;
     use arrow::datatypes::Int32Type;
     use datafusion_common::Result;
+
+    #[test]
+    fn flat_distinct_spill_is_bounded_and_preserves_empty_groups() -> Result<()> {
+        for distinct_values in [3, 1000] {
+            let mut accumulator =
+                PrimitiveDistinctCountGroupsAccumulator::<Int32Type>::new();
+            let values = Arc::new(Int32Array::from_iter(
+                (0..distinct_values)
+                    .map(Some)
+                    .chain([Some(7), None, Some(42)]),
+            ));
+            let groups = (0..distinct_values)
+                .map(|_| 0)
+                .chain([1, 2, 3])
+                .collect::<Vec<_>>();
+            let filter = BooleanArray::from_iter(
+                (0..distinct_values + 2)
+                    .map(|_| Some(true))
+                    .chain([Some(false)]),
+            );
+            accumulator.update_batch(&[values], &groups, Some(&filter), 4)?;
+            let drained = accumulator.take_distinct_count_values(7)?;
+            assert_eq!(accumulator.size(), size_of_val(&accumulator));
+            let mut observed = std::collections::BTreeSet::new();
+            for batch in drained {
+                let (groups, values) = batch?;
+                assert!(!groups.is_empty() && groups.len() <= 7);
+                for (group, value) in groups
+                    .into_iter()
+                    .zip(values.as_primitive::<Int32Type>().iter())
+                {
+                    assert!(observed.insert((group, value)));
+                }
+            }
+            let expected = (0..distinct_values)
+                .map(|value| (0, Some(value)))
+                .chain([(1, Some(7)), (2, None), (3, None)])
+                .collect();
+            assert_eq!(observed, expected);
+            accumulator.update_batch(
+                &[Arc::new(Int32Array::from(vec![9, 9]))],
+                &[0, 0],
+                None,
+                1,
+            )?;
+            assert_eq!(
+                accumulator
+                    .evaluate(EmitTo::All)?
+                    .as_primitive::<arrow::datatypes::Int64Type>(),
+                &Int64Array::from(vec![1])
+            );
+        }
+        Ok(())
+    }
 
     #[test]
     fn promoted_values_survive_partial_emission_and_merge() -> Result<()> {

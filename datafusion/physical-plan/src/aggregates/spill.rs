@@ -121,6 +121,9 @@ pub(super) struct AggregateSpill {
     min_spill_batch_rows: usize,
     /// Describes this stream's spill requests, and prefixes its internal errors.
     label: &'static str,
+    /// Flat DISTINCT COUNT runs are counted directly after the merge.
+    distinct_count: bool,
+    batch_target_bytes: usize,
 }
 
 impl AggregateSpill {
@@ -205,7 +208,25 @@ impl AggregateSpill {
             spills: vec![],
             min_spill_batch_rows: batch_size,
             label,
+            distinct_count: false,
+            batch_target_bytes: SPILL_BATCH_TARGET_BYTES,
         })
+    }
+
+    pub(super) fn use_distinct_count_replay(&mut self, buffer_bytes: usize) {
+        self.distinct_count = true;
+        self.batch_target_bytes = buffer_bytes;
+        let schema = self.spill_manager.schema();
+        let index = schema.fields().len() - 1;
+        self.spill_expr
+            .push(PhysicalSortExpr::new_default(Arc::new(Column::new(
+                schema.field(index).name(),
+                index,
+            ))));
+    }
+
+    pub(super) fn schema(&self) -> SchemaRef {
+        Arc::clone(self.spill_manager.schema())
     }
 
     pub(super) fn has_spills(&self) -> bool {
@@ -222,14 +243,20 @@ impl AggregateSpill {
         let Some(state_batch) = state_batch else {
             return Ok(());
         };
-
+        // Keep DISTINCT runs large, but write small IPC batches so the merge
+        // can read more runs concurrently within its buffer reservation.
+        let spill_batch_bytes = if self.distinct_count {
+            self.batch_target_bytes.min(16 * 1024)
+        } else {
+            self.batch_target_bytes
+        };
         let mut max_batch_rows = 0;
         let sorted_iter = IncrementalSortIterator::new(
             state_batch,
             self.spill_expr.clone(),
             self.batch_size,
         )
-        .with_max_batch_bytes(SPILL_BATCH_TARGET_BYTES)
+        .with_max_batch_bytes(spill_batch_bytes)
         .inspect(|batch| {
             if let Ok(batch) = batch {
                 max_batch_rows = max_batch_rows.max(batch.num_rows());
@@ -294,6 +321,8 @@ impl AggregateSpill {
             spills,
             min_spill_batch_rows,
             label: _,
+            distinct_count,
+            batch_target_bytes,
         } = self;
 
         let spill_schema = Arc::clone(spill_manager.schema());
@@ -308,11 +337,20 @@ impl AggregateSpill {
             .with_expressions(&spill_expr)
             .with_metrics(baseline_metrics.intermediate())
             .with_batch_size(batch_size)
-            .with_max_batch_bytes(Some(SPILL_BATCH_TARGET_BYTES))
+            .with_max_batch_bytes(Some(batch_target_bytes))
             .with_reservation(merge_reservation)
             .with_replay_headroom()
             .with_intermediate_merge_sizing(Some(min_spill_batch_rows))
             .build()?;
+        if distinct_count {
+            return super::distinct_count::replay(
+                merged,
+                Arc::clone(&replay_agg.schema),
+                batch_size,
+                batch_target_bytes,
+                reservation,
+            );
+        }
         // A merged batch references the whole data buffers of the spilled
         // batches its rows come from, and can hold all their dictionary
         // values. Replay keeps the list states of a group, such as those of
