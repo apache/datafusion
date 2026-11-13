@@ -654,6 +654,44 @@ fn roundtrip_csv_scan_preserves_format_options() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn roundtrip_csv_scan_preserves_match_columns_by_header() -> Result<()> {
+    use datafusion::common::config::CsvOptions;
+
+    let file_schema =
+        Arc::new(Schema::new(vec![Field::new("col", DataType::Utf8, true)]));
+    let file_source = Arc::new(
+        CsvSource::new(TableSchema::from(&file_schema)).with_csv_options(
+            CsvOptions::default()
+                .with_has_header(true)
+                .with_match_columns_by_header(true),
+        ),
+    );
+    let scan_config =
+        FileScanConfigBuilder::new(ObjectStoreUrl::local_filesystem(), file_source)
+            .with_file_groups(vec![FileGroup::new(vec![PartitionedFile::new(
+                "/path/to/file.csv".to_string(),
+                1024,
+            )])])
+            .build();
+
+    let ctx = SessionContext::new();
+    let roundtripped = roundtrip_test_and_return(
+        DataSourceExec::from_data_source(scan_config),
+        &ctx,
+        &DefaultPhysicalExtensionCodec {},
+        &DefaultPhysicalProtoConverter {},
+    )?;
+    let csv_source = roundtripped
+        .downcast_ref::<DataSourceExec>()
+        .and_then(|exec| exec.data_source().downcast_ref::<FileScanConfig>())
+        .and_then(|scan| scan.file_source().downcast_ref::<CsvSource>())
+        .ok_or_else(|| internal_datafusion_err!("Expected CsvSource"))?;
+
+    assert!(csv_source.match_columns_by_header());
+    Ok(())
+}
+
 #[tokio::test]
 async fn roundtrip_parquet_exec_with_table_partition_cols() -> Result<()> {
     let mut file_group =

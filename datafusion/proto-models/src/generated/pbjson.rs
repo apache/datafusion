@@ -5015,6 +5015,9 @@ impl serde::Serialize for CsvScanExecNode {
         if self.terminator.is_some() {
             len += 1;
         }
+        if self.match_columns_by_header {
+            len += 1;
+        }
         if self.optional_escape.is_some() {
             len += 1;
         }
@@ -5044,6 +5047,9 @@ impl serde::Serialize for CsvScanExecNode {
             #[allow(clippy::needless_borrow)]
             #[allow(clippy::needless_borrows_for_generic_args)]
             struct_ser.serialize_field("terminator", pbjson::private::base64::encode(&v).as_str())?;
+        }
+        if self.match_columns_by_header {
+            struct_ser.serialize_field("matchColumnsByHeader", &self.match_columns_by_header)?;
         }
         if let Some(v) = self.optional_escape.as_ref() {
             match v {
@@ -5080,6 +5086,8 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             "truncate_rows",
             "truncateRows",
             "terminator",
+            "match_columns_by_header",
+            "matchColumnsByHeader",
             "escape",
             "comment",
         ];
@@ -5093,6 +5101,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
             NewlinesInValues,
             TruncateRows,
             Terminator,
+            MatchColumnsByHeader,
             Escape,
             Comment,
         }
@@ -5123,6 +5132,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                             "newlinesInValues" | "newlines_in_values" => Ok(GeneratedField::NewlinesInValues),
                             "truncateRows" | "truncate_rows" => Ok(GeneratedField::TruncateRows),
                             "terminator" => Ok(GeneratedField::Terminator),
+                            "matchColumnsByHeader" | "match_columns_by_header" => Ok(GeneratedField::MatchColumnsByHeader),
                             "escape" => Ok(GeneratedField::Escape),
                             "comment" => Ok(GeneratedField::Comment),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
@@ -5151,6 +5161,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                 let mut newlines_in_values__ = None;
                 let mut truncate_rows__ = None;
                 let mut terminator__ = None;
+                let mut match_columns_by_header__ = None;
                 let mut optional_escape__ = None;
                 let mut optional_comment__ = None;
                 while let Some(k) = map_.next_key()? {
@@ -5199,6 +5210,12 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                                 map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| x.0)
                             ;
                         }
+                        GeneratedField::MatchColumnsByHeader => {
+                            if match_columns_by_header__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("matchColumnsByHeader"));
+                            }
+                            match_columns_by_header__ = Some(map_.next_value()?);
+                        }
                         GeneratedField::Escape => {
                             if optional_escape__.is_some() {
                                 return Err(serde::de::Error::duplicate_field("escape"));
@@ -5221,6 +5238,7 @@ impl<'de> serde::Deserialize<'de> for CsvScanExecNode {
                     newlines_in_values: newlines_in_values__.unwrap_or_default(),
                     truncate_rows: truncate_rows__.unwrap_or_default(),
                     terminator: terminator__,
+                    match_columns_by_header: match_columns_by_header__.unwrap_or_default(),
                     optional_escape: optional_escape__,
                     optional_comment: optional_comment__,
                 })
