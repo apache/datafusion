@@ -1042,6 +1042,15 @@ impl DefaultPhysicalPlanner {
                     file_output_mode,
                 };
 
+                // For queries like:
+                // `COPY (SELECT * FROM t ORDER BY c1) TO 'ordered.parquet'`
+                // Preserve the explicit sort order as an input ordering requirement,
+                // otherwise it might be lost during optimization.
+                //
+                // Use the explicit ordering from SortExec rather than the child's inferred
+                // output ordering, which may be incorrect at this stage. The plan may still
+                // require a `CoalescePartitionsExec`, inserted later by `EnsureRequirements`,
+                // which can change the inferred output ordering.
                 let ordering = input_exec
                     .downcast_ref::<SortExec>()
                     .map(|sort| sort.expr().clone());
