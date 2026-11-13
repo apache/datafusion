@@ -1514,6 +1514,13 @@ fn interleave_referenced<B: Borrow<RecordBatch>>(
 /// `compact` assigns new places by position in that walk rather than looking
 /// each slot up. Debug builds check this.
 trait StoreSlots {
+    /// Whether the rows a partition keeps do not depend on the order its
+    /// rows arrive in, so [`PartitionedTopKCore::insert_batch_with`] may visit
+    /// a batch back to front. True for `DENSE_RANK`, which keeps every row
+    /// tied with a kept value; not for `ROW_NUMBER`, which keeps the tied rows
+    /// that come first.
+    const ORDER_FREE: bool = false;
+
     /// Where every retained row lives.
     fn store_rows(&self) -> impl Iterator<Item = StoreRef> + '_;
 
@@ -1829,8 +1836,8 @@ struct PartitionedTopKCore<S> {
     /// alone leaves it holding far more than the partitions point at,
     /// `RecordBatchStore::compact` rewrites it.
     store: RecordBatchStore,
-    /// Rows of the batch currently being inserted that were admitted, in
-    /// ascending row order. Reused across `insert_batch` calls.
+    /// Rows of the batch currently being inserted that were admitted, in the
+    /// order the pass visited them. Reused across `insert_batch` calls.
     admitted_rows: Vec<u32>,
     /// Rows the partitions currently hold, i.e. slots pointing into `store`.
     ///
@@ -1956,10 +1963,11 @@ impl<S: StoreSlots> PartitionedTopKCore<S> {
     /// between the three operators.
     ///
     /// Both column sets are encoded once for the whole batch, then the rows
-    /// are visited in batch order rather than grouped by partition.
+    /// are visited in batch order, or back to front for an
+    /// [`StoreSlots::ORDER_FREE`] state, rather than grouped by partition.
     /// Interleaving partitions cannot change a decision — a state is only read
-    /// and written by its own partition's rows, which still reach it in
-    /// ascending row order — and it costs no pass over the partitions seen so
+    /// and written by its own partition's rows, which still reach it in the
+    /// order the pass walks — and it costs no pass over the partitions seen so
     /// far, which would be quadratic in the input whenever partition count
     /// grows with it. Only keys are copied during the pass; an admission
     /// records where its row will live, and one gather afterwards materializes
@@ -2006,7 +2014,17 @@ impl<S: StoreSlots> PartitionedTopKCore<S> {
         // Accumulated locally and folded in once, so the running totals are not
         // touched per row.
         let mut interned_bytes = 0usize;
-        for row in 0..batch.num_rows() {
+        let num_rows = batch.num_rows();
+        // Front to back, a batch whose ORDER BY values fall, such as
+        // `ORDER BY ts DESC` over rows stored by ascending `ts`, makes nearly
+        // every row a new best that displaces one. Back to front, the first K
+        // per partition fill the state and the boundary check drops the rest,
+        // which only saves work when partitions get more than K rows each.
+        let backwards = S::ORDER_FREE
+            && num_rows > self.k.saturating_mul(self.partitions.len())
+            && self.scratch_rows.row(num_rows - 1) < self.scratch_rows.row(0);
+        for i in 0..num_rows {
+            let row = if backwards { num_rows - 1 - i } else { i };
             let pk = self.partition_scratch_rows.row(row);
             // One probe per row, and `entry_ref` owns the key only on Vacant, so
             // a key is allocated once per partition for the operator's lifetime
@@ -2677,7 +2695,8 @@ impl PartitionedTopKRank {
 #[derive(Debug, Default)]
 struct DenseRankPartitionState {
     /// Keyed by the row-encoded ORDER BY bytes, capped at `k` keys. Each
-    /// group's rows are in arrival order, which `emit` keeps.
+    /// group's rows are in the order they were admitted, which `emit` keeps:
+    /// arrival order, reversed for a batch visited back to front.
     groups: HashMap<Vec<u8>, Vec<StoreRef>>,
     /// The same keys as `groups`, in a max-heap: the admission boundary
     /// (the largest tracked ob value) is an O(1) `peek()` check, and
@@ -2726,9 +2745,8 @@ impl DenseRankPartitionState {
             .groups
             .remove_entry(heap_key.as_slice())
             .expect("keys mirrors groups");
-        // A group's rows from one batch sit next to each other, in arrival
-        // order, so each run of them drops its uses with one store lookup
-        // rather than one per row.
+        // A group's rows from one batch sit next to each other, so each run of
+        // them drops its uses with one store lookup rather than one per row.
         for run in rows.chunk_by(|a, b| a.batch_id == b.batch_id) {
             admission.release_n(run[0].batch_id, run.len());
         }
@@ -2757,6 +2775,8 @@ impl DenseRankPartitionState {
 }
 
 impl StoreSlots for DenseRankPartitionState {
+    const ORDER_FREE: bool = true;
+
     fn store_rows(&self) -> impl Iterator<Item = StoreRef> + '_ {
         self.groups.values().flatten().copied()
     }
@@ -2867,7 +2887,8 @@ impl PartitionedTopKDenseRank {
     /// Drain every partition in partition-key order and return the rows as a
     /// stream of `RecordBatch`es ordered by `(partition_keys, order_keys)`.
     /// Within a partition the distinct ob keys are sorted (byte-comparable
-    /// encoding == sort order), and a group's rows keep their arrival order.
+    /// encoding == sort order), and a group's rows keep the order they were
+    /// admitted in: arrival order, reversed for a batch visited back to front.
     ///
     /// The partitions are drained as the stream is polled: a group already
     /// holds one 8-byte [`StoreRef`] per row, so collecting `(StoreRef, u64)`
@@ -7836,7 +7857,9 @@ mod tests {
         // 10 joins the group from the batch in flight, then 5 evicts all four
         // of its rows: two uses back to the first entry, one to the second, and
         // one off the pending count.
-        state.insert_batch(&pk_val_batch(&schema, vec![1, 1], vec![10, 5])?)?;
+        // The trailing 10 loses to the boundary and keeps the batch from
+        // falling, so it is visited front to back.
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 1, 1], vec![10, 5, 10])?)?;
 
         // Both earlier entries are freed. This batch's gather holds both of its
         // admissions, one of them still retained.
@@ -8000,8 +8023,11 @@ mod tests {
     async fn test_partitioned_topk_dense_rank_evicts_same_call_group() -> Result<()> {
         let (schema, mut state) = build_partitioned_topk_dense_rank(1)?;
 
-        let vals: Vec<i32> = (0..32).rev().collect();
-        state.insert_batch(&pk_val_batch(&schema, vec![1; 32], vals)?)?;
+        // The trailing 40 ends the batch above its start, so it is visited
+        // front to back and every falling value evicts the one before it.
+        let mut vals: Vec<i32> = (0..32).rev().collect();
+        vals.push(40);
+        state.insert_batch(&pk_val_batch(&schema, vec![1; 33], vals)?)?;
 
         // All 32 rows were admitted and 31 evicted again, so the gather was
         // compacted down to the one survivor.
@@ -8023,6 +8049,41 @@ mod tests {
             ],
             &results
         );
+        Ok(())
+    }
+
+    /// A batch whose ORDER BY values fall is visited back to front, so it
+    /// evicts nothing: front to back, every row would evict the one before.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_falling_batch_evicts_nothing() -> Result<()>
+    {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(2)?;
+
+        let vals: Vec<i32> = (0..1000).rev().collect();
+        state.insert_batch(&pk_val_batch(&schema, vec![1; 1000], vals)?)?;
+        assert_eq!(state.core.metrics.row_replacements.value(), 0);
+
+        assert_eq!(pk_val_rows(state.emit()?).await?, vec![(1, 0), (1, 1)]);
+        Ok(())
+    }
+
+    /// A falling batch with no more than K rows per partition seen is walked
+    /// front to back, since each partition would keep all of its rows either
+    /// way. The check goes by that average, so a batch that puts all its rows
+    /// in one partition is still walked in order.
+    #[tokio::test]
+    async fn test_partitioned_topk_dense_rank_falling_batch_over_many_partitions()
+    -> Result<()> {
+        let (schema, mut state) = build_partitioned_topk_dense_rank(1)?;
+        state.insert_batch(&pk_val_batch(&schema, vec![1, 2, 3, 4], vec![100; 4])?)?;
+
+        // 4 rows <= K * 4 partitions: 4 evicts the 100, then 3, 2 and 1 each
+        // evict the one before.
+        state.insert_batch(&pk_val_batch(&schema, vec![1; 4], vec![4, 3, 2, 1])?)?;
+        assert_eq!(state.core.metrics.row_replacements.value(), 4);
+
+        let rows = pk_val_rows(state.emit()?).await?;
+        assert_eq!(rows, vec![(1, 1), (2, 100), (3, 100), (4, 100)]);
         Ok(())
     }
 
@@ -8099,7 +8160,8 @@ mod tests {
         // resolves are the check that it repointed them: a slot left at a
         // pre-compaction coordinate would surface some other row. Partition
         // `p`'s survivors are the pair batch `p` gave it, rows `2p` and
-        // `2p + 1`, in arrival order.
+        // `2p + 1`, compared as a set: a batch visited back to front stores
+        // its tied rows reversed.
         let batches: Vec<RecordBatch> = state.emit()?.try_collect().await?;
         let mut rows = Vec::new();
         for b in &batches {
@@ -8112,6 +8174,9 @@ mod tests {
         let expected: Vec<(i32, i32, i32)> = (0..B)
             .flat_map(|p| [(p, 0, id(p, 2 * p)), (p, 0, id(p, 2 * p + 1))])
             .collect();
+        for ties in rows.chunk_by_mut(|a, b| a.0 == b.0) {
+            ties.sort_unstable();
+        }
         assert_eq!(rows, expected);
         Ok(())
     }
