@@ -840,10 +840,10 @@ physical_plan
 03)----AggregateExec: mode=FinalPartitioned, gby=[k@0 as k], aggr=[max(topk_parquet.x)], lim=[2]
 04)------RepartitionExec: partitioning=Hash([k@0], 4), input_partitions=4
 05)--------AggregateExec: mode=Partial, gby=[k@0 as k], aggr=[max(topk_parquet.x)], lim=[2]
-06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1, maintains_sort_order=true
+06)----------RepartitionExec: partitioning=RoundRobinBatch(4), input_partitions=1
 07)------------HashJoinExec: mode=CollectLeft, join_type=RightSemi, on=[(column1@0, CAST(topk_parquet.k AS Int64)@2)], projection=[k@0, x@1]
 08)--------------DataSourceExec: partitions=1, partition_sizes=[1]
-09)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/aggregates_topk/topk.parquet]]}, projection=[k, x, CAST(k@0 AS Int64) as CAST(topk_parquet.k AS Int64)], output_ordering=[x@1 ASC NULLS LAST], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
+09)--------------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/aggregates_topk/topk.parquet]]}, projection=[k, x, CAST(k@0 AS Int64) as CAST(topk_parquet.k AS Int64)], file_type=parquet, predicate=DynamicFilter [ empty ], dynamic_rg_pruning=eligible
 
 query II
 SELECT k, max(x) FROM topk_parquet

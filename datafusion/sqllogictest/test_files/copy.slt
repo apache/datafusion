@@ -823,3 +823,46 @@ physical_plan
 
 statement count 0
 drop table t;
+
+# COPY (... UNION ALL ... ORDER BY) must write rows in ORDER BY order when
+# each UNION ALL arm selects a different literal and reads an already sorted
+# input. The literal is constant within each arm but not across arms, so it
+# must stay in the merge key.
+#
+# Earlier versions reported only [ts ASC NULLS LAST] as the merge key in SortPreservingMergeExec due to issues with the
+# constants in the individual partitions.
+
+statement ok
+COPY (SELECT * FROM (VALUES (1, 10.0), (2, 20.0), (3, 30.0)) AS v(ts, x) ORDER BY ts)
+TO 'test_files/scratch/copy/union_const_order/sorted.parquet';
+
+statement ok
+CREATE EXTERNAL TABLE union_const_src STORED AS PARQUET
+LOCATION 'test_files/scratch/copy/union_const_order/sorted.parquet';
+
+query TT
+EXPLAIN COPY (
+  SELECT id, ts, x FROM (
+    SELECT 'b' AS id, ts, x FROM union_const_src
+    UNION ALL
+    SELECT 'a' AS id, ts, x FROM union_const_src
+  ) ORDER BY id, ts
+) TO 'test_files/scratch/copy/union_const_order/out.parquet';
+----
+logical_plan
+01)CopyTo: format=parquet output_url=test_files/scratch/copy/union_const_order/out.parquet options: ()
+02)--Sort: id ASC NULLS LAST, ts ASC NULLS LAST
+03)----Union
+04)------Projection: Utf8("b") AS id, union_const_src.ts, union_const_src.x
+05)--------TableScan: union_const_src projection=[ts, x]
+06)------Projection: Utf8("a") AS id, union_const_src.ts, union_const_src.x
+07)--------TableScan: union_const_src projection=[ts, x]
+physical_plan
+01)DataSinkExec: sink=ParquetSink(file_groups=[])
+02)--SortPreservingMergeExec: [id@0 ASC NULLS LAST, ts@1 ASC NULLS LAST]
+03)----UnionExec
+04)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/union_const_order/sorted.parquet]]}, projection=[b as id, ts, x], output_ordering=[ts@1 ASC NULLS LAST], file_type=parquet
+05)------DataSourceExec: file_groups={1 group: [[WORKSPACE_ROOT/datafusion/sqllogictest/test_files/scratch/copy/union_const_order/sorted.parquet]]}, projection=[a as id, ts, x], output_ordering=[ts@1 ASC NULLS LAST], file_type=parquet
+
+statement ok
+DROP TABLE union_const_src;
