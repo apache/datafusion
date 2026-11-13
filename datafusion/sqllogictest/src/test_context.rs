@@ -59,6 +59,7 @@ use tempfile::TempDir;
 
 mod custom_sort_pushdown;
 mod evaluation_counter;
+mod exact_sort_pushdown;
 mod range_partitioning;
 
 /// Context for running tests
@@ -168,6 +169,8 @@ impl TestContext {
                     test_ctx.session_ctx(),
                 )
                 .expect("register custom projection table");
+                exact_sort_pushdown::register_exact_sort_source(test_ctx.session_ctx())
+                    .expect("register exact sort source");
             }
             "parquet_missing_bounds.slt" => {
                 register_parquet_missing_bounds(&mut test_ctx).await;
