@@ -898,6 +898,9 @@ message TableReadSelector {
     datafusion_common.ScalarValue as_of_version = 1;
     // A point in time, in nanoseconds since the Unix epoch (UTC)
     int64 as_of_timestamp = 2;
+    // A selector defined outside DataFusion, encoded by a
+    // LogicalExtensionCodec
+    bytes extension = 3;
   }
 }
 

@@ -7,7 +7,7 @@ use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use datafusion_common::tree_node::{Transformed, TransformedResult};
 use datafusion_common::{
     Column, DFSchema, DFSchemaRef, DataFusionError, Result, ScalarValue,
-    TableReadSelector, TableReference, assert_contains,
+    TableReadSelector, TableReadSelectorExtension, TableReference, assert_contains,
 };
 use datafusion_expr::expr::{WindowFunction, WindowFunctionParams};
 use datafusion_expr::test::function_stub::{
@@ -35,7 +35,7 @@ use datafusion_sql::unparser::dialect::{
 };
 use datafusion_sql::unparser::{Unparser, expr_to_sql, plan_to_sql};
 use insta::assert_snapshot;
-use sqlparser::ast::Statement;
+use sqlparser::ast::{self, Statement};
 use std::hash::Hash;
 use std::ops::Add;
 use std::sync::Arc;
@@ -1759,7 +1759,93 @@ fn test_table_scan_version_to_sql() -> Result<()> {
         .strip_backtrace();
     assert_snapshot!(err, @"This feature is not implemented: This dialect does not support time travel to version 3");
 
+    // Extensions are unparsed by the dialect
+    let before =
+        TableReadSelector::Extension(Arc::new(BeforeStatement("q1".to_string())));
+    let unparser = Unparser::new(&BeforeStatementDialect {});
+    let sql = unparser.plan_to_sql(&scan(before.clone(), vec![])?)?;
+    assert_snapshot!(sql, @"SELECT * FROM t1 BEFORE(STATEMENT => 'q1')");
+    let err = plan_to_sql(&scan(before, vec![])?)
+        .unwrap_err()
+        .strip_backtrace();
+    assert_snapshot!(err, @r#"This feature is not implemented: This dialect does not support table read selector before statement "q1""#);
+
     Ok(())
+}
+
+/// A table read selector for the state of a table before a statement was executed
+#[derive(Debug, PartialEq, Eq, Hash, PartialOrd)]
+struct BeforeStatement(String);
+
+impl fmt::Display for BeforeStatement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "before statement {:?}", self.0)
+    }
+}
+
+impl TableReadSelectorExtension for BeforeStatement {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn dyn_eq(&self, other: &dyn TableReadSelectorExtension) -> bool {
+        other.as_any().downcast_ref::<Self>() == Some(self)
+    }
+
+    fn dyn_hash(&self, mut state: &mut dyn std::hash::Hasher) {
+        self.hash(&mut state)
+    }
+
+    fn dyn_ord(
+        &self,
+        other: &dyn TableReadSelectorExtension,
+    ) -> Option<std::cmp::Ordering> {
+        other
+            .as_any()
+            .downcast_ref::<Self>()
+            .and_then(|other| self.partial_cmp(other))
+    }
+}
+
+/// A dialect that unparses [`BeforeStatement`] to Snowflake's
+/// `BEFORE (STATEMENT => ...)` clause
+struct BeforeStatementDialect {}
+
+impl UnparserDialect for BeforeStatementDialect {
+    fn identifier_quote_style(&self, _identifier: &str) -> Option<char> {
+        None
+    }
+
+    fn read_selector_extension_to_sql(
+        &self,
+        unparser: &Unparser,
+        selector: &dyn TableReadSelectorExtension,
+    ) -> Result<Option<ast::TableVersion>> {
+        let Some(BeforeStatement(statement)) = selector.as_any().downcast_ref() else {
+            return Ok(None);
+        };
+        let statement = unparser.expr_to_sql(&lit(statement.as_str()))?;
+        Ok(Some(ast::TableVersion::Function(ast::Expr::Function(
+            ast::Function {
+                name: ast::ObjectName::from(vec![ast::Ident::new("BEFORE")]),
+                uses_odbc_syntax: false,
+                parameters: ast::FunctionArguments::None,
+                args: ast::FunctionArguments::List(ast::FunctionArgumentList {
+                    duplicate_treatment: None,
+                    args: vec![ast::FunctionArg::Named {
+                        name: ast::Ident::new("STATEMENT"),
+                        arg: ast::FunctionArgExpr::Expr(statement),
+                        operator: ast::FunctionArgOperator::RightArrow,
+                    }],
+                    clauses: vec![],
+                }),
+                filter: None,
+                null_treatment: None,
+                over: None,
+                within_group: vec![],
+            },
+        ))))
+    }
 }
 
 #[test]

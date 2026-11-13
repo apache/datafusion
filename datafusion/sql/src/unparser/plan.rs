@@ -2351,19 +2351,27 @@ impl Unparser<'_> {
         &self,
         selector: &TableReadSelector,
     ) -> Result<ast::TableVersion> {
-        let value = match selector {
-            TableReadSelector::AsOfVersion(value) => value.clone(),
-            TableReadSelector::AsOfTimestamp(ns) => {
-                ScalarValue::TimestampNanosecond(Some(*ns), Some("UTC".into()))
+        let (name, value) = match selector {
+            TableReadSelector::AsOfVersion(value) => ("VERSION", value.clone()),
+            TableReadSelector::AsOfTimestamp(ns) => (
+                "TIMESTAMP",
+                ScalarValue::TimestampNanosecond(Some(*ns), Some("UTC".into())),
+            ),
+            TableReadSelector::Extension(extension) => {
+                return match self
+                    .dialect
+                    .read_selector_extension_to_sql(self, extension.as_ref())?
+                {
+                    Some(version) => Ok(version),
+                    None => not_impl_err!(
+                        "This dialect does not support table read selector {selector}"
+                    ),
+                };
             }
         };
         let value = self.expr_to_sql(&Expr::Literal(value, None))?;
         Ok(match (self.dialect.table_version_style(), selector) {
             (TableVersionStyle::At, _) => {
-                let name = match selector {
-                    TableReadSelector::AsOfVersion(_) => "VERSION",
-                    TableReadSelector::AsOfTimestamp(_) => "TIMESTAMP",
-                };
                 ast::TableVersion::Function(ast::Expr::Function(ast::Function {
                     name: ast::ObjectName::from(vec![Ident::new("AT")]),
                     uses_odbc_syntax: false,
@@ -2395,6 +2403,11 @@ impl Unparser<'_> {
             (TableVersionStyle::ForSystemTime, TableReadSelector::AsOfVersion(_)) => {
                 return not_impl_err!(
                     "This dialect does not support time travel to version {selector}"
+                );
+            }
+            (_, TableReadSelector::Extension(_)) => {
+                return internal_err!(
+                    "Table read selector extensions are unparsed by the dialect"
                 );
             }
         })

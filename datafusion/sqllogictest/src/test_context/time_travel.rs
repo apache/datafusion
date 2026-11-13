@@ -301,6 +301,9 @@ impl SchemaProvider for VersionedSchema {
                     None => return plan_err!("Table t did not exist at {selector}"),
                 }
             }
+            TableReadSelector::Extension(_) => {
+                return plan_err!("Table read selector {selector} is not supported");
+            }
         };
         Self::table_version(version).map(Some)
     }

@@ -28895,6 +28895,11 @@ impl serde::Serialize for TableReadSelector {
                     #[allow(clippy::needless_borrows_for_generic_args)]
                     struct_ser.serialize_field("asOfTimestamp", ToString::to_string(&v).as_str())?;
                 }
+                table_read_selector::TableReadSelectorEnum::Extension(v) => {
+                    #[allow(clippy::needless_borrow)]
+                    #[allow(clippy::needless_borrows_for_generic_args)]
+                    struct_ser.serialize_field("extension", pbjson::private::base64::encode(&v).as_str())?;
+                }
             }
         }
         struct_ser.end()
@@ -28911,12 +28916,14 @@ impl<'de> serde::Deserialize<'de> for TableReadSelector {
             "asOfVersion",
             "as_of_timestamp",
             "asOfTimestamp",
+            "extension",
         ];
 
         #[allow(clippy::enum_variant_names)]
         enum GeneratedField {
             AsOfVersion,
             AsOfTimestamp,
+            Extension,
         }
         impl<'de> serde::Deserialize<'de> for GeneratedField {
             fn deserialize<D>(deserializer: D) -> std::result::Result<GeneratedField, D::Error>
@@ -28940,6 +28947,7 @@ impl<'de> serde::Deserialize<'de> for TableReadSelector {
                         match value {
                             "asOfVersion" | "as_of_version" => Ok(GeneratedField::AsOfVersion),
                             "asOfTimestamp" | "as_of_timestamp" => Ok(GeneratedField::AsOfTimestamp),
+                            "extension" => Ok(GeneratedField::Extension),
                             _ => Err(serde::de::Error::unknown_field(value, FIELDS)),
                         }
                     }
@@ -28974,6 +28982,12 @@ impl<'de> serde::Deserialize<'de> for TableReadSelector {
                                 return Err(serde::de::Error::duplicate_field("asOfTimestamp"));
                             }
                             table_read_selector_enum__ = map_.next_value::<::std::option::Option<::pbjson::private::NumberDeserialize<_>>>()?.map(|x| table_read_selector::TableReadSelectorEnum::AsOfTimestamp(x.0));
+                        }
+                        GeneratedField::Extension => {
+                            if table_read_selector_enum__.is_some() {
+                                return Err(serde::de::Error::duplicate_field("extension"));
+                            }
+                            table_read_selector_enum__ = map_.next_value::<::std::option::Option<::pbjson::private::BytesDeserialize<_>>>()?.map(|x| table_read_selector::TableReadSelectorEnum::Extension(x.0));
                         }
                     }
                 }
