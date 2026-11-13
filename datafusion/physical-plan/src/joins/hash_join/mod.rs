@@ -2,7 +2,8 @@
 // SPDX-FileCopyrightText: See the NOTICE file distributed with this work for additional information regarding copyright ownership
 // SPDX-FileContributor: Licensed to the Apache Software Foundation (ASF) under one or more contributor license agreements
 
-//! [`HashJoinExec`] Partitioned Hash Join Operator
+//! [`HashJoinExec`]: build a key index, enumerate matching rows, apply join semantics.
+//!
 
 pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 /// # Public Only for Internal Use:
@@ -14,9 +15,12 @@ pub use exec::{HashJoinExec, HashJoinExecBuilder, PreparedHashJoinBuild};
 pub use partitioned_hash_eval::HashTableLookupExpr;
 pub use partitioned_hash_eval::{HashExpr, SeededRandomState};
 
+mod batched_join_processor;
+mod build;
 mod exec;
 mod inlist_builder;
 mod not_in;
 mod partitioned_hash_eval;
+mod regular_join;
 mod shared_bounds;
 mod stream;
