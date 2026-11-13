@@ -2565,6 +2565,14 @@ impl NestedLoopJoinStream {
         }
     }
 
+    /// Left semi/anti/mark joins only need to know whether each left row matched.
+    fn is_left_existence_join(&self) -> bool {
+        matches!(
+            self.join_type,
+            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
+        )
+    }
+
     /// Returns true if this stream is operating in memory-limited mode
     fn is_memory_limited(&self) -> bool {
         matches!(self.spill_state, SpillState::Active(_))
@@ -2843,10 +2851,7 @@ impl NestedLoopJoinStream {
         // has a match. Spill passes must still consume the right input so it is
         // available for replay against subsequent left chunks.
         if !self.is_memory_limited()
-            && matches!(
-                self.join_type,
-                JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
-            )
+            && self.is_left_existence_join()
             && let Some(left_data) = &self.buffered_left_data
         {
             let bitmap = left_data.bitmap().lock();
@@ -3351,10 +3356,7 @@ impl NestedLoopJoinStream {
             .ok_or_else(|| internal_datafusion_err!("Right batch should be available"))?
             .clone();
 
-        if matches!(
-            self.join_type,
-            JoinType::LeftSemi | JoinType::LeftAnti | JoinType::LeftMark
-        ) && self.left_probe_idx >= self.left_unmatched_end
+        if self.is_left_existence_join() && self.left_probe_idx >= self.left_unmatched_end
         {
             let bitmap = left_data.bitmap().lock();
             let start = (self.left_probe_idx..left_rows)
