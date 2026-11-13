@@ -429,7 +429,25 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         let empty_table_bytes = state.group_values.size()
             + size_of_val(state.accumulators[0].accumulator.as_ref());
         let conversion_bytes = buffer_bytes.saturating_sub(empty_table_bytes) / 2;
-        let batch_size = (conversion_bytes / (3 * max_key_bytes + 64).max(1)).max(1);
+        let row_bytes = if fixed_key_bytes.is_some() {
+            // Fixed-width builders allocate their requested capacity. Cover the
+            // flat columns and group indices; the second half of the workspace
+            // covers sorting indices and the bounded sorted output.
+            max_key_bytes
+                + schema
+                    .fields()
+                    .last()
+                    .unwrap()
+                    .data_type()
+                    .primitive_width()
+                    .unwrap()
+                + size_of::<usize>()
+                + size_of::<u32>()
+                + 1
+        } else {
+            3 * max_key_bytes + 64
+        };
+        let batch_size = (conversion_bytes / row_bytes.max(1)).max(1);
         let retained_bytes = state.accumulators[0].accumulator.size() + keys.size();
         let values = state.accumulators[0]
             .accumulator
@@ -440,6 +458,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
         state.accumulators[0].shrink_to_fit();
         let batches = values.map(move |values| {
             let (groups, values) = values?;
+            // Inline values and NULL markers are emitted in group-id order.
+            // These batches have at most one row per group, so sorting by the
+            // group keys alone also orders the full group-and-value key.
+            let unique_groups = groups.windows(2).all(|pair| pair[0] < pair[1]);
             let mut columns = keys
                 .values_preserving(GroupSelection::try_from_indices(
                     &groups, num_groups,
@@ -448,7 +470,10 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
                 .map(float_semantics::normalize)
                 .collect::<Vec<_>>();
             columns.push(values);
-            Ok(RecordBatch::try_new(Arc::clone(&schema), columns)?)
+            Ok((
+                RecordBatch::try_new(Arc::clone(&schema), columns)?,
+                unique_groups,
+            ))
         });
         Ok(Some(DistinctCountSpillState {
             batches: Box::new(batches),
@@ -607,7 +632,7 @@ impl<AggrMode> AggregateHashTable<AggrMode> {
 
 pub(in crate::aggregates) struct DistinctCountSpillState {
     pub(in crate::aggregates) batches:
-        Box<dyn Iterator<Item = Result<RecordBatch>> + Send>,
+        Box<dyn Iterator<Item = Result<(RecordBatch, bool)>> + Send>,
     pub(in crate::aggregates) retained_bytes: usize,
 }
 

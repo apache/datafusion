@@ -6,11 +6,14 @@
 
 use std::sync::Arc;
 
-use arrow::array::{ArrayRef, Int64Array};
-use arrow::datatypes::SchemaRef;
+use arrow::array::{Array, ArrayRef, AsArray, Int64Array};
+use arrow::datatypes::{
+    ArrowPrimitiveType, DataType, Int8Type, Int16Type, Int32Type, Int64Type, SchemaRef,
+    UInt8Type, UInt16Type, UInt32Type, UInt64Type,
+};
 use arrow::record_batch::RecordBatch;
 use arrow::row::{OwnedRow, RowConverter, SortField};
-use datafusion_common::{Result, ScalarValue};
+use datafusion_common::{Result, internal_err};
 use datafusion_execution::async_try_stream;
 use datafusion_execution::memory_pool::MemoryReservation;
 use futures::StreamExt;
@@ -20,6 +23,29 @@ use crate::aggregates::group_values::encode_array_if_necessary;
 use crate::stream::RecordBatchStreamAdapter;
 
 pub(super) fn replay(
+    input: SendableRecordBatchStream,
+    schema: SchemaRef,
+    batch_size: usize,
+    buffer_bytes: usize,
+    reservation: MemoryReservation,
+) -> Result<SendableRecordBatchStream> {
+    macro_rules! replay_integer {
+        ($($data_type:ident => $arrow_type:ty),+ $(,)?) => {
+            match input.schema().fields().last().unwrap().data_type() {
+                $(DataType::$data_type => replay_typed::<$arrow_type>(
+                    input, schema, batch_size, buffer_bytes, reservation,
+                ),)+
+                other => internal_err!("Unsupported DISTINCT COUNT spill type: {other}"),
+            }
+        };
+    }
+    replay_integer!(
+        Int8 => Int8Type, Int16 => Int16Type, Int32 => Int32Type, Int64 => Int64Type,
+        UInt8 => UInt8Type, UInt16 => UInt16Type, UInt32 => UInt32Type, UInt64 => UInt64Type,
+    )
+}
+
+fn replay_typed<T: ArrowPrimitiveType>(
     mut input: SendableRecordBatchStream,
     schema: SchemaRef,
     batch_size: usize,
@@ -36,7 +62,7 @@ pub(super) fn replay(
     let output_schema = Arc::clone(&schema);
     let stream = async_try_stream(move |mut emitter| async move {
         let mut current: Option<OwnedRow> = None;
-        let mut previous_value: Option<ScalarValue> = None;
+        let mut previous_value: Option<T::Native> = None;
         let mut count = 0_i64;
         let mut keys = Vec::new();
         let mut counts = Vec::new();
@@ -45,6 +71,14 @@ pub(super) fn replay(
             let rows = converter.convert_columns(&batch.columns()[..num_keys])?;
             let batch_bytes =
                 batch.get_array_memory_size() + rows.size() + converter.size();
+            reservation.try_resize(
+                batch_bytes
+                    + output_bytes
+                    + current.as_ref().map_or(0, |key| key.row().as_ref().len())
+                    + keys.capacity() * size_of::<OwnedRow>()
+                    + counts.capacity() * size_of::<i64>(),
+            )?;
+            let values = batch.column(num_keys).as_primitive::<T>();
             for row in 0..batch.num_rows() {
                 let key = rows.row(row);
                 if current.as_ref().is_none_or(|current| current.row() != key) {
@@ -56,32 +90,37 @@ pub(super) fn replay(
                     current = Some(key.owned());
                     previous_value = None;
                     count = 0;
-                }
-                let value = ScalarValue::try_from_array(batch.column(num_keys), row)?;
-                if !value.is_null() && previous_value.as_ref() != Some(&value) {
-                    count += 1;
-                    previous_value = Some(value);
-                }
-                let current_bytes =
-                    current.as_ref().map_or(0, |key| key.row().as_ref().len());
-                reservation.try_resize(
-                    batch_bytes
-                        + output_bytes
-                        + current_bytes
-                        + keys.capacity() * size_of::<OwnedRow>()
-                        + counts.capacity() * size_of::<i64>(),
-                )?;
-                if keys.len() >= batch_size || output_bytes >= buffer_bytes / 4 {
-                    let output =
-                        output_batch(&converter, &output_schema, &mut keys, &mut counts)?;
-                    output_bytes = 0;
+                    let current_bytes = key.as_ref().len();
                     reservation.try_resize(
                         batch_bytes
+                            + output_bytes
                             + current_bytes
-                            + output.get_array_memory_size()
-                            + keys.capacity() * size_of::<OwnedRow>(),
+                            + keys.capacity() * size_of::<OwnedRow>()
+                            + counts.capacity() * size_of::<i64>(),
                     )?;
-                    emitter.emit(output).await;
+                    if keys.len() >= batch_size || output_bytes >= buffer_bytes / 4 {
+                        let output = output_batch(
+                            &converter,
+                            &output_schema,
+                            &mut keys,
+                            &mut counts,
+                        )?;
+                        output_bytes = 0;
+                        reservation.try_resize(
+                            batch_bytes
+                                + current_bytes
+                                + output.get_array_memory_size()
+                                + keys.capacity() * size_of::<OwnedRow>(),
+                        )?;
+                        emitter.emit(output).await;
+                    }
+                }
+                if values.is_valid(row) {
+                    let value = values.value(row);
+                    if previous_value != Some(value) {
+                        count += 1;
+                        previous_value = Some(value);
+                    }
                 }
             }
         }
@@ -491,6 +530,60 @@ mod tests {
                     .collect(),
                 "{data_type:?}",
             );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn distinct_spill_integer_types() -> Result<()> {
+        for data_type in [
+            DataType::Int8,
+            DataType::Int16,
+            DataType::Int32,
+            DataType::Int64,
+            DataType::UInt8,
+            DataType::UInt16,
+            DataType::UInt32,
+            DataType::UInt64,
+        ] {
+            let mut fields = schema().fields().to_vec();
+            fields[2] = Arc::new(Field::new("v", data_type.clone(), true));
+            let schema = Arc::new(Schema::new(fields));
+            let mut batches = Vec::new();
+            for value in [0, 127, 0, 127] {
+                for start in (0_i64..20_000).step_by(256) {
+                    let end = (start + 256).min(20_000);
+                    let len = (end - start) as usize;
+                    let values = Int64Array::from_iter(
+                        (start..end).map(|key| (key % 5 != 0).then_some(value)),
+                    );
+                    batches.push(RecordBatch::try_new(
+                        Arc::clone(&schema),
+                        vec![
+                            Arc::new(Int64Array::from_iter_values(start..end)),
+                            Arc::new(StringArray::from(vec!["typed"; len])),
+                            arrow::compute::cast(&values, &data_type)?,
+                            Arc::new(BooleanArray::from(vec![true; len])),
+                        ],
+                    )?);
+                }
+            }
+            let output = run(batches, 1024 * 1024, false).await?;
+            let mut groups = std::collections::BTreeSet::new();
+            for batch in output {
+                let keys = batch.column(0).as_primitive::<Int64Type>();
+                let counts = batch.column(2).as_primitive::<Int64Type>();
+                for row in 0..batch.num_rows() {
+                    let key = keys.value(row);
+                    assert!(groups.insert(key));
+                    assert_eq!(
+                        counts.value(row),
+                        if key % 5 == 0 { 0 } else { 2 },
+                        "{data_type:?}"
+                    );
+                }
+            }
+            assert_eq!(groups.len(), 20_000);
         }
         Ok(())
     }

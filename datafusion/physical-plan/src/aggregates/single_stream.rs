@@ -356,28 +356,36 @@ impl Aggregating {
             .as_mut()
             .expect("spill context is configured");
         if self.distinct_spill_buffer_bytes.is_some() {
-            // The table may have grown on the insertion that triggered spilling.
-            // Use only the workspace still covered by its existing reservation.
-            let buffer_bytes = reservation
-                .size()
-                .saturating_sub(self.hash_table.memory_size())
-                .max(1);
+            // Conversion needs less headroom than another hash-table growth.
+            // Use the available space for larger runs when the full growth
+            // reservation no longer fits, retaining the existing quota otherwise.
+            let table_bytes = self.hash_table.memory_size();
+            let conversion_reservation = table_bytes.saturating_add(table_bytes / 2);
+            if conversion_reservation > reservation.size() {
+                match reservation.try_resize(conversion_reservation) {
+                    Ok(()) | Err(DataFusionError::ResourcesExhausted(_)) => {}
+                    Err(error) => return Err(error),
+                }
+            }
+            let buffer_bytes = reservation.size().saturating_sub(table_bytes).max(1);
+            let single_group = self.hash_table.building_group_count() == 1;
             if let Some(state) = self
                 .hash_table
                 .take_distinct_count_batches(spill.schema(), buffer_bytes)?
             {
                 let retained_bytes = state.retained_bytes + self.hash_table.memory_size();
                 for batch in state.batches {
-                    let batch = batch?;
+                    let (batch, unique_groups) = batch?;
                     // Moving the hash state into the iterator does not free it.
                     // Include the flat batch, sorted output and sorting indices
                     // until this run has been written and its iterator dropped.
                     reservation.try_resize(reservation.size().max(
                         retained_bytes
-                            + 3 * batch.get_array_memory_size()
-                            + batch.num_rows() * size_of::<u32>(),
+                            + 2 * batch.get_array_memory_size()
+                            + batch.num_rows()
+                                * (size_of::<(u32, u64)>() + 2 * size_of::<u32>()),
                     ))?;
-                    spill.sort_and_spill(Some(batch))?;
+                    spill.sort_distinct_and_spill(batch, single_group, unique_groups)?;
                 }
             }
         } else {

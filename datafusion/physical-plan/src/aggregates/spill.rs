@@ -240,6 +240,33 @@ impl AggregateSpill {
         &mut self,
         state_batch: Option<RecordBatch>,
     ) -> Result<()> {
+        self.sort_and_spill_by(state_batch, self.spill_expr.clone())
+    }
+
+    pub(super) fn sort_distinct_and_spill(
+        &mut self,
+        batch: RecordBatch,
+        single_group: bool,
+        unique_groups: bool,
+    ) -> Result<()> {
+        // Constant grouping columns need no comparisons inside this run. The
+        // merge still orders different runs by the full group-and-value key.
+        let ordering = if single_group {
+            LexOrdering::new(vec![self.spill_expr.last().unwrap().clone()]).unwrap()
+        } else if unique_groups {
+            LexOrdering::new(self.spill_expr[..self.spill_expr.len() - 1].to_vec())
+                .unwrap()
+        } else {
+            self.spill_expr.clone()
+        };
+        self.sort_and_spill_by(Some(batch), ordering)
+    }
+
+    fn sort_and_spill_by(
+        &mut self,
+        state_batch: Option<RecordBatch>,
+        ordering: LexOrdering,
+    ) -> Result<()> {
         let Some(state_batch) = state_batch else {
             return Ok(());
         };
@@ -251,17 +278,14 @@ impl AggregateSpill {
             self.batch_target_bytes
         };
         let mut max_batch_rows = 0;
-        let sorted_iter = IncrementalSortIterator::new(
-            state_batch,
-            self.spill_expr.clone(),
-            self.batch_size,
-        )
-        .with_max_batch_bytes(spill_batch_bytes)
-        .inspect(|batch| {
-            if let Ok(batch) = batch {
-                max_batch_rows = max_batch_rows.max(batch.num_rows());
-            }
-        });
+        let sorted_iter =
+            IncrementalSortIterator::new(state_batch, ordering, self.batch_size)
+                .with_max_batch_bytes(spill_batch_bytes)
+                .inspect(|batch| {
+                    if let Ok(batch) = batch {
+                        max_batch_rows = max_batch_rows.max(batch.num_rows());
+                    }
+                });
         let spill_file = self
             .spill_manager
             .spill_record_batch_iter_and_return_max_batch_memory(
