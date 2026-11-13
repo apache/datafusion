@@ -10,10 +10,11 @@ use crate::leaf_resolver::LeafResolver;
 use crate::{Int96Coercer, apply_file_schema_type_coercions};
 use arrow::array::{Array, ArrayRef, BooleanArray};
 use arrow::compute::kernels::cmp::eq;
-use arrow::compute::{and, sum};
+use arrow::compute::{SortOptions, and, sum};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef, TimeUnit};
 use datafusion_common::encryption::FileDecryptionProperties;
 use datafusion_common::stats::Precision;
+use datafusion_common::utils::compare_rows;
 use datafusion_common::{
     ColumnStatistics, DataFusionError, HashMap, HashSet, Result, ScalarValue, Statistics,
     internal_datafusion_err,
@@ -39,6 +40,7 @@ use parquet::file::metadata::{
 use parquet::file::statistics::Statistics as ParquetStatistics;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use std::any::Any;
+use std::cmp::Ordering;
 use std::sync::Arc;
 
 /// Minimum fraction of row groups that must report NDV statistics for the
@@ -1183,8 +1185,14 @@ pub(crate) fn lex_ordering_to_sorting_columns(
 
 /// Extracts ordering information from Parquet metadata.
 ///
-/// This function reads the sorting_columns from the first row group's metadata
+/// This function reads the sorting_columns from the row group metadata
 /// and converts them into a [`LexOrdering`] that can be used by the query engine.
+///
+/// Parquet declares sorting_columns per row group, so they only describe the
+/// order of rows within one row group. The ordering is returned for the file
+/// only if all row groups declare the same sorting_columns. It is limited to
+/// the leading columns that the row group statistics show to be ordered from
+/// one row group to the next.
 ///
 /// # Arguments
 /// * `metadata` - The Parquet metadata containing sorting_columns information
@@ -1199,8 +1207,8 @@ pub fn ordering_from_parquet_metadata(
 ) -> Result<Option<LexOrdering>> {
     // Get the sorting columns from the first row group metadata.
     // If no row groups exist or no sorting columns are specified, return None.
-    let sorting_columns = metadata
-        .row_groups()
+    let row_groups = metadata.row_groups();
+    let sorting_columns = row_groups
         .first()
         .and_then(|rg| rg.sorting_columns())
         .filter(|cols| !cols.is_empty());
@@ -1208,6 +1216,19 @@ pub fn ordering_from_parquet_metadata(
     let Some(sorting_columns) = sorting_columns else {
         return Ok(None);
     };
+
+    // In case sorting_columns differ across row_groups, we return early
+    // Typically, writers add the same sorting_column to all row_groups
+    // Could be improved by finding a shared prefix across all sorting_columns
+    if row_groups
+        .iter()
+        .any(|rg| rg.sorting_columns() != Some(sorting_columns))
+    {
+        return Ok(None);
+    }
+
+    let num_ordered = num_columns_ordered_across_row_groups(metadata, sorting_columns)?;
+    let sorting_columns = &sorting_columns[..num_ordered];
 
     let parquet_schema = metadata.file_metadata().schema_descr();
 
@@ -1227,8 +1248,6 @@ fn sorting_columns_to_physical_exprs(
     parquet_schema: &SchemaDescriptor,
     arrow_schema: &SchemaRef,
 ) -> Vec<PhysicalSortExpr> {
-    use arrow::compute::SortOptions;
-
     sorting_columns
         .iter()
         .filter_map(|sc| {
@@ -1244,6 +1263,136 @@ fn sorting_columns_to_physical_exprs(
                 nulls_first: sc.nulls_first,
             };
             Some(PhysicalSortExpr::new(expr, options))
+        })
+        .collect()
+}
+
+/// Returns how many leading `sorting_columns` are ordered across the whole
+/// file, given that every row group is sorted by all of them.
+///
+/// The row group statistics give the values that sort first and last in each
+/// row group. The file is ordered if the value that sorts last in each row
+/// group is not after the value that sorts first in the next row group. For
+/// `a ASC`:
+///
+/// ```text
+/// row groups [1, 2] [3, 4]: ordered, because 2 <= 3
+/// row groups [1, 4] [2, 3]: not ordered, because 4 > 2
+/// ```
+///
+/// A later column must be ordered only where all earlier columns are equal.
+/// For `a ASC, b ASC`:
+///
+/// ```text
+/// row groups [(1, 8), (1, 9)] [(2, 0), (2, 1)]: ordered by (a, b), because a increases
+/// row groups [(1, 8), (1, 9)] [(1, 0), (1, 1)]: ordered by (a) only, because a is equal and 9 > 0
+/// ```
+///
+/// A column without usable statistics counts as not ordered.
+fn num_columns_ordered_across_row_groups(
+    metadata: &ParquetMetaData,
+    sorting_columns: &[SortingColumn],
+) -> Result<usize> {
+    let row_groups = metadata.row_groups();
+    if row_groups.len() < 2 {
+        return Ok(sorting_columns.len());
+    }
+    let file_metadata = metadata.file_metadata();
+    let parquet_schema = file_metadata.schema_descr();
+    let arrow_schema =
+        parquet_to_arrow_schema(parquet_schema, file_metadata.key_value_metadata())?;
+    let resolver = LeafResolver::new(parquet_schema, &arrow_schema);
+
+    let column_bounds: Vec<_> = sorting_columns
+        .iter()
+        .map(|sorting_column| {
+            row_group_sort_bounds(row_groups, parquet_schema, &resolver, sorting_column)
+        })
+        .collect();
+
+    let mut num_ordered = sorting_columns.len();
+    // Compare each row group with the next one, column by column
+    for i in 0..row_groups.len() - 1 {
+        let columns = sorting_columns.iter().zip(&column_bounds);
+        for (column, (sorting_column, bounds)) in columns.take(num_ordered).enumerate() {
+            let Some(bounds) = bounds else {
+                num_ordered = column;
+                break;
+            };
+            let options = [SortOptions::new(
+                sorting_column.descending,
+                sorting_column.nulls_first,
+            )];
+            let last = std::slice::from_ref(&bounds[i].1);
+            let next_first = std::slice::from_ref(&bounds[i + 1].0);
+            match compare_rows(last, next_first, &options)? {
+                // In order, so the later columns do not matter here
+                Ordering::Less => break,
+                // Equal, so the next column decides
+                Ordering::Equal => {}
+                Ordering::Greater => {
+                    num_ordered = column;
+                    break;
+                }
+            }
+        }
+    }
+    Ok(num_ordered)
+}
+
+/// Returns the values that sort first and last in each row group under
+/// `sorting_column`, or `None` if the statistics do not provide them.
+fn row_group_sort_bounds(
+    row_groups: &[RowGroupMetaData],
+    parquet_schema: &SchemaDescriptor,
+    resolver: &LeafResolver,
+    sorting_column: &SortingColumn,
+) -> Option<Vec<(ScalarValue, ScalarValue)>> {
+    let column_index = usize::try_from(sorting_column.column_idx).ok()?;
+    let name = parquet_schema.columns().get(column_index)?.name();
+    // The statistics must belong to the sorting column
+    if resolver.leaf_index(name) != Some(column_index) {
+        return None;
+    }
+    let converter = resolver
+        .converter(name)
+        .ok()?
+        .with_missing_null_counts_as_zero(false);
+    let mins = converter.row_group_mins(row_groups).ok()?;
+    let maxes = converter.row_group_maxes(row_groups).ok()?;
+    let null_counts = converter.row_group_null_counts(row_groups).ok()?;
+    let null = ScalarValue::try_new_null(mins.data_type()).ok()?;
+
+    row_groups
+        .iter()
+        .enumerate()
+        .map(|(i, row_group)| {
+            if null_counts.is_null(i) {
+                return None;
+            }
+            let null_count = null_counts.value(i);
+            if null_count == row_group.num_rows() as u64 {
+                return Some((null.clone(), null.clone()));
+            }
+            if mins.is_null(i) || maxes.is_null(i) {
+                return None;
+            }
+            let min = ScalarValue::try_from_array(&mins, i).ok()?;
+            let max = ScalarValue::try_from_array(&maxes, i).ok()?;
+            let (mut first, mut last) = if sorting_column.descending {
+                (max, min)
+            } else {
+                (min, max)
+            };
+            // Statistics exclude nulls, which sort before or after all values
+            if null_count > 0 {
+                if sorting_column.nulls_first {
+                    first = null.clone();
+                } else {
+                    last = null.clone();
+                }
+            }
+            Some((first, last))
         })
         .collect()
 }
@@ -1458,6 +1607,74 @@ mod tests {
             );
 
             ParquetMetaData::new(file_meta, row_groups)
+        }
+
+        #[test]
+        fn test_ordering_across_row_groups() -> Result<()> {
+            let descriptor = create_schema_descr(1);
+            let schema = create_arrow_schema(1);
+            let sorted = Some(vec![SortingColumn {
+                column_idx: 0,
+                descending: false,
+                nulls_first: false,
+            }]);
+            let stats = |min, max| {
+                Some(ParquetStatistics::int32(
+                    Some(min),
+                    Some(max),
+                    None,
+                    Some(0),
+                    false,
+                ))
+            };
+            let row_group = |stats, sorting_columns: &Option<Vec<SortingColumn>>| {
+                create_row_group_with_stats(&descriptor, vec![stats], 2)
+                    .into_builder()
+                    .set_sorting_columns(sorting_columns.clone())
+                    .build()
+                    .unwrap()
+            };
+            let cases = [
+                (
+                    "ordered",
+                    [
+                        row_group(stats(1, 2), &sorted),
+                        row_group(stats(3, 4), &sorted),
+                    ],
+                    true,
+                ),
+                (
+                    "not ordered",
+                    [
+                        row_group(stats(1, 4), &sorted),
+                        row_group(stats(2, 3), &sorted),
+                    ],
+                    false,
+                ),
+                (
+                    "sorting columns differ",
+                    [
+                        row_group(stats(1, 2), &sorted),
+                        row_group(stats(3, 4), &None),
+                    ],
+                    false,
+                ),
+                (
+                    "statistics missing",
+                    [row_group(None, &sorted), row_group(None, &sorted)],
+                    false,
+                ),
+            ];
+
+            for (name, row_groups, expected) in cases {
+                let metadata =
+                    create_parquet_metadata(Arc::clone(&descriptor), row_groups.to_vec());
+
+                let ordering = ordering_from_parquet_metadata(&metadata, &schema)?;
+
+                assert_eq!(ordering.is_some(), expected, "{name}");
+            }
+            Ok(())
         }
 
         #[test]
